@@ -297,17 +297,8 @@ describe("ChatComposerCapabilityHost", () => {
 
     const props = host.props(context, state, session, "main");
     expect(props.mutationBlockedReason).toBeTruthy();
-    const result = await (
-      host as unknown as {
-        patch: (
-          context: ApplicationContext,
-          state: ChatPageHost,
-          next: { skills: Record<string, boolean> },
-        ) => Promise<{ ok: true } | { ok: false; error: string }>;
-      }
-    ).patch(context, state, { skills: { release: true } });
-
-    expect(result).toEqual({ ok: false, error: props.mutationBlockedReason });
+    props.onPatchToolOverrides?.({ skills: { release: true } });
+    await Promise.resolve();
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -594,24 +585,16 @@ describe("ChatComposerCapabilityHost", () => {
     });
   });
 
-  it("records an unexpected effective-tools loader rejection", async () => {
+  it("shows effective-tools request failures and allows an explicit retry", async () => {
     const notify = vi.fn();
     const host = new ChatComposerCapabilityHost(notify);
     const context = createContext({ runtimeConfig: {} });
     context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.patch", "tools.effective"]);
-    let stateReads = 0;
-    Object.defineProperty(context.sessions, "state", {
-      configurable: true,
-      get: () => {
-        stateReads += 1;
-        if (stateReads === 3) {
-          throw new Error("unexpected loader failure");
-        }
-        return { modelOverrides: {} };
-      },
-    });
     const state = createState();
-    const request = vi.fn().mockResolvedValue({ agentId: "main", groups: [], profile: "full" });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("tools unavailable"))
+      .mockResolvedValue({ agentId: "main", groups: [], profile: "full" });
     state.client = { request } as unknown as GatewayBrowserClient;
     const session = { key: "main" } as GatewaySessionRow;
 
@@ -628,6 +611,9 @@ describe("ChatComposerCapabilityHost", () => {
     await vi.waitFor(() => {
       expect(host.props(context, state, session, "main").toolsEffectiveResult).not.toBeNull();
     });
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      ["tools.effective", { agentId: "main", sessionKey: "main" }],
+      ["tools.effective", { agentId: "main", sessionKey: "main" }],
+    ]);
   });
 });

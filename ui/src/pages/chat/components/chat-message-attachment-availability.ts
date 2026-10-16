@@ -235,8 +235,13 @@ export function resolveAssistantAttachmentAvailability(
 export async function loadAssistantAttachmentAvailability(
   source: string,
   options: ImageRenderOptions = {},
+  retryFailed = false,
 ): Promise<AssistantAttachmentAvailability | null> {
-  const availability = resolveAssistantAttachmentAvailability(source, options);
+  let availability = resolveAssistantAttachmentAvailability(source, options);
+  if (retryFailed && availability.status === "unavailable" && availability.recoverable) {
+    retryAssistantAttachmentAvailability(source, options);
+    availability = resolveAssistantAttachmentAvailability(source, options);
+  }
   if (availability.status !== "checking") {
     return availability;
   }
@@ -363,6 +368,7 @@ export function retainAssistantImage(
   image: HTMLImageElement,
   options: ImageRenderOptions = {},
   filename?: string,
+  previewWidth: 480 | 960 | 1920 = 960,
 ) {
   const resource = readRetainedAssistantAttachment(source, options);
   const availability = resource?.value;
@@ -378,6 +384,8 @@ export function retainAssistantImage(
         availability.mediaTicket,
         options,
         filename,
+        "thumbnail",
+        previewWidth,
       )
   ) {
     resource.retainedImage = image;

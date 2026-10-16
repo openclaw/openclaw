@@ -398,68 +398,26 @@ it.each([{ mode: 42, legacyHints: true }])(
   },
 );
 
-it.each(["runs/old-job.jsonl"])(
-  "refuses retired %s before mutating supported quarantine or SQLite rows",
-  async (relative) => {
-    await withOpenClawTestState({ label: "cron-retired-files" }, async (state) => {
-      const storePath = state.statePath("cron", "jobs.json");
-      await saveCronStore(storePath, {
-        version: 1,
-        jobs: [{ ...job("retained"), enabled: false }],
-      });
-      const before = (await loadCronStore(storePath)).jobs;
-      const sourcePath = state.statePath("cron", relative);
-      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-      const source =
-        relative === "jobs.json"
-          ? JSON.stringify({ version: 1, jobs: [{ ...job("retired"), enabled: false }] })
-          : relative === "jobs-state.json"
-            ? JSON.stringify({
-                version: 1,
-                jobs: { retained: { updatedAtMs: 1, state: { lastStatus: "ok" } } },
-              })
-            : `${JSON.stringify({ ts: 1, jobId: "retained", action: "finished", status: "ok" })}\n`;
-      await fs.writeFile(sourcePath, source);
-      const quarantinePath = await state.writeJson("cron/jobs-quarantine.json", {
-        version: 1,
-        jobs: [{ reason: "invalid-schedule", job: { id: "quarantined" } }],
-      });
-      const quarantineBytes = await fs.readFile(quarantinePath, "utf8");
-      const cfg = { cron: { store: storePath } } as OpenClawConfig;
-      await expect(repairLegacyCronStoreWithoutPrompt({ cfg })).rejects.toThrow(
-        /Upgrade through OpenClaw 2026\.9\.7/,
-      );
-      expect(await fs.readFile(sourcePath, "utf8")).toBe(source);
-      expect(await fs.readFile(quarantinePath, "utf8")).toBe(quarantineBytes);
-      expect((await loadCronStore(storePath)).jobs).toEqual(before);
-      expect(await loadCronQuarantinedJobs(storePath)).toEqual([]);
-    });
-  },
-);
-
-it("refuses a retired source created during confirmation before consuming quarantine", async () => {
-  await withOpenClawTestState({ label: "cron-retired-confirmation" }, async (state) => {
+it("leaves a newly appeared JSON source for the next Doctor migration", async () => {
+  await withOpenClawTestState({ label: "cron-late-source" }, async (state) => {
     const storePath = state.statePath("cron", "jobs.json");
     const quarantinePath = await state.writeJson("cron/jobs-quarantine.json", {
       version: 1,
       jobs: [{ reason: "invalid-schedule", job: { id: "quarantined" } }],
     });
-    const original = await fs.readFile(quarantinePath, "utf8");
-    await expect(
-      maybeRepairLegacyCronStore({
-        cfg: { cron: { store: storePath } } as OpenClawConfig,
-        options: {},
-        prompter: {
-          confirm: async () => {
-            await fs.writeFile(storePath, "new retired source");
-            return true;
-          },
+    await maybeRepairLegacyCronStore({
+      cfg: { cron: { store: storePath } } as OpenClawConfig,
+      options: {},
+      prompter: {
+        confirm: async () => {
+          await fs.writeFile(storePath, "new retired source");
+          return true;
         },
-      }),
-    ).rejects.toThrow(/Upgrade through OpenClaw 2026\.9\.7/);
-    expect(await fs.readFile(quarantinePath, "utf8")).toBe(original);
+      },
+    });
     expect(await fs.readFile(storePath, "utf8")).toBe("new retired source");
-    expect(await loadCronQuarantinedJobs(storePath)).toEqual([]);
+    expect(await loadCronQuarantinedJobs(storePath)).toHaveLength(1);
+    await expect(fs.stat(quarantinePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 
@@ -470,9 +428,9 @@ it("preserves a broken retired cron source link and refuses repair", async () =>
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     await fs.symlink(missingTarget, storePath, "file");
 
-    await expect(loadLegacyCronRepairState({ cfg: {}, storePath })).rejects.toThrow(
-      /Upgrade through OpenClaw 2026\.9\.7/,
-    );
+    await expect(
+      repairLegacyCronStoreWithoutPrompt({ cfg: { cron: { store: storePath } } as OpenClawConfig }),
+    ).rejects.toThrow(/symlink/i);
 
     expect((await fs.lstat(storePath)).isSymbolicLink()).toBe(true);
     expect(await fs.readlink(storePath)).toBe(missingTarget);

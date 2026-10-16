@@ -96,9 +96,17 @@ const stateSnapshotReads = resolveGlobalSingleton(
         cleanupRoot?: string;
         env: NodeJS.ProcessEnv;
         cleanClose?: boolean;
+        callerSignal?: AbortSignal;
       }
     >(),
 );
+
+function resolveStateReadCallerSignal(): AbortSignal | undefined {
+  const signal = getAsyncWorkSignal();
+  const snapshot = stateSnapshotReads.getStore();
+  // Snapshot drainage closes physical custody; only the caller can cancel an admitted read.
+  return snapshot && signal === snapshot.work.signal ? snapshot.callerSignal : signal;
+}
 
 /** Stable identity and private bytes for reads within the enclosing snapshot scope. */
 export function getActiveOpenClawStateDatabaseReadSnapshot(
@@ -123,7 +131,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     return await operation();
   }
   const env = options.env ?? process.env;
-  const callerSignal = getAsyncWorkSignal();
+  const callerSignal = resolveStateReadCallerSignal();
   const controller = new AbortController();
   const admissionSignal = callerSignal
     ? AbortSignal.any([callerSignal, controller.signal])
@@ -199,6 +207,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
         cleanupRoot: prepared.cleanupRoot,
         env,
         cleanClose,
+        callerSignal,
       },
     );
     const lifecycle = stateSnapshotReads.run(snapshot, () => bindRetainedReadScope(snapshot));
@@ -243,6 +252,10 @@ export async function withDisposableOpenClawStateReads<T>(
 }
 
 function requiresArtifactPreservingSnapshot(pathname: string): boolean {
+  // PostgreSQL reads use the admitted connection's read-only transaction, never a copied anchor.
+  if (isStatePostgres()) {
+    return false;
+  }
   const required =
     isArtifactPreservingStateRead("shared", pathname) &&
     !isUpdateRehearsalPrivateDatabase(pathname, process.env) &&
@@ -549,7 +562,13 @@ function startRetainedOpenClawStateRead(
   }
   const preserveArtifacts = requiresArtifactPreservingSnapshot(pathname);
   const controller = new AbortController();
-  const readSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  // Inspection inherits its deadline; ordinary background reads own explicit cancellation.
+  const callerSignal =
+    signal ??
+    (isArtifactPreservingStateRead() ? resolveStateReadCallerSignal() : snapshot?.callerSignal);
+  const readSignal = callerSignal
+    ? AbortSignal.any([callerSignal, controller.signal])
+    : controller.signal;
   const run = () => {
     const inheritedSource = currentRead
       ? undefined

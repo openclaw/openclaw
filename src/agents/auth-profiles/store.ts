@@ -1291,6 +1291,8 @@ export function createAuthProfileStoreRuntime(
     ensureAuthProfileStoreAsync,
     ensureAuthProfileStoreWithoutExternalProfiles,
     ensureAuthProfileStoreWithoutExternalProfilesAsync,
+    ensureAuthProfileStoreForLocalUpdate,
+    ensureAuthProfileStoreForLocalUpdateAsync,
     prepareAuthProfileStoreForModelRuntime,
   } = createAuthProfileStoreReadRuntime({
     isEnvOnlyAuthProfileRuntime,
@@ -1443,77 +1445,6 @@ export function createAuthProfileStoreRuntime(
       ...options,
       readOnly: true,
       allowKeychainPrompt: false,
-    });
-  }
-
-  /** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Supported through 2026-12-31. */
-  function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthProfileStore {
-    warnPluginSdkDeprecation({
-      family: "auth-profiles",
-      method: "ensureAuthProfileStoreForLocalUpdate",
-      replacement: "ensureAuthProfileStoreForLocalUpdateAsync",
-    });
-    if (isEnvOnlyAuthProfileRuntime()) {
-      return createEmptyAuthProfileStore();
-    }
-    const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
-    const options: LoadAuthProfileStoreOptions = { syncExternalCli: false };
-    const store = loadAuthProfileStoreForAgent(effectiveAgentDir, options);
-    const authPath = effectiveAgentDir
-      ? resolveAgentAuthPath(effectiveAgentDir)
-      : resolveSharedAuthPath();
-    const mainAgentDir = resolveRuntimeAuthProfileAgentDir();
-    const mainAuthPath = mainAgentDir
-      ? resolveAgentAuthPath(mainAgentDir)
-      : resolveSharedAuthPath();
-    if (!effectiveAgentDir || authPath === mainAuthPath) {
-      return store;
-    }
-
-    const mainStore = loadInheritedAuthProfileStore(
-      () => loadAuthProfileStoreForAgent(undefined, { readOnly: true, syncExternalCli: false }),
-      undefined,
-      getScopedAuthProfileEnv(),
-    );
-    return mainStore
-      ? mergeAuthProfileStores(mainStore, store, { preserveBaseRuntimeExternalProfiles: true })
-      : store;
-  }
-
-  async function ensureAuthProfileStoreForLocalUpdateAsync(
-    agentDir?: string,
-  ): Promise<AuthProfileStore> {
-    if (isEnvOnlyAuthProfileRuntime()) {
-      return createEmptyAuthProfileStore();
-    }
-    return withPreparedAuthProfileStoreReads(agentDir, undefined, async (prepared) => {
-      const options: LoadAuthProfileStoreOptions = { syncExternalCli: false };
-      const store = await prepared.readStore(prepared.effectiveAgentDir, options);
-      const mainAgentDir = prepared.runInCapturedScope(() => resolveRuntimeAuthProfileAgentDir());
-      const mainAuthPath = mainAgentDir
-        ? resolveAgentAuthPath(mainAgentDir)
-        : await prepared.sharedPath();
-      if (
-        !prepared.effectiveAgentDir ||
-        resolveAgentAuthPath(prepared.effectiveAgentDir) === mainAuthPath
-      ) {
-        return store;
-      }
-      let mainStore: AuthProfileStore | null | undefined;
-      try {
-        mainStore = await prepared.readStore(undefined, { readOnly: true, syncExternalCli: false });
-      } catch (error) {
-        mainStore = loadInheritedAuthProfileStore(
-          () => {
-            throw error;
-          },
-          undefined,
-          prepared.env,
-        );
-      }
-      return mainStore
-        ? mergeAuthProfileStores(mainStore, store, { preserveBaseRuntimeExternalProfiles: true })
-        : store;
     });
   }
 

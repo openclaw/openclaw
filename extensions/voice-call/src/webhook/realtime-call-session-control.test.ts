@@ -209,8 +209,6 @@ describe("realtime call session control", () => {
     const onIdle = vi.fn();
     const controller = createRealtimeCallActivityController({
       idleHangupMs: 1_000,
-      mediaInactivityMs: 30_000,
-      mediaGraceMs: 2_000,
       onIdle,
       onMediaWarning: vi.fn(),
       onMediaTimeout: vi.fn(),

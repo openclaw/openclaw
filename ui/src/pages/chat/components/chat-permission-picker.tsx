@@ -5,7 +5,6 @@ import { Menu, type MenuHandle, type MenuItem } from "../../../components/solid/
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../../lib/external-link.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { closeOtherChatComposerPickers } from "./chat-picker-overlay.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
 
@@ -59,6 +58,9 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
   const id = createUniqueId();
   let menu: MenuHandle | undefined;
   const disabled = createMemo(() => props.disabled || props.pending);
+  const selectedMode = createMemo(() => props.mode ?? null);
+  const defaultMode = createMemo(() => props.defaultMode);
+  const canSelectFull = createMemo(() => props.canSelectFull);
   const selectMode = (mode: PermissionSelection) => {
     if (!disabled() && (mode !== "full" || props.canSelectFull) && mode !== (props.mode ?? null)) {
       void props.onSelect(mode);
@@ -74,9 +76,9 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
     },
     ...PERMISSION_OPTIONS.map((mode, index): MenuItem => {
       const value = mode ?? DEFAULT_PERMISSION_VALUE;
-      const selected = (props.mode ?? null) === mode;
-      const locked = mode === "full" && !props.canSelectFull;
-      const label = modeLabel(mode, props.defaultMode);
+      const selected = selectedMode() === mode;
+      const locked = mode === "full" && !canSelectFull();
+      const label = modeLabel(mode, defaultMode());
       return {
         id: value,
         label: locked ? `${label}. ${t("chat.permissionControls.fullRequiresAdmin")}` : label,
@@ -155,6 +157,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
   });
   return (
     <Menu
+      lazy
       id={`chat-permission-${id}`}
       label={`${t("chat.permissionControls.label")}: ${modeLabel(props.mode, props.defaultMode)}`}
       class="chat-controls__inline-select chat-controls__permission-picker"
@@ -173,11 +176,6 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
         menu = handle;
         handle.overlay.surface.addEventListener("keydown", keydown, true);
         handle.overlay.trigger?.addEventListener("keydown", keydown, true);
-      }}
-      onBeforeShow={() => {
-        if (menu?.overlay.trigger) {
-          closeOtherChatComposerPickers(menu.overlay.trigger);
-        }
       }}
       onSelect={(item) => {
         const mode = permissionSelection(item.id);

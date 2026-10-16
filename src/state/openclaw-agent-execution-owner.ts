@@ -358,6 +358,9 @@ export function createAgentDatabaseExecution(
     get creationIdentity() {
       return creationIdentity;
     },
+    getPendingPreparation() {
+      return generation?.getPendingPreparation();
+    },
     borrow(borrowedPath, expected, creating, requestedPath) {
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;

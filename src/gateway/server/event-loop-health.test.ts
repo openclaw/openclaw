@@ -216,6 +216,39 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     }
   });
 
+  it("exports a 250 ms scheduler stall once without exposing public events", async () => {
+    resetDiagnosticEventsForTest();
+    setDiagnosticsEnabledForProcess(true);
+    const internal: DiagnosticEventPayload[] = [];
+    const publicEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => internal.push(event), {
+      include: ["gateway.main_thread.stall"],
+    });
+    const unsubscribePublic = onDiagnosticEvent((event) => publicEvents.push(event));
+    try {
+      const harness = createMonitorHarness();
+      harness.scheduler.schedule({
+        id: "maintenance:synthetic-work",
+        delayMs: 0,
+        run: () => harness.elapseWithoutSampling(250),
+      });
+      await harness.samples(100);
+      await waitForDiagnosticEventsDrained();
+      expect(internal).toEqual([
+        expect.objectContaining({
+          type: "gateway.main_thread.stall",
+          stalls: [{ task: "scheduler:maintenance:synthetic-work", durationMs: 250 }],
+          dropped: 0,
+        }),
+      ]);
+      expect(publicEvents).toEqual([]);
+    } finally {
+      unsubscribe();
+      unsubscribePublic();
+      resetDiagnosticEventsForTest();
+    }
+  });
+
   it("does not turn reads without samples into healthy observations", async () => {
     const harness = createMonitorHarness({ cpuMsPerWallMs: 1, utilization: 1 });
     harness.elapseWithoutSampling(1_200);

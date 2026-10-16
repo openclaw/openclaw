@@ -139,7 +139,7 @@ COMMIT;
 Use a disposable schema for this readiness check; it does not enable shared-state
 PostgreSQL support or migrate an existing store.
 
-Both engines use the same shared-state schema version (currently 24). Every
+Both engines use the same shared-state schema version (currently 25). Every
 future version change must supply both engines' forward migration and catalog
 equivalence proof together. JSON stays canonical: a query/index projection is
 derived once in TypeScript and committed in the same statement as its JSON.
@@ -151,6 +151,14 @@ It contains forward DDL only; the caller supplies the transaction, namespace,
 and version publication. PostgreSQL conformance verifies the upgraded index
 definitions against a fresh schema and preserves retained rows and local indexes.
 This readiness artifact does not enable shared-state PostgreSQL runtime support.
+
+Schema 25 adds `state-v24-v25.postgres.sql`, a metadata-only forward migration
+registered with the existing PostgreSQL engine owner. It updates the shared-state
+version and content markers; the engine owner publishes its version in the same
+transaction. The catalog and retained rows are unchanged. Version publication
+fences older readers that would discard recovered subagent operator restrictions.
+Conformance checks cover catalog equivalence and upgrading a retained state-24
+database through the shared-state owner.
 
 Generation refuses unsupported shared-state tables, columns, defaults, CHECKs,
 indexes, and foreign keys with their exact source and reason. Text uses C
@@ -254,10 +262,13 @@ Transcript bytes, session recovery rows, schemas, and update behavior are unchan
 Global projection preflight and search readiness use the projection maintenance
 owner's connection-local facts. Transactional TEMP triggers queue affected sessions
 for appends, rewrites, projection publication, deletion, cold-storage moves, and raw
-local SQL. An owning-writer receipt or schema change restarts bounded admission;
-indexed seeks skip whole session ranges instead of scanning transcript rows. Each
-maintenance transaction examines at most 128 sessions and deletes at most 512
-orphan rows per projection table. A status request stops after 32 batches;
+local SQL. A sibling-writer receipt or schema change restarts bounded admission;
+local changes consume only the queued sessions. A bounded recursive key query
+skips whole session ranges instead of scanning transcript rows, then a compound
+read classifies the batch using the projection owner's readiness predicate.
+Queue consumption and dirty-session publication are batched in the same
+transaction. Each maintenance transaction examines at most 128 sessions and
+deletes at most 512 orphan rows per projection table. A status request stops after 32 batches;
 incomplete admission remains pending and the existing reconcile cadence resumes it.
 Reconciliation yields between bounded batches until an ordered traversal completes,
 then gives the observed pending backlog to the scheduler and awaits its rebuild.
@@ -311,8 +322,12 @@ admission without reentering SQLite on the host. These checks belong to each
 startup request; reusing the native actor for ordinary work does not retain them.
 Committed deletion invalidates the captured pending admission before observers
 run, while rollback and replacement admission owners remain unaffected. Startup
-migration preserves its pending-versus-completed cleanup diagnostics. No schema,
-retention, permission, or update migration changes are required.
+migration reads deletion status, retained paths, and registered owners once per
+startup pass through the shared-state worker, preserving pending-versus-completed
+cleanup diagnostics. A later startup reads fresh facts; an overlapping deletion
+is enforced by database admission and cleanup owners without repeating discovery
+between maintenance phases. No schema, retention, permission, or update migration
+changes are required.
 
 Callers should request domain operations, such as claiming a cron run or
 appending a transcript report, from the store that owns the invariant. That
@@ -610,8 +625,12 @@ authority after waiting, without copying the live database for each observation.
 Cold sources and unavailable or replaced native paths retain artifact-preserving
 snapshot preparation. Schema, permissions, and update behavior are unchanged.
 
-Project recents and observed checkout requests consume the Gateway's prepared
-session-row metadata, including archived rows. The existing selection owner maintains
+Project recents consume profile-scoped, recency-ordered candidates from the Gateway's
+session-row projection, including archived rows, until eight distinct results are found.
+Committed receipts maintain the creator index; uncertain metadata uses the existing
+worker admission. Ordinary recents do not reconstruct a combined session store.
+Observed checkout requests still consume the broader prepared metadata selection.
+The existing selection owner maintains
 physical-store and sentinel precedence through committed row and topology publications;
 listings do not reread or rebuild the durable session stores. Recent-project ties retain
 physical-store and SQLite binary key order. Incognito entries remain with the
@@ -1368,6 +1387,10 @@ and at transaction and commit admission; replies and preference-change events
 follow guarded completion. Device subscription mutations keep their deferred
 start after snapshot preparation.
 
+Background upload and removal replies use the asset metadata and preference
+already committed by their worker transaction, without reading either row again.
+The existing profile, expected-value, quota, and commit-authority checks remain.
+
 The shared read-only worker owner retains inherited snapshot and disposable-source
 scopes until the task acknowledges native reader cleanup. Fixed reads share two execution workers
 with the existing pending-task and captured-input byte limits. Successful reads
@@ -2052,11 +2075,14 @@ post-writer lifecycle checks. Retention rules, cap buffering, forced cleanup,
 and active-work, ancestor, and lifecycle protection remain unchanged. No schema
 or migration change is required.
 
-After archive preparation, session deletion rereads its target before admitting
-the final reclamation worker. A missing or changed target returns the existing
-entry-mismatch result without starting that worker, while preserving archives
-already committed by the deletion. Admitted workers still recheck the target
-and current authority inside their deletion transaction.
+Session deletion checks its target and current authority inside the deletion
+transaction. A missing or changed target returns the existing entry-mismatch
+result while preserving archives already committed by the deletion. Exact
+metadata-only deletion with an expected entry uses the admitted session writer,
+without a separate planning read or archive worker. Cron run alias cleanup uses
+that path and keeps the stable session's transcript. Native-session participants,
+pending-delivery protection, and lease-loss refusal remain in the lifecycle owner.
+The transaction passes its validated rows to deletion instead of reading them again.
 
 Prepared session-store updates, entry replacements, and lifecycle upserts use
 the same admission for cold snapshot reads and actual commits, retaining their
@@ -2763,7 +2789,7 @@ yielding between batches. Cache writes wait outside the agent writer FIFO until
 foreground work drains, then commit one session at a time. Report reads use their
 separate worker lane and return partial or stale totals during backfill. Restart
 rediscovers unfinished sessions from their committed checkpoints.
-Expected refresh cancellation during shutdown logs at debug level; refresh or cleanup failures still warn.
+Refresh or cleanup failures still warn.
 After in-process DDL, worker admission publishes its validated schema even if a
 retained reader adopted another wrapper of the previous shared receipt while it
 was pending. The received schema and physical database proof must remain valid;
@@ -2781,8 +2807,11 @@ writes or pruning invalidate rollup inputs. Worker retirement discards the worki
 set. Reports keep their independent read snapshots. A concurrent repair during a
 refresh can defer correction to the next refresh; it does not require another
 metadata comparison on the ordinary background path.
-Full refreshes submit pruning only when their metadata scan found stale rows;
-deletion still matches each observed row's checkpoint and update timestamp.
+Full refreshes transfer stale row snapshots in bounded batches under that
+reservation, then submit one prune request. Deletion still matches each observed
+row's checkpoint and update timestamp. Targeted refreshes do not prune other keys.
+Selected month deletion uses bounded key batches in the existing rollup write
+transaction.
 Doctor owns cleanup of retired cache scopes, so ordinary refreshes do not repeat
 legacy deletions. Retired rows may remain until `openclaw doctor --fix` runs.
 Deletion, transcript rewind or branch changes, and pricing revisions rebuild
@@ -2798,6 +2827,31 @@ represented by the aggregate use canonical transcript reads. Partial backfill
 remains visible in the existing cache-status fields. An older implementation
 ignores the new representation's version and reconstructs its prior cache from
 transcripts, so rollback needs no reverse data migration.
+
+## Background exec notification obligations
+
+The exec completion owner stores `pendingExecNotifications` in the existing
+private session-row JSON when an eligible process becomes backgrounded. Each
+unique registry process-instance ID retains the public process ID, owning session ID and lifecycle revision, Gateway
+incarnation, start time, a generic command label, and the existing completion
+policy and route. Arguments, environment, output, operating-system handles, approvals,
+and execution authority are not persisted.
+
+This additive field needs no schema migration or index. The existing session
+writer commits it; startup filters the private fact in SQL and reads only matching
+session-list projections in pages of 64 through the existing worker after store
+admission. Unrelated entry payloads and saved prompts stay in SQLite. Storage grows
+with pending background completions. The notification uses current session
+admission and a stable source-turn identity; it cannot re-run the command. The
+fact remains until transcript adoption, explicit cancellation/removal, reset,
+archive, or rejection by current notification policy. Incognito sessions do not
+persist obligations. Normal session deletion removes the field with its row.
+
+Older binaries ignore this field and do not recover its notifications; a later
+upgrade can report the pending unknown outcome. Rollback does not alter history,
+execute commands, or require a database restore. The maintainer-authorized
+restart-continuity repair accepts this narrowly scoped durability change; owner
+and separate-Gateway-process tests cover lifecycle cleanup and restart handoff.
 
 ## Review checkpoint for material changes
 

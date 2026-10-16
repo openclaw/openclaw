@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { BoardOp, BoardSnapshot } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
@@ -52,7 +52,7 @@ type StoredBoard = {
   htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
 };
 
-const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
+const ensuredBoardDatabases = new WeakSet<EngineConnection>();
 const BOARD_WRITE_BATCH_SIZE = 64;
 
 export function ensureBoardSchema(database: BoardDatabaseHandle): void {

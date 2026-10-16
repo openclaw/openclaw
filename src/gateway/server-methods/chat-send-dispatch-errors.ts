@@ -1,9 +1,13 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
+import { isReplyPayloadStatusNotice } from "../../auto-reply/reply-payload.js";
 import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/dispatch-session-refresh-error.js";
+import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
@@ -22,6 +26,10 @@ import { broadcastChatError, broadcastChatTerminal } from "./chat-broadcast.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import {
+  readChatSendReplyPayload,
+  type DeliveredChatSendReply,
+} from "./chat-send-command-replies.js";
+import {
   classifyAcceptedChatSendFailure,
   shouldRetainAcceptedChatSendRetryIdentity,
   type AcceptedChatSendFailureDisposition,
@@ -31,7 +39,7 @@ import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-export function formatReturnedAgentErrors(messages: string[]): string | undefined {
+function formatReturnedAgentErrors(messages: string[]): string | undefined {
   const [primary, ...additional] = [...new Set(messages)];
   if (!primary || additional.length === 0) {
     return primary;
@@ -40,6 +48,56 @@ export function formatReturnedAgentErrors(messages: string[]): string | undefine
     return `${primary}\n\nAdditional error: ${additional[0]}`;
   }
   return `${primary}\n\nAdditional errors:\n${additional.map((message) => `- ${message}`).join("\n")}`;
+}
+
+export function resolveChatSendReturnedOutcome(params: {
+  dispatchResult: unknown;
+  runtimeOutcome: AgentRunTerminalOutcome | undefined;
+  deliveredReplies: readonly DeliveredChatSendReply[];
+  agentRunStarted: boolean;
+  isInternalTextSlashCommandTurn: boolean;
+}) {
+  const { runtimeOutcome, deliveredReplies, agentRunStarted, isInternalTextSlashCommandTurn } =
+    params;
+  const recordedOutcome = readAgentRunTerminalOutcome(params.dispatchResult);
+  // ACP owns a rich terminal result; native runs record their outcome on dispatch.
+  // Delivered warnings or source replies cannot replace either authoritative result.
+  const runtimeClassification = runtimeOutcome
+    ? classifyAgentRunTerminalOutcome(runtimeOutcome)
+    : recordedOutcome && (recordedOutcome === "failed" ? "failure" : "success");
+  const runtimeCancelled = runtimeClassification === "cancellation";
+  const runtimeFailed = runtimeClassification === "failure" || runtimeClassification === "timeout";
+  const returnedAgentErrorPayloads = deliveredReplies
+    .map((entry) => readChatSendReplyPayload(entry.input))
+    .filter((payload) => payload.isError);
+  // Native streams cannot publish a host-authored warning. Give a warning-only
+  // turn the normal reply owner without reclassifying the runtime outcome.
+  const hasOnlyFinalWarnings =
+    returnedAgentErrorPayloads.length > 0 &&
+    deliveredReplies.every(({ kind, input }) => {
+      const payload = readChatSendReplyPayload(input);
+      return (kind === "final" && payload.isError === true) || isReplyPayloadStatusNotice(payload);
+    });
+  const hasReturnedAgentError = runtimeClassification
+    ? runtimeFailed
+    : returnedAgentErrorPayloads.length > 0 && (agentRunStarted || !isInternalTextSlashCommandTurn);
+  const returnedAgentErrorMessage =
+    runtimeOutcome?.error ??
+    (formatReturnedAgentErrors(
+      returnedAgentErrorPayloads
+        .map((payload) => payload.text?.trim())
+        .filter((text): text is string => Boolean(text)),
+    ) ||
+      (runtimeFailed ? "agent run failed" : undefined));
+  return {
+    runtimeClassification,
+    runtimeCancelled,
+    runtimeFailed,
+    returnedAgentErrorPayloads,
+    hasOnlyFinalWarnings,
+    hasReturnedAgentError,
+    returnedAgentErrorMessage,
+  };
 }
 
 type PendingDispatchLifecycleError = {

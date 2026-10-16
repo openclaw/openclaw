@@ -4,6 +4,7 @@ import { getHeapStatistics } from "node:v8";
 import { createContext, Script, type Context } from "node:vm";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { observeGcSamples } from "../infra/gc-observer.js";
+import { publishWorkerGcStorm } from "../infra/worker-memory.js";
 import { serveWorkerTasks, type WorkerTaskChannel } from "../infra/worker-task-server.js";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
 import { CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
@@ -38,6 +39,7 @@ type NodeResult = CodeModeWorkerThreadResult<undefined>;
 type GuestOutcome = { ok: boolean; json: string };
 type NodeCell = {
   context: Context;
+  gcAttribution: NodeInput["gcAttribution"];
   config: CodeModeConfig;
   location: SourceLocation;
   pendingRequests: PendingBridgeRequest[];
@@ -60,13 +62,48 @@ process.on("rejectionHandled", (promise) => cell?.rejections.delete(promise));
 // Pressure belongs to the isolate, including time between checkpoints and idle GC.
 let gcStartedAt = performance.now();
 let majorCollections = 0;
+let stormStartedAt = gcStartedAt;
+let stormCollections = 0;
+let consecutiveStormWindows = 0;
+let lastStormWarningAt = -Infinity;
+let cellCount = 0;
+let workerId: string | undefined;
 observeGcSamples((samples) => {
   for (const sample of samples) {
     if (sample.kind === "mark_sweep_compact") {
       majorCollections++;
+      stormCollections++;
     }
   }
   const now = performance.now();
+  const stormIntervalMs = now - stormStartedAt;
+  if (stormIntervalMs >= 10_000) {
+    const storming = stormCollections > stormIntervalMs / 100;
+    consecutiveStormWindows = storming ? Math.min(2, consecutiveStormWindows + 1) : 0;
+    if (consecutiveStormWindows === 2 && workerId) {
+      publishWorkerGcStorm({ retireWorkerId: workerId });
+    }
+    if (storming && now - lastStormWarningAt >= 60_000) {
+      const { heapUsed, heapTotal, external, arrayBuffers } = process.memoryUsage();
+      publishWorkerGcStorm({
+        workerId,
+        ...cell?.gcAttribution,
+        cellCount,
+        activeCellCount: cell ? 1 : 0,
+        bridgeMethods: [...new Set(cell?.pendingRequests.map((request) => request.method) ?? [])],
+        majorCollections: stormCollections,
+        intervalMs: stormIntervalMs,
+        heapUsed,
+        heapTotal,
+        external,
+        arrayBuffers,
+        heapSizeLimitBytes: getHeapStatistics().heap_size_limit,
+      });
+      lastStormWarningAt = now;
+    }
+    stormStartedAt = now;
+    stormCollections = 0;
+  }
   const elapsedMs = now - gcStartedAt;
   if (elapsedMs < 1_000) {
     return;
@@ -238,8 +275,10 @@ function createCell(
   }
   const program = buildUserSource(source, input.prelude, "utf16");
   const context = createContext(Object.create(null), { microtaskMode: "afterEvaluate" });
+  cellCount++;
   const current: NodeCell = {
     context,
+    gcAttribution: input.gcAttribution,
     config: input.config,
     location: program.location,
     pendingRequests: [],
@@ -384,6 +423,7 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
     receipt?.();
   };
   const config = input.config;
+  workerId = input.gcAttribution?.workerId;
   const startedAt = performance.now();
   const progress = new CodeModeNodeProgress(input.progress);
   try {

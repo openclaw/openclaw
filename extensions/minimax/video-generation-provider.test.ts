@@ -43,7 +43,7 @@ function expectMinimaxFetchCall(index: number, url: string) {
   }
   const [actualUrl, init, timeoutMs, fetchFn] = call;
   expect(actualUrl).toBe(url);
-  expect(init?.method).toBe("GET");
+  expect(init).toMatchObject({ method: "GET" });
   expect(Number.isInteger(timeoutMs)).toBe(true);
   expect(timeoutMs).toBeGreaterThan(0);
   expect(fetchFn).toBe(fetch);
@@ -196,7 +196,7 @@ describe("minimax video generation provider", () => {
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockRejectedValueOnce(new Error("temporary poll failure"))
+      .mockRejectedValueOnce(new Error("request timeout"))
       .mockResolvedValueOnce(
         jsonResponse({
           task_id: "task-retry",

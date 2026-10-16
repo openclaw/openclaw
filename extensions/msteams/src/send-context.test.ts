@@ -24,6 +24,10 @@ const sendContextMockState = vi.hoisted(() => {
         id: "mock-app",
         api: {
           serviceUrl: "https://smba.trafficmanager.net/amer/",
+          fromServiceUrl: ({ serviceUrl }: { serviceUrl: string }) => ({
+            serviceUrl,
+            conversations: { activities: getActivities },
+          }),
           conversations: { activities: getActivities },
         },
       },

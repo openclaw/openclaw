@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveAzureApiVersionRequestTarget } from "./azure-api-version-request.js";
 import { readEmbeddingVectors } from "./embedding-vectors.js";
 import {
   addEmbeddingErrorContext,
@@ -46,8 +47,10 @@ export async function fetchRemoteEmbeddingVectors(params: {
   const errorPrefix = `${params.errorPrefix} (model: ${model}, batch size: ${inputCount ?? "unknown"})`;
   const context = { context: errorPrefix, inputCount };
   debugEmbeddingsLog("memory embeddings: remote request", context);
+  const target = resolveAzureApiVersionRequestTarget(params);
   return await postJson({
     ...params,
+    ...target,
     mapResponseError: (error) => addEmbeddingErrorContext(error, params.errorPrefix, errorPrefix),
     onResponse: (res) => {
       debugEmbeddingsLog("memory embeddings: remote response", {

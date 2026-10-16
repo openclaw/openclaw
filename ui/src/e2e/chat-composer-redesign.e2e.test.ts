@@ -714,14 +714,16 @@ suite.define(() => {
       ).toBeLessThanOrEqual(1);
 
       await settings.click();
-      const viewDropdown = page.locator("wa-dropdown.chat-header-session-menu");
+      const viewDropdown = page.locator(".chat-header-session-menu");
       const viewMenu = viewDropdown.getByRole("menuitem", { name: "View", exact: true });
       await expect.poll(() => viewMenu.isVisible()).toBe(true);
       await viewMenu.hover();
       await expect
         .poll(() =>
-          viewMenu
-            .locator('wa-dropdown-item[slot="submenu"] .session-menu__text')
+          viewDropdown
+            .getByRole("menu", { name: "View", exact: true })
+            .getByRole("menuitemcheckbox")
+            .locator(".session-menu__text")
             .allTextContents(),
         )
         .toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
@@ -736,7 +738,7 @@ suite.define(() => {
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");
       await settings.click();
-      await expect.poll(() => viewDropdown.getAttribute("open")).toBeNull();
+      await expect.poll(() => settings.getAttribute("aria-expanded")).toBe("false");
 
       await textarea.fill("Send this message");
       await expect

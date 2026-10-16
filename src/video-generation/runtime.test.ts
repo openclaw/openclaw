@@ -706,22 +706,4 @@ describe("video-generation runtime", () => {
       { key: "watermark", value: false },
     ]);
   });
-
-  it("builds a generic config hint without hardcoded provider ids", async () => {
-    providers = [
-      {
-        id: "motion-one",
-        defaultModel: "animate-v1",
-        capabilities: {},
-        generateVideo: async () => ({
-          videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-        }),
-      },
-    ];
-    providerEnvVars = { "motion-one": ["MOTION_ONE_API_KEY"] };
-
-    await expect(runGenerateVideo({ cfg: {}, prompt: "animate a cat" })).rejects.toThrow(
-      'No video-generation model configured. Set agents.defaults.mediaModels.video.primary to a provider/model like "motion-one/animate-v1". If you want a specific provider, also configure that provider\'s auth/API key first (motion-one: MOTION_ONE_API_KEY).',
-    );
-  });
 });

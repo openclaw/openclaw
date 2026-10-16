@@ -867,6 +867,8 @@ it("Doctor sees an already-current update's completed history after original-sta
         expect.objectContaining({ step: "original-state-capture", status: "completed" }),
       ]),
     });
+    // Drain the fixture's writers so the independent Doctor capture has a quiescent source.
+    await closeOpenClawStateDatabaseAsync();
     const readHistory = vi.spyOn(history, "listUpdateRunsAsync");
     vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(fixture.root);
     // Keep Doctor admission, original capture, config preflight, and history real;

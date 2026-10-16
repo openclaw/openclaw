@@ -32,7 +32,7 @@ scenario:
       faultMarkerPrefix: QA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE
       summaryMarker: QA-COMPACTION-REASONING-RECOVERED-SUMMARY
       finalMarker: QA-COMPACTION-REASONING-FINAL-OK
-      emptyRetryNeedle: The previous attempt did not produce a user-visible answer.
+      emptyRetryNeedle: Continue from the current state
       reasoningRetryNeedle: The previous assistant turn recorded reasoning but did not produce a user-visible answer.
 
 flow:

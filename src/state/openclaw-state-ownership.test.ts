@@ -38,9 +38,9 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "./openclaw-state-ownership-operations.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "./openclaw-state-ownership-preflight.js";
 import * as ownershipWorker from "./openclaw-state-ownership-worker.js";
 import {
-  assertOpenClawStateWriteAllowedAtPath,
   inspectOpenClawStateOwnershipAtPath,
   STATE_SUPERVISION_KEY,
 } from "./openclaw-state-ownership.js";

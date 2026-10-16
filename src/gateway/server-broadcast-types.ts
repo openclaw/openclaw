@@ -17,7 +17,7 @@ type SessionEventProjectionScope = {
   agentId?: string;
 };
 
-/** Connection-owned receipts and live run state, consumed within one publication. */
+/** Connection-owned receipts and run display facts, consumed within one publication. */
 type SessionEventProjectionContext = {
   isCurrentProjection: (owner: object) => boolean;
   resolveAgentScope: (
@@ -27,7 +27,7 @@ type SessionEventProjectionContext = {
   forgetAncestors: (key?: string) => void;
   references: (client: GatewayClient) => SessionAncestorReferences;
   forgetConnectionAncestors: (client: GatewayClient) => void;
-  getRunProjector: () => (selection: {
+  createRunProjector: () => (selection: {
     requestedKey: string;
     canonicalKey: string;
     sessionId?: string;

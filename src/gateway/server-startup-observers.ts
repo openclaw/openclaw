@@ -75,6 +75,7 @@ export async function runGatewayStartupObservers(params: {
   getCron: () => PluginHookGatewayCronService | undefined;
   isClosing?: () => boolean;
   waitForPostReadyWork?: () => Promise<void>;
+  onSubagentRecoverySettled?: () => void;
   startupTrace?: GatewayStartupTrace;
   log: { warn: (message: string) => void };
   logHooks: {
@@ -105,17 +106,21 @@ export async function runGatewayStartupObservers(params: {
       await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
         // Restored wakes start their admission budget at dispatch. Join reader startup
         // first, including maintenance that shares compute with foreground admission.
-        const { prewarmGatewaySessionHistory } = await import("./server-history-prewarm.js");
-        await prewarmGatewaySessionHistory(params.config, {
-          includeMaintenance: true,
-          isCancelled: () => params.signal.aborted || params.isClosing?.() === true,
+        await measureStartup(params.startupTrace, "sidecars.recovery-readers", async () => {
+          const { prewarmGatewaySessionHistory } = await import("./server-history-prewarm.js");
+          await prewarmGatewaySessionHistory(params.config, {
+            includeMaintenance: true,
+            isCancelled: () => params.signal.aborted || params.isClosing?.() === true,
+          });
         });
         // A crash can leave agent databases under background integrity admission.
         // Discover saved deliveries only after the existing reader startup joins it.
         if (context && !params.signal.aborted && !params.isClosing?.()) {
           try {
-            const { recoverSessionSendDeliveries } = await import("./session-send-recovery.js");
-            await recoverSessionSendDeliveries(context, params.signal);
+            await measureStartup(params.startupTrace, "sidecars.delivery-recovery", async () => {
+              const { recoverSessionSendDeliveries } = await import("./session-send-recovery.js");
+              await recoverSessionSendDeliveries(context, params.signal, params.startupTrace);
+            });
           } catch (error) {
             if (!params.signal.aborted) {
               params.log.warn(
@@ -124,19 +129,40 @@ export async function runGatewayStartupObservers(params: {
             }
           }
         }
-        const activateSubagentRegistry = await params.loadSubagentRegistryActivation();
+        if (!params.signal.aborted && !params.isClosing?.()) {
+          await measureStartup(params.startupTrace, "sidecars.exec-recovery", async () => {
+            try {
+              const { recoverExecExitNotifications } =
+                await import("../agents/bash-tools.exec-notify.js");
+              await recoverExecExitNotifications(params.config, params.signal);
+            } catch (error) {
+              if (!params.signal.aborted) {
+                params.log.warn(`Exec restart notifications remain pending: ${String(error)}`);
+              }
+            }
+          });
+        }
+        const activateSubagentRegistry = await measureStartup(
+          params.startupTrace,
+          "sidecars.subagent-load",
+          params.loadSubagentRegistryActivation,
+        );
         if (!params.signal.aborted && params.isClosing?.() !== true) {
-          await activateSubagentRegistry(params.resolveGatewayContext);
+          await measureStartup(params.startupTrace, "sidecars.subagent-activation", () =>
+            activateSubagentRegistry(params.resolveGatewayContext),
+          );
         }
       });
     },
     "startup:subagent-recovery",
     params.signal,
-  ).catch((err: unknown) => {
-    if (!params.signal.aborted && !params.isClosing?.()) {
-      params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);
-    }
-  });
+  )
+    .catch((err: unknown) => {
+      if (!params.signal.aborted && !params.isClosing?.()) {
+        params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);
+      }
+    })
+    .finally(params.onSubagentRecoverySettled);
   const sentinelRefresh = runWithGatewayIndependentRootWorkAdmission(
     async () => {
       await measureStartup(params.startupTrace, "post-attach.update-sentinel", async () => {

@@ -71,6 +71,7 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
   "meeting-transcript-start-time": ["meeting_transcript_sessions"],
   "portable-identity-columns-v22": ["acp_sessions", ...STATE_CURSOR_TABLES_V22],
   "task-run-indexes-v24": [],
+  "subagent-operator-recovery-v25": [],
   "predicate-columns-v21": [
     "meeting_transcript_sessions",
     "meeting_transcript_summaries",
@@ -442,6 +443,9 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   }
   if (userVersion < 24 && tableExists(db, "task_runs")) {
     migrations.push({ kind: "task-run-indexes-v24", path: pathname });
+  }
+  if (userVersion < 25) {
+    migrations.push({ kind: "subagent-operator-recovery-v25", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

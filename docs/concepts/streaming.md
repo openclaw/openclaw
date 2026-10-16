@@ -15,6 +15,14 @@ token-delta streaming** to channel messages:
 - **Preview streaming (Telegram/Discord/Slack/Matrix/Mattermost/MS Teams):**
   update a temporary **preview message** while generating (send + edits/appends).
 
+Rapid provider deltas are coalesced before channel preview callbacks and worker
+preview snapshots, with a 75 ms cadence. Message boundaries and final settlement
+flush pending text; a provider pause can leave the last partial waiting for its
+next event. Each channel still applies its own network update cadence. Final
+replies and stored transcript content retain the complete text.
+The embedded TUI also batches text presentation at 75 ms, flushing before tools,
+replacements, and terminal events.
+
 ## Control UI startup status
 
 After `chat.send` acknowledges an active run, the Gateway can send a typed,
@@ -24,8 +32,10 @@ workspace preparation, environment provisioning, context preparation, and
 model startup.
 
 The first assistant delta or tool start permanently replaces startup status for
-that run. Approval status takes precedence while a tool is waiting for operator
-action. Worktree creation and initial cloud dispatch happen before a chat run
+that run. Session-list and sidebar activity stays on until the run settles,
+including while the final reply is still streaming or being delivered. An answer
+delta or attempt-level finishing signal alone does not mark the session idle.
+Approval status takes precedence while a tool is waiting for operator action. Worktree creation and initial cloud dispatch happen before a chat run
 exists, so their pre-run RPC progress is not presented as run startup status;
 environment provisioning appears here only when an active run reprovisions a
 reclaimed worker.

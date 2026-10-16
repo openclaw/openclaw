@@ -10,7 +10,7 @@ read_when:
 
 Use GitHub-hosted runners for independent checks that fit the workflow's remaining time. Retain Blacksmith where the measured job tail threatens completion. Qualify RunsOn by workload before assigning it a production tier. Requested Blacksmith 8/16/32 labels delivered 2/4/8 CPUs in the capacity check; labels are not worker counts.
 
-The table compares eleven successful B1/R1 main runs with five later successful main runs: `35679872894`, `35679457587`, `35678156129`, `35677164460`, and `35675497006`. These are longitudinal observations with different source revisions, not controlled provider comparisons. Values are median [maximum] complete job seconds; a dash means unmeasured. Existing trust, retry, and [hosted assignment admission](/ci/runners#hybrid-hosted-assignment-guard) still apply.
+The historical table compares eleven successful B1/R1 main runs with five later successful main runs: `35679872894`, `35679457587`, `35678156129`, `35677164460`, and `35675497006`. These are longitudinal observations with different source revisions, not controlled provider comparisons. Values are median [maximum] complete job seconds; a dash means unmeasured. Placement describes that historical routing; the current critical-control policy is recorded below. Existing trust, retry, and [hosted assignment admission](/ci/runners#hybrid-hosted-assignment-guard) still apply.
 
 | Job family                                                 |            Blacksmith |                               GitHub-hosted | Hybrid placement               |
 | ---------------------------------------------------------- | --------------------: | ------------------------------------------: | ------------------------------ |
@@ -132,6 +132,33 @@ Numbered compact bins change when membership changes. A matching suffix does not
 
 ## Hosted assignment on the critical path
 
+Ordinary push and scheduled runs in `openclaw/openclaw`, and its same-repository
+PRs, now route `preflight`, the selected `pr-failure-report`, and
+`openclaw/ci-gate` to hosted `ubuntu-24.04` in hybrid mode. Fork first attempts
+retain Blacksmith preflight and gate, with their reporter already hosted. All
+dispatch qualification/release overrides, runner groups, retries and other
+backend modes keep their existing routes. This removes three Blacksmith
+assignments per eligible PR and two per eligible main run. The mandatory hosted
+controls count within the existing 40-row base threshold and 45-row admission
+limit before optional offloads; there are no new jobs or higher limits.
+
+An October 15 sample of 26 PR runs recorded 148 minutes of preflight waiting,
+mean 5.69 minutes per run, p75 12.9 minutes and maximum 24.3 minutes; eight of the
+26 waited more than five minutes. Median PR wall time was 35.6 minutes, while
+preflight execution took about one to two minutes. A separate tail-control
+sample waited 27 minutes for 12 seconds of work. These observations identify
+queue exposure; they do not measure the result of the hosted routing change.
+
+Estimated hosted cost is three to four nominal rounded runner-minutes per
+same-repository PR, for roughly two to three compute minutes across the three
+controls. This is an estimate, not observed billing or a demonstrated workflow
+speedup. Hosted queues can also delay completion; measure the first natural
+runs before claiming queue avoidance or lower workflow wall time. Heavy jobs,
+optional offload admission and all validation commands remain unchanged.
+
+The following September observations explain the previous routing decision and
+are retained as historical evidence.
+
 In main run `35810905247` (September 23, 2026), the gate completed 1,068 seconds
 after `run_started_at`; the run metadata finalized one second later. The jobs
 endpoint reports 105 rows, including skipped jobs, so the second page is required
@@ -164,12 +191,13 @@ That chain spends 130 seconds in hosted queueing, two in creation, 632 executing
 and 16 in Blacksmith queueing. No test depends on the artifact build in either
 chain. Changing matrix shape would not remove the gate's serial queue.
 
-Trusted hybrid first attempts therefore request the 16-class for both
-packed core-lint rows and the 4-class for the gate. The logical lint partitions, single
-lint thread, extension-lint rows, main parity slots,
-workflow dependencies, and deadlines stay unchanged. Hosted remains the route
-for independent cheap work. RunsOn's cron evidence does not qualify lint or a
-Bash-only gate, so those workloads retain the measured Blacksmith route.
+These September observations previously motivated the 16-class for both
+packed core-lint rows and the 4-class for the gate. Core lint retains its measured
+Blacksmith route. The current ordinary same-repository hybrid controls use the
+hosted routing above; fork, dispatch and RunsOn overrides remain. Logical lint
+partitions, the single lint thread, extension-lint rows, main parity slots,
+workflow dependencies and deadlines are unchanged. RunsOn's cron evidence does
+not qualify lint or the gate for RunsOn placement.
 The existing health owner also rejects optional check offloads after observed
 hosted waits reach sixty seconds, replacing its former three-minute threshold.
 This protects the central type and dependency rows when assignment consumes
@@ -211,6 +239,34 @@ This replaces the stale historical `80 + 3 + 1` explanation without spending
 headroom or changing matrix caps. Manual/frozen release jobs and other workflows
 are outside this conditional arrival envelope; it does not establish complete
 organization-wide usage.
+
+## Compiler planning queue
+
+The October 15 post-batching cohort still showed a separate Blacksmith queue
+before type/lint admission. In the first three assigned planners whose PR bases
+contained both `908efae6fe8b` and `9915d01d074a`, creation-to-start wait was
+559 seconds median and 637 seconds p75. Two completed planners then took
+113 and 151 seconds. These are incomplete natural-run observations, not a
+whole-workflow speedup measurement.
+
+Same-repository hybrid PR first attempts therefore use hosted `check-plan`
+with its existing serial discovery mode. A current-source replay produced an
+identical complete plan in both modes: batched discovery took 16.7 seconds
+and serial took 87.7 seconds on the same Mac; maximum RSS fell from 16.5 GB to
+5.65 GB. A Node 24.21.0 Linux replay also returned the identical plan in 225 seconds
+under a hard two-CPU, 7-GiB limit with no swap. It reused the same pinned native
+compiler on ARM64; GitHub x64 latency remains unmeasured. These local
+measurements establish the execution tradeoff, not hosted job latency. The complete graph validator and all compiler/lint execution
+owners remain unchanged. The extra mandatory hosted row is reserved before
+optional offloads within the existing 40-row threshold and 45-row limit.
+
+Only the planner moves; memory-heavy type/lint workers retain their qualified
+runner classes. Pushes, schedules, forks, retries and manual/release overrides
+retain their routes. Natural CI must establish the new planner queue, complete
+job duration and workflow wall time. Setup plus the Linux replay suggests about
+five to six hosted runner-minutes per eligible PR, replacing one Blacksmith
+16-class assignment; this is an estimate, not billing evidence. No dispatch or
+rerun is needed for that observation.
 
 ## Ratchet admission and Node tests
 

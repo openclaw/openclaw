@@ -27,7 +27,7 @@ import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { getSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
-import { isTalkRealtimeVoiceEntry } from "./session-manager-codec.js";
+import { isOutOfTurnHistoryEntry } from "./session-manager-codec.js";
 import {
   prepareCurrentTurnReplaySelection,
   resolveCurrentTurnEntryId,
@@ -339,7 +339,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       if (
         committed.result?.adoptedMessageId &&
         !committed.result.appended &&
-        this.resolveCurrentTurnEntryId(isTalkRealtimeVoiceEntry) !==
+        this.resolveCurrentTurnEntryId(isOutOfTurnHistoryEntry) !==
           committed.result.adoptedMessageId
       ) {
         throw new Error(
@@ -399,9 +399,9 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       reload();
       // Context-excluded users have no payload in byId. The exact SQLite replay
       // anchors their identity; physical ancestry still closes older turns.
-      // Final Talk speech records history without consuming the consult's keyed input.
+      // Talk speech and direct child-result mirrors do not consume the open keyed input.
       if (
-        this.resolveCurrentTurnEntryId(isTalkRealtimeVoiceEntry) !==
+        this.resolveCurrentTurnEntryId(isOutOfTurnHistoryEntry) !==
         persistenceResult.adoptedMessageId
       ) {
         throw new Error(

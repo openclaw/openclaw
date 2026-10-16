@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
@@ -102,6 +102,15 @@ function persistedDigest(harness: Harness, index = 0) {
     | undefined;
 }
 
+function nextPersistence(harness: Harness): Promise<void> {
+  const persisted = createDeferred();
+  harness.persistDigest.mockImplementationOnce(async () => {
+    persisted.resolve();
+    return true;
+  });
+  return persisted.promise;
+}
+
 function broadcastDigest(harness: Harness, index = 0) {
   return harness.broadcastToConnIds.mock.calls.at(index)?.[1] as SessionObserverDigest | undefined;
 }
@@ -159,9 +168,9 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(harness.persistDigest.mock.calls[0]?.[0]?.digest).toMatchObject({ health: "done" });
   });
 
-  it.each([false, true])(
+  it.for([false, true])(
     "recovers the owner of a contextless terminal (dormant: %s)",
-    async (dormant) => {
+    async (dormant, { signal }) => {
       const { harness } = createPersistedHarness();
       startAndAddToolNotes(harness.observer);
       if (dormant) {
@@ -171,8 +180,11 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       const terminal = lifecycleEvent({ phase: "end", startedAt: 0, endedAt: 30_000 });
       delete terminal.sessionKey;
       delete terminal.agentId;
+      const persisted = nextPersistence(harness);
+      const published = createDeferred();
+      harness.broadcastToConnIds.mockImplementationOnce(() => published.resolve());
       harness.observer.handleEvent(terminal);
-      await flushObserver();
+      await withinTest(Promise.all([persisted, published.promise]), signal);
       expect(broadcastDigest(harness, -1)).toMatchObject({ runId: "run-1", health: "done" });
       expect(persistedDigest(harness)).toMatchObject({ runId: "run-1", health: "done" });
       expect(harness.persistDigest).toHaveBeenCalledOnce();
@@ -197,7 +209,9 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     });
   });
 
-  it("does not finalize a retryable attempt error before same-run fallback succeeds", async () => {
+  it("does not finalize a retryable attempt error before same-run fallback succeeds", async ({
+    signal,
+  }) => {
     const harness = createHarness();
     emitEvent(harness, "lifecycle", { phase: "start", startedAt: 0 });
     await vi.advanceTimersByTimeAsync(30_000);
@@ -212,7 +226,9 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     emitEvent(harness, "lifecycle", { phase: "start", startedAt: 30_000 });
     expect(vi.getTimerCount()).toBe(0);
     vi.setSystemTime(60_000);
+    const persisted = nextPersistence(harness);
     await handleLifecycle(harness, { phase: "end", endedAt: 60_000 });
+    await withinTest(persisted, signal);
 
     expect(observerBroadcasts(harness).map((call) => call[1])).toEqual([
       expect.objectContaining({ health: "done" }),
@@ -220,7 +236,9 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(harness.persistDigest).toHaveBeenCalledOnce();
   });
 
-  it("corrects an expired retryable failure after repeated same-run attempt errors", async () => {
+  it("corrects an expired retryable failure after repeated same-run attempt errors", async ({
+    signal,
+  }) => {
     const harness = createHarness();
     emitEvent(harness, "lifecycle", { phase: "start", startedAt: 0 });
     await vi.advanceTimersByTimeAsync(30_000);
@@ -236,7 +254,9 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
 
     expect(broadcastDigest(harness, -1)).toMatchObject({ health: "failed" });
     const failureRevision = broadcastDigest(harness, -1)?.revision;
+    const persisted = nextPersistence(harness);
     await handleLifecycle(harness, { phase: "end", endedAt: 70_000 });
+    await withinTest(persisted, signal);
 
     expect(broadcastDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-1" });
     expect(persistedDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-1" });
@@ -267,14 +287,20 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(broadcastDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-2" });
   });
 
-  it("does not replay terminal persistence after an unknown write outcome", async () => {
+  it("does not replay terminal persistence after an unknown write outcome", async ({ signal }) => {
     vi.setSystemTime(30_000);
+    const attempted = createDeferred();
     const persistDigest = vi
       .fn()
-      .mockRejectedValueOnce(new Error("write outcome unknown"))
+      .mockImplementationOnce(async () => {
+        attempted.resolve();
+        throw new Error("write outcome unknown");
+      })
       .mockResolvedValueOnce(true);
     const harness = createHarness({ persistDigest });
     await handleLifecycle(harness, { phase: "end", startedAt: 0, endedAt: 30_000 });
+    await withinTest(attempted.promise, signal);
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(persistDigest).toHaveBeenCalledTimes(1);
   });

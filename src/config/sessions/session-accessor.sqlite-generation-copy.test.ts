@@ -4,7 +4,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { copySqliteSessionGenerationRows } from "./session-accessor.sqlite-generation-copy.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 
-it("rejects a streaming copy onto its source before deleting any rows", async () => {
+it("treats a streaming copy onto its source as a no-op without deleting any rows", async () => {
   await withOpenClawTestState({ label: "generation-self-copy" }, async (state) => {
     const scope = {
       agentId: "main",
@@ -38,7 +38,7 @@ it("rejects a streaming copy onto its source before deleting any rows", async ()
             sessionId: scope.sessionId,
             sourceWindowPresent: true,
           }),
-        ).toThrow("requires distinct source and destination databases");
+        ).not.toThrow();
         expect(snapshot()).toEqual(before);
       },
       { agentId: scope.agentId, env: scope.env },

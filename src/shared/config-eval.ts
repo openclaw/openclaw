@@ -106,7 +106,6 @@ function resolveBinarySearch(cache = resolveBinaryCache()) {
   return {
     cache,
     isWindows,
-    pathExt: isWindows ? process.env.PATHEXT : undefined,
     parts: cache.path.split(path.delimiter).filter(Boolean),
     extensions: isWindows ? windowsPathExtensions(process.env.PATHEXT) : [""],
   };
@@ -146,16 +145,12 @@ export function hasBinary(bin: string): boolean {
 export async function prepareBinaryAvailability(
   bins: Iterable<string>,
   assertCurrent?: () => void,
-): Promise<{ hasBinary: (bin: string) => boolean; isCurrent: () => boolean }> {
+): Promise<{ hasBinary: (bin: string) => boolean }> {
   const search = resolveBinarySearch();
   const cwd = process.cwd();
   const pending = new Set(bins).values();
   const available = new Set<string>();
   let failure: { error: unknown } | undefined;
-  const isCurrent = () =>
-    (process.env.PATH ?? "") === search.cache.path &&
-    (search.isWindows ? process.env.PATHEXT : undefined) === search.pathExt &&
-    process.cwd() === cwd;
   const probe = async (bin: string) => {
     for (const candidate of binaryCandidates(search, bin)) {
       if (failure) {
@@ -175,16 +170,14 @@ export async function prepareBinaryAvailability(
         continue;
       }
       assertCurrent?.();
-      if (isCurrent()) {
-        available.add(bin);
-      }
+      available.add(bin);
       return;
     }
   };
   const worker = async () => {
     try {
       for (;;) {
-        if (failure || !isCurrent()) {
+        if (failure) {
           return;
         }
         assertCurrent?.();
@@ -204,5 +197,5 @@ export async function prepareBinaryAvailability(
     throw failure.error;
   }
   assertCurrent?.();
-  return { hasBinary: (bin) => available.has(bin), isCurrent };
+  return { hasBinary: (bin) => available.has(bin) };
 }

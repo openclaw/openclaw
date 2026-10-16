@@ -1,13 +1,4 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  flush,
-  For,
-  onCleanup,
-  Show,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show, untrack } from "solid-js";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
@@ -91,10 +82,10 @@ function useRoster(props: RosterProps) {
     host();
     return store().snapshot;
   }, presented);
+  const cached = createMemo(() => cachedRosterCards(host()));
   const cards = createParkedProjection(() => {
-    const cached = cachedRosterCards(host());
-    if (cached) {
-      return cached;
+    if (cached()) {
+      return cached()!;
     }
     const currentContext = context();
     return snapshot().cards.map((card) =>
@@ -118,20 +109,13 @@ export function SidebarAgentRoster(props: RosterProps) {
   const empty = createParkedProjection(() => props.empty, presented);
   const gatewaySnapshot = createParkedProjection(() => roster.gateway().read(), presented);
   const settingsScope = createMemo(() => gatewaySnapshot().connection.gatewayUrl);
-  const [collapsed, setCollapsed] = createSignal<ReadonlySet<string>>(
-    new Set(
+  // Restore saved choices only when the Gateway scope changes, retaining local toggles otherwise.
+  const [collapsed, setCollapsed] = createSignal<ReadonlySet<string>>(() => {
+    const gatewayUrl = settingsScope();
+    return new Set(
       untrack(() => props.host.sidebarSnapshot?.collapsedAgentIds) ??
-        loadSettings(settingsScope()).sidebarCollapsedAgentIds ??
+        loadSettings(gatewayUrl).sidebarCollapsedAgentIds ??
         [],
-    ),
-  );
-  createEffect(settingsScope, (gatewayUrl) => {
-    setCollapsed(
-      new Set(
-        props.host.sidebarSnapshot?.collapsedAgentIds ??
-          loadSettings(gatewayUrl).sidebarCollapsedAgentIds ??
-          [],
-      ),
     );
   });
   createEffect(
@@ -141,24 +125,29 @@ export function SidebarAgentRoster(props: RosterProps) {
     },
   );
   createEffect(roster.store, (store) => () => store.setInvolvingMe(false));
-  createEffect(
-    () => ({ active: presented(), collapsed: collapsed() }),
-    ({ active, collapsed: collapsedIds }) => {
-      if (!active) {
-        return;
+  // Sidebar queries keep the last admitted selection while the roster is parked.
+  const queryCollapsed = createMemo<ReadonlySet<string> | null>((previous) =>
+    presented() ? collapsed() : (previous ?? null),
+  );
+  // Owner publications must not tear down the query accessor on the same host.
+  const hostIdentity = createMemo(() => props.host);
+  // The synchronous owner publishes through its own frame, not this child's dependencies.
+  const readCollapsed = () => untrack(queryCollapsed);
+  createEffect(hostIdentity, (host) => {
+    host.readRosterCollapsedAgentIds = readCollapsed;
+    return () => {
+      if (host.readRosterCollapsedAgentIds === readCollapsed) {
+        host.readRosterCollapsedAgentIds = null;
+        host.requestUpdate();
       }
-      const host = props.host;
-      if (host.rosterCollapsedAgentIds !== collapsedIds) {
-        host.rosterCollapsedAgentIds = collapsedIds;
+    };
+  });
+  createEffect(
+    () => [hostIdentity(), queryCollapsed()] as const,
+    ([host, ids]) => {
+      if (ids) {
         host.sessionData.requestSessionDataUpdate();
       }
-    },
-  );
-  createEffect(
-    () => props.host,
-    (host) => () => {
-      host.rosterCollapsedAgentIds = null;
-      host.requestUpdate();
     },
   );
   const setCollapsedAgents = (next: ReadonlySet<string>) => {
@@ -197,9 +186,6 @@ export function SidebarAgentRoster(props: RosterProps) {
           </Show>
           <For each={roster.cards()} keyed={(card) => card.id}>
             {(card) => {
-              const [menuOpened, setMenuOpened] = createSignal(false);
-              let removeMenuPreparation: (() => void) | undefined;
-              onCleanup(() => removeMenuPreparation?.());
               const runVisibility = sessionRunVisibility;
               const sections = () =>
                 parkedSections().filter((section) => section.id.startsWith(`agent:${card().id}:`));
@@ -247,25 +233,44 @@ export function SidebarAgentRoster(props: RosterProps) {
                 runVisibility,
               });
               const access = () => roster.host().readNewSessionAccess();
+              const collapseLabel = () =>
+                t(isCollapsed() ? "agentsHome.expandAgent" : "agentsHome.collapseAgent", {
+                  agent: card().name,
+                });
               return (
                 <section
                   class="sidebar-agent-roster__group"
                   data-agent-group={card().id}
                   aria-label={card().name}
                 >
-                  <div class="sidebar-agent-roster__header session-row-host">
-                    <Show when={hasSessions()}>
+                  <div
+                    class={[
+                      "sidebar-agent-roster__header session-row-host",
+                      { "sidebar-agent-roster__header--current": active() },
+                    ]}
+                  >
+                    {/* The avatar doubles as the collapse toggle (it shows a chevron on
+                        hover/focus), so the header needs no separate disclosure column. */}
+                    <Show
+                      when={hasSessions()}
+                      fallback={
+                        <span class="sidebar-agent-roster__avatar" aria-hidden="true">
+                          <AgentIdentityAvatar agent={card()} />
+                        </span>
+                      }
+                    >
                       <button
                         type="button"
-                        class="sidebar-agent-roster__action sidebar-agent-roster__chevron"
+                        class="sidebar-agent-roster__toggle"
                         data-agent-collapse={card().id}
-                        aria-label={t(
-                          isCollapsed() ? "agentsHome.expandAgent" : "agentsHome.collapseAgent",
-                          { agent: card().name },
-                        )}
+                        aria-label={collapseLabel()}
+                        title={collapseLabel()}
                         aria-expanded={isCollapsed() ? "false" : "true"}
                         onClick={() => toggleAgent(card().id)}
                       >
+                        <span class="sidebar-agent-roster__avatar" aria-hidden="true">
+                          <AgentIdentityAvatar agent={card()} />
+                        </span>
                         <span class="sidebar-agent-roster__chevron" aria-hidden="true">
                           <Icon name={isCollapsed() ? "chevronRight" : "chevronDown"} />
                         </span>
@@ -284,9 +289,6 @@ export function SidebarAgentRoster(props: RosterProps) {
                         }
                       }}
                     >
-                      <span class="sidebar-agent-roster__avatar" aria-hidden="true">
-                        <AgentIdentityAvatar agent={card()} />
-                      </span>
                       <span class="sidebar-agent-roster__copy">
                         <span>{card().name}</span>
                       </span>
@@ -320,7 +322,7 @@ export function SidebarAgentRoster(props: RosterProps) {
                         get agentId() {
                           return card().id;
                         },
-                        className: "sidebar-agent-roster__action sidebar-agent-roster__new",
+                        class: "sidebar-agent-roster__action sidebar-agent-roster__new",
                         get label() {
                           return `${t("agentChip.newConversation")}: ${card().name}`;
                         },
@@ -337,25 +339,9 @@ export function SidebarAgentRoster(props: RosterProps) {
                         label={t("agentsHome.agentOptions", { agent: card().name })}
                         triggerClass="sidebar-agent-roster__action"
                         trigger={<Icon name="moreHorizontal" />}
+                        lazy
                         ref={({ overlay }) => {
                           overlay.surface.dataset.chatAutotypeExempt = "";
-                          const trigger = overlay.trigger!;
-                          const prepare = () => {
-                            setMenuOpened(true);
-                            // Populate lazy rows before the menu's admission check.
-                            flush();
-                          };
-                          const keydown = (event: KeyboardEvent) => {
-                            if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) {
-                              prepare();
-                            }
-                          };
-                          trigger.addEventListener("click", prepare, true);
-                          trigger.addEventListener("keydown", keydown, true);
-                          removeMenuPreparation = () => {
-                            trigger.removeEventListener("click", prepare, true);
-                            trigger.removeEventListener("keydown", keydown, true);
-                          };
                         }}
                         onBeforeShow={() => {
                           roster.host().dismissTransientMenus();
@@ -381,30 +367,26 @@ export function SidebarAgentRoster(props: RosterProps) {
                               break;
                           }
                         }}
-                        items={
-                          menuOpened()
-                            ? [
-                                {
-                                  id: "main",
-                                  label: t("agentsHome.openMainChat"),
-                                  class: "sidebar-customize-menu__item",
-                                  icon: <Icon name="messageSquare" />,
-                                },
-                                {
-                                  id: "sessions",
-                                  label: t("agentsHome.allSessions"),
-                                  class: "sidebar-customize-menu__item",
-                                  icon: <Icon name="listTree" />,
-                                },
-                                {
-                                  id: "collapse-others",
-                                  label: t("agentsHome.collapseOthers"),
-                                  class: "sidebar-customize-menu__item",
-                                  icon: <Icon name="foldVertical" />,
-                                },
-                              ]
-                            : []
-                        }
+                        items={[
+                          {
+                            id: "main",
+                            label: t("agentsHome.openMainChat"),
+                            class: "sidebar-customize-menu__item",
+                            icon: <Icon name="messageSquare" />,
+                          },
+                          {
+                            id: "sessions",
+                            label: t("agentsHome.allSessions"),
+                            class: "sidebar-customize-menu__item",
+                            icon: <Icon name="listTree" />,
+                          },
+                          {
+                            id: "collapse-others",
+                            label: t("agentsHome.collapseOthers"),
+                            class: "sidebar-customize-menu__item",
+                            icon: <Icon name="foldVertical" />,
+                          },
+                        ]}
                       />
                     </span>
                   </div>

@@ -159,37 +159,6 @@ describe("prepared binary availability", () => {
     expect(hasBinary("fixture-tool")).toBe(false);
   });
 
-  it("does not publish an awaited hit into a different PATH cache", async () => {
-    const binDir = tempDirs.make("openclaw-prepared-path-");
-    const executable = path.join(binDir, "fixture-tool");
-    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(executable, 0o755);
-    vi.stubEnv("PATH", binDir);
-    const pending = prepareBinaryAvailability(["fixture-tool"]);
-    vi.stubEnv("PATH", path.join(binDir, "other"));
-    expect(hasBinary("fixture-tool")).toBe(false);
-    expect((await pending).isCurrent()).toBe(false);
-    expect(hasBinary("fixture-tool")).toBe(false);
-  });
-
-  it("invalidates prepared PATHEXT candidates without changing synchronous successful-hit semantics", async () => {
-    mockProcessPlatform("win32");
-    const binDir = tempDirs.make("openclaw-prepared-pathext-");
-    const executable = path.join(binDir, "fixture-tool.CMD");
-    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(executable, 0o755);
-    vi.stubEnv("PATH", binDir);
-    vi.stubEnv("PATHEXT", undefined);
-    const pending = prepareBinaryAvailability(["fixture-tool"]);
-    vi.stubEnv("PATHEXT", "");
-    expect((await pending).isCurrent()).toBe(false);
-    expect(hasBinary("fixture-tool")).toBe(false);
-    vi.stubEnv("PATHEXT", ".CMD");
-    expect((await prepareBinaryAvailability(["fixture-tool"])).hasBinary("fixture-tool")).toBe(
-      true,
-    );
-  });
-
   it("keeps filesystem lookup semantics for nested binary names", async () => {
     const binDir = tempDirs.make("openclaw-prepared-nested-");
     fs.mkdirSync(path.join(binDir, "nested"));
@@ -214,7 +183,6 @@ describe("prepared binary availability", () => {
     const facts = await prepareBinaryAvailability(["missing-tool-a", "missing-tool-b"]);
     expect(facts.hasBinary("missing-tool-a")).toBe(false);
     expect(facts.hasBinary("missing-tool-b")).toBe(false);
-    expect(facts.isCurrent()).toBe(true);
     expect(cwdSpy.mock.calls.length).toBeLessThan(20);
   });
 });

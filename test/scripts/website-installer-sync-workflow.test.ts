@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { compileFunction } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -246,5 +247,165 @@ ${run}`,
     expect(workflow).toContain("rm -f openclaw.ai/public/install.cmd");
     expect(workflow).toContain("bun run build");
     expect(workflow).toContain("git push origin HEAD:main");
+  });
+});
+
+describe("installer platform admission", () => {
+  const workflow = parse(readFileSync(WORKFLOW_PATH, "utf8")) as {
+    jobs: Record<
+      string,
+      {
+        if?: string;
+        steps: { id?: string; name?: string; if?: string; with?: { script?: string } }[];
+      }
+    >;
+  };
+  const script = workflow.jobs.scope?.steps.find((step) => step.id === "scope")?.with?.script;
+  if (!script) {
+    throw new Error("Missing installer platform selection");
+  }
+  const execute = compileFunction(
+    `return (async () => {
+${script}
+})();`,
+    ["context", "core", "exec", "process"],
+  ) as (...args: unknown[]) => Promise<void>;
+  const unixJobs = [
+    "linux-docker",
+    "debian-installer",
+    "linux-build-tools-failure",
+    "linux-non-root",
+    "fedora-installer",
+    "macos-installer",
+  ];
+
+  async function select(
+    options: {
+      event?: string;
+      cwd?: string;
+      checkout?: string;
+      diffExitCodes?: number[];
+    } = {},
+  ) {
+    const outputs: Record<string, string> = {};
+    let diffCalls = 0;
+    await execute(
+      { eventName: options.event ?? "pull_request" },
+      {
+        setOutput: (key: string, value: string) => {
+          outputs[key] = value;
+        },
+        info() {},
+        warning() {},
+      },
+      {
+        getExecOutput: async (command: string, args: string[]) => {
+          const exitCode = options.diffExitCodes?.[diffCalls++];
+          if (exitCode !== undefined) {
+            return { exitCode };
+          }
+          const result = spawnSync(command, args, { cwd: options.cwd, encoding: "utf8" });
+          return { exitCode: result.status ?? 128 };
+        },
+      },
+      { env: { INSTALLER_CHECKOUT_OUTCOME: options.checkout ?? "success" } },
+    );
+    const needs = { scope: { result: "success", outputs } };
+    const evaluate = (guard: string, cancelled = false) =>
+      compileFunction(`return (${guard.replace(/^\$\{\{\s*|\s*\}\}$/gu, "")});`, [
+        "needs",
+        "cancelled",
+      ])(needs, () => cancelled) as boolean;
+    const jobs = Object.fromEntries(
+      [...unixJobs, "windows-installer", "static"].map((job) => [
+        job,
+        evaluate(workflow.jobs[job]!.if!),
+      ]),
+    );
+    const staticSteps = Object.fromEntries(
+      workflow.jobs
+        .static!.steps.filter((step) => step.if)
+        .map((step) => [step.name, evaluate(step.if!)]),
+    );
+    return { outputs, jobs, staticSteps, diffCalls, evaluate };
+  }
+
+  it.each([
+    { file: "scripts/install.ps1", unix: false, windows: true },
+    ...[
+      "scripts/install.sh",
+      "scripts/install-cli.sh",
+      "scripts/install-policy.sh",
+      "scripts/build-installers.mjs",
+      "scripts/lib/standalone-installers.mjs",
+    ].map((file) => ({ file, unix: true, windows: false })),
+    { file: ".github/workflows/website-installer-sync.yml", unix: true, windows: true },
+    { file: "scripts/install.ps1", moveTo: "retired.ps1", unix: false, windows: true },
+    { file: "retired.ps1", moveTo: "scripts/install.ps1", unix: false, windows: true },
+  ])("routes the tested event tree for $file (move: $moveTo)", async (scenario) => {
+    const cwd = tempDirs.make("installer-platform-scope-");
+    const git = (...args: string[]) => {
+      const result = spawnSync(
+        "git",
+        ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args],
+        {
+          cwd,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GIT_AUTHOR_NAME: "Test",
+            GIT_AUTHOR_EMAIL: "test@example.com",
+            GIT_COMMITTER_NAME: "Test",
+            GIT_COMMITTER_EMAIL: "test@example.com",
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+    };
+    const original = path.join(cwd, scenario.file);
+    mkdirSync(path.dirname(original), { recursive: true });
+    writeFileSync(original, "base\n");
+    git("init", "-q");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    if ("moveTo" in scenario && scenario.moveTo) {
+      mkdirSync(path.dirname(path.join(cwd, scenario.moveTo)), { recursive: true });
+      git("mv", scenario.file, scenario.moveTo);
+    } else {
+      writeFileSync(original, "changed\n");
+    }
+    git("add", ".");
+    git("commit", "-qm", "event tree");
+    const result = await select({ cwd });
+    expect(result.outputs).toEqual({
+      unix: String(scenario.unix),
+      windows: String(scenario.windows),
+    });
+    for (const job of unixJobs) {
+      expect(result.jobs[job], job).toBe(scenario.unix);
+    }
+    expect(result.jobs["windows-installer"]).toBe(scenario.windows);
+    expect(result.staticSteps["Shell syntax"]).toBe(scenario.unix);
+    expect(result.staticSteps["PowerShell syntax"]).toBe(scenario.windows);
+    expect(result.jobs.static).toBe(true);
+    expect(result.evaluate(workflow.jobs["windows-installer"]!.if!, true)).toBe(false);
+  });
+
+  it.each(["push", "workflow_dispatch"])("keeps full %s validation", async (event) => {
+    const result = await select({ event });
+    expect(result.diffCalls).toBe(0);
+    expect(result.outputs).toEqual({ unix: "true", windows: "true" });
+    expect(Object.values(result.jobs).every(Boolean)).toBe(true);
+    expect(Object.values(result.staticSteps).every(Boolean)).toBe(true);
+  });
+
+  it.each([
+    { checkout: "failure", diffExitCodes: [] },
+    { diffExitCodes: [128] },
+    { diffExitCodes: [0, 128] },
+  ])("retains every platform when exact scope is unavailable: %j", async (options) => {
+    const result = await select(options);
+    expect(result.outputs).toEqual({ unix: "true", windows: "true" });
+    expect(Object.values(result.jobs).every(Boolean)).toBe(true);
   });
 });

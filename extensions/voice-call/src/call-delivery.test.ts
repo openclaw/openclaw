@@ -2,7 +2,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCallDelivery, type CallDeliveryMessage } from "./call-delivery.js";
-import { VoiceCallConfigSchema } from "./config.js";
+import { normalizeVoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
   createManagerHarness,
@@ -23,7 +23,7 @@ describe("requester call delivery", () => {
     overrides: Record<string, unknown> = {},
     beforeDeliver?: () => Promise<void>,
   ) {
-    const config = VoiceCallConfigSchema.parse({
+    const config = normalizeVoiceCallConfig({
       reports: { enabled: true, includeTranscript: true },
       live: { transcript: false, minIntervalMs: 1000 },
       ...overrides,
@@ -314,7 +314,7 @@ describe("requester call delivery", () => {
   it("records a failed report and still settles call shutdown", async () => {
     const { manager, call } = await setup();
     const delivery = createCallDelivery({
-      config: VoiceCallConfigSchema.parse({ reports: { enabled: true } }),
+      config: normalizeVoiceCallConfig({ reports: { enabled: true } }),
       summarize: async () => "Needs follow-up.",
       deliver: async () => {
         throw new Error("session route unavailable");

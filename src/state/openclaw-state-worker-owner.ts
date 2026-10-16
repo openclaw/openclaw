@@ -30,6 +30,7 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "./openclaw-state-db-cache.js";
+import type { OpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type {
   OpenClawStateWorkerCleanupOperations,
@@ -428,6 +429,7 @@ function createSharedStateWorkerOwner() {
       context: SqliteWorkerStateContext,
       assertOwned: () => void,
       identity: DatabasePathIdentity,
+      maintenanceScope?: OpenClawDatabaseMaintenanceScope,
     ) {
       const expectedIdentity = { ...identity };
       assertOwned();
@@ -479,6 +481,11 @@ function createSharedStateWorkerOwner() {
         { ...captureRuntimeWorkerSource(moduleUrl), databasePath, existingOnly: true },
         context,
         assertCurrent,
+        {
+          cleanupAccess: maintenanceScope && {
+            assertDatabaseAccess: maintenanceScope.assertCleanupDatabaseAccess,
+          },
+        },
       );
     },
     async open(

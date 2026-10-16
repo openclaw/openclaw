@@ -158,7 +158,8 @@ const normalizeTokenCount = (value: unknown): number | undefined => {
     : Math.min(Math.max(0, Math.trunc(numeric)), Number.MAX_SAFE_INTEGER);
 };
 
-function normalizeContextUsage(raw?: ContextUsage): ContextUsage | undefined {
+export function normalizeContextUsage(value: unknown): ContextUsage | undefined {
+  const raw = asOptionalRecord(value);
   if (raw?.state !== "available") {
     return raw?.state === "unavailable" ? { state: "unavailable" } : undefined;
   }

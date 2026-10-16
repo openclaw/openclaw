@@ -164,11 +164,28 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     );
   });
 
+  it("marks an aborted embedded agent run without a run-level error as a cron error", async () => {
+    mockAgentRun({ ...failedRun, meta: { aborted: true } });
+    const result = await runTurn();
+    expectObjectFields(result, { status: "error", error: "cron isolated agent run aborted" });
+  });
+
+  it("keeps explicit silent replies as successful cron completions", async () => {
+    await useRealOutcome();
+    mockAgentRun({
+      usage: { input: 10, output: 1 },
+      meta: { terminalReply: { disposition: "silent" } },
+    });
+    const result = await runTurn();
+    expect(dispatchCronDeliveryMock).toHaveBeenCalled();
+    expectObjectFields(result, { status: "ok", error: undefined });
+  });
+
   it("records a real tool error when the terminal assistant reply is silent", async () => {
     await useRealOutcome();
     mockAgentRun({
       payloads: [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }],
-      meta: { finalAssistantVisibleText: "NO_REPLY" },
+      meta: { terminalReply: { disposition: "silent" } },
     });
     const result = await runTurn();
     expect(result.status).toBe("error");
@@ -304,8 +321,7 @@ describe("delivered report outcome", () => {
       messagingToolSentTargets,
       meta: {
         agentMeta: { usage: { input: 10, output: 20 } },
-        finalAssistantVisibleText: "NO_REPLY",
-        finalAssistantRawText: "NO_REPLY",
+        terminalReply: { disposition: "silent" },
       },
     });
 

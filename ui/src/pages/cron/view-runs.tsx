@@ -1,4 +1,4 @@
-import { createMemo, For } from "solid-js";
+import { createEffect, createMemo, For } from "solid-js";
 import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
 import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
@@ -32,6 +32,7 @@ type CronRunsSectionProps = Pick<
   | "onRefresh"
   | "onRunsFiltersChange"
   | "onViewRunTranscript"
+  | "onHighlightedRun"
 > & {
   conditionActivity?: {
     checkCount: number;
@@ -145,7 +146,10 @@ function FilterDropdown<T extends string>(props: {
         id={`cron-runs-filter-${props.id}`}
         label={`${props.title} ${accessibleSummary()}`}
         class="cron-filter-dropdown__details"
-        triggerClass={`btn btn--sm cron-filter-dropdown__trigger${props.selected.length > 0 ? " active" : ""}`}
+        triggerClass={[
+          "btn btn--sm cron-filter-dropdown__trigger",
+          { active: props.selected.length > 0 },
+        ]}
         triggerAttributes={{ title: props.title }}
         trigger={
           <>
@@ -353,6 +357,7 @@ export function RunsSection(props: CronRunsSectionProps) {
                 entry={entry()}
                 formatTimestamp={formatTimestamp()}
                 highlightedRunId={props.highlightedRunId}
+                onHighlightedRun={(element, link) => props.onHighlightedRun?.(element, link)}
                 onViewRunTranscript={(targetEntry, trigger) =>
                   props.onViewRunTranscript?.(targetEntry, trigger)
                 }
@@ -400,6 +405,7 @@ function Run(props: {
   formatTimestamp: ReturnType<typeof createMsFormatter>;
   highlightedRunId?: string | null;
   onViewRunTranscript?: CronProps["onViewRunTranscript"];
+  onHighlightedRun?: (element: HTMLElement, link: string) => (() => void) | undefined;
 }) {
   const status = () =>
     runStatusLabel(props.entry.status ?? "unknown", props.entry.completionStatus);
@@ -431,10 +437,22 @@ function Run(props: {
       usageSummary(),
     ].filter(Boolean),
   );
-  const highlighted = () =>
-    Boolean(props.highlightedRunId && cronRunEntryMatchesLink(props.highlightedRunId, props.entry));
+  const highlighted = createMemo(() =>
+    props.highlightedRunId && cronRunEntryMatchesLink(props.highlightedRunId, props.entry)
+      ? props.highlightedRunId
+      : null,
+  );
+  let row!: HTMLDivElement;
+  createEffect(highlighted, (selected) =>
+    selected ? props.onHighlightedRun?.(row, selected) : undefined,
+  );
   return (
-    <div class={["cron-run-entry", { "cron-run-entry--highlighted": highlighted() }]}>
+    <div
+      ref={(element) => {
+        row = element;
+      }}
+      class={["cron-run-entry", { "cron-run-entry--highlighted": Boolean(highlighted()) }]}
+    >
       <div class="cron-run-entry__header">
         <div class="cron-run-entry__main">
           <div class="cron-run-entry__title">

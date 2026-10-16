@@ -18,7 +18,6 @@ import {
   createTelegramMessageContextRuntime,
   createTelegramMessageSessionRuntime,
 } from "./bot-handlers.message-context.js";
-import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { telegramPromptContextHistory } from "./group-history-window.js";
 import { readTelegramHistory } from "./history-policy.js";
 import {
@@ -40,21 +39,27 @@ const TOPIC_ID = 77;
 
 let storeScopeId = 0;
 
+const resolveStorePathMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
+  resolveStorePath: resolveStorePathMock,
+}));
+
 /**
  * Builds the runtime against the real message cache so the reaction path's topic
  * recovery is proven through the cache it actually reads, not a stub.
  */
 function createRuntime(cfg: OpenClawConfig = {}) {
   storeScopeId += 1;
+  resolveStorePathMock.mockReturnValue(
+    `/tmp/openclaw-telegram-thread-recovery-${storeScopeId}/store.json`,
+  );
   return createTelegramMessageContextRuntime({
     cfg,
     accountId: "default",
     ownerAgentId: "main",
     opts: {},
     telegramCfg: cfg.channels?.telegram ?? {},
-    telegramDeps: {
-      resolveStorePath: () => `/tmp/openclaw-telegram-thread-recovery-${storeScopeId}/store.json`,
-    } as RegisterTelegramHandlerParams["telegramDeps"],
   });
 }
 
@@ -71,13 +76,14 @@ function forumMessage(messageId: number, threadId?: number): Message {
 
 describe("resolveCachedMessageThreadSpec", () => {
   beforeEach(() => {
+    resolveStorePathMock.mockClear();
     resetTelegramMessageCacheForTest();
   });
 
   it("keeps account cache ownership separate from a topic-routed session owner", async () => {
-    const resolveStorePath = vi.fn(
-      (_store, options: { agentId?: string }) =>
-        `/tmp/openclaw-telegram-owner-${options.agentId}.json`,
+    const resolveStorePath = resolveStorePathMock.mockImplementation(
+      (_store?: string, options?: { agentId?: string }) =>
+        `/tmp/openclaw-telegram-owner-${options?.agentId}.json`,
     );
     const cfg = {
       agents: {
@@ -92,16 +98,10 @@ describe("resolveCachedMessageThreadSpec", () => {
       ownerAgentId: "main",
       opts: {},
       telegramCfg: {},
-      telegramDeps: {
-        resolveStorePath,
-      } as unknown as RegisterTelegramHandlerParams["telegramDeps"],
     });
     const sessionRuntime = createTelegramMessageSessionRuntime({
       accountId: "primary",
       resolveTelegramGroupConfig: () => ({ topicConfig: { agentId: "research" } }),
-      telegramDeps: {
-        resolveStorePath,
-      } as unknown as RegisterTelegramHandlerParams["telegramDeps"],
     });
 
     const session = await sessionRuntime.resolveTelegramSessionState({
@@ -186,6 +186,7 @@ describe("automatic Telegram retained history workload", () => {
 
   function historyRuntime(telegramCfg: TelegramAccountConfig = { groupPolicy: "open" }) {
     const cfg: OpenClawConfig = { channels: { telegram: telegramCfg } };
+    resolveStorePathMock.mockReturnValue(storePath);
     return {
       cfg,
       telegramCfg,
@@ -195,7 +196,6 @@ describe("automatic Telegram retained history workload", () => {
         accountId,
         ownerAgentId: "main",
         opts: {},
-        telegramDeps: { resolveStorePath: () => storePath },
       }),
     };
   }

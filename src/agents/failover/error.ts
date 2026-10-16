@@ -12,6 +12,8 @@ import type { FailoverReason } from "./signal.js";
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
 export const CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE = "cli_partial_output_rejected";
+/** Host-authored planner diagnostic that names a saved login; never provider reply copy. */
+export const AUTH_PROFILE_COOLDOWN_ERROR_CODE = "auth_profile_cooldown";
 
 export type CliTimeoutContext = {
   mode: "overall" | "no-output";
@@ -28,6 +30,7 @@ export type FallbackAttemptRecord = {
   model: string;
   reason: FailoverReason;
   status?: number;
+  code?: string;
   error?: string;
   rateLimitRetriesExhausted?: number;
 };
@@ -161,7 +164,7 @@ export function readDirectErrorMessage(err: unknown): string | undefined {
     return String(err);
   }
   if (typeof err === "symbol") {
-    return err.description ?? undefined;
+    return err.description;
   }
   return readStringField(asOptionalObjectRecord(err), "message") || undefined;
 }

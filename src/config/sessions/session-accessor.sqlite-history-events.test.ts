@@ -5,6 +5,7 @@ import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
@@ -41,8 +42,9 @@ function enforceSqliteVariableLimit(
   database: OpenClawAgentDatabase,
   limit = REGRESSION_SQLITE_VARIABLE_LIMIT,
 ): void {
-  const prepare = database.db.prepare.bind(database.db);
-  vi.spyOn(database.db, "prepare").mockImplementation((source) => {
+  const nativeDb = requireNativeSqliteDatabase(database.db);
+  const prepare = nativeDb.prepare.bind(nativeDb);
+  vi.spyOn(nativeDb, "prepare").mockImplementation((source) => {
     const variableCount = source.match(/\?/gu)?.length ?? 0;
     if (variableCount > limit) {
       throw new Error("too many SQL variables");

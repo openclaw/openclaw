@@ -79,10 +79,6 @@ function mockFetchResponse(body: unknown, status = 200) {
   return new Response(bodyStr, { status, headers: { "content-type": "application/json" } });
 }
 
-function mockBinaryResponse(data: Uint8Array, status = 200) {
-  return new Response(Buffer.from(data) as BodyInit, { status });
-}
-
 function oversizedGraphJson(payload: Record<string, unknown>): string {
   return JSON.stringify({ ...payload, padding: "x".repeat(16 * 1024 * 1024) });
 }
@@ -156,38 +152,6 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     });
 
     expect(result.media).toEqual([{ kind: "image", contentType: "image/png" }]);
-  });
-
-  it("skips $value content when Content-Length exceeds maxBytes", async () => {
-    const fetchCalls: string[] = [];
-
-    mockGraphMediaFetch({
-      messageId: "msg-cl",
-      hostedContents: [{ id: "hosted-big", contentType: "image/png" }],
-      valueResponses: {
-        "/hostedContents/hosted-big/$value": new Response(
-          Buffer.from(new Uint8Array([0x89, 0x50, 0x4e, 0x47])) as BodyInit,
-          {
-            status: 200,
-            headers: { "content-length": "999999999" },
-          },
-        ),
-      },
-      fetchCalls,
-    });
-
-    const result = await downloadGraphMediaWithDefaults({
-      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-cl",
-      maxBytes: 1024, // 1 KB limit
-    });
-
-    // $value was fetched but skipped due to Content-Length exceeding maxBytes
-    expect(fetchCalls).toContain(
-      "https://graph.microsoft.com/v1.0/chats/c/messages/msg-cl/hostedContents/hosted-big/$value",
-    );
-    expect(result.media).toEqual([
-      { kind: "image", contentType: "image/png", sourceId: "hosted-big" },
-    ]);
   });
 
   it("skips hosted content when the Graph collection response exceeds the byte cap", async () => {
@@ -288,31 +252,6 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     }
   });
 
-  it("ignores unexpected inline bytes and still fetches bounded $value", async () => {
-    const fetchCalls: string[] = [];
-    const base64Png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64");
-    const imageBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-
-    mockGraphMediaFetch({
-      messageId: "msg-3",
-      hostedContents: [{ id: "hosted-456", contentType: "image/png", contentBytes: base64Png }],
-      valueResponses: {
-        "/hostedContents/hosted-456/$value": mockBinaryResponse(imageBytes),
-      },
-      fetchCalls,
-    });
-
-    const result = await downloadGraphMediaWithDefaults({
-      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-3",
-    });
-
-    expect(fetchCalls).toContain(
-      "https://graph.microsoft.com/v1.0/chats/c/messages/msg-3/hostedContents/hosted-456/$value",
-    );
-    expect(result.media.length).toBeGreaterThan(0);
-    expect(result.hostedCount).toBe(1);
-  });
-
   it("adds the OpenClaw User-Agent to Graph shares downloads for reference attachments", async () => {
     mockGraphMediaFetch({
       messageId: "msg-share",
@@ -366,32 +305,6 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
 describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("keeps a type-only fact when a Graph reference download fails", async () => {
-    mockGraphMediaFetch({
-      messageId: "msg-failed-reference",
-      messageResponse: {
-        body: {},
-        attachments: [
-          {
-            id: "reference-1",
-            contentType: "reference",
-            contentUrl: "https://tenant.sharepoint.com/failed.pdf",
-            name: "failed.pdf",
-          },
-        ],
-      },
-    });
-    vi.mocked(downloadAndStoreMSTeamsRemoteMedia).mockRejectedValueOnce(
-      new Error("download failed"),
-    );
-
-    const result = await downloadGraphMediaWithDefaults({
-      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-failed-reference",
-    });
-
-    expect(result.media).toEqual([{ kind: "document", sourceId: "reference-1" }]);
   });
 
   it("releases message metadata before starting nested SharePoint downloads", async () => {

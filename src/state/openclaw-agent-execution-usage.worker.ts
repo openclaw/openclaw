@@ -23,15 +23,17 @@ export async function loadUsageCacheOperations() {
         admit("commit");
       }),
     "usageCache.writeRollup": (
-      input: Parameters<typeof writeSessionCostUsageRollupInDatabase>[1],
+      input: Parameters<typeof writeSessionCostUsageRollupInDatabase>[1][],
       { writeTransaction, admit },
     ) =>
       writeTransaction("session-cost-usage.rollup.write", "Usage cache", ({ db }) => {
-        const result = withSqliteDatabaseWriteScope(db, [], () =>
-          writeSessionCostUsageRollupInDatabase(db, input),
-        );
+        withSqliteDatabaseWriteScope(db, [], () => {
+          for (const row of input) {
+            writeSessionCostUsageRollupInDatabase(db, row);
+          }
+        });
         admit("commit");
-        return result;
+        return true;
       }),
     "usageCache.prune": (
       input: Parameters<typeof pruneSessionCostUsageRollupsInDatabase>[1],

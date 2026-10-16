@@ -37,14 +37,19 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "../provider-secret-egress.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
-import { normalizeToolPolicyName } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
+import {
+  resolveContextEngineCompletionRuntimeContext,
+  runWithContextEngineAssemblyAttempt,
+  type ContextEngineAssemblySnapshot,
+} from "./context-engine-assembly-attempt.js";
 import { beginContextEngineLogicalTurn } from "./context-engine-turn-begin.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import {
   assertAgentHarnessExecutionEnvironment,
+  isSystemAgentOnlyAllowlist,
   preparePluginHarnessToolPolicies,
   resolvePluginHarnessDenyAllToolPolicyPrompt,
   resolvePluginHarnessToolPolicies,
@@ -377,88 +382,95 @@ export async function runAgentHarnessAttempt(
     agentId: params.agentId,
   });
   let result: EmbeddedRunAttemptResult;
+  let assembly: ContextEngineAssemblySnapshot | undefined;
   try {
-    result = await runAgentHarnessOperation(harness, params, () =>
-      runWithAgentRingZeroTools(ringZeroTools, async () => {
-        // Resolve plugin policy after entering the host scope. Ring-zero tools are
-        // trusted setup authority and must survive ordinary deny-all policy.
-        const hostOpenClawAuthority =
-          isHostScopedAgentToolActive("openclaw") &&
-          isSystemAgentOnlyAllowlist(pluginAttempt.params.toolsAllow);
-        nativePermissionsConsented = await assertAgentHarnessExecutionEnvironment(harness, params);
-        const preparedParams = selection.builtIn
-          ? pluginAttempt.params
-          : await preparePluginHarnessParams(
-              pluginAttempt.params,
-              harness,
-              nativePermissionsConsented,
-              pluginAttempt.setInputAttachmentReadAllowed,
-            );
-        const effectiveAttemptParams =
-          hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
-            ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
-            : preparedParams;
-        assertPluginHarnessConversationToolPolicySupport(
-          harness,
-          effectiveAttemptParams.pluginHarnessToolPolicyRestricted === true &&
-            !nativePermissionsConsented,
-        );
-        // Load the calculator only after admission and final host policy preparation.
-        return import("./tool-authority.runtime.js").then(
-          ({ withPreparedEmbeddedRunToolAuthority }) =>
-            withPreparedEmbeddedRunToolAuthority(
-              internalParams,
-              effectiveAttemptParams,
-              selection.builtIn
-                ? undefined
-                : (input, sandbox) => {
-                    const policies = resolvePluginHarnessToolPolicies(
-                      {
-                        ...input.run,
-                        modelId: input.run.model,
-                        sandboxSessionKey: input.run.runtimePolicySessionKey,
-                        messageChannel: input.originatingChannel,
-                        toolsAllow: input.toolsAllow,
-                        disableTools: input.disableTools,
-                      },
-                      undefined,
-                      undefined,
-                      sandbox,
-                    );
-                    return resolvePluginHarnessDenyAllToolPolicyPrompt(policies)
-                      ? { ...input, toolsAllow: [] }
-                      : input;
-                  },
-              (prepared) =>
-                pluginAttempt.runWithHostScope(async () => {
-                  if (prepared.trigger !== "user" || !prepared.sessionKey) {
-                    return runPreparedAttempt(prepared);
-                  }
-                  const note = await claimHeartbeatContextForUserRun({
-                    ...prepared,
-                    agentId: resolveSessionAgentIds(prepared).sessionAgentId,
-                    storePath: prepared.sessionTarget?.storePath,
-                    detached: prepared.sessionPersistence === "detached",
-                    assertCurrent: resolveAdmittedRunActiveAssertion(
-                      internalParams.admittedRunContext,
-                      prepared.abortSignal,
-                    ),
-                  });
-                  if (!note) {
-                    return runPreparedAttempt(prepared);
-                  }
-                  return runPreparedAttempt({
-                    ...prepared,
-                    currentInboundContext: appendCurrentInboundContext(
-                      prepared.currentInboundContext,
-                      [{ kind: "heartbeat-outcome", text: note }],
-                    ),
-                  });
-                }),
-            ),
-        );
-      }),
-    );
+    const run = () =>
+      runAgentHarnessOperation(harness, params, () =>
+        runWithAgentRingZeroTools(ringZeroTools, async () => {
+          // Resolve plugin policy after entering the host scope. Ring-zero tools are
+          // trusted setup authority and must survive ordinary deny-all policy.
+          const hostOpenClawAuthority =
+            isHostScopedAgentToolActive("openclaw") &&
+            isSystemAgentOnlyAllowlist(pluginAttempt.params.toolsAllow);
+          nativePermissionsConsented = await assertAgentHarnessExecutionEnvironment(
+            harness,
+            params,
+          );
+          const preparedParams = selection.builtIn
+            ? pluginAttempt.params
+            : await preparePluginHarnessParams(
+                pluginAttempt.params,
+                harness,
+                nativePermissionsConsented,
+                pluginAttempt.setInputAttachmentReadAllowed,
+                attemptParams.runtimePluginToolGrant !== undefined,
+              );
+          const effectiveAttemptParams =
+            hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
+              ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
+              : preparedParams;
+          assertPluginHarnessConversationToolPolicySupport(
+            harness,
+            effectiveAttemptParams.pluginHarnessToolPolicyRestricted === true &&
+              !nativePermissionsConsented,
+          );
+          // Load the calculator only after admission and final host policy preparation.
+          return import("./tool-authority.runtime.js").then(
+            ({ withPreparedEmbeddedRunToolAuthority }) =>
+              withPreparedEmbeddedRunToolAuthority(
+                internalParams,
+                effectiveAttemptParams,
+                selection.builtIn
+                  ? undefined
+                  : (input, sandbox) => {
+                      const policies = resolvePluginHarnessToolPolicies(
+                        {
+                          ...input.run,
+                          modelId: input.run.model,
+                          sandboxSessionKey: input.run.runtimePolicySessionKey,
+                          messageChannel: input.originatingChannel,
+                          toolsAllow: input.toolsAllow,
+                          disableTools: input.disableTools,
+                        },
+                        undefined,
+                        undefined,
+                        sandbox,
+                      );
+                      return resolvePluginHarnessDenyAllToolPolicyPrompt(policies)
+                        ? { ...input, toolsAllow: [] }
+                        : input;
+                    },
+                (prepared) =>
+                  pluginAttempt.runWithHostScope(async () => {
+                    if (prepared.trigger !== "user" || !prepared.sessionKey) {
+                      return runPreparedAttempt(prepared);
+                    }
+                    const note = await claimHeartbeatContextForUserRun({
+                      ...prepared,
+                      agentId: resolveSessionAgentIds(prepared).sessionAgentId,
+                      storePath: prepared.sessionTarget?.storePath,
+                      detached: prepared.sessionPersistence === "detached",
+                      assertCurrent: resolveAdmittedRunActiveAssertion(
+                        internalParams.admittedRunContext,
+                        prepared.abortSignal,
+                      ),
+                    });
+                    if (!note) {
+                      return runPreparedAttempt(prepared);
+                    }
+                    return runPreparedAttempt({
+                      ...prepared,
+                      currentInboundContext: appendCurrentInboundContext(
+                        prepared.currentInboundContext,
+                        [{ kind: "heartbeat-outcome", text: note }],
+                      ),
+                    });
+                  }),
+              ),
+          );
+        }),
+      );
+    ({ result, assembly } = await runWithContextEngineAssemblyAttempt(run));
   } finally {
     pluginAttempt.closeHostCapabilities();
   }
@@ -485,19 +497,12 @@ export async function runAgentHarnessAttempt(
       yieldAborted:
         result.terminal.kind === "aborted" && result.terminal.source === "yield_cleanup",
       isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
-      // Native model identity does not attest the host's window or context cap.
-      runtimeContext:
-        nativeSessionRuntime && result.runtimeModelSelection
-          ? {
-              provider: result.runtimeModelSelection.provider,
-              modelId: result.runtimeModelSelection.model,
-            }
-          : {
-              provider: internalParams.provider,
-              modelId: internalParams.modelId,
-              modelContextWindow: internalParams.modelContextWindow,
-              tokenBudget: internalParams.contextTokenBudget,
-            },
+      runtimeContext: resolveContextEngineCompletionRuntimeContext(
+        internalParams,
+        result,
+        nativeSessionRuntime !== undefined,
+        assembly,
+      ),
     });
   }
   const { contextEngineTerminalAnchor: _contextEngineTerminalAnchor, ...publicResult } = result;
@@ -565,10 +570,6 @@ async function runAgentHarnessOperation<T>(
     }
     throw error;
   }
-}
-
-function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): boolean {
-  return toolsAllow?.length === 1 && normalizeToolPolicyName(toolsAllow[0] ?? "") === "openclaw";
 }
 
 function withoutInternalHarnessAuthority(
@@ -644,6 +645,7 @@ async function preparePluginHarnessParams(
   harness: AgentHarness,
   nativePermissionsConsented: boolean,
   setInputAttachmentReadAllowed: (allowed: boolean) => void,
+  hasRuntimePluginToolGrant: boolean,
 ): Promise<import("./types.js").AgentHarnessAttemptParamsV2> {
   const boundary = "plugin harness handoff";
   const resolvedApiKey = params.resolvedApiKey
@@ -670,6 +672,7 @@ async function preparePluginHarnessParams(
     pluginHarnessToolPolicySafeDeniedTools:
       policies.safeDeniedToolNames.length > 0 ? policies.safeDeniedToolNames : undefined,
     pluginHarnessToolPolicyRestricted: policies.toolPolicyRestricted,
+    pluginHarnessToolPolicyScope: hasRuntimePluginToolGrant ? "turn" : policies.toolPolicyScope,
   };
   const effectiveParams = nativePermissionsConsented
     ? policyParams

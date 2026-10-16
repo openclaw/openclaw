@@ -117,14 +117,14 @@ it("shows connected review waits without changing delivery versions or crossing 
   );
   onTestFinished(() => {
     view.unmount();
-    props.transcript.hostDisconnected();
+    props.transcript.dispose();
     container.remove();
   });
   const draw = () => {
     setViewProps(currentProps());
     flush();
-    props.transcript.hostConnected();
-    props.transcript.hostUpdated();
+    props.transcript.start();
+    props.transcript.update();
     flush();
   };
 

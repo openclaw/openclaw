@@ -4,7 +4,7 @@ import {
   isVisibleAssistantResultEventForRun,
   matchesTranscriptEvent,
 } from "../../../sessions/transcript-visible-record.js";
-import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "../registry/subagent-run-generation.js";
 import {
@@ -44,7 +44,7 @@ describe("exact-run announcement results", () => {
       },
       completion: {
         required: true,
-        terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text }),
+        terminalReply: prepareAgentRunTerminalReply({ rawText: text }).terminalReply,
       },
     };
     published.set(child.runId, child);

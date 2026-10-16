@@ -195,7 +195,7 @@ function mergeSkillTiers(
   return entries;
 }
 
-/** Keep Library pins and physical read authority fixed across workspace discovery retries. */
+/** Keep Library pins and physical read authority fixed throughout workspace discovery. */
 function captureWorkspaceSkillPreparation(
   workspaceDir: string,
   opts: (WorkspaceSkillLoadOptions & { entries?: SkillEntry[] }) | undefined,
@@ -417,47 +417,34 @@ async function prepareWorkspaceSkillSelection(
   assertCurrent?: () => void,
 ): Promise<{ entries: SkillEntry[]; skillFilter: string[] | undefined }> {
   const preparation = captureWorkspaceSkillPreparation(workspaceDir, opts, assertCurrent);
-  for (;;) {
-    preparation.assertCurrent();
-    const sourceVersion = getSkillsSourceVersion(workspaceDir, opts);
-    let skillFilter = mode === "prompt" ? resolveEffectiveWorkspaceSkillFilter(opts) : undefined;
-    const sources = await prepareCapturedWorkspaceSkillEntries(workspaceDir, opts, preparation);
-    preparation.assertCurrent();
-    const entries = sources.entries;
-    if (mode === "runtime") {
-      const selection = resolveWorkspaceSkillLoad(workspaceDir, opts, entries);
-      skillFilter = selection.effectiveSkillFilter;
-      if (!selection.shouldFilter) {
-        return { entries, skillFilter };
-      }
+  let skillFilter = mode === "prompt" ? resolveEffectiveWorkspaceSkillFilter(opts) : undefined;
+  const sources = await prepareCapturedWorkspaceSkillEntries(workspaceDir, opts, preparation);
+  preparation.assertCurrent();
+  const entries = sources.entries;
+  if (mode === "runtime") {
+    const selection = resolveWorkspaceSkillLoad(workspaceDir, opts, entries);
+    skillFilter = selection.effectiveSkillFilter;
+    if (!selection.shouldFilter) {
+      return { entries, skillFilter };
     }
-    const probe = await prepareSkillBinaryProbe(
-      entries,
-      { ...opts, skillFilter },
-      preparation.assertCurrent,
-      // Local binaries can change between discovery scans; remote hosts supply their own facts.
-      getAgentWorkspaceAccess(workspaceDir, "loadSkills")?.loadSkills ? sources.runtime : undefined,
-    );
-    preparation.assertCurrent();
-    if (
-      probe.needsRetry() ||
-      ((mode === "runtime" || !opts?.entries) &&
-        getSkillsSourceVersion(workspaceDir, opts) !== sourceVersion)
-    ) {
-      continue;
-    }
-    const eligible = filterSkillEntries(entries, {
-      ...opts,
-      skillFilter,
-      hasBin: probe.hasBin,
-      platform: sources.runtime?.platform,
-    });
-    preparation.assertCurrent();
-    if (probe.needsRetry()) {
-      continue;
-    }
-    return { entries: eligible, skillFilter };
   }
+  const probe = await prepareSkillBinaryProbe(
+    entries,
+    { ...opts, skillFilter },
+    preparation.assertCurrent,
+    // Local binaries can change between discovery scans; remote hosts supply their own facts.
+    getAgentWorkspaceAccess(workspaceDir, "loadSkills")?.loadSkills ? sources.runtime : undefined,
+  );
+  preparation.assertCurrent();
+  // Source or eligibility changes during preparation take effect on the next scan/turn.
+  const eligible = filterSkillEntries(entries, {
+    ...opts,
+    skillFilter,
+    hasBin: probe.hasBin,
+    platform: sources.runtime?.platform,
+  });
+  preparation.assertCurrent();
+  return { entries: eligible, skillFilter };
 }
 
 function resolveWorkspaceSkillLoad(

@@ -366,7 +366,7 @@ describe("openclaw-link-reader-hovercard-provider", () => {
       vi
         .fn()
         .mockImplementation((_method: string, params: { url: string }) =>
-          Promise.resolve(preview(params.url)),
+          Promise.resolve({ url: params.url, title: "Cached preview" }),
         ),
     );
     await hover(anchor);

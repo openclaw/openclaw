@@ -191,7 +191,6 @@ describe("createOpenClawTools sessions_spawn session-key selection", () => {
     expect(mocks.subagentsToolOptions).toHaveBeenCalledWith(
       expect.objectContaining({
         agentSessionKey: durableKey,
-        callerPolicySessionKey: policyKey,
       }),
     );
     const subagentsCall = mocks.subagentsToolOptions.mock.calls[0]?.[0] as

@@ -5,17 +5,13 @@ import {
   boundCodeModeError,
   captureCodeModeOutput,
   captureCodeModeValue,
-  EMPTY_CODE_MODE_OUTPUT,
   buildUserSource,
   SOURCE_LOCATION_KEY,
   USER_SOURCE_FILE,
   normalizeSourceStack,
   prepareSource,
   ToolInputError,
-  type CodeModeApiVirtualFile,
   type CodeModeConfig,
-  type CodeModeNamespaceDescriptor,
-  type CodeModeWorkerPayload as SharedWorkerPayload,
   type CodeModeWorkerContinuation,
   type CodeModeVmResult,
   type CodeModeWorkerThreadResult as SharedWorkerThreadResult,
@@ -23,7 +19,6 @@ import {
   type SettledBridgeRequest,
   type SourceLocation,
 } from "openclaw/plugin-sdk/code-mode-executor-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { serveWorkerTasks, type WorkerTaskChannel } from "openclaw/plugin-sdk/worker-task-server";
 import {
   EvalFlags,
@@ -34,11 +29,8 @@ import {
   type Snapshot,
 } from "quickjs-wasi";
 import { readSourceLocation } from "./source-location.js";
+import type { QuickJsWorkerPayload as CodeModeWorkerPayload } from "./worker-types.js";
 
-type CodeModeWorkerPayload = SharedWorkerPayload<Snapshot> & {
-  wasmModule: WebAssembly.Module;
-  wasmExtensions: Array<{ name: string; wasm: WebAssembly.Module }>;
-};
 type CodeModeWorkerResult = CodeModeVmResult<Snapshot>;
 type CodeModeWorkerThreadResult = SharedWorkerThreadResult<Snapshot>;
 type CodeModeFailure = Extract<CodeModeWorkerResult, { status: "failed" }>;
@@ -334,6 +326,7 @@ function takeOutputSafely(vm: QuickJS): unknown[] {
   try {
     return takeOutput(vm);
   } catch {
+    // A failed guest may also break output extraction; preserve its original failure.
     return [];
   }
 }
@@ -664,92 +657,14 @@ async function run(
   return bridge.networkContentObserved ? { ...result, networkContentObserved: true } : result;
 }
 
-function isQuickJsWasmModule(value: unknown): value is WebAssembly.Module {
-  return Object.prototype.toString.call(value) === "[object WebAssembly.Module]";
-}
-
-function isQuickJsWasmExtensions(value: unknown): value is CodeModeWorkerPayload["wasmExtensions"] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (extension) =>
-        isRecord(extension) &&
-        typeof extension.name === "string" &&
-        isQuickJsWasmModule(extension.wasm),
-    )
-  );
-}
-
 async function main(
-  input: unknown,
+  input: CodeModeWorkerPayload,
   channel?: WorkerTaskChannel,
 ): Promise<CodeModeWorkerThreadResult> {
   channel?.notify({ status: "worker", workerId: `code-mode-quickjs:${threadId}` });
-  if (
-    !isRecord(input) ||
-    !isRecord(input.config) ||
-    !isQuickJsWasmModule(input.wasmModule) ||
-    !isQuickJsWasmExtensions(input.wasmExtensions)
-  ) {
-    return {
-      ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
-      output: EMPTY_CODE_MODE_OUTPUT,
-    };
-  }
-  // SAFETY: The private executor sends core-normalized limits through structured clone.
-  const config = input.config as CodeModeConfig;
+  const { config } = input;
   try {
-    if (config.timeoutMs <= 0) {
-      throw new CodeModeWorkerFailure("timeout", "code mode timeout exceeded", "host");
-    }
-    let payload: CodeModeWorkerPayload;
-    if (input.kind === "exec" && typeof input.source === "string") {
-      payload = {
-        kind: "exec",
-        wasmModule: input.wasmModule,
-        wasmExtensions: input.wasmExtensions,
-        source: input.source,
-        prelude: typeof input.prelude === "string" ? input.prelude : undefined,
-        executionTimeoutMs:
-          typeof input.executionTimeoutMs === "number" ? input.executionTimeoutMs : undefined,
-        config,
-        catalog: Array.isArray(input.catalog) ? input.catalog : [],
-        apiFiles: Array.isArray(input.apiFiles)
-          ? (input.apiFiles as CodeModeApiVirtualFile[]) // SAFETY: Only host-prepared declaration files enter this channel.
-          : [],
-        namespaces: Array.isArray(input.namespaces)
-          ? (input.namespaces as CodeModeNamespaceDescriptor[]) // SAFETY: The host serializes these descriptors before dispatch.
-          : [],
-        swarmEnabled: input.swarmEnabled === true,
-      };
-    } else {
-      // SAFETY: This process's QuickJS workers produce snapshots; the host returns them unchanged.
-      const snapshot = input.continuation as Snapshot | undefined;
-      if (input.kind !== "resume" || !(snapshot?.memory instanceof Uint8Array)) {
-        return {
-          ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
-          output: EMPTY_CODE_MODE_OUTPUT,
-        };
-      }
-      payload = {
-        kind: "resume",
-        wasmModule: input.wasmModule,
-        wasmExtensions: input.wasmExtensions,
-        continuation: snapshot,
-        config,
-        settledRequests: Array.isArray(input.settledRequests)
-          ? (input.settledRequests as SettledBridgeRequest[]) // SAFETY: The core broker constructs envelopes around guest JSON.
-          : [],
-        pendingRequests: Array.isArray(input.pendingRequests)
-          ? (input.pendingRequests as PendingBridgeRequest[]) // SAFETY: The broker returns this worker's pending descriptors.
-          : [],
-      };
-    }
-    return captureWorkerResult(
-      await run(payload, channel),
-      config,
-      input.retainFinalValue === true,
-    );
+    return captureWorkerResult(await run(input, channel), config, input.retainFinalValue === true);
   } catch (error) {
     const result = workerFailureResult(error);
     notifyWorkerFailure(channel, error, result.failurePhase);
@@ -757,7 +672,8 @@ async function main(
   }
 }
 
-serveWorkerTasks(main, {
+// SAFETY: Only the private typed executor submits tasks; guest code cannot post host messages.
+serveWorkerTasks((input, channel) => main(input as CodeModeWorkerPayload, channel), {
   transferList: (result) =>
     // SAFETY: QuickJS.snapshot allocates a dedicated, transferable ArrayBuffer.
     result.status === "waiting" ? [result.continuation.memory.buffer as ArrayBuffer] : [],

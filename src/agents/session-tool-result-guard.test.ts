@@ -3,11 +3,16 @@ import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it } from "vitest";
+import { convertToLlm } from "../../packages/agent-core/src/harness/messages.js";
+import { convertResponsesMessages } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
+import type { Model } from "../../packages/ai/src/types.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { buildExecForegroundResult } from "./bash-tools.exec-support.js";
+import { createPromptCacheRequestObserver } from "./embedded-agent-runner/prompt-cache-request-observer.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { createReadTool } from "./sessions/tools/read.js";
@@ -47,22 +52,101 @@ function resultText(sm: SessionManager) {
 }
 
 describe("installSessionToolResultGuard", () => {
-  it("publishes run ownership before the first assistant continuation without adopting transcript-only edits", () => {
-    const live = call();
-    const { sm } = setup({
-      runId: "synthetic-run",
-      beforeMessageWriteHook: ({ message }) => ({
-        message: { ...message, content: [{ type: "text", text: "transcript-only" }] },
-      }),
-    });
-    sm.appendMessage(live);
-    expect(live).toMatchObject({ __openclaw: { runId: "synthetic-run" } });
-    expect(live.content).toEqual(call().content);
-    expect(messages(sm)[0]).toMatchObject({
-      __openclaw: { runId: "synthetic-run" },
-      content: [{ type: "text", text: "transcript-only" }],
-    });
-  });
+  it.each(["assistant", "toolResult"] as const)(
+    "publishes %s ownership before projection without adopting transcript-only edits",
+    (role) => {
+      const live = role === "assistant" ? call() : result("live result");
+      const originalContent = structuredClone(live.content);
+      const { sm } = setup({
+        runId: "synthetic-run",
+        beforeMessageWriteHook: ({ message }) => {
+          expect(message).toMatchObject({ __openclaw: { runId: "synthetic-run" } });
+          return { message: { ...message, content: [{ type: "text", text: "transcript-only" }] } };
+        },
+      });
+      sm.appendMessage(live);
+      expect(live).toMatchObject({ __openclaw: { runId: "synthetic-run" } });
+      expect(live.content).toEqual(originalContent);
+      expect(messages(sm)[0]).toMatchObject({
+        __openclaw: { runId: "synthetic-run" },
+        content: [{ type: "text", text: "transcript-only" }],
+      });
+    },
+  );
+
+  it.each(["appendMessage", "appendMessageAsync"] as const)(
+    "keeps guarded live continuation and cold replay append-only through %s",
+    async (append) => {
+      await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+        const { sm } = setup({ runId: "synthetic-run" });
+        const live = [makeUserMessage("Read the fixture", 1), call(), result("fixture result")];
+        for (const message of live) {
+          await sm[append](message);
+        }
+        const model = {
+          id: "test-model",
+          name: "Test model",
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://example.invalid/v1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 32_000,
+          maxTokens: 1_024,
+        } satisfies Model<"openai-responses">;
+        const context = {
+          systemPrompt: "Stable fixture instructions",
+          messages: convertToLlm(live),
+        };
+        const observer = createPromptCacheRequestObserver(
+          { sessionId: sm.getSessionId(), streamStrategy: "test" },
+          () => {},
+        );
+        await observer.onModelRequest(model, context);
+        observer.onModelUsage({ cacheRead: 8_000 });
+        const replay = SessionManager.fromEntries(sm.getPersistedEntries()).buildSessionContext();
+        const replayContext = { ...context, messages: convertToLlm(replay.messages) };
+        const providers = new Set(["openai"]);
+        const input = convertResponsesMessages(model, context, providers);
+        const encoded = JSON.stringify(input);
+        expect(input.at(-1)).toEqual({
+          type: "function_call_output",
+          call_id: "call_1",
+          output: "fixture result",
+        });
+        expect(JSON.stringify(convertResponsesMessages(model, replayContext, providers))).toBe(
+          encoded,
+        );
+        expect(await observer.onModelRequest(model, replayContext)).toMatchObject({
+          prefixUnchanged: true,
+          changes: null,
+        });
+      });
+    },
+  );
+
+  it.each(["assistant", "toolResult"] as const)(
+    "does not rewrite immutable %s replay before projection",
+    (role) => {
+      const replay = Object.freeze({
+        ...(role === "assistant" ? call() : result("recorded result")),
+        __openclaw: Object.freeze({ runId: "recorded-run" }),
+      });
+      const before = structuredClone(replay);
+      const projected: AgentMessage[] = [];
+      const { sm } = setup({
+        runId: "new-run",
+        beforeMessageWriteHook: ({ message }) => {
+          projected.push(message);
+          return undefined;
+        },
+      });
+      sm.appendMessage(replay);
+      expect(replay).toEqual(before);
+      expect(projected[0]).toEqual(before);
+    },
+  );
 
   it("keeps the exec retention-loss disclosure through the session result cap", () => {
     const { sm } = setup({ maxToolResultChars: 4_000 });

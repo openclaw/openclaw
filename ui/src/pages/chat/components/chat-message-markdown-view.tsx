@@ -2,7 +2,8 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Show } from "solid-js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
+import { copyMarkdownLabel } from "../../../components/copy-button-state.ts";
+import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { NormalizedMessage } from "../../../lib/chat/chat-types.ts";
@@ -14,7 +15,6 @@ import {
 } from "../../../lib/chat/message-normalizer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import {
   type AssistantMessageExpansionState,
   resolveCappedMessageId,
@@ -151,7 +151,7 @@ export function MessageActions(props: {
         <ReplyButton target={props.details!.replyTarget!} onReply={props.options.onReply!} />
       </Show>
       <Show when={props.details?.markdown}>
-        <LitContent value={renderCopyAsMarkdownButton(props.details!.markdown!)} />
+        <CopyButton text={props.details!.markdown!} idleLabel={copyMarkdownLabel()} bare />
       </Show>
       <Show when={props.details?.readAloudText}>
         <ReadAloud text={props.details!.readAloudText!} />

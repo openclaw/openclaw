@@ -1,7 +1,6 @@
 import { createEffect, createMemo, createSignal, For, Show, onCleanup } from "solid-js";
 import type { CronJob } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import { t } from "../i18n/index.ts";
 import { isCronJobRunning, resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
 import { createInitialCronState } from "../lib/cron/index.ts";
 import { loadCronJobsPage } from "../lib/cron/jobs.ts";
@@ -9,6 +8,7 @@ import { formatRelativeTimestamp } from "../lib/format.ts";
 import { createGatewayConnectionLifecycle } from "../lib/gateway-connection-lifecycle.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { formatCronPayload, formatCronSchedule } from "../lib/presenter.ts";
+import { i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./tooltip.ts";
 
@@ -117,6 +117,21 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
           ? t("chat.sessionDetails.automationPaused")
           : t("chat.sessionDetails.automationEnabled");
   const loading = () => state().cronLoading || state().cronJobsLoadingMore;
+  const message = createMemo(() =>
+    !state().connected
+      ? t("chat.sessionDetails.automationUnavailable")
+      : state().cronJobsError
+        ? t("chat.sessionDetails.automationError")
+        : !state().cronJobsSnapshotRevision
+          ? t("chat.sessionDetails.automationLoading")
+          : state().cronJobsTotal === 0
+            ? t("chat.sessionDetails.automationEmpty")
+            : undefined,
+  );
+  const schedule = (job: CronJob) => {
+    i18nRevision();
+    return formatCronSchedule(job);
+  };
   const jobHref = (jobId?: string) => {
     const url = new URL(props.automation.href, globalThis.location.origin);
     if (jobId) {
@@ -124,6 +139,26 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
     }
     return url.pathname + url.search;
   };
+  const OpenLink = (link: { job?: CronJob }) => (
+    <a
+      class="session-hovercard__automation-open"
+      href={link.job ? jobHref(link.job.id) : props.automation.href}
+      onClick={(event) => {
+        if (shouldHandleNavigationClick(event)) {
+          event.preventDefault();
+          const job = link.job;
+          if (job) {
+            props.automation.navigate(job.id);
+          } else {
+            props.automation.navigate();
+          }
+        }
+      }}
+    >
+      {t(link.job ? "sessionHovercard.openAutomation" : "sessionHovercard.openAutomations")}
+      <Icon name="externalLink" />
+    </a>
+  );
   return (
     <openclaw-tooltip
       class="session-hovercard__automation-tooltip"
@@ -185,7 +220,7 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
               <div class="session-hovercard__automation-name">
                 {value().name.trim() || value().id}
               </div>
-              <div class="session-hovercard__automation-meta">{formatCronSchedule(value())}</div>
+              <div class="session-hovercard__automation-meta">{schedule(value())}</div>
               <div
                 class="session-hovercard__automation-meta"
                 data-running={isCronJobRunning(value()) ? "true" : "false"}
@@ -227,38 +262,13 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
                   <pre>{instructions(value())}</pre>
                 </details>
               </div>
-              <a
-                class="session-hovercard__automation-open"
-                href={jobHref(value().id)}
-                onClick={(event) => {
-                  if (shouldHandleNavigationClick(event)) {
-                    event.preventDefault();
-                    props.automation.navigate(value().id);
-                  }
-                }}
-              >
-                {t("sessionHovercard.openAutomation")}
-                <Icon name="externalLink" />
-              </a>
+              <OpenLink job={value()} />
             </section>
           )}
         </Show>
-        <Show
-          when={
-            !state().connected ||
-            state().cronJobsError ||
-            !state().cronJobsSnapshotRevision ||
-            state().cronJobsTotal === 0
-          }
-        >
+        <Show when={message() !== undefined}>
           <div class="session-hovercard__automation-message" role="status">
-            {!state().connected
-              ? t("chat.sessionDetails.automationUnavailable")
-              : state().cronJobsError
-                ? t("chat.sessionDetails.automationError")
-                : !state().cronJobsSnapshotRevision
-                  ? t("chat.sessionDetails.automationLoading")
-                  : t("chat.sessionDetails.automationEmpty")}
+            {message()}
           </div>
         </Show>
         <Show when={state().cronJobsError}>
@@ -277,19 +287,7 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
           </button>
         </Show>
         <Show when={!selected()}>
-          <a
-            class="session-hovercard__automation-open"
-            href={props.automation.href}
-            onClick={(event) => {
-              if (shouldHandleNavigationClick(event)) {
-                event.preventDefault();
-                props.automation.navigate();
-              }
-            }}
-          >
-            {t("sessionHovercard.openAutomations")}
-            <Icon name="externalLink" />
-          </a>
+          <OpenLink />
         </Show>
       </div>
     </openclaw-tooltip>

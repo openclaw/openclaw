@@ -53,7 +53,11 @@ import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.t
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   private readonly headerSessionDataMemo = new ChatPaneHeaderMemo<SessionMenuData>();
   protected resolveHeaderSessionTitle(row: GatewaySessionRow | undefined): string {
-    return chatSessionPresentationTitle(this.state, row, this.sessionKey);
+    return chatSessionPresentationTitle(
+      this.state,
+      row ?? this.transcriptSessionProps(row).transcriptMetadata,
+      this.sessionKey,
+    );
   }
 
   protected canArchiveHeaderSession(row: GatewaySessionRow): boolean {
@@ -351,7 +355,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
             const patch = headerSessionMetadataPatch(action, currentSession);
-            await operations.patchSession(host, currentSession, patch, scope);
+            await operations.patchSession(host, currentSession, patch, scope, {
+              sessionScope: action.kind === "toggle-unread",
+            });
           }
           break;
         }

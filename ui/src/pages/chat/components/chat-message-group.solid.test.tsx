@@ -7,14 +7,18 @@ import type {
   ControlUiReplacement,
 } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
-import { LitContent, SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
 import "../../../plugins/control-ui-view.solid.tsx";
-import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { MessageGroup, type NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
-import { renderActivityGroup } from "./chat-message-group.test-support.ts";
+import { prepareGroupMessage } from "./chat-message-group-frame.ts";
+import {
+  ActivityGroup,
+  MessageGroup,
+  type NativeMessageGroupOptions,
+} from "./chat-message-group-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
 it.each([false, true])(
@@ -103,6 +107,24 @@ it.each([
   expect(onReply.mock.calls.map(([target]) => target.messageId)).toEqual(
     answered ? ["answer"] : [],
   );
+});
+
+it("does not give provider speech unframed answer actions", () => {
+  const speech = {
+    role: "assistant",
+    content: "It exited with code zero.",
+    stopReason: "stop",
+    timestamp: 1000,
+    __openclaw: { id: "spoken", voiceTranscript: "provider-owned" },
+  };
+  const group = createMessageGroup(speech, "assistant");
+  const prepared = prepareGroupMessage(group, group.messages[0]!, {
+    showReasoning: false,
+    onReply: vi.fn(),
+  });
+  expect(prepared.ownsActions).toBe(false);
+  expect(prepared.actions?.replyTarget).toBeUndefined();
+  expect(prepared.source.displayMarkdown).toBe(speech.content);
 });
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {
@@ -209,7 +231,9 @@ it("retains aggregate disclosure and legacy card focus when options refresh", as
     showToolCalls: true,
     isToolMessageExpanded: () => true,
   });
-  const view = mountSolid(() => <LitContent value={renderActivityGroup([group], options())} />);
+  const view = mountSolid(() => (
+    <ActivityGroup groups={[group]} options={options()} presentation="standalone" />
+  ));
   await waitForSolid(() => {
     expect(
       view.container.querySelectorAll(".chat-tools-inline .chat-tool-msg-collapse"),
@@ -254,6 +278,9 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     reload: async () => undefined,
     refresh: async () => undefined,
     registrations: () => [],
+    loadSettingsView: async () => {
+      throw new Error("This chat fixture does not load Settings presentations.");
+    },
     selectReplacement: vi.fn(),
     selectedReplacement: (surface) =>
       surface === "tool-result" && selected
@@ -273,7 +300,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   };
   // SAFETY: This grouped-renderer fixture consumes only the complete plugin capability.
   const context = { plugins } as ApplicationContext;
-  const provider = createApplicationContextProvider(context);
+  const provider = createSolidApplicationContextProvider(context);
   const [group, setGroup] = createSignal(
     createMessageGroup(
       createToolResultMessage("call-read", "read", "Original tool output", { timestamp: 1000 }),
@@ -291,14 +318,14 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   const [active, setActive] = createSignal(true);
   const view = mountSolid(
     () => (
-      <SolidContentPresentation value={active}>
+      <ContentPresentation value={active}>
         <MessageGroup group={group()} options={options()} />
-      </SolidContentPresentation>
+      </ContentPresentation>
     ),
-    { baseElement: document.createElement("div") },
+    { wrapper: provider.wrapper },
   );
   const nextListeners = new Set<() => void>();
-  const nextProvider = createApplicationContextProvider({
+  const nextContext: ApplicationContext = {
     ...context,
     plugins: {
       ...context.plugins,
@@ -307,10 +334,8 @@ it("mounts only selected tool replacements and keeps their context, projection, 
         return () => nextListeners.delete(listener);
       },
     },
-  });
+  };
   flush();
-  provider.append(view.container);
-  document.body.append(provider, nextProvider);
   try {
     await waitForSolid(() => expect(view.container.textContent).toContain("Original tool output"));
     expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -380,7 +405,11 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     expect(mountedSignal?.aborted).toBe(false);
     expect(dispose).not.toHaveBeenCalled();
     setActive(true);
-    await waitForSolid(() => expect(latest?.signal).toBe(mountedSignal));
+    setOptions((previous) => ({ ...previous, presented: true }));
+    await waitForSolid(() => {
+      expect(latest?.signal).toBe(mountedSignal);
+      expect(latest?.presented).toBe(true);
+    });
     expect(view.getByLabelText("Plugin local draft")).toBe(localDraft);
     expect(localDraft.value).toBe("Retained plugin draft");
     selected = undefined;
@@ -394,15 +423,14 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     expect(mountedSignal?.aborted).toBe(true);
     expect(dispose).toHaveBeenCalledOnce();
     expect(reportError).not.toHaveBeenCalled();
-    // Parking disconnects the range before it moves to another context owner.
+    // Replacing the application owner retires subscriptions from the parked tree.
     selected = replacement;
     for (const listener of listeners) {
       listener();
     }
     setActive(false);
     flush();
-    expect(listeners.size).toBe(0);
-    nextProvider.append(view.container);
+    provider.setContext(nextContext);
     setActive(true);
     await waitForSolid(() =>
       expect(view.container.textContent).toContain("Selected tool renderer"),
@@ -411,7 +439,6 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     expect(listeners.size).toBe(0);
     const reconnectedSignal = latest?.signal;
     view.unmount();
-    // The Solid bridge distinguishes a same-turn move from actual removal.
     await Promise.resolve();
     flush();
     expect(reconnectedSignal?.aborted).toBe(true);
@@ -419,7 +446,5 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     expect(nextListeners.size).toBe(0);
   } finally {
     view.unmount();
-    provider.remove();
-    nextProvider.remove();
   }
 });

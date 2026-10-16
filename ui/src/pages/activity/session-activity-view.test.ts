@@ -7,9 +7,9 @@ import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../../lib/sessions/route-navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid as mountDashboards } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { loadChatRoute } from "../chat/route-loader.ts";
 import { DashboardsView } from "../dashboards/view.tsx";
 import { mountSolid, props, row } from "./session-activity-view.test-harness.ts";
@@ -497,18 +497,20 @@ describe("session activity semantics", () => {
         agents: [{ id: "research", name: "Research partner", identity: { emoji: "🔬" } }],
       },
     );
-    const providerContainer = createApplicationContextProvider(context);
-    document.body.append(providerContainer);
-    show(
-      {
-        context,
-        rows: [
-          row("agent:research:review", { id: "person", label: "Alex Morgan" }, Date.now(), {
-            channel: "discord",
+    const { container: providerContainer } = mountDashboards(
+      () =>
+        createComponent(
+          renderSessionActivityView,
+          props({
+            context,
+            rows: [
+              row("agent:research:review", { id: "person", label: "Alex Morgan" }, Date.now(), {
+                channel: "discord",
+              }),
+            ],
           }),
-        ],
-      },
-      providerContainer,
+        ),
+      { wrapper: createSolidApplicationContextProvider(context).wrapper },
     );
 
     await vi.waitFor(() => {

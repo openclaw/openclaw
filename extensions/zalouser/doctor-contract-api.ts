@@ -219,20 +219,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         if (!existing) {
           try {
-            await store.registerIfAbsent(key, credentials);
+            if (!(await store.registerIfAbsent(key, credentials))) {
+              throw new Error("Canonical state appeared during offline import.");
+            }
           } catch (error) {
             warnings.push(
               `Failed importing Zalo Personal credentials for profile ${source.profile}: ${String(error)}; left legacy source in place`,
             );
             continue;
           }
-        }
-        const persisted = normalizeStoredZaloCredentials(await store.lookup(key), source.profile);
-        if (!persisted || JSON.stringify(persisted) !== JSON.stringify(credentials)) {
-          warnings.push(
-            `Failed verifying Zalo Personal credentials for profile ${source.profile}; left legacy source in place`,
-          );
-          continue;
         }
         changes.push(`Migrated Zalo Personal credentials for profile ${source.profile}`);
         await archiveLegacyStateSource({

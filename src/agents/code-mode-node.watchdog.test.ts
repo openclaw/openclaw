@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { MessageChannel } from "node:worker_threads";
 import { expect, it } from "vitest";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { setTrackedWorkerGcObserver } from "../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { codeModeNodeInitialization, prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
 import { CodeModeNodeProgress } from "./code-mode-node-progress.js";
@@ -18,6 +19,56 @@ const config = {
   maxPendingToolCalls: 16,
   maxSnapshotBytes: 1024,
 };
+
+// The real idle interval is intentional: fake clocks cannot exercise V8's GC
+// scheduling. Keep this one-minute regression out of local performance sweeps.
+it.skipIf(Boolean(process.versions.bun))(
+  "keeps a Code Mode worker idle after cells without per-GC event-loop work",
+  async () => {
+    const { port1, port2 } = new MessageChannel();
+    const pool = new WorkerTaskPool<CodeModeNodeInput, CodeModeWorkerThreadResult<undefined>>({
+      workerUrl: new URL("./code-mode-node-idle-gc.test-support.ts", import.meta.url),
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
+      workerOptions: {
+        resourceLimits: { maxOldGenerationSizeMb: 384, maxYoungGenerationSizeMb: 8 },
+        workerData: { receipt: port2 },
+        transferList: [port2],
+      },
+    });
+    setTrackedWorkerGcObserver(() => {});
+    try {
+      for (let index = 0; index < 16; index++) {
+        expect(
+          await pool.run(
+            {
+              kind: "exec",
+              source:
+                "const data = Array.from({ length: 10000 }, (_, i) => ({ i })); return data.length;",
+              config,
+              initialization,
+              inlineHost: false,
+              progress: new CodeModeNodeProgress(config.maxOutputBytes).buffer,
+            },
+            { timeoutMs: config.timeoutMs },
+          ),
+        ).toMatchObject({ status: "completed", value: { json: "10000" } });
+      }
+      const observed = once(port1, "message");
+      port1.postMessage("observe-idle");
+      const [sample] = await observed;
+      expect(sample.immediates).toBe(0);
+      expect(sample.majorCollections).toBeGreaterThan(0);
+      expect(sample.majorCollections).toBeLessThan(10);
+    } finally {
+      setTrackedWorkerGcObserver(undefined);
+      port1.close();
+      port2.close();
+      await pool.close();
+    }
+  },
+  75_000,
+);
 
 it("does not force full collections in a reusable Code Mode worker", async () => {
   const { port1, port2 } = new MessageChannel();

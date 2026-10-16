@@ -1,4 +1,4 @@
-import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
+import { WorkerTaskPoolCore, type WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { createWorkerTaskHost } from "./worker-task-host.js";
 import type {
   WorkerTaskInput,
@@ -18,7 +18,7 @@ export class WorkerTaskPool<Input, Output> {
   constructor(options: WorkerTaskPoolOptions<Output>) {
     this.core = new WorkerTaskPoolCore<Input, Output>(
       options,
-      createWorkerTaskHost({ databaseAccess: options.databaseAccess }, options.workerClass),
+      createWorkerTaskHost(undefined, options.workerClass),
       {
         close: (error) => this.close(error),
         getSnapshot: () => this.getSnapshot(),
@@ -46,8 +46,8 @@ export class WorkerTaskPool<Input, Output> {
     return this.core.rotate();
   }
 
-  close(error?: Error): Promise<void> {
-    return this.core.close(error);
+  close(error?: Error, reason?: WorkerRetirementReason): Promise<void> {
+    return this.core.close(error, reason);
   }
 }
 
@@ -58,10 +58,7 @@ export function createOwnedWorkerTaskPool<Input, Output>(
 ) {
   const core = new WorkerTaskPoolCore<Input, Output>(
     options,
-    createWorkerTaskHost(
-      { databaseAccess: options.databaseAccess, ...ownerOptions },
-      options.workerClass,
-    ),
+    createWorkerTaskHost(ownerOptions, options.workerClass),
     undefined,
     ownerOptions,
   );

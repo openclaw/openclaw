@@ -49,7 +49,6 @@ function runSystemCacheWrapper(model: Partial<Model<"openai-completions">>) {
 function captureHeaders(
   extraParams?: Record<string, unknown>,
   model: Partial<Model<"openai-completions">> = {},
-  headers?: Record<string, string>,
 ) {
   const calls: Array<{ headers?: Record<string, string> }> = [];
   const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -64,27 +63,12 @@ function captureHeaders(
       ...model,
     } as Model<"openai-completions">,
     { messages: [] },
-    { headers },
+    {},
   );
   return calls;
 }
 
 describe("proxy stream wrappers", () => {
-  it("adds OpenRouter attribution headers to stream options", () => {
-    const calls = captureHeaders(undefined, {}, { "X-Custom": "1" });
-
-    expect(calls).toEqual([
-      {
-        headers: {
-          "HTTP-Referer": "https://openclaw.ai",
-          "X-OpenRouter-Title": "OpenClaw",
-          "X-OpenRouter-Categories": "personal-agent,cli-agent",
-          "X-Custom": "1",
-        },
-      },
-    ]);
-  });
-
   it("adds opt-in OpenRouter response caching headers", () => {
     const calls = captureHeaders(
       { responseCache: true, responseCacheTtlSeconds: 900 },

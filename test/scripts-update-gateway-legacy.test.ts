@@ -2,13 +2,16 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { copyTreeCloseOnExec } from "./helpers/close-on-exec-copy.js";
 import { createFixtureLifetime } from "./helpers/fixture-lifetime.js";
 import { requireNodeTool } from "./helpers/node-toolchain.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.js";
 
 const lifetime = createFixtureLifetime();
 afterEach(() => lifetime.cleanup());
+const suiteLifetime = createFixtureLifetime();
+afterAll(() => suiteLifetime.cleanup());
 const source = process.cwd();
 const nodeExecPath = requireNodeTool("node");
 const publishedScript = path.join(source, "test/scripts/fixtures/update-gateway-2026.9.4.sh");
@@ -16,6 +19,54 @@ const publishedScript = path.join(source, "test/scripts/fixtures/update-gateway-
 const publishedSha256 = "944d24f53a4f6b4134326d6d3dc5fe135ab5524d7fdccd2af5b85572e00db652";
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], { cwd, encoding: "utf8" });
+let preparedCheckout: string;
+
+beforeAll(() => {
+  if (process.platform === "win32") {
+    return;
+  }
+  const root = fs.realpathSync(suiteLifetime.createTempDir("openclaw-legacy-source-template-"));
+  const seed = path.join(root, "seed");
+  preparedCheckout = path.join(root, "checkout");
+  fs.mkdirSync(path.join(seed, "scripts"), { recursive: true });
+  fs.writeFileSync(path.join(seed, "scripts/update-gateway.sh"), fs.readFileSync(publishedScript));
+  fs.writeFileSync(
+    path.join(seed, "package.json"),
+    JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@12.4.2" }),
+  );
+  fs.writeFileSync(
+    path.join(seed, ".gitignore"),
+    "dist/\n.artifacts/\n.update-build-backup.*/\nforeign/\nevents\nstopped\nbuild-env.json\n",
+  );
+  git(seed, "init", "-q", "-b", "main");
+  git(seed, "add", ".");
+  git(
+    seed,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "--no-gpg-sign",
+    "-qm",
+    "published shell",
+  );
+  // Each copied checkout starts behind the same immutable origin and still performs the real update.
+  git(root, "clone", "-q", seed, preparedCheckout);
+  fs.writeFileSync(path.join(seed, "candidate"), "candidate\n");
+  git(seed, "add", "candidate");
+  git(
+    seed,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "--no-gpg-sign",
+    "-qm",
+    "candidate",
+  );
+});
 
 it.skipIf(process.platform === "win32").for([
   { mode: "default", restart: undefined, code: 0, owns: true },
@@ -51,51 +102,15 @@ it.skipIf(process.platform === "win32").for([
   async ({ mode, restart, code, owns }, { signal }) => {
     await lifetime.run(async () => {
       const root = fs.realpathSync(lifetime.createTempDir("openclaw-legacy-source-build-"));
-      const seed = path.join(root, "seed");
       const checkout = path.join(root, "checkout");
       const bin = path.join(root, "bin");
       const home = path.join(root, "home");
-      for (const dir of [path.join(seed, "scripts"), bin, home]) {
+      for (const dir of [bin, home]) {
         fs.mkdirSync(dir, { recursive: true });
       }
       const bytes = fs.readFileSync(publishedScript);
       expect(createHash("sha256").update(bytes).digest("hex")).toBe(publishedSha256);
-      fs.writeFileSync(path.join(seed, "scripts/update-gateway.sh"), bytes);
-      fs.writeFileSync(
-        path.join(seed, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@12.4.2" }),
-      );
-      fs.writeFileSync(
-        path.join(seed, ".gitignore"),
-        "dist/\n.artifacts/\n.update-build-backup.*/\nforeign/\nevents\nstopped\nbuild-env.json\n",
-      );
-      git(seed, "init", "-q", "-b", "main");
-      git(seed, "add", ".");
-      git(
-        seed,
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.invalid",
-        "commit",
-        "--no-gpg-sign",
-        "-qm",
-        "published shell",
-      );
-      git(root, "clone", "-q", seed, checkout);
-      fs.writeFileSync(path.join(seed, "candidate"), "candidate\n");
-      git(seed, "add", "candidate");
-      git(
-        seed,
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.invalid",
-        "commit",
-        "--no-gpg-sign",
-        "-qm",
-        "candidate",
-      );
+      copyTreeCloseOnExec(preparedCheckout, checkout);
       for (const base of [checkout, path.join(checkout, "foreign")]) {
         fs.mkdirSync(path.join(base, "dist"), { recursive: true });
         fs.writeFileSync(path.join(base, "dist/entry.js"), "old runtime\n");

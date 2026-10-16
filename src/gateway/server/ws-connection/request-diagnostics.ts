@@ -106,6 +106,7 @@ export class GatewayRpcDiagnostics {
   }
 
   static async runHandler(
+    method: string,
     invoke: () => Promise<void> | void,
     diagnostics?: GatewayRpcDiagnostics,
   ): Promise<void> {
@@ -122,10 +123,7 @@ export class GatewayRpcDiagnostics {
     }
     let outcome: "returned" | "threw" = "returned";
     try {
-      await runWithMainThreadTask(
-        diagnostics ? `gateway:rpc:${diagnostics.method}` : "gateway:rpc",
-        invoke,
-      );
+      await runWithMainThreadTask(`gateway:rpc:${method}`, invoke);
     } catch (error) {
       outcome = "threw";
       throw error;
@@ -167,7 +165,8 @@ export class GatewayRpcDiagnostics {
 
 /** Capture receipt before a socket FIFO, without work when diagnostics are unused. */
 export function captureGatewayRpcReceivedAt(): number | undefined {
-  return areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventInterest("gateway.rpc")
+  return areDiagnosticsEnabledForProcess() &&
+    hasInternalDiagnosticEventInterest("gateway.rpc", true)
     ? performance.now()
     : undefined;
 }
@@ -198,7 +197,10 @@ export function createGatewayRpcDiagnostics(
     params: unknown;
   },
 ): GatewayRpcDiagnostics | undefined {
-  if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("gateway.rpc")) {
+  if (
+    !areDiagnosticsEnabledForProcess() ||
+    !hasInternalDiagnosticEventInterest("gateway.rpc", true)
+  ) {
     return undefined;
   }
   // Only catalog-owned names become dimensions, never arbitrary request values.

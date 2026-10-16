@@ -768,9 +768,7 @@ describe("restored historical cancellation ownership", () => {
         }));
       }
       const originalBefore = loadSubagentRegistryFromSqlite().get(input.subagent.runId);
-      const successorBefore = structuredClone(
-        stage === "before restore" ? subagentRuns.get(successor.runId) : successor,
-      );
+      const successorBefore = structuredClone(subagentRuns.get(successor.runId));
       resumeSubagentRun(input.subagent.runId, "restore");
       await settle();
       const before = loadSubagentRegistryFromSqlite().get(successor.runId);

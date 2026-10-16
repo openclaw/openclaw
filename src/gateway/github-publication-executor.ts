@@ -193,8 +193,6 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
   let worktreeOwner:
     | Awaited<ReturnType<typeof readLocalGitHubPublicationWorktreeOwner>>
     | undefined;
-  using _ = { [Symbol.dispose]: () => worktreeOwner?.release() };
-
   const currentWorktree = () => {
     if (!worktreeOwner) {
       throw new GitHubPublicationRecoveryPendingError(
@@ -464,6 +462,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       row,
       storePath: loaded.storePath,
       accountId: identity.account.accountId,
+      host: githubHost,
       assertCurrent: assertPublicationAction,
       description: (
         row.body?.trim() || "Published by the Gateway after authoritative workspace reconciliation."

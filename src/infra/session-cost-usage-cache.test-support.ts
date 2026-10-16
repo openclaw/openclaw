@@ -65,12 +65,14 @@ export async function writeLegacyUsageCostRollupForTest(sessionFile: string): Pr
   try {
     expect(await lock.acquire()).toBe(true);
     expect(
-      await lock.writeRollup({
-        rollupId: sessionFile,
-        valueJson: Buffer.from(encoded.valueJson),
-        blob: encoded.blob,
-        updatedAt: currentRow.updatedAt + 1,
-      }),
+      await lock.writeRollup([
+        {
+          rollupId: sessionFile,
+          valueJson: Buffer.from(encoded.valueJson),
+          blob: encoded.blob,
+          updatedAt: currentRow.updatedAt + 1,
+        },
+      ]),
     ).toBe(true);
   } finally {
     await lock.release();
@@ -88,7 +90,7 @@ export function readSessionCostUsageRollupEntry(
   }
   const result = withOpenClawAgentDatabaseReadOnly(
     ({ db }) => {
-      const body = readSessionCostUsageRollupBodyInDatabase(db, row);
+      const body = readSessionCostUsageRollupBodyInDatabase(db, row.key);
       return body
         ? decodeUsageCostRollup(row.valueJson, envelope.pricingFingerprint, body.blob)
         : undefined;

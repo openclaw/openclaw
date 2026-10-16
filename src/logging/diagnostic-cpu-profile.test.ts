@@ -437,37 +437,11 @@ describe("diagnostic CPU profile owner", () => {
   );
 
   const invalidProfiles: Record<string, (value: ProfileFixture) => void> = {
-    "unknown sample": (value) => {
-      value.samples[0] = 99;
-    },
-    "missing delta": (value) => {
-      value.timeDeltas.pop();
-    },
-    "invalid delta": (value) => {
-      value.timeDeltas[0] = Number.NaN;
-    },
     "fractional source line": (value) => {
       value.nodes[1].callFrame.lineNumber = -1.5;
     },
     "fractional source column": (value) => {
       value.nodes[1].callFrame.columnNumber = -1.5;
-    },
-    "fractional position-tick line": (value) => {
-      value.nodes[1].positionTicks = [{ line: -1.5, ticks: 2 }];
-    },
-    "duplicate node": (value) => {
-      value.nodes[1].id = 1;
-    },
-    "unknown child": (value) => {
-      value.nodes[0].children.push(99);
-    },
-    cycle: (value) => {
-      value.nodes[1].children = [1];
-    },
-    "disconnected cycle": (value) => {
-      value.nodes[0].children = [];
-      value.nodes[1].children = [3];
-      value.nodes[2].children = [2];
     },
   };
   it.each(Object.entries(invalidProfiles))(

@@ -87,9 +87,9 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
   applyPlacementReadPublication(owner, change, sequence);
   if (change.kind !== "tools" && (change.kind !== "claim" || !change.localOnly)) {
     owner.preservation = undefined;
+    owner.recoveryCandidatesEmpty = undefined;
   }
   if (change.kind !== "tools") {
-    owner.recoveryCandidatesEmpty = undefined;
     owner.projections.delete(change.sessionId);
     if (change.kind === "claim" && change.projection && !change.indeterminate) {
       retainProjection(owner, change.sessionId, change.projection);
@@ -228,7 +228,7 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
             ]),
           );
         }
-        throw changed();
+        throw new WorkerPlacementInventoryChangedError(new Set([sessionId]), changedMessage);
       }
     },
     release(this: void) {

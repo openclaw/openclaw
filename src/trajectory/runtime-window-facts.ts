@@ -18,12 +18,11 @@ sessionChanges.subscribeFacts((change) => {
   if ("sessionKey" in change && !change.factsInvalidated) {
     // Transcript and metadata receipts do not remove trajectory rows. Reclamation
     // publishes removal or unknown row facts before releasing the writer FIFO.
-    if (change.scope === "transcript") {
+    if (!change.facts || change.scope === "transcript") {
       return;
     }
     const facts = change.facts;
     if (
-      facts &&
       facts.kind !== "removed" &&
       (facts.kind !== "entry" ||
         (facts.previousSessionId === facts.sessionId && !facts.lifecycleChanged)) &&

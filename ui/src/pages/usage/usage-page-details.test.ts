@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
@@ -207,7 +206,9 @@ describe("UsagePage detail requests", () => {
     await page.updateComplete;
     expect(page.usageLoading).toBe(true);
     page.querySelector<HTMLButtonElement>('.session-bar-selection[aria-label="Second"]')!.click();
-    await waitForFast(() => expect(page.details.session.status.error).toContain("out of date"));
+    await waitForFast(() =>
+      expect(page.read().detail.context.status.error).toContain("out of date"),
+    );
     expect(page.usageSelectedSessions).toEqual(["agent:main:Second"]);
     expect(page.querySelector(".session-detail-title")?.textContent).toContain("Second");
     expect(page.textContent).not.toContain("Wrong identity");
@@ -259,8 +260,8 @@ describe("UsagePage detail requests", () => {
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
     await waitForFast(() => {
-      expect(page.details.timeSeries.status.awaitingGateway).toBe(true);
-      expect(page.details.sessionLogs.status.awaitingGateway).toBe(true);
+      expect(page.read().detail.timeSeriesStatus.awaitingGateway).toBe(true);
+      expect(page.read().detail.sessionLogsStatus.awaitingGateway).toBe(true);
     });
     await page.updateComplete;
     expect(page.querySelector(".usage-detail-error--timeline")).toBeNull();
@@ -281,6 +282,12 @@ describe("UsagePage detail requests", () => {
     const pending = deferred<never>();
     let recovered = false;
     const request = vi.fn(async (method: string) => {
+      if (method === "sessions.usage") {
+        return cacheSnapshot("fresh").result;
+      }
+      if (method === "usage.status") {
+        return { providers: [] };
+      }
       if (!recovered) {
         return pending.promise;
       }
@@ -291,14 +298,18 @@ describe("UsagePage detail requests", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const context = contextWithClient(client);
     const page = await createPage(client, false, context);
-    page.usageSelectedSessions = ["agent:main:detail"];
-    const timeline = page.details.timeSeries.load("agent:main:detail");
-    const conversation = page.details.sessionLogs.load("agent:main:detail");
+    page
+      .read()
+      .callbacks.details.onSelectSession("agent:main:detail", false, ["agent:main:detail"]);
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
-    expect(request.mock.calls.filter(([method]) => method !== "sessions.usage")).toHaveLength(2);
+    expect(
+      request.mock.calls.filter(
+        ([method]) => method === "sessions.usage.timeseries" || method === "sessions.usage.logs",
+      ),
+    ).toHaveLength(2);
 
     recovered = true;
     pending.reject(
@@ -309,43 +320,69 @@ describe("UsagePage detail requests", () => {
         details: { reason: "gateway-suspending", phase: "draining" },
       }),
     );
-    await Promise.all([timeline, conversation]);
+    await pending.promise.catch(() => {});
     await waitForFast(() =>
-      expect(page.details.sessionLogs.data?.[0]?.content).toBe("Recovered after late rejection"),
+      expect(page.read().detail.sessionLogs?.[0]?.content).toBe("Recovered after late rejection"),
     );
-    expect(page.details.timeSeries.data?.points).toHaveLength(1);
-    expect(request.mock.calls.filter(([method]) => method !== "sessions.usage")).toHaveLength(4);
+    expect(page.read().detail.timeSeries?.points).toHaveLength(1);
+    expect(
+      request.mock.calls.filter(
+        ([method]) => method === "sessions.usage.timeseries" || method === "sessions.usage.logs",
+      ),
+    ).toHaveLength(4);
   });
 
   it("does not transfer queued detail recovery to a replacement selection", async () => {
     const first = deferred<never>();
     const second = deferred<never>();
-    const request = vi.fn((_method: string, params: { key: string }) =>
-      params.key === "agent:main:first" ? first.promise : second.promise,
-    );
+    const request = vi.fn((method: string, params: { key: string }) => {
+      if (method === "sessions.usage") {
+        return Promise.resolve(cacheSnapshot("fresh").result);
+      }
+      if (method === "usage.status") {
+        return Promise.resolve({ providers: [] });
+      }
+      return params.key === "agent:main:first" ? first.promise : second.promise;
+    });
     const client = { request } as unknown as GatewayBrowserClient;
     const context = contextWithClient(client);
     const page = await createPage(client, false, context);
-    page.usageSelectedSessions = ["agent:main:first"];
-    const firstLoad = page.details.timeSeries.load("agent:main:first");
+    page
+      .read()
+      .callbacks.details.onSelectSession("agent:main:first", false, [
+        "agent:main:first",
+        "agent:main:second",
+      ]);
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
 
-    page.usageSelectedSessions = ["agent:main:second"];
-    const secondLoad = page.details.timeSeries.load("agent:main:second");
+    page
+      .read()
+      .callbacks.details.onSelectSession("agent:main:second", false, [
+        "agent:main:first",
+        "agent:main:second",
+      ]);
     second.reject(new Error("Selected timeline unavailable"));
-    await secondLoad;
+    await waitForFast(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
     first.reject(new Error("Retired timeline unavailable"));
-    await firstLoad;
-    expect(request.mock.calls.filter(([method]) => method !== "sessions.usage")).toHaveLength(2);
-    expect(page.details.timeSeries.data).toBeNull();
-    expect(page.details.timeSeries.status.error).toBe("Selected timeline unavailable");
+    await first.promise.catch(() => {});
+    expect(
+      request.mock.calls.filter(([method]) => method === "sessions.usage.timeseries"),
+    ).toHaveLength(2);
+    expect(page.read().detail.timeSeries).toBeNull();
+    expect(page.read().detail.timeSeriesStatus.error).toBe("Selected timeline unavailable");
   });
 
   it("retries interrupted detail requests on immediate same-client reconnect and fences their old replies", async () => {
     const pending = deferred<never>();
     let disconnected = false;
     const request = vi.fn(async (method: string) => {
+      if (method === "sessions.usage") {
+        return cacheSnapshot("fresh").result;
+      }
+      if (method === "usage.status") {
+        return { providers: [] };
+      }
       if (!disconnected) {
         return pending.promise;
       }
@@ -356,18 +393,22 @@ describe("UsagePage detail requests", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const context = contextWithClient(client);
     const page = await createPage(client, false, context);
-    page.usageSelectedSessions = ["agent:main:detail"];
-    const timeline = page.details.timeSeries.load("agent:main:detail");
-    const conversation = page.details.sessionLogs.load("agent:main:detail");
+    page
+      .read()
+      .callbacks.details.onSelectSession("agent:main:detail", false, ["agent:main:detail"]);
     context.setGatewaySnapshot({ phase: "stopped" });
     disconnected = true;
     context.setGatewaySnapshot({ phase: "connected" });
-    await waitForFast(() => expect(page.details.sessionLogs.data?.[0]?.content).toBe("Recovered"));
+    await waitForFast(() => expect(page.read().detail.sessionLogs?.[0]?.content).toBe("Recovered"));
     pending.reject(new Error("gateway closed (1006): disconnected"));
-    await Promise.all([timeline, conversation]);
-    expect(page.details.timeSeries.status.error).toBeNull();
-    expect(page.details.sessionLogs.status.error).toBeNull();
-    expect(request.mock.calls.filter(([method]) => method !== "sessions.usage")).toHaveLength(4);
+    await pending.promise.catch(() => {});
+    expect(page.read().detail.timeSeriesStatus.error).toBeNull();
+    expect(page.read().detail.sessionLogsStatus.error).toBeNull();
+    expect(
+      request.mock.calls.filter(
+        ([method]) => method === "sessions.usage.timeseries" || method === "sessions.usage.logs",
+      ),
+    ).toHaveLength(4);
   });
 
   it("loads context only for the selected session and fences superseded replies through automatic recovery", async () => {
@@ -683,158 +724,7 @@ describe("UsagePage detail requests", () => {
     expect(page.providerUsageStalled).toBe(true);
 
     rejectProviderUsage = false;
-    await page.loadUsage();
+    await page.refresh();
     expect(page.providerUsageStalled).toBe(false);
   });
-
-  it.each(["resolve", "reject"])(
-    "commits only the latest time-series selection (%s)",
-    async (completion) => {
-      const first = deferred<SessionUsageTimeSeries>();
-      const second = deferred<SessionUsageTimeSeries>();
-      const request = vi.fn((_method: string, params: { key: string }) =>
-        params.key === "agent:main:a" ? first.promise : second.promise,
-      );
-      const page = await createPage({ request } as unknown as GatewayBrowserClient);
-
-      page.usageSelectedSessions = ["agent:main:a"];
-      const firstLoad = page.details.timeSeries.load("agent:main:a");
-      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-      page.usageSelectedSessions = ["agent:main:b"];
-      const secondLoad = page.details.timeSeries.load("agent:main:b");
-      const latest = { points: [{ timestamp: 2 }] } as SessionUsageTimeSeries;
-      second.resolve(latest);
-      await secondLoad;
-      if (completion === "resolve") {
-        first.resolve({ points: [{ timestamp: 1 }] } as SessionUsageTimeSeries);
-      } else {
-        first.reject(new Error("superseded timeline failed"));
-      }
-      await firstLoad;
-
-      expect(page.details.timeSeries.data).toBe(latest);
-      expect(page.details.timeSeries.status.error).toBeNull();
-    },
-  );
-
-  it("retains stale time-series data until a retry succeeds", async () => {
-    const retry = deferred<SessionUsageTimeSeries>();
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ points: [{ timestamp: 1 }] })
-      .mockRejectedValueOnce(new Error("timeline unavailable"))
-      .mockReturnValueOnce(retry.promise);
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
-
-    await page.details.timeSeries.load("agent:main:detail");
-    const previous = page.details.timeSeries.data;
-
-    await page.details.timeSeries.load("agent:main:detail");
-    expect(page.details.timeSeries.status).toEqual({
-      error: "timeline unavailable",
-      hasLoaded: true,
-      stale: true,
-      awaitingGateway: false,
-    });
-    expect(page.details.timeSeries.data).toBe(previous);
-
-    const retryLoad = page.details.timeSeries.load("agent:main:detail");
-    expect(page.details.timeSeries.status).toEqual({
-      error: null,
-      hasLoaded: true,
-      stale: true,
-      awaitingGateway: false,
-    });
-    const result = { points: [] } as unknown as SessionUsageTimeSeries;
-    retry.resolve(result);
-    await retryLoad;
-
-    expect(page.details.timeSeries.data).toBe(result);
-    expect(page.details.timeSeries.status).toEqual({
-      error: null,
-      hasLoaded: true,
-      stale: false,
-      awaitingGateway: false,
-    });
-  });
-
-  it("does not retain detail data when the selected session changes", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ points: [{ timestamp: 1 }] })
-      .mockResolvedValueOnce({
-        logs: [{ timestamp: 1, role: "user", content: "session A" }],
-      })
-      .mockRejectedValueOnce(new Error("timeline unavailable"))
-      .mockRejectedValueOnce(new Error("logs unavailable"));
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
-
-    page.usageSelectedSessions = ["agent:main:a"];
-    await page.details.timeSeries.load("agent:main:a");
-    await page.details.sessionLogs.load("agent:main:a");
-    page.usageSelectedSessions = ["agent:main:b"];
-    await page.details.timeSeries.load("agent:main:b");
-    await page.details.sessionLogs.load("agent:main:b");
-
-    expect(page.details.timeSeries.data).toBeNull();
-    expect(page.details.timeSeries.status).toEqual({
-      error: "timeline unavailable",
-      hasLoaded: false,
-      stale: false,
-      awaitingGateway: false,
-    });
-    expect(page.details.sessionLogs.data).toBeNull();
-    expect(page.details.sessionLogs.status).toEqual({
-      error: "logs unavailable",
-      hasLoaded: false,
-      stale: false,
-      awaitingGateway: false,
-    });
-  });
-
-  it.each(["draining"] as const)(
-    "clears retained details and preserves read authorization errors while %s",
-    async (suspensionPhase) => {
-      const pending = deferred<never>();
-      const authorizationError = new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "missing scope: operator.read",
-      });
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce({ points: [{ timestamp: 1 }] })
-        .mockResolvedValueOnce({
-          logs: [{ timestamp: 1, role: "user", content: "sensitive" }],
-        })
-        .mockReturnValue(pending.promise);
-      const client = { request } as unknown as GatewayBrowserClient;
-      const context = contextWithClient(client);
-      const page = await createPage(client, false, context);
-
-      await page.details.timeSeries.load("agent:main:detail");
-      await page.details.sessionLogs.load("agent:main:detail");
-      const timeline = page.details.timeSeries.load("agent:main:detail");
-      const conversation = page.details.sessionLogs.load("agent:main:detail");
-      context.setGatewaySnapshot({ suspensionPhase });
-      pending.reject(authorizationError);
-      await Promise.all([timeline, conversation]);
-
-      expect(page.details.timeSeries.data).toBeNull();
-      expect(page.details.timeSeries.status).toEqual({
-        error:
-          "You don't have permission to view usage details. Ask the person who manages OpenClaw for access.",
-        hasLoaded: false,
-        stale: false,
-        awaitingGateway: false,
-      });
-      expect(page.details.sessionLogs.data).toBeNull();
-      expect(page.details.sessionLogs.status).toEqual({
-        error:
-          "You don't have permission to view usage details. Ask the person who manages OpenClaw for access.",
-        hasLoaded: false,
-        stale: false,
-        awaitingGateway: false,
-      });
-    },
-  );
 });

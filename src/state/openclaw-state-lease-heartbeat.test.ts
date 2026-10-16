@@ -271,13 +271,7 @@ describe("maintenance lease heartbeat", () => {
         expect(worker.listenerCount("message")).toBe(1);
         // Withhold only the owner's notification; the real worker still renews
         // and publishes ready before our observer sees its startup message.
-        const receive = worker.listeners("message")[0]!;
-        worker.off("message", receive);
-        worker.on("message", (reply: unknown) => {
-          if (reply !== null) {
-            receive(reply);
-          }
-        });
+        worker.removeAllListeners("message");
         await Promise.race([once(worker, "message"), operation]);
         await expect(operation).resolves.toBe("maintained");
         expect(readLease(state.env)).toBeUndefined();

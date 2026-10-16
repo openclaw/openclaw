@@ -3,34 +3,11 @@ import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-d
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureSqliteDatabaseAdmissions } from "./sqlite-database-admission.js";
-import { getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
-import { createOwnedWorkerTaskPool, WorkerTaskPool } from "./worker-task-pool.js";
+import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 import type {
   SqliteIdleInput,
   SqliteIdleReply,
 } from "./worker-task-pool.sqlite-idle.test-support.js";
-
-it("preserves schema admission when an SDK read-only worker retires with a retained reader", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { db, path } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const schema = getAdmittedSqliteSchemaFacts(db);
-    expect(schema).toBeDefined();
-    const pool = new WorkerTaskPool<SqliteIdleInput, SqliteIdleReply>({
-      workerUrl: new URL("./worker-task-pool.sqlite-idle.test-support.ts", import.meta.url),
-      maxWorkers: 1,
-      idleTimeoutMs: 0,
-      databaseAccess: "read-only",
-    });
-    try {
-      expect(await pool.run({ path }, {})).toMatchObject({ retained: true, open: true });
-      await pool.close();
-      expect(getAdmittedSqliteSchemaFacts(db)?.admissionId).toBe(schema?.admissionId);
-    } finally {
-      await pool.close();
-      await closeOpenClawAgentDatabaseByPathAsync(path);
-    }
-  });
-});
 
 it("retires a cold-imported reader after its task, then reopens and explicitly closes in the same worker", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

@@ -4,7 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { getEnvironmentData, threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { notifyListeners } from "../shared/listeners.js";
 import { hasErrnoCode } from "./errno.js";
 import {
   isPostgresSqlConnection,
@@ -70,7 +70,10 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
   exchange: new AsyncLocalStorage<Exchange>(),
   exchanging: false,
   publication: 0,
-  seals: new SqliteDatabaseCleanCloseSeals(publishFact),
+  seals: new SqliteDatabaseCleanCloseSeals(publishFact, {
+    retain: (record) => state.registry.changeReferences(record, 1),
+    release: releaseReference,
+  }),
 }));
 
 export function readSqliteDatabaseCleanClose(location: string): boolean {
@@ -114,15 +117,17 @@ export function prepareSqliteDatabaseCleanClose(database: DatabaseSync) {
 const scopedWrites = createSqliteDatabaseWriteReceipts({
   admission,
   pathAdmission,
+  writeListeners: state.writeListeners,
   readRevision: readSqliteDatabaseWriteRevision,
   writer: (database) => state.dataWriters.get(database),
   suspended: (database) => state.suspended.has(database),
-  publish(record) {
-    state.registry.publish(record);
+  publish(record, keys) {
+    state.registry.publish(record, keys);
     exchange(record);
   },
 });
 export const {
+  onSqliteDatabaseWriteSettled,
   retireSqliteDatabaseWriteScopes,
   withSqliteDatabaseWriteScope,
   withoutSqliteDatabaseWriteScope,
@@ -346,24 +351,53 @@ function admission(database: DatabaseSync, create = true): Admission | undefined
 }
 
 function retainConnection(database: DatabaseSync, record: Admission): Admission {
-  const publish = state.registry.changeReferences(record, 1);
+  const expected = record.identity;
+  let current = record;
   try {
-    if (publish) {
-      exchange(record);
+    for (;;) {
+      if (current.identity !== expected) {
+        throw new Error("SQLite database changed identity during native open");
+      }
+      const publish = state.registry.changeReferences(current, 1);
+      let retained = false;
+      try {
+        if (publish) {
+          exchange(current);
+        }
+        const retirement = readSqliteDatabaseGeneration(current, "retired");
+        if (retirement === 0) {
+          state.connections.set(database, current);
+          retained = true;
+          return current;
+        }
+        if (retirement !== 2) {
+          throw new Error("SQLite database admission retired during native open");
+        }
+      } finally {
+        if (!retained) {
+          state.registry.changeReferences(current, -1);
+        }
+      }
+      // The last known reader can close before the host receives this worker's
+      // first reference. Bind only after the host acknowledges its live generation.
+      const location = database.location();
+      const replacement = database.isTransaction
+        ? state.registry.records.get(expected)
+        : location
+          ? pathAdmission(location)
+          : undefined;
+      if (!replacement || isRetired(replacement)) {
+        throw new Error("SQLite database admission unavailable during native open");
+      }
+      current = replacement;
     }
-    if (isRetired(record)) {
-      throw new Error("SQLite database admission retired during native open");
-    }
-    state.connections.set(database, record);
-    return record;
   } catch (error) {
-    state.registry.changeReferences(record, -1);
     state.openedIdentities.delete(database);
     throw error;
   }
 }
 
-/** Native close settles this handle; the physical store retains facts until invalidation. */
+/** Native close has settled; keep only descriptor custody, never the closed database's payloads. */
 export function releaseSqliteDatabaseAdmission(database: DatabaseSync): void {
   const record = state.connections.get(database);
   if (state.openedIdentities.delete(database) && record) {
@@ -415,24 +449,10 @@ export function beginSqliteDatabaseWrite(database: DatabaseSync, unscoped = fals
   if (state.dataWriters.has(database)) {
     return;
   }
-  state.dataWriters.set(database, admission(database));
-}
-
-/** Local sibling writers notify maintenance after publishing their shared write revision. */
-export function onSqliteDatabaseWriteSettled(
-  database: DatabaseSync,
-  listener: () => void,
-): (() => void) | undefined {
-  const record = admission(database);
-  if (!record) {
-    return undefined;
+  state.dataWriters.set(database, record);
+  if (record) {
+    Atomics.add(new Int32Array(record.references.get(threadId)!), 1, 1);
   }
-  let listeners = state.writeListeners.get(record);
-  if (!listeners) {
-    listeners = new Set();
-    state.writeListeners.set(record, listeners);
-  }
-  return registerListener(listeners, listener);
 }
 
 /** Native settlement invalidates row caches, including failed or rolled-back writes. */
@@ -446,6 +466,8 @@ export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
   scopedWrites.finish(database, record);
   if (record) {
     advanceSqliteDatabaseGeneration(record, "writeRevision");
+    // Clear only after publishing both receipts; a native COMMIT can outlive its worker.
+    Atomics.sub(new Int32Array(record.references.get(threadId)!), 1, 1);
     const listeners = state.writeListeners.get(record);
     if (listeners) {
       notifyListeners(listeners, undefined);
@@ -480,13 +502,18 @@ export function readSqliteDatabaseSiblingWriteRevision(
     : (revision - (state.localWriteRevisions.get(database) ?? 0)) | 0;
 }
 
-/** A stopped worker may have committed before delivering its row-cache receipt. */
+/** Settle interrupted native writes before releasing the departed worker's handles. */
 export function trackSqliteDatabaseAdmissionWorker(worker: {
   readonly threadId: number;
   once(event: "exit", listener: (code: number | undefined) => void): unknown;
 }): void {
   const owner = worker.threadId;
-  worker.once("exit", () => state.registry.releaseWorker(owner));
+  worker.once("exit", () => {
+    for (const record of state.registry.records.values()) {
+      scopedWrites.settleWorker(record, owner);
+    }
+    state.registry.releaseWorker(owner);
+  });
 }
 
 export function hasPendingSqliteDatabaseSchemaMutation(

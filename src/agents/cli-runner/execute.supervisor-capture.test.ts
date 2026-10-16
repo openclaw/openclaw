@@ -53,6 +53,7 @@ import {
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
+import { prepareCliRunTerminalReply } from "./terminal-reply.js";
 import { captureCliRunStartTime, type PreparedCliRunContext } from "./types.js";
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 vi.mock("../../process/supervisor/adapters/child.js", () => ({ createChildAdapter: vi.fn() })); // Gateway unit coverage owns quiet-admission timing. These integration cases only
@@ -1481,7 +1482,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     { action: "send", exitCode: 0 },
     { action: "poll", exitCode: 1 },
   ])(
-    "retains source $action delivery and suppresses assistant output through CLI exit $exitCode",
+    "retains the final source $action reply through CLI exit $exitCode",
     async ({ action, exitCode }) => {
       const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
       context.mcpDeliveryCapture = true;
@@ -1492,10 +1493,18 @@ describe("executePreparedCliRun supervisor output capture", () => {
           recordMcpLoopbackToolCallResult({
             captureKey,
             toolName: "message",
-            args: { action, channel: TEST_MESSAGE_CHANNEL, message: "implicit source reply" },
+            args: {
+              action,
+              channel: TEST_MESSAGE_CHANNEL,
+              message: "implicit source reply",
+              final: true,
+            },
             result: {
               content: [{ type: "text", text: "sent" }],
               details: {
+                deliveryStatus: "sent",
+                sourceReplySink: "internal-ui",
+                sourceReply: { text: "implicit source reply" },
                 messageDelivery: {
                   status: "settled",
                   partialDelivery: false,
@@ -1517,6 +1526,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         result = buildCliRunResult({
           context,
           output,
+          preparedReply: prepareCliRunTerminalReply(context, output),
           usedHistoryPrompt: false,
           userTurnHandled: true,
           sessionBindingDisabled: true,
@@ -1544,7 +1554,17 @@ describe("executePreparedCliRun supervisor output capture", () => {
       }
       expect(result.sourceReplyDelivered).toBe(true);
       expect(result.messagingToolSentTargets).toBeUndefined();
-      expect(result.payloads).toBeUndefined();
+      expect(result.messagingToolSourceReplyPayloads).toEqual([
+        { text: "implicit source reply", sourceReplyFinal: true },
+      ]);
+      expect(result.payloads).toEqual([{ text: "implicit source reply" }]);
+      expect(result.meta.terminalReply).toEqual({
+        disposition: "visible",
+        text: "implicit source reply",
+      });
+      if (exitCode !== 0) {
+        expect(result.meta.error).toMatchObject({ kind: "incomplete_turn", fallbackSafe: false });
+      }
     },
   );
 

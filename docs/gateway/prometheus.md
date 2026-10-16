@@ -163,6 +163,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_session_recovery_age_seconds`                   | histogram | `action`, `active_work_kind`, `state`, `status`                                           |
 | `openclaw_gateway_event_loop_delay_max_seconds`           | histogram | none                                                                                      |
 | `openclaw_gateway_event_loop_observed_seconds_total`      | counter   | none                                                                                      |
+| `openclaw_gateway_main_thread_stall_seconds`              | histogram | `task`                                                                                    |
+| `openclaw_gateway_main_thread_stalls_dropped_total`       | counter   | none                                                                                      |
 | `openclaw_liveness_warning_total`                         | counter   | `reason`                                                                                  |
 | `openclaw_liveness_sessions`                              | gauge     | `state`                                                                                   |
 | `openclaw_liveness_event_loop_delay_p99_seconds`          | histogram | `reason`                                                                                  |
@@ -179,6 +181,10 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_worker_request_seconds`                         | histogram | `kind`, `request_class`                                                                   |
 | `openclaw_worker_heap_sampled_count`                      | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_heap_used_bytes`                         | gauge     | `script`                                                                                  |
+| `openclaw_worker_heap_space_used_bytes`                   | gauge     | `script`, `space`                                                                         |
+| `openclaw_worker_external_bytes`                          | gauge     | `script`                                                                                  |
+| `openclaw_worker_array_buffers_bytes`                     | gauge     | `script`                                                                                  |
+| `openclaw_code_mode_worker_memory_bytes`                  | gauge     | `slot`, `kind` (`external`, `array_buffers`)                                              |
 | `openclaw_worker_started_total`                           | counter   | `script`                                                                                  |
 | `openclaw_worker_retired_total`                           | counter   | `script`, `reason`                                                                        |
 | `openclaw_worker_messages_total`                          | counter   | `kind`, `direction`                                                                       |
@@ -468,6 +474,22 @@ exporter's series cap, and process restarts can also lose observations. Watch
 the existing drop counters and the represented-duration counter when assessing
 coverage. Readiness decisions and persistent liveness-warning thresholds are unchanged.
 
+### Main-thread stall attribution
+
+`openclaw_gateway_main_thread_stall_seconds{task}` records individual main-thread
+tasks lasting at least 250 milliseconds. Its `_count` counts recorded tasks;
+`_sum` totals their elapsed seconds. Buckets are 0.25, 0.5, 1, 2.5, 5, and 10
+seconds, plus `+Inf`. The `task` label comes from code-owned work scopes and passes
+through the exporter's normal label sanitizer and series cap. It contains no
+request IDs or message content.
+
+`openclaw_gateway_main_thread_stalls_dropped_total` counts records omitted when
+the attribution buffer fills. It appears only after the first loss; the histogram
+appears only after the first recorded stall. Diagnostic queue drops and exporter
+restarts can also lose observations, so an absent histogram does not establish
+that no stalls occurred. Unlike event-loop window maxima, these observations
+attribute elapsed execution to a work scope; they do not provide CPU profiles.
+
 ### Worker request queues
 
 `openclaw_worker_queue_depth{kind}` reports requests awaiting dispatch across
@@ -576,7 +598,21 @@ fresh sample, while `openclaw_worker_heap_sampled_count` counts its fresh sample
 The original unlabeled series retain the aggregate totals. Select
 `{script!=""}` when summing script series to avoid counting the aggregate again.
 `openclaw_worker_heap_used_bytes{script="..."}` sums fresh heap samples for each
-Worker script. Labels use a fixed allowlist of runtime-entrypoint, pooled, and bundled plugin Worker basenames, normalized to
+Worker script. `openclaw_worker_external_bytes` and `openclaw_worker_array_buffers_bytes`
+sum the corresponding available counters from those same samples by `script`.
+ArrayBuffer bytes are included in external memory; do not add them together.
+Native-only heap samples provide external memory but no ArrayBuffer count, so
+ArrayBuffer totals can cover fewer Workers than the heap sample count. Missing
+counters are omitted, while measured zero bytes are exported as zero.
+On Node, `openclaw_worker_heap_space_used_bytes{script="...",space="..."}` sums
+used bytes by V8 heap space for Workers serving the private memory channel. It
+shares the existing heartbeat, sample expiration, and exit cleanup. Space names
+come from V8's finite native set; labels contain no paths, account details, or
+catalog contents. Compare old, large-object, and code spaces to locate worker
+heap growth without a snapshot. Native-only fallback samples and Bun omit these
+space counters, so their coverage can be smaller than the heap sample count.
+`openclaw_heap_space_bytes` remains the main isolate's separate space breakdown.
+Labels use a fixed allowlist of runtime-entrypoint, pooled, and bundled plugin Worker basenames, normalized to
 `.js` in source and packaged runs; unknown, eval, and unwrapped third-party Workers
 use `other`. Full paths and eval source are never recorded. A script's series
 disappears when it has no live, fresh samples; its count series disappear when
@@ -595,7 +631,11 @@ separate SQLite handle retention window remains 30 minutes.
 `openclaw_worker_retired_total{script="...",reason="..."}` expose cumulative
 starts and confirmed native exits through the same heartbeat. Retirement reasons
 are `idle_timeout`, `memory_pressure`, `closed`, `rotation`, `cancelled`,
-`failure`, or `exit` when an owner did not specify a reason. A retirement request
+`failure`, `eviction`, `idle-expiry`, `dispose`, `shutdown`, `crash`, `gc-thrash`,
+or `exit` when an owner did not specify a reason. Code Mode distinguishes warm-cache
+eviction, idle expiry, explicit disposal, host shutdown, native crash, and GC-watchdog
+retirement; see [Code Mode executors](/tools/code-mode/executors).
+A retirement request
 does not count until the Worker exits; failed termination and retries do not
 double-count. Counters survive exporter restarts and reset with the process.
 Use `60 * rate(openclaw_worker_started_total[5m])` for starts per minute by
@@ -664,8 +704,14 @@ cleanup pass. Normal result settlement still removes its own refs immediately.
 `openclaw_gc_duration_seconds` records elapsed garbage collection (GC) duration
 reported by Node.js for the main isolate and instrumented workers. `kind` is
 `scavenge` (minor), `mark_sweep_compact` (major), `incremental`, or
-`weak_processing`, taken from the native entry's `detail.kind`. `thread` is `main`
+`weak_processing`, taken from the native GC profile's collection type. `thread` is `main`
 or an allowlisted worker script basename; unknown worker scripts use `other`.
+Native sampling reports `reason="other"`: `GCProfiler` does not expose callback
+flags. SDK producers may still supply the bounded callback-flag labels `none`,
+`forced`, `synchronous_phantom_processing`, `all_available_garbage`,
+`all_external_memory`, `schedule_idle`, or `construct_retained`. These flags are
+not V8's complete internal reason for starting a collection.
+
 Code Mode Node workers also carry a reusable `slot` label from 1 through 64.
 The worker registry holds a slot until native worker exit, including pending
 retirement, then makes it available for reuse. Concurrent workers beyond 64
@@ -673,7 +719,7 @@ retain script-level attribution without a slot; other worker scripts also retain
 script-level attribution. Slots are not thread IDs or session identities.
 Counters accumulate across occupants of a slot, so a rate window can span more
 than one worker. Older SDK
-producers that omit attribution use `kind="unknown",thread="main"`. SDK-provided
+producers that omit attribution use `kind="unknown",reason="other",thread="main"`. SDK-provided
 unknown kinds and worker names fold into `unknown` and `other` at event emission.
 Each observation is one
 GC entry, not CPU time, allocated bytes, or a guaranteed stop-the-world pause.
@@ -695,14 +741,16 @@ exports are suppressed in the meantime.
 The histogram is absent until the first observation, so absence does not prove
 zero GC. Queue drops, the series cap, observation gaps and process restarts limit
 coverage. Diagnostics disable/re-enable preserves the exporter's existing
-counters; restarting the exporter resets them as usual. No extra timer, GC
-trigger, trace attribution or application payload is collected. Worker GC batches
+counters; restarting the exporter resets them as usual. One shared native profiler
+per isolate drains on an unreferenced one-second timer instead of scheduling
+JavaScript after each GC. Sampling does not force GC or collect application payloads.
+Worker GC batches
 reuse the memory telemetry port; port closure stops its observer. Workers without
 that port, nested workers outside this registry, and runtimes without native GC
 entries are not covered. Worker exit can lose a final undelivered batch.
 
 The histogram's `_count` and `_sum` are the collection count and total elapsed
-seconds for each label pair. Existing queries that need a single total should
+seconds for each label set. Existing queries that need a single total should
 aggregate the new labels; select `thread="main"` to retain main-isolate scope:
 
 ```promql
@@ -714,7 +762,9 @@ To locate a busy Code Mode isolate and compare its latest used heap with its
 actual V8 limit:
 
 ```promql
-60 * rate(openclaw_gc_duration_seconds_count{thread="code-mode-node.worker.js",kind="mark_sweep_compact",slot!=""}[5m])
+60 * sum by (slot, reason) (
+  rate(openclaw_gc_duration_seconds_count{thread="code-mode-node.worker.js",kind="mark_sweep_compact",slot!=""}[5m])
+)
 openclaw_code_mode_worker_heap_bytes{kind="used"}
   / ignoring(kind) openclaw_code_mode_worker_heap_bytes{kind="limit"}
 ```
@@ -725,6 +775,13 @@ the next memory sample after worker exit or stale sampling; missing limits are
 omitted on runtimes without V8. The script-level worker heap metrics continue to
 include all workers, including slot overflow. No additional heap interrupt or
 sampling timer is introduced.
+
+`openclaw_code_mode_worker_memory_bytes` exposes the same slots with
+`kind="external"` and `kind="array_buffers"`, using the counters already carried
+by the memory heartbeat. Missing counters are omitted, and gauges disappear on
+the next memory sample after exit or stale sampling, just like the heap gauges.
+Slot overflow remains included in the script-level totals. These counters do
+not account for every native allocation or allocator arena.
 
 OpenTelemetry's `openclaw.gc.duration_ms` uses the corresponding
 `openclaw.gc.kind`, `openclaw.gc.thread`, and optional `openclaw.gc.worker_slot`

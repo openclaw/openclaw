@@ -821,6 +821,10 @@ Measured phases log both their start and elapsed
 duration; `total` is elapsed time from process startup (or the current in-process
 restart). These are wall times, including asynchronous waits, not CPU measurements.
 Nested durations overlap their parent phases; do not add them to the parent total.
+Plugin service starts taking at least 250 ms always log one compact
+`sidecars.plugin-services.<plugin>.<service>` span with elapsed time and a
+`success` or `failure` outcome, even without opt-in tracing. Plugin and service IDs
+use encoded diagnostic segments; the record contains no service payload or error text.
 Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the complete breakdown and per-plugin
 import and registration timings.
 
@@ -1131,6 +1135,19 @@ capturing raw prompt or response content:
 These fields are available to diagnostic snapshots, model-call plugin hooks, and
 OTEL model-call spans/metrics when diagnostics export is enabled.
 
+Local llama.cpp and native Ollama requests show “Waiting for the local model to
+respond” after one second without a response event. Control UI, TUI, and channels
+with progress drafts show this transient status, including later model calls in
+the same turn. It clears on the first stream event, cancellation, failure, or
+completion. Fast requests do not flash a waiting status, and no server polling
+or user configuration is required.
+
+“Waiting for a free model slot” is reserved for request-correlated backend
+evidence. The pinned llama.cpp server and Ollama do not expose that evidence for
+queued requests: occupied slots, model residency, and silence alone cannot
+distinguish queueing from loading or prompt processing. They use the generic
+response-wait wording.
+
 Completed llama.cpp and Ollama calls also report `providerProcessingMs` and
 `providerWaitEstimateMs` in model-call diagnostics, provider request timeline
 events, and Gateway stability snapshots and bundles. `openclaw gateway stability`
@@ -1197,11 +1214,22 @@ Log messages should contain IDs, sizes, and outcomes, never message text, prompt
 tool arguments, or tool results. Config snapshots, audit output, and
 credential-bearing URLs and command-line options retain their credential masking.
 
+Gateway agent ingress returns replies through results and session transcripts
+without echoing them to service logs. Nested-agent replies are not printed to
+logs. Interactive `openclaw agent` commands still print replies to stdout.
+Stalled and stuck session diagnostics retain session IDs, ages, tool names, cron
+metadata, and recovery outcomes without copying assistant replies from transcripts.
+
 `logging.redactPatterns` replaces the default regex string list for logs and
 diagnostics. Built-in structural protections for form bodies, structured
 authorization headers, and bare AWS secret access keys always apply, including
 when this list is customized. Redaction is best-effort; review diagnostic
 exports before sharing them.
+
+If the list contains malformed or rejected patterns, OpenClaw skips those entries,
+keeps valid patterns, and adds the default protections. It warns once per process
+without printing the rejected values. Correct `logging.redactPatterns` in your
+config; directory inspection and Doctor can still report the config error.
 
 Tool arguments and results are not secret-masked. This includes model context,
 session transcripts, tool events and summaries in the Control UI, session-history

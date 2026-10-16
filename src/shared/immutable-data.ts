@@ -86,3 +86,26 @@ export function freezeJsonSnapshot<T>(value: T): T {
   inspectPlainData(value, true);
   return value;
 }
+
+/** Freeze decoded/internal JSON only; callers own the plain-data guarantee. */
+export function freezeTrustedJsonSnapshot<T>(value: T): T {
+  if (!value || typeof value !== "object" || deeplyFrozenPlainData.has(value)) {
+    return value;
+  }
+  const pending: unknown[] = [value];
+  while (pending.length) {
+    const candidate = pending.pop();
+    if (!candidate || typeof candidate !== "object" || deeplyFrozenPlainData.has(candidate)) {
+      continue;
+    }
+    Object.freeze(candidate);
+    deeplyFrozenPlainData.add(candidate);
+    for (const key in candidate) {
+      const child: unknown = Reflect.get(candidate, key);
+      if (child && typeof child === "object") {
+        pending.push(child);
+      }
+    }
+  }
+  return value;
+}

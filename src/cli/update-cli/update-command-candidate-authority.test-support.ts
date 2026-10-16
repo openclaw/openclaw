@@ -17,10 +17,9 @@ export async function prepareCandidateAuthorityRuntime(root: string) {
       recursive: true,
       mode: fs.constants.COPYFILE_FICLONE,
     });
-    await fs.promises.copyFile(
-      path.join(preparedRoot, "node-host-launcher.mjs"),
-      path.join(root, "node-host-launcher.mjs"),
-    );
+    for (const filename of ["cli-invocation.mjs", "node-host-launcher.mjs"]) {
+      await fs.promises.copyFile(path.join(preparedRoot, filename), path.join(root, filename));
+    }
     const dependencies = path.resolve("node_modules");
     const fixtureDependencies = path.join(root, "node_modules");
     await fs.promises.mkdir(fixtureDependencies);

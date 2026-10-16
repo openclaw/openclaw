@@ -20,6 +20,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   readExactSessionEntryRow,
@@ -213,7 +214,8 @@ function createFixture() {
     },
     async reopenDatabase() {
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
-      database = openOpenClawAgentDatabase(context.options);
+      const reopened = openOpenClawAgentDatabase(context.options);
+      database = Object.assign(reopened, { db: requireNativeSqliteDatabase(reopened.db) });
     },
     closeActor: () => actor.close(),
     close() {

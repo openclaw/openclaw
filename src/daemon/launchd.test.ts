@@ -175,14 +175,24 @@ describe("launchd runtime parsing", () => {
     }
   });
 
-  it("fails closed when the LaunchAgent enabled state cannot be read", async () => {
-    state.printDisabledError = "Operation not permitted";
-    state.printDisabledCode = 1;
-
-    await expect(isLaunchAgentEnabled({ env: createDefaultLaunchdEnv() })).rejects.toThrow(
-      "launchctl print-disabled failed: Operation not permitted",
-    );
-  });
+  it.each(["enabled", "loaded"] as const)(
+    "fails closed when the %s state cannot be read",
+    async (read) => {
+      if (read === "enabled") {
+        state.printDisabledError = "Operation not permitted";
+        state.printDisabledCode = 1;
+        await expect(isLaunchAgentEnabled({ env: ENV })).rejects.toThrow(
+          "launchctl print-disabled failed: Operation not permitted",
+        );
+      } else {
+        state.printError = "launchctl print permission denied";
+        state.printFailuresRemaining = 1;
+        await expect(isLaunchAgentLoaded({ env: ENV })).rejects.toMatchObject({
+          reason: "launchd-gui-domain-unavailable",
+        });
+      }
+    },
+  );
 });
 
 describe("launchd runtime state", () => {
@@ -628,15 +638,6 @@ describe("launchd bootstrap repair", () => {
 });
 
 describe("launchd uninstall", () => {
-  it("rejects a permission-denied launchctl inspection", async () => {
-    state.printError = "launchctl print permission denied";
-    state.printFailuresRemaining = 1;
-
-    await expect(isLaunchAgentLoaded({ env: createDefaultLaunchdEnv() })).rejects.toMatchObject({
-      reason: "launchd-gui-domain-unavailable",
-    });
-  });
-
   it.each([
     { operation: "lstat", code: "EACCES" },
     { operation: "rename", code: "ENOENT" },
@@ -740,42 +741,42 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toEqual([]);
   });
 
-  it("aborts before mutation when prior LaunchAgent supervision is ambiguous", async () => {
-    const plistPath = resolveLaunchAgentPlistPath(ENV);
-    const previous = setLaunchAgentPlist(ENV, "ai.openclaw.gateway", [
-      "/previous/node",
-      "/previous/openclaw.mjs",
-      "gateway",
-    ]);
-    state.printError = "launchctl print permission denied";
-    // A denied membership probe must refuse before any native mutation.
-    state.printFailuresRemaining = 2;
+  it.each(["ambiguous supervision", "missing loaded definition"] as const)(
+    "aborts before mutation with %s",
+    async (scenario) => {
+      const plistPath = resolveLaunchAgentPlistPath(ENV);
+      const previous =
+        scenario === "ambiguous supervision"
+          ? setLaunchAgentPlist(ENV, "ai.openclaw.gateway", [
+              "/previous/node",
+              "/previous/openclaw.mjs",
+              "gateway",
+            ])
+          : undefined;
+      if (scenario === "ambiguous supervision") {
+        state.printError = "launchctl print permission denied";
+        // A denied membership probe must refuse before any native mutation.
+        state.printFailuresRemaining = 2;
+      } else {
+        state.serviceStates.set(`${DOMAIN}/ai.openclaw.gateway`, "running");
+      }
 
-    await expect(
-      installLaunchAgent({
-        env: ENV,
-        stdout: new PassThrough(),
-        programArguments: defaultProgramArguments,
-      }),
-    ).rejects.toMatchObject({ reason: "service-membership-unverified" });
+      const install = installLaunchAgent(defaultLaunchAgentFixture(ENV));
+      if (scenario === "ambiguous supervision") {
+        await expect(install).rejects.toMatchObject({ reason: "service-membership-unverified" });
+      } else {
+        await expect(install).rejects.toThrow("is loaded but its plist is missing");
+        expect(state.serviceLoaded).toBe(true);
+        expect(state.serviceRunning).toBe(true);
+      }
 
-    expect(state.files.get(plistPath)).toBe(previous);
-    expect(state.fileWrites).toEqual([]);
-    expect(launchctlCommandNames()).toEqual(["print"]);
-  });
-
-  it("aborts before mutation when launchd has the only copy of the prior definition", async () => {
-    state.serviceStates.set(`${DOMAIN}/ai.openclaw.gateway`, "running");
-
-    await expect(installLaunchAgent(defaultLaunchAgentFixture(ENV))).rejects.toThrow(
-      "is loaded but its plist is missing",
-    );
-
-    expect(state.serviceLoaded).toBe(true);
-    expect(state.serviceRunning).toBe(true);
-    expect(state.fileWrites).toEqual([]);
-    expect(launchctlCommandNames()).toEqual(["print", "print"]);
-  });
+      expect(state.files.get(plistPath)).toBe(previous);
+      expect(state.fileWrites).toEqual([]);
+      expect(launchctlCommandNames()).toEqual(
+        scenario === "ambiguous supervision" ? ["print"] : ["print", "print"],
+      );
+    },
+  );
 
   it("restores absent artifacts after a failed fresh install", async () => {
     const plistPath = resolveLaunchAgentPlistPath(ENV);
@@ -1534,32 +1535,62 @@ describe("launchd install", () => {
     expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "kickstart" }]]);
   });
 
-  it.each(["exit", "timeout"] as const)(
-    "retries teardown bootstrap output only after a completed command (%s)",
-    async (termination) => {
+  it.each([
+    { scenario: "teardown", termination: "exit" },
+    { scenario: "teardown", termination: "timeout" },
+    { scenario: "in-progress", termination: "exit" },
+    { scenario: "in-progress", termination: "timeout" },
+  ] as const)(
+    "accepts $scenario bootstrap output only after a completed command ($termination)",
+    async ({ scenario, termination }) => {
       const env = createLaunchdEnvWithGatewayPort("18789");
-      setLaunchAgentPlist(env, "ai.openclaw.gateway", ["node", "gateway.js"]);
-      state.bootstrapError = "Bootstrap failed: 5: Input/output error";
+      const detail =
+        scenario === "teardown"
+          ? "Bootstrap failed: 5: Input/output error"
+          : "Bootstrap failed: 37: Operation already in progress";
+      state.bootstrapError = detail;
+      if (scenario === "teardown") {
+        setLaunchAgentPlist(env, "ai.openclaw.gateway", ["node", "gateway.js"]);
+        state.bootstrapTransient = true;
+      } else {
+        setLegacyGatewayLaunchAgentPlist(resolveLaunchAgentPlistPath(env), [
+          "    <key>StandardOutPath</key>",
+          "    <string>/Users/test/.openclaw-default/logs/gateway.log</string>",
+        ]);
+        state.bootstrapLoadsServiceOnFailure = true;
+      }
       state.bootstrapCode = termination === "exit" ? 5 : 1;
       state.bootstrapTermination = termination;
-      state.bootstrapTransient = true;
       const onMutation = vi.fn();
 
-      const result = runWithFakeTimers(() =>
-        restartLaunchAgent(launchAgentControlFixture(env, { onMutation })),
-      );
+      const restart = () => restartLaunchAgent(launchAgentControlFixture(env, { onMutation }));
+      const result = scenario === "teardown" ? runWithFakeTimers(restart) : restart();
 
       if (termination === "exit") {
         await expect(result).resolves.toEqual({ outcome: "completed" });
       } else {
-        await expect(result).rejects.toThrow(
-          "launchctl bootstrap failed: Bootstrap failed: 5: Input/output error",
-        );
+        await expect(result).rejects.toThrow(`launchctl bootstrap failed: ${detail}`);
       }
       // Recovery can restore the job after interruption, but must not turn the
       // failed restart into success by treating partial EIO output as a retry.
       expect(state.serviceLoaded).toBe(true);
-      expect(onMutation).toHaveBeenCalledWith({ mode: "bootstrap" });
+      if (scenario === "teardown" || termination === "exit") {
+        expect(onMutation).toHaveBeenCalledWith({ mode: "bootstrap" });
+      } else {
+        expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
+      }
+      if (scenario === "in-progress") {
+        expect(launchctlCommandNames()).toEqual([
+          "print",
+          "print",
+          "enable",
+          "bootout",
+          "enable",
+          "bootstrap",
+          "print",
+        ]);
+        expect(launchctlCommandNames()).not.toContain("kickstart");
+      }
     },
   );
 
@@ -1587,45 +1618,6 @@ describe("launchd install", () => {
     expect(message).toContain("The gateway is down and launchd has no job left to respawn it.");
     expect(message).toContain("openclaw gateway start");
   });
-
-  it.each(["exit", "timeout"] as const)(
-    "accepts in-progress bootstrap output only after a completed command (%s)",
-    async (termination) => {
-      const env = createLaunchdEnvWithGatewayPort("18789");
-      const plistPath = resolveLaunchAgentPlistPath(env);
-      setLegacyGatewayLaunchAgentPlist(plistPath, [
-        "    <key>StandardOutPath</key>",
-        "    <string>/Users/test/.openclaw-default/logs/gateway.log</string>",
-      ]);
-      state.bootstrapError = "Bootstrap failed: 37: Operation already in progress";
-      state.bootstrapCode = termination === "exit" ? 5 : 1;
-      state.bootstrapTermination = termination;
-      state.bootstrapLoadsServiceOnFailure = true;
-      const onMutation = vi.fn();
-
-      const result = restartLaunchAgent(launchAgentControlFixture(env, { onMutation }));
-      if (termination === "exit") {
-        await expect(result).resolves.toEqual({ outcome: "completed" });
-        expect(onMutation).toHaveBeenCalledWith({ mode: "bootstrap" });
-      } else {
-        await expect(result).rejects.toThrow(
-          "launchctl bootstrap failed: Bootstrap failed: 37: Operation already in progress",
-        );
-        expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
-      }
-
-      expect(launchctlCommandNames()).toEqual([
-        "print",
-        "print",
-        "enable",
-        "bootout",
-        "enable",
-        "bootstrap",
-        "print",
-      ]);
-      expect(launchctlCommandNames()).not.toContain("kickstart");
-    },
-  );
 
   it("protects the current launchd PID across dual-stack listeners", async () => {
     const managedPidAfterCleanup = 4343;

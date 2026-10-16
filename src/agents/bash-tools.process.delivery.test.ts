@@ -386,3 +386,21 @@ test("composes lazy process actions through generated declarations and JavaScrip
     value: [{ id: "typed-process", lines: 2, output: "FIRST\nSECOND" }],
   });
 });
+
+test("keeps a poll wait live when the wall clock steps forward", async () => {
+  // The wait budget measures elapsed time; a wall-clock step is not elapsed work.
+  vi.useFakeTimers({
+    toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
+  const h = pollFixture();
+  const pending = h.poll("wall-clock-step", 5_000);
+  vi.setSystemTime(Date.now() + 60_000);
+  const append = setTimeout(() => appendOutput(h.session, "stdout", "late output\n"), 1_000);
+  try {
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(resultText(await pending)).toContain("late output");
+  } finally {
+    clearTimeout(append);
+    await pending;
+  }
+});

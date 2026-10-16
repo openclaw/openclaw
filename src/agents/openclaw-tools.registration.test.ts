@@ -179,7 +179,10 @@ describe("openclaw-tools progress_card gating", () => {
   it("keeps human-question tools on permitted primary sessions", async () => {
     for (const toolName of ["ask_user", "secrets"] as const) {
       const includeTool = (agentSessionKey?: string) =>
-        shouldIncludePrimarySessionToolForOpenClawTools(toolName, { agentSessionKey });
+        shouldIncludePrimarySessionToolForOpenClawTools(toolName, {
+          agentSessionKey,
+          questionInputMode: "native",
+        });
       expect(includeTool()).toBe(false);
       expect(includeTool("agent:main:main")).toBe(true);
       expect(includeTool("agent:main:subagent:worker")).toBe(false);
@@ -196,6 +199,7 @@ describe("openclaw-tools progress_card gating", () => {
     expect(
       createFastToolNames({
         runSessionKey: "agent:main:non-embedded",
+        questionInputMode: "native",
       }),
     ).toEqual(expect.arrayContaining(["ask_user", "secrets"]));
     setEmbeddedMode(true);
@@ -204,12 +208,14 @@ describe("openclaw-tools progress_card gating", () => {
       await withPreparedSessionCapabilityRead(() =>
         createFastToolNames({
           agentSessionKey: "agent:main:subagent:worker",
+          questionInputMode: "native",
         }),
       ),
     ).not.toContain("ask_user");
     expect(
       createFastToolNames({
         runSessionKey: "agent:main:run",
+        questionInputMode: "native",
       }),
     ).toContain("ask_user");
   });

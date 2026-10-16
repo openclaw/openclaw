@@ -13,13 +13,6 @@ export const CAPTURE_FINALIZE_GRACE_MS = 2_000;
 export const VOICE_CONNECT_READY_TIMEOUT_MS = 30_000;
 export const VOICE_RECONNECT_GRACE_MS = 15_000;
 
-export function resolveVoiceTimeoutMs(value: number | undefined, fallbackMs: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return fallbackMs;
-  }
-  return Math.floor(value);
-}
-
 export type VoiceOperationResult = {
   ok: boolean;
   message: string;
@@ -43,11 +36,7 @@ export type VoiceSessionGeneration = {
 export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
 
 export function resolveDiscordVoiceMode(voice: DiscordAccountConfig["voice"]): DiscordVoiceMode {
-  const mode = voice?.mode;
-  if (mode === "stt-tts" || mode === "bidi") {
-    return mode;
-  }
-  return "agent-proxy";
+  return voice?.mode ?? "agent-proxy";
 }
 
 export function isDiscordRealtimeVoiceMode(
@@ -89,10 +78,10 @@ export type VoiceRealtimeSession = {
 };
 
 type VoiceRealtimeLifecycle =
-  | { status: "inactive"; generation: number }
-  | { status: "starting"; generation: number; instance: VoiceRealtimeSession }
-  | { status: "active"; generation: number; instance: VoiceRealtimeSession }
-  | { status: "stopped"; generation: number; reason: string };
+  | { status: "inactive" }
+  | { status: "starting"; instance: VoiceRealtimeSession }
+  | { status: "active"; instance: VoiceRealtimeSession }
+  | { status: "stopped"; reason: string };
 
 export type VoiceGuildLifecycle =
   | { status: "inactive"; generation: number }

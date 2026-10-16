@@ -102,6 +102,8 @@ import {
   createExtensionTestProcessTargetChunks,
   listTrackedTestPlanFiles,
   resolveExtensionTestConfig,
+  shouldSplitExtensionTestProcesses,
+  splitExtensionTestJobTargets,
   splitExtensionTestProcessTargets,
 } from "./lib/extension-test-plan.mts";
 import {
@@ -5282,7 +5284,7 @@ export function buildVitestRunPlans(
   args: string[],
   cwd = process.cwd(),
   listChangedPaths: (baseRef: string, cwd: string) => string[] = listChangedPathsFromGit,
-  options: ChangedTestTargetOptions = {},
+  options: ChangedTestTargetOptions & { changedTargetArgs?: string[] | null } = {},
 ) {
   const {
     forwardedArgs,
@@ -5291,7 +5293,11 @@ export function buildVitestRunPlans(
     watchMode,
   } = parseTestProjectsArgs(args, cwd);
   const changedTargetArgs =
-    targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths, options) : null;
+    targetArgs.length === 0
+      ? options.changedTargetArgs !== undefined
+        ? options.changedTargetArgs
+        : resolveChangedTargetArgs(args, cwd, listChangedPaths, options)
+      : null;
   const requestedTargetArgs = changedTargetArgs ?? targetArgs;
   const ownedTargets = explicitIncludeTargets(targetArgs, cwd);
   if (
@@ -5715,7 +5721,7 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
   const expandToProjectConfigs =
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS === "1" ||
     (parallelShardCount !== null && parallelShardCount > 1) ||
-    shouldExpandLocalFullSuiteShardsByDefault(process.env);
+    !isCiLikeEnv(process.env);
   return fullSuiteVitestShards.flatMap((shard) => {
     if (
       process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD === "1" &&
@@ -5795,6 +5801,14 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
           }
         }
         if (chunks !== null) {
+          if (
+            config === EXTENSION_DATABASE_WORKERS_VITEST_CONFIG &&
+            !isCiLikeEnv(process.env) &&
+            shouldSplitExtensionTestProcesses(config, forwardedArgs)
+          ) {
+            // Bound the large native-worker cohorts without merging singleton process owners.
+            chunks = chunks.flatMap((targets) => splitExtensionTestJobTargets(config, targets));
+          }
           return chunks.map((targets) => ({
             config,
             forwardedArgs: [...forwardedArgs, ...targets],
@@ -5814,17 +5828,6 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
       ];
     });
   });
-}
-
-function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
-  if (hasConservativeVitestWorkerBudget(env)) {
-    return false;
-  }
-  return env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && !isCiLikeEnv(env);
-}
-
-function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
-  return !isCiLikeEnv(env);
 }
 
 function parsePositiveInt(value: string | undefined, label: string) {
@@ -5908,18 +5911,10 @@ export function resolveParallelFullSuiteConcurrency(
   if (override !== null) {
     return Math.min(override, specCount);
   }
-  if (env.OPENCLAW_TEST_PROJECTS_SERIAL === "1") {
-    return 1;
-  }
-  if (isCiLikeEnv(env)) {
-    return 1;
-  }
-  if (hasConservativeVitestWorkerBudget(env)) {
-    return 1;
-  }
   if (
-    env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS !== "1" &&
-    !shouldUseLocalFullSuiteParallelByDefault(env)
+    env.OPENCLAW_TEST_PROJECTS_SERIAL === "1" ||
+    isCiLikeEnv(env) ||
+    hasConservativeVitestWorkerBudget(env)
   ) {
     return 1;
   }
@@ -6029,13 +6024,16 @@ export function applyDefaultVitestNoOutputTimeout<T extends WatchableVitestSpecS
 
 export function createVitestRunSpecs(
   args: string[],
-  params: { baseEnv?: NodeJS.ProcessEnv; cwd?: string } = {},
+  params: { baseEnv?: NodeJS.ProcessEnv; cwd?: string; changedTargetArgs?: string[] | null } = {},
 ) {
   const cwd = params.cwd ?? process.cwd();
   const baseEnv = params.baseEnv ?? process.env;
   const ownedTargets = explicitIncludeTargets(parseTestProjectsArgs(args, cwd).targetArgs, cwd);
   const plans = filterPlansForContractIncludeFile(
-    buildVitestRunPlans(args, cwd, listChangedPathsFromGit, { env: baseEnv }),
+    buildVitestRunPlans(args, cwd, listChangedPathsFromGit, {
+      env: baseEnv,
+      changedTargetArgs: params.changedTargetArgs,
+    }),
     baseEnv,
     ownedTargets,
   );

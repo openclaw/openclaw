@@ -53,7 +53,7 @@ function runWorker(input: SnapshotInput, mode: "inventory" | "snapshot", admitte
       ),
     ],
     {
-      input: JSON.stringify({ ...input, mode, ...admitted }),
+      input: JSON.stringify({ ...input, mode, ...admitted, includeLocalStoreVersions: true }),
       timeoutMs: 30_000,
       killGraceMs: 500,
       maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },

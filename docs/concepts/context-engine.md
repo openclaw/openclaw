@@ -240,13 +240,19 @@ Required members:
 
 Set `info.acceptedHostParams` to restrict the host-added lifecycle fields the
 engine receives. Current keys are `sessionKey`, `prompt`, `runtimeSettings`,
-`sessionTarget`, `runtimeContext`, and `abortSignal`. OpenClaw intersects the
-declaration with the fields available for each lifecycle method, so undeclared
-or unknown keys are never injected. `abortSignal` governs optional cooperative
-cancellation for `maintain()`; the existing compact-operation abort signal is
-always preserved. Engines without this declaration receive every current host
-field; declare an explicit list, including `[]`, when the engine validates a
-narrower input shape.
+`sessionTarget`, `runtimeContext`, `abortSignal`, and `onProgress`. OpenClaw
+intersects the declaration with the fields available for each lifecycle method,
+so undeclared or unknown keys are never injected. `abortSignal` governs optional
+cooperative cancellation for `maintain()`; the existing compact-operation abort
+signal is always preserved. Engines without this declaration receive every
+current host field except `onProgress`; declare an explicit list, including `[]`,
+when the engine validates a narrower input shape.
+
+Compaction progress is opt-in: explicitly include `"onProgress"` to receive the
+optional `compact()` callback. Report useful progress to refresh the existing
+no-progress window, under the same finite overall ceiling. Engines that omit the
+declaration or exclude `"onProgress"` keep the one-window contract for their own
+compaction work. See [Compaction progress](/plugins/architecture-internals/context-engines#compaction-progress).
 
 For durable admitted turns, declare both transcript semantics:
 

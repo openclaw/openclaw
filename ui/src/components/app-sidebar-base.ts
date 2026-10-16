@@ -1,4 +1,3 @@
-import type { ReactiveController } from "lit";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
@@ -8,6 +7,7 @@ import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import type { SidebarOutboxSummary } from "../lib/chat/outbox-store-projection.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
+import type { SolidController } from "../lib/reactive/solid-controller-host.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -17,7 +17,7 @@ import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-hand
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
-import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
+import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import type { ContextualSidebar } from "./sidebar-context-state.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
@@ -142,7 +142,7 @@ export abstract class AppSidebarBase {
   declare readonly contains: HTMLElement["contains"];
   declare readonly matches: HTMLElement["matches"];
 
-  private readonly controllers = new Set<ReactiveController>();
+  private readonly controllers = new Set<SolidController>();
   private readonly listeners = new Set<() => void>();
   private attached = false;
   private complete: Promise<boolean> = Promise.resolve(true);
@@ -218,13 +218,13 @@ export abstract class AppSidebarBase {
     // The bridge delays disposal across moves; detached hosts cannot admit new work.
     return this.attached && this.hostElement.isConnected;
   }
-  addController(controller: ReactiveController): void {
+  addController(controller: SolidController): void {
     this.controllers.add(controller);
     if (this.isConnected) {
       controller.hostConnected?.();
     }
   }
-  removeController(controller: ReactiveController): void {
+  removeController(controller: SolidController): void {
     this.controllers.delete(controller);
   }
   subscribe(listener: () => void): () => void {
@@ -271,7 +271,7 @@ export abstract class AppSidebarBase {
   protected updated(): void {}
 
   get sessionInvolvingMeFilterActive(): boolean {
-    return this.sidebarSnapshot?.involvingMe ?? this.sessionOwnerFilter.involvingMe;
+    return this.sidebarSnapshot?.involvingMe ?? this.sessionOwnerFilter.read().involvingMe;
   }
 
   get sessionCatalogRowsVisible(): boolean {
@@ -282,7 +282,7 @@ export abstract class AppSidebarBase {
     );
   }
 
-  abstract readonly sessionOwnerFilter: SessionOwnerFilterController;
+  abstract readonly sessionOwnerFilter: SessionOwnerFilter;
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
     this.sessionOwnerFilter.set(ownerId, involvingMe);
@@ -290,6 +290,21 @@ export abstract class AppSidebarBase {
 
   pluginNavigation() {
     return this.context?.plugins?.registrations("navigation") ?? [];
+  }
+
+  pendingSessionCreate() {
+    const pending = this.context?.chatSubmissions?.readCreate();
+    return this.activeRouteId === "chat" && !pending?.creation.admitted ? pending : undefined;
+  }
+
+  public getRouteSessionKey(): string {
+    // A provisional row owns only presentation, never the saved Gateway selection.
+    return (
+      this.pendingSessionCreate()?.creation.sessionKey ||
+      this.sessionKey.trim() ||
+      this.context?.gateway.snapshot.sessionKey.trim() ||
+      ""
+    );
   }
 
   protected setApplicationSession(sessionKey: string, fallbackAgentId?: string): void {

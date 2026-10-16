@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { SessionParticipantProjection } from "./session-membership-facts.types.js";
 
@@ -20,7 +20,7 @@ export function withPreparedSessionParticipants<T>(read: ParticipantRead, consum
 }
 
 export function readPreparedSessionParticipants(
-  database: DatabaseSync,
+  database: EngineConnection,
   sessionKey: string,
 ): SessionParticipantProjection | undefined {
   if (!preparedRead || database.isTransaction) {

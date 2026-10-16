@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "./test-helpers/service-audit-mocks.js";
 import {
-  auditGatewayServiceConfig,
+  auditGatewayServiceConfig as inspectGatewayServiceConfig,
   checkTokenDrift,
   needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES as codes,
@@ -17,10 +17,24 @@ import {
   resolveBunRuntimeInfoMock,
   resolveNodeRuntimeInfoMock,
 } from "./test-helpers/service-audit-fixtures.js";
+import { seedCompletedRuntimePinMigration } from "./test-helpers/service-audit-runtime-pin.js";
 
-type AuditOptions = Parameters<typeof auditGatewayServiceConfig>[0];
+type AuditOptions = Parameters<typeof inspectGatewayServiceConfig>[0];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-beforeEach(resetServiceAuditMocks);
+let runtimePinStateDir: string;
+beforeEach(() => {
+  resetServiceAuditMocks();
+  runtimePinStateDir = tempDirs.make("service-audit-runtime-pin-");
+});
+
+async function auditGatewayServiceConfig(options: AuditOptions) {
+  const env = {
+    ...options.env,
+    OPENCLAW_STATE_DIR: options.env.OPENCLAW_STATE_DIR ?? runtimePinStateDir,
+  };
+  await seedCompletedRuntimePinMigration(env);
+  return inspectGatewayServiceConfig({ ...options, env });
+}
 
 function audit(
   command: Partial<NonNullable<AuditOptions["command"]>> = {},
@@ -47,6 +61,19 @@ function minimalPath(platform: NodeJS.Platform, env: AuditOptions["env"]) {
 }
 
 describe("auditGatewayServiceConfig runtime", () => {
+  it("reports pending pin migration without recommending a different runtime", async () => {
+    const result = await inspectGatewayServiceConfig({
+      env: { HOME: runtimePinStateDir, OPENCLAW_STATE_DIR: runtimePinStateDir },
+      platform: "linux",
+      command: {
+        programArguments: ["/home/user/.nvm/versions/node/v24.21.0/bin/node", "gateway"],
+      },
+    });
+    expect(result.runtimeNote).toBe("Runtime pin migration pending; run openclaw doctor.");
+    expect(hasIssue(result, codes.gatewayRuntimeNodeVersionManager)).toBe(false);
+    expect(hasIssue(result, codes.gatewayRuntimeNodeSystemMissing)).toBe(false);
+  });
+
   const auditBun = () =>
     audit({ programArguments: ["/opt/homebrew/bin/bun", "gateway"] }, { platform: "darwin" });
 
@@ -141,7 +168,7 @@ describe("auditGatewayServiceConfig runtime", () => {
     const result = await audit({ environment: undefined }, { timeoutMs: 1234 });
     expect(resolveNodeRuntimeInfoMock).toHaveBeenCalledWith(
       "/usr/bin/node",
-      { HOME: "/tmp" },
+      { HOME: "/tmp", OPENCLAW_STATE_DIR: runtimePinStateDir },
       1234,
     );
     expect(result.issues).toContainEqual(
@@ -393,7 +420,7 @@ describe("auditGatewayServiceConfig systemd", () => {
     manager(["LoadState=loaded", ...effective]);
     expect(systemdCodes(await auditUnit(321))).toEqual(expected);
     expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
-      env(),
+      { ...env(), OPENCLAW_STATE_DIR: runtimePinStateDir },
       [
         "show",
         "openclaw-audit.service",

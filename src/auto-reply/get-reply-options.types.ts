@@ -98,11 +98,18 @@ export type TaskSuggestionDeliveryMode = "gateway";
 
 /** Correlates queued reply ownership transfer with later delivery drains. */
 export type QueuedReplyDeliveryCorrelation = {
+  /** Source-owned suppression for origin-routed replies that bypass the dispatcher.
+   * A collected batch is suppressed only when all participating policies agree. */
+  shouldSuppressReply?: (payload: ReplyPayload) => boolean;
+  /** Called only after the origin transport confirms visible delivery. */
+  onReplyDelivered?: (payload: ReplyPayload) => void;
   /** No settlement means a source retry or a separate source-owned delivery outcome. */
   begin: () =>
     | ((settlement?: {
         visibleReplySent: boolean;
         failed: boolean;
+        /** True only for a successfully completed execution, not cancellation. */
+        completed?: boolean;
         /** Transport retained delivery without a callback to this source; clear activity UI. */
         transportPending?: boolean;
       }) => void)
@@ -260,6 +267,10 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
+  /** @internal Preserve the recovery owner's replay-safe tool restriction for this turn. */
+  forceRestartSafeTools?: boolean;
+  /** @internal Retain restart-safe Code Mode controls for an interrupted continuation. */
+  forceCodeModeTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */

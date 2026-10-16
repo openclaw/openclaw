@@ -576,41 +576,38 @@ describe("runPreparedReply media-only handling", () => {
     ]);
   });
 
-  it.each([{ name: "visible child", spawnedBy: "agent:default:main" }])(
-    "loads workspace skills and runs in the $name managed worktree",
-    async ({ spawnedBy }) => {
-      const params = baseParams({
-        sessionKey: "agent:default:dashboard:worktree-session",
-        workspaceDir: "/tmp/agent-workspace",
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-          spawnedBy,
-          spawnedCwd: "/tmp/session-worktree",
-          worktree: {
-            id: "worktree-1",
-            branch: "openclaw/worktree-1",
-            repoRoot: "/tmp/project",
-            canonicalWorkspaceDir: "/tmp/project/packages/app",
-          },
+  it("loads workspace skills and runs in the visible child's managed worktree", async () => {
+    const params = baseParams({
+      sessionKey: "agent:default:dashboard:worktree-session",
+      workspaceDir: "/tmp/agent-workspace",
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:default:main",
+        spawnedCwd: "/tmp/session-worktree",
+        worktree: {
+          id: "worktree-1",
+          branch: "openclaw/worktree-1",
+          repoRoot: "/tmp/project",
+          canonicalWorkspaceDir: "/tmp/project/packages/app",
         },
-      });
-      envMockState.fastTestRuntime = false;
-      try {
-        await runPreparedReply(params);
-        const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
-        expect(ensureSkillSnapshot).toHaveBeenCalledWith(
-          expect.objectContaining({
-            workspaceDir: "/tmp/agent-workspace",
-            executionWorkspaceDir: "/tmp/session-worktree",
-          }),
-        );
-      } finally {
-        envMockState.fastTestRuntime = true;
-      }
-      expect(requireRunReplyAgentCall().followupRun.run.workspaceDir).toBe("/tmp/session-worktree");
-    },
-  );
+      },
+    });
+    envMockState.fastTestRuntime = false;
+    try {
+      await runPreparedReply(params);
+      const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
+      expect(ensureSkillSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceDir: "/tmp/agent-workspace",
+          executionWorkspaceDir: "/tmp/session-worktree",
+        }),
+      );
+    } finally {
+      envMockState.fastTestRuntime = true;
+    }
+    expect(requireRunReplyAgentCall().followupRun.run.workspaceDir).toBe("/tmp/session-worktree");
+  });
 
   beforeEach(async () => {
     preparedReplyMockState.unexpectedCalls.length = 0;
@@ -843,33 +840,24 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
-  it.each([undefined])(
-    "uses thread history %s before falling back to the starter",
-    async (history) => {
-      const params = baseParams({ isNewSession: false });
-      for (const context of [params.ctx, params.sessionCtx]) {
-        context.ThreadStarterBody = "starter message";
-        context.ThreadHistoryBody = history;
-      }
-      await expect(runPreparedReply(params)).resolves.toEqual({ text: "ok" });
-      const { followupRun } = requireRunReplyAgentCall();
-      const context = followupRun.currentInboundContext;
-      const label = history ? "Thread history" : "Thread starter";
-      const body = history ?? "starter message";
-      expect(context?.text).toContain(`[${label} - for context]`);
-      expect(context?.text).toContain(body);
-      expect(context?.fragments).toContainEqual({
-        kind: "conversation-data",
-        text: `[${label} - for context]\n${body}`,
-      });
-      expect(followupRun.prompt).toBe("[User sent media without caption]");
-      expect(followupRun.transcriptPrompt).not.toContain(body);
-      if (history) {
-        expect(context?.text).not.toContain("[Thread starter - for context]");
-        expect(JSON.stringify(context?.fragments)).not.toContain("[Thread starter - for context]");
-      }
-    },
-  );
+  it("uses the thread starter when history is absent", async () => {
+    const params = baseParams({ isNewSession: false });
+    for (const context of [params.ctx, params.sessionCtx]) {
+      context.ThreadStarterBody = "starter message";
+      context.ThreadHistoryBody = undefined;
+    }
+    await expect(runPreparedReply(params)).resolves.toEqual({ text: "ok" });
+    const { followupRun } = requireRunReplyAgentCall();
+    const context = followupRun.currentInboundContext;
+    expect(context?.text).toContain("[Thread starter - for context]");
+    expect(context?.text).toContain("starter message");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "[Thread starter - for context]\nstarter message",
+    });
+    expect(followupRun.prompt).toBe("[User sent media without caption]");
+    expect(followupRun.transcriptPrompt).not.toContain("starter message");
+  });
 
   it.each([
     ["disabled text command", "discord", "text-slash", false, true],
@@ -943,94 +931,70 @@ describe("runPreparedReply media-only handling", () => {
     },
   );
 
-  it.each([
-    { name: "authorized directive", directive: "/think high\r\n", authorized: true, enabled: true },
-  ])(
-    "preserves prompt bytes through routing and preparation: $name",
-    async ({ directive, authorized, enabled }) => {
-      const code =
-        "Run  this:\r\n```python\r\n    if True:\r\n        print('a  b')\r\n\t\t# tabs  stay\r\n```";
-      const body = `${directive}${code}`;
-      const params = baseParams({
-        ctx: createInboundTurn(body, "slack", "direct"),
-        sessionCtx: createSessionTurn(body, "slack", "direct"),
-        isNewSession: false,
-        commandAuthorized: authorized,
-        allowTextCommands: enabled,
-      });
-      params.command = { ...params.command, isAuthorizedSender: authorized };
-      const inbound = finalizeInboundContext(params.ctx);
-      const routed = resolveReplyDirectiveRouting({
-        commandText: inbound.commandText,
-        agentText: inbound.agentText,
-        modelAliases: [],
-        canInterpretTextDirectives: authorized && enabled,
-        isAuthorizedSender: authorized,
-        isGroup: false,
-        wasMentioned: false,
-        ctx: inbound,
-        cfg: params.cfg,
-        agentId: params.agentId,
-        resetTriggered: false,
-      });
-      params.directives = routed.directives;
-      params.sessionCtx.agentText = routed.cleanedBody;
-      await runPreparedReply(params);
+  it("preserves prompt bytes through authorized directive routing and preparation", async () => {
+    const code =
+      "Run  this:\r\n```python\r\n    if True:\r\n        print('a  b')\r\n\t\t# tabs  stay\r\n```";
+    const body = `/think high\r\n${code}`;
+    const params = baseParams({
+      ctx: createInboundTurn(body, "slack", "direct"),
+      sessionCtx: createSessionTurn(body, "slack", "direct"),
+      isNewSession: false,
+      commandAuthorized: true,
+      allowTextCommands: true,
+    });
+    params.command = { ...params.command, isAuthorizedSender: true };
+    const inbound = finalizeInboundContext(params.ctx);
+    const routed = resolveReplyDirectiveRouting({
+      commandText: inbound.commandText,
+      agentText: inbound.agentText,
+      modelAliases: [],
+      canInterpretTextDirectives: true,
+      isAuthorizedSender: true,
+      isGroup: false,
+      wasMentioned: false,
+      ctx: inbound,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      resetTriggered: false,
+    });
+    params.directives = routed.directives;
+    params.sessionCtx.agentText = routed.cleanedBody;
+    await runPreparedReply(params);
 
-      const expected = (authorized && enabled ? code : body).replaceAll("\r\n", "\n");
-      const call = requireRunReplyAgentCall();
-      expect(call.commandBody).toBe(expected);
-      expect(call.followupRun.prompt).toBe(expected);
-    },
-  );
+    const expected = code.replaceAll("\r\n", "\n");
+    const call = requireRunReplyAgentCall();
+    expect(call.commandBody).toBe(expected);
+    expect(call.followupRun.prompt).toBe(expected);
+  });
 
-  it.each([{ body: "\u0000  ", contextBody: "", admitted: false }])(
-    "admits pending inbound history only when nonblank: $admitted",
-    async ({ body, contextBody, admitted }) => {
-      vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
-        [
-          "Chat history since last reply:",
-          "```json",
-          JSON.stringify(
-            [{ sender: "Alice", timestamp_ms: 1_700_000_000_000, body: contextBody }],
-            null,
-            2,
-          ),
-          "```",
-        ].join("\n"),
-      );
+  it("rejects blank pending inbound history", async () => {
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+      [
+        "Chat history since last reply:",
+        "```json",
+        JSON.stringify([{ sender: "Alice", timestamp_ms: 1_700_000_000_000, body: "" }], null, 2),
+        "```",
+      ].join("\n"),
+    );
 
-      const result = await runPrepared({
-        ...turn(
-          "",
-          { ChatType: "group", WasMentioned: true },
-          {
-            Provider: "feishu",
-            OriginatingChannel: "feishu",
-            OriginatingTo: "chat-1",
-            InboundHistory: [{ sender: "Alice", timestamp: 1_700_000_000_000, body }],
-          },
-        ),
-      });
+    const result = await runPrepared({
+      ...turn(
+        "",
+        { ChatType: "group", WasMentioned: true },
+        {
+          Provider: "feishu",
+          OriginatingChannel: "feishu",
+          OriginatingTo: "chat-1",
+          InboundHistory: [{ sender: "Alice", timestamp: 1_700_000_000_000, body: "\u0000  " }],
+        },
+      ),
+    });
 
-      if (admitted) {
-        expect(result).toEqual({ text: "ok" });
-        expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
-        const call = requireRunReplyAgentCall();
-        expect(call.followupRun.prompt).toBe("");
-        expect(call.followupRun.currentInboundContext?.text).toContain(
-          "Chat history since last reply",
-        );
-        expect(call.followupRun.currentInboundContext?.text).toContain("what changed?");
-        expect(call.followupRun.prompt).not.toContain("[User sent media without caption]");
-      } else {
-        expect(result).toEqual({
-          text: "I didn't receive any text in your message. Please resend or add a caption.",
-        });
-        expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
-      }
-    },
-  );
+    expect(result).toEqual({
+      text: "I didn't receive any text in your message. Please resend or add a caption.",
+    });
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
 
   it("allows webchat pure-image turns when image content is carried outside MediaPath", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
@@ -1070,35 +1034,26 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
-  it.each([undefined])(
-    "persists direct-turn sender attribution only for external contacts (self: %s)",
-    async (senderIsSelf) => {
-      await runPrepared({
-        ...turn(
-          "hello",
-          { OriginatingChannel: "telegram", OriginatingTo: "chat-1", ChatType: "direct" },
-          { Provider: "telegram", SenderId: "user-42", SenderName: "Ada", SenderUsername: "ada" },
-          { InboundAccessAuthorized: true, ...(senderIsSelf ? { SenderIsSelf: true } : {}) },
-        ),
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: 1,
-          chatType: "direct",
-        },
-      });
+  it("persists admitted external-contact sender attribution on direct turns", async () => {
+    await runPrepared({
+      ...turn(
+        "hello",
+        { OriginatingChannel: "telegram", OriginatingTo: "chat-1", ChatType: "direct" },
+        { Provider: "telegram", SenderId: "user-42", SenderName: "Ada", SenderUsername: "ada" },
+        { InboundAccessAuthorized: true },
+      ),
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        chatType: "direct",
+      },
+    });
 
-      const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
-      if (senderIsSelf) {
-        expect(message).not.toHaveProperty("__openclaw.senderId");
-        expect(message).not.toHaveProperty("__openclaw.senderName");
-        expect(message).not.toHaveProperty("__openclaw.senderUsername");
-      } else {
-        expect(message).toMatchObject({
-          __openclaw: { senderId: "user-42", senderName: "Ada", senderUsername: "ada" },
-        });
-      }
-    },
-  );
+    const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
+    expect(message).toMatchObject({
+      __openclaw: { senderId: "user-42", senderName: "Ada", senderUsername: "ada" },
+    });
+  });
 
   it("normalizes second-based inbound timestamps before preparing user turns", async () => {
     await runPrepared({
@@ -2540,21 +2495,18 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
-  it.each([{ level: undefined, clear: true, source: "default" }] as const)(
-    "records thinking origin $source for level=$level reset=$clear",
-    async ({ level, clear, source }) => {
-      const params = ownerParams();
-      params.directives = {
-        ...params.directives,
-        hasThinkDirective: level !== undefined || clear,
-        thinkLevel: level,
-        clearThinkLevel: clear,
-      };
-      params.resolvedThinkLevel = level;
-      await runPreparedReply(params);
-      expect(requireRunReplyAgentCall().followupRun.run.thinkLevelOverride).toBe(source);
-    },
-  );
+  it("records default thinking origin when the directive clears the level", async () => {
+    const params = ownerParams();
+    params.directives = {
+      ...params.directives,
+      hasThinkDirective: true,
+      thinkLevel: undefined,
+      clearThinkLevel: true,
+    };
+    params.resolvedThinkLevel = undefined;
+    await runPreparedReply(params);
+    expect(requireRunReplyAgentCall().followupRun.run.thinkLevelOverride).toBe("default");
+  });
 
   registerSystemEventAdmissionCases({ runPrepared, requireRunReplyAgentCall });
 });

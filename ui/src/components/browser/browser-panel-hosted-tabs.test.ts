@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { icons } from "../icons.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT, readPanelHostedTabs } from "../panel-hosted-tabs.ts";
 import type { BrowserPanelTab } from "./browser-client.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
@@ -90,17 +89,24 @@ describe("Browser panel hosted tabs", () => {
   it("projects controller tabs and keeps simultaneous panels' DOM associations separate", async () => {
     const { panel } = await mount(true, false);
     expect(readPanelHostedTabs(panel)).toBe(panel);
-    expect(panel.hostedTabs).toEqual([
-      { id: "remote:a", label: "Example", url: "https://example.test/a", icon: icons.globe },
+    const hostedTabs = panel.hostedTabs;
+    expect(hostedTabs).toEqual([
+      {
+        id: "remote:a",
+        label: "Example",
+        url: "https://example.test/a",
+        icon: expect.any(SVGSVGElement),
+      },
       {
         id: "native:b",
         label: "second.test",
         url: "https://second.test/b",
-        icon: icons.monitor,
+        icon: expect.any(SVGSVGElement),
         favicon,
       },
-      { id: "remote:c", label: "New tab", url: "about:blank", icon: icons.globe },
+      { id: "remote:c", label: "New tab", url: "about:blank", icon: expect.any(SVGSVGElement) },
     ]);
+    expect(hostedTabs[0]!.icon).not.toBe(panel.hostedTabs[0]!.icon);
     expect(panel.activeHostedTabId).toBe("remote:a");
     expect(
       [...panel.renderRoot!.querySelectorAll(".tabstrip-tab__label")].map(

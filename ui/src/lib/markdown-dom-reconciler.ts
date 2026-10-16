@@ -336,6 +336,8 @@ export class MarkdownDomReconciler {
       if (fragment.prefix !== canonical) {
         fragment.canonical = parseCanonical(fragment.html, prefix, fragment.incremental);
         fragment.prefix = canonical;
+      } else if (!media) {
+        continue;
       }
       fragment.children = this.reconcile(fragment, fragment.children, fragment.canonical, media);
     }

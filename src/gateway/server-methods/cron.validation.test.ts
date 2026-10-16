@@ -79,9 +79,14 @@ const getRuntimeConfig = vi.hoisted(() =>
 const cronRunRecordsOverride = vi.hoisted(() =>
   vi.fn<
     (
-      ...args: Parameters<typeof import("../../cron/store/read-only.js").readCronRunRecords>
+      ...args: Parameters<
+        typeof import("../../cron/store/read-only.js").readCronRunHistoryCandidates
+      >
     ) => Promise<CronRunRecord[]> | undefined
   >(),
+);
+const cronRunDetailsOverride = vi.hoisted(() =>
+  vi.fn<() => Promise<CronRunRecord[]> | undefined>(),
 );
 const resolveCronDeliveryPreview = vi.hoisted(() =>
   vi.fn(async () => ({ label: "not requested", detail: "not requested" })),
@@ -100,8 +105,20 @@ vi.mock("../../cron/store/read-only.js", async () => {
   );
   return {
     ...actual,
-    readCronRunRecords: (...args: Parameters<typeof actual.readCronRunRecords>) =>
-      cronRunRecordsOverride(...args) ?? actual.readCronRunRecords(...args),
+    readCronRunHistoryCandidates: async (
+      ...args: Parameters<typeof actual.readCronRunHistoryCandidates>
+    ) => {
+      const records = cronRunRecordsOverride(...args);
+      return records ? { records: await records } : actual.readCronRunHistoryCandidates(...args);
+    },
+    readCronRunHistoryRecords: async (
+      ...args: Parameters<typeof actual.readCronRunHistoryRecords>
+    ) => {
+      const records = cronRunDetailsOverride() ?? cronRunRecordsOverride(args[0]);
+      return records
+        ? (await records).filter((record) => args[1].includes(record.id))
+        : actual.readCronRunHistoryRecords(...args);
+    },
   };
 });
 
@@ -379,6 +396,7 @@ describe("cron method validation", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
     cronRunRecordsOverride.mockReset();
+    cronRunDetailsOverride.mockReset();
     resolveCronDeliveryPreview
       .mockReset()
       .mockResolvedValue({ label: "not requested", detail: "not requested" });
@@ -1588,9 +1606,6 @@ describe("cron method validation", () => {
       { context, client: runClient },
     );
     expect(remove.respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
-    expect(context.cron.remove).toHaveBeenCalledWith(accountJob.id, {
-      commitGuard: expect.any(Function),
-    });
 
     cronRunRecordsOverride.mockImplementationOnce(async () => {
       runClient.internal!.agentRuntimeIdentity!.cronSelfManagementContext!.expiresAtMs =
@@ -2133,6 +2148,116 @@ describe("cron method validation", () => {
     }),
   );
 
+  // Creation records no host inference account for a CLI-backed model, so an
+  // edit must accept the same model ref instead of demanding a stored account.
+  const cliBackedModelRef = "anthropic/claude-sonnet-4-6";
+  const embeddedModelRef = "anthropic/claude-opus-4-6";
+  function cliBackedModelConfig(runtime = "claude-cli"): OpenClawConfig {
+    return {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {} },
+        defaults: {
+          model: { primary: cliBackedModelRef, fallbacks: [] },
+          models: {
+            [cliBackedModelRef]: { agentRuntime: { id: runtime } },
+            [embeddedModelRef]: { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com",
+            apiKey: "synthetic-unused-model-key",
+            models: ["claude-sonnet-4-6", "claude-opus-4-6"].map((id) => ({
+              id,
+              name: `Synthetic ${id}`,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200_000,
+              maxTokens: 8192,
+            })),
+          },
+        },
+      },
+    } as OpenClawConfig;
+  }
+  const cliModelPatch = (model: string) => ({
+    payload: { kind: "agentTurn", message: "updated", model },
+  });
+
+  it("accepts a CLI-backed model with a selected profile on cron.update", async () => {
+    setRuntimeConfig(cliBackedModelConfig());
+
+    const accepted = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@selected-profile`) },
+      createCronJob(),
+    );
+    expect(accepted.context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(accepted.respond);
+
+    // Control: an embedded-runtime reference still needs its stored account.
+    const refused = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${embeddedModelRef}@missing-profile`) },
+      createCronJob(),
+    );
+    expect(refused.context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(refused.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "is unavailable",
+    });
+  });
+
+  it("keeps explicit native-account validation when automatic routing defaults to CLI", async () => {
+    const cfg = cliBackedModelConfig("auto");
+    cfg.auth = {
+      order: { anthropic: ["anthropic:cli"] },
+      profiles: {
+        "anthropic:cli": { provider: "claude-cli", mode: "oauth" },
+        "anthropic:missing-api": { provider: "anthropic", mode: "api_key" },
+      },
+    };
+    setRuntimeConfig(cfg);
+
+    const refused = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@anthropic:missing-api`) },
+      createCronJob(),
+    );
+    expect(refused.context.committedUpdates).toEqual([]);
+    expectResponseError(refused.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "is unavailable",
+    });
+  });
+
+  // A bound job keeps its rejection: the store would otherwise clone its recorded
+  // account onto the CLI route while the same patch replaces the model.
+  it("keeps the stored account rejection when a bound job moves to a CLI-backed model", async () => {
+    setRuntimeConfig(cliBackedModelConfig());
+
+    const bound = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@selected-profile`) },
+      Object.assign(createCronJob(), {
+        inferenceBinding: {
+          version: 1 as const,
+          provider: "anthropic",
+          profileId: "anthropic:stored-account",
+          authorizationId: "9f2b1c0d4e5a67890123456789abcdef0123456789abcdef0123456789abcdef",
+          authRequirement: "api-key" as const,
+          source: "user" as const,
+        },
+      }),
+    );
+    expect(bound.context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(bound.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "is unavailable",
+    });
+  });
+
   it("accepts provider-prefixed announce targets when delivery.channel uses a channel alias", async () => {
     setRuntimeConfig(msteamsConfig());
 
@@ -2374,15 +2499,34 @@ describe("cron method validation", () => {
     });
   });
 
-  it.each(["job", "all"] as const)(
-    "withholds %s history when client authority closes during the worker read",
-    async (scope) => {
+  it.each([
+    { scope: "job", phase: "candidate" },
+    { scope: "all", phase: "candidate" },
+    { scope: "job", phase: "detail" },
+    { scope: "all", phase: "detail" },
+  ] as const)(
+    "withholds $scope history when client authority closes during the $phase read",
+    async ({ scope, phase }) => {
       const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
       const respond = vi.fn();
       let current = true;
+      const records: CronRunRecord[] = [
+        {
+          id: "retained-run",
+          jobId: "cron-1",
+          agentId: "ops",
+          createdAt: 1,
+          status: "succeeded",
+          detail: { kind: "cron-run", storeKey: cronStoreKey(context.cronStorePath), status: "ok" },
+        },
+      ];
       cronRunRecordsOverride.mockImplementation(async () => {
+        current = phase !== "candidate";
+        return records;
+      });
+      cronRunDetailsOverride.mockImplementation(async () => {
         current = false;
-        return [];
+        return records;
       });
 
       await expect(
@@ -2396,26 +2540,45 @@ describe("cron method validation", () => {
     },
   );
 
-  it("rechecks the scoped job after reading history in the worker", async () => {
-    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
-    cronRunRecordsOverride.mockImplementation(async () => {
-      context.cron.getJob.mockReturnValue(undefined);
-      return [];
-    });
+  it.each(["candidate", "detail"] as const)(
+    "rechecks the scoped job after reading history %s",
+    async (phase) => {
+      const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
+      const records: CronRunRecord[] = [
+        {
+          id: "retained-run",
+          jobId: "cron-1",
+          agentId: "ops",
+          createdAt: 1,
+          status: "succeeded",
+          detail: { kind: "cron-run", storeKey: cronStoreKey(context.cronStorePath), status: "ok" },
+        },
+      ];
+      cronRunRecordsOverride.mockImplementation(async () => {
+        if (phase === "candidate") {
+          context.cron.getJob.mockReturnValue(undefined);
+        }
+        return records;
+      });
+      cronRunDetailsOverride.mockImplementation(async () => {
+        context.cron.getJob.mockReturnValue(undefined);
+        return records;
+      });
 
-    const { respond } = await invokeCron(
-      "cron.runs",
-      { id: "cron-1" },
-      {
-        context,
-        client: callerClient("ops"),
-      },
-    );
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Automation not found",
-    });
-  });
+      const { respond } = await invokeCron(
+        "cron.runs",
+        { id: "cron-1" },
+        {
+          context,
+          client: callerClient("ops"),
+        },
+      );
+      expectResponseError(respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "Automation not found",
+      });
+    },
+  );
 
   it("does not widen a whitespace-only cron.runs selector to all history", async () => {
     const context = createCronContext();

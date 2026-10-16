@@ -12,7 +12,8 @@ import "../lib/toast-host.ts";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import {
   type LoginFailureFeedback,
@@ -22,7 +23,7 @@ import {
 } from "./login-gate-feedback.ts";
 import { ConnectCommand } from "./solid/connect-command.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
-import "./theme-brand-icon.ts";
+import "./theme-brand-icon.tsx";
 import "./tooltip.ts";
 
 registerEnglishCatalog(registerLoginEnglish);
@@ -375,6 +376,7 @@ function LoginGateContent(props: {
   host.style.display = "contents";
   const [refreshState, setRefreshState] = createSignal<RefreshState>("idle");
   const [now, setNow] = createSignal(Date.now());
+  const polling = useVisiblePoll(1_000, () => setNow(Date.now()));
   let refreshAttempt: { props: LoginGateProps } | undefined;
   const cancelRefresh = () => {
     refreshAttempt = undefined;
@@ -415,28 +417,13 @@ function LoginGateContent(props: {
       props.model.lastErrorCode === "GATEWAY_BUSY" &&
       (props.model.reconnectAt ?? 0) > now(),
     (running) => {
-      if (!running) {
-        return undefined;
-      }
-      let timer: ReturnType<typeof setInterval> | undefined;
-      const update = () => {
-        if (timer !== undefined) {
-          clearInterval(timer);
-        }
-        timer = undefined;
-        if (document.visibilityState !== "hidden") {
+      if (running) {
+        if (polling.start() && document.visibilityState !== "hidden") {
           setNow(Date.now());
-          timer = setInterval(() => setNow(Date.now()), 1000);
         }
-      };
-      update();
-      document.addEventListener("visibilitychange", update);
-      return () => {
-        if (timer !== undefined) {
-          clearInterval(timer);
-        }
-        document.removeEventListener("visibilitychange", update);
-      };
+      } else {
+        polling.stop();
+      }
     },
   );
   host.addEventListener("login-gate-disconnect", cancelRefresh);

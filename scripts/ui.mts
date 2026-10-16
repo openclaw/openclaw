@@ -13,6 +13,7 @@ import {
   CONTROL_UI_BUILD_PREFIX,
   controlUiBuildSiblingPid,
 } from "./lib/output-root-guard.mjs";
+import { prepareControlUiSettings } from "./lib/prepare-control-ui-settings.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 import { resolveNodePackageBin } from "./run-node-package-bin.mts";
@@ -386,6 +387,9 @@ async function buildAndPublishUi(
   toolCall: UiSpawnCall,
   env: NodeJS.ProcessEnv,
 ): Promise<UiSpawnResult> {
+  // Prepare before cache input capture: presenter source edits must change the
+  // canonical bytes and inventory even when the UI bundle can otherwise be reused.
+  await prepareControlUiSettings(repoRoot);
   const dist = path.join(repoRoot, "dist");
   const output = path.join(dist, "control-ui");
   fs.mkdirSync(dist, { recursive: true });

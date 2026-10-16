@@ -5,6 +5,7 @@ import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/clie
 import type { AgentsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as runtimeMetadata from "../../agents/agent-runtime-metadata.js";
+import * as avatarRuntime from "../../agents/identity-avatar-file-runtime.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   resolveSessionStorePathCore as resolveStorePath,
@@ -39,7 +40,7 @@ import {
   listSessions,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 setupGatewaySessionsHandlerTestHarness();
 
@@ -66,6 +67,7 @@ function expectAgentStoreAbsent(agentId: string): void {
 async function listAgentsViaRpc(
   includeSystem = false,
   catalogContext: Partial<GatewayRequestContext> = {},
+  client?: GatewayClient,
 ): Promise<AgentsListResult> {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   let result: AgentsListResult | undefined;
@@ -83,16 +85,18 @@ async function listAgentsViaRpc(
       readPreparedGatewayModelCatalog: async () => ({ entries: [] }),
       ...catalogContext,
     } as unknown as GatewayRequestContext,
-    client: includeSystem
-      ? {
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            client: { id: "test", version: "test", platform: "test", mode: "test" },
-            caps: [GATEWAY_CLIENT_CAPS.AGENT_KIND],
-          },
-        }
-      : null,
+    client:
+      client ??
+      (includeSystem
+        ? {
+            connect: {
+              minProtocol: 1,
+              maxProtocol: 1,
+              client: { id: "test", version: "test", platform: "test", mode: "test" },
+              caps: [GATEWAY_CLIENT_CAPS.AGENT_KIND],
+            },
+          }
+        : null),
     isWebchatConnect: () => false,
   });
   if (!result) {
@@ -166,6 +170,122 @@ test("agents.list returns the roster when optional prepared model facts are unav
     [{ agentId: "research" }],
   ]);
 });
+
+function avatarRosterConfig(agents: string[]): OpenClawConfig {
+  return {
+    agents: {
+      ownership: "explicit",
+      entries: {
+        ops: { identity: { name: "Operations" } },
+        research: { identity: { name: "Research", avatar: "avatar.png" } },
+      },
+    },
+    gateway: {
+      roles: {
+        definitions: {
+          reader: {
+            agents,
+            scopes: ["operator.read"],
+            sessions: { others: "none" },
+          },
+        },
+      },
+    },
+  };
+}
+
+function avatarRosterClient(): GatewayClient {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+      role: "operator",
+      scopes: ["operator.read"],
+    },
+    preparedSessionProfile: {
+      profileId: "reader-profile",
+      aliases: new Set(["reader-profile"]),
+      role: "reader",
+    },
+    authenticatedUserProfile: {
+      profileId: "reader-profile",
+      displayName: "Reader",
+      hasAvatar: false,
+      updatedAt: 1,
+    },
+  };
+}
+
+test("agents.list returns visible rows without waiting for a hidden agent avatar", async () => {
+  const config = avatarRosterConfig(["ops"]);
+  const client = avatarRosterClient();
+  const entered = createDeferred();
+  const release = createDeferred();
+  vi.spyOn(avatarRuntime, "prepareLocalAgentAvatar").mockImplementation(async () => {
+    entered.resolve();
+    await release.promise;
+    return { ok: false, reason: "missing" };
+  });
+  const startedAt = performance.now();
+  const response = listAgentsViaRpc(false, { getRuntimeConfig: () => config }, client);
+  try {
+    const first = await Promise.race([
+      response.then(() => "response"),
+      entered.promise.then(() => "hidden-avatar"),
+    ]);
+    console.log("agents.list hidden-avatar boundary", {
+      first,
+      elapsedMs: performance.now() - startedAt,
+    });
+    expect(first).toBe("response");
+    expect((await response).agents.map(({ id }) => id)).toEqual(["ops"]);
+  } finally {
+    release.resolve();
+    await response;
+  }
+});
+
+test.each([{ initial: ["ops", "research"], current: ["research"] }])(
+  "agents.list applies avatar-time role changes from $initial to $current",
+  async ({ initial, current }) => {
+    let config = avatarRosterConfig(initial);
+    config.agents!.entries!.ops!.identity!.avatar = "ops.png";
+    const entered = createDeferred();
+    const release = createDeferred();
+    vi.spyOn(avatarRuntime, "prepareLocalAgentAvatar").mockImplementation(async (input) => {
+      if (input.source === "ops.png") {
+        entered.resolve();
+        await release.promise;
+      }
+      return { ok: false, reason: "missing" };
+    });
+    const response = listAgentsViaRpc(
+      false,
+      { getRuntimeConfig: () => config },
+      avatarRosterClient(),
+    );
+    try {
+      await entered.promise;
+      config = avatarRosterConfig(current);
+    } finally {
+      release.resolve();
+    }
+    const result = await response;
+    expect(result.agents.map(({ id }) => id)).toEqual(current);
+    expect(result).toMatchObject({
+      defaultId: "ops",
+      ownership: "explicit",
+      selectionRequired: true,
+      mainKey: "main",
+      scope: "per-sender",
+    });
+    expect(result.agents.find(({ id }) => id === "research")?.identity).toMatchObject({
+      name: "Research",
+      avatarUrl: expect.any(String),
+    });
+  },
+);
 
 test("agents.list starts legacy scalar catalog reads before awaiting siblings", async () => {
   await setAgentsConfig({ ownership: "explicit", entries: { ops: {}, research: {} } });

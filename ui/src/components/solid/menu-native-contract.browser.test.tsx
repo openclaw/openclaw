@@ -28,6 +28,107 @@ afterEach(async () => {
   await page.viewport(originalViewport.width, originalViewport.height);
 });
 
+it("keeps submenu icons and details in the visible trigger", async () => {
+  let icon!: HTMLSpanElement;
+  let details!: HTMLSpanElement;
+  render(() => (
+    <Menu
+      id="people"
+      label="People"
+      items={[
+        {
+          id: "view",
+          label: "View",
+          icon: <span ref={(node) => (icon = node)}>Eye</span>,
+          details: <span ref={(node) => (details = node)}>V</span>,
+          children: [{ id: "reasoning", label: "Reasoning" }],
+        },
+      ]}
+    />
+  ));
+  flush();
+  await openMenu();
+  const view = item("View");
+  expect(view.contains(icon)).toBe(true);
+  expect(view.contains(details)).toBe(true);
+  await userEvent.click(view);
+  await phase(surface("people-view"), "open");
+  expect(view.contains(icon)).toBe(true);
+  expect(view.contains(details)).toBe(true);
+});
+
+it("routes arrow navigation from an embedded button through the menu", async () => {
+  const activate = vi.fn();
+  mountMenu({
+    items: [
+      { id: "disabled", label: "Unavailable", disabled: true },
+      { id: "first", label: "First" },
+      { id: "last", label: "Last" },
+    ],
+    children: (
+      <button type="button" data-form-control="" autofocus onClick={activate}>
+        About choices
+      </button>
+    ),
+  });
+  await openMenu();
+  const info = surface().querySelector<HTMLButtonElement>("[data-form-control]")!;
+  expect(document.activeElement).toBe(info);
+  await userEvent.keyboard("{Enter}");
+  expect(activate).toHaveBeenCalledOnce();
+  expect(surface().matches(":popover-open")).toBe(true);
+  await userEvent.keyboard("{ArrowDown}");
+  await expect.poll(() => document.activeElement).toBe(item("First"));
+  info.focus();
+  await userEvent.keyboard("{ArrowUp}");
+  await expect.poll(() => document.activeElement).toBe(item("Last"));
+});
+
+it("keeps native embedded controls in the menu keyboard flow", async () => {
+  const activate = vi.fn();
+  const navigate = vi.fn((event: MouseEvent) => event.preventDefault());
+  const select = vi.fn();
+  mountMenu({
+    onSelect: select,
+    items: [
+      { id: "first", label: "First" },
+      { id: "last", label: "Last" },
+      {
+        kind: "content",
+        id: "header-actions",
+        content: (
+          <>
+            <button type="button" onClick={activate}>
+              Clear
+            </button>
+            <a href="#help" onClick={navigate}>
+              Help
+            </a>
+          </>
+        ),
+      },
+    ],
+  });
+  await openMenu();
+  expect(document.activeElement).toBe(item("First"));
+  await userEvent.tab();
+  const button = surface().querySelector<HTMLButtonElement>("button:not([role])")!;
+  expect(document.activeElement).toBe(button);
+  await userEvent.keyboard("{Enter}");
+  expect(activate).toHaveBeenCalledOnce();
+  expect(select).not.toHaveBeenCalled();
+  expect(surface().matches(":popover-open")).toBe(true);
+  await userEvent.tab();
+  expect(document.activeElement).toBe(surface().querySelector("a"));
+  await userEvent.keyboard("{Enter}");
+  expect(navigate).toHaveBeenCalledOnce();
+  expect(select).not.toHaveBeenCalled();
+  await userEvent.tab({ shift: true });
+  expect(document.activeElement).toBe(button);
+  await userEvent.keyboard("{ArrowUp}");
+  await expect.poll(() => document.activeElement).toBe(item("Last"));
+});
+
 it.each([false, true])("preserves native link intent (routing=%s)", async (routing) => {
   let cancel = false;
   let selections = 0;
@@ -185,7 +286,13 @@ it("updates accessible labels without splitting mounted DOM and machine identity
     },
     get items() {
       return [
-        { id: "assign", label: childLabel(), children: [{ id: "ada", label: "Ada Rivera" }] },
+        {
+          id: "assign",
+          label: childLabel(),
+          icon: <span data-testid="assign-icon">Icon</span>,
+          details: <span data-testid="assign-shortcut">A</span>,
+          children: [{ id: "ada", label: "Ada Rivera" }],
+        },
       ];
     },
   });
@@ -194,6 +301,9 @@ it("updates accessible labels without splitting mounted DOM and machine identity
   await openMenu();
   await openMenu("people-assign");
   const child = surface("people-assign");
+  expect(trigger("people-assign").querySelector('[data-testid="assign-icon"]')).not.toBeNull();
+  expect(trigger("people-assign").querySelector('[data-testid="assign-shortcut"]')).not.toBeNull();
+  expect(item("Ada Rivera", "people-assign").getAttribute("value")).toBe("ada");
   setId("replacement-id");
   setLabel("Updated actions");
   setChildLabel("Updated assignment");
@@ -313,8 +423,15 @@ it("keeps descendant-only native overlap leased through closing and releases aft
   expect(bounds.left).toBeGreaterThan(surface().getBoundingClientRect().right);
   await expect.poll(() => states).toEqual([false, true]);
   const branch = [surface(), child];
+  // Establish the visible starting state for the closing transitions.
+  await expect.poll(() => branch.map((menu) => getComputedStyle(menu).opacity)).toEqual(["1", "1"]);
   // Hold the parent too: its exit moves the submenu anchor before hiding it.
-  branch.forEach((menu) => menu.style.setProperty("--oc-overlay-hide-duration", "60s"));
+  branch.forEach((menu) => {
+    const animation = menu.animate({ opacity: [1, 0], scale: [1, 0.9] }, { duration: 1000 });
+    animation.pause();
+    animation.currentTime = 0;
+    cleanups.push(() => animation.cancel());
+  });
   const hidden = new Promise<void>((resolve) => {
     child.addEventListener("overlay-after-hide", () => resolve(), { once: true });
   });
@@ -324,9 +441,77 @@ it("keeps descendant-only native overlap leased through closing and releases aft
       child.getAnimations().forEach((animation) => animation.finish());
     }
   });
+  const closeTrace: {
+    id: string;
+    operation: "animations" | "hide-before" | "hide-after";
+    phase: string | undefined;
+    nativeOpen: boolean;
+    animations?: number;
+  }[] = [];
+  const recordClose = (entry: (typeof closeTrace)[number]) => {
+    if (closeTrace.length < 32) {
+      closeTrace.push(entry);
+    }
+  };
+  for (const menu of branch) {
+    const getAnimations = menu.getAnimations.bind(menu);
+    const hidePopover = menu.hidePopover.bind(menu);
+    const animationSpy = vi.spyOn(menu, "getAnimations").mockImplementation(function (
+      this: HTMLElement,
+      ...args: Parameters<HTMLElement["getAnimations"]>
+    ) {
+      const animations = getAnimations(...args);
+      recordClose({
+        id: this.id,
+        operation: "animations",
+        phase: this.dataset.phase,
+        nativeOpen: this.matches(":popover-open"),
+        animations: animations.length,
+      });
+      return animations;
+    });
+    const hideSpy = vi.spyOn(menu, "hidePopover").mockImplementation(function (
+      this: HTMLElement,
+      ...args: Parameters<HTMLElement["hidePopover"]>
+    ) {
+      recordClose({
+        id: this.id,
+        operation: "hide-before",
+        phase: this.dataset.phase,
+        nativeOpen: this.matches(":popover-open"),
+      });
+      const result = hidePopover(...args);
+      recordClose({
+        id: this.id,
+        operation: "hide-after",
+        phase: this.dataset.phase,
+        nativeOpen: this.matches(":popover-open"),
+      });
+      return result;
+    });
+    cleanups.push(
+      () => animationSpy.mockRestore(),
+      () => hideSpy.mockRestore(),
+    );
+  }
   expect(view.handle.close()).toBe(true);
   const closing = branch.flatMap((menu) => {
     const animations = menu.getAnimations();
+    if (animations.length === 0) {
+      const style = getComputedStyle(menu);
+      console.error("Menu exit animation missing", {
+        closeTrace,
+        id: menu.id,
+        phase: menu.dataset.phase,
+        nativeOpen: menu.matches(":popover-open"),
+        opacity: style.opacity,
+        scale: style.scale,
+        display: style.display,
+        transitionDuration: style.transitionDuration,
+        transitionProperty: style.transitionProperty,
+        reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+      });
+    }
     expect(animations.length).toBeGreaterThan(0);
     return animations;
   });

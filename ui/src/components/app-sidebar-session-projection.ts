@@ -13,6 +13,7 @@ import {
 } from "../lib/sessions/grouping.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
+import { SidebarChildExpansion } from "./app-sidebar-child-expansion.ts";
 import { sidebarPresencePresentation, type SidebarPresenceScope } from "./app-sidebar-presence.ts";
 import {
   catalogErrorMessages,
@@ -43,7 +44,6 @@ const SIDEBAR_CREATED_ORDER_CAP = 1_000;
 // the narration throttle so replacement cadence stays consistent.
 const SIDEBAR_SUBTITLE_MIN_DISPLAY_MS = 2_000;
 
-export type SidebarExpansionMode = "collapsed-by-user" | "expanded" | "expanded-fully";
 type SidebarSubtitleParams = Parameters<typeof resolveSidebarSessionSubtitle>[0];
 type SidebarSubtitleValue = ReturnType<typeof resolveSidebarSessionSubtitle>;
 
@@ -64,6 +64,8 @@ type SidebarProjectionInput = {
   agentId: string;
   connectionIdentity: object | null;
   listSource: object | null;
+  /** False while rows are only route placeholders, before the session list arrives. */
+  listLoaded: boolean;
   subtitle: {
     sidebarLiveActivity: boolean;
     showPreview: boolean;
@@ -136,10 +138,7 @@ function isOperatorCriticalSubtitle(session: SidebarRecentSession): boolean {
 }
 
 export class SidebarSessionProjection {
-  constructor(
-    private readonly now: () => number = () => Date.now(),
-    private readonly host?: { readonly isConnected: boolean; requestUpdate(): void },
-  ) {}
+  constructor(private readonly now: () => number = () => Date.now()) {}
 
   // Record frame admission only; owner.updated can precede child DOM bindings.
   private publishedSessionPresentation = "";
@@ -377,14 +376,13 @@ export class SidebarSessionProjection {
   revision = 0;
   createdOrderRevision = 0;
   private observedResults: readonly { sessions: readonly { key: string }[] }[] = [];
-  private subtitleTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private subtitleDeadline = Infinity;
+  subtitleDeadline = Infinity;
   private readonly observedOrder = new Map<string, number>();
   private nextCreatedOrder = 0;
   private readonly stickySections = new Map<string, Set<string>>();
-  private readonly childModes = new Map<string, SidebarExpansionMode>();
-  private readonly observedChildKeys = new Map<string, readonly string[]>();
-  private restoredChildrenPending = false;
+  readonly children = new SidebarChildExpansion(() => {
+    this.revision += 1;
+  });
   private readonly heldSubtitles = new Map<
     string,
     { value: SidebarSubtitleValue; catalogValue?: SidebarSubtitleValue; shownAt: number }
@@ -458,7 +456,7 @@ export class SidebarSessionProjection {
   project(input: SidebarProjectionInput): SidebarVisibleSections {
     // Record the state published by this pass, including sticky membership and subtitles.
     this.revision += 1;
-    this.clearSubtitleTimer();
+    this.subtitleDeadline = Infinity;
     const previous = this.previousInput;
     const scopeChanged =
       previous !== null &&
@@ -476,16 +474,11 @@ export class SidebarSessionProjection {
     ) {
       this.resetMembership();
     }
-    if (
-      !this.restoredChildrenPending &&
+    this.children.beginPass(
       previous !== null &&
-      (previous.agentId !== input.agentId ||
-        previous.connectionIdentity !== input.connectionIdentity)
-    ) {
-      this.childModes.clear();
-      this.observedChildKeys.clear();
-    }
-    this.restoredChildrenPending = false;
+        (previous.agentId !== input.agentId ||
+          previous.connectionIdentity !== input.connectionIdentity),
+    );
     if (scopeChanged) {
       this.heldSubtitles.clear();
     }
@@ -504,27 +497,10 @@ export class SidebarSessionProjection {
     };
     this.previousCollapsedSections = new Set(input.collapsedSections);
 
-    const staleKeys = new Set([
-      ...this.childModes.keys(),
-      ...this.observedChildKeys.keys(),
-      ...this.heldSubtitles.keys(),
-    ]);
+    const staleKeys = new Set([...this.children.keys(), ...this.heldSubtitles.keys()]);
     const observeTree = (session: SidebarRecentSession) => {
       staleKeys.delete(session.key);
-      const previousChildren = this.observedChildKeys.get(session.key);
-      const mode = this.childModes.get(session.key);
-      // New children reveal their parent once; ordinary refreshes and reordering
-      // must not undo an explicit collapse or the operator's Show more choice.
-      const hasNewChild =
-        previousChildren !== undefined &&
-        session.childSessionKeys.some((key) => !previousChildren.includes(key));
-      if (
-        (mode === undefined && session.containsActiveDescendant) ||
-        (hasNewChild && mode !== "expanded-fully")
-      ) {
-        this.childModes.set(session.key, "expanded");
-      }
-      this.observedChildKeys.set(session.key, session.childSessionKeys);
+      this.children.observe(session, input.listLoaded);
       this.observeSubtitle(session, input.subtitle);
       for (const child of session.children) {
         observeTree(child);
@@ -532,8 +508,7 @@ export class SidebarSessionProjection {
     };
     input.rows.forEach(observeTree);
     for (const key of staleKeys) {
-      this.childModes.delete(key);
-      this.observedChildKeys.delete(key);
+      this.children.delete(key);
       this.heldSubtitles.delete(key);
     }
 
@@ -640,82 +615,9 @@ export class SidebarSessionProjection {
     }
   }
 
-  isChildrenExpanded(key: string): boolean {
-    const mode = this.childModes.get(key);
-    return mode === "expanded" || mode === "expanded-fully";
-  }
-
-  captureChildrenDisplay(key: string): SidebarExpansionMode | undefined {
-    return this.childModes.get(key);
-  }
-
-  restoreChildrenDisplay(
-    rows: readonly { key: string; childrenDisplayMode?: SidebarExpansionMode }[],
-  ): void {
-    this.childModes.clear();
-    this.observedChildKeys.clear();
-    for (const row of rows) {
-      if (row.childrenDisplayMode !== undefined) {
-        this.childModes.set(row.key, row.childrenDisplayMode);
-      }
-    }
-    // The first authoritative projection changes the connection scope; these
-    // admitted modes belong to that handoff, not the preceding empty projection.
-    this.restoredChildrenPending = this.childModes.size > 0;
-    this.revision += 1;
-  }
-
-  isChildrenFullyShown(key: string): boolean {
-    return this.childModes.get(key) === "expanded-fully";
-  }
-
-  toggleChildren(session: SidebarRecentSession): { expanded: boolean } {
-    this.revision += 1;
-    if (this.isChildrenExpanded(session.key)) {
-      // The explicit closed mode prevents a still-active descendant from
-      // immediately undoing the user's collapse on the next update pass.
-      this.childModes.set(session.key, "collapsed-by-user");
-      return { expanded: false };
-    }
-    this.childModes.set(session.key, "expanded");
-    return { expanded: true };
-  }
-
-  showMoreChildren(key: string): void {
-    if (this.isChildrenExpanded(key)) {
-      this.childModes.set(key, "expanded-fully");
-      this.revision += 1;
-    }
-  }
-
-  dispose(): void {
-    this.clearSubtitleTimer();
-    this.revision += 1;
-  }
-
-  private clearSubtitleTimer(): void {
-    if (this.subtitleTimer !== null) {
-      globalThis.clearTimeout(this.subtitleTimer);
-    }
-    this.subtitleTimer = null;
+  invalidate(): void {
     this.subtitleDeadline = Infinity;
-  }
-
-  private scheduleSubtitleUpdate(deadline: number): void {
-    if (!this.host?.isConnected || this.subtitleDeadline <= deadline) {
-      return;
-    }
-    this.clearSubtitleTimer();
-    this.subtitleDeadline = deadline;
-    this.subtitleTimer = globalThis.setTimeout(
-      () => {
-        this.subtitleTimer = null;
-        this.subtitleDeadline = Infinity;
-        this.revision += 1;
-        this.host?.requestUpdate();
-      },
-      Math.max(0, deadline - this.now()),
-    );
+    this.revision += 1;
   }
 
   resolveSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue {
@@ -771,7 +673,10 @@ export class SidebarSessionProjection {
       now - held.shownAt < SIDEBAR_SUBTITLE_MIN_DISPLAY_MS &&
       !isOperatorCriticalSubtitle(session)
     ) {
-      this.scheduleSubtitleUpdate(held.shownAt + SIDEBAR_SUBTITLE_MIN_DISPLAY_MS);
+      this.subtitleDeadline = Math.min(
+        this.subtitleDeadline,
+        held.shownAt + SIDEBAR_SUBTITLE_MIN_DISPLAY_MS,
+      );
       return;
     }
     const catalogValue = resolveSidebarSessionSubtitle({ ...params, hasDisplay: true });

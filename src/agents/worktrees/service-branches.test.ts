@@ -17,6 +17,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import * as gitExec from "../../infra/git-exec.js";
+import * as gitWorkerContext from "../../infra/git-worker-context.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import {
@@ -35,6 +36,7 @@ import {
   withWorktreeBasePreparation,
   type WorktreeBasePreparation,
 } from "./base-ref.js";
+import { readRepositoryBranches } from "./branches.runtime.js";
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -98,13 +100,26 @@ describe("ManagedWorktreeService branch discovery", () => {
     return await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", message);
   }
 
-  async function expectWarmBranchAdmission(checkout: string, resetCommands?: () => void) {
-    const first = await service.listRepositoryBranches(checkout, { includeRepositoryStatus: true });
+  function admitBranchSuggestionCache() {
+    vi.spyOn(gitWorkerContext, "gitFilesystemEnvironmentRevision").mockReturnValue("test-env");
+  }
+
+  async function expectWarmBranchAdmission(
+    checkout: string,
+    resetCommands?: () => void,
+    readBranches = readRepositoryBranches,
+  ) {
+    if (readBranches === readRepositoryBranches) {
+      admitBranchSuggestionCache();
+    }
+    const first = await readBranches(checkout, { includeRepositoryStatus: true });
     expect(first.repositoryStatus).toBe("git");
     resetCommands?.();
-    expect(
-      await service.listRepositoryBranches(checkout, { includeRepositoryStatus: true }),
-    ).toEqual(first);
+    expect(await readBranches(checkout, { includeRepositoryStatus: true })).toEqual(first);
+  }
+
+  function expireBranchSuggestions() {
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_001);
   }
 
   beforeEach(async () => {
@@ -705,32 +720,41 @@ describe("ManagedWorktreeService branch discovery", () => {
     },
   );
 
-  it("reuses unchanged branch inventories and observes loose, packed, tag, and HEAD changes", async () => {
+  it("reuses branch suggestions until expiry, then observes loose, packed, tag, and HEAD changes", async () => {
+    admitBranchSuggestionCache();
     const linked = path.join(root, "linked");
     await git(repo, "worktree", "add", "-b", "tasks/selected", linked, "HEAD");
     const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
-    const first = await service.listRepositoryBranches(linked);
+    const first = await readRepositoryBranches(linked);
     expect(first.headBranch).toBe("tasks/selected");
     run.mockClear();
-    expect(await service.listRepositoryBranches(linked)).toEqual(first);
+    expect(await readRepositoryBranches(linked)).toEqual(first);
     expect(run).toHaveBeenCalledTimes(0);
 
     await git(repo, "branch", "tasks/added");
-    expect((await service.listRepositoryBranches(linked)).branches).toContainEqual({
+    expect((await readRepositoryBranches(linked)).branches).not.toContainEqual({
+      name: "tasks/added",
+      kind: "local",
+    });
+    expireBranchSuggestions();
+    expect((await readRepositoryBranches(linked)).branches).toContainEqual({
       name: "tasks/added",
       kind: "local",
     });
     await git(repo, "pack-refs", "--all", "--prune");
     await git(repo, "branch", "-d", "tasks/added");
-    expect((await service.listRepositoryBranches(linked)).branches).not.toContainEqual({
+    expireBranchSuggestions();
+    expect((await readRepositoryBranches(linked)).branches).not.toContainEqual({
       name: "tasks/added",
       kind: "local",
     });
     await git(repo, "tag", "tasks/selected");
-    expect((await service.listRepositoryBranches(linked)).headBranch).toBe("heads/tasks/selected");
+    expireBranchSuggestions();
+    expect((await readRepositoryBranches(linked)).headBranch).toBe("heads/tasks/selected");
     await git(linked, "switch", "--detach");
-    expect((await service.listRepositoryBranches(linked)).headBranch).toBeUndefined();
-    expect((await service.listRepositoryBranches(repo)).headBranch).toBe("main");
+    expireBranchSuggestions();
+    expect((await readRepositoryBranches(linked)).headBranch).toBeUndefined();
+    expect((await readRepositoryBranches(repo)).headBranch).toBe("main");
 
     const commit = await git(repo, "rev-parse", "HEAD");
     const refs = path.join(repo, ".git", "refs", "heads", "fleet");
@@ -740,21 +764,23 @@ describe("ManagedWorktreeService branch discovery", () => {
         fs.writeFile(path.join(refs, String(index).padStart(4, "0")), `${commit}\n`),
       ),
     );
-    const fleet = await service.listRepositoryBranches(repo);
+    expireBranchSuggestions();
+    const fleet = await readRepositoryBranches(repo);
     run.mockClear();
-    expect(await service.listRepositoryBranches(repo)).toEqual(fleet);
+    expect(await readRepositoryBranches(repo)).toEqual(fleet);
     expect(run).toHaveBeenCalledTimes(0);
     await fs.unlink(path.join(refs, "0000"));
-    expect((await service.listRepositoryBranches(repo)).branches).not.toContainEqual({
+    expireBranchSuggestions();
+    expect((await readRepositoryBranches(repo)).branches).not.toContainEqual({
       name: "fleet/0000",
       kind: "local",
     });
   });
 
-  it("reuses inventories with more than 1,024 pack metadata files and refreshes changed refs", async () => {
+  it("reuses inventories with more than 1,024 pack metadata files and refreshes expired suggestions", async () => {
     const packs = path.join(repo, ".git", "objects", "pack");
     await fs.mkdir(packs, { recursive: true });
-    // Git ignores keep markers during discovery; all still participate in the revision.
+    // Git ignores keep markers during discovery.
     await Promise.all(
       Array.from({ length: 1_100 }, (_, index) =>
         fs.writeFile(path.join(packs, `pack-${index}.keep`), "synthetic keep marker\n"),
@@ -764,7 +790,8 @@ describe("ManagedWorktreeService branch discovery", () => {
     await expectWarmBranchAdmission(repo, () => run.mockClear());
     expect(run).toHaveBeenCalledTimes(0);
     await git(repo, "branch", "new-branch");
-    expect((await service.listRepositoryBranches(repo)).branches).toContainEqual({
+    expireBranchSuggestions();
+    expect((await readRepositoryBranches(repo)).branches).toContainEqual({
       name: "new-branch",
       kind: "local",
     });
@@ -795,17 +822,15 @@ describe("ManagedWorktreeService branch discovery", () => {
       } else {
         await fs.writeFile(object, Buffer.alloc((await fs.stat(object)).size));
       }
-      await fs.utimes(path.join(repo, ".git", "HEAD"), 0, 0);
+      expireBranchSuggestions();
 
       await expect(
-        service.listRepositoryBranches(repo, { includeRepositoryStatus: true }),
+        readRepositoryBranches(repo, { includeRepositoryStatus: true }),
       ).resolves.toEqual({
         branches: [],
         repositoryStatus: "unavailable",
       });
-      await expect(service.listRepositoryBranches(repo)).rejects.toThrow(
-        "Git metadata is unavailable",
-      );
+      await expect(readRepositoryBranches(repo)).rejects.toThrow("Git metadata is unavailable");
     },
   );
 
@@ -826,19 +851,23 @@ describe("ManagedWorktreeService branch discovery", () => {
         config = path.join(root, "included.gitconfig");
         vi.stubEnv("GIT_CONFIG_PARAMETERS", `'include.path=${config}'`);
       }
-      await expectWarmBranchAdmission(repo);
+      const readBranches =
+        source === "environment"
+          ? service.listRepositoryBranches.bind(service)
+          : readRepositoryBranches;
+      await expectWarmBranchAdmission(repo, undefined, readBranches);
       if (source === "environment") {
         config = path.join(root, "redirected.gitconfig");
         vi.stubEnv("GIT_CONFIG_GLOBAL", config);
       }
       await fs.writeFile(config, "[malformed\n");
-      await fs.utimes(path.join(repo, ".git", "HEAD"), 0, 0);
-      expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
-        {
-          branches: [],
-          repositoryStatus: "unavailable",
-        },
-      );
+      if (source !== "environment") {
+        expireBranchSuggestions();
+      }
+      expect(await readBranches(repo, { includeRepositoryStatus: true })).toEqual({
+        branches: [],
+        repositoryStatus: "unavailable",
+      });
     },
   );
 
@@ -853,11 +882,9 @@ describe("ManagedWorktreeService branch discovery", () => {
       await expectWarmBranchAdmission(checkout);
     }
     await fs.unlink(path.join(repo, ".git", "objects", head.slice(0, 2), head.slice(2)));
+    expireBranchSuggestions();
     for (const checkout of [repo, alternate]) {
-      await fs.utimes(path.join(checkout, ".git", "HEAD"), 0, 0);
-      expect(
-        await service.listRepositoryBranches(checkout, { includeRepositoryStatus: true }),
-      ).toEqual({
+      expect(await readRepositoryBranches(checkout, { includeRepositoryStatus: true })).toEqual({
         branches: [],
         repositoryStatus: "unavailable",
       });

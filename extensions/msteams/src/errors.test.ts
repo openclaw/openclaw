@@ -1,12 +1,11 @@
 // Msteams tests cover errors plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsDeliveryFailureGuidance,
   formatMSTeamsSendErrorHint,
   formatUnknownError,
 } from "./errors.js";
-import { withRevokedProxyFallback } from "./revoked-context.js";
 
 function replaySafeRetryAfterMs(error: unknown): number | undefined {
   const classification = classifyMSTeamsSendError(error);
@@ -153,32 +152,5 @@ describe("msteams errors", () => {
   it("still classifies HTTP errors as unknown when no status code and no network code", () => {
     expect(classifyMSTeamsSendError(new Error("unexpected error")).kind).toBe("unknown");
     expect(classifyMSTeamsSendError(null).kind).toBe("unknown");
-  });
-
-  describe("withRevokedProxyFallback", () => {
-    it("uses fallback when proxy-revoked TypeError is thrown", async () => {
-      const onRevokedLog = vi.fn();
-      await expect(
-        withRevokedProxyFallback({
-          run: async () => {
-            throw new TypeError("Cannot perform 'get' on a proxy that has been revoked");
-          },
-          onRevoked: async () => "fallback",
-          onRevokedLog,
-        }),
-      ).resolves.toBe("fallback");
-      expect(onRevokedLog).toHaveBeenCalledOnce();
-    });
-
-    it.each([new Error("proxy that has been revoked")])("rethrows non-revoked %s", async (err) => {
-      await expect(
-        withRevokedProxyFallback({
-          run: async () => {
-            throw err;
-          },
-          onRevoked: async () => "fallback",
-        }),
-      ).rejects.toBe(err);
-    });
   });
 });

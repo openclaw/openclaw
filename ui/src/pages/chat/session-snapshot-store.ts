@@ -64,6 +64,9 @@ const paginationSchema = z.discriminatedUnion("hasMore", [
 const transcriptMetadataSchema = Type.Pick(SessionRowSchema, [
   "key",
   "kind",
+  "label",
+  "displayName",
+  "derivedTitle",
   "classification",
   "participants",
   "expandedParticipants",

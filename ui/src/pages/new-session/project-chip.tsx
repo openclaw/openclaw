@@ -13,6 +13,11 @@ import type { ProjectChipOptions } from "./project-chip.ts";
 export function ProjectChip(props: { params: ProjectChipOptions }) {
   const selectClone = (cloneUrl: string) =>
     props.params.onSelectRemoteProject({ identity: cloneUrl, cloneUrl });
+  const triggerIcon = <Icon name={props.params.projectId ? "gitBranch" : "folder"} />;
+  const newWorkspaceIcon = <Icon name="folder" />;
+  const deviceFolderIcon = <Icon name="folder" />;
+  const workspaceIcon = <Icon name="folder" />;
+  const cloneIcon = <Icon name="gitBranch" />;
   const view = createMemo(() => {
     const folder = props.params.folder.trim();
     const cloneInput = projectCloneInput(props.params.projectQuery);
@@ -61,7 +66,7 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
       kind="project"
       label={`${t("newSession.what")}: ${props.params.state.label}`}
       value={props.params.state.label}
-      icon={props.params.projectId ? <Icon name="gitBranch" /> : <Icon name="folder" />}
+      icon={triggerIcon}
       triggerAttributes={{ "data-project-id": props.params.projectId || undefined }}
       state={props.params}
     >
@@ -87,7 +92,7 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
               item={{
                 value: "new-workspace",
                 label: t("newSession.newWorkspace"),
-                icon: <Icon name="folder" />,
+                icon: newWorkspaceIcon,
                 sub: t("newSession.newWorkspaceDescription"),
                 checked: props.params.freshWorkspace === true,
                 onSelect: props.params.onNewWorkspace,
@@ -100,7 +105,7 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
               item={{
                 value: "device-folder",
                 label: t("newSession.deviceFolder"),
-                icon: <Icon name="folder" />,
+                icon: deviceFolderIcon,
                 sub:
                   props.params.deviceFolderDisabledReason ??
                   t("newSession.deviceFolderDescription"),
@@ -117,7 +122,7 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
               item={{
                 value: "workspace",
                 label: pathDisplayName(props.params.workspace),
-                icon: <Icon name="folder" />,
+                icon: workspaceIcon,
                 checked:
                   !props.params.freshWorkspace &&
                   !props.params.projectId &&
@@ -153,19 +158,22 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
           </label>
           {
             <For each={props.params.state.localProjects} keyed={(project) => project.id}>
-              {(project) => (
-                <SessionMenuItem
-                  item={{
-                    value: `project:${project().id}`,
-                    label: project().displayName,
-                    icon: <Icon name="gitBranch" />,
-                    checked: props.params.projectId === project().id,
-                    title: project().repoRoot,
-                    onSelect: () => props.params.onSelectProject(project().id),
-                  }}
-                  submitting={props.params.submitting}
-                />
-              )}
+              {(project) => {
+                const icon = <Icon name="gitBranch" />;
+                return (
+                  <SessionMenuItem
+                    item={{
+                      value: `project:${project().id}`,
+                      label: project().displayName,
+                      icon,
+                      checked: props.params.projectId === project().id,
+                      title: project().repoRoot,
+                      onSelect: () => props.params.onSelectProject(project().id),
+                    }}
+                    submitting={props.params.submitting}
+                  />
+                );
+              }}
             </For>
           }
           {view().cloneInput && props.params.projectAddAvailable ? (
@@ -173,7 +181,7 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
               item={{
                 value: "project-clone-url",
                 label: view().cloneInput!,
-                icon: <Icon name="gitBranch" />,
+                icon: cloneIcon,
                 sub: t("newSession.cloneProject"),
                 checked: props.params.selectedRemoteProject?.cloneUrl === view().cloneInput,
                 onSelect: () => selectClone(view().cloneInput!),
@@ -199,28 +207,31 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
               ) : undefined}
               {
                 <For each={props.params.remoteProjects} keyed={(project) => project.cloneUrl}>
-                  {(project) => (
-                    <SessionMenuItem
-                      item={{
-                        value: `remote-project:${project().fullName}`,
-                        label: project().fullName,
-                        icon: <Icon name="gitBranch" />,
-                        sub: project().description ?? t("newSession.cloneProject"),
-                        checked:
-                          props.params.selectedRemoteProject?.cloneUrl === project().cloneUrl,
-                        title: project().webUrl,
-                        onSelect: () =>
-                          props.params.onSelectRemoteProject({
-                            identity: project().fullName,
-                            cloneUrl: project().cloneUrl,
-                            ...(project().defaultBranch
-                              ? { defaultBranch: project().defaultBranch }
-                              : {}),
-                          }),
-                      }}
-                      submitting={props.params.submitting || !props.params.projectAddAvailable}
-                    />
-                  )}
+                  {(project) => {
+                    const icon = <Icon name="gitBranch" />;
+                    return (
+                      <SessionMenuItem
+                        item={{
+                          value: `remote-project:${project().fullName}`,
+                          label: project().fullName,
+                          icon,
+                          sub: project().description ?? t("newSession.cloneProject"),
+                          checked:
+                            props.params.selectedRemoteProject?.cloneUrl === project().cloneUrl,
+                          title: project().webUrl,
+                          onSelect: () =>
+                            props.params.onSelectRemoteProject({
+                              identity: project().fullName,
+                              cloneUrl: project().cloneUrl,
+                              ...(project().defaultBranch
+                                ? { defaultBranch: project().defaultBranch }
+                                : {}),
+                            }),
+                        }}
+                        submitting={props.params.submitting || !props.params.projectAddAvailable}
+                      />
+                    );
+                  }}
                 </For>
               }
             </>
@@ -240,6 +251,7 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
                 }
               >
                 {(recent, index) => {
+                  const icon = <Icon name={recent().kind === "folder" ? "folder" : "gitBranch"} />;
                   const item = createMemo(() => {
                     const row = recent();
                     return {
@@ -248,8 +260,7 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
                           ? `repository:${row.url}`
                           : `recent:${row.folder}`,
                       label: row.displayName,
-                      icon:
-                        row.kind === "folder" ? <Icon name="folder" /> : <Icon name="gitBranch" />,
+                      icon,
                       sub: view().recentSuffixes[index()],
                       checked:
                         row.kind === "repository"

@@ -5,7 +5,7 @@ export function buildStaticChutesProvider(): ModelProviderConfig {
   return {
     baseUrl: CHUTES_BASE_URL,
     api: "openai-completions",
-    models: structuredClone(CHUTES_MODEL_CATALOG),
+    models: CHUTES_MODEL_CATALOG,
   };
 }
 

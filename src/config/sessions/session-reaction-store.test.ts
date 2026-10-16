@@ -3,11 +3,12 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { assertSqliteSchemaContains } from "../../infra/sqlite-schema-contract.test-support.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
-import { assertOpenClawAgentSchemaContains } from "../../state/openclaw-agent-db-schema-helpers.js";
+import { AGENT_SCHEMA_COMPATIBILITY } from "../../state/openclaw-agent-db-schema-compatibility.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -17,6 +18,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
@@ -110,40 +112,35 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("session reaction store", () => {
-  it.each(["default", "shared"] as const)(
-    "writes %s reactions through their database owner",
-    async (store) => {
-      if (store !== "default") {
-        scope = {
-          ...scope,
-          storePath: path.join(root, "shared-reactions.sqlite"),
-        };
-        await upsertSessionEntryCore(scope, {
-          sessionId: "session-a",
-          updatedAt: 1,
-        });
-        await seedMessages("session-a", [reaction.messageId]);
+  it("writes shared reactions through their database owner", async () => {
+    scope = {
+      ...scope,
+      storePath: path.join(root, "shared-reactions.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "session-a",
+      updatedAt: 1,
+    });
+    await seedMessages("session-a", [reaction.messageId]);
+    const methods = observeCallerSql();
+    try {
+      expect(await setSessionReactionAsync(scope, reaction)).toEqual({
+        reactions: [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
+        newestRemainingEmoji: "👍",
+        changed: true,
+      });
+      for (const method of methods) {
+        expect(method).not.toHaveBeenCalled();
       }
-      const methods = observeCallerSql();
-      try {
-        expect(await setSessionReactionAsync(scope, reaction)).toEqual({
-          reactions: [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
-          newestRemainingEmoji: "👍",
-          changed: true,
-        });
-        for (const method of methods) {
-          expect(method).not.toHaveBeenCalled();
-        }
-      } finally {
-        for (const method of methods) {
-          method.mockRestore();
-        }
+    } finally {
+      for (const method of methods) {
+        method.mockRestore();
       }
-      expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual([
-        { emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] },
-      ]);
-    },
-  );
+    }
+    expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual([
+      { emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] },
+    ]);
+  });
 
   it("rolls back a reaction when the caller's authority expires at commit admission", async () => {
     let current = true;
@@ -240,22 +237,7 @@ describe("session reaction store", () => {
     );
   });
 
-  it.each([
-    {
-      name: "removing 🚀 after Alice 👍, Alice 🎉, Bob 👍, then 🚀",
-      rocket: true,
-      emoji: "🚀",
-      identityId: "alice",
-      expected: "👍",
-    },
-    {
-      name: "removing Bob's newest 👍 while Alice's older 👍 remains",
-      rocket: false,
-      emoji: "👍",
-      identityId: "bob",
-      expected: "🎉",
-    },
-  ])("returns the newest surviving emoji after $name", async (scenario) => {
+  it("returns the newest surviving emoji after removing Bob's newest reaction", async () => {
     for (const [emoji, identityId, createdAt] of [
       ["👍", "alice", 100],
       ["🎉", "alice", 200],
@@ -264,25 +246,20 @@ describe("session reaction store", () => {
       await setSessionReactionAsync(scope, { ...reaction, emoji, identityId });
       stampReaction(emoji, identityId, createdAt);
     }
-    if (scenario.rocket) {
-      await setSessionReactionAsync(scope, { ...reaction, emoji: "🚀" });
-      stampReaction("🚀", "alice", 400);
-    }
     const removal = {
       ...reaction,
-      emoji: scenario.emoji,
-      identityId: scenario.identityId,
+      identityId: "bob",
       remove: true,
     };
     const result = await setSessionReactionAsync(scope, removal);
-    expect(result).toMatchObject({ changed: true, newestRemainingEmoji: scenario.expected });
+    expect(result).toMatchObject({ changed: true, newestRemainingEmoji: "🎉" });
     expect(result.reactions.map(({ emoji }) => emoji)).toEqual(["👍", "🎉"]);
     expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual(
       result.reactions,
     );
     expect(await setSessionReactionAsync(scope, removal)).toMatchObject({
       changed: false,
-      newestRemainingEmoji: scenario.expected,
+      newestRemainingEmoji: "🎉",
     });
   });
 
@@ -481,7 +458,12 @@ describe("session reaction store", () => {
       count: 0,
     });
     expect(() =>
-      assertOpenClawAgentSchemaContains(database.db, database.path, previousSchema),
+      assertSqliteSchemaContains(
+        requireNativeSqliteDatabase(database.db),
+        database.path,
+        previousSchema,
+        AGENT_SCHEMA_COMPATIBILITY,
+      ),
     ).not.toThrow();
   });
 });

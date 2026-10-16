@@ -45,7 +45,7 @@ export function prepareSteeringDelivery(params: {
   entry?: SessionEntry;
   assertCurrent: () => void;
 }) {
-  const fallbackEntry = params.entry ? structuredClone(params.entry) : undefined;
+  const fallbackEntry = params.entry;
   const assertEntry = (
     current: Parameters<typeof resolveRestartRecoverySteeringBlockReason>[0],
   ) => {

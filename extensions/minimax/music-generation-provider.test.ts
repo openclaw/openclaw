@@ -298,12 +298,10 @@ describe("minimax music generation provider", () => {
       audio_url: "https://example.com/retry.mp3",
       base_resp: { status_code: 0 },
     });
-    fetchWithTimeoutMock
-      .mockRejectedValueOnce(new Error("temporary download failure"))
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "audio/mpeg" }),
-        arrayBuffer: async () => Buffer.from("mp3-bytes"),
-      });
+    fetchWithTimeoutMock.mockRejectedValueOnce(new Error("request timeout")).mockResolvedValueOnce({
+      headers: new Headers({ "content-type": "audio/mpeg" }),
+      arrayBuffer: async () => Buffer.from("mp3-bytes"),
+    });
 
     const provider = buildMinimaxMusicGenerationProvider("minimax-portal");
     const result = await provider.generateMusic(

@@ -18,7 +18,13 @@ import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-lifecy
 import type {
   SessionEntryMaintenancePlan,
   SessionEntryMaintenanceResult,
+  SqliteSessionReclamationPlan,
+  SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
+import {
+  capturePendingSessionMaintenanceAgeChanges,
+  type SessionEntryMaintenanceAgeChange,
+} from "./session-accessor.sqlite-maintenance-age.js";
 import {
   applySessionEntryMaintenanceInDatabase,
   emptySessionEntryMaintenancePlan,
@@ -57,6 +63,56 @@ const SESSION_TRANSCRIPT_BYTE_QUERY_BATCH = MAX_SESSION_MAINTENANCE_BATCH_ENTRIE
 // cleanups must not pay the measured synchronous full-database analysis cost.
 const SESSION_PLANNER_ANALYSIS_MIN_DELETED_ENTRIES = MAX_SESSION_MAINTENANCE_BATCH_ENTRIES;
 const plannerMaintenanceByStore = new Map<string, Promise<void>>();
+
+export function releaseSessionEntryMaintenanceExecution(
+  databasePath: string,
+  owner: { execution?: OpenClawAgentDatabaseExecution; release?: Promise<void> },
+): void {
+  if (!owner.execution) {
+    return;
+  }
+  const released = owner.execution.release();
+  owner.release = owner.release
+    ? Promise.all([owner.release, released]).then(() => undefined)
+    : released;
+  owner.execution = undefined;
+  void owner.release.catch((error: unknown) =>
+    getChildLogger({ subsystem: "session-sqlite" }).warn(
+      "SQLite automatic maintenance could not release its executor",
+      { error, path: databasePath },
+    ),
+  );
+}
+
+export async function readSessionEntryMaintenanceAgeAfterWriterRelease(
+  params: Pick<
+    Extract<SqliteSessionReclamationPlan, { kind: "maintenance-age" }>,
+    "databaseOptions" | "maintenance"
+  > & {
+    ageChanges: Map<string, SessionEntryMaintenanceAgeChange>;
+    assertCurrent: () => void;
+  },
+): Promise<
+  Extract<SqliteSessionReclamationResult, { kind: "maintenance-age" | "maintenance-plan-stale" }>
+> {
+  const pending = capturePendingSessionMaintenanceAgeChanges(params.ageChanges);
+  const result = await runSqliteSessionReclamation({
+    diagnostics: { kind: "maintenance-age" },
+    assertCommitAllowed: params.assertCurrent,
+    plan: {
+      kind: "maintenance-age",
+      databaseOptions: params.databaseOptions,
+      materializedPlans: [],
+      maintenance: params.maintenance,
+      ageChanges: pending.changes,
+    },
+  });
+  if (result.kind !== "maintenance-age" && result.kind !== "maintenance-plan-stale") {
+    throw new Error("SQLite automatic maintenance returned another age result");
+  }
+  pending.acknowledge();
+  return result;
+}
 
 /** Coalesce bounded planner-statistics refreshes behind the per-store writer lane. */
 export async function refreshSqliteSessionPlannerStatisticsBestEffort(

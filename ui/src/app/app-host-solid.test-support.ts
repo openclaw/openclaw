@@ -1,12 +1,18 @@
 import { render } from "@solidjs/testing-library";
-import { createEffect, flush, onSettled } from "solid-js";
+import { createEffect, createRoot, flush, onSettled } from "solid-js";
 import { onTestFinished } from "vitest";
 import { ShellOwner } from "./app-host.tsx";
 import { renderApplicationShell } from "./app-shell-view.tsx";
 
 export function createShellOwner(): ShellOwner {
-  const shell = new ShellOwner(document.createElement("openclaw-app-shell"));
-  onTestFinished(() => shell.disconnect());
+  const { shell, dispose } = createRoot((disposeRoot) => ({
+    shell: new ShellOwner(document.createElement("openclaw-app-shell")),
+    dispose: disposeRoot,
+  }));
+  onTestFinished(() => {
+    shell.disconnect();
+    dispose();
+  });
   return shell;
 }
 

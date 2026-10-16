@@ -23,6 +23,7 @@ import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
+  onTrustedToolExecutionEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
@@ -71,6 +72,87 @@ describe("diagnostic-events", () => {
     expect(typeof message).toBe("string");
     expect((message as string).startsWith(prefix)).toBe(true);
   }
+
+  it("does not read or queue payloads until a consumer accepts their trust and type", async () => {
+    let payloadReads = 0;
+    const event = {
+      ...modelStartedEvent(),
+      get provider() {
+        payloadReads += 1;
+        return "openai";
+      },
+    };
+    emitTrustedDiagnosticEvent(event);
+    const publicEvents: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((value) => publicEvents.push(value));
+    emitTrustedDiagnosticEvent(event);
+    onInternalDiagnosticEvent(() => {}, { includeTrusted: ["model.call.error"] });
+    emitTrustedDiagnosticEvent(event);
+    expect(payloadReads).toBe(0);
+    expect(hasPendingInternalDiagnosticEvent(() => true)).toBe(false);
+
+    emitDiagnosticEvent(event);
+    await waitForDiagnosticEventsDrained();
+    expect(publicEvents).toMatchObject([
+      { type: "model.call.started", provider: "openai", seq: 4 },
+    ]);
+    expect(payloadReads).toBe(1);
+
+    const trustedEvents: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((value) => trustedEvents.push(value), {
+      include: ["model.call.started"],
+    });
+    emitTrustedDiagnosticEvent(event);
+    await waitForDiagnosticEventsDrained();
+    expect(trustedEvents).toMatchObject([
+      { type: "model.call.started", provider: "openai", seq: 5 },
+    ]);
+    expect(payloadReads).toBe(2);
+    stop();
+    emitTrustedDiagnosticEvent(event);
+    expect(payloadReads).toBe(2);
+    expect(hasPendingInternalDiagnosticEvent(() => true)).toBe(false);
+  });
+
+  it("keeps duplicate public subscriptions independent and passes only the event", () => {
+    const listener = vi.fn();
+    const stopFirst = onDiagnosticEvent(listener);
+    const stopSecond = onDiagnosticEvent(listener);
+    const event = { type: "message.queued" as const, source: "plugin" };
+    emitDiagnosticEvent(event);
+    expect(listener.mock.calls.map((args) => args.length)).toEqual([1, 1]);
+    stopFirst();
+    emitDiagnosticEvent(event);
+    expect(listener).toHaveBeenCalledTimes(3);
+    stopSecond();
+    emitDiagnosticEvent(event);
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([true, false])(
+    "only snapshots tool audits for a consumer (diagnostics %s)",
+    (enabled) => {
+      setDiagnosticsEnabledForProcess(enabled);
+      let payloadReads = 0;
+      const event = {
+        type: "tool.execution.started" as const,
+        get toolName() {
+          payloadReads += 1;
+          return "exec";
+        },
+      };
+      emitTrustedDiagnosticEvent(event);
+      expect(payloadReads).toBe(0);
+      const listener = vi.fn();
+      const stop = onTrustedToolExecutionEvent(listener);
+      emitTrustedDiagnosticEvent(event);
+      expect(payloadReads).toBe(1);
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({ toolName: "exec", seq: 2 }));
+      stop();
+      emitTrustedDiagnosticEvent(event);
+      expect(payloadReads).toBe(1);
+    },
+  );
 
   it("marks dispatcher provenance separately from trust", async () => {
     const events: Array<{
@@ -150,6 +232,7 @@ describe("diagnostic-events", () => {
       },
     );
     expect(privateDataReads).toBe(0);
+    expect(hasPendingInternalDiagnosticEvent(() => true)).toBe(false);
     emitTrustedDiagnosticEvent({
       type: "model.call.completed",
       runId: "run-1",
@@ -355,30 +438,88 @@ describe("diagnostic-events", () => {
     );
   });
 
-  it("isolates nested diagnostic payloads from listener mutation", () => {
+  it("shares a frozen snapshot isolated from listener and producer mutation", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const usage = { total: 42 };
+    const events: DiagnosticEventPayload[] = [];
     const seen: Array<{ total: number | undefined; trusted: boolean }> = [];
     onInternalDiagnosticEvent((event) => {
+      events.push(event);
+      usage.total = 7;
       if (event.type === "model.usage") {
         event.usage.total = 0;
       }
     });
     onInternalDiagnosticEvent((event, metadata) => {
+      events.push(event);
       if (event.type === "model.usage") {
         seen.push({ total: event.usage.total, trusted: metadata.trusted });
       }
     });
+    onTrustedInternalDiagnosticEvent((event) => events.push(event));
 
-    emitTrustedDiagnosticEvent({
-      type: "model.usage",
-      usage: { total: 42 },
-    });
+    emitTrustedDiagnosticEvent({ type: "model.usage", usage });
 
+    expect(events).toHaveLength(3);
+    expect(events[1]).toBe(events[0]);
+    expect(events[2]).toBe(events[0]);
+    expect(usage.total).toBe(7);
     expect(seen).toEqual([{ total: 42, trusted: true }]);
     expectConsoleErrorPrefix(
       errorSpy,
       "[diagnostic-events] listener error type=model.usage seq=1: TypeError",
     );
+  });
+
+  it("keeps opaque plugin values isolated across listeners", () => {
+    const extra = {
+      map: new Map([["value", 42]]),
+      date: new Date(123),
+      set: new Set([42]),
+      array: Object.assign([1], { bytes: new Uint8Array([42]) }),
+    };
+    const eventInput = { type: "message.queued" as const, source: "plugin", extra };
+    onDiagnosticEvent((event) => {
+      const captured = (event as DiagnosticEventPayload & typeof eventInput).extra;
+      captured.map.set("value", 0);
+      captured.date.setTime(0);
+      captured.set.clear();
+      captured.array.bytes[0] = 0;
+    });
+    const observed: DiagnosticEventPayload[] = [];
+    onTrustedInternalDiagnosticEvent((event) => observed.push(event));
+
+    emitDiagnosticEvent(eventInput);
+
+    expect(observed).toHaveLength(1);
+    const captured = (observed[0] as DiagnosticEventPayload & typeof eventInput).extra;
+    for (const value of [captured, extra]) {
+      expect(value.map.get("value")).toBe(42);
+      expect(value.date.getTime()).toBe(123);
+      expect([...value.set]).toEqual([42]);
+      expect(value.array.bytes[0]).toBe(42);
+    }
+  });
+
+  it("freezes extra array properties and cyclic plugin payloads before sharing", () => {
+    const children = Object.assign([1], { extra: { value: 42 } });
+    const extra = { children, self: {} };
+    extra.self = extra;
+    const input = { type: "message.queued" as const, source: "plugin", extra };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    onDiagnosticEvent((event) => {
+      (event as DiagnosticEventPayload & typeof input).extra.children.extra.value = 0;
+    });
+    const observed: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => observed.push(event));
+
+    emitDiagnosticEvent(input);
+
+    const captured = (observed[0] as DiagnosticEventPayload & typeof input).extra;
+    expect(captured.children.extra.value).toBe(42);
+    expect(captured.self).toBe(captured);
+    expect(Object.isFrozen(captured.children.extra)).toBe(true);
+    expect(errors).toHaveBeenCalledOnce();
   });
 
   it("drops prototype-pollution keys during event enrichment", () => {
@@ -485,6 +626,7 @@ describe("diagnostic-events", () => {
   });
 
   it("skips uncloneable pending diagnostics during queue inspection", async () => {
+    onInternalDiagnosticEvent(() => {});
     emitDiagnosticEvent({
       ...modelStartedEvent("run-uncloneable", "call-uncloneable"),
       badValue: () => undefined,
@@ -529,8 +671,7 @@ describe("diagnostic-events", () => {
     );
     expect(dropSummary).toMatchObject({
       type: "diagnostic.async_queue.dropped",
-      droppedEvents: 2,
-      droppedTrustedEvents: 1,
+      droppedEvents: 1,
       droppedUntrustedEvents: 1,
       maxQueueLength: 10_000,
       drainBatchSize: 100,

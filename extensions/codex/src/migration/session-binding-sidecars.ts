@@ -465,16 +465,15 @@ async function migrateSource(
         }
         const observation = await observe(key);
         const candidateParsed = readStoredCodexAppServerBinding(observation.value);
-        if (candidateParsed && isDeepStrictEqual(candidateParsed, parsed)) {
-          await compareAndApply(key, observation.comparison, {
-            operation: "update",
-            action: "set",
-            value: normalized,
-          });
+        if (!candidateParsed || !isDeepStrictEqual(candidateParsed, parsed)) {
+          return `current plugin state changed at ${key}`;
         }
-        // Offline migration is best effort: a conflicting writer leaves the sidecar for the next run.
-        const persisted = readStoredCodexAppServerBinding(await store.lookup(key));
-        if (!persisted || !isDeepStrictEqual(persisted, normalized)) {
+        const result = await compareAndApply(key, observation.comparison, {
+          operation: "update",
+          action: "set",
+          value: normalized,
+        });
+        if (result.status === "conflict") {
           return `current plugin state changed at ${key}`;
         }
         importedKeys++;
@@ -575,12 +574,6 @@ async function migrateSource(
           // as a note; failed retirement and revalidation stay warnings above.
           if (typeof ownershipResult === "string") {
             return retain(ownershipWarning, "notice");
-          }
-        } else {
-          for (const entry of entries) {
-            if (!hasExpected(await store.lookup(entry.key), entry.value)) {
-              return retain(`current plugin state changed at ${entry.key}`);
-            }
           }
         }
       }

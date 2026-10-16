@@ -222,7 +222,7 @@ describe("node worker launch adapter", () => {
     [true, false],
     [true, true],
   ])(
-    "snapshots the launch plan and negotiates idle retention for node=%s and bundle=%s",
+    "negotiates idle retention for node=%s and bundle=%s without changing the caller's options",
     async (nodeSupports, bundleSupports) => {
       const input = launchInput();
       if (!bundleSupports) {
@@ -244,15 +244,10 @@ describe("node worker launch adapter", () => {
         return wire(receipt(expected, "completed"));
       });
       const adapter = createNodeWorkerLaunchAdapter({
-        getTransport: () =>
-          transportWith(invoke, async () => {
-            input.descriptor.assignment.prompt = "mutated after launch call";
-            return [node];
-          }),
+        getTransport: () => transportWith(invoke, async () => [node]),
       });
       expect(await adapter.launch(launchRequest(input))).toEqual(receipt(expected, "completed"));
       expect(input).not.toHaveProperty("idleRetention");
-      expect(input.descriptor.assignment.prompt).toBe("mutated after launch call");
       expect(invoke).toHaveBeenCalledOnce();
     },
   );

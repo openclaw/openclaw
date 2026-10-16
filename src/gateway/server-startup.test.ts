@@ -42,6 +42,7 @@ describe("gateway startup model runtime publication", () => {
       expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
         allowGatewaySubagentBinding: true,
         gatewayLifecycle: true,
+        joinSupersedingPublication: true,
         startup: true,
         catalogMode: "static",
         ...(workspaceDir ? { defaultWorkspaceDir: workspaceDir } : {}),

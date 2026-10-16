@@ -962,6 +962,12 @@
       ],
       "openclaw/plugin-sdk/codex-client-version-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/codex-client-version-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/realtime-transcription-provider": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/realtime-transcription-provider.d.ts"
+      ],
+      "openclaw/plugin-sdk/meeting-config": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/meeting-config.d.ts"
       ]
     }
   }

@@ -7,6 +7,7 @@ import type {
   CurrentInboundPromptContext,
   RunEmbeddedAgentParams,
 } from "../../../agents/embedded-agent-runner/run/params.js";
+import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import type {
   ReplyDeliveryFactsObserver,
@@ -63,7 +64,7 @@ export type EnqueueFollowupRunOptions = {
   steerCandidate?: boolean;
 };
 
-export type FollowupQueueDisposition = Parameters<
+type FollowupQueueDisposition = Parameters<
   NonNullable<GetReplyOptions["onFollowupQueueDisposition"]>
 >[0];
 
@@ -160,6 +161,8 @@ export type FollowupRun = {
   /** Turn-owned tool authority captured before queue ownership transfers. */
   toolsAllow?: string[];
   disableTools?: boolean;
+  forceRestartSafeTools?: boolean;
+  forceCodeModeTools?: boolean;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
   /** Pending same-turn acceptance while this item remains parked in FIFO order. */
@@ -318,6 +321,13 @@ export function bindReplyOperationQueueDisposition(
     }
   };
 }
+
+/** Admission-owned image facts stay out of the public FollowupRun contract. */
+export type InternalFollowupRun = FollowupRun & {
+  currentTurnImagesPrepared?: true;
+  /** Fact indexes are relative to this run's media array. */
+  mediaImageLayout?: MediaImageLayout;
+};
 
 export function isFollowupRunAborted(
   run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal" | "operatorAuthority">,

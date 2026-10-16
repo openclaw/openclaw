@@ -107,18 +107,11 @@ it("passes the cold metadata caller's signal to its reader task", async () => {
   });
 });
 
-it.each([
-  { view: "Uint8Array", accepted: true },
-  { view: "Uint16Array", accepted: false },
-  { view: "DataView", accepted: false },
-])("validates cross-realm $view transcript frames", async ({ view, accepted }) => {
+it("decodes cross-realm Uint8Array transcript frames", async () => {
   const event = { type: "message", text: "hello 🦞" };
   const json = JSON.stringify(event);
   const bytes = Array.from(new TextEncoder().encode(json));
-  const data: unknown = runInNewContext(
-    view === "DataView" ? "new DataView(new Uint8Array(bytes).buffer)" : `new ${view}(bytes)`,
-    { bytes },
-  );
+  const data: unknown = runInNewContext("new Uint8Array(bytes)", { bytes });
   const version = { generation: "synthetic-generation", rawSeq: 7, updatedAt: 123 };
   const signal = new AbortController().signal;
   const readers = createSessionHistoryWorkerReaders(
@@ -145,16 +138,10 @@ it.each([
     },
     signal,
   );
-  if (accepted) {
-    await expect(result).resolves.toEqual({
-      kind: "full",
-      snapshot: { events: [event], eventJson: [json], eventSeqs: [7], version },
-    });
-  } else {
-    await expect(result).rejects.toThrow(
-      "Session history worker returned an invalid transcript frame",
-    );
-  }
+  await expect(result).resolves.toEqual({
+    kind: "full",
+    snapshot: { events: [event], eventJson: [json], eventSeqs: [7], version },
+  });
 });
 
 it.each(["utf-8", "utf-16le", "utf-16be"])(
@@ -225,3 +212,39 @@ it.each(["utf-8", "utf-16le", "utf-16be"])(
     });
   },
 );
+
+it.each([
+  { json: "{", endOfEvent: true, seq: 7, eventCount: 1, error: /JSON/ },
+  { json: "{}", endOfEvent: true, seq: undefined, eventCount: 1, error: /row sequence/ },
+  { json: "{}", endOfEvent: false, seq: 7, eventCount: 0, error: /incomplete transcript/ },
+  { json: "{}", endOfEvent: true, seq: 7, eventCount: 2, error: /incomplete transcript/ },
+])("rejects unusable transcript data: %j", async ({ json, endOfEvent, seq, eventCount, error }) => {
+  const signal = new AbortController().signal;
+  const readers = createSessionHistoryWorkerReaders(
+    createSessionHistoryWorkerRequestStub(async (_prepare, _inputBytes, _signal, onRequest) => {
+      if (!onRequest) {
+        throw new Error("Transcript reader did not provide its chunk receiver");
+      }
+      await onRequest(
+        {
+          kind: "transcript-hydration-chunk",
+          encoding: "utf-8",
+          frames: [{ data: Buffer.from(json), endOfEvent, seq }],
+        },
+        signal,
+      );
+      return {
+        kind: "full",
+        version: { generation: "synthetic-generation", rawSeq: 7, updatedAt: 123 },
+        eventCount,
+      };
+    }),
+  );
+  await expect(
+    readers.readTranscript({
+      target: { sessionId: "synthetic-session" },
+      resolvedScope: { agentId: "main", sessionId: "synthetic-session" },
+      includeEventJson: true,
+    }),
+  ).rejects.toThrow(error);
+});

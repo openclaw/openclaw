@@ -11,11 +11,10 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
-import { redactToolPayloadText } from "../../logging/redact.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { waitForBrokerChildCompletion } from "./child-completion.js";
+import { observeBrokerChildDiagnostics } from "./child-diagnostics.js";
 import { BrokerChild } from "./child.js";
 import { terminateBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
@@ -28,9 +27,9 @@ import {
   type BrokerResponse,
   type BrokerSpawnOptions,
 } from "./protocol.js";
+import { createNativeResourceAuthority } from "./resource-authority.js";
 import {
   BrokerResourceClaims,
-  createNativeResourceAuthority,
   type BrokerNativeResourceCallbacks,
   type BrokerNativeResourceInput,
   type BrokerNativeResourceLease,
@@ -234,15 +233,14 @@ export class SpawnBrokerHost {
     if (!this.resourceClaims || !this.process) {
       return;
     }
-    const stderr = this.process.stderr instanceof Socket ? this.process.stderr : undefined;
     if (this.closing || this.resourceClaims.hasOpenClaims || this.requests.size > 0) {
       this.process.ref();
-      stderr?.ref();
+      process.ref(this.process.stderr);
       // Newer Bun releases, like Node, reference IPC independently of the child.
       this.process.channel?.ref?.();
     } else {
       this.process.unref();
-      stderr?.unref();
+      process.unref(this.process.stderr);
       this.process.channel?.unref?.();
     }
   }
@@ -386,19 +384,11 @@ export class SpawnBrokerHost {
       serialization: "advanced",
     });
     this.process = child;
-    let stderrTail = "";
-    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
-      stderrTail = truncateUtf8Suffix(stderrTail + chunk, 2048);
-    });
-    const exitError = () => {
-      const stderr = redactToolPayloadText(stderrTail).trim();
-      return new Error(
-        `exited with code=${child.exitCode ?? "null"} signal=${child.signalCode ?? "none"}${stderr ? `\nstderr:\n${stderr}` : ""}`,
-      );
-    };
-    // Exit can precede the last stderr bytes; record diagnostics only after the pipe closes.
+    const exitError = observeBrokerChildDiagnostics(child);
+    let closingAtExit = false;
+    // Classify at native exit; the last stderr bytes can arrive after close() starts.
     this.brokerClosed = waitForBrokerChildCompletion(child).then(() => {
-      if (this.closing && child.pid && (child.exitCode !== 0 || child.signalCode !== null)) {
+      if (closingAtExit && child.pid && (child.exitCode !== 0 || child.signalCode !== null)) {
         this.cleanupErrors.push(
           new SpawnBrokerError("Spawn broker shutdown failed", { cause: exitError() }),
         );
@@ -514,6 +504,7 @@ export class SpawnBrokerHost {
     this.markNativeReady = markReady;
     child.once("error", fail);
     child.once("exit", () => {
+      closingAtExit = this.closing;
       brokerExited.resolve();
       fail(exitError());
     });
@@ -538,6 +529,18 @@ export class SpawnBrokerHost {
       }
       // SAFETY: The version-matched broker is the sole sender on this private IPC channel.
       const message = decoded as BrokerResponse | BrokerResourceResponse;
+      if (message.type === "startup-failed") {
+        if (!ready && this.resourceClaims) {
+          const claims = this.resourceClaims;
+          void this.brokerClosed
+            ?.then(() => claims.closeBeforeStartup())
+            .catch((error: unknown) => {
+              this.cleanupErrors.push(toErrorObject(error, "Spawn broker startup cleanup failed"));
+            });
+        }
+        fail(Object.assign(new Error(message.error.message), message.error));
+        return;
+      }
       if (message.type === "ready") {
         try {
           markReady(message.pid, generation);

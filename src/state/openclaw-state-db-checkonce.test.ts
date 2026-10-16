@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   readSqliteDatabaseCleanClose,
   readSqliteDatabaseIntegrityVerification,
@@ -166,12 +167,23 @@ it("checks integrity once before index repair and once after rebuilding the inde
     expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
       2,
     );
+    closeOpenClawStateDatabaseForTest();
+    unlinkSync(`${pathname}.seal`);
+    observation.queries.length = 0;
+    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
+      1,
+    );
+    observation.queries.length = 0;
+    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
+    expect(validationStatements(observation.queries)).toEqual([]);
   } finally {
     observation.restore();
   }
 });
 
-it("reuses admission after the final handles close without a seal", () => {
+it("reuses live admission and revalidates after the final handles close without a seal", () => {
   const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-") };
   const first = openOpenClawStateDatabase({ env });
   const pathname = first.path;
@@ -190,7 +202,10 @@ it("reuses admission after the final handles close without a seal", () => {
     closeOpenClawStateDatabaseForTest();
     unlinkSync(`${pathname}.seal`);
     const reopened = openOpenClawStateDatabase({ env });
-    expect(validationStatements(observation.queries)).toEqual([]);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
+      1,
+    );
     observation.queries.length = 0;
     const reader = openOpenClawStateReadOnlyLocation(pathname, pathname);
     reader.close();
@@ -269,7 +284,8 @@ it.each(["newer header"] as const)(
         VALUES('primary', 'global', 1, 1, 1)`);
     }
     const callback = vi.fn(
-      (db: DatabaseSync) => db.prepare("SELECT COUNT(*) AS total FROM state_leases").get()?.total,
+      (db: EngineConnection) =>
+        db.prepare("SELECT COUNT(*) AS total FROM state_leases").get()?.total,
     );
     const read = () => withOpenClawStateStartupMigrationCheckpointDatabase(callback, options);
     expect(read()).toBe(0);

@@ -127,30 +127,21 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.staggerMs;
   }
 
-  if (next.kind === "at") {
+  if (kind) {
     // Keep each schedule variant canonical so persisted jobs do not carry stale
     // fields from a previous kind after CLI/API normalization.
-    delete next.everyMs;
-    delete next.anchorMs;
-    delete next.expr;
-    delete next.tz;
-    delete next.staggerMs;
-  } else if (next.kind === "every") {
-    delete next.at;
-    delete next.expr;
-    delete next.tz;
-    delete next.staggerMs;
-  } else if (next.kind === "cron") {
-    delete next.at;
-    delete next.everyMs;
-    delete next.anchorMs;
-  } else if (next.kind === "on-exit" || next.kind === "stream" || next.kind === "event") {
-    delete next.at;
-    delete next.everyMs;
-    delete next.anchorMs;
-    delete next.expr;
-    delete next.tz;
-    delete next.staggerMs;
+    if (kind !== "at") {
+      delete next.at;
+    }
+    if (kind !== "every") {
+      delete next.everyMs;
+      delete next.anchorMs;
+    }
+    if (kind !== "cron") {
+      delete next.expr;
+      delete next.tz;
+      delete next.staggerMs;
+    }
   }
 
   if (next.kind !== "on-exit" && next.kind !== "stream") {
@@ -477,10 +468,7 @@ export function normalizeCronJobInput(
     }
     if ("schedule" in next && isRecord(next.schedule) && next.schedule.kind === "cron") {
       const schedule = next.schedule;
-      const explicit = normalizeCronStaggerMs(schedule.staggerMs);
-      if (explicit !== undefined) {
-        schedule.staggerMs = explicit;
-      } else {
+      if (schedule.staggerMs === undefined) {
         const expr = typeof schedule.expr === "string" ? schedule.expr : "";
         const defaultStaggerMs = resolveDefaultCronStaggerMs(expr);
         if (defaultStaggerMs !== undefined) {

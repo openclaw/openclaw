@@ -2,6 +2,7 @@ import { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -12,6 +13,7 @@ import {
   getSessionWorkAdmissionRelease,
   interruptSessionWorkAdmissions,
 } from "../../sessions/session-lifecycle-admission.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -28,6 +30,71 @@ const generate = vi.hoisted(() =>
 vi.mock("../../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: generate,
 }));
+
+it.each(["persisted", "failed"])("publishes pending and %s title settlement", async (outcome) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } };
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:title-notification",
+      sessionId: "title-notification",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const started = createDeferredCore();
+    const naming = createDeferredCore<string>();
+    generate.mockReset().mockImplementation(async () => {
+      started.resolve();
+      return await naming.promise;
+    });
+    const states: boolean[] = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if (
+        "sessionKey" in change &&
+        change.sessionKey === scope.sessionKey &&
+        change.scope === "runtime"
+      ) {
+        states.push(sessionTitleRequests.get(scope) !== undefined);
+      }
+    });
+    const warned = createDeferredCore();
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    context.logGateway.warn = () => warned.resolve();
+    const write =
+      outcome === "failed"
+        ? vi
+            .spyOn(sessionAccessor, "patchSessionEntryCore")
+            .mockRejectedValueOnce(new Error("title write failed"))
+        : undefined;
+    try {
+      scheduleChatDashboardSessionTitle({
+        ...scope,
+        admittedSessionId: scope.sessionId,
+        cfg,
+        context,
+        request: { rawMessage: "Plan the release", normalizedAttachments: [] },
+      });
+      await started.promise;
+      const request = sessionTitleRequests.get(scope)!;
+      const settled = request.catch(() => false);
+      expect(states).toEqual([true]);
+      naming.resolve("Release planning");
+      await settled;
+      if (outcome === "failed") {
+        await warned.promise;
+      }
+      expect(states).toEqual([true, false]);
+      expect(sessionTitleRequests.get(scope)).toBeUndefined();
+      expect(loadSessionEntry(scope)?.displayName).toBe(
+        outcome === "persisted" ? "Release planning" : undefined,
+      );
+    } finally {
+      naming.resolve("Release planning");
+      write?.mockRestore();
+      stop();
+    }
+  });
+});
 
 it.each([
   { titleSource: undefined, expectedSource: "Original release plan" },

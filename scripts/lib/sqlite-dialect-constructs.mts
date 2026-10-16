@@ -7,8 +7,14 @@ export const SQLITE_PRIMITIVE_OWNERS: readonly string[] = [
   "src/infra/sqlite-user-version.ts",
   // SQLite archive-format owner: catalog capture and offline restoration of migration table scopes.
   "src/infra/sqlite-migration-scoped-snapshot.ts",
+  // SQLite admission catalogs own native schema/PRAGMA facts; PostgreSQL has its own catalog owner.
+  "src/infra/sqlite-schema-catalog.ts",
   // SQLite planner-statistics owner: bounded optimization under existing writer admission.
   "src/infra/sqlite-planner-statistics.ts",
+  // SQLite-only daemon store owner: empty-store admission and durable schema creation on every engine.
+  "src/daemon/runtime-pin-store.ts",
+  // SQLite-only local client owner; it never opens the selected Gateway engine.
+  "src/infra/client-credential-store.ts",
 ];
 export type DialectMatch = {
   construct: string;

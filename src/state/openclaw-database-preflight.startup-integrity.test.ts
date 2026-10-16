@@ -16,7 +16,6 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import * as integrity from "../infra/sqlite-integrity.js";
-import * as schemaContracts from "../infra/sqlite-schema-contract.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { VERSION } from "../version.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
@@ -39,7 +38,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -57,18 +55,16 @@ it("cold-loads a complete prior-build seal without validation SQL or snapshots",
   expect(fs.existsSync(`${agentPath}-wal`)).toBe(false);
   expect(fs.existsSync(`${agentPath}-shm`)).toBe(false);
   const file = fs.statSync(agentPath, { bigint: true });
-  const seal = readSqliteCleanCloseSeal(agentPath, sqliteDatabaseSealSchemaFor(), file)!;
+  const seal = readSqliteCleanCloseSeal(agentPath, file)!;
   // Persist the predecessor's identity format independently of the current helper.
   const previousBuildIdentity = createHash("sha256")
-    .update(JSON.stringify([2, VERSION]))
+    .update(JSON.stringify([2, VERSION, "agent"]))
     .update(OPENCLAW_AGENT_SCHEMA_SQL)
-    .update(OPENCLAW_STATE_SCHEMA_SQL)
     .digest("hex");
   expect(writeSqliteCleanCloseSeal(agentPath, previousBuildIdentity, file, seal)).toBe(true);
   retireSqliteDatabaseAdmissionForPath(agentPath);
   const before = fs.readFileSync(agentPath);
   const validate = vi.spyOn(integrity, "assertSqliteIntegrity");
-  const templates = vi.spyOn(schemaContracts, "getCanonicalSqliteTableNames");
   const prepare = snapshots.prepareSqliteReadOnlyLocation;
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((pathname, options) => {
     if (pathname === agentPath) {
@@ -88,7 +84,6 @@ it("cold-loads a complete prior-build seal without validation SQL or snapshots",
   expect(onAgentInspection).toHaveBeenLastCalledWith(
     expect.objectContaining({ schemaSnapshotCount: 0, schemaProcessCount: 0 }),
   );
-  expect(templates).not.toHaveBeenCalled();
   expect(validate).not.toHaveBeenCalled();
   expect(fs.readFileSync(agentPath)).toEqual(before);
   expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);
@@ -104,12 +99,8 @@ it("admits every previously sealed same-version agent before transcript readers 
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   for (const agent of agents) {
-    const identity = sqliteDatabaseSealSchemaFor();
-    const seal = readSqliteCleanCloseSeal(
-      agent.path,
-      identity,
-      fs.statSync(agent.path, { bigint: true }),
-    )!;
+    const identity = sqliteDatabaseSealSchemaFor("agent");
+    const seal = readSqliteCleanCloseSeal(agent.path, fs.statSync(agent.path, { bigint: true }))!;
     expect(seal).toBeDefined();
     revokeSqliteDatabaseAdmissionsForPath(agent.path);
     const old = new (requireNodeSqlite().DatabaseSync)(agent.path);

@@ -5,6 +5,7 @@ import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
 import { logWarn } from "../../logger.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
+import { isOpenClawSubagentCompletionMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import type {
@@ -23,7 +24,15 @@ export {
   partitionSessionFileEntries,
 } from "../../config/sessions/session-entry-codec.js";
 
-export function isTalkRealtimeVoiceEntry(entry: SessionEntry): boolean {
+/** Rows that record history without consuming the open turn's keyed input. */
+export function isOutOfTurnHistoryEntry(entry: SessionEntry): boolean {
+  return (
+    isTalkRealtimeVoiceEntry(entry) ||
+    (entry.type === "message" && isOpenClawSubagentCompletionMirrorAssistantMessage(entry.message))
+  );
+}
+
+function isTalkRealtimeVoiceEntry(entry: SessionEntry): boolean {
   if (
     entry.type !== "message" ||
     (entry.message.role !== "user" && entry.message.role !== "assistant")

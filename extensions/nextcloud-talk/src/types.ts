@@ -40,6 +40,16 @@ export type NextcloudTalkSendResult = {
   timestamp?: number;
 };
 
+/** Signed but untrusted file metadata parsed from a Talk `file_shared` activity. */
+export type NextcloudTalkInboundAttachment = {
+  fileId?: string;
+  name: string;
+  mimeType: string;
+  declaredSizeBytes: number;
+  shareUrl: string;
+  hideDownload: boolean;
+};
+
 export type NextcloudTalkInboundMessage = {
   messageId: string;
   roomToken: string;
@@ -47,9 +57,13 @@ export type NextcloudTalkInboundMessage = {
   senderId: string;
   senderName: string;
   text: string;
+  /** Caption text with referenced user mentions resolved, excluding file metadata. */
+  mentionText?: string;
   mediaType: string;
   timestamp: number;
   isGroupChat: boolean;
+  attachment?: NextcloudTalkInboundAttachment;
+  attachmentIssue?: "media_missing_metadata";
 };
 
 export type NextcloudTalkWebhookHeaders = {

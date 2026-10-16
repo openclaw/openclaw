@@ -134,29 +134,18 @@ async function persistBindingsSnapshot(params: {
 }): Promise<MatrixThreadBindingRecord[]> {
   const store = createThreadBindingStore(params);
   const liveKeys = new Set(params.bindings.map((record) => buildThreadBindingStoreKey(record)));
-  const stored = new Map<string, MatrixThreadBindingRecord>();
   for (const entry of await store.entries()) {
     const record = normalizeBindingRecord(entry.value, params.accountId);
-    if (record) {
-      stored.set(entry.key, record);
-    }
     if (record && !liveKeys.has(entry.key)) {
       await store.delete(entry.key);
     }
   }
-  const committed: MatrixThreadBindingRecord[] = [];
+  // The persistence queue captures these records after earlier touches have settled.
   for (const record of params.bindings) {
     const key = buildThreadBindingStoreKey(record);
-    const previous = stored.get(key);
-    // A snapshot accepted behind a targeted touch must not restore its older activity time.
-    const next =
-      previous && sameBindingIncarnation(previous, record)
-        ? { ...record, lastActivityAt: Math.max(record.lastActivityAt, previous.lastActivityAt) }
-        : record;
-    await store.register(key, toPluginJsonValue(next));
-    committed.push(next);
+    await store.register(key, toPluginJsonValue(record));
   }
-  return committed;
+  return params.bindings;
 }
 
 export async function createMatrixThreadBindingManager(params: {

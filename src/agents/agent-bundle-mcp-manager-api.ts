@@ -164,7 +164,3 @@ export async function disposeAllSessionMcpRuntimes(): Promise<void> {
     resetMcpStartupBackoff();
   }
 }
-
-export function getSessionMcpRuntimeManagerForTesting(): SessionMcpRuntimeManager {
-  return getSessionMcpRuntimeManager();
-}

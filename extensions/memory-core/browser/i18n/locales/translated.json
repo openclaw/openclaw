@@ -1,0 +1,1662 @@
+{
+  "zh-CN": {
+    "common": {
+      "loading": "正在加载…",
+      "enabled": "已启用",
+      "disabled": "已禁用",
+      "na": "不适用",
+      "unknown": "未知"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "记忆已唤醒",
+          "waking": "正在唤醒记忆…",
+          "hibernating": "记忆正在休眠",
+          "needsAttention": "记忆需要关注",
+          "noSearchRuntime": "主机记忆搜索不可用",
+          "noSearchRuntimeDescription": "{engine} 不提供主机记忆搜索运行时。其他记忆集成可能独立运行。",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "正在检查此智能体的记忆引擎和梦境周期。",
+          "offDescription": "在设置中选择记忆引擎以将其唤醒。",
+          "disabledDescription": "所选记忆引擎已禁用。 请在设置中重新启用。",
+          "gatewayOffline": "Gateway 处于离线状态, 无法获取记忆状态。",
+          "hybridSearch": "混合搜索",
+          "keywordSearch": "关键词搜索 (无嵌入向量)",
+          "openSettings": "打开设置",
+          "retry": "重试",
+          "refresh": "刷新状态"
+        },
+        "schedule": {
+          "title": "睡眠计划",
+          "lightDescription": "整理新增的短期笔记并暂存有潜力的候选条目，不更改长期记忆。",
+          "remDescription": "反思近期活动中的主题和反复出现的想法，以优化排名，不更改长期记忆。",
+          "deepDescription": "为暂存的候选条目评分，将值得保留的条目转入长期记忆 (MEMORY.md)，并写入梦境日记。",
+          "nextRun": "下次 {time}",
+          "lastRun": "上次 {time}",
+          "notScheduled": "未安排",
+          "learnMore": "梦境机制的工作原理",
+          "openDocs": "打开梦境指南"
+        },
+        "activity": {
+          "title": "活动",
+          "promotedToday": "今日转入长期记忆",
+          "promotedTotal": "累计转入长期记忆",
+          "shortTermCount": "待处理的短期条目",
+          "phaseHitCount": "阶段信号",
+          "lightPhaseHitCount": "浅睡阶段命中次数",
+          "remPhaseHitCount": "快速眼动阶段命中次数"
+        },
+        "health": {
+          "title": "引擎健康状况",
+          "provider": "提供商",
+          "embeddings": "嵌入向量",
+          "runtime": "嵌入运行时",
+          "healthy": "就绪",
+          "unavailable": "不可用",
+          "notChecked": "尚未检查",
+          "notCheckedDescription": "尚未检查嵌入功能是否就绪。",
+          "checking": "正在检查…",
+          "test": "测试",
+          "testing": "正在测试…"
+        },
+        "shortcuts": {
+          "title": "探索记忆",
+          "memories": "搜索记忆",
+          "diary": "阅读梦境日记",
+          "settings": "配置记忆"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "浅层阶段"
+          },
+          "deep": {
+            "title": "深层阶段"
+          },
+          "rem": {
+            "title": "REM 阶段"
+          }
+        }
+      }
+    }
+  },
+  "zh-TW": {
+    "common": {
+      "loading": "載入中…",
+      "enabled": "已啟用",
+      "disabled": "已停用",
+      "na": "不適用",
+      "unknown": "未知"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "記憶已甦醒",
+          "waking": "正在喚醒記憶…",
+          "hibernating": "記憶正在休眠",
+          "needsAttention": "記憶需要關注",
+          "noSearchRuntime": "主機記憶搜尋功能無法使用",
+          "noSearchRuntimeDescription": "{engine} 不提供主機記憶搜尋執行環境。其他記憶整合功能可獨立執行。",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "正在檢查此代理程式的記憶引擎與夢境週期。",
+          "offDescription": "請在設定中選擇記憶引擎以喚醒記憶。",
+          "disabledDescription": "所選的記憶引擎已停用。 請在設定中重新啟用。",
+          "gatewayOffline": "Gateway 已離線, 因此無法取得記憶狀態。",
+          "hybridSearch": "混合搜尋",
+          "keywordSearch": "關鍵字搜尋 (無嵌入向量)",
+          "openSettings": "開啟設定",
+          "retry": "重試",
+          "refresh": "重新整理狀態"
+        },
+        "schedule": {
+          "title": "睡眠排程",
+          "lightDescription": "整理新的短期筆記並暫存有潛力的候選項目，不變更長期記憶。",
+          "remDescription": "反思近期活動中的主題與反覆出現的想法，以強化排序，不變更長期記憶。",
+          "deepDescription": "評估暫存的候選項目，將值得保留的項目提升為長期記憶 (MEMORY.md)，並撰寫夢境日記。",
+          "nextRun": "下次 {time}",
+          "lastRun": "上次 {time}",
+          "notScheduled": "尚未排程",
+          "learnMore": "夢境運作方式",
+          "openDocs": "開啟夢境指南"
+        },
+        "activity": {
+          "title": "活動",
+          "promotedToday": "今日提升數",
+          "promotedTotal": "累計提升數",
+          "shortTermCount": "待處理的短期記憶項目",
+          "phaseHitCount": "階段訊號",
+          "lightPhaseHitCount": "淺眠階段命中數",
+          "remPhaseHitCount": "快速動眼期命中數"
+        },
+        "health": {
+          "title": "引擎健康狀態",
+          "provider": "供應商",
+          "embeddings": "嵌入向量",
+          "runtime": "嵌入執行環境",
+          "healthy": "就緒",
+          "unavailable": "無法使用",
+          "notChecked": "尚未檢查",
+          "notCheckedDescription": "尚未檢查嵌入功能是否就緒。",
+          "checking": "檢查中…",
+          "test": "測試",
+          "testing": "測試中…"
+        },
+        "shortcuts": {
+          "title": "探索記憶",
+          "memories": "搜尋記憶",
+          "diary": "閱讀夢境日記",
+          "settings": "設定記憶"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "淺層階段"
+          },
+          "deep": {
+            "title": "深層階段"
+          },
+          "rem": {
+            "title": "REM 階段"
+          }
+        }
+      }
+    }
+  },
+  "pt-BR": {
+    "common": {
+      "loading": "Carregando…",
+      "enabled": "Ativado",
+      "disabled": "Desativado",
+      "na": "n/d",
+      "unknown": "Desconhecido"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "A memória está desperta",
+          "waking": "Despertando a memória…",
+          "hibernating": "A memória está hibernando",
+          "needsAttention": "A memória precisa de atenção",
+          "noSearchRuntime": "A pesquisa na memória do host está indisponível",
+          "noSearchRuntimeDescription": "{engine} não fornece um ambiente de execução para pesquisa na memória do host. Outras integrações de memória podem funcionar de forma independente.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Verificando o mecanismo de memória e o ciclo de sonhos deste agente.",
+          "offDescription": "Escolha um mecanismo de memória em Configurações para despertá-la.",
+          "disabledDescription": "O mecanismo de memória selecionado está desativado. Reative-o em Configurações.",
+          "gatewayOffline": "O Gateway está offline, por isso o status da memória está indisponível.",
+          "hybridSearch": "busca híbrida",
+          "keywordSearch": "busca por palavras-chave (sem embeddings)",
+          "openSettings": "Abrir Configurações",
+          "retry": "Tentar novamente",
+          "refresh": "Atualizar status"
+        },
+        "schedule": {
+          "title": "Programação de sono",
+          "lightDescription": "Organiza notas recentes de curto prazo e prepara candidatos promissores sem alterar a memória de longo prazo.",
+          "remDescription": "Reflete sobre temas e ideias recorrentes nas atividades recentes para aprimorar a classificação sem alterar a memória de longo prazo.",
+          "deepDescription": "Pontua os candidatos preparados, promove os selecionados para a memória de longo prazo (MEMORY.md) e escreve o diário de sonhos.",
+          "nextRun": "próxima {time}",
+          "lastRun": "última {time}",
+          "notScheduled": "Não agendado",
+          "learnMore": "Como os sonhos funcionam",
+          "openDocs": "Abrir guia de sonhos"
+        },
+        "activity": {
+          "title": "Atividade",
+          "promotedToday": "Promovidos hoje",
+          "promotedTotal": "Total de promovidos",
+          "shortTermCount": "Entradas de curto prazo pendentes",
+          "phaseHitCount": "Sinais de fase",
+          "lightPhaseHitCount": "Ocorrências na fase leve",
+          "remPhaseHitCount": "Ocorrências na fase REM"
+        },
+        "health": {
+          "title": "Integridade do mecanismo",
+          "provider": "Provedor",
+          "embeddings": "Representações vetoriais",
+          "runtime": "Ambiente de execução de representações vetoriais",
+          "healthy": "Pronto",
+          "unavailable": "Indisponível",
+          "notChecked": "Não verificado",
+          "notCheckedDescription": "A disponibilidade dos embeddings ainda não foi verificada.",
+          "checking": "Verificando…",
+          "test": "Testar",
+          "testing": "Testando…"
+        },
+        "shortcuts": {
+          "title": "Explorar memória",
+          "memories": "Buscar memórias",
+          "diary": "Ler o diário de sonhos",
+          "settings": "Configurar memória"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Fase leve"
+          },
+          "deep": {
+            "title": "Fase profunda"
+          },
+          "rem": {
+            "title": "Fase REM"
+          }
+        }
+      }
+    }
+  },
+  "de": {
+    "common": {
+      "loading": "Wird geladen…",
+      "enabled": "Aktiviert",
+      "disabled": "Deaktiviert",
+      "na": "k. A.",
+      "unknown": "Unbekannt"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "Das Gedächtnis ist wach",
+          "waking": "Das Gedächtnis erwacht…",
+          "hibernating": "Das Gedächtnis hält Winterschlaf",
+          "needsAttention": "Das Gedächtnis benötigt Aufmerksamkeit",
+          "noSearchRuntime": "Die Host-Speichersuche ist nicht verfügbar",
+          "noSearchRuntimeDescription": "{engine} stellt keine Laufzeitumgebung für die Host-Speichersuche bereit. Andere Speicherintegrationen können unabhängig davon ausgeführt werden.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Die Gedächtnis-Engine und der Traumzyklus dieses Agenten werden überprüft.",
+          "offDescription": "Wählen Sie in den Einstellungen eine Gedächtnis-Engine aus, um das Gedächtnis zu wecken.",
+          "disabledDescription": "Die ausgewählte Gedächtnis-Engine ist deaktiviert. Aktivieren Sie sie in den Einstellungen erneut.",
+          "gatewayOffline": "Der Gateway ist offline, daher ist der Gedächtnisstatus nicht verfügbar.",
+          "hybridSearch": "hybride Suche",
+          "keywordSearch": "Stichwortsuche (ohne Einbettungen)",
+          "openSettings": "Einstellungen öffnen",
+          "retry": "Erneut versuchen",
+          "refresh": "Status aktualisieren"
+        },
+        "schedule": {
+          "title": "Schlafplan",
+          "lightDescription": "Sortiert neue Kurzzeitnotizen und merkt vielversprechende Kandidaten vor, ohne das Langzeitgedächtnis zu verändern.",
+          "remDescription": "Reflektiert über Themen und wiederkehrende Ideen aus den jüngsten Aktivitäten, um die Rangfolge zu verbessern, ohne das Langzeitgedächtnis zu verändern.",
+          "deepDescription": "Bewertet vorgemerkte Kandidaten, übernimmt die geeigneten ins Langzeitgedächtnis (MEMORY.md) und schreibt das Traumtagebuch.",
+          "nextRun": "nächster Lauf {time}",
+          "lastRun": "letzter Lauf {time}",
+          "notScheduled": "Nicht geplant",
+          "learnMore": "So funktioniert das Träumen",
+          "openDocs": "Anleitung zum Träumen öffnen"
+        },
+        "activity": {
+          "title": "Aktivität",
+          "promotedToday": "Heute übernommen",
+          "promotedTotal": "Insgesamt übernommen",
+          "shortTermCount": "Ausstehende Kurzzeiteinträge",
+          "phaseHitCount": "Phasensignale",
+          "lightPhaseHitCount": "Treffer in der Leichtschlafphase",
+          "remPhaseHitCount": "Treffer in der REM-Phase"
+        },
+        "health": {
+          "title": "Engine-Zustand",
+          "provider": "Anbieter",
+          "embeddings": "Einbettungen",
+          "runtime": "Einbettungs-Laufzeitumgebung",
+          "healthy": "Bereit",
+          "unavailable": "Nicht verfügbar",
+          "notChecked": "Nicht geprüft",
+          "notCheckedDescription": "Die Embedding-Bereitschaft wurde noch nicht geprüft.",
+          "checking": "Wird geprüft…",
+          "test": "Testen",
+          "testing": "Wird getestet…"
+        },
+        "shortcuts": {
+          "title": "Gedächtnis erkunden",
+          "memories": "Erinnerungen durchsuchen",
+          "diary": "Traumtagebuch lesen",
+          "settings": "Gedächtnis konfigurieren"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Leichtschlafphase"
+          },
+          "deep": {
+            "title": "Tiefschlafphase"
+          },
+          "rem": {
+            "title": "REM-Phase"
+          }
+        }
+      }
+    }
+  },
+  "es": {
+    "common": {
+      "loading": "Cargando…",
+      "enabled": "Activado",
+      "disabled": "Desactivado",
+      "na": "n/d",
+      "unknown": "Desconocido"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "La memoria está despierta",
+          "waking": "Despertando la memoria…",
+          "hibernating": "La memoria está hibernando",
+          "needsAttention": "La memoria requiere atención",
+          "noSearchRuntime": "La búsqueda en la memoria del host no está disponible",
+          "noSearchRuntimeDescription": "{engine} no proporciona un entorno de ejecución para buscar en la memoria del host. Otras integraciones de memoria pueden ejecutarse de forma independiente.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Comprobando el motor de memoria y el ciclo de sueños de este agente.",
+          "offDescription": "Elige un motor de memoria en Configuración para despertarla.",
+          "disabledDescription": "El motor de memoria seleccionado está desactivado. Vuelve a activarlo en Configuración.",
+          "gatewayOffline": "El Gateway está desconectado, por lo que el estado de la memoria no está disponible.",
+          "hybridSearch": "búsqueda híbrida",
+          "keywordSearch": "búsqueda por palabras clave (sin representaciones vectoriales)",
+          "openSettings": "Abrir Configuración",
+          "retry": "Reintentar",
+          "refresh": "Actualizar estado"
+        },
+        "schedule": {
+          "title": "Horario de sueño",
+          "lightDescription": "Ordena las notas recientes de la memoria a corto plazo y prepara las candidatas prometedoras sin modificar la memoria a largo plazo.",
+          "remDescription": "Reflexiona sobre los temas y las ideas recurrentes de la actividad reciente para mejorar la clasificación sin modificar la memoria a largo plazo.",
+          "deepDescription": "Puntúa las candidatas preparadas, incorpora las que vale la pena conservar a la memoria a largo plazo (MEMORY.md) y escribe el diario de sueños.",
+          "nextRun": "próxima {time}",
+          "lastRun": "última {time}",
+          "notScheduled": "Sin programar",
+          "learnMore": "Cómo funciona el sueño",
+          "openDocs": "Abrir la guía del sueño"
+        },
+        "activity": {
+          "title": "Actividad",
+          "promotedToday": "Incorporadas hoy",
+          "promotedTotal": "Total de incorporadas",
+          "shortTermCount": "Entradas pendientes a corto plazo",
+          "phaseHitCount": "Señales de fase",
+          "lightPhaseHitCount": "Coincidencias en la fase ligera",
+          "remPhaseHitCount": "Coincidencias en la fase REM"
+        },
+        "health": {
+          "title": "Estado del motor",
+          "provider": "Proveedor",
+          "embeddings": "Representaciones vectoriales",
+          "runtime": "Entorno de ejecución de representaciones vectoriales",
+          "healthy": "Listo",
+          "unavailable": "No disponible",
+          "notChecked": "Sin comprobar",
+          "notCheckedDescription": "Aún no se ha comprobado si las representaciones vectoriales están listas.",
+          "checking": "Comprobando…",
+          "test": "Probar",
+          "testing": "Probando…"
+        },
+        "shortcuts": {
+          "title": "Explorar la memoria",
+          "memories": "Buscar recuerdos",
+          "diary": "Leer el diario de sueños",
+          "settings": "Configurar la memoria"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Fase ligera"
+          },
+          "deep": {
+            "title": "Fase profunda"
+          },
+          "rem": {
+            "title": "Fase REM"
+          }
+        }
+      }
+    }
+  },
+  "ja-JP": {
+    "common": {
+      "loading": "読み込み中…",
+      "enabled": "有効",
+      "disabled": "無効",
+      "na": "該当なし",
+      "unknown": "不明"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "メモリは稼働中です",
+          "waking": "メモリを起動中…",
+          "hibernating": "メモリは休止中です",
+          "needsAttention": "メモリの確認が必要です",
+          "noSearchRuntime": "ホストメモリ検索は利用できません",
+          "noSearchRuntimeDescription": "{engine} はホストメモリ検索ランタイムを提供していません。他のメモリ連携は独立して動作する場合があります。",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "このエージェントのメモリエンジンと夢のサイクルを確認しています。",
+          "offDescription": "設定でメモリエンジンを選択して起動してください。",
+          "disabledDescription": "選択したメモリエンジンは無効です。設定で再度有効にしてください。",
+          "gatewayOffline": "Gateway がオフラインのため、メモリの状態を取得できません。",
+          "hybridSearch": "ハイブリッド検索",
+          "keywordSearch": "キーワード検索 (埋め込みなし)",
+          "openSettings": "設定を開く",
+          "retry": "再試行",
+          "refresh": "状態を更新"
+        },
+        "schedule": {
+          "title": "スリープスケジュール",
+          "lightDescription": "長期記憶を変更せずに、新しい短期メモを整理し、有望な候補を準備します。",
+          "remDescription": "長期記憶を変更せずに、最近のアクティビティ全体のテーマや繰り返し現れるアイデアを振り返り、ランキングを改善します。",
+          "deepDescription": "準備した候補を評価し、残すべきものを長期記憶 (MEMORY.md) に昇格させ、夢日記を記録します。",
+          "nextRun": "次回 {time}",
+          "lastRun": "前回 {time}",
+          "notScheduled": "スケジュール未設定",
+          "learnMore": "夢を見る仕組み",
+          "openDocs": "夢のガイドを開く"
+        },
+        "activity": {
+          "title": "アクティビティ",
+          "promotedToday": "本日の昇格数",
+          "promotedTotal": "昇格総数",
+          "shortTermCount": "保留中の短期記憶エントリ",
+          "phaseHitCount": "フェーズのシグナル数",
+          "lightPhaseHitCount": "浅い睡眠フェーズのヒット数",
+          "remPhaseHitCount": "レム睡眠フェーズのヒット数"
+        },
+        "health": {
+          "title": "エンジンの稼働状態",
+          "provider": "プロバイダー",
+          "embeddings": "埋め込み",
+          "runtime": "埋め込みランタイム",
+          "healthy": "準備完了",
+          "unavailable": "利用不可",
+          "notChecked": "未確認",
+          "notCheckedDescription": "埋め込みの準備状況はまだ確認されていません。",
+          "checking": "確認中…",
+          "test": "テスト",
+          "testing": "テスト中…"
+        },
+        "shortcuts": {
+          "title": "メモリを探索",
+          "memories": "メモリを検索",
+          "diary": "夢日記を読む",
+          "settings": "メモリを設定"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "浅い睡眠フェーズ"
+          },
+          "deep": {
+            "title": "深い睡眠フェーズ"
+          },
+          "rem": {
+            "title": "REMフェーズ"
+          }
+        }
+      }
+    }
+  },
+  "ko": {
+    "common": {
+      "loading": "불러오는 중…",
+      "enabled": "활성화됨",
+      "disabled": "비활성화됨",
+      "na": "해당 없음",
+      "unknown": "알 수 없음"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "메모리가 깨어 있습니다",
+          "waking": "메모리를 깨우는 중…",
+          "hibernating": "메모리가 동면 중입니다",
+          "needsAttention": "메모리 확인이 필요합니다",
+          "noSearchRuntime": "호스트 메모리 검색을 사용할 수 없습니다",
+          "noSearchRuntimeDescription": "{engine}은(는) 호스트 메모리 검색 런타임을 제공하지 않습니다. 다른 메모리 통합 기능은 독립적으로 실행될 수 있습니다.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "이 에이전트의 메모리 엔진과 꿈 주기를 확인하는 중입니다.",
+          "offDescription": "설정에서 메모리 엔진을 선택하여 메모리를 깨우세요.",
+          "disabledDescription": "선택한 메모리 엔진이 비활성화되어 있습니다. 설정에서 다시 활성화하세요.",
+          "gatewayOffline": "Gateway가 오프라인 상태여서 메모리 상태를 확인할 수 없습니다.",
+          "hybridSearch": "하이브리드 검색",
+          "keywordSearch": "키워드 검색 (임베딩 없음)",
+          "openSettings": "설정 열기",
+          "retry": "다시 시도",
+          "refresh": "상태 새로고침"
+        },
+        "schedule": {
+          "title": "수면 일정",
+          "lightDescription": "장기 기억을 변경하지 않고 새로운 단기 메모를 정리하고 유망한 후보를 준비합니다.",
+          "remDescription": "장기 기억을 변경하지 않고 최근 활동 전반의 주제와 반복되는 아이디어를 되짚어 순위 산정을 개선합니다.",
+          "deepDescription": "준비된 후보를 평가하고, 보존할 항목을 장기 기억(MEMORY.md)으로 승격하며, 꿈 일기를 작성합니다.",
+          "nextRun": "다음 실행 {time}",
+          "lastRun": "마지막 실행 {time}",
+          "notScheduled": "예약되지 않음",
+          "learnMore": "꿈꾸기 작동 방식",
+          "openDocs": "꿈꾸기 가이드 열기"
+        },
+        "activity": {
+          "title": "활동",
+          "promotedToday": "오늘 승격된 항목",
+          "promotedTotal": "전체 승격된 항목",
+          "shortTermCount": "대기 중인 단기 기억 항목",
+          "phaseHitCount": "단계별 신호",
+          "lightPhaseHitCount": "얕은 수면 단계 적중 횟수",
+          "remPhaseHitCount": "REM 단계 적중 횟수"
+        },
+        "health": {
+          "title": "엔진 상태",
+          "provider": "제공업체",
+          "embeddings": "임베딩",
+          "runtime": "임베딩 런타임",
+          "healthy": "준비됨",
+          "unavailable": "사용 불가",
+          "notChecked": "확인되지 않음",
+          "notCheckedDescription": "임베딩 준비 상태가 아직 확인되지 않았습니다.",
+          "checking": "확인 중…",
+          "test": "테스트",
+          "testing": "테스트 중…"
+        },
+        "shortcuts": {
+          "title": "메모리 탐색",
+          "memories": "메모리 검색",
+          "diary": "꿈 일기 읽기",
+          "settings": "메모리 설정"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "얕은 수면 단계"
+          },
+          "deep": {
+            "title": "깊은 수면 단계"
+          },
+          "rem": {
+            "title": "REM 단계"
+          }
+        }
+      }
+    }
+  },
+  "fr": {
+    "common": {
+      "loading": "Chargement…",
+      "enabled": "Activé",
+      "disabled": "Désactivé",
+      "na": "s/o",
+      "unknown": "Inconnu"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "La mémoire est éveillée",
+          "waking": "Réveil de la mémoire…",
+          "hibernating": "La mémoire est en hibernation",
+          "needsAttention": "La mémoire nécessite votre attention",
+          "noSearchRuntime": "La recherche dans la mémoire de l’hôte est indisponible",
+          "noSearchRuntimeDescription": "{engine} ne fournit pas d’environnement d’exécution pour la recherche dans la mémoire de l’hôte. D’autres intégrations de mémoire peuvent fonctionner indépendamment.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Vérification du moteur de mémoire et du cycle de rêve de cet agent.",
+          "offDescription": "Choisissez un moteur de mémoire dans les Paramètres pour la réveiller.",
+          "disabledDescription": "Le moteur de mémoire sélectionné est désactivé. Réactivez-le dans les Paramètres.",
+          "gatewayOffline": "Le Gateway est hors ligne, l’état de la mémoire est donc indisponible.",
+          "hybridSearch": "recherche hybride",
+          "keywordSearch": "recherche par mots-clés (sans plongements vectoriels)",
+          "openSettings": "Ouvrir les Paramètres",
+          "retry": "Réessayer",
+          "refresh": "Actualiser l’état"
+        },
+        "schedule": {
+          "title": "Horaires de sommeil",
+          "lightDescription": "Trie les notes récentes à court terme et prépare les candidates prometteuses sans modifier la mémoire à long terme.",
+          "remDescription": "Analyse les thèmes et les idées récurrentes de l’activité récente pour affiner le classement sans modifier la mémoire à long terme.",
+          "deepDescription": "Évalue les candidates préparées, transfère celles à conserver dans la mémoire à long terme (MEMORY.md) et rédige le journal des rêves.",
+          "nextRun": "prochaine {time}",
+          "lastRun": "dernière {time}",
+          "notScheduled": "Non planifié",
+          "learnMore": "Comment fonctionne le rêve",
+          "openDocs": "Ouvrir le guide du rêve"
+        },
+        "activity": {
+          "title": "Activité",
+          "promotedToday": "Transférées aujourd’hui",
+          "promotedTotal": "Total des entrées transférées",
+          "shortTermCount": "Entrées à court terme en attente",
+          "phaseHitCount": "Signaux de phase",
+          "lightPhaseHitCount": "Détections en phase de sommeil léger",
+          "remPhaseHitCount": "Détections en phase de sommeil paradoxal"
+        },
+        "health": {
+          "title": "État du moteur",
+          "provider": "Fournisseur",
+          "embeddings": "Représentations vectorielles",
+          "runtime": "Environnement d’exécution de la vectorisation",
+          "healthy": "Prêt",
+          "unavailable": "Indisponible",
+          "notChecked": "Non vérifié",
+          "notCheckedDescription": "La disponibilité des plongements vectoriels n’a pas encore été vérifiée.",
+          "checking": "Vérification…",
+          "test": "Tester",
+          "testing": "Test en cours…"
+        },
+        "shortcuts": {
+          "title": "Explorer la mémoire",
+          "memories": "Rechercher des souvenirs",
+          "diary": "Lire le journal des rêves",
+          "settings": "Configurer la mémoire"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Phase légère"
+          },
+          "deep": {
+            "title": "Phase profonde"
+          },
+          "rem": {
+            "title": "Phase de sommeil paradoxal"
+          }
+        }
+      }
+    }
+  },
+  "hi": {
+    "common": {
+      "loading": "लोड हो रहा है…",
+      "enabled": "सक्षम",
+      "disabled": "अक्षम",
+      "na": "लागू नहीं",
+      "unknown": "अज्ञात"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "स्मृति जागृत है",
+          "waking": "स्मृति जाग रही है…",
+          "hibernating": "स्मृति सुप्त अवस्था में है",
+          "needsAttention": "स्मृति पर ध्यान देने की आवश्यकता है",
+          "noSearchRuntime": "होस्ट मेमोरी खोज उपलब्ध नहीं है",
+          "noSearchRuntimeDescription": "{engine} होस्ट मेमोरी खोज के लिए रनटाइम प्रदान नहीं करता है। अन्य मेमोरी इंटीग्रेशन स्वतंत्र रूप से चल सकते हैं।",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "इस एजेंट के स्मृति इंजन और स्वप्न चक्र की जाँच की जा रही है.",
+          "offDescription": "स्मृति को जगाने के लिए सेटिंग्स में एक स्मृति इंजन चुनें.",
+          "disabledDescription": "चुना गया स्मृति इंजन अक्षम है. इसे सेटिंग्स में फिर से सक्षम करें.",
+          "gatewayOffline": "Gateway ऑफ़लाइन है, इसलिए स्मृति की स्थिति उपलब्ध नहीं है.",
+          "hybridSearch": "हाइब्रिड खोज",
+          "keywordSearch": "कीवर्ड खोज (एम्बेडिंग के बिना)",
+          "openSettings": "सेटिंग्स खोलें",
+          "retry": "फिर से प्रयास करें",
+          "refresh": "स्थिति रीफ़्रेश करें"
+        },
+        "schedule": {
+          "title": "नींद की समय-सारणी",
+          "lightDescription": "दीर्घकालिक स्मृति को बदले बिना नए अल्पकालिक नोट्स को व्यवस्थित करता है और उपयोगी लगने वाली प्रविष्टियों को अगले चरण के लिए तैयार करता है।",
+          "remDescription": "दीर्घकालिक स्मृति को बदले बिना रैंकिंग बेहतर बनाने के लिए हाल की गतिविधियों के विषयों और बार-बार आने वाले विचारों पर चिंतन करता है।",
+          "deepDescription": "तैयार की गई प्रविष्टियों का मूल्यांकन करता है, सहेजने योग्य प्रविष्टियों को दीर्घकालिक स्मृति (MEMORY.md) में स्थानांतरित करता है, और स्वप्न डायरी लिखता है।",
+          "nextRun": "अगला {time}",
+          "lastRun": "पिछला {time}",
+          "notScheduled": "निर्धारित नहीं है",
+          "learnMore": "स्वप्न प्रक्रिया कैसे काम करती है",
+          "openDocs": "स्वप्न प्रक्रिया की मार्गदर्शिका खोलें"
+        },
+        "activity": {
+          "title": "गतिविधि",
+          "promotedToday": "आज दीर्घकालिक स्मृति में जोड़ी गईं",
+          "promotedTotal": "दीर्घकालिक स्मृति में जोड़ी गईं कुल प्रविष्टियाँ",
+          "shortTermCount": "लंबित अल्पकालिक प्रविष्टियाँ",
+          "phaseHitCount": "चरण संकेत",
+          "lightPhaseHitCount": "हल्के चरण के संकेत",
+          "remPhaseHitCount": "REM चरण के संकेत"
+        },
+        "health": {
+          "title": "इंजन की स्थिति",
+          "provider": "प्रदाता",
+          "embeddings": "एम्बेडिंग",
+          "runtime": "एम्बेडिंग रनटाइम",
+          "healthy": "तैयार",
+          "unavailable": "अनुपलब्ध",
+          "notChecked": "जाँच नहीं की गई",
+          "notCheckedDescription": "एम्बेडिंग की तत्परता की अभी तक जाँच नहीं की गई है.",
+          "checking": "जाँच जारी है…",
+          "test": "परीक्षण करें",
+          "testing": "परीक्षण जारी है…"
+        },
+        "shortcuts": {
+          "title": "मेमोरी देखें",
+          "memories": "स्मृतियाँ खोजें",
+          "diary": "सपनों की डायरी पढ़ें",
+          "settings": "मेमोरी कॉन्फ़िगर करें"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "हल्का चरण"
+          },
+          "deep": {
+            "title": "गहन चरण"
+          },
+          "rem": {
+            "title": "REM चरण"
+          }
+        }
+      }
+    }
+  },
+  "ar": {
+    "common": {
+      "loading": "جارٍ التحميل…",
+      "enabled": "مفعّل",
+      "disabled": "معطّل",
+      "na": "غير متاح",
+      "unknown": "غير معروف"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "الذاكرة مستيقظة",
+          "waking": "جارٍ إيقاظ الذاكرة…",
+          "hibernating": "الذاكرة في وضع السبات",
+          "needsAttention": "الذاكرة تحتاج إلى اهتمام",
+          "noSearchRuntime": "البحث في ذاكرة المضيف غير متاح",
+          "noSearchRuntimeDescription": "لا يوفر {engine} بيئة تشغيل للبحث في ذاكرة المضيف. قد تعمل تكاملات الذاكرة الأخرى بشكل مستقل.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "جارٍ التحقق من محرك ذاكرة هذا الوكيل ودورة أحلامه.",
+          "offDescription": "اختر محرك ذاكرة في الإعدادات لإيقاظها.",
+          "disabledDescription": "محرك الذاكرة المحدد معطّل. أعد تفعيله في الإعدادات.",
+          "gatewayOffline": "Gateway غير متصل، لذا لا تتوفر حالة الذاكرة.",
+          "hybridSearch": "بحث هجين",
+          "keywordSearch": "بحث بالكلمات المفتاحية (بدون تضمينات)",
+          "openSettings": "فتح الإعدادات",
+          "retry": "إعادة المحاولة",
+          "refresh": "تحديث الحالة"
+        },
+        "schedule": {
+          "title": "جدول النوم",
+          "lightDescription": "يرتّب الملاحظات الحديثة في الذاكرة قصيرة المدى ويجهّز العناصر المرشحة الواعدة دون تغيير الذاكرة طويلة المدى.",
+          "remDescription": "يتأمل الموضوعات والأفكار المتكررة في النشاط الأخير لتحسين ترتيبها دون تغيير الذاكرة طويلة المدى.",
+          "deepDescription": "يقيّم العناصر المرشحة المجهّزة، وينقل ما يستحق الاحتفاظ به إلى الذاكرة طويلة المدى (MEMORY.md)، ويكتب يوميات الأحلام.",
+          "nextRun": "التالي {time}",
+          "lastRun": "الأخير {time}",
+          "notScheduled": "غير مجدول",
+          "learnMore": "كيف يعمل الحلم",
+          "openDocs": "فتح دليل الحلم"
+        },
+        "activity": {
+          "title": "النشاط",
+          "promotedToday": "المنقول إلى الذاكرة طويلة المدى اليوم",
+          "promotedTotal": "إجمالي المنقول إلى الذاكرة طويلة المدى",
+          "shortTermCount": "إدخالات الذاكرة قصيرة المدى المعلّقة",
+          "phaseHitCount": "إشارات المراحل",
+          "lightPhaseHitCount": "تطابقات مرحلة النوم الخفيف",
+          "remPhaseHitCount": "تطابقات مرحلة نوم حركة العين السريعة"
+        },
+        "health": {
+          "title": "سلامة المحرك",
+          "provider": "المزوّد",
+          "embeddings": "التمثيلات المتجهية",
+          "runtime": "بيئة تشغيل التمثيل المتجهي",
+          "healthy": "جاهز",
+          "unavailable": "غير متاح",
+          "notChecked": "لم يتم التحقق",
+          "notCheckedDescription": "لم يتم التحقق من جاهزية التضمين بعد.",
+          "checking": "جارٍ التحقق…",
+          "test": "اختبار",
+          "testing": "جارٍ الاختبار…"
+        },
+        "shortcuts": {
+          "title": "استكشاف الذاكرة",
+          "memories": "البحث في الذكريات",
+          "diary": "قراءة يوميات الأحلام",
+          "settings": "تهيئة الذاكرة"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "المرحلة الخفيفة"
+          },
+          "deep": {
+            "title": "المرحلة العميقة"
+          },
+          "rem": {
+            "title": "مرحلة حركة العين السريعة"
+          }
+        }
+      }
+    }
+  },
+  "it": {
+    "common": {
+      "loading": "Caricamento…",
+      "enabled": "Abilitato",
+      "disabled": "Disabilitato",
+      "na": "n/d",
+      "unknown": "Sconosciuto"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "La memoria è sveglia",
+          "waking": "Risveglio della memoria…",
+          "hibernating": "La memoria è in letargo",
+          "needsAttention": "La memoria richiede attenzione",
+          "noSearchRuntime": "La ricerca nella memoria dell’host non è disponibile",
+          "noSearchRuntimeDescription": "{engine} non fornisce un ambiente di esecuzione per la ricerca nella memoria dell’host. Altre integrazioni di memoria possono funzionare in modo indipendente.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Verifica del motore di memoria e del ciclo dei sogni di questo agente.",
+          "offDescription": "Scegli un motore di memoria nelle Impostazioni per risvegliarla.",
+          "disabledDescription": "Il motore di memoria selezionato è disabilitato. Riabilitalo nelle Impostazioni.",
+          "gatewayOffline": "Il Gateway è offline, quindi lo stato della memoria non è disponibile.",
+          "hybridSearch": "ricerca ibrida",
+          "keywordSearch": "ricerca per parole chiave (senza embedding)",
+          "openSettings": "Apri Impostazioni",
+          "retry": "Riprova",
+          "refresh": "Aggiorna stato"
+        },
+        "schedule": {
+          "title": "Orario del sonno",
+          "lightDescription": "Ordina le nuove note a breve termine e prepara i candidati promettenti senza modificare la memoria a lungo termine.",
+          "remDescription": "Riflette sui temi e sulle idee ricorrenti nelle attività recenti per migliorare la classificazione senza modificare la memoria a lungo termine.",
+          "deepDescription": "Valuta i candidati preparati, promuove quelli da conservare nella memoria a lungo termine (MEMORY.md) e scrive il diario dei sogni.",
+          "nextRun": "prossima {time}",
+          "lastRun": "ultima {time}",
+          "notScheduled": "Non pianificata",
+          "learnMore": "Come funziona il processo onirico",
+          "openDocs": "Apri la guida al processo onirico"
+        },
+        "activity": {
+          "title": "Attività",
+          "promotedToday": "Promossi oggi",
+          "promotedTotal": "Totale promossi",
+          "shortTermCount": "Voci a breve termine in attesa",
+          "phaseHitCount": "Segnali delle fasi",
+          "lightPhaseHitCount": "Riscontri nella fase leggera",
+          "remPhaseHitCount": "Riscontri nella fase REM"
+        },
+        "health": {
+          "title": "Stato del motore",
+          "provider": "Fornitore",
+          "embeddings": "Incorporamenti",
+          "runtime": "Ambiente di esecuzione degli incorporamenti",
+          "healthy": "Pronto",
+          "unavailable": "Non disponibile",
+          "notChecked": "Non verificato",
+          "notCheckedDescription": "La disponibilità degli embedding non è ancora stata verificata.",
+          "checking": "Verifica in corso…",
+          "test": "Test",
+          "testing": "Test in corso…"
+        },
+        "shortcuts": {
+          "title": "Esplora la memoria",
+          "memories": "Cerca nei ricordi",
+          "diary": "Leggi il diario dei sogni",
+          "settings": "Configura la memoria"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Fase leggera"
+          },
+          "deep": {
+            "title": "Fase profonda"
+          },
+          "rem": {
+            "title": "Fase REM"
+          }
+        }
+      }
+    }
+  },
+  "tr": {
+    "common": {
+      "loading": "Yükleniyor…",
+      "enabled": "Etkin",
+      "disabled": "Devre dışı",
+      "na": "geçerli değil",
+      "unknown": "Bilinmiyor"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "Bellek uyanık",
+          "waking": "Bellek uyanıyor…",
+          "hibernating": "Bellek kış uykusunda",
+          "needsAttention": "Bellekle ilgilenilmesi gerekiyor",
+          "noSearchRuntime": "Ana makinede bellek araması kullanılamıyor",
+          "noSearchRuntimeDescription": "{engine}, ana makinede bellek araması için bir çalışma zamanı sağlamıyor. Diğer bellek entegrasyonları bağımsız olarak çalışabilir.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Bu ajanın bellek motoru ve rüya döngüsü kontrol ediliyor.",
+          "offDescription": "Belleği uyandırmak için Ayarlar'da bir bellek motoru seçin.",
+          "disabledDescription": "Seçili bellek motoru devre dışı. Ayarlar'dan yeniden etkinleştirin.",
+          "gatewayOffline": "Gateway çevrimdışı olduğundan bellek durumu kullanılamıyor.",
+          "hybridSearch": "hibrit arama",
+          "keywordSearch": "anahtar kelime araması (vektör gömmeleri yok)",
+          "openSettings": "Ayarlar'ı aç",
+          "retry": "Yeniden dene",
+          "refresh": "Durumu yenile"
+        },
+        "schedule": {
+          "title": "Uyku programı",
+          "lightDescription": "Yeni kısa süreli notları sıralar ve uzun süreli belleği değiştirmeden umut vadeden adayları hazırlar.",
+          "remDescription": "Uzun süreli belleği değiştirmeden sıralamayı iyileştirmek için son etkinliklerdeki temaları ve tekrarlayan fikirleri değerlendirir.",
+          "deepDescription": "Hazırlanan adayları puanlar, saklanmaya değer olanları uzun süreli belleğe (MEMORY.md) aktarır ve rüya günlüğünü yazar.",
+          "nextRun": "sonraki {time}",
+          "lastRun": "son {time}",
+          "notScheduled": "Planlanmadı",
+          "learnMore": "Rüya görme nasıl çalışır",
+          "openDocs": "Rüya görme kılavuzunu aç"
+        },
+        "activity": {
+          "title": "Etkinlik",
+          "promotedToday": "Bugün uzun süreli belleğe aktarılanlar",
+          "promotedTotal": "Uzun süreli belleğe aktarılan toplam",
+          "shortTermCount": "Bekleyen kısa süreli kayıtlar",
+          "phaseHitCount": "Evre sinyalleri",
+          "lightPhaseHitCount": "Hafif uyku evresi eşleşmeleri",
+          "remPhaseHitCount": "REM evresi eşleşmeleri"
+        },
+        "health": {
+          "title": "Motor sağlığı",
+          "provider": "Sağlayıcı",
+          "embeddings": "Vektör temsilleri",
+          "runtime": "Vektör temsili çalışma ortamı",
+          "healthy": "Hazır",
+          "unavailable": "Kullanılamıyor",
+          "notChecked": "Kontrol edilmedi",
+          "notCheckedDescription": "Vektör gömme işlevinin hazır olup olmadığı henüz kontrol edilmedi.",
+          "checking": "Kontrol ediliyor…",
+          "test": "Test et",
+          "testing": "Test ediliyor…"
+        },
+        "shortcuts": {
+          "title": "Belleği keşfet",
+          "memories": "Anılarda ara",
+          "diary": "Rüya günlüğünü oku",
+          "settings": "Belleği yapılandır"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Hafif evre"
+          },
+          "deep": {
+            "title": "Derin evre"
+          },
+          "rem": {
+            "title": "REM evresi"
+          }
+        }
+      }
+    }
+  },
+  "uk": {
+    "common": {
+      "loading": "Завантаження…",
+      "enabled": "Увімкнено",
+      "disabled": "Вимкнено",
+      "na": "н/д",
+      "unknown": "Невідомо"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "Пам’ять не спить",
+          "waking": "Пам’ять прокидається…",
+          "hibernating": "Пам’ять у сплячому режимі",
+          "needsAttention": "Пам’ять потребує уваги",
+          "noSearchRuntime": "Пошук у пам’яті хоста недоступний",
+          "noSearchRuntimeDescription": "{engine} не надає середовища виконання для пошуку в пам’яті хоста. Інші інтеграції пам’яті можуть працювати незалежно.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Перевірка рушія пам’яті та циклу сновидінь цього агента.",
+          "offDescription": "Виберіть рушій пам’яті в налаштуваннях, щоб розбудити її.",
+          "disabledDescription": "Вибраний рушій пам’яті вимкнено. Увімкніть його знову в налаштуваннях.",
+          "gatewayOffline": "Gateway не в мережі, тому стан пам’яті недоступний.",
+          "hybridSearch": "гібридний пошук",
+          "keywordSearch": "пошук за ключовими словами (без ембедингів)",
+          "openSettings": "Відкрити налаштування",
+          "retry": "Повторити спробу",
+          "refresh": "Оновити стан"
+        },
+        "schedule": {
+          "title": "Розклад сну",
+          "lightDescription": "Сортує свіжі короткострокові нотатки та готує перспективних кандидатів, не змінюючи довгострокову пам’ять.",
+          "remDescription": "Аналізує теми та повторювані ідеї з нещодавньої активності, щоб покращити ранжування, не змінюючи довгострокову пам’ять.",
+          "deepDescription": "Оцінює підготовлених кандидатів, переносить варті збереження записи до довгострокової пам’яті (MEMORY.md) і веде щоденник сновидінь.",
+          "nextRun": "наступний {time}",
+          "lastRun": "останній {time}",
+          "notScheduled": "Не заплановано",
+          "learnMore": "Як працюють сновидіння",
+          "openDocs": "Відкрити посібник зі сновидінь"
+        },
+        "activity": {
+          "title": "Активність",
+          "promotedToday": "Перенесено до довгострокової пам’яті сьогодні",
+          "promotedTotal": "Перенесено до довгострокової пам’яті загалом",
+          "shortTermCount": "Короткострокові записи в очікуванні",
+          "phaseHitCount": "Сигнали фаз",
+          "lightPhaseHitCount": "Спрацювання легкої фази",
+          "remPhaseHitCount": "Спрацювання REM-фази"
+        },
+        "health": {
+          "title": "Стан рушія",
+          "provider": "Постачальник",
+          "embeddings": "Векторні подання",
+          "runtime": "Середовище виконання векторизації",
+          "healthy": "Готово",
+          "unavailable": "Недоступно",
+          "notChecked": "Не перевірено",
+          "notCheckedDescription": "Готовність до створення векторних представлень ще не перевірено.",
+          "checking": "Перевірка…",
+          "test": "Тест",
+          "testing": "Тестування…"
+        },
+        "shortcuts": {
+          "title": "Огляд пам’яті",
+          "memories": "Пошук спогадів",
+          "diary": "Читати щоденник снів",
+          "settings": "Налаштувати пам’ять"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Легка фаза"
+          },
+          "deep": {
+            "title": "Глибока фаза"
+          },
+          "rem": {
+            "title": "Фаза швидкого сну"
+          }
+        }
+      }
+    }
+  },
+  "id": {
+    "common": {
+      "loading": "Memuat…",
+      "enabled": "Diaktifkan",
+      "disabled": "Dinonaktifkan",
+      "na": "t/a",
+      "unknown": "Tidak diketahui"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "Memori terjaga",
+          "waking": "Membangunkan memori…",
+          "hibernating": "Memori sedang berhibernasi",
+          "needsAttention": "Memori memerlukan perhatian",
+          "noSearchRuntime": "Pencarian memori host tidak tersedia",
+          "noSearchRuntimeDescription": "{engine} tidak menyediakan runtime pencarian memori host. Integrasi memori lainnya dapat berjalan secara mandiri.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Memeriksa mesin memori dan siklus mimpi agen ini.",
+          "offDescription": "Pilih mesin memori di Pengaturan untuk membangunkannya.",
+          "disabledDescription": "Mesin memori yang dipilih dinonaktifkan. Aktifkan kembali di Pengaturan.",
+          "gatewayOffline": "Gateway sedang offline, sehingga status memori tidak tersedia.",
+          "hybridSearch": "pencarian hibrida",
+          "keywordSearch": "pencarian kata kunci (tanpa penyematan)",
+          "openSettings": "Buka Pengaturan",
+          "retry": "Coba lagi",
+          "refresh": "Segarkan status"
+        },
+        "schedule": {
+          "title": "Jadwal tidur",
+          "lightDescription": "Memilah catatan jangka pendek terbaru dan menyiapkan kandidat yang menjanjikan tanpa mengubah memori jangka panjang.",
+          "remDescription": "Merefleksikan tema dan gagasan yang berulang dalam aktivitas terbaru untuk memperkuat pemeringkatan tanpa mengubah memori jangka panjang.",
+          "deepDescription": "Menilai kandidat yang telah disiapkan, memasukkan yang layak disimpan ke memori jangka panjang (MEMORY.md), dan menulis buku harian mimpi.",
+          "nextRun": "berikutnya {time}",
+          "lastRun": "terakhir {time}",
+          "notScheduled": "Tidak dijadwalkan",
+          "learnMore": "Cara kerja proses bermimpi",
+          "openDocs": "Buka panduan proses bermimpi"
+        },
+        "activity": {
+          "title": "Aktivitas",
+          "promotedToday": "Dipromosikan hari ini",
+          "promotedTotal": "Total yang dipromosikan",
+          "shortTermCount": "Entri jangka pendek yang tertunda",
+          "phaseHitCount": "Sinyal fase",
+          "lightPhaseHitCount": "Temuan fase ringan",
+          "remPhaseHitCount": "Temuan fase REM"
+        },
+        "health": {
+          "title": "Kesehatan mesin",
+          "provider": "Penyedia",
+          "embeddings": "Penyematan",
+          "runtime": "Lingkungan eksekusi penyematan",
+          "healthy": "Siap",
+          "unavailable": "Tidak tersedia",
+          "notChecked": "Belum diperiksa",
+          "notCheckedDescription": "Kesiapan embedding belum diperiksa.",
+          "checking": "Memeriksa…",
+          "test": "Uji",
+          "testing": "Menguji…"
+        },
+        "shortcuts": {
+          "title": "Jelajahi memori",
+          "memories": "Cari memori",
+          "diary": "Baca buku harian mimpi",
+          "settings": "Konfigurasi memori"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Fase ringan"
+          },
+          "deep": {
+            "title": "Fase dalam"
+          },
+          "rem": {
+            "title": "Fase REM"
+          }
+        }
+      }
+    }
+  },
+  "pl": {
+    "common": {
+      "loading": "Ładowanie…",
+      "enabled": "Włączone",
+      "disabled": "Wyłączone",
+      "na": "nie dotyczy",
+      "unknown": "Nieznane"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "Pamięć jest aktywna",
+          "waking": "Wybudzanie pamięci…",
+          "hibernating": "Pamięć jest w stanie hibernacji",
+          "needsAttention": "Pamięć wymaga uwagi",
+          "noSearchRuntime": "Wyszukiwanie w pamięci hosta jest niedostępne",
+          "noSearchRuntimeDescription": "{engine} nie udostępnia środowiska uruchomieniowego wyszukiwania w pamięci hosta. Inne integracje pamięci mogą działać niezależnie.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Sprawdzanie silnika pamięci i cyklu snów tego agenta.",
+          "offDescription": "Wybierz silnik pamięci w Ustawieniach, aby ją wybudzić.",
+          "disabledDescription": "Wybrany silnik pamięci jest wyłączony. Włącz go ponownie w Ustawieniach.",
+          "gatewayOffline": "Gateway jest offline, więc stan pamięci jest niedostępny.",
+          "hybridSearch": "wyszukiwanie hybrydowe",
+          "keywordSearch": "wyszukiwanie według słów kluczowych (bez osadzeń wektorowych)",
+          "openSettings": "Otwórz Ustawienia",
+          "retry": "Ponów próbę",
+          "refresh": "Odśwież stan"
+        },
+        "schedule": {
+          "title": "Harmonogram snu",
+          "lightDescription": "Porządkuje nowe notatki krótkoterminowe i przygotowuje obiecujące wpisy bez zmieniania pamięci długoterminowej.",
+          "remDescription": "Analizuje tematy i powracające pomysły z ostatniej aktywności, aby udoskonalić ranking bez zmieniania pamięci długoterminowej.",
+          "deepDescription": "Ocenia przygotowane wpisy, przenosi wybrane do pamięci długoterminowej (MEMORY.md) i zapisuje dziennik snów.",
+          "nextRun": "następne {time}",
+          "lastRun": "ostatnie {time}",
+          "notScheduled": "Nie zaplanowano",
+          "learnMore": "Jak działa śnienie",
+          "openDocs": "Otwórz przewodnik po śnieniu"
+        },
+        "activity": {
+          "title": "Aktywność",
+          "promotedToday": "Przeniesione dzisiaj",
+          "promotedTotal": "Przeniesione łącznie",
+          "shortTermCount": "Oczekujące wpisy krótkoterminowe",
+          "phaseHitCount": "Sygnały faz",
+          "lightPhaseHitCount": "Trafienia w fazie snu płytkiego",
+          "remPhaseHitCount": "Trafienia w fazie REM"
+        },
+        "health": {
+          "title": "Stan silnika",
+          "provider": "Dostawca",
+          "embeddings": "Osadzenia",
+          "runtime": "Środowisko wykonawcze osadzeń",
+          "healthy": "Gotowy",
+          "unavailable": "Niedostępne",
+          "notChecked": "Nie sprawdzono",
+          "notCheckedDescription": "Gotowość do tworzenia osadzeń nie została jeszcze sprawdzona.",
+          "checking": "Sprawdzanie…",
+          "test": "Test",
+          "testing": "Testowanie…"
+        },
+        "shortcuts": {
+          "title": "Przeglądaj pamięć",
+          "memories": "Szukaj wspomnień",
+          "diary": "Czytaj dziennik snów",
+          "settings": "Konfiguruj pamięć"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Faza lekka"
+          },
+          "deep": {
+            "title": "Faza głęboka"
+          },
+          "rem": {
+            "title": "Faza REM"
+          }
+        }
+      }
+    }
+  },
+  "th": {
+    "common": {
+      "loading": "กำลังโหลด…",
+      "enabled": "เปิดใช้งาน",
+      "disabled": "ปิดใช้งาน",
+      "na": "ไม่เกี่ยวข้อง",
+      "unknown": "ไม่ทราบ"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "ความจำตื่นอยู่",
+          "waking": "กำลังปลุกความจำ…",
+          "hibernating": "ความจำกำลังจำศีล",
+          "needsAttention": "ความจำต้องได้รับการดูแล",
+          "noSearchRuntime": "การค้นหาหน่วยความจำบนโฮสต์ไม่พร้อมใช้งาน",
+          "noSearchRuntimeDescription": "{engine} ไม่มีรันไทม์สำหรับการค้นหาหน่วยความจำบนโฮสต์ การผสานรวมหน่วยความจำอื่น ๆ อาจทำงานได้อย่างอิสระ",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "กำลังตรวจสอบเอนจินความจำและวงจรความฝันของเอเจนต์นี้",
+          "offDescription": "เลือกเอนจินความจำในการตั้งค่าเพื่อปลุกความจำ",
+          "disabledDescription": "เอนจินความจำที่เลือกถูกปิดใช้งาน เปิดใช้งานอีกครั้งในการตั้งค่า",
+          "gatewayOffline": "Gateway ออฟไลน์อยู่ จึงไม่สามารถดูสถานะความจำได้",
+          "hybridSearch": "การค้นหาแบบผสม",
+          "keywordSearch": "การค้นหาด้วยคำสำคัญ (ไม่มีเวกเตอร์ฝังตัว)",
+          "openSettings": "เปิดการตั้งค่า",
+          "retry": "ลองอีกครั้ง",
+          "refresh": "รีเฟรชสถานะ"
+        },
+        "schedule": {
+          "title": "ตารางเวลานอน",
+          "lightDescription": "จัดเรียงบันทึกระยะสั้นใหม่และเตรียมรายการที่มีแนวโน้มดีไว้ โดยไม่เปลี่ยนแปลงความจำระยะยาว",
+          "remDescription": "ทบทวนประเด็นและแนวคิดที่เกิดซ้ำในกิจกรรมล่าสุดเพื่อปรับปรุงการจัดอันดับ โดยไม่เปลี่ยนแปลงความจำระยะยาว",
+          "deepDescription": "ให้คะแนนรายการที่เตรียมไว้ ย้ายรายการที่ควรเก็บเข้าสู่ความจำระยะยาว (MEMORY.md) และเขียนบันทึกความฝัน",
+          "nextRun": "ครั้งถัดไป {time}",
+          "lastRun": "ครั้งล่าสุด {time}",
+          "notScheduled": "ยังไม่ได้กำหนดเวลา",
+          "learnMore": "การฝันทำงานอย่างไร",
+          "openDocs": "เปิดคู่มือการฝัน"
+        },
+        "activity": {
+          "title": "กิจกรรม",
+          "promotedToday": "ย้ายเข้าความจำระยะยาววันนี้",
+          "promotedTotal": "ย้ายเข้าความจำระยะยาวทั้งหมด",
+          "shortTermCount": "รายการความจำระยะสั้นที่รอดำเนินการ",
+          "phaseHitCount": "สัญญาณของแต่ละระยะ",
+          "lightPhaseHitCount": "จำนวนครั้งที่พบในระยะหลับตื้น",
+          "remPhaseHitCount": "จำนวนครั้งที่พบในระยะ REM"
+        },
+        "health": {
+          "title": "สถานะการทำงานของเอนจิน",
+          "provider": "ผู้ให้บริการ",
+          "embeddings": "เวกเตอร์ฝังตัว",
+          "runtime": "รันไทม์การฝังตัว",
+          "healthy": "พร้อม",
+          "unavailable": "ไม่พร้อมใช้งาน",
+          "notChecked": "ยังไม่ได้ตรวจสอบ",
+          "notCheckedDescription": "ยังไม่ได้ตรวจสอบความพร้อมของการฝังเวกเตอร์.",
+          "checking": "กำลังตรวจสอบ…",
+          "test": "ทดสอบ",
+          "testing": "กำลังทดสอบ…"
+        },
+        "shortcuts": {
+          "title": "สำรวจความทรงจำ",
+          "memories": "ค้นหาความทรงจำ",
+          "diary": "อ่านบันทึกความฝัน",
+          "settings": "ตั้งค่าความทรงจำ"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "ระยะหลับตื้น"
+          },
+          "deep": {
+            "title": "ระยะหลับลึก"
+          },
+          "rem": {
+            "title": "ระยะ REM"
+          }
+        }
+      }
+    }
+  },
+  "vi": {
+    "common": {
+      "loading": "Đang tải…",
+      "enabled": "Đã bật",
+      "disabled": "Đã tắt",
+      "na": "không áp dụng",
+      "unknown": "Không xác định"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "Bộ nhớ đang thức",
+          "waking": "Đang đánh thức bộ nhớ…",
+          "hibernating": "Bộ nhớ đang ngủ đông",
+          "needsAttention": "Bộ nhớ cần được chú ý",
+          "noSearchRuntime": "Tính năng tìm kiếm bộ nhớ trên máy chủ không khả dụng",
+          "noSearchRuntimeDescription": "{engine} không cung cấp môi trường thực thi tìm kiếm bộ nhớ trên máy chủ. Các tích hợp bộ nhớ khác có thể hoạt động độc lập.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Đang kiểm tra bộ máy bộ nhớ và chu kỳ giấc mơ của tác tử này.",
+          "offDescription": "Chọn một bộ máy bộ nhớ trong Cài đặt để đánh thức bộ nhớ.",
+          "disabledDescription": "Bộ máy bộ nhớ đã chọn đang bị vô hiệu hóa. Hãy bật lại trong Cài đặt.",
+          "gatewayOffline": "Gateway đang ngoại tuyến nên không thể xem trạng thái bộ nhớ.",
+          "hybridSearch": "tìm kiếm kết hợp",
+          "keywordSearch": "tìm kiếm theo từ khóa (không có vectơ nhúng)",
+          "openSettings": "Mở Cài đặt",
+          "retry": "Thử lại",
+          "refresh": "Làm mới trạng thái"
+        },
+        "schedule": {
+          "title": "Lịch ngủ",
+          "lightDescription": "Sắp xếp các ghi chú ngắn hạn mới và chuẩn bị các mục tiềm năng mà không thay đổi bộ nhớ dài hạn.",
+          "remDescription": "Suy ngẫm về các chủ đề và ý tưởng lặp lại trong hoạt động gần đây để cải thiện thứ hạng mà không thay đổi bộ nhớ dài hạn.",
+          "deepDescription": "Chấm điểm các mục đã chuẩn bị, đưa những mục đáng giữ vào bộ nhớ dài hạn (MEMORY.md), và viết nhật ký giấc mơ.",
+          "nextRun": "lần tới {time}",
+          "lastRun": "lần cuối {time}",
+          "notScheduled": "Chưa lên lịch",
+          "learnMore": "Cách giấc mơ hoạt động",
+          "openDocs": "Mở hướng dẫn về giấc mơ"
+        },
+        "activity": {
+          "title": "Hoạt động",
+          "promotedToday": "Đã đưa vào bộ nhớ dài hạn hôm nay",
+          "promotedTotal": "Tổng số đã đưa vào bộ nhớ dài hạn",
+          "shortTermCount": "Các mục ngắn hạn đang chờ",
+          "phaseHitCount": "Tín hiệu theo giai đoạn",
+          "lightPhaseHitCount": "Lượt khớp trong giai đoạn ngủ nông",
+          "remPhaseHitCount": "Lượt khớp trong giai đoạn REM"
+        },
+        "health": {
+          "title": "Tình trạng bộ máy",
+          "provider": "Nhà cung cấp",
+          "embeddings": "Vectơ nhúng",
+          "runtime": "Môi trường chạy nhúng",
+          "healthy": "Sẵn sàng",
+          "unavailable": "Không khả dụng",
+          "notChecked": "Chưa kiểm tra",
+          "notCheckedDescription": "Chưa kiểm tra trạng thái sẵn sàng của tính năng nhúng.",
+          "checking": "Đang kiểm tra…",
+          "test": "Kiểm tra",
+          "testing": "Đang kiểm tra…"
+        },
+        "shortcuts": {
+          "title": "Khám phá bộ nhớ",
+          "memories": "Tìm kiếm ký ức",
+          "diary": "Đọc nhật ký giấc mơ",
+          "settings": "Cấu hình bộ nhớ"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Giai đoạn ngủ nông"
+          },
+          "deep": {
+            "title": "Giai đoạn ngủ sâu"
+          },
+          "rem": {
+            "title": "Giai đoạn REM"
+          }
+        }
+      }
+    }
+  },
+  "nl": {
+    "common": {
+      "loading": "Laden…",
+      "enabled": "Ingeschakeld",
+      "disabled": "Uitgeschakeld",
+      "na": "n.v.t.",
+      "unknown": "Onbekend"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "Het geheugen is wakker",
+          "waking": "Het geheugen wordt wakker…",
+          "hibernating": "Het geheugen is in winterslaap",
+          "needsAttention": "Het geheugen heeft aandacht nodig",
+          "noSearchRuntime": "Zoeken in het hostgeheugen is niet beschikbaar",
+          "noSearchRuntimeDescription": "{engine} biedt geen runtime voor zoeken in het hostgeheugen. Andere geheugenintegraties kunnen onafhankelijk werken.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "De geheugenengine en droomcyclus van deze agent worden gecontroleerd.",
+          "offDescription": "Kies een geheugenengine in Instellingen om het geheugen wakker te maken.",
+          "disabledDescription": "De geselecteerde geheugenengine is uitgeschakeld. Schakel deze opnieuw in via Instellingen.",
+          "gatewayOffline": "De gateway is offline, waardoor de geheugenstatus niet beschikbaar is.",
+          "hybridSearch": "hybride zoeken",
+          "keywordSearch": "zoeken op trefwoorden (zonder embeddings)",
+          "openSettings": "Instellingen openen",
+          "retry": "Opnieuw proberen",
+          "refresh": "Status vernieuwen"
+        },
+        "schedule": {
+          "title": "Slaapschema",
+          "lightDescription": "Sorteert nieuwe kortetermijnnotities en zet veelbelovende kandidaten klaar zonder het langetermijngeheugen te wijzigen.",
+          "remDescription": "Reflecteert op thema's en terugkerende ideeën uit recente activiteit om de rangschikking te verbeteren zonder het langetermijngeheugen te wijzigen.",
+          "deepDescription": "Beoordeelt klaargezette kandidaten, neemt de waardevolle op in het langetermijngeheugen (MEMORY.md) en schrijft het droomdagboek.",
+          "nextRun": "volgende {time}",
+          "lastRun": "laatste {time}",
+          "notScheduled": "Niet gepland",
+          "learnMore": "Hoe dromen werkt",
+          "openDocs": "Droomhandleiding openen"
+        },
+        "activity": {
+          "title": "Activiteit",
+          "promotedToday": "Vandaag opgenomen",
+          "promotedTotal": "Totaal opgenomen",
+          "shortTermCount": "Kortetermijnitems in afwachting",
+          "phaseHitCount": "Fasesignalen",
+          "lightPhaseHitCount": "Treffers in de lichte fase",
+          "remPhaseHitCount": "Treffers in de REM-fase"
+        },
+        "health": {
+          "title": "Enginestatus",
+          "provider": "Aanbieder",
+          "embeddings": "Embeddings",
+          "runtime": "Uitvoeringsomgeving voor embeddings",
+          "healthy": "Gereed",
+          "unavailable": "Niet beschikbaar",
+          "notChecked": "Niet gecontroleerd",
+          "notCheckedDescription": "Er is nog niet gecontroleerd of embeddings gereed zijn.",
+          "checking": "Controleren…",
+          "test": "Test",
+          "testing": "Testen…"
+        },
+        "shortcuts": {
+          "title": "Geheugen verkennen",
+          "memories": "Herinneringen doorzoeken",
+          "diary": "Het droomdagboek lezen",
+          "settings": "Geheugen configureren"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Lichte fase"
+          },
+          "deep": {
+            "title": "Diepe fase"
+          },
+          "rem": {
+            "title": "REM-fase"
+          }
+        }
+      }
+    }
+  },
+  "fa": {
+    "common": {
+      "loading": "در حال بارگذاری…",
+      "enabled": "فعال",
+      "disabled": "غیرفعال",
+      "na": "نامربوط",
+      "unknown": "نامشخص"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "حافظه بیدار است",
+          "waking": "در حال بیدار کردن حافظه…",
+          "hibernating": "حافظه در خواب زمستانی است",
+          "needsAttention": "حافظه نیاز به توجه دارد",
+          "noSearchRuntime": "جستجوی حافظهٔ میزبان در دسترس نیست",
+          "noSearchRuntimeDescription": "{engine} محیط اجرایی جستجوی حافظهٔ میزبان را ارائه نمی‌دهد. سایر یکپارچه‌سازی‌های حافظه ممکن است به‌طور مستقل اجرا شوند.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "در حال بررسی موتور حافظه و چرخهٔ رؤیای این عامل.",
+          "offDescription": "برای بیدار کردن حافظه، یک موتور حافظه در تنظیمات انتخاب کنید.",
+          "disabledDescription": "موتور حافظهٔ انتخاب‌شده غیرفعال است. آن را در تنظیمات دوباره فعال کنید.",
+          "gatewayOffline": "Gateway آفلاین است، بنابراین وضعیت حافظه در دسترس نیست.",
+          "hybridSearch": "جستجوی ترکیبی",
+          "keywordSearch": "جستجوی کلیدواژه‌ای (بدون بردارهای تعبیه)",
+          "openSettings": "باز کردن تنظیمات",
+          "retry": "تلاش مجدد",
+          "refresh": "تازه‌سازی وضعیت"
+        },
+        "schedule": {
+          "title": "برنامهٔ خواب",
+          "lightDescription": "یادداشت‌های کوتاه‌مدت تازه را مرتب می‌کند و موارد منتخبِ امیدبخش را بدون تغییر حافظه بلندمدت آماده می‌کند.",
+          "remDescription": "مضامین و ایده‌های تکرارشونده در فعالیت‌های اخیر را بررسی می‌کند تا بدون تغییر حافظه بلندمدت، رتبه‌بندی را بهبود دهد.",
+          "deepDescription": "به موارد منتخبِ آماده‌شده امتیاز می‌دهد، موارد ارزشمند را به حافظه بلندمدت (MEMORY.md) منتقل می‌کند و دفتر رؤیاها را می‌نویسد.",
+          "nextRun": "بعدی {time}",
+          "lastRun": "قبلی {time}",
+          "notScheduled": "زمان‌بندی نشده",
+          "learnMore": "رؤیاپردازی چگونه کار می‌کند",
+          "openDocs": "باز کردن راهنمای رؤیاپردازی"
+        },
+        "activity": {
+          "title": "فعالیت",
+          "promotedToday": "منتقل‌شده به حافظه بلندمدت در امروز",
+          "promotedTotal": "مجموع منتقل‌شده به حافظه بلندمدت",
+          "shortTermCount": "ورودی‌های کوتاه‌مدت در انتظار",
+          "phaseHitCount": "نشانه‌های مرحله",
+          "lightPhaseHitCount": "موارد شناسایی‌شده در مرحله خواب سبک",
+          "remPhaseHitCount": "موارد شناسایی‌شده در مرحله REM"
+        },
+        "health": {
+          "title": "سلامت موتور",
+          "provider": "ارائه‌دهنده",
+          "embeddings": "بازنمایی‌های برداری",
+          "runtime": "محیط اجرای بازنمایی برداری",
+          "healthy": "آماده",
+          "unavailable": "در دسترس نیست",
+          "notChecked": "بررسی نشده",
+          "notCheckedDescription": "آمادگی تعبیه‌سازی هنوز بررسی نشده است.",
+          "checking": "در حال بررسی…",
+          "test": "آزمایش",
+          "testing": "در حال آزمایش…"
+        },
+        "shortcuts": {
+          "title": "کاوش در حافظه",
+          "memories": "جستجوی خاطرات",
+          "diary": "خواندن دفتر رؤیاها",
+          "settings": "پیکربندی حافظه"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "مرحلهٔ سبک"
+          },
+          "deep": {
+            "title": "مرحلهٔ عمیق"
+          },
+          "rem": {
+            "title": "مرحلهٔ REM"
+          }
+        }
+      }
+    }
+  },
+  "ru": {
+    "common": {
+      "loading": "Загрузка…",
+      "enabled": "Включено",
+      "disabled": "Отключено",
+      "na": "н/д",
+      "unknown": "Неизвестно"
+    },
+    "memoryPage": {
+      "overview": {
+        "hero": {
+          "awake": "Память бодрствует",
+          "waking": "Память просыпается…",
+          "hibernating": "Память в спящем режиме",
+          "needsAttention": "Память требует внимания",
+          "noSearchRuntime": "Поиск по памяти на хосте недоступен",
+          "noSearchRuntimeDescription": "{engine} не предоставляет среду выполнения для поиска по памяти на хосте. Другие интеграции с памятью могут работать независимо.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Проверяем движок памяти и цикл сновидений этого агента.",
+          "offDescription": "Выберите движок памяти в настройках, чтобы разбудить её.",
+          "disabledDescription": "Выбранный движок памяти отключён. Включите его снова в настройках.",
+          "gatewayOffline": "Gateway не в сети, поэтому статус памяти недоступен.",
+          "hybridSearch": "гибридный поиск",
+          "keywordSearch": "поиск по ключевым словам (без эмбеддингов)",
+          "openSettings": "Открыть настройки",
+          "retry": "Повторить",
+          "refresh": "Обновить статус"
+        },
+        "schedule": {
+          "title": "Расписание сна",
+          "lightDescription": "Сортирует свежие краткосрочные заметки и подготавливает перспективные записи, не изменяя долгосрочную память.",
+          "remDescription": "Анализирует темы и повторяющиеся идеи из недавней активности для улучшения ранжирования, не изменяя долгосрочную память.",
+          "deepDescription": "Оценивает подготовленные записи, переносит наиболее ценные в долгосрочную память (MEMORY.md) и ведёт дневник сновидений.",
+          "nextRun": "следующий запуск {time}",
+          "lastRun": "последний запуск {time}",
+          "notScheduled": "Не запланировано",
+          "learnMore": "Как работают сновидения",
+          "openDocs": "Открыть руководство по сновидениям"
+        },
+        "activity": {
+          "title": "Активность",
+          "promotedToday": "Перенесено в долгосрочную память сегодня",
+          "promotedTotal": "Всего перенесено в долгосрочную память",
+          "shortTermCount": "Краткосрочные записи в ожидании",
+          "phaseHitCount": "Сигналы фаз",
+          "lightPhaseHitCount": "Срабатывания лёгкой фазы",
+          "remPhaseHitCount": "Срабатывания фазы быстрого сна"
+        },
+        "health": {
+          "title": "Состояние движка",
+          "provider": "Провайдер",
+          "embeddings": "Векторные представления",
+          "runtime": "Среда выполнения векторизации",
+          "healthy": "Готово",
+          "unavailable": "Недоступно",
+          "notChecked": "Не проверено",
+          "notCheckedDescription": "Готовность эмбеддингов ещё не проверена.",
+          "checking": "Проверка…",
+          "test": "Проверить",
+          "testing": "Тестирование…"
+        },
+        "shortcuts": {
+          "title": "Обзор памяти",
+          "memories": "Поиск воспоминаний",
+          "diary": "Читать дневник сновидений",
+          "settings": "Настроить память"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Лёгкая фаза"
+          },
+          "deep": {
+            "title": "Глубокая фаза"
+          },
+          "rem": {
+            "title": "Фаза быстрого сна"
+          }
+        }
+      }
+    }
+  }
+}

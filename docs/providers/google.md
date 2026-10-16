@@ -656,7 +656,8 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
     this route; use `google-generative-ai` for that feature.
 
     Interrupted text replies use the normal transient-error retry and failover
-    policy. Malformed completed tool-call arguments remain rejected.
+    policy. Malformed streaming JSON fails the request instead of silently
+    dropping content. Malformed completed tool-call arguments remain rejected.
 
   </Accordion>
 

@@ -3307,6 +3307,7 @@ openclaw-chat-ci-details {
   white-space: normal;
 }
 
+.chat-pane__chat-toggle,
 .chat-pane__layout-trigger,
 .chat-pane__sharing-trigger,
 .chat-pane__subagents-running {
@@ -3318,20 +3319,22 @@ openclaw-chat-ci-details {
   white-space: nowrap;
 }
 
-.chat-pane__layout-trigger {
+.chat-pane__chat-toggle,
+.chat-pane__layout-trigger,
+.chat-pane__sharing-trigger {
   padding: 5px 8px;
   line-height: 1;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-pane__chat-toggle,
   .chat-pane__layout-trigger {
     min-height: 44px;
   }
 
   /* Keep the complete action list scrollable without covering the conversation. */
-  .chat-panel-layout-menu::part(menu) {
-    /* Web Awesome consumes this variable in its important max-height rule. */
-    --auto-size-available-height: min(360px, 50dvh);
+  .chat-panel-layout-menu > .oc-menu {
+    --oc-overlay-max-height: min(360px, 50dvh);
 
     width: min(264px, calc(100dvw - 24px));
     overflow-y: auto;
@@ -3350,11 +3353,12 @@ openclaw-chat-ci-details {
 
   /* The desktop shortcut rail consumes label space but offers no touch action. */
   .chat-panel-layout-menu .side-panel-type-option__shortcut,
-  .chat-panel-layout-menu .session-menu__item::part(details) {
+  .chat-panel-layout-menu .session-menu__item > .oc-menu-item__details {
     display: none;
   }
 }
 
+.chat-pane__chat-toggle svg,
 .chat-pane__layout-trigger svg,
 .chat-pane__sharing-trigger svg,
 .chat-pane__subagents-running svg {
@@ -3386,4 +3390,13 @@ openclaw-chat-ci-details {
   border: 0;
   background: transparent;
   color: var(--text);
+}
+
+.chat-pane__chat-toggle {
+  order: 1;
+}
+
+.chat-pane__chat-toggle[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--bg-hover);
 }

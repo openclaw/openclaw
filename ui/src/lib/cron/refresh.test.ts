@@ -195,6 +195,7 @@ describe("cron event refresh replacement", () => {
         expect.objectContaining({
           query: "new filter",
           offset: 1,
+          view: "summary",
         }),
       );
       harness.response(2).resolve(harness.payload(3));

@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
-import { SessionActivityController } from "./session-activity-controller.ts";
+import { createSessionActivity } from "./session-activity-owner.ts";
 
 const result = {
   ts: 1,
@@ -12,12 +12,12 @@ const result = {
   defaults: { model: null, modelProvider: null, contextTokens: null },
 };
 let client: GatewayBrowserClient;
-let controller: SessionActivityController;
+let controller: ReturnType<typeof createSessionActivity>;
 beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(Math, "random").mockReturnValue(0);
   client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
-  controller = new SessionActivityController(() => {});
+  controller = createSessionActivity(() => {});
 });
 afterEach(() => {
   controller.dispose();
@@ -214,14 +214,13 @@ it("holds a trailing Activity refresh through page hiding and retires it on disc
   vi.stubGlobal("document", documentEvents);
   vi.stubGlobal("addEventListener", pageEvents.addEventListener.bind(pageEvents));
   vi.stubGlobal("removeEventListener", pageEvents.removeEventListener.bind(pageEvents));
-  controller = new SessionActivityController(() => {});
+  controller = createSessionActivity(() => {});
   let complete!: (value: typeof result) => void;
   const pending = new Promise<typeof result>((resolve) => {
     complete = resolve;
   });
   const request = vi.spyOn(client, "request").mockResolvedValue(result);
   try {
-    controller.connect();
     const filters = { personId: null, time: "7d" as const, query: "" };
     void controller.load(client, filters);
     await vi.advanceTimersByTimeAsync(0);

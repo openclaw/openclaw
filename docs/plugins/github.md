@@ -176,6 +176,9 @@ hovercard, and GitHub links open externally.
   Refreshes use GitHub ETags for unchanged item and commit responses; identity
   changes, eviction, or a failed refresh retire those cached responses. Repository
   visibility is checked again for every authenticated refresh.
+  Anonymous author and coauthor avatars are shared across previews for up to five
+  minutes, including concurrent reads and previews of different items. Metadata
+  and repository access checks remain scoped to the selected GitHub identity.
 - Slow preview reads (500 ms or longer) log phase durations for identity preparation,
   cache/load wait, delivery credential checks, metadata rendering, optional decoration,
   and upstream authentication/network waits. Network timings cover response headers;
@@ -193,3 +196,18 @@ GitHub uses the generic docked link-reader contribution in the
 [Plugin SDK](/plugins/sdk-overview/host-hooks#docked-link-readers). The plugin owns URL matching, GitHub API
 requests, caching, and mapping source data into the passive reader model. The
 Control UI owns tabs, layout, safe rendering, and keyboard interaction.
+
+## Session-bound Enterprise previews
+
+When `gateway.github.host` selects an Enterprise host, the plugin also advertises
+an exact-host, session-scoped reader. It uses the foreground session's repository
+and the selected GitHub App identity. Factory requests require the current signed-in
+operator's `session-item-read` proof and existing repository admission; a pasted
+URL cannot select another repository or borrow a different person's credentials.
+
+Private previews finish under that request's authority. Their UI cache is scoped
+to the connection, agent, and session; document caches also include the host,
+repository, and prepared reader identity. Access denial stays an error, rather than
+falling back to anonymous page metadata. Repository redirects require reopening
+an updated session target. Public `github.preview`, `github_read`, and
+`github_search` retain their public-repository contracts.

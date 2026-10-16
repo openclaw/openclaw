@@ -63,6 +63,16 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 
 ## Rejected Experiments
 
+- **UI blobless sparse checkout (2026-10-16):** Excluding native mobile/macOS
+  app trees removed 48.31 MiB of logical tracked content, but did not qualify as
+  a runner-cost improvement. In
+  [run 38866595993](https://github.com/openclaw/openclaw/actions/runs/38866595993),
+  the Blacksmith UI E2E checkout took 56s and the hosted browser checkout 58s;
+  same-run full UI checkouts took 22–38s. These are small, unpaired samples,
+  not a measured billing delta. Keep the full source checkout. Reconsider only
+  with lower complete checkout time and billed cost, including filtered fetch,
+  lazy materialization, and trusted-harness export; fewer logical bytes alone
+  do not establish savings.
 - **Declaration-fixture owner selection (2026-10-02):**
   `test/scripts/tsdown-declaration-fixture.ts` derives real source copies from its runtime
   entrypoint closures, so product PRs that edit one do not select the four declaration suites
@@ -277,8 +287,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   include short-publisher turnover in burst estimates. Preflight and downstream Node jobs are
   restore-only consumers on eligible self-hosted runners. Exact misses and
   hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
-- Trusted canonical hybrid first attempts route `ci-gate` to the Blacksmith
-  4-class after hosted assignment added 416 seconds to main's critical chain.
+- Ordinary canonical same-repository hybrid first attempts keep `preflight`,
+  `pr-failure-report`, and `ci-gate` on hosted Ubuntu. October 15's 26-PR sample
+  found 148 minutes of Blacksmith preflight queueing, with a 12.9-minute p75.
+  Fork first attempts, RunsOn, and admitted qualification/release dispatches
+  retain their existing routes. Count these mandatory hosted controls before
+  optional offload; keep the 45-row ceiling and all job/worker limits.
   Core lint uses the 16-class on canonical automatic first attempts with an
   unset, `blacksmith`, or `hybrid` backend, including fork PRs. Admitted
   qualifications retain their existing routes. The first packed lint row took
@@ -288,11 +302,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   jobs or registrations and keeps the deadline and complete stripe inventory. The gate has no checkout or dependency setup; retries, ordinary
   manual dispatches, noncanonical contexts, and the GitHub override stay hosted.
   Core lint additionally retains hosted routing for frozen targets. Normal hybrid
-  main/same-repository PRs add three assignments; fork PRs can add six because
+  main/same-repository PRs add two lint assignments; fork PRs can add six because
   their logical GitHub check profile emits five lint rows. These fit the fresh
   71-row union and reserved 84-row non-Node allowance described above.
-  Automatic canonical hybrid and RunsOn first-attempt `preflight` uses the
-  existing 4-class, matching default Blacksmith preflight. The former 16-class
+  Automatic canonical RunsOn and fork hybrid first-attempt `preflight` uses
+  the existing 4-class, matching default Blacksmith preflight. The former 16-class
   placement addressed hosted queue stalls. October 13 observations found 610
   4-class runs with no OOMs and 113s p95 duration; full and changed manifest plans
   also fit two CPUs and 4 GiB without swap with unchanged outputs. Keep the
@@ -302,9 +316,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   `security-fast` stays hosted
   outside eligible hybrid first attempts and when the bounded hosted plan is admitted. Security hooks use pinned installed packages
   and local hook definitions, without remote Git initialization. The `github`
-  outage override remains intact. Budget three control-job registrations per eligible
-  hybrid first attempt when optional hosted admission is closed, two when admitted,
-  and one per normal Blacksmith run. All occur in the reserved non-Node inventory.
+  outage override remains intact. Ordinary same-repository hybrid controls add
+  at most one Blacksmith security registration when optional hosted admission is
+  closed, none when admitted; fork hybrid first attempts retain up to three,
+  and normal Blacksmith runs retain their existing control registrations. All occur in the reserved non-Node inventory.
   Selected baseline ratchets and Node rows start independently after preflight.
   Keep the standalone ratchet owner and exact merge-parent/base checks; the final
   gate still requires every selected ratchet to pass. Same-repository
@@ -313,7 +328,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Preserve the existing hosted fallbacks and deadline.
   The existing `check-plan` prerequisite uses the 16-class for shared compiler
   snapshot memory on canonical automatic first attempts with an unset,
-  `blacksmith`, or `hybrid` backend, including fork PRs. Fork core type stripes
+  `blacksmith`, or `hybrid` backend, including fork PRs. Same-repository hybrid
+  PR first attempts instead use hosted planning with the existing serial
+  compiler discovery mode; reserve that mandatory row before optional offloads.
+  Never move the complete compiler snapshot onto the smaller hosted runner.
+  Fork core type stripes
   with an unset or `blacksmith` backend also use the 16-class on those attempts;
   hybrid health admission retains its existing placement rules. These routes
   add paid assignments, not jobs. Preserve logical GitHub stripe coverage,
@@ -604,6 +623,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Apply capacity after packing; preserve inventories, runtime selection, timing
   identities, and process boundaries. Full families retain their planned capacity.
   RunsOn inherits the hybrid choice for these retained Blacksmith jobs.
+  The isolated LLM-boundary cache-stability file also qualifies when it is the
+  group's only file, under the same serial, worker, and preparation guards.
+  Its complete current-source replay passed all 19 tests with four CPUs,
+  12 GiB RAM, no swap, 4.23 GiB peak, and zero OOMs. Other isolated files,
+  including siblings in the same job, retain their planned capacity.
 - Source-only serial Blacksmith tooling bins use the 16-class after packing,
   retaining logical classes, names, file inventories, and two-worker pins.
   Keep the 32-class for compiler/artifact capacity files, explicit runner or

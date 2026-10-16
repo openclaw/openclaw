@@ -10,6 +10,8 @@ export type LocalCommandProbe = {
   found: boolean;
   version?: string;
   error?: string;
+  /** Missing executables are absence; failed probes must not hide installed backends. */
+  failure?: "not-found" | "error";
   timedOut?: boolean;
 };
 
@@ -32,6 +34,7 @@ export async function probeLocalCommand(
         command,
         found: true,
         error: `timed out after ${timeoutMs}ms`,
+        failure: "error",
         timedOut: true,
       };
     }
@@ -42,6 +45,7 @@ export async function probeLocalCommand(
       found: result.code === 0 || Boolean(text),
       version: text || undefined,
       error: result.code === 0 ? undefined : `exited ${String(result.code)}`,
+      ...(result.code === 0 ? {} : { failure: "error" as const }),
     };
   } catch (error) {
     const spawnError = error as NodeJS.ErrnoException;
@@ -49,6 +53,7 @@ export async function probeLocalCommand(
       command,
       found: spawnError.code !== "ENOENT",
       error: spawnError.code === "ENOENT" ? "not found" : spawnError.message,
+      failure: spawnError.code === "ENOENT" ? "not-found" : "error",
     };
   }
 }

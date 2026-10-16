@@ -86,12 +86,10 @@ it.each([
               .get(),
           ).toBeUndefined();
 
-          await expect(prepareDoctorContext(configPath)).rejects.toMatchObject({
-            name: "RetiredStateFormatError",
-            message:
-              `Runtime JSON sidecars: retired files whose last writer predates July 1, 2026: ${sourcePath}. ` +
-              'The files were left unchanged. Upgrade through OpenClaw 2026.9.7, run "openclaw doctor --fix" on the original host, then retry this upgrade.',
+          await using doctor = await prepareDoctorContext(configPath, {
+            options: { nonInteractive: true, repair: false },
           });
+          expect(doctor.sourceConfigValid).toBe(true);
           const { db: deferredDb } = openOpenClawStateDatabase();
 
           expect(await fs.readFile(sourcePath, "utf8")).toBe(original);

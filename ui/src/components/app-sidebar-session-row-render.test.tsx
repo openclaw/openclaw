@@ -67,7 +67,12 @@ function createHost(mode: "chip" | "roster" = "roster") {
   const container = document.createElement("div");
   const props = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
   props.sidebarAgentsMode = mode;
-  const host = new AppSidebarOwner(props, context, props);
+  const host = new AppSidebarOwner(
+    { dashboards: null, loadMoreDashboards() {} },
+    props,
+    context,
+    props,
+  );
   host.sessionOwnershipVisibility = { filters: true, avatars: true };
   document.body.append(container);
   return { host, container, context };
@@ -247,6 +252,127 @@ it("keeps the unread badge on an idle child with an icon", () => {
   expect(container.querySelector('.session-glyph__badge[aria-label="Unread"]')).not.toBeNull();
 });
 
+it("keeps an idle child owner's glyph hidden until the run starts", () => {
+  const { host, container } = createHost("chip");
+  const session = {
+    ...projectSidebarSession({
+      key: "agent:main:child",
+      status: "done",
+      owner: { actor: { type: "human", id: "ada", label: "Ada" } },
+    }),
+    isChild: true,
+  };
+  const [current, setCurrent] = createSignal(session);
+  mountSolid(
+    () =>
+      renderRecentSession({
+        host,
+        get session() {
+          return current();
+        },
+      }),
+    { container },
+  );
+  expect(container.querySelector(".session-glyph")).toBeNull();
+  expect(container.querySelector("openclaw-session-owner-chip")).toBeNull();
+  expect(container.querySelector(".sidebar-child-session__status")).not.toBeNull();
+
+  setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true });
+  flush();
+  expect(container.querySelector(".session-glyph--running.session-glyph--bare")).not.toBeNull();
+  expect(container.querySelector("openclaw-session-owner-chip")).toBeNull();
+});
+
+it.each([false, null, undefined])(
+  "preserves the run glyph's bare styling for icon override %s",
+  (icon) => {
+    const { host, container } = createHost("chip");
+    const session = projectSidebarSession({
+      key: "agent:main:running",
+      hasActiveRun: true,
+      status: "running",
+      icon: "book",
+    });
+    mountSolid(() => renderRecentSession({ host, session, icon }), { container });
+    const glyph = container.querySelector(".session-glyph--running");
+    expect(glyph).not.toBeNull();
+    expect(glyph?.classList.contains("session-glyph--bare")).toBe(icon === false);
+    expect(glyph?.querySelector(".session-glyph__icon") !== null).toBe(icon !== false);
+  },
+);
+
+it.each(["owner", "icon"] as const)(
+  "retains %s artwork and actions when live rows republish unchanged presentation",
+  async (kind) => {
+    const { host, container } = createHost("chip");
+    const session = projectSidebarSession({
+      key: "agent:main:thread",
+      label: "Research",
+      color: "blue",
+      unread: true,
+      icon: kind === "icon" ? "book" : undefined,
+      owner: { actor: { type: "human", id: "ada", label: "Ada" } },
+    });
+    const [current, setCurrent] = createSignal(session);
+    mountSolid(
+      () =>
+        renderRecentSession({
+          host,
+          get session() {
+            return current();
+          },
+        }),
+      { container },
+    );
+    const chip = container.querySelector("openclaw-session-owner-chip");
+    await chip?.updateComplete;
+    const content = container.querySelector(".session-glyph__content")!;
+    const artwork = content.firstElementChild;
+    const graphic = content.querySelector("svg");
+    const initialGraphic = graphic?.innerHTML;
+    const archive = container.querySelector("[data-sidebar-session-archive]")!;
+    const archiveIcon = archive.querySelector("svg");
+    const row = container.querySelector(".sidebar-recent-session")!;
+    const observer = new MutationObserver(() => {});
+    observer.observe(content, { childList: true });
+    observer.observe(container.querySelector(".session-row-actions")!, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
+    observer.observe(row, { attributes: true, attributeFilter: ["style"] });
+    onTestFinished(() => observer.disconnect());
+
+    setCurrent({ ...session, updatedAt: 2, owner: { ...session.owner! } });
+    flush();
+    expect(observer.takeRecords()).toHaveLength(0);
+    expect(container.querySelector(".session-glyph__content")).toBe(content);
+    expect(content.firstElementChild).toBe(artwork);
+    expect(archive.querySelector("svg")).toBe(archiveIcon);
+
+    setCurrent({
+      ...current(),
+      archived: true,
+      icon: kind === "icon" ? "bot" : undefined,
+      owner: { actor: { type: "human", id: "ada", label: "Ada renamed" } },
+    });
+    flush();
+    await chip?.updateComplete;
+    expect(archive.getAttribute("aria-label")).toBe("Restore session: Research");
+    expect(archive.querySelector("svg")).toBe(archiveIcon);
+    if (kind === "owner") {
+      expect(content.firstElementChild).toBe(artwork);
+      expect(chip?.querySelector(".session-owner-chip")?.getAttribute("aria-label")).toContain(
+        "Ada renamed",
+      );
+    } else {
+      expect(content.firstElementChild).toBe(artwork);
+      expect(content.querySelector("svg")).toBe(graphic);
+      expect(content.querySelector("svg")?.innerHTML).not.toBe(initialGraphic);
+    }
+  },
+);
+
 it("materializes the archive hint on hover without changing the action name", () => {
   vi.useFakeTimers();
   onTestFinished(installTitleTooltips(document));
@@ -289,6 +415,26 @@ it("renders the saved chip identity before agent discovery without reviving anot
   update();
   expect(container.querySelector("openclaw-sidebar-agent-card")).toBeNull();
   expect(container.querySelector(".sidebar-workspace-header")).not.toBeNull();
+});
+
+it("retains the workspace name DOM across unrelated sidebar publications and renames", () => {
+  const { host, container } = createHost();
+  host.restoreSidebarSnapshot(emptySnapshot);
+  const update = mountObservedHost(host, container, renderSidebarAgentCard);
+  const name = () => container.querySelector(".sidebar-agent-card__name-text");
+  const original = name();
+  expect(original?.textContent).toBe("Harbor");
+
+  update();
+  expect(name()).toBe(original);
+
+  host.restoreSidebarSnapshot({
+    ...emptySnapshot,
+    brand: { ...emptySnapshot.brand, name: "Harbor renamed" },
+  });
+  update();
+  expect(name()).toBe(original);
+  expect(name()?.textContent).toBe("Harbor renamed");
 });
 
 it("keeps the rendered preview slot after caching without restoring live run authority", () => {

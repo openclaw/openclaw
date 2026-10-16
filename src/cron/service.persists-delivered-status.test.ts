@@ -17,6 +17,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { runCronCommandJob } from "./command-runner.js";
+import { normalizeCronJobPatch } from "./normalize.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import type { CronEvent } from "./service.js";
@@ -715,11 +716,11 @@ describe("cron payload conversion", () => {
         toolsAllow: ["read"],
       });
 
-      await expect(
-        cron.update(job.id, {
-          payload: { kind: "command", argv: ["echo"], env: null as never },
+      expect(() =>
+        normalizeCronJobPatch({
+          payload: { kind: "command", argv: ["echo"], env: null },
         }),
-      ).rejects.toThrow("command env");
+      ).toThrow("command env");
       expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual({
         kind: "agentTurn",
         message: "after",

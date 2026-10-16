@@ -7,7 +7,6 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import {
   makeBundledEsmFixtureRoot,
-  mockChannelPluginModuleLoader,
   writeAlphaSdkAliasDistFixture,
 } from "./bundled.shape-guard.test-helpers.js";
 
@@ -167,9 +166,6 @@ function packageMarkerPathsToRoots(markerPaths: string[], extensionsDir: string)
 
 afterEach(() => {
   clearPluginMetadataLifecycleCaches();
-  delete (globalThis as { __openclawBundledChannelReenter?: () => void })[
-    "__openclawBundledChannelReenter"
-  ];
   vi.resetModules();
   vi.doUnmock("../../plugins/bundled-channel-runtime.js");
   vi.doUnmock("../../plugins/bundled-plugin-metadata.js");
@@ -992,85 +988,6 @@ describe("bundled channel entry shape guards", () => {
     expect(offenders).toStrictEqual([]);
   });
 
-  it("breaks reentrant bundled channel discovery cycles with an empty fallback", async () => {
-    const pluginDir = makeBundledEsmFixtureRoot("openclaw-bundled-reentrant-");
-    const modulePath = path.join(pluginDir, "index.cjs");
-    fs.writeFileSync(
-      modulePath,
-      `
-const reenter = globalThis["__openclawBundledChannelReenter"];
-if (typeof reenter === "function") {
-  reenter();
-}
-module.exports = {
-  default: {
-    kind: "bundled-channel-entry",
-    id: "alpha",
-    name: "Alpha",
-    description: "Alpha",
-    configSchema: {},
-    register() {},
-    loadChannelPlugin() {
-      return {
-        id: "alpha",
-        meta: {},
-        capabilities: {},
-        config: {},
-      };
-    },
-  },
-};
-`,
-      "utf8",
-    );
-
-    vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
-      const actual =
-        await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
-      return {
-        ...actual,
-        listBundledChannelPluginMetadata: () => [
-          {
-            dirName: "alpha",
-            idHint: "alpha",
-            rootDir: pluginDir,
-            source: {
-              source: "./index.cjs",
-              built: "./index.cjs",
-            },
-            manifest: {
-              id: "alpha",
-              channels: ["alpha"],
-            },
-          },
-        ],
-        resolveBundledChannelGeneratedPath: () => modulePath,
-      };
-    });
-    mockChannelPluginModuleLoader();
-    vi.doMock("../../plugins/channel-catalog-registry.js", () => ({
-      listChannelCatalogEntries: () => [],
-    }));
-
-    let reentered = false;
-    (globalThis as { __openclawBundledChannelReenter?: () => void })[
-      "__openclawBundledChannelReenter"
-    ] = () => {
-      if (!reentered) {
-        reentered = true;
-        expect(bundled.listBundledChannelPlugins()).toStrictEqual([]);
-      }
-    };
-
-    const bundled = await importFreshModule<typeof import("./bundled.js")>(
-      import.meta.url,
-      "./bundled.js?scope=reentrant-bundled-discovery",
-    );
-
-    expect(bundled.listBundledChannelPlugins()).toHaveLength(1);
-    expect(reentered).toBe(true);
-  });
-
   it("keeps private src runtime barrels from forwarding to parent runtime barrels that export local plugins", () => {
     const offenders: string[] = [];
 
@@ -1098,4 +1015,3 @@ module.exports = {
     expect(offenders).toStrictEqual([]);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

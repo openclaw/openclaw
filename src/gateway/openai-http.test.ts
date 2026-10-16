@@ -1629,29 +1629,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
-  it("rejects resolved terminal agent failures without exposing provider details", async () => {
-    const privateDetail = "raw provider detail should stay private";
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce(
-      recordAgentRunTerminalOutcome(
-        {
-          payloads: [{ text: "Command may have changed state", isError: true }],
-          meta: { error: { kind: "incomplete_turn", message: privateDetail } },
-        },
-        "failed",
-      ) as never,
-    );
-
-    const res = await postChatCompletions(enabledPort);
-    const body = await res.text();
-    expect(res.status).toBe(500);
-    expect(JSON.parse(body)).toEqual({
-      error: { message: "internal error", type: "api_error" },
-    });
-    expect(body).not.toContain(privateDetail);
-  });
-
   it.each([
+    {
+      name: "resolved terminal failure",
+      meta: {
+        error: { kind: "incomplete_turn", message: "raw provider detail should stay private" },
+      },
+      outcome: "failed",
+      status: 500,
+    },
     { name: "error stop", meta: { stopReason: "error" }, outcome: "failed", status: 500 },
     {
       name: "run-budget timeout without error metadata",
@@ -1671,7 +1657,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
     const res = await postChatCompletions(enabledPort);
     expect(res.status).toBe(status);
-    await res.text();
+    const body = await res.text();
+    if (status === 500) {
+      expect(JSON.parse(body)).toEqual({ error: { message: "internal error", type: "api_error" } });
+      expect(body).not.toContain("raw provider detail should stay private");
+    }
   });
 
   it.each(streamingFailureCases)(
@@ -3042,65 +3032,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     });
   });
 
-  it(
-    "cleans up usage-enabled stream when client disconnects before usage arrives",
-    { timeout: 15_000 },
-    async () => {
-      const port = enabledPort;
-      let serverAbortSignal: AbortSignal | undefined;
-
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce(
-        (opts: unknown) =>
-          new Promise<undefined>((resolve) => {
-            const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-            const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-            serverAbortSignal = signal;
-            emitAgentEvent({ runId, stream: "assistant", data: { delta: "hello" } });
-            emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-            if (signal?.aborted) {
-              resolve(undefined);
-              return;
-            }
-            signal?.addEventListener("abort", () => resolve(undefined), { once: true });
-          }),
-      );
-
-      const clientReq = http.request({
-        hostname: "127.0.0.1",
-        port,
-        path: "/v1/chat/completions",
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: "Bearer secret",
-        },
-      });
-      clientReq.on("error", () => {});
-      clientReq.end(
-        JSON.stringify({
-          stream: true,
-          stream_options: { include_usage: true },
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        }),
-      );
-
-      await vi.waitFor(() => {
-        expect(agentCommandMock).toHaveBeenCalledTimes(1);
-      });
-
-      clientReq.destroy();
-
-      await vi.waitFor(
-        () => {
-          expect(serverAbortSignal?.aborted).toBe(true);
-        },
-        { timeout: 5_000, interval: 50 },
-      );
-    },
-  );
-
   it("preserves declared owner identity for streaming and non-streaming private callers", async () => {
     await expectDeclaredHttpOwnerIdentity({
       post: (stream, headers) => postChatCompletions(enabledPort, chatRequest({ stream }), headers),
@@ -3109,91 +3040,40 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     });
   });
 
-  it("aborts agent command when streaming client disconnects", { timeout: 15_000 }, async () => {
-    const port = enabledPort;
-    const idleRootCount = getActiveGatewayRootWorkCount();
-    const agentAborted = createDeferred();
-    const finishAgentCleanup = createDeferred();
-    const cleanupAdmissionClosed = createDeferred<boolean>();
-    let serverAbortSignal: AbortSignal | undefined;
-
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
-      const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-      serverAbortSignal = signal;
-      if (signal?.aborted) {
-        agentAborted.resolve();
-      } else {
-        signal?.addEventListener("abort", () => agentAborted.resolve(), { once: true });
-      }
-      await agentAborted.promise;
-      cleanupAdmissionClosed.resolve(isGatewaySubordinateWorkAdmissionClosed());
-      await finishAgentCleanup.promise;
-      return undefined;
-    });
-
-    const clientReq = http.request({
-      hostname: "127.0.0.1",
-      port,
-      path: "/v1/chat/completions",
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: "Bearer secret",
-      },
-    });
-    clientReq.on("error", () => {});
-    clientReq.end(
-      JSON.stringify({
-        stream: true,
-        model: "openclaw",
-        messages: [{ role: "user", content: "hi" }],
-      }),
-    );
-
-    await vi.waitFor(() => {
-      expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    });
-
-    try {
-      clientReq.destroy();
-
-      await vi.waitFor(() => expect(serverAbortSignal?.aborted).toBe(true), {
-        timeout: 5_000,
-        interval: 50,
-      });
-      expect(await cleanupAdmissionClosed.promise).toBe(false);
-      expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
-    } finally {
-      finishAgentCleanup.resolve();
-    }
-
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount), {
-      timeout: 5_000,
-      interval: 50,
-    });
-  });
-
-  it(
-    "aborts agent command when non-streaming client disconnects",
+  it.each([
+    { name: "streaming", stream: true, includeUsage: false },
+    { name: "usage-enabled streaming", stream: true, includeUsage: true },
+    { name: "non-streaming", stream: false, includeUsage: false },
+  ])(
+    "aborts and retains cleanup admission when $name client disconnects",
     { timeout: 15_000 },
-    async () => {
+    async ({ stream, includeUsage }) => {
       const port = enabledPort;
+      const idleRootCount = getActiveGatewayRootWorkCount();
+      const agentAborted = createDeferred();
+      const finishAgentCleanup = createDeferred();
+      const cleanupAdmissionClosed = createDeferred<boolean>();
       let serverAbortSignal: AbortSignal | undefined;
 
       agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce(
-        (opts: unknown) =>
-          new Promise<undefined>((resolve) => {
-            const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-            serverAbortSignal = signal;
-            if (signal?.aborted) {
-              resolve(undefined);
-              return;
-            }
-            signal?.addEventListener("abort", () => resolve(undefined), { once: true });
-          }),
-      );
+      agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
+        const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+        serverAbortSignal = signal;
+        if (includeUsage) {
+          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+          emitAgentEvent({ runId, stream: "assistant", data: { delta: "hello" } });
+          emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        }
+        if (signal?.aborted) {
+          agentAborted.resolve();
+        } else {
+          signal?.addEventListener("abort", () => agentAborted.resolve(), { once: true });
+        }
+        await agentAborted.promise;
+        cleanupAdmissionClosed.resolve(isGatewaySubordinateWorkAdmissionClosed());
+        await finishAgentCleanup.promise;
+        return undefined;
+      });
 
       const clientReq = http.request({
         hostname: "127.0.0.1",
@@ -3208,6 +3088,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       clientReq.on("error", () => {});
       clientReq.end(
         JSON.stringify({
+          ...(stream ? { stream: true } : {}),
+          ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
           model: "openclaw",
           messages: [{ role: "user", content: "hi" }],
         }),
@@ -3217,16 +3099,26 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(agentCommandMock).toHaveBeenCalledTimes(1);
       });
 
-      clientReq.destroy();
+      try {
+        clientReq.destroy();
 
-      await vi.waitFor(
-        () => {
-          expect(serverAbortSignal?.aborted).toBe(true);
-        },
-        { timeout: 5_000, interval: 50 },
-      );
+        await vi.waitFor(() => expect(serverAbortSignal?.aborted).toBe(true), {
+          timeout: 5_000,
+          interval: 50,
+        });
+        expect(await cleanupAdmissionClosed.promise).toBe(false);
+        expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
+      } finally {
+        finishAgentCleanup.resolve();
+      }
+
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount), {
+        timeout: 5_000,
+        interval: 50,
+      });
     },
   );
+
   // Keep this last: it verifies shutdown of the shared server.
   it("binds the Gateway lifecycle resolver to chat-completion runs", async () => {
     let resolveGatewayContext: ReturnType<typeof getGatewayContextResolver>;

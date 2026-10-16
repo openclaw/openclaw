@@ -356,9 +356,15 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       return requestForSession(input);
     },
 
-    async resumeSessionRequests(): Promise<void> {
+    async resumeSessionRequests(isStopping?: () => boolean): Promise<void> {
+      if (isStopping?.()) {
+        return;
+      }
       const rows = await listSharedGitHubPublicationsAsync({ claimNull: true, pending: true });
       params.assertCurrent();
+      if (isStopping?.()) {
+        return;
+      }
       const pending = new Set(
         (await params.placements.listPendingWorkspaceResultsAsync()).map(
           (result) => result.sessionId,
@@ -366,8 +372,14 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       );
       const failures: Error[] = [];
       const blockedWorktrees = new Set<string>();
+      if (isStopping?.()) {
+        return;
+      }
       const placements = await params.placements.getManyAsync(rows.map((row) => row.session_id));
       for (const row of rows) {
+        if (isStopping?.()) {
+          break;
+        }
         if (
           blockedWorktrees.has(row.worktree_id) ||
           pending.has(row.session_id) ||
@@ -376,6 +388,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           continue;
         }
         try {
+          // An executing publication keeps its custody through durable settlement.
           await processRow(row, () => {
             const placement = params.placements.get(row.session_id);
             return !placement?.turnClaim && !pending.has(row.session_id);
@@ -463,8 +476,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           "repository" | "branch" | "source_head_commit" | "workspace_tree"
         >,
       ) => Promise<boolean>,
+      preparedRead?: Parameters<typeof readSharedGitHubPublication>[2],
     ): Promise<SessionGitHubStatusResult | null> {
-      const row = await readSharedGitHubPublication(session, { idempotencyKey });
+      const row = await readSharedGitHubPublication(session, { idempotencyKey }, preparedRead);
       // Discovery offers recovery for current work, not a failure whose accepted
       // snapshot has since been published. Exact-key and by-id history stay intact.
       if (

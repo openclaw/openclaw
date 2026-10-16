@@ -315,7 +315,7 @@ export async function handleChatSendWithStorage(
     let approvedInput: PersistedUserTurnMessage | undefined;
     let stageInput = Boolean(
       entry?.sessionId &&
-      userTurn.baseInput.display !== false &&
+      (userTurn.baseInput.display !== false || request.restartResume) &&
       (!systemInputProvenance ||
         systemInputProvenance.kind === "external_user" ||
         options?.stageCreatedInput === true) &&
@@ -324,7 +324,7 @@ export async function handleChatSendWithStorage(
       !restartSafeAdmission?.retryExpectedState &&
       !commitInitialInput,
     );
-    if (stageInput && restartSafeAdmission) {
+    if (stageInput && restartSafeAdmission && !request.restartResume) {
       inputAdmissionAttempted = true;
       const input = await admission.acquireInputActor();
       if (input) {
@@ -353,7 +353,10 @@ export async function handleChatSendWithStorage(
         assertCustodyLifetimeCurrent,
         assertClientUploadAllowed: admission.assertClientUploadAllowed,
       });
-      const staged = await userTurnRecorder.stageApproved?.(pendingAdmission);
+      const staged = await userTurnRecorder.stageApproved?.({
+        ...pendingAdmission,
+        ...(request.restartResume ? { lifecycleAdmission: request.restartResume } : {}),
+      });
       stagePhase?.finish();
       if (userTurnRecorder.isPendingInputConsumed?.()) {
         admission.cleanupAdmittedRun();

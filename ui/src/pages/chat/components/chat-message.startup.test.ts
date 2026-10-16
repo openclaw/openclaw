@@ -1,22 +1,27 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { expect, it } from "vitest";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { chatStartupStatusLabel } from "../chat-run-startup.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
-import { renderStreamGroup } from "./chat-message-stream.test-support.ts";
+import { StreamGroup } from "./chat-message-stream-view.tsx";
 
 it("renders the startup status with elapsed time instead of a working phrase", () => {
   const container = document.createElement("div");
 
-  render(
-    renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
-      startupLabel: chatStartupStatusLabel(
-        { state: "status", runId: "startup-run", phase: "waiting_for_state" },
-        null,
-      ),
-    }),
-    container,
+  mountSolid(
+    () =>
+      createComponent(StreamGroup, {
+        parts: [{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }],
+        options: {
+          startupLabel: chatStartupStatusLabel(
+            { state: "status", runId: "startup-run", phase: "waiting_for_state" },
+            null,
+          ),
+        },
+      }),
+    { container },
   );
 
   expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
@@ -52,19 +57,23 @@ it.each([
   [{ mode: "cold", reason: "warm-images-off", phase: "provisioning" }, "Provisioning environment…"],
 ] as const)("renders cloud start status in the existing line (%j)", (startStatus, label) => {
   const container = document.createElement("div");
-  render(
-    renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
-      startupLabel: chatStartupStatusLabel(
-        null,
-        {
-          sessionKey: "agent:main:cloud-status",
-          phase: "provisioning",
-          startedAt: 1_000,
+  mountSolid(
+    () =>
+      createComponent(StreamGroup, {
+        parts: [{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }],
+        options: {
+          startupLabel: chatStartupStatusLabel(
+            null,
+            {
+              sessionKey: "agent:main:cloud-status",
+              phase: "provisioning",
+              startedAt: 1_000,
+            },
+            startStatus,
+          ),
         },
-        startStatus,
-      ),
-    }),
-    container,
+      }),
+    { container },
   );
   expect(container.querySelectorAll(".chat-working-indicator__status")).toHaveLength(1);
   expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(label);

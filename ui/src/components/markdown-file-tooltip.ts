@@ -1,7 +1,7 @@
 import { t } from "../i18n/index.ts";
 import { showToast } from "../lib/toast.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
-import { createMarkdownIcon } from "./markdown-icon.ts";
+import { createIconElement } from "./markdown-icon.ts";
 import "../styles/markdown-file-tooltip.css";
 
 /** The shared tooltip owns visibility, input modality, positioning, and dismissal. */
@@ -21,7 +21,7 @@ export function renderMarkdownFileTooltip(container: HTMLElement, path: string) 
   const button = ownerDocument.createElement("button");
   button.type = "button";
   button.setAttribute("aria-label", label);
-  const icon = createMarkdownIcon("copy", ownerDocument);
+  const icon = createIconElement("copy", ownerDocument);
   button.append(icon);
   const status = ownerDocument.createElement("span");
   status.setAttribute("role", "status");
@@ -31,9 +31,7 @@ export function renderMarkdownFileTooltip(container: HTMLElement, path: string) 
       showToast({ message: t("common.copyFailed") });
     }
     // Keep the hovered SVG shell, as the former renderer did across icon changes.
-    icon.replaceChildren(
-      ...createMarkdownIcon(copied ? "check" : "copy", ownerDocument).childNodes,
-    );
+    icon.replaceChildren(...createIconElement(copied ? "check" : "copy", ownerDocument).childNodes);
     status.className = copied === false ? "" : "sr-only";
     status.textContent =
       copied === undefined ? "" : t(copied ? "common.copied" : "common.copyFailed");

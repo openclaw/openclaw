@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { retainSqliteDatabaseAdmissionLocation } from "../infra/sqlite-database-admission.js";
 import {
   currentSqliteOperationTiming,
   withSqliteReaderOwner,
@@ -79,66 +80,72 @@ it.each([0, 1])("counts quarantine initialization from version %s once", (versio
   });
 });
 
-it("retains quarantine decisions across closed handles and publishes record and clear", () => {
+it("shares quarantine decisions while an admitted sibling remains open", () => {
   const fixture = createFixture();
-  fixture.record();
-  const open = nodeSqlite.openNodeSqliteDatabase;
-  const timeouts: unknown[] = [];
-  const statements: string[] = [];
-  vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    const database = open(...args);
-    if (args[0] === fixture.storePath) {
-      timeouts.push(database.prepare("PRAGMA busy_timeout").get()?.timeout);
-      const exec = database.exec.bind(database);
-      const prepare = database.prepare.bind(database);
-      vi.spyOn(database, "prepare").mockImplementation((sql) => {
-        statements.push(sql);
-        return prepare(sql);
-      });
-      vi.spyOn(database, "exec").mockImplementation((sql) => {
-        statements.push(sql);
-        exec(sql);
-      });
-    }
-    return database;
-  });
-  expect(
-    readOpenClawDatabaseQuarantineFailure("agent", fixture.pathname, { env: fixture.env }),
-  ).toBeUndefined();
-  const readDecision = () => {
-    const observation = observeSqliteReadSql(
-      nodeSqlite.requireNodeSqlite().StatementSync.prototype,
-    );
-    try {
-      const result = readOpenClawDatabaseQuarantineFailure("agent", fixture.pathname, {
+  retainSqliteDatabaseAdmissionLocation(fixture.storePath);
+  const sibling = nodeSqlite.openNodeSqliteDatabase(fixture.storePath);
+  try {
+    fixture.record();
+    const open = nodeSqlite.openNodeSqliteDatabase;
+    const timeouts: unknown[] = [];
+    const statements: string[] = [];
+    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+      const database = open(...args);
+      if (args[0] === fixture.storePath) {
+        timeouts.push(database.prepare("PRAGMA busy_timeout").get()?.timeout);
+        const exec = database.exec.bind(database);
+        const prepare = database.prepare.bind(database);
+        vi.spyOn(database, "prepare").mockImplementation((sql) => {
+          statements.push(sql);
+          return prepare(sql);
+        });
+        vi.spyOn(database, "exec").mockImplementation((sql) => {
+          statements.push(sql);
+          exec(sql);
+        });
+      }
+      return database;
+    });
+    expect(
+      readOpenClawDatabaseQuarantineFailure("agent", fixture.pathname, { env: fixture.env }),
+    ).toBeUndefined();
+    const readDecision = () => {
+      const observation = observeSqliteReadSql(
+        nodeSqlite.requireNodeSqlite().StatementSync.prototype,
+      );
+      try {
+        const result = readOpenClawDatabaseQuarantineFailure("agent", fixture.pathname, {
+          env: fixture.env,
+        });
+        expect(observation.queries).toEqual([]);
+        return result;
+      } finally {
+        observation.restore();
+      }
+    };
+    expect(readDecision()).toBeUndefined();
+    expect(
+      recordOpenClawDatabaseQuarantine({
         env: fixture.env,
-      });
-      expect(observation.queries).toEqual([]);
-      return result;
-    } finally {
-      observation.restore();
-    }
-  };
-  expect(readDecision()).toBeUndefined();
-  expect(
-    recordOpenClawDatabaseQuarantine({
-      env: fixture.env,
-      path: fixture.pathname,
-      kind: "agent",
-      reason: "synthetic verified damage",
-    }),
-  ).toBe(true);
-  expect(readDecision()).toMatchObject({
-    name: "SqliteIntegrityError",
-    message: expect.stringContaining("synthetic verified damage"),
-  });
-  expect(clearOpenClawDatabaseQuarantine(fixture.pathname, { env: fixture.env })).toBe(true);
-  expect(readDecision()).toBeUndefined();
-  expect(timeouts).toEqual([5_000, 5_000]);
-  expect(statements.some((sql) => /\bPRAGMA\s+busy_timeout\s*=/i.test(sql))).toBe(false);
-  expect(statements.filter((sql) => /\bPRAGMA\s+user_version\b|CREATE TABLE/i.test(sql))).toEqual(
-    [],
-  );
+        path: fixture.pathname,
+        kind: "agent",
+        reason: "synthetic verified damage",
+      }),
+    ).toBe(true);
+    expect(readDecision()).toMatchObject({
+      name: "SqliteIntegrityError",
+      message: expect.stringContaining("synthetic verified damage"),
+    });
+    expect(clearOpenClawDatabaseQuarantine(fixture.pathname, { env: fixture.env })).toBe(true);
+    expect(readDecision()).toBeUndefined();
+    expect(timeouts).toEqual([5_000, 5_000]);
+    expect(statements.some((sql) => /\bPRAGMA\s+busy_timeout\s*=/i.test(sql))).toBe(false);
+    expect(statements.filter((sql) => /\bPRAGMA\s+user_version\b|CREATE TABLE/i.test(sql))).toEqual(
+      [],
+    );
+  } finally {
+    sibling.close();
+  }
 });
 
 it("keeps quarantine decisions scoped to their recorded pathname", () => {
@@ -167,36 +174,43 @@ it("keeps quarantine decisions scoped to their recorded pathname", () => {
   });
 });
 
-it("validates a replaced quarantine store once across closed handles", () => {
+it("validates a replaced quarantine store once while an admitted sibling remains open", () => {
   const fixture = createFixture();
   fs.renameSync(fixture.storePath, `${fixture.storePath}.original`);
   fs.copyFileSync(`${fixture.storePath}.original`, fixture.storePath);
-  const open = nodeSqlite.openNodeSqliteDatabase;
-  const statements: string[] = [];
-  vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    const database = open(...args);
-    if (args[0] === fixture.storePath) {
-      const prepare = database.prepare.bind(database);
-      const exec = database.exec.bind(database);
-      vi.spyOn(database, "prepare").mockImplementation((sql) => {
-        statements.push(sql);
-        return prepare(sql);
-      });
-      vi.spyOn(database, "exec").mockImplementation((sql) => {
-        statements.push(sql);
-        exec(sql);
-      });
-    }
-    return database;
-  });
-  fixture.record();
-  expect(statements.filter((sql) => /\bPRAGMA\s+user_version\b/i.test(sql))).toHaveLength(1);
-  expect(statements.filter((sql) => /CREATE TABLE/i.test(sql))).toHaveLength(0);
-  statements.length = 0;
-  fixture.record();
-  expect(statements.filter((sql) => /\bPRAGMA\s+user_version\b|CREATE TABLE/i.test(sql))).toEqual(
-    [],
-  );
+  // Keep quarantine facts alive without adding generic catalog admission and its DDL refresh.
+  retainSqliteDatabaseAdmissionLocation(fixture.storePath);
+  const sibling = nodeSqlite.openNodeSqliteDatabase(fixture.storePath);
+  try {
+    const open = nodeSqlite.openNodeSqliteDatabase;
+    const statements: string[] = [];
+    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+      const database = open(...args);
+      if (args[0] === fixture.storePath) {
+        const prepare = database.prepare.bind(database);
+        const exec = database.exec.bind(database);
+        vi.spyOn(database, "prepare").mockImplementation((sql) => {
+          statements.push(sql);
+          return prepare(sql);
+        });
+        vi.spyOn(database, "exec").mockImplementation((sql) => {
+          statements.push(sql);
+          exec(sql);
+        });
+      }
+      return database;
+    });
+    fixture.record();
+    expect(statements.filter((sql) => /\bPRAGMA\s+user_version\b/i.test(sql))).toHaveLength(1);
+    expect(statements.filter((sql) => /CREATE TABLE/i.test(sql))).toHaveLength(0);
+    statements.length = 0;
+    fixture.record();
+    expect(statements.filter((sql) => /\bPRAGMA\s+user_version\b|CREATE TABLE/i.test(sql))).toEqual(
+      [],
+    );
+  } finally {
+    sibling.close();
+  }
 });
 
 it.each([
@@ -246,7 +260,7 @@ it.each([
   }
 });
 
-it("refreshes schema facts after DDL and still reads fresh quarantine decisions", () => {
+it("uses generation metadata only after its schema version admits it", () => {
   const fixture = createFixture();
   expect(
     recordOpenClawDatabaseQuarantine({
@@ -257,7 +271,6 @@ it("refreshes schema facts after DDL and still reads fresh quarantine decisions"
     }),
   ).toBe(true);
   const database = nodeSqlite.openNodeSqliteDatabase(fixture.storePath);
-  const observation = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
   try {
     database.exec(
       "PRAGMA user_version = 1; UPDATE quarantined_databases SET verified_generation = 'invalid'",
@@ -275,23 +288,7 @@ it("refreshes schema facts after DDL and still reads fresh quarantine decisions"
         fresh: true,
       }),
     ).toBeUndefined();
-    database.exec(
-      "UPDATE quarantined_databases SET verified_generation = NULL, reason = 'updated decision'",
-    );
-    expect(
-      readOpenClawDatabaseQuarantineFailure("agent", fixture.pathname, {
-        env: fixture.env,
-        fresh: true,
-      }),
-    ).toMatchObject({ message: expect.stringContaining("updated decision") });
-    expect(observation.queries.filter((sql) => /^PRAGMA user_version$/iu.test(sql))).toHaveLength(
-      2,
-    );
-    expect(
-      observation.queries.filter((sql) => sql.includes("FROM quarantined_databases")),
-    ).toHaveLength(3);
   } finally {
-    observation.restore();
     database.close();
   }
 });

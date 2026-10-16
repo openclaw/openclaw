@@ -16,6 +16,10 @@ import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { deleteUserPreference, selectUserPreferenceValues } from "./user-preferences.store.js";
 import {
+  selectEnterpriseGitHubIdentities,
+  selectEnterpriseGitHubProfileIdsForMerge,
+} from "./user-profile-enterprise-github-identity.js";
+import {
   captureUserProfileAuthorityRead,
   publishUserProfileAuthorityChange,
 } from "./user-profile-events.js";
@@ -36,6 +40,7 @@ import type {
   UserProfileGitHubAttribution,
   UserProfileGitHubAttributionRead,
   UserProfileRoleAuthority,
+  EnterpriseGitHubIdentity,
 } from "./user-profiles.types.js";
 
 const GITHUB_PROVIDER = "github";
@@ -179,6 +184,10 @@ export function selectProfileAccessEntries(
     return rows;
   }
   const identities = selectStoredGitHubIdentities(db, profileIds);
+  const githubIdentities = projectUserProfileGitHubIdentities(
+    identities,
+    selectEnterpriseGitHubIdentities(db, profileIds),
+  );
   return rows.map(([id, row]) => {
     const identity = identities.get(id);
     const accounts = identity?.accounts;
@@ -189,8 +198,9 @@ export function selectProfileAccessEntries(
             ...row,
             githubAccountIds: accounts.map(({ accountId }) => accountId),
             githubLogin: identity?.primary?.login ?? null,
+            githubIdentity: githubIdentities.get(id) ?? null,
           }
-        : row,
+        : { ...row, githubIdentity: githubIdentities.get(id) ?? null },
     ];
   });
 }
@@ -248,23 +258,47 @@ export function selectUserProfileGitHubIdentities(
   db: EngineConnection,
   profileIds?: readonly string[],
 ): Map<string, UserProfileGitHubIdentity> {
+  return projectUserProfileGitHubIdentities(
+    selectStoredGitHubIdentities(db, profileIds),
+    selectEnterpriseGitHubIdentities(db, profileIds),
+  );
+}
+
+function projectUserProfileGitHubIdentities(
+  publicIdentities: ReturnType<typeof selectStoredGitHubIdentities>,
+  enterpriseIdentities: Map<string, EnterpriseGitHubIdentity>,
+): Map<string, UserProfileGitHubIdentity> {
   const identities = new Map<string, UserProfileGitHubIdentity>();
-  for (const [profileId, { primary }] of selectStoredGitHubIdentities(db, profileIds)) {
+  for (const [profileId, { primary }] of publicIdentities) {
     if (primary) {
+      identities.set(profileId, projectGitHubIdentity(primary));
+    }
+  }
+  for (const [profileId, identity] of enterpriseIdentities) {
+    if (!publicIdentities.has(profileId)) {
       identities.set(profileId, {
-        login: primary.login,
-        profileUrl: `https://github.com/${primary.login}`,
-        avatarUrl: `https://avatars.githubusercontent.com/u/${primary.accountId}?v=4`,
+        host: identity.host,
+        login: identity.login,
+        profileUrl: `https://${identity.host}/${identity.login}`,
+        avatarUrl: `https://${identity.host}/avatars/u/${identity.accountId}`,
       });
     }
   }
   return identities;
 }
 
+function projectGitHubIdentity(primary: StoredGitHubIdentity): UserProfileGitHubIdentity {
+  return {
+    login: primary.login,
+    profileUrl: `https://github.com/${primary.login}`,
+    avatarUrl: `https://avatars.githubusercontent.com/u/${primary.accountId}?v=4`,
+  };
+}
+
 /** Resolves current verified identities and public-credit preferences without initializing storage. */
 export async function resolveUserProfileGitHubAttribution(
   profileIds: readonly string[],
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { host?: string } = {},
 ): Promise<UserProfileGitHubAttribution> {
   if (profileIds.length === 0) {
     return new Map();
@@ -275,6 +309,7 @@ export async function resolveUserProfileGitHubAttribution(
 function resolveUserProfileGitHubAttributionInDatabase(
   db: EngineConnection,
   profileIds: readonly string[],
+  host = "github.com",
 ): UserProfileGitHubAttributionRead {
   if (profileIds.length === 0 || !tableExists(db, "user_profiles")) {
     return { identities: new Map(), canonicalProfileIds: [] };
@@ -291,15 +326,28 @@ function resolveUserProfileGitHubAttributionInDatabase(
   );
   const canonicalIds = [...new Set(canonicalBySource.values())];
   const identities = selectStoredGitHubIdentities(db, canonicalIds);
+  const enterprise =
+    host !== "github.com"
+      ? selectEnterpriseGitHubIdentities(db, canonicalIds, host)
+      : new Map<string, EnterpriseGitHubIdentity>();
   const preferences = selectUserPreferenceValues(db, canonicalIds, GIT_COAUTHOR_PREFERENCE_KEY);
   return {
     identities: new Map(
-      [...canonicalBySource].map(([sourceId, canonicalId]) => [
-        sourceId,
-        isGitCoauthorCreditEnabled(preferences.get(canonicalId))
-          ? (identities.get(canonicalId)?.primary ?? null)
-          : null,
-      ]),
+      [...canonicalBySource].map(([sourceId, canonicalId]) => {
+        const enterpriseIdentity = enterprise.get(canonicalId);
+        const identity =
+          host !== "github.com"
+            ? enterpriseIdentity?.verifiedEmail
+              ? enterpriseIdentity
+              : null
+            : host === "github.com"
+              ? (identities.get(canonicalId)?.primary ?? null)
+              : null;
+        return [
+          sourceId,
+          isGitCoauthorCreditEnabled(preferences.get(canonicalId)) ? identity : null,
+        ];
+      }),
     ),
     canonicalProfileIds: canonicalIds,
   };
@@ -315,11 +363,12 @@ const preparedGitHubAttributions = new Map<string, PreparedGitHubAttribution>();
 /** Bind public credit to its live profile owner before any later publication awaits. */
 export async function prepareUserProfileGitHubAttribution(
   profileIds: readonly string[],
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { host?: string } = {},
 ): Promise<PreparedGitHubAttribution> {
   const selectedProfileIds = [...profileIds];
   const context = captureOpenClawStateWorkerContext(options);
-  const key = JSON.stringify([context.admission.identity.key, selectedProfileIds]);
+  const host = options.host ?? "github.com";
+  const key = JSON.stringify([context.admission.identity.key, selectedProfileIds, host]);
   const cached = preparedGitHubAttributions.get(key);
   if (cached?.isCurrent()) {
     return { identities: structuredClone(cached.identities), isCurrent: cached.isCurrent };
@@ -329,7 +378,7 @@ export async function prepareUserProfileGitHubAttribution(
     const authority = await captureUserProfileAuthorityRead(context.admission);
     const reply = await executeExistingOpenClawStateRead(
       { path: context.admission.databasePath, env: context.environment },
-      { type: "userProfiles.githubAttribution.resolve", profileIds: selectedProfileIds },
+      { type: "userProfiles.githubAttribution.resolve", profileIds: selectedProfileIds, host },
       { context, current: true },
     );
     context.admission.assertCurrent();
@@ -372,7 +421,7 @@ export function readUserProfileGitHubCommand(
         }
       : {
           type: command.type,
-          ...resolveUserProfileGitHubAttributionInDatabase(db, command.profileIds),
+          ...resolveUserProfileGitHubAttributionInDatabase(db, command.profileIds, command.host),
         },
   );
 }
@@ -394,9 +443,14 @@ export function prepareUserProfileGitHubMerge(
     (survivingSourceProfileId
       ? identities.get(survivingSourceProfileId)?.primary?.accountId
       : undefined);
+  const enterpriseIdentities = selectEnterpriseGitHubProfileIdsForMerge(db, sourceProfileIds);
   for (const sourceProfileId of sourceProfileIds) {
     const sourceIdentity = identities.get(sourceProfileId)?.primary;
-    if (!sourceIdentity || sourceIdentity.accountId !== survivingAccountId) {
+    // Retained enterprise accounts keep consent even while merged bindings need fresh sign-in.
+    if (
+      !enterpriseIdentities.has(sourceProfileId) &&
+      (!sourceIdentity || sourceIdentity.accountId !== survivingAccountId)
+    ) {
       deleteUserPreference(db, sourceProfileId, GIT_COAUTHOR_PREFERENCE_KEY);
     }
   }

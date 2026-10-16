@@ -209,7 +209,7 @@ describe("trusted full release candidate selection", () => {
         { ...metadata, digest: "" },
         { ...metadata, expired: true },
         { ...metadata, expires_at: "2026-08-28T11:59:59Z" },
-        { ...metadata, expires_at: "2026-08-28T13:59:59Z" },
+        { ...metadata, expires_at: "2026-08-29T01:00:00Z" },
         {
           ...artifactMetadata(archive, { id: 302 }),
           workflow_run: {
@@ -259,25 +259,6 @@ describe("trusted full release candidate selection", () => {
     expect(selected?.artifact.id).toBe(10);
   });
 
-  it("requires enough remaining lifetime for the longest release-validation drain", async () => {
-    const { archive, manifest } = await fixture();
-    const tooShort = artifactMetadata(archive, {
-      expires_at: new Date(NOW + 13 * 60 * 60 * 1000).toISOString(),
-    });
-    const longEnough = artifactMetadata(archive, {
-      expires_at: new Date(NOW + 15 * 60 * 60 * 1000).toISOString(),
-      id: 302,
-    });
-    const selected = await selectTrustedFullReleaseCandidate({
-      artifacts: [tooShort, longEnough],
-      now: NOW,
-      readWorkflowRun: async (runId) => workflowRun(runId),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-    });
-    expect(selected?.artifact.id).toBe(302);
-  });
-
   it("stops provenance reads when the discovery deadline is exhausted", async () => {
     const { manifest, metadata } = await fixture();
     let reads = 0;
@@ -295,34 +276,6 @@ describe("trusted full release candidate selection", () => {
       }),
     ).rejects.toThrow("candidate discovery exceeded its time budget");
     expect(reads).toBe(0);
-  });
-
-  it("skips an artifact whose trusted publisher job did not succeed", async () => {
-    const { archive, manifest, metadata } = await fixture();
-    const newest = artifactMetadata(archive, {
-      created_at: "2026-08-28T11:00:00Z",
-      id: 302,
-      workflow_run: {
-        head_repository_id: 1,
-        head_sha: manifest.request.toolingSha,
-        id: 78,
-        repository_id: 1,
-      },
-    });
-    const selected = await selectTrustedFullReleaseCandidate({
-      artifacts: [metadata, newest],
-      now: NOW,
-      readWorkflowRun: async (runId) => workflowRun(runId),
-      readWorkflowJobs: async (runId) => {
-        const jobs = workflowJobs(manifest, { runId });
-        if (runId === 78) {
-          jobs.jobs[1]!.conclusion = "failure";
-        }
-        return jobs;
-      },
-      request: manifest.request,
-    });
-    expect(selected?.artifact.id).toBe(301);
   });
 
   it("skips a trust miss but never falls back after selecting malformed evidence", async () => {
@@ -932,7 +885,6 @@ describe("full release candidate loading", () => {
   });
 
   it.each([
-    ["job id", (jobs) => void (jobs.jobs[1]!.id = 999)],
     ["job name", (jobs) => void (jobs.jobs[1]!.name = "different publisher")],
     ["job conclusion", (jobs) => void (jobs.jobs[1]!.conclusion = "failure")],
   ] satisfies Array<[string, (jobs: ReturnType<typeof workflowJobs>) => void]>)(

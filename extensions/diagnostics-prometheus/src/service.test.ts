@@ -1011,6 +1011,31 @@ describe("metrics HTTP handler", () => {
       expect(head.status).toBe(200);
       expect(head.headers.get("content-length")).toBe(String(getBodyBytes));
       expect(headBody.byteLength).toBe(0);
+
+      metrics.record({ type: "queue.lane.enqueue", lane: "main", queueSize: 2 });
+      await fetch(base).then((res) => res.text());
+      metrics.record({ type: "queue.lane.dequeue", lane: "main", queueSize: 0, waitMs: 10 });
+      const updated = await fetch(base);
+      const updatedBody = await updated.text();
+      expect(updatedBody).toContain('openclaw_queue_lane_size{lane="main"} 0\n');
+      expect(updatedBody).toContain(
+        'openclaw_queue_lane_wait_seconds_bucket{lane="main",le="0.005"} 0\n',
+      );
+      expect(updated.headers.get("content-length")).toBe(String(Buffer.byteLength(updatedBody)));
+
+      metrics.stop();
+      metrics.start();
+      metrics.record({ type: "webhook.received", channel: "test", updateType: "message" });
+      const restarted = await fetch(base);
+      const restartedBody = await restarted.text();
+      expect(restartedBody).toBe(
+        "# HELP openclaw_webhook_received_total Webhook requests received by channel and update type.\n" +
+          "# TYPE openclaw_webhook_received_total counter\n" +
+          'openclaw_webhook_received_total{channel="test",webhook="message"} 1\n',
+      );
+      expect(restarted.headers.get("content-length")).toBe(
+        String(Buffer.byteLength(restartedBody)),
+      );
     });
   });
 });

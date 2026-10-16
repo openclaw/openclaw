@@ -43,6 +43,7 @@ const workerDeployArtifactNames = [
   "worker-native-lifecycle.worker.mjs",
   "worker.mjs",
   "workspace-rsync-receiver.mjs",
+  "windows-security-helper.exe",
 ];
 
 function makeTempRoot(): string {

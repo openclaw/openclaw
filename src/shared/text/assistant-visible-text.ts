@@ -294,7 +294,16 @@ export function assistantVisibleTextFilters(
     preserve ? leadingEmptyLinesTextFilter : trimTextFilter(trim, { preserveCodeIndentation }),
     {
       transform: stripInvisibleAssistantText,
-      create: () => createConditionalTextProjector(stripInvisibleAssistantText, () => true),
+      create: () => {
+        let visible = false;
+        return createConditionalTextProjector(
+          () => "",
+          (input) => {
+            visible ||= Boolean(stripInvisibleAssistantText(input.delta ?? input.text));
+            return !visible;
+          },
+        );
+      },
     },
   );
   profileFilters.set(key, filters);
@@ -400,11 +409,6 @@ export function stripAssistantInternalScaffolding(text: string): string {
  */
 export function sanitizeAssistantVisibleText(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
-}
-
-/** Sanitizes text already marked as final-answer prose by the agent runtime. */
-export function sanitizeAssistantFinalAnswerText(text: string): string {
-  return sanitizeAssistantVisibleTextWithProfile(text, "final-answer-delivery");
 }
 
 /**

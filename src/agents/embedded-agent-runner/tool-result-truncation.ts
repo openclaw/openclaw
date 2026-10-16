@@ -6,6 +6,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
+import type { TranscriptRewriteReplacement as ToolResultReplacement } from "../../context-engine/types.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -757,11 +758,6 @@ function buildToolResultPlanningBranch(messages: AgentMessage[]): ToolResultMess
     message,
   }));
 }
-
-type ToolResultReplacement = {
-  entryId: string;
-  message: AgentMessage;
-};
 
 type MeasuredToolResultBranchEntry = {
   readonly entry: ToolResultBranchEntry;

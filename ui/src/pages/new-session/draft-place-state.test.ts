@@ -51,7 +51,7 @@ describe("DraftPlaceState repository selection", () => {
           ? eligibility.promise
           : { repositoryStatus: "git", branches: [] },
       );
-      f.requestUpdate.mockImplementation(() => {
+      f.changed.mockImplementation(() => {
         if (f.state.worktree && f.state.worktreeAvailable()) {
           settled.resolve();
         }
@@ -105,7 +105,7 @@ describe("DraftPlaceState repository selection", () => {
         ? old.promise
         : Promise.resolve({ current: true, worktree: true }),
     );
-    f.requestUpdate.mockImplementation(() => {
+    f.changed.mockImplementation(() => {
       if (f.browser.projectId === "current" && !f.state.folderSubmissionBlocked()) {
         settled.resolve();
       }
@@ -190,7 +190,7 @@ describe("DraftPlaceState repository selection", () => {
   });
 
   it("leaves the worktree base to the Gateway unless a branch was selected", async () => {
-    const { state, request, requestUpdate } = createRepositoryFixture({ workspaceGit: true });
+    const { state, request, changed } = createRepositoryFixture({ workspaceGit: true });
     const discovered = createDeferred();
     request.mockResolvedValue({
       repositoryStatus: "git",
@@ -198,7 +198,7 @@ describe("DraftPlaceState repository selection", () => {
       defaultBranch: "main",
       headBranch: "old-feature",
     });
-    requestUpdate.mockImplementation(() => {
+    changed.mockImplementation(() => {
       if (state.repository.kind === "git") {
         discovered.resolve();
       }
@@ -647,11 +647,11 @@ describe("DraftPlaceState repository selection", () => {
   );
 
   it("ignores a failed saved-worktree probe after the user chooses another folder", async () => {
-    const { state, request, requestUpdate } = createRepositoryFixture({ workspaceGit: true });
+    const { state, request, changed } = createRepositoryFixture({ workspaceGit: true });
     const previous = createDeferred<WorktreesBranchesResult>();
     const current = Promise.resolve({ repositoryStatus: "git", branches: [] });
     const currentPublished = createDeferred();
-    requestUpdate.mockImplementation(() => {
+    changed.mockImplementation(() => {
       if (state.repository.kind === "git") {
         currentPublished.resolve();
       }
@@ -676,8 +676,7 @@ describe("DraftPlaceState repository selection", () => {
   it.each(["local", "device", "cloud"] as const)(
     "preserves remote-project branch intent and checkout eligibility on %s",
     (placement) => {
-      const { state, browser, persistPreference, requestUpdate, request } =
-        createRepositoryFixture();
+      const { state, browser, persistPreference, changed, request } = createRepositoryFixture();
       state.selectRemoteProject(REMOTE_PROJECT);
       if (placement === "local") {
         expect(state.repository).toEqual({
@@ -710,12 +709,12 @@ describe("DraftPlaceState repository selection", () => {
       }
       expect(state.baseRef).toBe("release");
       persistPreference.mockClear();
-      requestUpdate.mockClear();
+      changed.mockClear();
       request.mockClear();
       state.selectWorktree(placement === "local");
       expect(state.worktree).toBe(placement === "local");
       expect(persistPreference).not.toHaveBeenCalled();
-      expect(requestUpdate).not.toHaveBeenCalled();
+      expect(changed).not.toHaveBeenCalled();
       expect(request).not.toHaveBeenCalled();
     },
   );
@@ -723,7 +722,7 @@ describe("DraftPlaceState repository selection", () => {
   it.each(["/workspace", "/plain"])(
     "rejects worktree selection before and after confirming a non-Git folder %s",
     async (folder) => {
-      const { state, persistPreference, requestUpdate, request, readPreference } =
+      const { state, persistPreference, changed, request, readPreference } =
         createRepositoryFixture();
       const discovery = createDeferred<WorktreesBranchesResult>();
       if (folder === "/plain") {
@@ -744,7 +743,7 @@ describe("DraftPlaceState repository selection", () => {
       }
       await vi.waitFor(() => expect(state.repository.kind).toBe("direct"));
       persistPreference.mockClear();
-      requestUpdate.mockClear();
+      changed.mockClear();
 
       state.selectWorktree(true);
 
@@ -752,7 +751,7 @@ describe("DraftPlaceState repository selection", () => {
       expect(state.worktreeAvailable()).toBe(false);
       expect(state.checkoutVisible).toBe(false);
       expect(persistPreference).not.toHaveBeenCalled();
-      expect(requestUpdate).not.toHaveBeenCalled();
+      expect(changed).not.toHaveBeenCalled();
     },
   );
 
@@ -784,12 +783,12 @@ describe("DraftPlaceState repository selection", () => {
     { kind: "device", id: "desktop" },
     { kind: "auto-device" },
   ] as const)("does not restore $kind isolation as a local checkout choice", async (where) => {
-    const { state, readPreference, requestUpdate } = createRepositoryFixture({
+    const { state, readPreference, changed } = createRepositoryFixture({
       workspaceGit: true,
       unavailable: true,
     });
     const discovered = createDeferred();
-    requestUpdate.mockImplementation(() => {
+    changed.mockImplementation(() => {
       if (state.repository.kind === "unavailable") {
         discovered.resolve();
       }
@@ -887,7 +886,7 @@ describe("DraftPlaceState cloud machine selection", () => {
         ],
       },
     ];
-    const { state, requestUpdate } = createRepositoryFixture({ cloudProfiles });
+    const { state, changed } = createRepositoryFixture({ cloudProfiles });
 
     state.applyPendingPlacement({ agentId: "main", profileId: "aws" });
     expect(state.cloudSelection.machineClass).toBe("standard");
@@ -905,7 +904,7 @@ describe("DraftPlaceState cloud machine selection", () => {
     expect(state.cloudSelection.machineClass).toBe("fast");
     state.cloudMachines.select("aws", "standard", cloudProfiles);
     expect(state.cloudSelection.machineClass).toBe("standard");
-    expect(requestUpdate).toHaveBeenCalled();
+    expect(changed).toHaveBeenCalled();
   });
 
   it("restores the exact recovered choice instead of retaining a stale draft override", () => {

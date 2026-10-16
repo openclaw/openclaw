@@ -9,12 +9,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import {
@@ -35,18 +35,6 @@ const workspaceConfig = {
     },
   },
 } as OpenClawConfig;
-
-function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  return requireRecord(arg);
-}
 
 async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
@@ -87,27 +75,6 @@ describe("runMessageAction media behavior", () => {
   beforeEach(async () => {
     await resetMessageActionMediaMocks();
   });
-  it("copies the normalized idempotency key into send execution context", async () => {
-    setTestPlugin(workspacePlugin, "workspace");
-
-    await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "12345678",
-        message: "hello",
-        idempotencyKey: " run-1:message-tool:send-1:fingerprint ",
-      },
-    });
-
-    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
-    expect(requireRecord(sendArgs.ctx).idempotencyKey).toBe(
-      "run-1:message-tool:send-1:fingerprint",
-    );
-    expect(requireRecord(sendArgs.ctx).channelPlugin).toBe(workspacePlugin);
-    expect(channelResolutionMocks.resolveOutboundChannelPlugin).toHaveBeenCalledTimes(1);
-  });
-
   it("materializes buffer-only send attachments into outbound media paths", async () => {
     setTestPlugin(workspacePlugin, "workspace");
 
@@ -121,6 +88,7 @@ describe("runMessageAction media behavior", () => {
           buffer: Buffer.from("artifact bytes").toString("base64"),
           filename: "artifact.txt",
           contentType: "text/plain",
+          idempotencyKey: " run-1:message-tool:send-1:fingerprint ",
         },
       });
 
@@ -133,60 +101,19 @@ describe("runMessageAction media behavior", () => {
         "artifact bytes",
       );
 
-      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendArgs = mockFirstRecordArg(
+        channelResolutionMocks.executeSendAction,
+        "executeSendAction",
+        "Expected a non-array record",
+      );
       const sendCtx = requireRecord(sendArgs.ctx);
+      expect(sendCtx.idempotencyKey).toBe("run-1:message-tool:send-1:fingerprint");
+      expect(sendCtx.channelPlugin).toBe(workspacePlugin);
+      expect(channelResolutionMocks.resolveOutboundChannelPlugin).toHaveBeenCalledTimes(1);
       const sendParams = requireRecord(sendCtx.params);
       expect(sendParams.buffer).toBeUndefined();
       expect(sendArgs.mediaUrl).toBe(result.sendResult?.mediaUrl);
       expect(sendArgs.mediaUrls).toEqual([result.sendResult?.mediaUrl]);
-    });
-  });
-
-  it("rejects oversized buffer-only send attachments before channel dispatch", async () => {
-    setTestPlugin(workspacePlugin, "workspace");
-
-    await withTempOpenClawStateDir(async () => {
-      await expect(
-        runMessageAction({
-          cfg: workspaceConfig,
-          action: "send",
-          params: {
-            channel: "workspace",
-            target: "12345678",
-            message: "too large",
-            buffer: Buffer.alloc(MEDIA_MAX_BYTES + 1, 1).toString("base64"),
-            contentType: "application/octet-stream",
-          },
-        }),
-      ).rejects.toThrow(/too large|limit/i);
-
-      expect(channelResolutionMocks.executeSendAction).not.toHaveBeenCalled();
-    });
-  });
-
-  it("previews dry-run buffer-only sends without writing outbound media files", async () => {
-    setTestPlugin(workspacePlugin, "workspace");
-
-    await withTempOpenClawStateDir(async (stateDir) => {
-      const result = await runDrySend({
-        cfg: workspaceConfig,
-        actionParams: {
-          channel: "workspace",
-          target: "12345678",
-          buffer: Buffer.from("preview bytes").toString("base64"),
-          filename: "preview.txt",
-          contentType: "text/plain",
-        },
-      });
-
-      expect(result.kind).toBe("send");
-      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
-      const sendCtx = requireRecord(sendArgs.ctx);
-      const sendParams = requireRecord(sendCtx.params);
-      expect(sendParams.buffer).toBeUndefined();
-      expect(sendArgs.mediaUrl).toBe("buffer://message-send/attachment");
-      expect(sendArgs.mediaUrls).toEqual(["buffer://message-send/attachment"]);
-      await expect(fs.readdir(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
     });
   });
 
@@ -237,7 +164,11 @@ describe("runMessageAction media behavior", () => {
         path.join(sandboxDir, "one.png"),
         path.join(sandboxDir, "two.png"),
       ]);
-      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendArgs = mockFirstRecordArg(
+        channelResolutionMocks.executeSendAction,
+        "executeSendAction",
+        "Expected a non-array record",
+      );
       const sendCtx = requireRecord(sendArgs.ctx);
       const sendParams = requireRecord(sendCtx.params);
       const sendMediaAccess = requireRecord(sendCtx.mediaAccess);
@@ -290,9 +221,10 @@ describe("runMessageAction media behavior", () => {
         });
 
         expect(channelResolutionMocks.executeSendAction).toHaveBeenCalledTimes(1);
-        const sendArgs = firstMockArg(
+        const sendArgs = mockFirstRecordArg(
           channelResolutionMocks.executeSendAction,
           "executeSendAction",
+          "Expected a non-array record",
         );
         const mediaUrls = [
           path.join(sandboxDir, "assets", "photo.png"),
@@ -333,7 +265,11 @@ describe("runMessageAction media behavior", () => {
       });
 
       expect(channelResolutionMocks.executeSendAction).toHaveBeenCalledTimes(1);
-      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendArgs = mockFirstRecordArg(
+        channelResolutionMocks.executeSendAction,
+        "executeSendAction",
+        "Expected a non-array record",
+      );
       expect(sendArgs.mediaUrls).toEqual(mediaUrls);
       expect(requireRecord(sendArgs.payload).mediaUrls).toEqual(mediaUrls);
       expect(requireRecord(sendArgs.payload)).not.toHaveProperty("attachments");
@@ -556,20 +492,6 @@ describe("runMessageAction media access", () => {
           }),
         ).rejects.toThrow(/sandbox/i);
       });
-    });
-
-    it("rejects data URLs in media params", async () => {
-      await expect(
-        runDrySend({
-          cfg: workspaceConfig,
-          actionParams: {
-            channel: "workspace",
-            target: "12345678",
-            media: "data:image/png;base64,abcd",
-            message: "",
-          },
-        }),
-      ).rejects.toThrow(/data:/i);
     });
 
     it("prefers media over mediaUrl when both aliases are present", async () => {

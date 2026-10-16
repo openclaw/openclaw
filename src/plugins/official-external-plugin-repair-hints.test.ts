@@ -102,12 +102,18 @@ describe("resolveExternalPluginRuntimeDependencyRepairHint", () => {
   it.each([
     {
       name: "names the official install command for the package that owns the id",
-      candidate: { pluginId: "discord", packageName: "@openclaw/discord" },
+      candidate: { origin: "bundled", pluginId: "discord", packageName: "@openclaw/discord" },
       expected: "openclaw plugins install @openclaw/discord",
+    },
+    {
+      name: "keeps install repair for a separately installed copy of a core plugin",
+      candidate: { origin: "config", pluginId: "cloudflare", packageName: "@openclaw/cloudflare" },
+      expected: "openclaw plugins install @openclaw/cloudflare",
     },
     {
       name: "withholds the official install command from a foreign package reusing the id",
       candidate: {
+        origin: "bundled",
         pluginId: "discord",
         packageName: "@example/discord-fork",
         packageBuild: { bundledDist: false },
@@ -120,11 +126,12 @@ describe("resolveExternalPluginRuntimeDependencyRepairHint", () => {
     expect(hint).toContain(expected);
   });
 
-  it("stays silent for plugins shipped inside the root package", () => {
+  it.each(["telegram", "cloudflare"])("stays silent for root-packaged %s", (pluginId) => {
     expect(
       resolveExternalPluginRuntimeDependencyRepairHint({
-        pluginId: "telegram",
-        packageName: "@openclaw/telegram",
+        origin: "bundled",
+        pluginId,
+        packageName: `@openclaw/${pluginId}`,
       }),
     ).toBeUndefined();
   });

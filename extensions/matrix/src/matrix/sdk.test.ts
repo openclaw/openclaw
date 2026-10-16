@@ -32,10 +32,12 @@ import {
 } from "./sdk/crypto-persistence.test-support.js";
 import { createMatrixCryptoApi } from "./sdk/crypto.test-support.js";
 import { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
+import { registerDecryptRetentionTests } from "./sdk/decrypt-retention.test-support.js";
 import {
   FakeMatrixEvent,
   makeDecryptedMessageEvent,
   makeMatrixEvent,
+  type MatrixEventDecryptor,
 } from "./sdk/event.test-support.js";
 import { clearAllIndexedDbState } from "./sdk/idb-persistence.test-helpers.js";
 import {
@@ -200,7 +202,7 @@ type MatrixJsClientStub = {
     MatrixJsSdkClient["secretStorage"],
     "getDefaultKeyId" | "getKey" | "checkKey"
   >;
-  decryptEventIfNeeded: ReturnType<typeof vi.fn>;
+  decryptEventIfNeeded: ReturnType<typeof vi.fn<MatrixEventDecryptor>>;
   relations: ReturnType<typeof vi.fn>;
   syncApi: SyncApi;
 };
@@ -284,7 +286,7 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
     getKey: vi.fn(async () => null),
     checkKey: vi.fn(async () => false),
   };
-  client.decryptEventIfNeeded = vi.fn(async () => {});
+  client.decryptEventIfNeeded = vi.fn<MatrixEventDecryptor>(async () => {});
   client.relations = vi.fn(async () => ({
     originalEvent: null,
     events: [],
@@ -1783,36 +1785,7 @@ describe("MatrixClient event bridge", () => {
     expect(delivered).toEqual(["m.room.message"]);
   });
 
-  it("stops decryption retries after hitting retry cap", async () => {
-    vi.useFakeTimers();
-    const client = createSdkClient();
-    const failed: string[] = [];
-
-    client.on("room.failed_decryption", (_roomId, eventValue, error) => {
-      failed.push(error.message);
-    });
-
-    const encrypted = makeMatrixEvent({ decryptionFailure: true });
-
-    matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
-      throw new Error("still missing key");
-    });
-
-    await client.start();
-    matrixJsClient.emit("event", encrypted);
-    encrypted.emit("decrypted", encrypted, new Error("missing room key"));
-
-    expect(failed).toEqual(["missing room key"]);
-
-    await vi.advanceTimersByTimeAsync(200_000);
-    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(8);
-
-    encrypted.emit("decrypted", encrypted, new Error("missing room key again"));
-
-    await vi.advanceTimersByTimeAsync(200_000);
-    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(8);
-    expect(failed).toEqual(["missing room key"]);
-  });
+  registerDecryptRetentionTests({ createSdkClient, getMatrixJsClient: () => matrixJsClient });
 
   it("retries an exhausted missing-key decryption when a crypto key signal arrives", async () => {
     vi.useFakeTimers();
@@ -3262,7 +3235,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       return event;
     });
 
-    bridge.retryPendingNow("test crypto signal", { includeExhausted: true });
+    bridge.retryPendingNow({ includeExhausted: true });
     await Promise.resolve();
     await Promise.resolve();
 

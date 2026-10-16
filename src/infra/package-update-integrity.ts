@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { constants, lstatSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
@@ -20,8 +19,6 @@ const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_LAUNCHER_BYTES = 1024 * 1024;
 const SETTLED_CTIME_MARGIN_MS = 5_000;
 const SETTLED_CTIME_MARGIN_NS = BigInt(SETTLED_CTIME_MARGIN_MS) * 1_000_000n;
-const log = createSubsystemLogger("update/package-integrity");
-let readerSequence = 0;
 
 export type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
 export type PackageDirectoryIdentity = Pick<PackageIntegrityFingerprint, "identity" | "version">;
@@ -188,72 +185,20 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
   const startedAtMonotonicMs = now();
   const budget = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : UPDATE_RUNNER_TIMEOUT_MS;
   const deadlineAtMonotonicMs = startedAtMonotonicMs + budget;
-  const timing = {
-    readerId: `${process.pid}:${++readerSequence}`,
-    timeOriginUnixMs: performance.timeOrigin,
-    startedAtMonotonicMs,
-    budgetMs: budget,
-    deadlineClock: "monotonic",
-    deadlineAtMonotonicMs,
-  };
-  let timeoutObservedAtMonotonicMs: number | undefined;
-  let pendingIo = 0;
-
-  async function trackIo<T>(operation: () => Promise<T>): Promise<T> {
-    pendingIo++;
-    try {
-      return await operation();
-    } finally {
-      pendingIo--;
-    }
-  }
-
-  async function observe<T>(
-    phase: "baseline" | "retained" | "restored" | "transaction",
-    operation: () => Promise<T>,
-  ): Promise<T> {
-    const emit = (event: string, facts?: Record<string, unknown>) => {
-      try {
-        log.debug(event, { ...timing, phase, event, ...facts });
-      } catch {
-        // A diagnostics sink must not replace the package result or primary error.
-      }
-    };
-    emit("reader-started");
-    let outcome = "failed";
-    try {
-      const result = await operation();
-      outcome = "completed";
-      return result;
-    } finally {
-      // Observe the completed scope, including its awaited cleanup, not merely
-      // the timeout notification. Uncancelable OS work can still be pending.
-      const settledAtMonotonicMs = performance.now();
-      emit("reader-settled", {
-        settledAtMonotonicMs,
-        elapsedMs: settledAtMonotonicMs - startedAtMonotonicMs,
-        outcome: timeoutObservedAtMonotonicMs === undefined ? outcome : "timed-out",
-        timeoutObservedAtMonotonicMs,
-        pendingIo,
-      });
-    }
-  }
-
   async function read<T>(operation: () => Promise<T>, closeLate?: (value: T) => Promise<void>) {
     let pending: Promise<T> | undefined;
     const value = await awaitWithinDeadline(
-      () => (pending = trackIo(operation)),
+      () => (pending = operation()),
       deadlineAtMonotonicMs,
       now,
     );
     if (value === ABSOLUTE_DEADLINE_EXPIRED) {
-      timeoutObservedAtMonotonicMs ??= performance.now();
       // An OS read cannot always be canceled. Close late descriptors and never
       // continue the walk after returning a timeout to the swap owner.
       if (pending && closeLate) {
         void pending
           .then(
-            (late) => trackIo(() => closeLate(late)),
+            (late) => closeLate(late),
             () => {},
           )
           .catch(() => {});
@@ -264,13 +209,8 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
   }
 
   async function close(resource: { close: () => Promise<void> }) {
-    const closing = trackIo(() => resource.close()).catch(() => {});
-    if (
-      (await awaitWithinDeadline(() => closing, deadlineAtMonotonicMs, now)) ===
-      ABSOLUTE_DEADLINE_EXPIRED
-    ) {
-      timeoutObservedAtMonotonicMs ??= performance.now();
-    }
+    const closing = resource.close().catch(() => {});
+    await awaitWithinDeadline(() => closing, deadlineAtMonotonicMs, now);
   }
 
   async function entries(directoryPath: string, limit = MAX_TREE_ENTRIES): Promise<string[]> {
@@ -520,7 +460,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         const admittedAtNs = BigInt(Date.now()) * 1_000_000n;
         const reusable = stat.ctimeNs + SETTLED_CTIME_MARGIN_NS <= admittedAtNs;
         pending.push({
-          outcome: trackIo(() => hasher.hash(file, stat)).then(
+          outcome: hasher.hash(file, stat).then(
             (fileDigest) => {
               fields.set("sha256", fileDigest);
               retained.push("file", fileDigest);
@@ -723,5 +663,5 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     return copied;
   }
 
-  return { tree, copiedTree, rootEntry, directoryIdentity, launcher, exists, entries, observe };
+  return { tree, copiedTree, rootEntry, directoryIdentity, launcher, exists, entries };
 }

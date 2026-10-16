@@ -95,7 +95,7 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
     pane.render();
 
     const container = createApplicationContextProvider(context);
-    renderChatPropsInto(container, expectDefined(pane.chatProps, "chat props"));
+    renderChatPropsInto(container, expectDefined(pane.chatProps, "chat props"), context);
 
     expect(pane.chatProps?.canAbort).toBe(true);
     expect(
@@ -146,33 +146,37 @@ describe("composer run status", () => {
       const container = createApplicationContextProvider(context);
       const onOpenSubagent = vi.fn();
       const draw = async (children: GatewaySessionRow[], hydrated = true) => {
-        renderChatPropsInto(container, {
-          ...expectDefined(pane.chatProps, "chat props"),
-          selectedSession: parent,
-          messages: [
-            { role: "user", content: "Implement the backend.", timestamp: 1_500 },
-            {
-              role: "assistant",
-              runId: "parent-run",
-              timestamp: 2_000,
-              content: [
-                { type: "text", text: "The backend work is delegated." },
-                { type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} },
-              ],
-            },
-            {
-              role: "toolResult",
-              runId: "parent-run",
-              toolCallId: "yield",
-              toolName: "sessions_yield",
-              timestamp: 2_001,
-              content: [{ type: "text", text: '{"status":"yielded"}' }],
-            },
-          ],
-          subagentSessions: children,
-          subagentSessionsHydrated: hydrated,
-          onOpenSubagent,
-        });
+        renderChatPropsInto(
+          container,
+          {
+            ...expectDefined(pane.chatProps, "chat props"),
+            selectedSession: parent,
+            messages: [
+              { role: "user", content: "Implement the backend.", timestamp: 1_500 },
+              {
+                role: "assistant",
+                runId: "parent-run",
+                timestamp: 2_000,
+                content: [
+                  { type: "text", text: "The backend work is delegated." },
+                  { type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} },
+                ],
+              },
+              {
+                role: "toolResult",
+                runId: "parent-run",
+                toolCallId: "yield",
+                toolName: "sessions_yield",
+                timestamp: 2_001,
+                content: [{ type: "text", text: '{"status":"yielded"}' }],
+              },
+            ],
+            subagentSessions: children,
+            subagentSessionsHydrated: hydrated,
+            onOpenSubagent,
+          },
+          context,
+        );
         flush();
         expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
       };

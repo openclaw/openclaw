@@ -98,7 +98,7 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
 });
 
 describe("buildDeveloperInstructions delegation guidance", () => {
-  it.each([{ requireWorkspaceOnly: true }] as const)(
+  it.each([{ requireWorkspaceOnly: true }, { delegationCapability: "host_only" }] as const)(
     "does not advertise native helpers for restricted runs (%j)",
     (overrides) => {
       const instructions = buildInstructions(overrides);

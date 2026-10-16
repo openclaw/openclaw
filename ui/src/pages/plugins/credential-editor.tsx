@@ -18,8 +18,8 @@ import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import "./credential-editor.css";
+import "./custom-elements.ts";
 
 registerPluginManagementEnglish();
 const credentialReferenceParts = ["provider", "id"] as const;
@@ -45,7 +45,7 @@ export type PluginCredentialEditorProps = {
   context: PluginCredentialEditorContext;
 };
 
-function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
+export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   const [inspection, setInspection] = createSignal<PluginCredentialInspection | null>(null);
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal("");
@@ -307,236 +307,218 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
   };
 
   return (
-    <div class="plugin-credential">
-      {isReference() || environment() ? (
-        <div class="plugin-credential__reference">
-          <span>
-            {environment()
-              ? t("pluginsPage.credentials.environment", { name: environment()! })
-              : t("pluginsPage.credentials.fromSource", { source: referenceSource() })}
-          </span>
-          {referenceId() !== undefined ? <code>{referenceId()}</code> : null}
-          <button
-            class="btn btn--sm"
-            aria-label={`${t(environment() ? "pluginsPage.credentials.viewSource" : "pluginsPage.credentials.editReference")}: ${props.descriptor.label}`}
-            aria-describedby={props.field.descriptionId}
-            disabled={loading() || !inspection() || !props.context.canInspect}
-            onClick={openReference}
-          >
-            {t(
-              environment()
-                ? "pluginsPage.credentials.viewSource"
-                : "pluginsPage.credentials.editReference",
-            )}
-          </button>
-        </div>
-      ) : (
-        <>
-          <div
-            class="plugin-credential__input settings-secret"
-            onFocusOut={(event) => {
-              if (
-                event.relatedTarget instanceof Element &&
-                event.relatedTarget.closest(".plugin-credential__input") === event.currentTarget
-              ) {
-                return;
-              }
-              const input = event.currentTarget.querySelector("input");
-              const value = input ? enteredLiteral(input) : "";
-              if (value) {
-                void patch(value);
-              }
-            }}
-          >
-            <input
-              class="settings-input"
-              aria-label={props.descriptor.label}
+    <openclaw-plugin-credential-editor>
+      <div class="plugin-credential">
+        {isReference() || environment() ? (
+          <div class="plugin-credential__reference">
+            <span>
+              {environment()
+                ? t("pluginsPage.credentials.environment", { name: environment()! })
+                : t("pluginsPage.credentials.fromSource", { source: referenceSource() })}
+            </span>
+            {referenceId() !== undefined ? <code>{referenceId()}</code> : null}
+            <button
+              class="btn btn--sm"
+              aria-label={`${t(environment() ? "pluginsPage.credentials.viewSource" : "pluginsPage.credentials.editReference")}: ${props.descriptor.label}`}
               aria-describedby={props.field.descriptionId}
-              autocomplete="off"
-              spellcheck="false"
-              type={revealed() ? "text" : "password"}
-              value={literalValue()}
-              placeholder={
-                configured()
-                  ? t("pluginsPage.credentials.stored")
-                  : (props.descriptor.placeholder ?? "")
-              }
-              disabled={disabled()}
-              onInput={(event) => setLiteral(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                const value = enteredLiteral(event.currentTarget);
-                if (event.key === "Enter" && value) {
-                  event.preventDefault();
+              disabled={loading() || !inspection() || !props.context.canInspect}
+              onClick={openReference}
+            >
+              {t(
+                environment()
+                  ? "pluginsPage.credentials.viewSource"
+                  : "pluginsPage.credentials.editReference",
+              )}
+            </button>
+          </div>
+        ) : (
+          <>
+            <div
+              class="plugin-credential__input settings-secret"
+              onFocusOut={(event) => {
+                if (
+                  event.relatedTarget instanceof Element &&
+                  event.relatedTarget.closest(".plugin-credential__input") === event.currentTarget
+                ) {
+                  return;
+                }
+                const input = event.currentTarget.querySelector("input");
+                const value = input ? enteredLiteral(input) : "";
+                if (value) {
                   void patch(value);
                 }
               }}
-            />
-            <button
-              class="settings-secret__toggle"
-              type="button"
-              aria-label={`${t(revealed() ? "pluginsPage.credentials.hide" : "pluginsPage.credentials.reveal")}: ${props.descriptor.label}`}
-              aria-pressed={revealed() ? "true" : "false"}
-              disabled={disabled() || loading() || (!literal() && inspection()?.kind !== "literal")}
-              onClick={toggleReveal}
             >
-              <Icon name={revealed() ? "eyeOff" : "eye"} />
-            </button>
-          </div>
-          <div class="plugin-credential__links">
-            {props.descriptor.signupUrl ? (
-              <a href={props.descriptor.signupUrl} target="_blank" rel="noopener noreferrer">
-                {t("pluginsPage.credentials.signup")}
-                <Icon name="externalLink" />
-              </a>
-            ) : null}
-            <button
-              class="btn btn--ghost btn--sm"
-              aria-label={`${t("pluginsPage.credentials.useReference")}: ${props.descriptor.label}`}
-              aria-describedby={props.field.descriptionId}
-              disabled={disabled() || loading() || !inspection() || !props.context.canInspect}
-              onClick={openReference}
-            >
-              {t("pluginsPage.credentials.useReference")}
-            </button>
-          </div>
-          {configured() ? <small>{t("pluginsPage.credentials.replace")}</small> : null}
-        </>
-      )}
-      {loading() ? (
-        <span role="status" class="muted">
-          {t("common.loading")}
-        </span>
-      ) : null}
-      {inspection()?.kind === "invalid" ? (
-        <span role="alert">{t("pluginsPage.credentials.invalidStored")}</span>
-      ) : null}
-      {!dialogOpen() && failure() ? (
-        <div role="alert">
-          {failure()}
-          <button
-            class="btn btn--sm"
-            onClick={() => void (literal() ? patch(literal()) : inspect())}
-          >
-            {t("common.retry")}
-          </button>
-        </div>
-      ) : null}
-      {dialogOpen() ? (
-        <openclaw-modal-dialog
-          ref={(dialog) => dialog.setReturnFocusTarget(referenceTrigger)}
-          label={`${t("pluginsPage.credentials.referenceTitle")}: ${props.descriptor.label}`}
-          onModal-cancel={(event: Event) => {
-            event.preventDefault();
-            void cancelReference();
-          }}
-        >
-          <section class="plugin-credential__dialog">
-            <h2>{t("pluginsPage.credentials.referenceTitle")}</h2>
-            {environment() ? (
-              <p>{t("pluginsPage.credentials.environmentHelp", { name: environment()! })}</p>
-            ) : (
-              <>
-                <p>{t("pluginsPage.credentials.referenceHelp")}</p>
-                <label>
-                  {t("pluginsPage.credentials.source")}
-                  <select
-                    autofocus
-                    class="settings-input"
-                    aria-label={t("pluginsPage.credentials.source")}
-                    value={reference().source}
-                    disabled={blocked()}
-                    onChange={(event) => {
-                      const source = credentialSources.find(
-                        (entry) => entry === event.currentTarget.value,
-                      );
-                      if (source) {
-                        setReference({ ...reference(), source });
-                      }
-                    }}
-                  >
-                    <For each={credentialSources}>
-                      {(source) => (
-                        <option value={source} selected={source === reference().source}>
-                          {t(`pluginsPage.credentials.sources.${source}`)}
-                        </option>
-                      )}
-                    </For>
-                  </select>
-                </label>
-                <For each={credentialReferenceParts}>
-                  {(key) => (
-                    <label>
-                      {t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}
-                      <input
-                        class="settings-input"
-                        value={reference()[key]}
-                        disabled={blocked()}
-                        onInput={(event) =>
-                          setReference({ ...reference(), [key]: event.currentTarget.value })
-                        }
-                      />
-                    </label>
-                  )}
-                </For>
-                <p class="muted">{t(`pluginsPage.credentials.help.${reference().source}`)}</p>
-                {unresolved() ? (
-                  <p class="callout warn">{t("pluginsPage.credentials.unresolved")}</p>
-                ) : null}
-              </>
-            )}
-            {failure() ? (
-              <p role="alert" class="callout danger">
-                {failure()}
-              </p>
-            ) : null}
-            <openclaw-modal-actions>
+              <input
+                class="settings-input"
+                aria-label={props.descriptor.label}
+                aria-describedby={props.field.descriptionId}
+                autocomplete="off"
+                spellcheck="false"
+                type={revealed() ? "text" : "password"}
+                value={literalValue()}
+                placeholder={
+                  configured()
+                    ? t("pluginsPage.credentials.stored")
+                    : (props.descriptor.placeholder ?? "")
+                }
+                disabled={disabled()}
+                onInput={(event) => setLiteral(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  const value = enteredLiteral(event.currentTarget);
+                  if (event.key === "Enter" && value) {
+                    event.preventDefault();
+                    void patch(value);
+                  }
+                }}
+              />
               <button
-                class="btn"
-                disabled={saving() || cancelling()}
-                onClick={() => void cancelReference()}
+                class="settings-secret__toggle"
+                type="button"
+                aria-label={`${t(revealed() ? "pluginsPage.credentials.hide" : "pluginsPage.credentials.reveal")}: ${props.descriptor.label}`}
+                aria-pressed={revealed() ? "true" : "false"}
+                disabled={
+                  disabled() || loading() || (!literal() && inspection()?.kind !== "literal")
+                }
+                onClick={toggleReveal}
               >
-                {t("common.cancel")}
+                <Icon name={revealed() ? "eyeOff" : "eye"} />
               </button>
-              {!inspection() && !loading() ? (
-                <button class="btn" onClick={() => void inspect()}>
-                  {t("common.retry")}
-                </button>
+            </div>
+            <div class="plugin-credential__links">
+              {props.descriptor.signupUrl ? (
+                <a href={props.descriptor.signupUrl} target="_blank" rel="noopener noreferrer">
+                  {t("pluginsPage.credentials.signup")}
+                  <Icon name="externalLink" />
+                </a>
               ) : null}
-              {!environment() ? (
+              <button
+                class="btn btn--ghost btn--sm"
+                aria-label={`${t("pluginsPage.credentials.useReference")}: ${props.descriptor.label}`}
+                aria-describedby={props.field.descriptionId}
+                disabled={disabled() || loading() || !inspection() || !props.context.canInspect}
+                onClick={openReference}
+              >
+                {t("pluginsPage.credentials.useReference")}
+              </button>
+            </div>
+            {configured() ? <small>{t("pluginsPage.credentials.replace")}</small> : null}
+          </>
+        )}
+        {loading() ? (
+          <span role="status" class="muted">
+            {t("common.loading")}
+          </span>
+        ) : null}
+        {inspection()?.kind === "invalid" ? (
+          <span role="alert">{t("pluginsPage.credentials.invalidStored")}</span>
+        ) : null}
+        {!dialogOpen() && failure() ? (
+          <div role="alert">
+            {failure()}
+            <button
+              class="btn btn--sm"
+              onClick={() => void (literal() ? patch(literal()) : inspect())}
+            >
+              {t("common.retry")}
+            </button>
+          </div>
+        ) : null}
+        {dialogOpen() ? (
+          <openclaw-modal-dialog
+            ref={(dialog) => dialog.setReturnFocusTarget(referenceTrigger)}
+            label={`${t("pluginsPage.credentials.referenceTitle")}: ${props.descriptor.label}`}
+            onModal-cancel={(event: Event) => {
+              event.preventDefault();
+              void cancelReference();
+            }}
+          >
+            <section class="plugin-credential__dialog">
+              <h2>{t("pluginsPage.credentials.referenceTitle")}</h2>
+              {environment() ? (
+                <p>{t("pluginsPage.credentials.environmentHelp", { name: environment()! })}</p>
+              ) : (
+                <>
+                  <p>{t("pluginsPage.credentials.referenceHelp")}</p>
+                  <label>
+                    {t("pluginsPage.credentials.source")}
+                    <select
+                      autofocus
+                      class="settings-input"
+                      aria-label={t("pluginsPage.credentials.source")}
+                      value={reference().source}
+                      disabled={blocked()}
+                      onChange={(event) => {
+                        const source = credentialSources.find(
+                          (entry) => entry === event.currentTarget.value,
+                        );
+                        if (source) {
+                          setReference({ ...reference(), source });
+                        }
+                      }}
+                    >
+                      <For each={credentialSources}>
+                        {(source) => (
+                          <option value={source} selected={source === reference().source}>
+                            {t(`pluginsPage.credentials.sources.${source}`)}
+                          </option>
+                        )}
+                      </For>
+                    </select>
+                  </label>
+                  <For each={credentialReferenceParts}>
+                    {(key) => (
+                      <label>
+                        {t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}
+                        <input
+                          class="settings-input"
+                          value={reference()[key]}
+                          disabled={blocked()}
+                          onInput={(event) =>
+                            setReference({ ...reference(), [key]: event.currentTarget.value })
+                          }
+                        />
+                      </label>
+                    )}
+                  </For>
+                  <p class="muted">{t(`pluginsPage.credentials.help.${reference().source}`)}</p>
+                  {unresolved() ? (
+                    <p class="callout warn">{t("pluginsPage.credentials.unresolved")}</p>
+                  ) : null}
+                </>
+              )}
+              {failure() ? (
+                <p role="alert" class="callout danger">
+                  {failure()}
+                </p>
+              ) : null}
+              <openclaw-modal-actions>
                 <button
-                  class="btn primary"
-                  disabled={blocked() || !isValidSecretRef(reference())}
-                  onClick={() => void patch({ ...reference() })}
+                  class="btn"
+                  disabled={saving() || cancelling()}
+                  onClick={() => void cancelReference()}
                 >
-                  {saving() ? t("common.saving") : t("common.save")}
+                  {t("common.cancel")}
                 </button>
-              ) : null}
-            </openclaw-modal-actions>
-          </section>
-        </openclaw-modal-dialog>
-      ) : null}
-    </div>
+                {!inspection() && !loading() ? (
+                  <button class="btn" onClick={() => void inspect()}>
+                    {t("common.retry")}
+                  </button>
+                ) : null}
+                {!environment() ? (
+                  <button
+                    class="btn primary"
+                    disabled={blocked() || !isValidSecretRef(reference())}
+                    onClick={() => void patch({ ...reference() })}
+                  >
+                    {saving() ? t("common.saving") : t("common.save")}
+                  </button>
+                ) : null}
+              </openclaw-modal-actions>
+            </section>
+          </openclaw-modal-dialog>
+        ) : null}
+      </div>
+    </openclaw-plugin-credential-editor>
   );
 }
-
-export const PluginCredentialEditor = defineSolidBridge<Partial<PluginCredentialEditorProps>>(
-  "openclaw-plugin-credential-editor",
-  (props) => (
-    <>
-      {props.field && props.descriptor && props.context ? (
-        <PluginCredentialEditorContent
-          field={props.field}
-          descriptor={props.descriptor}
-          context={props.context}
-        />
-      ) : null}
-    </>
-  ),
-  {
-    properties: {
-      field: { default: undefined, attribute: false },
-      descriptor: { default: undefined, attribute: false },
-      context: { default: undefined, attribute: false },
-    },
-  },
-);

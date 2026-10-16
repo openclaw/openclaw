@@ -27,6 +27,9 @@ const CANONICAL_SCHEMA = `
   CREATE TABLE unindexed (id INTEGER PRIMARY KEY);
 `;
 
+import { sqliteSchemaFixture } from "./sqlite-schema-contract.test-support.js";
+
+const expectedCatalog = sqliteSchemaFixture(CANONICAL_SCHEMA);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createDatabase(): DatabaseSync {
@@ -123,10 +126,10 @@ describe("repairCanonicalSqliteIndexes", () => {
     });
     try {
       expect(
-        repairCanonicalSqliteIndexes(traced.database, "test database", CANONICAL_SCHEMA),
+        repairCanonicalSqliteIndexes(traced.database, "test database", expectedCatalog),
       ).toEqual([]);
       expect(droppedIndex).toBeDefined();
-      expect(repairCanonicalSqliteIndexes(reader, "test database", CANONICAL_SCHEMA)).toEqual([
+      expect(repairCanonicalSqliteIndexes(reader, "test database", expectedCatalog)).toEqual([
         droppedIndex,
       ]);
       expect(reader.isTransaction).toBe(false);
@@ -163,7 +166,7 @@ describe("repairCanonicalSqliteIndexes", () => {
 
         expect(db.prepare("PRAGMA schema_version").get()).toEqual(before);
         expect(traced.materializedIndexSqlBytes).toBeLessThanOrEqual(indexSqlBytes);
-        expect(traced.statements.length).toBeLessThanOrEqual(6);
+        expect(traced.statements.length).toBeLessThanOrEqual(7);
       } finally {
         db.close();
       }
@@ -182,7 +185,7 @@ describe("repairCanonicalSqliteIndexes", () => {
 
       const traced = traceSqlExecutions(db);
       expect(
-        repairCanonicalSqliteIndexes(traced.database, "test database", CANONICAL_SCHEMA),
+        repairCanonicalSqliteIndexes(traced.database, "test database", expectedCatalog),
       ).toEqual(["idx_records_identity"]);
       expect(
         traced.statements.filter((sql) =>
@@ -223,7 +226,7 @@ describe("repairCanonicalSqliteIndexes", () => {
           (2, 'tenant', NULL, 1);
       `);
 
-      expect(() => repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA)).toThrow(
+      expect(() => repairCanonicalSqliteIndexes(db, "test database", expectedCatalog)).toThrow(
         /canonical index idx_records_identity failed.*UNIQUE constraint failed/iu,
       );
 
@@ -292,7 +295,7 @@ describe("repairCanonicalSqliteIndexes", () => {
 
       expect(() =>
         runSqliteIntegrityOperationSync(
-          verifyAndRepairCanonicalSqliteIndexSteps(db, "test database", CANONICAL_SCHEMA),
+          verifyAndRepairCanonicalSqliteIndexSteps(db, "test database", expectedCatalog),
         ),
       ).toThrow(/integrity_check failed.*openclaw doctor --fix/iu);
       expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).not.toBe("ok");
@@ -309,7 +312,7 @@ describe("repairCanonicalSqliteIndexes", () => {
         CREATE UNIQUE INDEX idx_records_active_lookup ON records(active, tenant_id);
       `);
 
-      repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA);
+      repairCanonicalSqliteIndexes(db, "test database", expectedCatalog);
 
       expect(
         (
@@ -368,7 +371,7 @@ describe("repairCanonicalSqliteIndexes", () => {
           .all(),
       ).toEqual([]);
 
-      expect(() => repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA)).toThrow(
+      expect(() => repairCanonicalSqliteIndexes(db, "test database", expectedCatalog)).toThrow(
         /integrity_check failed.*openclaw doctor --fix/iu,
       );
       expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).not.toBe("ok");
@@ -385,7 +388,7 @@ describe("repairCanonicalSqliteIndexes", () => {
     try {
       db.exec(`DROP INDEX IF EXISTS ${name}; CREATE UNIQUE INDEX ${name} ON ${table}(id);`);
 
-      expect(() => repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA)).toThrow(
+      expect(() => repairCanonicalSqliteIndexes(db, "test database", expectedCatalog)).toThrow(
         `unexpected unique index ${name}`,
       );
     } finally {
@@ -417,7 +420,7 @@ describe("repairCanonicalSqliteIndexes", () => {
           return constants.SQLITE_OK;
         });
         expect(() =>
-          repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA, {
+          repairCanonicalSqliteIndexes(db, "test database", expectedCatalog, {
             verifyPhysicalIntegrity: false,
           }),
         ).toThrow(/access to sqlite_(?:master|schema)\.(?:sql|tbl_name) is prohibited/iu);
@@ -440,11 +443,11 @@ describe("repairCanonicalSqliteIndexes", () => {
         CREATE INDEX idx_records_active_lookup ON records(tenant_id);
       `);
 
-      expect(() => repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA)).toThrow(
+      expect(() => repairCanonicalSqliteIndexes(db, "test database", expectedCatalog)).toThrow(
         /no such column: active/iu,
       );
       expect(
-        repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA, {
+        repairCanonicalSqliteIndexes(db, "test database", expectedCatalog, {
           allowMissingColumns: true,
         }),
       ).toEqual([]);
@@ -454,7 +457,7 @@ describe("repairCanonicalSqliteIndexes", () => {
 
       db.exec("ALTER TABLE records ADD COLUMN active INTEGER NOT NULL DEFAULT 0;");
       expect(
-        repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA, {
+        repairCanonicalSqliteIndexes(db, "test database", expectedCatalog, {
           allowMissingColumns: true,
         }),
       ).toEqual(["idx_records_active_lookup", "idx_records_identity"]);
@@ -481,7 +484,7 @@ describe("repairCanonicalSqliteIndexes", () => {
           CREATE UNIQUE INDEX main.idx_records_identity ON records(id);
         `);
 
-        repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA);
+        repairCanonicalSqliteIndexes(db, "test database", expectedCatalog);
 
         expect(
           db

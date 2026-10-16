@@ -110,8 +110,12 @@ describe("plugin management Gateway handlers", () => {
       );
       managementMocks.list.mockResolvedValue({
         plugins: [
-          { ...workboard, id: "deprecated-sdk-fixture" },
-          { ...workboard, id: "current-sdk-fixture" },
+          {
+            ...workboard,
+            id: "deprecated-sdk-fixture",
+            clawhubPackage: "@openclaw/workboard",
+          },
+          { ...workboard, id: "local-only" },
         ],
         diagnostics: [],
         mutationAllowed: true,
@@ -122,6 +126,8 @@ describe("plugin management Gateway handlers", () => {
         plugins: [
           {
             id: "deprecated-sdk-fixture",
+            clawhubPackage: "@openclaw/workboard",
+            catalogId: "ch_QG9wZW5jbGF3L3dvcmtib2FyZA",
             runtime: { state: "unloaded" },
             compatibilityNotices: [
               {
@@ -138,46 +144,17 @@ describe("plugin management Gateway handlers", () => {
               },
             ],
           },
-          { id: "current-sdk-fixture", compatibilityNotices: [] },
+          { id: "local-only", catalogId: "local_bG9jYWwtb25seQ", compatibilityNotices: [] },
         ],
       });
+      expect(
+        (result.response as { plugins: Array<{ clawhubPackage?: string }> }).plugins[1]
+          ?.clawhubPackage,
+      ).toBeUndefined();
       expect(Compile(PluginsListResultSchema).Check(result.response)).toBe(true);
     } finally {
       warning.mockRestore();
     }
-  });
-
-  it("projects opaque local identities without inventing ClawHub publication", async () => {
-    managementMocks.list.mockResolvedValue({
-      plugins: [
-        { ...workboard, clawhubPackage: "@openclaw/workboard" },
-        {
-          id: "diffs",
-          name: "Diffs",
-          installed: false,
-          enabled: false,
-          state: "not-installed",
-          clawhubPackage: "@openclaw/diffs",
-        },
-        { ...workboard, id: "local-only", name: "Local only" },
-      ],
-      diagnostics: [],
-      mutationAllowed: true,
-    });
-
-    const result = await callHandler("plugins.list", {});
-
-    expect(result.response).toMatchObject({
-      plugins: [
-        { clawhubPackage: "@openclaw/workboard", catalogId: "ch_QG9wZW5jbGF3L3dvcmtib2FyZA" },
-        { clawhubPackage: "@openclaw/diffs", catalogId: "ch_QG9wZW5jbGF3L2RpZmZz" },
-        { id: "local-only", catalogId: "local_bG9jYWwtb25seQ" },
-      ],
-    });
-    expect(
-      (result.response as { plugins: Array<{ clawhubPackage?: string }> }).plugins[2]
-        ?.clawhubPackage,
-    ).toBeUndefined();
   });
 
   it.each([

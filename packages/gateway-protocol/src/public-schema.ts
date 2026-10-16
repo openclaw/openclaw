@@ -186,6 +186,8 @@ export {
   SessionFilePreviewKindSchema,
   SessionFileRelevanceSchema,
   SessionsFilesGetParamsSchema,
+  SessionsFilesDownloadParamsSchema,
+  SessionsFilesDownloadResultSchema,
   SessionsFilesGetResultSchema,
   SessionsFilesAssetsParamsSchema,
   SessionsFilesAssetsResultSchema,

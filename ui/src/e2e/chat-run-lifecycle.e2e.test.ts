@@ -226,7 +226,9 @@ suite.define(() => {
 
     expect(await assistantGroup.count()).toBe(1);
     expect(await currentPage.locator(".chat-reading-indicator").count()).toBe(0);
-    expect(await assistantGroup.getByText("Preparing this turn…", { exact: true }).count()).toBe(1);
+    expect(
+      await assistantGroup.getByText("Waiting for turn to start…", { exact: true }).count(),
+    ).toBe(1);
 
     const artifactDir = path.join(suite.artifactDir, "chat-single-turn-status");
     await currentPage.screenshot({
@@ -726,12 +728,12 @@ suite.define(() => {
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
       .toBe("2m 57s");
     const workingLabel = currentPage.locator(".chat-working-indicator__status > span:first-child");
-    expect(await workingLabel.textContent()).toBe("Preparing this turn…");
+    expect(await workingLabel.textContent()).toBe("Waiting for turn to start…");
     expect(
       await currentPage
         .locator(".chat-working-indicator__status > span:not(.sr-only)")
         .allTextContents(),
-    ).toEqual(["Preparing this turn…", "·"]);
+    ).toEqual(["Waiting for turn to start…", "·"]);
   });
 
   it.each(["final", "error"] as const)(

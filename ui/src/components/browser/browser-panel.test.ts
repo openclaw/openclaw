@@ -15,12 +15,8 @@ import {
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-function attachAnnotationOverlay(panel: {
-  browserPanelController: BrowserPanelController;
-  renderRoot: HTMLElement;
-}) {
-  const stage = document.createElement("div");
-  stage.className = "bp-stage";
+function attachAnnotationOverlay(panel: { renderRoot: HTMLElement }) {
+  const stage = panel.renderRoot.querySelector<HTMLElement>(".bp-stage")!;
   vi.spyOn(stage, "getBoundingClientRect").mockReturnValue({
     x: 0,
     y: 0,
@@ -32,19 +28,11 @@ function attachAnnotationOverlay(panel: {
     height: 100,
     toJSON: () => ({}),
   });
-  const overlay = document.createElement("canvas");
+  const overlay = stage.querySelector("canvas")!;
   const capturedPointers = new Set<number>();
   overlay.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
   overlay.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
   overlay.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
-  overlay.addEventListener("pointerdown", (event) =>
-    panel.browserPanelController.input.handleOverlayPointerDown(event as PointerEvent),
-  );
-  overlay.addEventListener("pointermove", (event) =>
-    panel.browserPanelController.handleOverlayPointerMove(event as PointerEvent),
-  );
-  stage.append(overlay);
-  panel.renderRoot.append(stage);
 
   const dispatchPointer = (
     type: "pointerdown" | "pointermove",
@@ -331,9 +319,10 @@ describe("normalizeBrowserUrlDraft", () => {
       panel.available = true;
       mountSolid(() => panel);
       await panel.updateComplete;
-      const { capturedPointers, dispatchPointer } = attachAnnotationOverlay(panel);
-
+      panel.browserPanelController.setState("view", createView("target-1"));
       panel.browserPanelController.setMode("annotate");
+      await panel.updateComplete;
+      const { capturedPointers, dispatchPointer } = attachAnnotationOverlay(panel);
       dispatchPointer("pointerdown", 10, 20);
       expect(capturedPointers.has(7)).toBe(true);
 

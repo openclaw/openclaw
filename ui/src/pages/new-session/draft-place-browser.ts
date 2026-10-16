@@ -11,7 +11,6 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectsForGateway, type ProjectCatalog } from "../../lib/projects.ts";
-import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-state.ts";
@@ -31,7 +30,8 @@ type DraftProjectSelection =
   | null;
 
 type DraftPlaceBrowserCallbacks = {
-  requestUpdate: () => void;
+  changed: () => void;
+  updateComplete: () => Promise<unknown>;
   pickerIdPrefix?: string;
   onProjectMissing: () => void;
   onSelectProject: (projectId: string) => void;
@@ -67,7 +67,6 @@ export class DraftPlaceBrowser {
   private projectSearchFailure: unknown;
 
   constructor(
-    private readonly host: Pick<ControllerHost, "addController" | "updateComplete">,
     private readonly gateway: DraftGatewayState,
     private readonly read: () => DraftPlaceBrowserSnapshot,
     private readonly callbacks: DraftPlaceBrowserCallbacks,
@@ -80,7 +79,7 @@ export class DraftPlaceBrowser {
         }
         return snapshot.client.request<FsListDirResult>("fs.listDir", path ? { path } : {});
       },
-      this.callbacks.requestUpdate,
+      this.callbacks.changed,
       (listing) => {
         this.browserProjectPathValue = null;
         this.callbacks.onApprovedListing(listing);
@@ -98,23 +97,20 @@ export class DraftPlaceBrowser {
             // Typing keeps this listing valid; replacement or reset retires its probe.
             if (this.browser.listing === listing && branches.repositoryStatus === "git") {
               this.browserProjectPathValue = listing.path;
-              this.callbacks.requestUpdate();
+              this.callbacks.changed();
             }
           })
           .catch(() => undefined);
       },
     );
-    // Draft lifetime can outlive the DOM during an instant-thread handoff.
-    // The page's disposeDraft owns disconnect; queued updates must not revive it.
-    host.addController({
-      hostUpdate: () => {
-        this.bindProjectCatalog();
-        const args = this.projectSearchInput();
-        if (!args.every((arg, index) => Object.is(arg, this.projectSearchArgs[index]))) {
-          this.searchProjects(args);
-        }
-      },
-    });
+  }
+
+  synchronize() {
+    this.bindProjectCatalog();
+    const args = this.projectSearchInput();
+    if (!args.every((arg, index) => Object.is(arg, this.projectSearchArgs[index]))) {
+      this.searchProjects(args);
+    }
   }
 
   private projectSearchInput() {
@@ -165,7 +161,7 @@ export class DraftPlaceBrowser {
       .finally(() => {
         if (this.projectSearchRequest === request) {
           this.projectSearchRequest = undefined;
-          this.callbacks.requestUpdate();
+          this.callbacks.changed();
         }
       });
   }
@@ -223,7 +219,7 @@ export class DraftPlaceBrowser {
 
   changeEnvironmentQuery(query: string) {
     this.environmentQueryValue = query;
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 
   get projectSearchResult(): ProjectsSearchRemoteResult | null {
@@ -298,7 +294,7 @@ export class DraftPlaceBrowser {
           this.callbacks.onProjectMissing();
         }
       }
-      this.callbacks.requestUpdate();
+      this.callbacks.changed();
     };
     this.projectCatalogCleanup = this.projectCatalog?.subscribe(update);
     update();
@@ -374,7 +370,7 @@ export class DraftPlaceBrowser {
       !context ||
       !canCallGatewayMethod(context.gateway.snapshot, "projects.searchRemote", "operator.read")
     ) {
-      this.callbacks.requestUpdate();
+      this.callbacks.changed();
       return;
     }
     const client = this.gateway.client;
@@ -386,16 +382,16 @@ export class DraftPlaceBrowser {
       }
       this.debouncedProjectQuery = normalized;
       this.searchProjects([client, true, normalized, connectionEpoch]);
-      this.callbacks.requestUpdate();
+      this.callbacks.changed();
     }, PICKER_INPUT_DEBOUNCE_MS);
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 
   resetProjectSearch() {
     this.clearProjectSearchTimer();
     this.projectQueryValue = "";
     this.debouncedProjectQuery = "";
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 
   resetProjects(resetSelection = true) {
@@ -451,7 +447,7 @@ export class DraftPlaceBrowser {
       this.browserProjectPath === path &&
       client === this.gateway.client;
     this.browser.error = null;
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
     try {
       const project = await client.request<ProjectsRegisterResult>("projects.register", { path });
       if (!isCurrentRegistration()) {
@@ -470,7 +466,7 @@ export class DraftPlaceBrowser {
     } finally {
       if (this.browserRegistration === operation) {
         this.browserRegistration = null;
-        this.callbacks.requestUpdate();
+        this.callbacks.changed();
       }
     }
   }
@@ -487,7 +483,7 @@ export class DraftPlaceBrowser {
     if (kind === "project") {
       this.showRoot();
     } else {
-      this.callbacks.requestUpdate();
+      this.callbacks.changed();
     }
   }
 
@@ -499,7 +495,7 @@ export class DraftPlaceBrowser {
     if (!active || active === body || popover?.contains(active)) {
       (this.callbacks.querySelector(`#${id}`) as HTMLButtonElement | null)?.focus();
     }
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 
   disconnect() {
@@ -523,7 +519,7 @@ export class DraftPlaceBrowser {
     if (closePopover) {
       this.openPopoverValue = null;
     }
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 
   private clearProjectSearchTimer() {
@@ -534,7 +530,7 @@ export class DraftPlaceBrowser {
   private focusProjectView(selector: string) {
     const requestId = ++this.focusRequestId;
     const origin = this.callbacks.activeElement();
-    void this.host.updateComplete.then(() => {
+    void this.callbacks.updateComplete().then(() => {
       if (requestId !== this.focusRequestId || this.openPopoverValue !== "project") {
         return;
       }

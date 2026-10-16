@@ -2,6 +2,10 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
 import type { ProviderModelRouteAuthRequirement } from "../../../plugin-sdk/provider-model-types.js";
+import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../../../plugins/provider-auth-authority.js";
 import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
 import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded-state.js";
 import {
@@ -11,6 +15,7 @@ import {
   resolveProfilesUnavailableReason,
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
+import { advanceAuthProfileCandidate } from "../../auth-profiles/advance.js";
 import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
 import { classifyFailoverReason } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
@@ -28,7 +33,6 @@ import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
 import { applyPreparedRuntimeAuthToModel } from "../../provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-protection.js";
-import { unwrapSecretSentinelsForProviderEgress } from "../../provider-secret-egress.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
@@ -212,10 +216,7 @@ export function createEmbeddedRunAuthController(params: {
         provider: prepareParams.runtimeModel.provider,
         modelId: params.modelId,
         model: prepareParams.runtimeModel,
-        apiKey: unwrapSecretSentinelsForProviderEgress(
-          prepareParams.apiKey,
-          "provider runtime auth exchange",
-        ),
+        apiKey: prepareParams.apiKey,
         authMode: prepareParams.authMode,
         profileId: prepareParams.profileId,
       },
@@ -290,6 +291,7 @@ export function createEmbeddedRunAuthController(params: {
       applyPreparedRuntimeRequestOverrides(runtimeModel, preparedAuth);
       state.runtimeAuthState = {
         ...activeRuntimeAuthState,
+        apiKey: preparedAuth.apiKey,
         expiresAt: preparedAuth.expiresAt,
       };
       if (preparedAuth.expiresAt) {
@@ -533,6 +535,9 @@ export function createEmbeddedRunAuthController(params: {
       state.models.runtime = baseRuntimeModel;
       state.models.effective = baseEffectiveModel;
     }
+    const authAuthority = getProviderAuthAuthority(apiKeyInfo);
+    state.models.runtime = attachProviderAuthAuthority(state.models.runtime, authAuthority);
+    state.models.effective = attachProviderAuthAuthority(state.models.effective, authAuthority);
     const runtimeModel = state.models.runtime;
     // AWS's default credential chain has no explicit key. The sentinel admits
     // runtime auth preparation or, without a plugin token, SDK request signing.
@@ -552,6 +557,7 @@ export function createEmbeddedRunAuthController(params: {
         params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
         state.runtimeAuthState = {
           generation: (state.runtimeAuthState?.generation ?? 0) + 1,
+          apiKey: preparedAuth.apiKey,
           sourceApiKey,
           authMode: apiKeyInfo.mode,
           profileId,
@@ -579,32 +585,29 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const advanceAuthProfile = async (): Promise<boolean> => {
-    let nextIndex = state.profileIndex + 1;
-    while (nextIndex < params.profileCandidates.length) {
-      const candidateIndex = nextIndex++;
-      const candidate = params.profileCandidates[candidateIndex];
-      // Candidate exhaustion is run-local and never depends on a cooldown write.
-      state.profileIndex = candidateIndex;
-      if (
-        candidate &&
-        isProfileInCooldown(params.authStore, candidate, undefined, params.modelId)
-      ) {
-        continue;
-      }
-      try {
-        await applyApiKeyInfo(candidate, candidateIndex);
-        state.thinkLevel = params.initialThinkLevel;
-        params.attemptedThinking.clear();
-        return true;
-      } catch (err) {
-        if (err instanceof SecretSurfaceUnavailableError) {
-          throw err;
+    const advanced = await advanceAuthProfileCandidate({
+      candidates: params.profileCandidates,
+      state,
+      isAvailable: (candidate) =>
+        !candidate || !isProfileInCooldown(params.authStore, candidate, undefined, params.modelId),
+      tryPrepare: async (candidate, index) => {
+        try {
+          await applyApiKeyInfo(candidate, index);
+          return true;
+        } catch (error) {
+          if (error instanceof SecretSurfaceUnavailableError) {
+            throw error;
+          }
+          await recordOAuthRefreshFailure(candidate, error);
+          return false;
         }
-        await recordOAuthRefreshFailure(candidate, err);
-      }
+      },
+    });
+    if (advanced) {
+      state.thinkLevel = params.initialThinkLevel;
+      params.attemptedThinking.clear();
     }
-    state.profileIndex = params.profileCandidates.length;
-    return false;
+    return advanced;
   };
 
   const initializeAuthProfile = async () => {

@@ -1365,9 +1365,9 @@ AFTER_CD
       const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
       expect(installStep.env, workflowPath).toMatchObject({
-        OPENGREP_VERSION: "v1.30.1",
+        OPENGREP_VERSION: "v1.30.2",
         OPENGREP_LINUX_X64_SHA256:
-          "d3195b9d8d5ae93179f6aa5f5daaba6a920a5a09d38c5d5ae5e60924050210c4",
+          "a66aa3278457f02b287b985a45b6762aebcaba5000f2689245fd1ed86d1456c7",
       });
       expect(run, workflowPath).toContain('binary="$(mktemp "${RUNNER_TEMP}/opengrep.XXXXXX")"');
       expect(run, workflowPath).toContain("trap 'rm -f \"$binary\"' EXIT");
@@ -2404,7 +2404,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(actionCheckoutIndex).toBeLessThan(setupIndex);
   });
 
-  it("keeps trusted hybrid controls on Blacksmith when optional hosted admission is closed", () => {
+  it("keeps tiny hybrid controls hosted without moving security or fork first attempts", () => {
     const workflow = readCiWorkflow();
     const context = {
       eventName: "pull_request",
@@ -2416,7 +2416,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       const expression = workflow.jobs[jobName]["runs-on"];
       for (const eventName of ["pull_request", "push"] as const) {
         expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
-          "blacksmith-4vcpu-ubuntu-2404",
+          jobName === "security-fast" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04",
         );
       }
       expect(
@@ -2426,7 +2426,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           headRepository: "contributor/openclaw",
         }),
         `${jobName}: untrusted fork first attempt`,
-      ).toBe(evaluateWorkflowExpression(expression, context));
+      ).toBe("blacksmith-4vcpu-ubuntu-2404");
       for (const override of [
         { runAttempt: 0 },
         { runAttempt: 2 },
@@ -2449,7 +2449,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       }
     }
     for (const [jobName, task, expected] of [
-      ["preflight", undefined, "blacksmith-4vcpu-ubuntu-2404"],
+      ["preflight", undefined, "ubuntu-24.04"],
       ["security-fast", undefined, "ubuntu-24.04"],
       ["checks-ui", undefined, "blacksmith-8vcpu-ubuntu-2404"],
       ["checks-ui-e2e", "browser-extension", "ubuntu-24.04"],
@@ -2484,7 +2484,11 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
               runnerBackend,
             }),
             `${runnerBackend}: ${authorAssociation}: ${headRepository}`,
-          ).toBe("blacksmith-4vcpu-ubuntu-2404");
+          ).toBe(
+            runnerBackend === "hybrid" && headRepository === "openclaw/openclaw"
+              ? "ubuntu-24.04"
+              : "blacksmith-4vcpu-ubuntu-2404",
+          );
         }
       }
     }
@@ -2603,12 +2607,12 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
   );
 
   it.each([
-    ["current shard 1", {}, 24],
-    ["current shard 2", { matrix: { shard: 2 } }, 25],
-    ["frozen shard 1", { frozenTarget: true }, 20],
-    ["frozen shard 2", { frozenTarget: true, matrix: { shard: 2 } }, 20],
-    ["unclassified shard 1", { preflightOutputs: { frozen_target: "" } }, 20],
-    ["unclassified shard 2", { preflightOutputs: { frozen_target: "" }, matrix: { shard: 2 } }, 20],
+    ["current shard 1", {}, 30],
+    ["current shard 2", { matrix: { shard: 2 } }, 30],
+    ["frozen shard 1", { frozenTarget: true }, 30],
+    ["frozen shard 2", { frozenTarget: true, matrix: { shard: 2 } }, 30],
+    ["unclassified shard 1", { preflightOutputs: { frozen_target: "" } }, 30],
+    ["unclassified shard 2", { preflightOutputs: { frozen_target: "" }, matrix: { shard: 2 } }, 30],
     ["hosted override", { runnerBackend: "github" }, 40],
     ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, 40],
     ["manual fallback", { eventName: "workflow_dispatch" }, 40],
@@ -2638,16 +2642,16 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       repository: "openclaw/openclaw",
       runAttempt: 1,
     } as const;
-    for (const [jobName, hostedTimeout] of [
-      ["android", 35],
-      ["build-artifacts", 35],
-      ["checks-ui", 35],
-      ["checks-ui-e2e-real-gateway", 40],
+    for (const [jobName, hostedTimeout, blacksmithTimeout] of [
+      ["android", 35, 20],
+      ["build-artifacts", 35, 20],
+      ["checks-ui", 35, 20],
+      ["checks-ui-e2e-real-gateway", 40, 30],
     ] as const) {
       const timeout = workflow.jobs[jobName]["timeout-minutes"];
       for (const [overrides, expected] of [
         [{ runnerBackend: "github" }, hostedTimeout],
-        [{ runnerBackend: "blacksmith" }, 20],
+        [{ runnerBackend: "blacksmith" }, blacksmithTimeout],
         [{ runnerBackend: "hybrid", runAttempt: 2 }, hostedTimeout],
       ] as const) {
         expect(
@@ -2700,7 +2704,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         for (const [jobName, timeout] of [
           ["build-artifacts", 20],
           ["android", 20],
-          ["checks-ui-e2e-real-gateway", 20],
+          ["checks-ui-e2e-real-gateway", 30],
           ["checks-ui", 20],
         ] as const) {
           expect(
@@ -4448,7 +4452,7 @@ ${step.run}`,
     { historical: true, hasWatchRtc: false, expected: false },
   ])("prepares Watch RTC by source capability: %j", ({ historical, hasWatchRtc, expected }) => {
     const workflow = readCiWorkflow();
-    for (const jobName of ["ios-build", "ios-screenshot-shard"]) {
+    for (const jobName of ["ios-build", "ios-screenshot-capture"]) {
       const install = workflow.jobs[jobName].steps.find(
         (step: WorkflowStep) => step.name === "Install Watch Rust toolchain",
       );
@@ -5875,12 +5879,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           .toSorted(),
       );
       if (releaseTier === false) {
-        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 12);
+        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 13);
         expect(selectedFiles).not.toContain(
           "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
         );
         expect(selectedFiles).not.toContain(
           "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
+        );
+        expect(selectedFiles).not.toContain(
+          "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
         );
         expect(selectedFiles).not.toContain(
           "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
@@ -6219,7 +6226,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Install ripgrep for native grep tests",
     );
 
-    expect(manifestSource).toContain("timeout_minutes: shard.timeoutMinutes");
     expect(manifestSource).toContain("pretest_build_mode: shard.pretestBuildMode");
     expect(manifestSource).toContain("requires_ripgrep:");
     expect(manifestSource).toContain("src/agents/sessions/tools/index.test.ts");
@@ -6231,7 +6237,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64).toBe(
-      "${{ matrix.groups_gzip_base64 || '' }}",
+      "${{ matrix.groups_pool && steps.node-test-groups.outputs.groups_gzip_base64 || matrix.groups_gzip_base64 || '' }}",
     );
     expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_JSON).toBe(
       "${{ matrix.groups && toJson(matrix.groups) || '' }}",
@@ -6665,23 +6671,47 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
       }),
     ).toBe(alreadyPublished !== "true");
   }
-  for (const [alreadyPublished, build, signing, expected] of [
-    ["true", "skipped", "skipped", true],
-    ["false", "success", "success", true],
-    ["false", "success", "failure", false],
-    ["false", "skipped", "skipped", false],
+  // Windows companion publication is temporarily off; see WINDOWS_COMPANION_RELEASE.
+  expect(linux.env.WINDOWS_COMPANION_RELEASE).toBe("false");
+  for (const [alreadyPublished, windowsBuild, expected] of [
+    ["true", "true", false],
+    ["false", "false", false],
+    ["false", "true", true],
+  ]) {
+    expect(
+      runInNewContext(linux.jobs.build_windows.if.replace(/^\$\{\{|\}\}$/gu, ""), {
+        needs: {
+          validate_release: {
+            outputs: { already_published: alreadyPublished, windows_build: windowsBuild },
+          },
+        },
+      }),
+    ).toBe(expected);
+  }
+  for (const [alreadyPublished, windowsBuild, linuxResult, windowsResult, expected] of [
+    ["true", "false", "skipped", "skipped", true],
+    ["false", "true", "success", "success", true],
+    ["false", "true", "success", "failure", false],
+    ["false", "true", "success", "skipped", false],
+    ["false", "false", "success", "skipped", true],
+    ["false", "false", "failure", "skipped", false],
+    ["false", "false", "skipped", "skipped", false],
   ]) {
     expect(
       runInNewContext(linux.jobs.publish.if.replace(/^\$\{\{|\}\}$/gu, ""), {
         always: () => true,
         needs: {
           validate_release: {
-            outputs: { already_published: alreadyPublished, desktop_test_bundles: "false" },
+            outputs: {
+              already_published: alreadyPublished,
+              desktop_test_bundles: "false",
+              windows_build: windowsBuild,
+            },
           },
-          build_linux: { result: build },
-          sign_linux: { result: signing },
-          build_windows: { result: build },
-          sign_desktop: { result: signing },
+          build_linux: { result: linuxResult },
+          sign_linux: { result: linuxResult },
+          build_windows: { result: windowsResult },
+          sign_desktop: { result: windowsResult },
         },
       }),
     ).toBe(expected);
@@ -6781,6 +6811,7 @@ fi
           REQUEST_RUN_ATTEMPT: "1",
           MINISIGN_BINARY_SHA256: "c".repeat(64),
           DESKTOP_TEST_BUNDLES: desktop,
+          WINDOWS_COMPANION_RELEASE: "false",
           LOCAL_INPUTS: String(
             runInNewContext(localInputs.replace(/^\$\{\{|\}\}$/gu, ""), {
               needs: { validate_release: { outputs: { already_published: alreadyPublished } } },
@@ -6811,12 +6842,50 @@ fi
     expect(reused.args).not.toContain("--assets");
     const fresh = run("false", { state: "pending", assetsComplete: false });
     expect(fresh.args?.join(" ")).toContain(localArgs.join(" "));
+    expect(fresh.args?.join(" ")).toContain("--windows false");
     const desktop = run("false", complete, "true");
     expect(desktop.status).toBe(1);
     expect(desktop.args).toBeUndefined();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+it("assembles a Linux-only release without Windows companion inputs", () => {
+  const assemble = expectDefined(
+    (
+      readWorkflow(".github/workflows/linux-app-release.yml").jobs.publish.steps as WorkflowStep[]
+    ).find(({ name }) => name === "Assemble release assets and updater manifest"),
+    "release asset assembly",
+  );
+  const root = tempDirs.make("openclaw-linux-assemble-");
+  const bin = path.join(root, "bin");
+  mkdirSync(bin);
+  // Linux-only assembly must not read release metadata for desktop manifests.
+  writeFileSync(path.join(bin, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const linuxInputs = path.join(root, "dist/input/linux/release");
+  mkdirSync(linuxInputs, { recursive: true });
+  writeFileSync(path.join(linuxInputs, "OpenClaw-2026.10.5-amd64.AppImage"), "appimage");
+  writeFileSync(path.join(linuxInputs, "OpenClaw-2026.10.5-amd64.deb"), "deb");
+  const result = spawnSync("bash", ["-c", assemble.run ?? ""], {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      RUNNER_TEMP: root,
+      RELEASE_TAG: "v2026.10.5",
+      DESKTOP_TEST_BUNDLES: "false",
+      WINDOWS_BUILD: "false",
+      WINDOWS_COMPANION_RELEASE: "false",
+    },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(readdirSync(path.join(root, "dist/release")).toSorted()).toEqual([
+    "OpenClaw-2026.10.5-amd64.AppImage",
+    "OpenClaw-2026.10.5-amd64.deb",
+    "SHA256SUMS.linux-app.txt",
+  ]);
 });
 
 it("detaches Linux mirror-only writers from both completed core finalizers", () => {

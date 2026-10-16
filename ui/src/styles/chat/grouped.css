@@ -755,6 +755,13 @@
   text-align: center;
 }
 
+.chat-notice .chat-divider__label {
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: center;
+  overflow-wrap: anywhere;
+}
+
 .chat-notice .chat-text {
   color: inherit;
   font-size: inherit;
@@ -796,7 +803,6 @@
 
 .chat-notice__collapse .chat-notice__body {
   margin-top: 7px;
-  text-align: start;
 }
 
 .chat-notice--danger {

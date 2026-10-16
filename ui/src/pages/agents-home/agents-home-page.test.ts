@@ -141,6 +141,11 @@ function createPage(initiallyActive = true) {
     agentIdentity,
     agentSelection,
     sessions: sessionCapability,
+    runtimeConfig: {
+      state: { configSnapshot: { sourceConfig: {} } },
+      ensureLoaded: async () => undefined,
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationContext["runtimeConfig"],
     navigate,
   };
   const baselineEventListeners = eventListeners.size;
@@ -195,6 +200,22 @@ afterEach(() => {
 });
 
 describe("AgentsHomePage", () => {
+  it("disables unavailable agent creation with its capability and recovery reason", async () => {
+    const { page, navigate } = createPage();
+    await waitForSolid(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
+    const create = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "New agent",
+    );
+
+    expect(create).toBeDefined();
+    expect(create?.disabled).toBe(true);
+    expect(create?.title).toContain("openclaw.chat");
+    expect(create?.title).toContain("operator.admin");
+    expect(create?.title).toContain("reconnect");
+    create?.click();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it("waits until an initially inactive page is shown before loading its roster", async () => {
     const { page, request, setActive } = createPage(false);
     await waitForSolid(() => expect(page.querySelector(".agents-home")).not.toBeNull());

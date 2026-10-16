@@ -10,8 +10,8 @@ import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js"
 import {
   readUpdateDatabaseGenerationsIsolated,
   readUpdateStateSchemaVersions,
-  updateStateSchemaVersionsMatch,
 } from "./update-candidate-state.js";
+import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 

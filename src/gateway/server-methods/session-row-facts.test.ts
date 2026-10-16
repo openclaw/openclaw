@@ -52,7 +52,8 @@ it("prepares current placement facts off the host thread and retries failed refr
       sessionKey: "agent:main:placement-read",
       sessionId: "placement-read",
     };
-    replaceSessionEntrySync(identity, { sessionId: identity.sessionId, updatedAt: 1 });
+    replaceSessionEntrySync(identity, { sessionId: " placement-read ", updatedAt: 1 });
+    expect(loadSessionEntryReadOnly(identity)?.sessionId).toBe(" placement-read ");
     const placements = createWorkerSessionPlacementStore();
     await placements.startDispatch(identity);
     const options = {

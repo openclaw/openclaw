@@ -261,7 +261,8 @@ port.on("message", (message: NativeWorkerRequest) => {
     return;
   }
   if (message.type === "release") {
-    if (lifetime.joined) {
+    // The parent can also join an exited target with the broker's independent close receipt.
+    if (lifetime.joined || lifetime.nativeJoined) {
       lifetime.resource?.owner.dispose();
       workers.delete(message.id);
     }

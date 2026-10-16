@@ -13,6 +13,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -384,7 +385,7 @@ it("returns a reply tail and its current watermark from one projection snapshot"
     };
     const readMessage = await anchorKernel.prepareSessionTranscriptAnchorMessageReader(selection);
     const statements = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["projection", "watermark"],
       (sql) =>
         sql.includes('"session_transcript_index_state"')
@@ -554,7 +555,7 @@ it("borrows one ready projection for anchors and payloads without extending its 
     const readMessage = await anchorKernel.prepareSessionTranscriptAnchorMessageReader(selection);
     const peer = new DatabaseSync(database.path);
     const statements = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["readiness", "watermark"],
       (sql) =>
         sql.includes('"session_transcript_index_state"')

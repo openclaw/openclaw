@@ -85,6 +85,7 @@ export function buildDeveloperInstructions(
     !isMessageOnlyCodexSourceReply(params);
   const nativeDelegationAvailable =
     delegationGuidanceAvailable &&
+    params.delegationCapability !== "host_only" &&
     params.pluginHarnessToolPolicyRestricted !== true &&
     params.requireWorkspaceOnly !== true &&
     !isCodexResponsesOAuthRun(params) &&
@@ -155,5 +156,5 @@ export function buildDeveloperInstructions(
     params.gitCoauthorPrompt,
     params.extraSystemPrompt,
   ];
-  return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
+  return sections.filter((section) => section?.trim()).join("\n\n");
 }

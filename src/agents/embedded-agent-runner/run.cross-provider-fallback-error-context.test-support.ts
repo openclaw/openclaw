@@ -316,6 +316,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledWith(undefined);
     expect(getLastFormattedAssistant()).toBeUndefined();
     expect(result.meta.finalAssistantVisibleText).toBeUndefined();
+    expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
     expect(result.meta.agentMeta).toMatchObject({
       provider: "deepseek",
       model: "deepseek-chat",

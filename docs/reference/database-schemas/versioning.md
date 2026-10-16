@@ -41,6 +41,50 @@ approvals, port-guardian state, Gateway startup, and updater admission retain
 their backend schema-version checks. Apps predating this exception still need
 an app update when their local backend advances beyond their supported schema.
 
+### Local credential-store preparation
+
+The prepared client credential format is SQLite schema version 1 at
+`<resolved-client-root>/client/credentials.sqlite`, independent of the selected
+Gateway engine. It contains client identities, device and Gateway-scoped token
+caches, local native socket credentials, and a migration receipt. This stage
+does not switch production clients or import or remove shared-state records.
+The native shared-table contract above remains in use until the later atomic
+cutover.
+
+The TypeScript owner and Swift adapter use exclusive SQLite custody in DELETE
+journal mode. A macOS app may retain that custody while serving bounded local
+operations; other clients must use that owner and must not fall back to direct
+access when its IPC fails. App-absent operations release custody at completion.
+iOS app and extension operations use the same Swift owner for a bounded
+operation and close before suspension. No owner selects an identity or token
+by comparing timestamps with another store. Maintenance must drain and close
+an active native owner before capturing or restoring the file.
+The TypeScript adapter refuses existing macOS ACL entries instead of removing
+them. A directory with custom deny or mixed ACLs requires explicit permission
+repair before that adapter can use it.
+
+Update and Doctor recovery capture the local file exactly, including its
+absence, alongside the shared database. Ordinary backup archives preserve
+client identity and cached-token records, but remove the local socket token,
+matching shared approval backup sanitization. Restoring an ordinary archive
+therefore requires local socket credentials to be initialized again.
+
+This preparation creates no credential store in production. A published SQLite
+updater therefore captures the shared database while it still contains the
+credential tables. If a later cutover candidate fails, rollback restores those
+tables and the old version ignores the orphaned local credential store. Credentials
+issued between upgrade and rollback are lost; affected clients must pair again.
+The next cutover must rebuild an orphan from authoritative shared records unless
+its completed receipt matches the shared database identity, generation, and source
+hash. It must never merge stale local credentials into the restored shared state.
+Shared records remain authoritative until the verified receipt completes and
+their retirement finishes under the same maintenance custody.
+
+Releases predating this local format do not support PostgreSQL shared state.
+PostgreSQL installations start with an engine-aware updater that includes this local family's capture and
+restore support. Their failed-candidate recovery restores the captured shared and
+local stores together. The later cutover must prove both update paths before use.
+
 When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `openclaw doctor --fix`; run `openclaw doctor --fix` from the compatible install if further migration is required, then restart through the service or deployment owner.
 
 Read admission reports the newer published schema version even when this build
@@ -53,6 +97,15 @@ replaces eleven retained task indexes with a runtime/run lookup and two ordered
 Cron history indexes. Rows and history ordering are unchanged. Builds supporting
 only schema 23 or earlier refuse it; binary rollback requires the verified
 pre-upgrade backup and its matching build.
+
+Shared-state [schema 25](/reference/database-schemas/state-schema-history#state-schema-25)
+requires recovered subagent completions to retain their original operator
+restriction. Older readers ignore the optional recovery source and can dispatch
+a cold-restored requester continuation as System, so a version fence is required
+even though tables and indexes are unchanged. The migration publishes metadata
+only; retained subagent payloads are not rewritten or backfilled. Older builds
+refuse schema 25. Restore the verified pre-upgrade backup with its matching build
+for rollback; never lower schema markers.
 
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still

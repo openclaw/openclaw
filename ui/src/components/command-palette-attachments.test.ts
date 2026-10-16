@@ -1,10 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
+import { createComponent, createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { CommandPaletteLoading } from "../app/app-shell-command-palette-loading-view.tsx";
-import { CommandPaletteLoadingState } from "../app/app-shell-command-palette-loading.ts";
+import { ShellCommandPaletteOwner } from "../app/app-shell-command-palette-loading.ts";
+import {
+  COMMAND_PALETTE_ELEMENT,
+  createLazyCustomElementRequests,
+} from "../app/lazy-custom-element.ts";
 import { createWebPushCapability } from "../app/web-push.ts";
 import * as toast from "../lib/toast.ts";
 import * as payloads from "../pages/chat/attachment-payload-store.ts";
@@ -35,6 +39,26 @@ afterEach(() => {
   sessionStorage.clear();
   vi.restoreAllMocks();
 });
+
+function createLoading(
+  host: Pick<ConstructorParameters<typeof ShellCommandPaletteOwner>[0], "context"> = {},
+) {
+  const { state, dispose } = createRoot((disposeRoot) => ({
+    state: new ShellCommandPaletteOwner(
+      {
+        ...host,
+        commandPaletteElement: COMMAND_PALETTE_ELEMENT,
+        lazyCustomElements: createLazyCustomElementRequests(),
+        chatNavigationOptions: () => undefined,
+        navigate: () => {},
+      },
+      { request: () => {}, clear: () => {}, cancel: () => {}, pending: () => false },
+    ).loading,
+    dispose: disposeRoot,
+  }));
+  onTestFinished(dispose);
+  return state;
+}
 
 function paste(input: HTMLTextAreaElement, files: File[] = [], text = "") {
   const event = new Event("paste", { bubbles: true, cancelable: true });
@@ -123,10 +147,10 @@ describe("command palette paste-only images", () => {
       ).toBe(false);
       if (!uploadsEnabled) {
         expect(paste(input, [image()]).defaultPrevented).toBe(true);
-        const loading = new CommandPaletteLoadingState({ context, requestUpdate: vi.fn() });
+        const loading = createLoading({ context });
         loading.begin();
         const loadingInput = document.createElement("textarea");
-        loadingInput.addEventListener("paste", loading.handlePaste);
+        loadingInput.addEventListener("paste", (event) => loading.handlePaste(event));
         expect(paste(loadingInput, [image()]).defaultPrevented).toBe(true);
         expect(loading.captureHandoff()()?.imageFiles).toBeUndefined();
       }
@@ -279,14 +303,13 @@ describe("command palette paste-only images", () => {
         },
       });
     }
-    const state = new CommandPaletteLoadingState({ requestUpdate: () => {} });
+    const state = createLoading();
     const loader = document.body.appendChild(document.createElement("div"));
     state.begin();
     const loadingView = mountSolid(
       () =>
         createComponent(CommandPaletteLoading, {
           state,
-          revision: 0,
           onClose: () => state.clear(),
         }),
       { container: loader },
@@ -344,7 +367,10 @@ describe("command palette paste-only images", () => {
         ),
       );
       expect(palette.querySelectorAll(".chat-attachment-thumb")).toHaveLength(
-        outcome === "partial" ? 1 : 0,
+        outcome === "partial" ? 2 : 1,
+      );
+      expect(palette.querySelector(".chat-attachment-failures")?.textContent).toContain(
+        "oversized.gif",
       );
     }
     if (outcome === "ready" || delayedPolicy) {

@@ -82,7 +82,7 @@ export function registerGatewaySupersededReloadTests({
         refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(async () => {
           entered.resolve();
           await release.promise;
-          throw new Error("Agent database resources are closing: retiring/openclaw-agent.sqlite");
+          throw new PreparedModelRuntimePublicationSupersededError("publication replaced");
         });
         const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
         const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -203,7 +203,7 @@ export function registerGatewaySupersededReloadTests({
             publish: async (commit) => await commit(),
           },
         );
-        const recoveryRequired = !cancelled && !superseded;
+        const recoveryRequired = !cancelled;
         if (!recoveryRequired) {
           await expect(reload).rejects.toBeInstanceOf(GatewayConfigReloadSupersededError);
         } else {

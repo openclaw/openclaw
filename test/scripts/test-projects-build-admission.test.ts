@@ -633,6 +633,34 @@ describe("packed config continuation", () => {
   });
 });
 
+describe("empty changed selection", () => {
+  it.each([
+    { paths: [], diagnostic: "[test] no changed test targets; skipping Vitest." },
+    {
+      paths: ["unknown/file.txt"],
+      diagnostic: "[test] no precise changed test targets; skipping Vitest.",
+    },
+  ])("keeps one selection and its diagnostics for $paths", async ({ paths, diagnostic }) => {
+    const lanes = await import("../../scripts/changed-lanes.mts");
+    const changedPaths = vi.spyOn(lanes, "listChangedPathsFromGit").mockReturnValue(paths);
+    const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+    await runTestProjects(async () => {}, ["--changed", "origin/main"], {
+      ...testRunnerFixtureEnv(),
+      OPENCLAW_TEST_CHANGED_BROAD: "0",
+    });
+    expect(changedPaths).toHaveBeenCalledTimes(1);
+    expect(commands.reader).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(diagnostic);
+    if (paths.length > 0) {
+      expect(console.error).toHaveBeenCalledWith("[test]   unknown/file.txt");
+      expect(console.error).toHaveBeenCalledWith(
+        "[test] run `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` for broad coverage.",
+      );
+    }
+    expect(process.exitCode).toBe(0);
+  });
+});
+
 describe("automatic exact-target admission", () => {
   const outputArgs = ["--reporter=dot", "--coverage.enabled=false"];
   const files = [
@@ -702,10 +730,11 @@ describe("automatic exact-target admission", () => {
       vi.mocked(os.availableParallelism).mockReturnValue(cpus ?? 8);
       vi.mocked(os.totalmem).mockReturnValue((gib ?? 24) * 1024 ** 3);
       const planner = await import("../../scripts/test-projects.test-support.mts");
-      if (changed) {
-        const lanes = await import("../../scripts/changed-lanes.mts");
-        vi.spyOn(lanes, "listChangedPathsFromGit").mockReturnValue(files);
-      }
+      const changedPaths = changed
+        ? vi
+            .spyOn(await import("../../scripts/changed-lanes.mts"), "listChangedPathsFromGit")
+            .mockReturnValue(files)
+        : undefined;
       const produced = vi.spyOn(planner, "createVitestRunSpecs");
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
       const selections: Array<{ config: string; include: string[] | null; workers: string }> = [];
@@ -738,10 +767,12 @@ describe("automatic exact-target admission", () => {
       >;
       expect(specs.length).toBeGreaterThanOrEqual(3);
       if (changed) {
+        expect(changedPaths).toHaveBeenCalledTimes(1);
         expect(specs.some((spec) => spec.pnpmArgs.includes("--passWithNoTests=false"))).toBe(false);
       }
       expect(peak).toBe(expected);
       const actual = selections.map(({ config, include }) => ({ config, include }));
+      expect(actual.flatMap(({ include }) => include ?? []).toSorted()).toEqual(files.toSorted());
       const planned = specs.map((spec) => ({ config: spec.config, include: spec.includePatterns }));
       // Explicit parallelism retains its timing order; automatic admission keeps native plan order.
       expect(
@@ -758,6 +789,7 @@ describe("automatic exact-target admission", () => {
     { outcome: "SIGTERM", mode: "automatic" },
     { outcome: "success", mode: "explicit parallel" },
     { outcome: "success", mode: "full suite" },
+    { outcome: "success", mode: "local full suite" },
   ])(
     "joins the real Gateway plan barrier before later admission and disposal ($mode, $outcome)",
     async ({ outcome, mode }) => {
@@ -775,6 +807,12 @@ describe("automatic exact-target admission", () => {
         return worker;
       });
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+      if (mode === "local full suite") {
+        vi.stubEnv("CI", "");
+        vi.stubEnv("GITHUB_ACTIONS", "");
+        vi.stubEnv("OPENCLAW_VITEST_MAX_WORKERS", "");
+        vi.stubEnv("OPENCLAW_TEST_WORKERS", "");
+      }
       const gatewayFile =
         mode === "automatic"
           ? "src/gateway/call.test.ts"
@@ -797,7 +835,7 @@ describe("automatic exact-target admission", () => {
         // Hold the ordinary/Gateway/ordinary order; timing weights have separate coverage.
         vi.spyOn(planner, "orderFullSuiteSpecsForParallelRun").mockImplementation((specs) => specs);
       }
-      if (mode === "full suite") {
+      if (mode.endsWith("full suite")) {
         vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
           configs.map((config, index) => ({
             config,
@@ -811,10 +849,13 @@ describe("automatic exact-target admission", () => {
       const releases = configs.map(() => createDeferred());
       const admissions = configs.map(() => createDeferred());
       const selected: string[] = [];
-      commands.reader.mockImplementation(({ pnpmArgs }) => {
+      commands.reader.mockImplementation(({ pnpmArgs, env }) => {
         const config = pnpmArgs[pnpmArgs.indexOf("--config") + 1];
         const index = configs.indexOf(config);
         expect(index).toBeGreaterThanOrEqual(0);
+        if (mode === "local full suite") {
+          expect(env.OPENCLAW_VITEST_MAX_WORKERS).toBe(index === 1 ? "3" : "1");
+        }
         selected.push(config);
         events.push(`start:${index}`);
         admissions[index]!.resolve();
@@ -833,7 +874,7 @@ describe("automatic exact-target admission", () => {
       const exit = vi.fn(async () => {});
       const running = runTestProjects(
         exit,
-        mode === "full suite" ? outputArgs : [...barrierFiles, ...outputArgs],
+        mode.endsWith("full suite") ? outputArgs : [...barrierFiles, ...outputArgs],
       );
       try {
         for (let index = 0; index < 2; index++) {

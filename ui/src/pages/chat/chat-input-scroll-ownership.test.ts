@@ -1,24 +1,23 @@
 /* @vitest-environment jsdom */
-import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createInitializationContext } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
-import { ChatStateController } from "./chat-state-controller.ts";
+import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { handleChatScrollTakeover } from "./scroll.ts";
 
-const controllers: ChatStateController<ChatPageHost>[] = [];
+const disposals: Array<() => void> = [];
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("sessionStorage", createStorageMock());
   vi.stubGlobal("localStorage", createStorageMock());
 });
 afterEach(() => {
-  for (const controller of controllers.splice(0)) {
-    controller.hostDisconnected();
+  for (const dispose of disposals.splice(0)) {
+    dispose();
   }
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -37,15 +36,12 @@ function userMessage(sendId: string) {
 }
 function setup() {
   const requestUpdate = vi.fn();
-  const host: ReactiveControllerHost = {
-    addController: () => undefined,
-    removeController: () => undefined,
+  const controller = createChatState<ChatPageHost>({
     requestUpdate,
     updateComplete: Promise.resolve(true),
-  };
-  const controller = new ChatStateController<ChatPageHost>(host);
-  controllers.push(controller);
-  controller.hostConnected();
+  });
+  const dispose = controller.dispose;
+  disposals.push(dispose);
   const state = createPageState(createInitializationContext(), controller.createRenderLifecycle(), {
     dispatchEvent: () => true,
     querySelector: () => null,
@@ -77,12 +73,13 @@ function setup() {
   return {
     state,
     controller,
+    dispose,
     requestUpdate,
     scrollport,
     commitGrowth: () => {
       state.requestUpdate?.();
       height += 889;
-      controller.hostUpdated();
+      controller.commitRender();
       vi.advanceTimersToNextFrame();
     },
   };
@@ -112,9 +109,9 @@ describe("transcript arrival scroll ownership", () => {
   });
 
   it("absorbs a pending background repaint into an immediate commit and cancels on teardown", async () => {
-    const { controller, requestUpdate, state } = setup();
+    const { controller, dispose, requestUpdate, state } = setup();
     controller.requestBackgroundUpdate();
-    controller.hostUpdate();
+    controller.prepareRender();
     vi.advanceTimersToNextFrame();
     expect(requestUpdate).not.toHaveBeenCalled();
 
@@ -125,7 +122,7 @@ describe("transcript arrival scroll ownership", () => {
     await Promise.resolve();
     expect(effect).toHaveBeenCalledOnce();
     controller.requestBackgroundUpdate();
-    controller.hostDisconnected();
+    dispose();
     vi.advanceTimersToNextFrame();
     expect(requestUpdate).toHaveBeenCalledOnce();
   });
@@ -135,8 +132,8 @@ describe("transcript arrival scroll ownership", () => {
     const follow = vi.spyOn(state, "chatScrollToEnd");
     state.chatStream = "A response arrived before the property commit.";
     requestChatPageUpdate(state, "animation-frame");
-    controller.hostUpdate();
-    controller.hostUpdated();
+    controller.prepareRender();
+    controller.commitRender();
     vi.advanceTimersToNextFrame();
     expect(requestUpdate).not.toHaveBeenCalled();
     expect(follow).toHaveBeenCalledOnce();

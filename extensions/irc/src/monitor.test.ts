@@ -662,10 +662,30 @@ describe("irc monitor inbound target", () => {
     },
   );
 
-  it("uses the receipt-time nickname when replaying a self echo", async () => {
+  it.each([
+    [
+      "uses the receipt-time nickname when replaying a self echo",
+      {
+        eventId: "local:previous-connection:000000000001",
+        rawLine: ":receipt-bot!ident@example.org PRIVMSG #openclaw :echo",
+        laneKey: "channel:#openclaw",
+        nick: "reconnected-bot",
+        completionLabel: "replayed self echo completion",
+      },
+    ],
+    [
+      "does not replay a DM after the accepting connection changed",
+      {
+        eventId: "local:previous-connection:000000000002",
+        rawLine: ":alice!ident@example.org PRIVMSG receipt-bot :private",
+        laneKey: "direct:alice",
+        nick: "receipt-bot",
+        completionLabel: "replayed DM completion",
+      },
+    ],
+  ] as const)("%s", async (_title, { eventId, rawLine, laneKey, nick, completionLabel }) => {
     await withIngressQueue(async (ingressQueue) => {
       installMonitorRuntime();
-      const eventId = "local:previous-connection:000000000001";
       const receivedAt = Date.now();
       await ingressQueue.enqueue(
         eventId,
@@ -675,61 +695,21 @@ describe("irc monitor inbound target", () => {
           receivedAt,
           connectionEpoch: "previous-connection",
           connectedNick: "receipt-bot",
-          rawLine: ":receipt-bot!ident@example.org PRIVMSG #openclaw :echo",
+          rawLine,
         },
-        { receivedAt, laneKey: "channel:#openclaw" },
+        { receivedAt, laneKey },
       );
-      const server = await startInboundIrcServer("reconnected-bot");
+      const server = await startInboundIrcServer(nick);
       const onMessage = vi.fn();
       const completed = observeIngressCompletion(ingressQueue);
       let monitor: { stop: () => Promise<void> } | undefined;
       try {
         monitor = await monitorIrcProvider({
-          config: monitorConfig(server.port, "reconnected-bot"),
+          config: monitorConfig(server.port, nick),
           ingressQueue,
           onMessage,
         });
-        expect(await withTimeout(completed, 3000, "replayed self echo completion")).toBe(eventId);
-        expect(await ingressQueue.listPending({ limit: "all" })).toEqual([]);
-        expect(await ingressQueue.listClaims()).toEqual([]);
-        expect(onMessage).not.toHaveBeenCalled();
-      } finally {
-        if (monitor) {
-          await monitor.stop();
-        }
-        await server.close();
-      }
-    });
-  });
-
-  it("does not replay a DM after the accepting connection changed", async () => {
-    await withIngressQueue(async (ingressQueue) => {
-      installMonitorRuntime();
-      const eventId = "local:previous-connection:000000000002";
-      const receivedAt = Date.now();
-      await ingressQueue.enqueue(
-        eventId,
-        {
-          version: 1,
-          eventId,
-          receivedAt,
-          connectionEpoch: "previous-connection",
-          connectedNick: "receipt-bot",
-          rawLine: ":alice!ident@example.org PRIVMSG receipt-bot :private",
-        },
-        { receivedAt, laneKey: "direct:alice" },
-      );
-      const server = await startInboundIrcServer("receipt-bot");
-      const onMessage = vi.fn();
-      const completed = observeIngressCompletion(ingressQueue);
-      let monitor: { stop: () => Promise<void> } | undefined;
-      try {
-        monitor = await monitorIrcProvider({
-          config: monitorConfig(server.port, "receipt-bot"),
-          ingressQueue,
-          onMessage,
-        });
-        expect(await withTimeout(completed, 3000, "replayed DM completion")).toBe(eventId);
+        expect(await withTimeout(completed, 3000, completionLabel)).toBe(eventId);
         expect(await ingressQueue.listPending({ limit: "all" })).toEqual([]);
         expect(await ingressQueue.listClaims()).toEqual([]);
         expect(onMessage).not.toHaveBeenCalled();

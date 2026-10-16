@@ -20,6 +20,7 @@ import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { ApplicationOverlays } from "../app/overlays-types.ts";
 import type { AppSidebarElement, AppSidebarOwner } from "../components/app-sidebar.tsx";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
+import { createInitialConfigState } from "../lib/config/config-state-model.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
 import {
   createSessionCapability,
@@ -55,13 +56,7 @@ const sidebarSessionGatewayBindings = new WeakMap<
 export type SidebarLifecycleState = AppSidebarElement &
   Omit<AppSidebarOwner, keyof AppSidebarElement>;
 
-export type TestSessionMenu = HTMLElement & {
-  forkDisabled: boolean;
-  forkFromLastCompleted: boolean;
-  onAction: (action: { kind: "fork" }) => void;
-  selectionCount: number;
-  readonly updateComplete: Promise<boolean>;
-};
+export type TestSessionMenu = HTMLElementTagNameMap["openclaw-session-menu"];
 
 export function createGatewayHarness(client: GatewayBrowserClient) {
   const originalRequest =
@@ -186,6 +181,16 @@ export function successfulSessionPatch(key: string) {
     key,
     entry: { sessionId: key },
   };
+}
+
+function usesPrimarySessionList(scope: SessionListOptions = {}) {
+  return (
+    (!scope.archivedFilter || scope.archivedFilter === "active") &&
+    !scope.spawnedBy &&
+    scope.source !== "dashboard" &&
+    !scope.ownerId &&
+    !scope.involvingMe
+  );
 }
 
 export function createSessionsHarness(agentId: string, keys: string[]) {
@@ -336,12 +341,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     deleteMany,
     list,
     listSnapshot(scope: Parameters<SessionCapability["listSnapshot"]>[0]) {
-      if (
-        (!scope.archivedFilter || scope.archivedFilter === "active") &&
-        !scope.spawnedBy &&
-        !scope.ownerId &&
-        !scope.involvingMe
-      ) {
+      if (usesPrimarySessionList(scope)) {
         return {
           result: state.result,
           agentId: state.agentId,
@@ -356,12 +356,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     observeList: (...args: Parameters<SessionCapability["observeList"]>) =>
       scopedSessions!.observeList(...args),
     refreshList(options: Parameters<SessionCapability["refreshList"]>[0]) {
-      if (
-        (!options?.archivedFilter || options.archivedFilter === "active") &&
-        !options?.spawnedBy &&
-        !options?.ownerId &&
-        !options?.involvingMe
-      ) {
+      if (usesPrimarySessionList(options)) {
         return refresh(options);
       }
       return scopedSessions!.refreshList(options);
@@ -422,7 +417,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
           const { archived, ...options } = (params ?? {}) as SessionListOptions & {
             archived?: true | "all";
           };
-          if (!archived && !options.spawnedBy && !options.ownerId && !options.involvingMe) {
+          if (!archived && usesPrimarySessionList(options)) {
             return state.result as T;
           }
           return (await list({
@@ -534,6 +529,11 @@ export function createContext(
     placementStartup: { pause: vi.fn<ApplicationContext["placementStartup"]["pause"]>() },
     agents,
     agentIdentity,
+    runtimeConfig: {
+      state: createInitialConfigState(gateway.snapshot),
+      ensureLoaded: async () => undefined,
+      subscribe: () => () => undefined,
+    },
     scopeUpgrade: hiddenScopeUpgradeCapability,
     overlays: {
       snapshot: { approvalQueue },
@@ -644,7 +644,7 @@ export async function mountSessionCatalogSidebar(client: GatewayBrowserClient) {
   gateway.publish({
     hello: {
       auth: { role: "operator", scopes: ["operator.read"] },
-      features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+      features: { methods: ["sessions.catalog.list"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
   const { sidebar } = await mountSidebar(

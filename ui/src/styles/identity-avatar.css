@@ -56,4 +56,5 @@
 
 .viewer-avatar > .identity-avatar--agent {
   display: inline-grid;
+  font-size: 14px;
 }

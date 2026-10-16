@@ -29,6 +29,7 @@ import {
   materializeDatabasePort,
   migrateDatabasePortSource,
   readPostgresPortCapabilities,
+  sqlitePortAllocations,
   type PortDescriptor,
   type PortVerification,
 } from "./port.worker.js";
@@ -38,7 +39,7 @@ type Identity = { storeId: string; namespace: string };
 export type DatabasePortTask =
   | ({ operation: "inspect"; to: "sqlite" | "postgres" } & Common)
   | { operation: "preflight"; config: OpenClawConfig; probe: boolean; namespace?: string }
-  | { operation: "migrate"; sourcePath: string }
+  | { operation: "migrate"; sourcePath: string; config?: OpenClawConfig }
   | ({
       operation: "stage";
       targetPath: string;
@@ -92,7 +93,10 @@ async function inspectSqliteImage(
     pendingColumns: {},
   };
   if (allowMigration && migrationRequired) {
-    inspectSqlitePortSchema(db, descriptor, pendingColumns);
+    // The family owner validates its historical shape before the private migration.
+    if (!descriptor.migrateSqliteSource) {
+      inspectSqlitePortSchema(db, descriptor, pendingColumns);
+    }
     return { version, migrationRequired };
   }
   const { tables, allocations } = await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
@@ -101,7 +105,7 @@ async function inspectSqliteImage(
 async function inspectSqlite(sourcePath: string, descriptor: PortDescriptor) {
   const prepared = prepareSqliteReadOnlyLocationSync(sourcePath);
   try {
-    using db = openNodeSqliteDatabase(prepared.location, { readOnly: true, readBigInts: true });
+    using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
     return await inspectSqliteImage(db, descriptor);
   } finally {
     prepared.cleanup();
@@ -128,13 +132,11 @@ async function preflight(
   assertCurrent: () => void,
 ) {
   return withDatabasePortConnection(task.config, async (db) => {
-    const descriptors = await Promise.all(
-      databasePortProviders.map((provider) => provider.loadDescriptor()),
-    );
-    const descriptor = descriptors.reduce((a, b) =>
-      a.minimumPostgresVersion >= b.minimumPostgresVersion ? a : b,
-    );
-    const facts = await readPostgresPortCapabilities(db, descriptor);
+    const facts = await readPostgresPortCapabilities(db, {
+      minimumPostgresVersion: Math.max(
+        ...databasePortProviders.map((provider) => provider.minimumPostgresVersion),
+      ),
+    });
     if (task.probe) {
       const namespace = task.namespace ?? `port_probe_${randomUUID().replaceAll("-", "")}`;
       await db.query("BEGIN");
@@ -165,7 +167,19 @@ async function stage(
     refuse("observed unmigrated private source; required migrate phase before staging");
   }
   if (task.sourceVerification) {
-    compare(verification, task.sourceVerification);
+    compare(
+      verification,
+      task.to === "sqlite"
+        ? {
+            ...task.sourceVerification,
+            allocations: sqlitePortAllocations(
+              descriptor,
+              verification.allocations,
+              task.sourceVerification.allocations,
+            ),
+          }
+        : task.sourceVerification,
+    );
   }
   const occupied = await fs.stat(task.targetPath).then(
     () => true,
@@ -293,12 +307,13 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
     }
     return;
   }
+  const { loadDatabasePortDescriptor } = await import("./port-provider-descriptor.js");
   const source = await (async () => {
     const prepared = prepareSqliteReadOnlyLocationSync(task.sourcePath);
     try {
       const engine = readBackupEngineImage(prepared.location, task.sourcePath);
       if (engine.engine === "postgres") {
-        if (!("config" in task) || task.operation === "stage") {
+        if (task.operation === "migrate" || task.operation === "stage") {
           refuse("private migration and staging require a SQLite image");
         }
         const descriptor = await withDatabasePortPostgres(
@@ -308,8 +323,11 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
         );
         return { engine, descriptor, facts: undefined };
       }
-      using db = openNodeSqliteDatabase(prepared.location, { readOnly: true, readBigInts: true });
-      const descriptor = await sqliteDatabasePortProvider(db).loadDescriptor();
+      using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+      const descriptor = await loadDatabasePortDescriptor(
+        sqliteDatabasePortProvider(db).id,
+        "config" in task ? task.config : undefined,
+      );
       const facts = await inspectSqliteImage(
         db,
         descriptor,

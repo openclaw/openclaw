@@ -101,7 +101,7 @@ function createFlow() {
     {} as DraftGatewayState,
     {} as DraftPlaceState,
     () => ({ context: undefined, data: undefined, isConnected: false }),
-    { requestUpdate: vi.fn(), closeTransientUi: vi.fn() },
+    { changed: vi.fn(), closeTransientUi: vi.fn() },
   );
 }
 

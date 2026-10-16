@@ -72,16 +72,26 @@ publication is unavailable, token/password chat links serve the app shell
 directly, without looking up or disclosing a transcript. Serving the shell grants
 no Gateway or session access.
 
-The public renderer includes only user messages and assistant final-answer text.
-It omits tools, reasoning, files, images, widgets, hidden messages, and internal
-metadata. Included text preserves credentials; review it before publishing. A restrictive
-content security policy permits only the fixed reader script; transcript HTML
-cannot execute. Responses retain `Cache-Control: no-store` and
+The public renderer includes user and assistant text, including progress updates,
+tool-call summaries, and shared images. Tool result text, reasoning, executable
+widgets, hidden messages, and internal metadata stay private. Images use a public
+media route bound to the current publication and transcript entry; other
+attachments appear as filename chips without download links. Included text
+preserves credentials; review it before publishing. A restrictive content
+security policy permits only the fixed reader script; transcript HTML cannot
+execute. Responses retain `Cache-Control: no-store` and
 `Referrer-Policy: no-referrer`. Server-side representation reuse never substitutes
 for a current publication check, including before a `304` response.
 
+Public transcript documents, preview cards, shared images, and the share namespace
+send `X-Robots-Tag: noindex, nofollow`; HTML reader and preview documents also
+include a robots meta tag. These directives ask compliant search engines not to
+index the content or follow its links. They do not prevent anonymous downloads,
+recall existing copies, or replace access control. Social-preview crawlers can
+still fetch public documents and images.
+
 Anyone who knows a public thread URL can read its existing and future published
-text until the creator or a Gateway admin disables access. Re-enabling access
+content until the creator or a Gateway admin disables access. Re-enabling access
 revives the normal thread URL, but not previously revoked token links.
 
 A login proxy must expose only the public thread documents and share namespace.
@@ -170,8 +180,13 @@ Uploaded images also stay visible while a new session's workspace or worktree de
 Generated images under `/api/chat/media/outgoing/...` use the same capability
 principle through `artifacts.download`. The authenticated WebSocket request
 authorizes the transcript artifact and returns a short-lived URL. The HTTP media
-route rechecks that the artifact still belongs to the transcript before serving
-bytes. The previous shared-owner bearer path remains available for older Control
+route rechecks that the artifact still belongs to the transcript and that the
+issuing reader can still read the session before serving bytes. Full images,
+thumbnails, and media playback share this authority. These URLs expire after five
+minutes and survive an ordinary WebSocket disconnect. Device, role, source, or
+session-access revocation stops reads through an existing URL. Responses use private,
+no-store caching; an already admitted stream retains its read authority until
+completion and stops if that authority is revoked. The previous shared-owner bearer path remains available for older Control
 UI clients during the compatibility window.
 
 ## Approval links

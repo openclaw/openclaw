@@ -40,6 +40,15 @@ async function updateOverlayVitals(overlay: TestDebugOverlay): Promise<void> {
   }
 }
 
+async function openOverlay(overlay: TestDebugOverlay): Promise<void> {
+  overlay.toggle();
+  await waitForSolid(() =>
+    expect(overlay.querySelector("openclaw-debug-overlay-content")).not.toBeNull(),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  await updateOverlayVitals(overlay);
+}
+
 useDebugTestEnvironment();
 
 describe("DebugOverlay", () => {
@@ -70,7 +79,7 @@ describe("DebugOverlay", () => {
     const requestCount = (method: string) =>
       request.mock.calls.filter(([called]) => called === method).length;
     try {
-      overlay.toggle();
+      await openOverlay(overlay);
       await vi.advanceTimersByTimeAsync(30_000);
       await updateOverlayVitals(overlay);
       expect(requestCount("sessions.list")).toBe(1);
@@ -140,7 +149,7 @@ describe("DebugOverlay", () => {
       }
     };
     try {
-      overlay.toggle();
+      await openOverlay(overlay);
       await vi.advanceTimersByTimeAsync(30_000);
       expect(request).not.toHaveBeenCalled();
 
@@ -233,7 +242,7 @@ describe("DebugOverlay", () => {
     document.body.append(overlay);
 
     try {
-      overlay.toggle();
+      await openOverlay(overlay);
       await waitForSolid(() =>
         expect(normalizedText(overlay.querySelector(".gateway-vital--cpu"))).toContain(
           "1.10 cores",

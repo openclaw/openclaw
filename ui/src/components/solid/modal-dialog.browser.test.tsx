@@ -82,6 +82,217 @@ describe("native Solid modal focus and top layer", () => {
     },
   );
 
+  it.each([false, true])("wraps native Tab at modal boundaries (shadow: %s)", async (inShadow) => {
+    const trigger = document.createElement("button");
+    const container = document.createElement("div");
+    document.body.append(trigger, container);
+    const mount = inShadow ? document.createElement("div") : container;
+    if (inShadow) {
+      container.attachShadow({ mode: "open" }).append(mount);
+    }
+    trigger.focus();
+    const { handle, name, notes } = mountModal("", mount);
+    const active = () => (inShadow ? container.shadowRoot!.activeElement : document.activeElement);
+    try {
+      notes.focus();
+      await userEvent.keyboard("{Tab}");
+      expect(active()).toBe(name);
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+      expect(active()).toBe(notes);
+      name.focus();
+      await userEvent.keyboard("{Tab}");
+      expect(active()).toBe(notes);
+
+      const preventTab = (event: KeyboardEvent) => {
+        if (event.key === "Tab") {
+          event.preventDefault();
+        }
+      };
+      notes.addEventListener("keydown", preventTab);
+      await userEvent.keyboard("{Tab}");
+      expect(active()).toBe(notes);
+      notes.removeEventListener("keydown", preventTab);
+
+      const hidden = afterModalHidden(handle);
+      handle.hide();
+      await hidden;
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      trigger.remove();
+      container.remove();
+    }
+  });
+
+  it.each([false, true])(
+    "keeps native Tab order through descendant shadow roots (only: %s)",
+    async (shadowOnly) => {
+      let before!: HTMLInputElement;
+      let shadow!: ShadowRoot;
+      let first!: HTMLInputElement;
+      let slotted!: HTMLInputElement;
+      let last!: HTMLInputElement;
+      render(() => (
+        <ModalDialog label="Shadow fields">
+          {!shadowOnly && (
+            <input
+              aria-label="Before shadow"
+              ref={(value) => {
+                before = value;
+              }}
+            />
+          )}
+          <div
+            ref={(host) => {
+              shadow = host.attachShadow({ mode: "open" });
+              first = document.createElement("input");
+              last = document.createElement("input");
+              slotted = document.createElement("input");
+              host.append(slotted);
+              shadow.append(first, document.createElement("slot"), last);
+            }}
+          />
+        </ModalDialog>
+      ));
+      flush();
+      const order = shadowOnly ? [first, slotted, last] : [before, first, slotted, last];
+      const active = () => shadow.activeElement ?? document.activeElement;
+      const start = shadowOnly ? first : before;
+      start.focus();
+      for (const next of [...order.slice(1), start]) {
+        await userEvent.keyboard("{Tab}");
+        expect(active()).toBe(next);
+      }
+      for (const next of [...order.slice(1).toReversed(), start]) {
+        await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+        expect(active()).toBe(next);
+      }
+    },
+  );
+
+  it("keeps native input navigation inside a button-ended modal", async () => {
+    const { handle, name, notes } = mountModal();
+    const dialog = modalDialog(handle);
+    const body = dialog.querySelector(".oc-modal-dialog__body")!;
+    const first = document.createElement("button");
+    first.textContent = "First action";
+    const last = document.createElement("button");
+    last.textContent = "Last action";
+    body.prepend(first);
+    body.append(last);
+    notes.focus();
+    await userEvent.keyboard("{Tab}");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    name.focus();
+    await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it.each(["summary", "editable"])(
+    "wraps native %s content without an explicit tabindex",
+    async (kind) => {
+      let handle!: OpenClawModalDialog;
+      let target!: HTMLElement;
+      render(() => (
+        <ModalDialog
+          label="Native content"
+          ref={(value) => {
+            handle = value;
+          }}
+        >
+          {kind === "summary" ? (
+            <details>
+              <summary
+                ref={(value) => {
+                  target = value;
+                }}
+              >
+                Details
+              </summary>
+              Content
+            </details>
+          ) : (
+            <div
+              contenteditable="true"
+              ref={(value) => {
+                target = value;
+              }}
+            >
+              Draft
+            </div>
+          )}
+        </ModalDialog>
+      ));
+      flush();
+      target.focus();
+      await userEvent.keyboard("{Tab}");
+      expect(document.activeElement).toBe(target);
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+      expect(document.activeElement).toBe(target);
+      target.tabIndex = -1;
+      modalDialog(handle).focus();
+      await userEvent.keyboard("{Tab}");
+      expect(document.activeElement).toBe(modalDialog(handle));
+    },
+  );
+
+  it.each([-1, 0, 1])("wraps to the radio group's tab stop (checked: %s)", async (checked) => {
+    let text!: HTMLInputElement;
+    let first!: HTMLInputElement;
+    let second!: HTMLInputElement;
+    render(() => (
+      <ModalDialog label="Radio group">
+        <input
+          aria-label="Text"
+          ref={(value) => {
+            text = value;
+          }}
+        />
+        <input
+          type="radio"
+          name="mode"
+          checked={checked === 0}
+          ref={(value) => {
+            first = value;
+          }}
+        />
+        <input
+          type="radio"
+          name="mode"
+          checked={checked === 1}
+          ref={(value) => {
+            second = value;
+          }}
+        />
+      </ModalDialog>
+    ));
+    flush();
+    const selected = checked === 1 ? second : first;
+    text.focus();
+    await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(document.activeElement).toBe(selected);
+    await userEvent.keyboard("{Tab}");
+    expect(document.activeElement).toBe(text);
+  });
+
+  it("keeps an empty modal focused without cycling through its guards", async () => {
+    let handle!: OpenClawModalDialog;
+    render(() => (
+      <ModalDialog
+        label="Empty modal"
+        ref={(value) => {
+          handle = value;
+        }}
+      />
+    ));
+    flush();
+    const dialog = modalDialog(handle);
+    expect(document.activeElement).toBe(dialog);
+    await userEvent.keyboard("{Tab}");
+    expect(document.activeElement).toBe(dialog);
+    await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(document.activeElement).toBe(dialog);
+  });
+
   it("a vetoed Escape keeps native top-layer, focus, and draft ownership", async () => {
     const { handle, notes } = mountModal();
     notes.value = "Unsaved draft";
@@ -113,6 +324,10 @@ describe("native Solid modal focus and top layer", () => {
     const inner = mountModal("", innerContainer);
     expect(document.activeElement).toBe(inner.name);
     inner.notes.focus();
+    await userEvent.keyboard("{Tab}");
+    expect(document.activeElement).toBe(inner.name);
+    await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(document.activeElement).toBe(inner.notes);
     modalDialog(inner.handle).focus();
     await userEvent.keyboard("Nested draft");
     expect(inner.notes.value).toBe("Nested draft");

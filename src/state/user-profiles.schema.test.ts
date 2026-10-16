@@ -20,11 +20,11 @@ import {
   configuredCommandOwnerPolicyFingerprint,
 } from "./user-channel-identities.js";
 import { prepareConfiguredCommandOwnerAuthority } from "./user-channel-identity-operations.js";
+import { readUserProfileEmailBindings } from "./user-profile-identity.read.js";
 import {
+  getUserProfileListItem,
   readUserProfileSnapshotSync,
-  readUserProfileEmailBindings,
-} from "./user-profile-identity.read.js";
-import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
+} from "./user-profile-list-item.test-support.js";
 import {
   getUserProfileDisplay,
   readResidentUserProfileIdentity,

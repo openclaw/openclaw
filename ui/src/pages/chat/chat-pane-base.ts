@@ -15,7 +15,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { observeNativeGateway } from "../../app/native-editor-locality.runtime.ts";
 import {
   createQuestionPromptState,
   listQuestionPrompts,
@@ -24,14 +23,17 @@ import {
 import type { PresencePayload } from "../../app/user-profile.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import type { SessionPanelToggleSlot } from "../../components/session-panel-toggle-buffer.ts";
-import { SessionProgressCardController } from "../../components/session-progress-card-controller.ts";
-import { I18nController } from "../../i18n/lib/lit-controller.ts";
 import type {
   BoardCommandEvent,
   BoardProvider,
   BoardProviderLease,
 } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
+import {
+  readSessionProgressCard,
+  sessionProgressCardsForGateway,
+} from "../../lib/session-progress-cards.ts";
 import type { GitHubPublicationBinding } from "../../lib/sessions/session-capability.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -41,13 +43,11 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
-import { PollController } from "../../lit/poll-controller.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import {
   ControllerHost,
   SubscriptionsController,
   viewState,
-} from "../../lit/subscriptions-controller.ts";
+} from "../../lib/subscriptions-controller.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
@@ -63,29 +63,23 @@ import { sameChatPanePresence } from "./chat-pane-presence.ts";
 import type { PendingSessionPanelToggle } from "./chat-pane-session-panel-toggle.ts";
 import type { ChatPaneConnectionScope, PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
-import { ChatStateController } from "./chat-state-controller.ts";
+import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
-import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
-import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import { createChatTranscript } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
-import {
-  cacheChatSessionSnapshot,
-  readChatSessionSnapshot,
-  type ChatMessageCache,
-} from "./session-message-cache.ts";
+import type { ChatMessageCache } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout-types.ts";
 
 export abstract class ChatPaneBase extends ControllerHost {
-  protected readonly i18nController = new I18nController(this);
   private readonly changedProperties = new Map<PropertyKey, unknown>();
   private completeUpdate: (() => void) | undefined;
   private commitPromise: Promise<boolean> | undefined;
@@ -132,6 +126,7 @@ export abstract class ChatPaneBase extends ControllerHost {
   }
 
   prepareRender(): void {
+    this.chatState.prepareRender();
     this.lastCommittedProperties = new Map(this.changedProperties);
     this.changedProperties.clear();
     this.willUpdate(this.lastCommittedProperties);
@@ -142,7 +137,7 @@ export abstract class ChatPaneBase extends ControllerHost {
     this.completeUpdate = undefined;
     this.commitPromise = undefined;
     this.updated(this.lastCommittedProperties);
-    this.chatState.hostUpdated();
+    this.chatState.commitRender();
     complete?.();
   }
 
@@ -151,8 +146,7 @@ export abstract class ChatPaneBase extends ControllerHost {
   private paneLifecycleRoot: Element | null = null;
   // The first Solid render initializes hidden panes; later hidden work parks.
   private readonly handleVisibilityChange = () => {
-    // Progress watches follow visibility before the parked view resumes.
-    this.progressCard.hostUpdate();
+    this.requestUpdate();
     if (document.visibilityState !== "hidden") {
       return;
     }
@@ -172,9 +166,31 @@ export abstract class ChatPaneBase extends ControllerHost {
     }
   };
   connectedCallback() {
+    if (this.chatState.disposed) {
+      this.chatState = this.mountChatState();
+    }
     this.paneLifecycleRoot = this.closest("openclaw-app-shell") ?? this.element.parentElement;
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     super.connect();
+    this.transcript.start();
+    this.chatState.addCleanup(
+      chatInputOwnerForContext(this.context).subscribe(() => this.activeChanged(this.active)),
+    );
+    this.activeChanged(this.active);
+    this.chatState.addCleanup(
+      this.context.overlays?.subscribe((snapshot) => {
+        if (this.state) {
+          this.reconcileWaitingApprovalSnapshot(snapshot.approvalQueue);
+        }
+        this.requestUpdate();
+      }) ?? (() => {}),
+    );
+    this.chatState.addCleanup(
+      this.context.runtimeConfig?.subscribe(() => {
+        this.refreshSwarmRoster();
+        this.requestUpdate();
+      }) ?? (() => {}),
+    );
     this.addEventListener(
       CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
       this.synchronizeForegroundTranscript,
@@ -189,6 +205,8 @@ export abstract class ChatPaneBase extends ControllerHost {
     );
     this.context?.connectionBootstrap.setForegroundPane(this, null);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.chatState.dispose();
+    this.transcript.dispose();
     super.disconnect();
     this.completeUpdate?.();
     this.completeUpdate = undefined;
@@ -201,14 +219,6 @@ export abstract class ChatPaneBase extends ControllerHost {
     paneRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
 
-  // Relative labels still need a minute tick; external PR state is server-pushed.
-  readonly minutePoll = new PollController(
-    this,
-    60_000,
-    () => this.requestUpdate(),
-    true,
-    "visible",
-  );
   @viewState()
   mcpAppLaunch?: import("../../components/mcp-app-launch.ts").McpAppOpenDetail;
   @viewState() paneId = "single";
@@ -275,7 +285,6 @@ export abstract class ChatPaneBase extends ControllerHost {
     this.headerPresentationGeneration += 1;
     this.presentedValue = value;
     this.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    this.progressCard.hostUpdate();
     this.requestUpdate("presented", previous);
     this.presentedChanged(value);
     this.notifyConversationPresentation(wasConversationPresented);
@@ -382,27 +391,31 @@ export abstract class ChatPaneBase extends ControllerHost {
   @viewState() boardProvider?: BoardProvider;
 
   private publishedRunActivity: ChatPaneBase["runActivity"] = null;
-  protected readonly chatState = new ChatStateController<ChatPageHost>(
-    this,
-    () => {
-      this.syncQueuedEditRetention();
-      const activity = this.runActivity;
-      if (
-        activity?.client === this.publishedRunActivity?.client &&
-        activity?.agentId === this.publishedRunActivity?.agentId &&
-        activity?.working === this.publishedRunActivity?.working &&
-        activity?.completion === this.publishedRunActivity?.completion
-      ) {
-        return;
-      }
-      this.publishedRunActivity = activity;
-      this.dispatchEvent(new Event(CHAT_RUN_ACTIVITY_CHANGED_EVENT, { bubbles: true }));
-    },
-    (item) =>
-      getTranscriptState(this.presentationId).transcriptRenderContext.onAsyncQuestionDiscard?.(
-        item,
-      ),
-  );
+  protected chatState: ReturnType<typeof createChatState<ChatPageHost>> = this.mountChatState();
+
+  private mountChatState() {
+    return createChatState<ChatPageHost>(
+      this,
+      () => {
+        this.syncQueuedEditRetention();
+        const activity = this.runActivity;
+        if (
+          activity?.client === this.publishedRunActivity?.client &&
+          activity?.agentId === this.publishedRunActivity?.agentId &&
+          activity?.working === this.publishedRunActivity?.working &&
+          activity?.completion === this.publishedRunActivity?.completion
+        ) {
+          return;
+        }
+        this.publishedRunActivity = activity;
+        this.dispatchEvent(new Event(CHAT_RUN_ACTIVITY_CHANGED_EVENT, { bubbles: true }));
+      },
+      (item) =>
+        getTranscriptState(this.presentationId).transcriptRenderContext.onAsyncQuestionDiscard?.(
+          item,
+        ),
+    );
+  }
 
   get runActivity() {
     return this.chatState.projectRunActivity(this.state);
@@ -410,29 +423,24 @@ export abstract class ChatPaneBase extends ControllerHost {
   protected readonly composerCapabilities = new ChatComposerCapabilityHost(() =>
     this.requestUpdate(),
   );
-  protected readonly transcript = new ChatTranscriptController(this, () => this.paneId, {
-    geometryEventTarget: this.element,
-    onViewportResize: () => this.chatState.handleTranscriptResize(),
-    canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
-    onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
-  });
-  protected readonly progressCard = new SessionProgressCardController(this, {
-    gateway: () => this.context?.gateway,
-    target: () => this.initialProgressCardTarget(),
-    onChange: (target, card) => {
-      const state = this.state;
-      if (!state || !this.ownsChatSnapshot(target)) {
-        return;
-      }
-      const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, target);
-      if (snapshot) {
-        cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
-          ...snapshot,
-          progressCard: card,
-        });
-      }
+  protected readonly transcript = createChatTranscript(
+    () => this.requestUpdate(),
+    () => this.paneId,
+    {
+      geometryEventTarget: this.element,
+      onViewportResize: () => this.chatState.handleTranscriptResize(),
+      canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
+      onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
     },
-  });
+  );
+  protected get progressCards() {
+    return sessionProgressCardsForGateway(this.context.gateway);
+  }
+
+  protected get progressCardSnapshot() {
+    return readSessionProgressCard(this.progressCards, this.initialProgressCardTarget());
+  }
+
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
     this.requestUpdate();
@@ -659,37 +667,10 @@ export abstract class ChatPaneBase extends ControllerHost {
 
   constructor(
     readonly element: HTMLElement,
-    protected context: ApplicationContext,
+    public context: ApplicationContext,
   ) {
     super();
-    observeNativeGateway(this);
     void new SubscriptionsController(this)
-      .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
-      .watchStore(
-        () => this.context && chatInputOwnerForContext(this.context),
-        () => this.activeChanged(this.active),
-      )
-      .watch(
-        () => this.context?.overlays,
-        (overlays, notify) =>
-          overlays.subscribe((snapshot) => {
-            if (this.state) {
-              this.reconcileWaitingApprovalSnapshot(snapshot.approvalQueue);
-            }
-            notify();
-          }),
-      )
-      .watch(
-        () => this.context?.runtimeConfig,
-        (runtimeConfig, notify) =>
-          runtimeConfig.subscribe(() => {
-            this.refreshSwarmRoster();
-            notify();
-          }),
-      )
-      .watchStore(() => this.context?.config)
-      .watchStore(() => this.context?.theme)
-      .watchStore(() => this.context?.plugins)
       .watch(
         () => this.resolveBoardProvider(),
         (provider, notify) => {

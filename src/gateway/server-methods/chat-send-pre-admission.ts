@@ -8,7 +8,6 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
-import { errorShapeFromError } from "../error-shape.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -19,7 +18,6 @@ import {
   resolveGatewaySessionStoreTargetInWorker,
 } from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
-import { formatForLog } from "../ws-log.js";
 import {
   buildAbortedChatSendPayload,
   readPreRegisteredRun,
@@ -32,10 +30,11 @@ import {
   withAbortedPartialPersistenceWarning,
 } from "./chat-aborted-partial.js";
 import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
+import { assertExpectedLeafActiveAsync } from "./chat-send-active-leaf.js";
 import {
-  ACTIVE_LEAF_CHANGED_ERROR_REASON,
-  assertExpectedLeafActiveAsync,
-} from "./chat-send-active-leaf.js";
+  respondChatSendAdmissionError,
+  respondChatSessionRoutingChanged,
+} from "./chat-send-admission-errors.js";
 import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -45,79 +44,9 @@ import {
   readChatSendRetryComparison,
   type ChatSendRetryComparison,
 } from "./chat-send-retry-comparison.js";
-import {
-  captureAdmittedChatSendSessionSettings,
-  SESSION_SETTINGS_CHANGED_ERROR_REASON,
-} from "./chat-send-session-settings.js";
+import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
 import type { LoadedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerOptions["respond"]) {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "session routing changed; review and retry", {
-      details: { reason: SESSION_ROUTING_CHANGED_ERROR_REASON },
-    }),
-  );
-}
-
-export function respondChatSendAdmissionError(
-  error: unknown,
-  respond: GatewayRequestHandlerOptions["respond"],
-): void {
-  const reason = error instanceof Error ? error.message : undefined;
-  if (reason === "goal-session-busy") {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        "This session still has active or queued work. Wait for it to finish, then retry the Goal.",
-        { retryable: true, details: { reason: "goal-session-busy" } },
-      ),
-    );
-    return;
-  }
-  if (reason === SESSION_ROUTING_CHANGED_ERROR_REASON) {
-    respondChatSessionRoutingChanged(respond);
-    return;
-  }
-  if (
-    reason === ACTIVE_LEAF_CHANGED_ERROR_REASON ||
-    reason === SESSION_SETTINGS_CHANGED_ERROR_REASON
-  ) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
-          ? "active branch changed; review and retry"
-          : "Session settings changed before send. Retry.",
-        { details: { reason } },
-      ),
-    );
-    return;
-  }
-  if (isSessionTranscriptProjectionUnavailableError(error)) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "session transcript is rebuilding; retry shortly", {
-        details: { method: "chat.send" },
-        retryable: true,
-        retryAfterMs: 250,
-      }),
-    );
-    return;
-  }
-  respond(
-    false,
-    undefined,
-    errorShapeFromError(ErrorCodes.INVALID_REQUEST, error, { message: formatForLog(error) }),
-  );
-}
 
 type ChatSendRetryParams = Pick<
   ChatSendPreAdmissionParams,
@@ -363,6 +292,7 @@ export async function runChatSendPreAdmission(
     }
     const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
       allowPendingWorkspace: true,
+      restartResume: request.restartResume,
       providerReviewAcknowledgment: request.providerReviewAcknowledgment,
       runId: clientRunId,
     });

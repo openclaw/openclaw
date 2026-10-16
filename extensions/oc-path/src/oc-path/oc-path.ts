@@ -19,7 +19,7 @@ const OC_SCHEME = "oc://";
 
 // Hard caps bound resource use under pathological / hostile input.
 const MAX_PATH_LENGTH = 4096;
-const MAX_SUB_SEGMENTS_PER_SLOT = 64;
+export const MAX_SUB_SEGMENTS_PER_SLOT = 64;
 export const MAX_TRAVERSAL_DEPTH = 256;
 
 const BOM = "﻿";

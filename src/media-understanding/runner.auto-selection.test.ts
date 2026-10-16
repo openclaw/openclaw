@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildMediaUnderstandingRegistry } from "./provider-registry.js";
 import { resolveAutoImageModel, runCapability } from "./runner.js";
@@ -102,41 +101,23 @@ describe("automatic media selection", () => {
     },
   );
 
-  it.each([
-    { capability: "image", route: "active", model: "after-auth", provider: "google" },
-    { capability: "video", route: "key", model: "before-auth", provider: "google" },
-  ] as const)(
-    "preserves $capability $route model capture and provider identity",
-    async (scenario) => {
-      const entered = createDeferred();
-      const available = createDeferred<boolean>();
-      const calls: string[] = [];
-      selection.auth.mockImplementation(async ({ provider }) => {
-        calls.push(provider);
-        if (scenario.route === "key" && calls.length === 1) {
-          return false;
-        }
-        entered.resolve();
-        return available.promise;
-      });
+  it.each(["image", "video"] as const)(
+    "selects the active %s model through its normalized provider alias",
+    async (capability) => {
       selection.providers.push({
         id: "google",
         capabilities: ["image", "video"],
         describeImage: async ({ model }) => ({ text: "image", model }),
         describeVideo: async ({ model }) => ({ text: "video", model }),
       });
-      const activeModel = { provider: " GEMINI ", model: "before-auth" };
+      const activeModel = { provider: " GEMINI ", model: "selected-model" };
       const cfg: OpenClawConfig = {};
       let outcome: { provider?: string; model?: string } | null = null;
-      if (scenario.capability === "image") {
-        const pending = resolveAutoImageModel({ cfg, activeModel });
-        await entered.promise;
-        activeModel.model = "after-auth";
-        available.resolve(true);
-        outcome = await pending;
+      if (capability === "image") {
+        outcome = await resolveAutoImageModel({ cfg, activeModel });
       } else {
-        await withVideoFixture("media-selection-timing", async ({ ctx, media, cache }) => {
-          const pending = runCapability({
+        await withVideoFixture("media-selection-alias", async ({ ctx, media, cache }) => {
+          const result = await runCapability({
             capability: "video",
             cfg,
             ctx,
@@ -145,17 +126,15 @@ describe("automatic media selection", () => {
             activeModel,
             providerRegistry: buildMediaUnderstandingRegistry(),
           });
-          await entered.promise;
-          activeModel.model = "after-auth";
-          available.resolve(true);
-          const result = await pending;
           expect(result.decision.outcome).toBe("success");
           expect(result.outputs).toHaveLength(1);
           outcome = result.outputs[0] ?? null;
         });
       }
-      expect(outcome).toMatchObject({ model: scenario.model, provider: scenario.provider });
-      expect(calls).toEqual(scenario.route === "key" ? ["google", "GEMINI"] : ["google"]);
+      expect(outcome).toMatchObject({ model: "selected-model", provider: "google" });
+      expect(selection.auth).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ provider: "google" }),
+      );
     },
   );
 

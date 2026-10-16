@@ -555,18 +555,8 @@ async function resolveModelInfoReply(
 describe("/model chat UX", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("marks an auth profile without a model selection as an error", async () => {
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineSessionDirectives("/model list@work"),
-    });
-
-    expect(reply).toEqual({
-      text: "Auth profile override requires a model selection.",
-      isError: true,
-    });
-  });
-
   it.each([
+    ["/model list@work", "Auth profile override requires a model selection."],
     ["/model status --runtime codex", "Runtime override requires a model selection."],
     ["/model list -s", "Session-only scope requires a model selection."],
     ["/model status --agent", "Agent scope requires a model selection."],
@@ -687,21 +677,6 @@ describe("/model chat UX", () => {
     );
     expect(resolved.errorText).toContain("Then retry: /model openai/gpt-5.5 --runtime codex");
     expect(resolved.errorText).toContain("openclaw plugins enable codex");
-  });
-
-  it("treats /model default as a session model reset", async () => {
-    const resolved = await resolveModelSelectionForCommand({
-      command: "/model default",
-      allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
-    });
-
-    expect(resolved.errorText).toBeUndefined();
-    expect(resolved.modelSelection).toEqual({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      isDefault: true,
-      resetToDefault: true,
-    });
   });
 
   it("keeps @YYYYMMDD as part of the model when the stored numeric profile is for another provider", async () => {
@@ -925,17 +900,31 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     },
   );
 
-  it("rejects persistent model scope without owner authority", async () => {
-    const { persisted, sessionEntry } = await persistModelDirectiveForTest({
+  it.each([
+    {
       command: "/model openai/gpt-4o -a continue with the request",
-      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
       canPersistStickyModelSelection: false,
-    });
+      error: "require owner authority",
+    },
+    {
+      command: "/model openai/gpt-4o -a -g continue with the request",
+      canPersistStickyModelSelection: true,
+      error: "only one model scope",
+    },
+  ])(
+    "rejects persistent model scope: $error",
+    async ({ command, canPersistStickyModelSelection, error }) => {
+      const { persisted, sessionEntry } = await persistModelDirectiveForTest({
+        command,
+        allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+        canPersistStickyModelSelection,
+      });
 
-    expect(persisted.errorText).toContain("require owner authority");
-    expect(sessionEntry.providerOverride).toBeUndefined();
-    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
-  });
+      expect(persisted.errorText).toContain(error);
+      expect(sessionEntry.providerOverride).toBeUndefined();
+      expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
+    },
+  );
 
   it("leaves a scoped model directive as plain text for an unauthorized sender", async () => {
     const { persisted, sessionEntry } = await persistModelDirectiveForTest({
@@ -952,29 +941,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(persisted.errorText).toBeUndefined();
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
-  });
-
-  it("rejects conflicting model scopes before changing session or config", async () => {
-    const { persisted, sessionEntry } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o -a -g continue with the request",
-      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-    });
-
-    expect(persisted.errorText).toContain("only one model scope");
-    expect(sessionEntry.providerOverride).toBeUndefined();
-    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
-  });
-
-  it("preserves unsupported stored thinking levels when persisting a model switch", async () => {
-    const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
-    const { persisted } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o",
-      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-      sessionEntry,
-    });
-
-    expect(sessionEntry.thinkingLevel).toBe("adaptive");
-    expect(persisted.directiveAck?.text).not.toContain("Thinking level set to");
   });
 
   it("suppresses model side effects when a concurrent switch wins", async () => {
@@ -1137,44 +1103,27 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     }
   });
 
-  it("persists thinkingLevel=off (does not clear)", async () => {
-    const sessionEntry = createSessionEntry({ thinkingLevel: "low" });
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const result = await runHandleCommand("/think off", { sessionEntry, sessionStore });
+  it.each([
+    { command: "/think off", initial: "low", expected: "off" },
+    { command: "/think default", initial: "high", expected: undefined },
+  ] as const)(
+    "persists $command without confusing off with default",
+    async ({ command, initial, expected }) => {
+      const sessionEntry = createSessionEntry({ thinkingLevel: initial });
+      const sessionStore = { [sessionKey]: sessionEntry };
+      const result = await runHandleCommand(command, { sessionEntry, sessionStore });
 
-    expect(result?.text ?? "").not.toContain("failed");
-    expect(sessionEntry.thinkingLevel).toBe("off");
-    expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
-  });
-
-  it("clears thinking override for default directives", async () => {
-    const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const result = await runHandleCommand("/think default", { sessionEntry, sessionStore });
-
-    expect(result?.text).toContain("Thinking level reset to default.");
-    expect(sessionEntry.thinkingLevel).toBeUndefined();
-    expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBeUndefined();
-  });
+      expect(result?.text ?? "").not.toContain("failed");
+      if (expected === undefined) {
+        expect(result?.text).toContain("Thinking level reset to default.");
+      }
+      expect(sessionEntry.thinkingLevel).toBe(expected);
+      expect(sessionStore[sessionKey]?.thinkingLevel).toBe(expected);
+    },
+  );
 
   it("reports the effective thinking level for the pinned runtime", async () => {
-    setDirectiveTestProviders([
-      {
-        id: "openai",
-        label: "OpenAI",
-        auth: [],
-        resolveThinkingProfile: ({ agentRuntime }) => ({
-          levels: [
-            { id: "off" },
-            { id: "low" },
-            { id: "medium" },
-            { id: "high" },
-            { id: "max" },
-            ...(agentRuntime === "openclaw" ? ([{ id: "ultra" }] as const) : []),
-          ],
-        }),
-      },
-    ]);
+    setOpenAiRuntimeScopedUltraProvider();
     const sessionEntry = createSessionEntry({
       thinkingLevel: "ultra",
       agentRuntimeOverride: "codex",
@@ -1335,65 +1284,55 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
   });
 
-  it("blocks internal operator.write exec persistence in directive-only handling", async () => {
-    const sessionEntry = createSessionEntry();
-    const result = await runHandleCommand(
-      "/exec host=node security=allowlist ask=always node=worker-1",
-      { sessionEntry, surface: "webchat", gatewayClientScopes: ["operator.write"] },
-    );
+  it.each([
+    {
+      command: EXEC_DEFAULTS_DIRECTIVE,
+      acknowledgement: "Exec policy for this run only (security=allowlist, ask=always).",
+      fields: ["execHost", "execNode"],
+    },
+    {
+      command: VERBOSE_DEFAULT_DIRECTIVE,
+      acknowledgement: "Verbose logging set for the current reply only.",
+      fields: ["verboseLevel"],
+    },
+  ] as const)(
+    "blocks internal operator.write persistence for $command",
+    async ({ command, acknowledgement, fields }) => {
+      const sessionEntry = createSessionEntry();
+      const result = await runHandleCommand(command, {
+        sessionEntry,
+        surface: "webchat",
+        gatewayClientScopes: ["operator.write"],
+      });
 
-    expect(result?.text).toContain("operator.admin");
+      expect(result?.text).toContain(acknowledgement);
+      expect(result?.text).toContain("operator.admin");
+      for (const field of fields) {
+        expect(sessionEntry[field]).toBeUndefined();
+      }
+    },
+  );
+
+  it("acknowledges run-only exec policy and persists admin-authorized placement", async () => {
+    const sessionEntry = createSessionEntry();
+    const initialEntry = { ...sessionEntry };
+    const result = await runHandleCommand(EXEC_DEFAULTS_DIRECTIVE, {
+      sessionEntry,
+      surface: "webchat",
+      gatewayClientScopes: ["operator.admin"],
+    });
+
     expect(result?.text).toContain(
       "Exec policy for this run only (security=allowlist, ask=always).",
     );
-    expect(sessionEntry.execHost).toBeUndefined();
-    expect(sessionEntry.execNode).toBeUndefined();
-  });
-
-  it("blocks internal operator.write verbose persistence in directive-only handling", async () => {
-    const sessionEntry = createSessionEntry();
-    const result = await runHandleCommand("/verbose full", {
-      sessionEntry,
-      surface: "webchat",
-      gatewayClientScopes: ["operator.write"],
+    expect(result?.text).toContain("Exec defaults set (host=node, node=worker-1).");
+    expect(sessionEntry).toEqual({
+      ...initialEntry,
+      execHost: "node",
+      execNode: "worker-1",
+      updatedAt: expect.any(Number),
     });
-
-    expect(result?.text).toContain("Verbose logging set for the current reply only.");
-    expect(result?.text).toContain("operator.admin");
-    expect(sessionEntry.verboseLevel).toBeUndefined();
   });
-
-  it.each([
-    {
-      options: "host=node security=allowlist ask=always node=worker-1",
-      policy: "security=allowlist, ask=always",
-      placement: { execHost: "node", execNode: "worker-1" },
-      scope: "operator.admin",
-    },
-  ])(
-    "acknowledges /exec $options policy for this run only",
-    async ({ options, policy, placement, scope }) => {
-      const sessionEntry = createSessionEntry();
-      const initialEntry = { ...sessionEntry };
-      const result = await runHandleCommand(`/exec ${options}`, {
-        sessionEntry,
-        surface: "webchat",
-        gatewayClientScopes: [scope],
-      });
-
-      expect(result?.text).toContain(`Exec policy for this run only (${policy}).`);
-      if (placement) {
-        expect(result?.text).toContain("Exec defaults set (host=node, node=worker-1).");
-      } else {
-        expect(result?.text).not.toContain("operator.admin");
-      }
-      expect(sessionEntry).toEqual({
-        ...initialEntry,
-        ...placement,
-        updatedAt: expect.any(Number),
-      });
-    },
-  );
 });
 
 describe("canonical session directive persistence policy", () => {
@@ -1441,26 +1380,28 @@ describe("canonical session directive persistence policy", () => {
     }
   });
 
-  it("skips exec persistence for unauthorized external callers even when gateway scopes are empty", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective(
-      EXEC_DEFAULTS_DIRECTIVE,
-      externalChannelPolicy({ gatewayClientScopes: [] }),
-    );
-
-    expectExecDefaults(sessionEntry, false);
-  });
-
-  it("allows authorized external provider callers when surface carries webchat metadata", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective(
-      EXEC_DEFAULTS_DIRECTIVE,
-      externalChannelPolicy({
+  it.each([
+    {
+      name: "unauthorized with empty scopes",
+      policy: { gatewayClientScopes: [] },
+      persisted: false,
+    },
+    {
+      name: "authorized with webchat surface metadata",
+      policy: {
         surface: "webchat",
         gatewayClientScopes: ["operator.write"],
         commandAuthorized: true,
-      }),
+      },
+      persisted: true,
+    },
+  ])("applies external provider authority for $name", async ({ policy, persisted }) => {
+    const sessionEntry = await persistInternalOperatorWriteDirective(
+      EXEC_DEFAULTS_DIRECTIVE,
+      externalChannelPolicy(policy),
     );
 
-    expectExecDefaults(sessionEntry, true);
+    expectExecDefaults(sessionEntry, persisted);
   });
 
   it("keeps internal provider authoritative over authorized external surface metadata", async () => {

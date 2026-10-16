@@ -12,7 +12,6 @@ import {
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 import "../../../test-helpers/load-styles.ts";
-import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "../../activity/session-activity-media.css";
 
 const browserMode = "__vitest_browser__" in globalThis;
@@ -121,6 +120,32 @@ function geometry(container: HTMLElement) {
   return { width: imageRect.width, height: imageRect.height, nextTop: nextRect.top };
 }
 
+function expectContentSizedError(card: HTMLElement) {
+  const header = card.querySelector<HTMLElement>(".chat-assistant-attachment-card__header")!;
+  const style = getComputedStyle(header);
+  const children = [...header.children].map((child) => child.getBoundingClientRect().height);
+  const contentHeight =
+    style.flexDirection === "column"
+      ? children.reduce((sum, height) => sum + height, 0) + Number.parseFloat(style.rowGap)
+      : Math.max(...children);
+  const headerHeight =
+    contentHeight + Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
+  const cardStyle = getComputedStyle(card);
+  const border =
+    Number.parseFloat(cardStyle.borderTopWidth) + Number.parseFloat(cardStyle.borderBottomWidth);
+  expect(header.getBoundingClientRect().height).toBeCloseTo(headerHeight, 0);
+  expect(card.getBoundingClientRect().height).toBeCloseTo(headerHeight + border, 0);
+  const reason = card.querySelector<HTMLElement>(".chat-assistant-attachment-card__status-reason")!;
+  expect(reason.textContent?.trim()).not.toBe("");
+  expect(reason.scrollWidth).toBeLessThanOrEqual(reason.clientWidth + 1);
+  expect(reason.scrollHeight).toBeLessThanOrEqual(reason.clientHeight + 1);
+  expect(getComputedStyle(reason).whiteSpace).toBe("normal");
+  expect(getComputedStyle(reason).textOverflow).not.toBe("ellipsis");
+  const action = card.querySelector("button")!;
+  expect(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(44);
+  expect(action.getBoundingClientRect().width).toBeGreaterThanOrEqual(44);
+}
+
 function svgResponse(width: number, height: number) {
   return new Response(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#cc6633"/></svg>`,
@@ -143,6 +168,24 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     } else {
       document.documentElement.dataset.themeMode = originalTheme;
     }
+  });
+
+  it("replaces a legacy immutable thumbnail rendition before loading its preview", async () => {
+    const container = mount(500);
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/thumbnail?v=2`;
+    const fetchMock = vi.fn(async (url: string) => {
+      // Model the old immutable response separately from the new bounded rendition.
+      return new URL(url, location.href).searchParams.get("v") === "2"
+        ? svgResponse(2400, 1200)
+        : svgResponse(400, 200);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    drawImages(container, { images: [{ url: source, alt: "Versioned preview" }] });
+    const image = await admittedImage(container);
+    await image.decode();
+    expect(image.naturalWidth).toBe(400);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(new URL(fetchMock.mock.calls[0]![0], location.href).searchParams.get("v")).toBe("4");
   });
 
   it("keeps a horizontally clipped image keyboard reachable before admission", async () => {
@@ -532,11 +575,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       const gap = Number.parseFloat(galleryStyle.rowGap);
       const columns = role === "user" ? galleryStyle.gridTemplateColumns.split(" ").length : 1;
       const rowHeights = Array.from({ length: Math.ceil(before.length / columns) }, (_, row) =>
-        Math.max(
-          ...before
-            .slice(row * columns, (row + 1) * columns)
-            .map((slot, offset) => (row * columns + offset < count ? fileHeight : slot.height)),
-        ),
+        Math.max(...before.slice(row * columns, (row + 1) * columns).map((slot) => slot.height)),
       );
       const compactHeight =
         rowHeights.reduce((sum, height) => sum + height, 0) + gap * (rowHeights.length - 1);
@@ -570,8 +609,15 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       };
       for (const [index, card] of cards.entries()) {
         expect(card.getBoundingClientRect().width).toBe(before[index]!.width);
-        expect(Math.abs(card.getBoundingClientRect().height - fileHeight)).toBeLessThanOrEqual(1);
-        expect(Math.abs(before[index]!.height - fileHeight)).toBeLessThanOrEqual(1);
+        expectContentSizedError(card);
+        expect(before[index]!.height).toBeCloseTo(card.getBoundingClientRect().height, 1);
+        // Measure the card outline independently of its sibling secondary menu.
+        // Menu hit targets are exercised separately above; restore them immediately.
+        const menu = card.parentElement!.querySelector<HTMLElement>(".chat-image-actions");
+        const menuPointerEvents = menu?.style.pointerEvents;
+        if (menu) {
+          menu.style.pointerEvents = "none";
+        }
         const cardCorners = cornerInsets(card);
         const rect = card.getBoundingClientRect();
         // Compare both outlines at the same subpixel coordinates so browser hit
@@ -581,6 +627,9 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         document.body.append(file);
         file.style.cssText = `position: fixed; left: ${rect.left}px; top: ${rect.top}px; width: ${rect.width}px; height: ${rect.height}px; z-index: 1`;
         const fileCorners = cornerInsets(file);
+        if (menu) {
+          menu.style.pointerEvents = menuPointerEvents ?? "";
+        }
         file.removeAttribute("style");
         fileParent.insertBefore(file, fileNext);
         expect.soft(cardCorners).toEqual(fileCorners);
@@ -607,8 +656,8 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       ).toEqual(before.slice(1).map(({ width, height }) => ({ width, height })));
       allowed.resolve(Response.json({ available: true }));
       await waitForFast(() => expect(frame(container).querySelector("img")).not.toBeNull());
-      for (const remaining of [...gallery.children].slice(1, count)) {
-        expect(remaining.getBoundingClientRect().height).toBe(fileHeight);
+      for (const [index, remaining] of [...gallery.children].slice(1, count).entries()) {
+        expect(remaining.getBoundingClientRect().height).toBe(before[index + 1]!.height);
       }
     },
   );
@@ -634,7 +683,10 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(container.querySelector(".chat-assistant-attachment-card")?.textContent).toContain(
         "load",
       );
-      expect(geometry(container).height).toBe(74);
+      const card = container.querySelector<HTMLElement>(".chat-assistant-attachment-card")!;
+      expectContentSizedError(card);
+      expect(geometry(container).height).toBeCloseTo(card.getBoundingClientRect().height, 1);
+      expect(geometry(container).height).toBeLessThan(before.height);
       const { page } = await import("vitest/browser");
       await page.getByRole("button", { name: "Retry", exact: true }).click();
       await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());

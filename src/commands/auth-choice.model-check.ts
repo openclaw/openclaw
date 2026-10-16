@@ -6,16 +6,13 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
-import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
+import type {
+  ProviderModelRouteAuthRequirement,
+  ProviderModelRouteSource as ModelRouteObservation,
+} from "../plugin-sdk/provider-model-types.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-
-type ModelRouteObservation = {
-  api?: ModelApi | null;
-  baseUrl?: unknown;
-};
 
 type DefaultModelAuthOptions = {
   agentId?: string;

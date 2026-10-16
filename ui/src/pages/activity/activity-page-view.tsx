@@ -2,8 +2,10 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  createStore,
   Match,
   onCleanup,
+  onSettled,
   Show,
   Switch,
   untrack,
@@ -11,7 +13,7 @@ import {
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
@@ -23,16 +25,16 @@ import {
   projectPresencePayload,
 } from "../../lib/presence-users.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
-import { ActivityPageController } from "./activity-page-controller.ts";
+import type { ActivityPageState } from "./activity-page-state.ts";
 import { renderCurrentWork as CurrentWork } from "./current-work-view.tsx";
 import { renderRunInspector as RunInspector } from "./run-inspector-view.tsx";
-import { ACTIVITY_SUMMARY_ENSURE_METHOD } from "./session-activity-controller.ts";
+import { ACTIVITY_SUMMARY_ENSURE_METHOD } from "./session-activity-owner.ts";
 import { renderSessionActivityView as SessionActivityView } from "./session-activity-view.tsx";
 import { renderActivity as LiveActivityView } from "./view.tsx";
 
@@ -46,15 +48,22 @@ function toggle(ids: ReadonlySet<string>, id: string, open = !ids.has(id)) {
   return next;
 }
 
-export function ActivityPageView(props: {
-  controller: ActivityPageController;
-  revision: () => number;
-  host?: HTMLElement;
-}) {
-  const state = () => {
-    props.revision();
-    return props.controller;
-  };
+export function ActivityPageView(props: { page: ActivityPageState }) {
+  const state = () => props.page.read();
+  const [filters, setFilters] = createStore({
+    filterText: "",
+    toolFilter: "",
+    autoFollow: true,
+    statusFilters: { running: true, done: true, error: true },
+  });
+  const update = (patch: Partial<typeof filters>) =>
+    setFilters((draft) => Object.assign(draft, patch));
+  const liveRevision = createMemo(() => state().liveActivity.snapshot.revision);
+  const [expandedIds, setExpandedIds] = createSignal(() => {
+    liveRevision();
+    return new Set<string>();
+  });
+  const [expandedAutomationDays, setExpandedAutomationDays] = createSignal(new Set<string>());
   const route = createMemo(() => state().routeData ?? state().presentedRoute?.data);
   const location = createMemo(() => state().routeLocation ?? state().presentedRoute?.location);
   const sessionRoute = createMemo(() => {
@@ -71,30 +80,26 @@ export function ActivityPageView(props: {
     agentsList: state().context.agents.state.agentsList,
     hello: state().context.gateway.snapshot.hello,
   });
-  const update = (
-    patch: Partial<
-      Pick<
-        ActivityPageController,
-        | "filterText"
-        | "toolFilter"
-        | "statusFilters"
-        | "autoFollow"
-        | "expandedIds"
-        | "expandedAutomationDays"
-      >
-    >,
-  ) => {
-    Object.assign(props.controller, patch);
-    props.controller.requestUpdate();
-  };
   let frame: number | undefined;
-  let previousEntries = untrack(() => props.controller.entries);
-  let previousAutoFollow = untrack(() => props.controller.autoFollow);
-  const follow = createMemo(() => ({ entries: state().entries, enabled: state().autoFollow }), {
-    equals: (previous, next) =>
-      previous.entries === next.entries && previous.enabled === next.enabled,
-  });
-  createEffect(follow, ({ entries, enabled }) => {
+  let stream: HTMLDivElement | undefined;
+  let atBottom = true;
+  let previousRevision = -1;
+  let previousEntries = untrack(() => state().entries);
+  let previousAutoFollow = true;
+  const follow = createMemo(
+    () => ({ entries: state().entries, enabled: filters.autoFollow, revision: liveRevision() }),
+    {
+      equals: (previous, next) =>
+        previous.entries === next.entries &&
+        previous.enabled === next.enabled &&
+        previous.revision === next.revision,
+    },
+  );
+  createEffect(follow, ({ entries, enabled, revision }) => {
+    if (revision !== previousRevision) {
+      atBottom = true;
+      previousRevision = revision;
+    }
     const force = enabled && !previousAutoFollow;
     const appended = entries !== previousEntries;
     previousEntries = entries;
@@ -102,36 +107,35 @@ export function ActivityPageView(props: {
     if (frame !== undefined) {
       cancelAnimationFrame(frame);
     }
-    if (!props.host || (!force && (!enabled || !appended || !props.controller.atBottom))) {
+    if (!force && (!enabled || !appended || !atBottom)) {
       return;
     }
     frame = requestAnimationFrame(() => {
       frame = undefined;
-      const container = props.host?.querySelector<HTMLElement>(".activity-stream");
-      if (!container) {
+      const container = stream;
+      if (!container?.isConnected) {
         return;
       }
       const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
-      if (
-        !force &&
-        (!props.controller.autoFollow || (!props.controller.atBottom && distance >= 120))
-      ) {
+      if (!force && (!filters.autoFollow || (!atBottom && distance >= 120))) {
         return;
       }
       container.scrollTop = container.scrollHeight;
-      props.controller.atBottom = true;
+      atBottom = true;
     });
   });
+  const [presentationTime, setPresentationTime] = createSignal(Date.now());
   const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
   const visibilityChanged = () => {
     setVisible(document.visibilityState !== "hidden");
     if (document.visibilityState !== "hidden") {
-      props.controller.requestUpdate();
+      setPresentationTime(Date.now());
     }
   };
-  document.addEventListener("visibilitychange", visibilityChanged);
+  onSettled(() => listen(document, "visibilitychange", visibilityChanged));
   const expiry = createMemo(() => {
-    props.revision();
+    props.page.revision();
+    presentationTime();
     if (!visible()) {
       return undefined;
     }
@@ -148,13 +152,12 @@ export function ActivityPageView(props: {
       return undefined;
     }
     const timer = setTimeout(
-      () => props.controller.requestUpdate(),
+      () => setPresentationTime(Date.now()),
       Math.max(0, deadline - Date.now()),
     );
     return () => clearTimeout(timer);
   });
   onCleanup(() => {
-    document.removeEventListener("visibilitychange", visibilityChanged);
     if (frame !== undefined) {
       cancelAnimationFrame(frame);
     }
@@ -173,25 +176,23 @@ export function ActivityPageView(props: {
       </ShellLayoutBoundary>
       <SettingsWorkspace fillHeight>
         <Show when={route()?.mode !== "run"}>
-          <LitContent
-            render={() =>
-              renderHubTabs({
-                id: "activity-mode",
-                active: route()?.mode ?? "sessions",
-                tabs: [
-                  { value: "sessions", label: t("activityFeed.sessionsMode") },
-                  { value: "live", label: t("activity.runInspector.liveMode") },
-                ],
-                ariaLabel: t("activity.runInspector.activityView"),
-                panelId: "activity-mode-panel",
-                className: "activity-mode-tabs",
-                variant: "sub",
-                onSelect: (selected) =>
-                  state().context.navigate("activity", {
-                    search: selected === "live" ? "?view=live" : "",
-                  }),
-              })
-            }
+          <HubTabs
+            {...{
+              id: "activity-mode",
+              active: route()?.mode ?? "sessions",
+              tabs: [
+                { value: "sessions", label: t("activityFeed.sessionsMode") },
+                { value: "live", label: t("activity.runInspector.liveMode") },
+              ],
+              ariaLabel: t("activity.runInspector.activityView"),
+              panelId: "activity-mode-panel",
+              class: "activity-mode-tabs",
+              variant: "sub",
+              onSelect: (selected) =>
+                state().context.navigate("activity", {
+                  search: selected === "live" ? "?view=live" : "",
+                }),
+            }}
           />
         </Show>
         <div
@@ -205,7 +206,7 @@ export function ActivityPageView(props: {
             <Match when={route()?.mode === "sessions"}>
               <SessionActivityView
                 context={state().context}
-                expandedAutomationDays={state().expandedAutomationDays}
+                expandedAutomationDays={expandedAutomationDays()}
                 filters={{
                   ...(sessionRoute()?.filters ?? {
                     personId: null,
@@ -218,12 +219,12 @@ export function ActivityPageView(props: {
                     null,
                 }}
                 presenceViewers={presence()}
-                presentationRevision={props.revision()}
+                presentationRevision={props.page.revision() + presentationTime()}
                 result={state().sessionActivity.result}
                 loading={pending() || state().sessionActivity.loading}
                 retrying={state().sessionActivity.retrying}
                 error={state().sessionActivity.error}
-                onRetry={() => state().syncSessionActivity("retry")}
+                onRetry={() => props.page.syncSessionActivity("retry")}
                 onSummaryRetry={
                   canCallGatewayMethod(
                     state().context.gateway.snapshot,
@@ -235,13 +236,13 @@ export function ActivityPageView(props: {
                     : undefined
                 }
                 onAutomationDayToggle={(day) =>
-                  update({ expandedAutomationDays: toggle(state().expandedAutomationDays, day) })
+                  setExpandedAutomationDays((days) => toggle(days, day))
                 }
-                onFiltersChange={(filters) =>
+                onFiltersChange={(nextFilters) =>
                   state().context.navigate(
                     "activity",
                     state().sessionActivity.locationForFilters(
-                      filters,
+                      nextFilters,
                       location()!,
                       state().context.basePath,
                       presence(),
@@ -264,11 +265,11 @@ export function ActivityPageView(props: {
                   state={state().runInspector}
                   selector={runRoute()?.selector ?? null}
                   selectorId={runRoute()?.selectorId ?? null}
-                  onLoadMoreExecutions={() => state().loadMoreInspectorPage("executions")}
-                  onLoadMoreDecisions={() => state().loadMoreInspectorPage("decisions")}
-                  onRestart={() => state().restartRunInspector()}
+                  onLoadMoreExecutions={() => props.page.loadMoreInspectorPage("executions")}
+                  onLoadMoreDecisions={() => props.page.loadMoreInspectorPage("decisions")}
+                  onRestart={() => props.page.restartRunInspector()}
                   onRetry={() =>
-                    state().syncRunInspector(
+                    props.page.syncRunInspector(
                       state().context.gateway,
                       state().context.gateway.snapshot,
                       true,
@@ -290,7 +291,7 @@ export function ActivityPageView(props: {
                   loading={pending() || state().sessionActivity.loading}
                   incomplete={state().sessionActivity.incomplete}
                   error={state().sessionActivity.error}
-                  onRetry={() => state().syncSessionActivity("retry")}
+                  onRetry={() => props.page.syncSessionActivity("retry")}
                 />
                 <Show when={state().liveActivity?.snapshot.error}>
                   <div role="alert">
@@ -310,28 +311,29 @@ export function ActivityPageView(props: {
                 <LiveActivityView
                   basePath={state().context.basePath}
                   entries={state().entries}
-                  filterText={state().filterText}
-                  statusFilters={state().statusFilters}
-                  toolFilter={state().toolFilter}
-                  expandedIds={state().expandedIds}
-                  autoFollow={state().autoFollow}
+                  filterText={filters.filterText}
+                  statusFilters={filters.statusFilters}
+                  toolFilter={filters.toolFilter}
+                  expandedIds={expandedIds()}
+                  autoFollow={filters.autoFollow}
                   onFilterTextChange={(next) => update({ filterText: next })}
                   onToolFilterChange={(next) => update({ toolFilter: next })}
                   onStatusToggle={(status, enabled) =>
-                    update({ statusFilters: { ...state().statusFilters, [status]: enabled } })
+                    update({ statusFilters: { ...filters.statusFilters, [status]: enabled } })
                   }
                   onToggleAutoFollow={(next) => update({ autoFollow: next })}
                   onClear={() => state().liveActivity?.clear()}
                   onExpandAll={() =>
-                    update({ expandedIds: new Set(state().entries.map((entry) => entry.id)) })
+                    setExpandedIds(new Set(state().entries.map((entry) => entry.id)))
                   }
-                  onCollapseAll={() => update({ expandedIds: new Set() })}
-                  onEntryToggle={(id, open) =>
-                    update({ expandedIds: toggle(state().expandedIds, id, open) })
-                  }
+                  onCollapseAll={() => setExpandedIds(new Set())}
+                  onEntryToggle={(id, open) => setExpandedIds((ids) => toggle(ids, id, open))}
+                  onStream={(element) => {
+                    stream = element;
+                  }}
                   onScroll={(event) => {
                     const container = event.currentTarget;
-                    props.controller.atBottom =
+                    atBottom =
                       container.scrollHeight - container.scrollTop - container.clientHeight < 120;
                   }}
                 />

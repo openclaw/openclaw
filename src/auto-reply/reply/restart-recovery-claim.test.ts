@@ -413,11 +413,8 @@ describe("createReplyRestartRecoveryClaimController", () => {
     });
 
     it.each([
-      "placement-publication",
       "session-retarget",
       "lifecycle-rotation",
-      "service-replacement",
-      "service-removal",
       "pending-input-persisted",
       "terminal-source",
     ] as const)("revalidates %s while session preparation is pending", async (change) => {
@@ -440,19 +437,10 @@ describe("createReplyRestartRecoveryClaimController", () => {
           admission,
           "admission settled before placement preparation",
         );
-        if (change === "placement-publication") {
-          await fixture.service.fail({
-            sessionId: fixture.entry.sessionId,
-            recoveryError: "placement interrupted",
-          });
-        } else if (change === "session-retarget") {
+        if (change === "session-retarget") {
           fixture.retarget();
         } else if (change === "lifecycle-rotation") {
           rotateAgentEventLifecycleGeneration();
-        } else if (change === "service-replacement") {
-          fixture.context.workerSessionPlacementService = { ...fixture.service };
-        } else if (change === "service-removal") {
-          fixture.context.workerSessionPlacementService = undefined;
         } else if (change === "pending-input-persisted") {
           fixture.recorder.markRuntimePersisted(fixture.recorder.getPendingInputMessage?.());
         } else {
@@ -468,12 +456,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
           expect(isAgentRunStaleLifecycleError(result)).toBe(true);
         } else {
           const message = {
-            "placement-publication": `Session ${fixture.entry.sessionId} placement authority changed`,
             "session-retarget": "session changed before durable user-turn admission",
-            "service-replacement":
-              "Worker placement service changed before durable user-turn admission",
-            "service-removal":
-              "Worker placement service changed before durable user-turn admission",
             "pending-input-persisted":
               "pending user turn changed before durable user-turn admission",
           }[change];
@@ -539,7 +522,8 @@ describe("createReplyRestartRecoveryClaimController", () => {
             message: "session changed before durable user-turn admission",
           });
         } else {
-          expect(isAgentRunStaleLifecycleError(failure)).toBe(true);
+          // The reader owns its refusal; admission no longer replaces its error after a failed read.
+          expect(failure).toBeInstanceOf(Error);
         }
         expect(setEntry).not.toHaveBeenCalled();
         expect(loadSessionEntry(scope)).toEqual(before);

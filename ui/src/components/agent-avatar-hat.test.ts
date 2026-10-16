@@ -4,8 +4,7 @@ import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { setCurrentThemeBranding } from "../app/theme-branding.ts";
-import { LitContent } from "../lit/solid-content.tsx";
-import { renderChatAvatar, renderForwardedAvatar } from "../pages/chat/chat-avatar.ts";
+import { ChatAvatar, ForwardedAvatar } from "../pages/chat/chat-avatar-view.tsx";
 import * as artworkLoader from "../pages/plugins/icon-loader.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
@@ -33,13 +32,21 @@ describe("theme avatar hats", () => {
       const container = document.createElement("div");
       const avatar = "data:image/png;base64,YQ==";
       for (const view of [
-        renderChatAvatar("assistant", { agentId, name: "Scout", avatar }),
-        renderForwardedAvatar(agentId, {
-          agents: [{ id: agentId }],
-          senderAgentAvatars: new Map([[agentId, avatar]]),
-        }),
+        () =>
+          createComponent(ChatAvatar, {
+            role: "assistant",
+            assistant: { agentId, name: "Scout", avatar },
+          }),
+        () =>
+          createComponent(ForwardedAvatar, {
+            agentId,
+            options: {
+              agents: [{ id: agentId }],
+              senderAgentAvatars: new Map([[agentId, avatar]]),
+            },
+          }),
       ]) {
-        const mounted = mountSolid(() => createComponent(LitContent, { value: view }), {
+        const mounted = mountSolid(view, {
           container,
         });
         const image = container.querySelector("img")!;
@@ -117,12 +124,9 @@ it.each([false, true])(
     mounted.unmount();
     const chat = mountSolid(
       () =>
-        createComponent(LitContent, {
-          value: renderChatAvatar("assistant", {
-            agentId: "agent-5",
-            name: "Scout",
-            avatar: "blob:photo",
-          }),
+        createComponent(ChatAvatar, {
+          role: "assistant",
+          assistant: { agentId: "agent-5", name: "Scout", avatar: "blob:photo" },
         }),
       { container },
     );

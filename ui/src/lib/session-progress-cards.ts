@@ -75,6 +75,20 @@ export type SessionProgressCardStore = {
   subscribe: (listener: () => void) => () => void;
 };
 
+export function readSessionProgressCard(
+  store: SessionProgressCardStore | undefined,
+  target: ProgressCardGetParams | undefined,
+) {
+  const card = target ? store?.get(target) : undefined;
+  return {
+    card,
+    loading: card === undefined,
+    lifetime: target ? store?.getLifetime(target) : undefined,
+    error: target ? store?.getError(target) : undefined,
+    refreshState: target ? store?.getRefreshState(target) : undefined,
+  };
+}
+
 const stores = new WeakMap<ApplicationGateway, SessionProgressCardStore>();
 
 function parseProgressCardStep(value: unknown): ProgressCardStep {

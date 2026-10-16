@@ -88,6 +88,7 @@ export async function buildPreparedCompactionRuntime(
     thinkLevel,
     runtimeModel,
     apiKeyInfo,
+    runtimeApiKey,
     resolvedRuntimeAuthPlan,
     hasRuntimeAuthExchange,
     resolvedWorkspace,
@@ -191,7 +192,7 @@ export async function buildPreparedCompactionRuntime(
       fallbackTokenBudget: params.tokenBudget,
     });
     const modelWithAuth = applyAuthHeaderOverride(
-      applyLocalNoAuthHeaderOverride(runtimeModel, apiKeyInfo),
+      applyLocalNoAuthHeaderOverride(runtimeModel, { apiKey: runtimeApiKey }),
       // Skip header injection when runtime auth exchange produced a
       // different credential — the SDK reads the exchanged token from
       // authStorage automatically.
@@ -410,6 +411,7 @@ export async function buildPreparedCompactionRuntime(
       cfg: params.config,
       channel: params.messageChannel ?? params.messageProvider,
       accountId: params.agentAccountId,
+      requester: params,
     });
 
     const runtimeInfo = {

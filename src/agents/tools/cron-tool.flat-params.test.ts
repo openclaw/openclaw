@@ -216,3 +216,63 @@ describe("cron shorthand recovery", () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });
+
+describe("cron schedule updates", () => {
+  it("preserves the timezone for flat expressions without leaking scheduleKind", async () => {
+    gateway.mockResolvedValueOnce({
+      id: "job-kind",
+      configRevision: "sha256:test",
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "Asia/Shanghai" },
+    });
+    await execute({
+      action: "update",
+      id: "job-kind",
+      expr: "0 8 * * *",
+      scheduleKind: "cron",
+    });
+    expect(gateway.mock.calls).toEqual([
+      ["cron.get", expect.anything(), { id: "job-kind" }],
+      [
+        "cron.update",
+        expect.anything(),
+        {
+          id: "job-kind",
+          expectedConfigRevision: "sha256:test",
+          patch: { schedule: { expr: "0 8 * * *", kind: "cron", tz: "Asia/Shanghai" } },
+        },
+      ],
+    ]);
+  });
+
+  it.each([
+    { schedule: { kind: "cron", expr: "0 8 * * *", tz: "Europe/Paris" } },
+    { schedule: { kind: "every", everyMs: 60_000 } },
+    { name: "renamed" },
+  ])(
+    "updates explicit timezones and unrelated fields without reading the job: %j",
+    async (patch) => {
+      await execute({ action: "update", id: "job-fast-path", job: patch });
+      expect(gateway).toHaveBeenCalledExactlyOnceWith("cron.update", expect.anything(), {
+        id: "job-fast-path",
+        patch,
+      });
+    },
+  );
+
+  it.each([
+    { kind: "cron", expr: "0 7 * * *" },
+    { kind: "every", everyMs: 60_000 },
+  ])("does not invent a timezone when the stored schedule has none: %j", async (schedule) => {
+    gateway.mockResolvedValueOnce({ id: "job-no-tz", configRevision: "sha256:test", schedule });
+    const patch = { schedule: { kind: "cron", expr: "0 8 * * *" } };
+    await execute({ action: "update", id: "job-no-tz", job: patch });
+    expect(gateway.mock.calls).toEqual([
+      ["cron.get", expect.anything(), { id: "job-no-tz" }],
+      [
+        "cron.update",
+        expect.anything(),
+        { id: "job-no-tz", expectedConfigRevision: "sha256:test", patch },
+      ],
+    ]);
+  });
+});

@@ -105,15 +105,18 @@ async function fixture(
   mode: "structured" | "search" | "code" = "structured",
   agentId = "main",
   hookRunner: Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["hookRunner"] = null,
+  toolSurface: { names?: string[]; forceToolNames?: string[]; clientOnly?: boolean } = {},
 ) {
   const runId = "prefilter-" + ++sequence;
-  const tools = ["inspect_file", "message", "decision_evaluate"].map((name) => ({
-    name,
-    label: name,
-    description: name,
-    parameters: Type.Object({}),
-    execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], details: {} }),
-  }));
+  const tools = (toolSurface.names ?? ["inspect_file", "message", "decision_evaluate"]).map(
+    (name) => ({
+      name,
+      label: name,
+      description: name,
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], details: {} }),
+    }),
+  );
   const controls = mode === "search" ? ["tool_search"] : mode === "code" ? ["exec"] : [];
   const controlTools = controls.map((name) => ({ ...tools[0]!, name }));
   const { session, sessionManager, modelRegistry } = await createTestSession({
@@ -144,13 +147,16 @@ async function fixture(
         };
   const policy = createPromptBuildToolPolicy({
     session,
-    readModelTools: () => session.agent.state.tools,
-    effectiveTools: mode === "structured" ? tools : [...controlTools, tools[1]!],
-    uncompactedEffectiveTools: tools,
-    tools,
+    effectiveTools: toolSurface.clientOnly
+      ? []
+      : mode === "structured"
+        ? tools
+        : [...controlTools, tools[1]!],
+    uncompactedEffectiveTools: toolSurface.clientOnly ? [] : tools,
+    tools: toolSurface.clientOnly ? [] : tools,
     catalogRef,
     codeModeControlsEnabled: mode === "code",
-    forceToolNames: ["message", "denied"],
+    forceToolNames: toolSurface.forceToolNames ?? ["message", "denied"],
   });
   const admission = prepareSystemAgentRunAdmission(cfg, runId, agentId, "prefilter-test");
   const promptStateLease = retainEmbeddedSessionPromptState(runId);
@@ -194,6 +200,7 @@ async function fixture(
       sessionAgentId: agentId,
       runtimeModel: testModel.id,
       systemPromptText: "System",
+      hasBaselineTools: policy.hasBaselineTools,
       applyPromptBuildToolsAllow: (allow, decisionIsCurrent) =>
         policy.apply(allow, decisionIsCurrent).callableToolNames,
       setActiveSessionSystemPrompt: () => {},
@@ -230,10 +237,72 @@ async function fixture(
       promptActiveSession: (prompt, options) => session.prompt(prompt, options),
     });
   };
-  return { assemble, submit, session, policy, catalogRef, controller, admission, attempt };
+  return { assemble, submit, session, policy, catalogRef, controller, admission, attempt, tools };
 }
 
 describe("prompt assembly with registered Decision runtime", () => {
+  it("skips Decision inference when the prepared tool surface is empty", async () => {
+    const call = register();
+    const f = await fixture(config(), "structured", "main", null, { names: [] });
+
+    const assembly = await f.assemble();
+
+    expect(f.attempt.disableTools).toBeUndefined();
+    expect(assembly.decisionPrefilter).toMatchObject({ status: "skipped", reason: "no-tools" });
+    expect(call).not.toHaveBeenCalled();
+    expect(f.session.getActiveToolNames()).toEqual([]);
+  });
+
+  it("evaluates the next turn after a Decision removes every model-facing tool", async () => {
+    const call = register();
+    const f = await fixture(config(), "structured", "main", null, {
+      names: ["inspect_file"],
+      forceToolNames: [],
+    });
+    await f.assemble();
+    expect(f.policy.current.effectiveTools).toEqual([]);
+    expect(f.session.getActiveToolNames()).toEqual([]);
+
+    call.mockResolvedValue(result(0.9));
+    await f.assemble({ prompt: "Read package.json now." });
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(f.session.getActiveToolNames()).toEqual(["inspect_file"]);
+  });
+
+  it("reads the permission baseline after preparation awaits and admits a later nonempty generation", async () => {
+    const call = register();
+    const f = await fixture();
+    const tools = f.tools.slice();
+    vi.mocked(leasePendingAgentSteeringItems).mockImplementationOnce(async () => {
+      f.tools.splice(0);
+      f.session.setActiveToolsByName([]);
+      f.policy.refresh();
+      return undefined;
+    });
+    const assembly = await f.assemble({ sessionKey: "agent:main:tools-revoked" });
+    expect(assembly.decisionPrefilter).toMatchObject({ status: "skipped", reason: "no-tools" });
+    expect(call).not.toHaveBeenCalled();
+
+    f.tools.push(...tools);
+    f.session.setActiveToolsByName(tools.map((tool) => tool.name));
+    f.policy.refresh();
+    await f.assemble();
+    expect(call).toHaveBeenCalledOnce();
+  });
+
+  it("keeps client-only model tools eligible for Decision inference", async () => {
+    const call = register(async () => result(0.9));
+    const f = await fixture(config(), "structured", "main", null, {
+      names: ["client_lookup"],
+      clientOnly: true,
+    });
+    expect(f.policy.current.effectiveTools).toEqual([]);
+    await f.assemble();
+    expect(call).toHaveBeenCalledOnce();
+    expect(f.session.getActiveToolNames()).toEqual(["client_lookup"]);
+  });
+
   it.each<[string, OpenClawConfig, string, boolean | undefined, boolean]>([
     ["missing referent", config(), "main", true, false],
     ["disabled", config(false), "main", true, false],

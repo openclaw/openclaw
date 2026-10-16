@@ -41,11 +41,7 @@ import {
   resolveIntegerOption,
   resolveOptionalIntegerOption,
 } from "openclaw/plugin-sdk/number-runtime";
-import {
-  isRecord,
-  normalizeBoundedOptionalString,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { definedFields } from "../record-fields.js";
 import {
@@ -320,7 +316,7 @@ export function normalizeAutomation(
     createdCardIds: strings("createdCardIds", "created card ids", 120),
     dispatchCount: timestamp("dispatchCount") || undefined,
     lastDispatchAt: timestamp("lastDispatchAt") || undefined,
-    launch: options.launch ? normalizeLaunchState(options.launch) : fallback.launch,
+    launch: options.launch ?? fallback.launch,
   };
   // Legacy imports can retain empty workspace or authority objects.
   for (const [key, entry] of Object.entries(next)) {
@@ -329,50 +325,6 @@ export function normalizeAutomation(
     }
   }
   return Object.keys(next).length ? next : undefined;
-}
-
-function normalizeLaunchTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? Math.trunc(value)
-    : undefined;
-}
-
-export function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const requestedSessionKey = normalizeBoundedOptionalString(value.requestedSessionKey, 240);
-  const provisionalRunId = normalizeRunId(value.provisionalRunId);
-  const preparedAt = normalizeLaunchTimestamp(value.preparedAt);
-  if (!requestedSessionKey || !provisionalRunId || preparedAt === undefined) {
-    return undefined;
-  }
-  const identity = { requestedSessionKey, provisionalRunId, preparedAt };
-  if (value.phase === "prepared") {
-    return { phase: "prepared", ...identity };
-  }
-  if (value.phase === "accepted") {
-    const acceptedAt = normalizeLaunchTimestamp(value.acceptedAt);
-    const acceptedSessionKey = normalizeBoundedOptionalString(value.acceptedSessionKey, 240);
-    const acceptedRunId = normalizeRunId(value.acceptedRunId);
-    return acceptedAt === undefined || !acceptedSessionKey
-      ? undefined
-      : definedFields<WorkboardLaunchState>({
-          phase: "accepted",
-          ...identity,
-          acceptedAt,
-          acceptedSessionKey,
-          acceptedRunId,
-        });
-  }
-  if (value.phase === "failed") {
-    const failedAt = normalizeLaunchTimestamp(value.failedAt);
-    const reason = normalizeBoundedOptionalString(value.reason, 800);
-    return failedAt === undefined || !reason
-      ? undefined
-      : { phase: "failed", ...identity, failedAt, reason };
-  }
-  return undefined;
 }
 
 export function deriveChildIdempotencyKey(
@@ -436,9 +388,15 @@ function normalizeAttempt(record: Record<string, unknown>): WorkboardRunAttempt 
   });
 }
 
-function normalizeComment(record: Record<string, unknown>): WorkboardComment | null {
+function normalizeComment(
+  record: Record<string, unknown>,
+  stored?: readonly WorkboardComment[],
+): WorkboardComment | null {
   const id = normalizeOptionalString(record.id);
-  const body = normalizeBoundedString(record.body, undefined, 2000, "comment body");
+  // Lifecycle updates must preserve stored text; only new or edited bodies need validation.
+  const body =
+    stored?.find((comment) => comment.id === id && comment.body === record.body)?.body ??
+    normalizeBoundedString(record.body, undefined, 2000, "comment body");
   const createdAt = normalizeTimestamp(record.createdAt, 0);
   if (!id || !body || !createdAt) {
     return null;
@@ -849,7 +807,7 @@ export function normalizeMetadata(
     ),
     comments: normalizeList(
       record.comments,
-      normalizeComment,
+      (entry) => normalizeComment(entry, fallback.comments),
       MAX_CARD_COMMENTS,
       fallback.comments,
     ),

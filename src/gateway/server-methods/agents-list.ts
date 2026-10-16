@@ -41,13 +41,25 @@ export const agentListHandler: GatewayRequestHandler = async ({
           ),
         ),
       );
-  const result = await listAgentsForGateway(cfg, {
+  const projectionOptions = {
     modelCatalogByAgentId,
     includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
     httpAvatarBasePath:
       client?.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI
         ? (cfg.gateway?.controlUi?.basePath ?? "")
         : undefined,
+  };
+  const initialAllowedAgents = resolveOperatorRolePolicy(
+    client,
+    context.getRuntimeConfig(),
+  )?.agents;
+  const selectedAgentIds =
+    initialAllowedAgents && initialAllowedAgents !== "*"
+      ? new Set(initialAllowedAgents)
+      : undefined;
+  const result = await listAgentsForGateway(cfg, {
+    ...projectionOptions,
+    agentIds: selectedAgentIds,
   });
   const currentConfig = context.getRuntimeConfig();
   const roleError = authorizeCurrentOperatorRoleScopes(client, currentConfig);
@@ -55,6 +67,7 @@ export const agentListHandler: GatewayRequestHandler = async ({
     respond(false, undefined, roleError);
     return;
   }
+  // Grants during enrichment appear on the next request; revocations apply now.
   const allowedAgents = resolveOperatorRolePolicy(client, currentConfig)?.agents;
   const agents =
     allowedAgents && allowedAgents !== "*"

@@ -5,14 +5,15 @@ import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.tsx";
+import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.types.ts";
 import {
   ComposerSkillCatalog,
   composerWebSearchBaseEnabled,
 } from "../chat/composer-capability-catalog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 
-export class NewSessionCapabilityController {
+/** Synchronous tool intent survives renderer changes and is read directly at submission. */
+export class NewSessionCapabilities {
   private readonly skillCatalog: ComposerSkillCatalog;
   private toolOverridesValue: SessionToolOverrides | null = null;
   constructor(
@@ -38,12 +39,6 @@ export class NewSessionCapabilityController {
 
   reset() {
     this.toolOverridesValue = null;
-  }
-
-  restoreToolOverrides(toolOverrides: SessionToolOverrides | null | undefined) {
-    if (toolOverrides !== undefined) {
-      this.setToolOverrides(toolOverrides);
-    }
   }
 
   canStartAsDraft(context: ApplicationContext | undefined): boolean {

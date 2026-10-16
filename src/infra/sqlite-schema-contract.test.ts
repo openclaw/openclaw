@@ -1,20 +1,28 @@
 import { channel } from "node:diagnostics_channel";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { load as loadSqliteVec } from "sqlite-vec";
+import { afterEach, describe, expect, it } from "vitest";
+import { readSqliteSchemaCatalog } from "../../scripts/lib/sqlite-schema-catalog.mts";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync.js";
+import type { SqliteSchemaCatalog } from "./sqlite-schema-catalog-types.js";
+import {
+  collectSqliteNamedIndexContract,
+  createSqliteTableContractReader,
+} from "./sqlite-schema-contract.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
-  collectSqliteNamedIndexContract,
   collectSqliteSchemaIssues,
-  createSqliteTableContractReader,
-} from "./sqlite-schema-contract.js";
+} from "./sqlite-schema-contract.test-support.js";
 
 const [nodeMajor = 0, nodeMinor = 0] = process.versions.node.split(".").map(Number);
 // Node added the public SQLite query diagnostic event in 26.8.0.
 const supportsQueryDiagnostics = nodeMajor > 26 || (nodeMajor === 26 && nodeMinor >= 8);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const CANONICAL_SCHEMA = `
   CREATE TABLE parents (
@@ -55,6 +63,55 @@ const CANONICAL_SCHEMA = `
   END;
 `;
 
+it("ignores unloaded unrelated vector tables but requires facts for declared virtual tables", () => {
+  const filename = path.join(tempDirs.make("schema-contract-vector-"), "agent.sqlite");
+  const writer = new DatabaseSync(filename, { allowExtension: true });
+  let declaredSchema: SqliteSchemaCatalog;
+  try {
+    loadSqliteVec(writer);
+    writer.exec("CREATE TABLE records (id INTEGER PRIMARY KEY)");
+    writer.exec("CREATE VIRTUAL TABLE vectors USING vec0(embedding float[3])");
+    declaredSchema = readSqliteSchemaCatalog(writer);
+  } finally {
+    writer.close();
+  }
+
+  const reader = new DatabaseSync(filename, { readOnly: true });
+  try {
+    const readTable = createSqliteTableContractReader(reader);
+    expect(
+      collectSqliteSchemaIssues(
+        reader,
+        "CREATE TABLE records (id INTEGER PRIMARY KEY)",
+        {},
+        readTable,
+      ),
+    ).toEqual([]);
+    expect(() => collectSqliteSchemaIssues(reader, declaredSchema, {}, readTable)).toThrow(
+      /no such module: vec0/u,
+    );
+  } finally {
+    reader.close();
+  }
+});
+
+it("includes virtual column facts when a shared reader reaches a later declared fragment", () => {
+  const ordinary = "CREATE TABLE records (id INTEGER PRIMARY KEY);";
+  const virtual = "CREATE VIRTUAL TABLE record_search USING fts5(body);";
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec(ordinary + virtual);
+    const readTable = createSqliteTableContractReader(database);
+    expect(collectSqliteSchemaIssues(database, ordinary, {}, readTable)).toEqual([]);
+    expect(collectSqliteSchemaIssues(database, ordinary + virtual, {}, readTable)).toEqual([]);
+    expect(readTable("record_search")?.columns).toEqual(
+      database.prepare("PRAGMA main.table_xinfo(record_search)").all(),
+    );
+  } finally {
+    database.close();
+  }
+});
+
 it("excludes named expected indexes without accepting unexpected actual uniqueness", () => {
   const table = "CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT);";
   const index = "CREATE INDEX optional_records_value ON records(value);";
@@ -82,6 +139,44 @@ describe("assertSqliteSchemaContains", () => {
     database.exec(schema);
     return database;
   }
+
+  it("inspects declared views without resolving unrelated broken views", () => {
+    const schema = `
+      CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT);
+      CREATE VIEW record_values AS SELECT id, value FROM records;
+    `;
+    const database = createDatabase(schema);
+    try {
+      database.exec("CREATE VIEW unrelated_view AS SELECT * FROM missing_table;");
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
+      expect(
+        collectSqliteSchemaIssues(database, schema, {}, createSqliteTableContractReader(database)),
+      ).toEqual([]);
+      database.exec(`
+        DROP VIEW record_values;
+        CREATE VIEW record_values AS SELECT id, value || 'changed' AS value FROM records;
+      `);
+      expect(collectSqliteSchemaIssues(database, schema)).toMatchObject([
+        { code: "missing-or-drifted-view", objectName: "record_values" },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("inspects user table names beginning with sqlite without an underscore", () => {
+    const schema = "CREATE TABLE sqlitecompat (id INTEGER PRIMARY KEY, value TEXT);";
+    const database = createDatabase(schema);
+    try {
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
+      database.exec("ALTER TABLE sqlitecompat ADD COLUMN extra TEXT;");
+      expect(collectSqliteSchemaIssues(database, schema)).toMatchObject([
+        { code: "unexpected-column", objectName: "sqlitecompat.extra" },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
 
   it("compares the real agent schema with five catalog reads and detects drift", () => {
     const schema = readFileSync(

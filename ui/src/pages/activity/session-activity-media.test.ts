@@ -1,11 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
+import { createComponent, createSignal, createStore } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -73,8 +72,6 @@ function images(label: string, count = 4): ArtifactsListResult {
   };
 }
 
-type MediaRow = SolidBridgeElement<ActivitySessionMediaProps>;
-
 function mountMedia(
   request: GatewayRequestHandler,
   {
@@ -89,12 +86,17 @@ function mountMedia(
 ) {
   const harness = createGatewayHarness(createTestGatewayClient(request));
   const context = createContext(harness.gateway, createSessions("main", []));
-  mountSolid(
-    () => createComponent(ActivitySessionMedia, { context, sessionKey, agentId, session }),
-    { container },
+  const [props, setProps] = createStore<ActivitySessionMediaProps>(
+    { context, sessionKey, agentId, session, revision: 0 },
+    { shallow: true },
   );
+  mountSolid(() => createComponent(ActivitySessionMedia, props), { container });
   flush();
-  return { harness, row: container.querySelector<MediaRow>("openclaw-activity-session-media")! };
+  return {
+    harness,
+    setProps,
+    row: container.querySelector<HTMLElement>("openclaw-activity-session-media")!,
+  };
 }
 
 it("waits for the viewport, limits concurrent discovery, and opens four thumbnails in the shared viewer", async () => {
@@ -102,17 +104,17 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
   const request = vi.fn(async () => pending[request.mock.calls.length - 1]!.promise);
   const harness = createGatewayHarness(createTestGatewayClient(request));
   const context = createContext(harness.gateway, createSessions("main", []));
-  mountSolid(
-    () =>
-      [0, 1, 2, 3].map((index) =>
-        createComponent(ActivitySessionMedia, {
-          context,
-          sessionKey: `agent:main:images-${index}`,
-          agentId: "main",
-        }),
-      ),
+  const media = [0, 1, 2, 3].map((index) =>
+    createStore<ActivitySessionMediaProps>(
+      { context, sessionKey: `agent:main:images-${index}`, agentId: "main", revision: 0 },
+      { shallow: true },
+    ),
+  );
+  const view = mountSolid(
+    () => media.map(([props]) => createComponent(ActivitySessionMedia, props)),
     { container },
   );
+  const [, setFirstProps] = media[0]!;
   flush();
   await waitForSolid(() => expect(observers.size).toBe(4));
   expect(request).not.toHaveBeenCalled();
@@ -141,9 +143,11 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
       "https://images.example.test/first-0.png",
     ),
   );
-  const first = rows[0] as MediaRow;
+  const first = rows[0]!;
   const lightbox = first.querySelector("openclaw-image-lightbox");
-  first.revision = 1;
+  setFirstProps((props) => {
+    props.revision = 1;
+  });
   try {
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(4));
     expect(first.querySelectorAll(".chat-message-image")).toHaveLength(4);
@@ -159,8 +163,12 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
   expect(lightbox?.querySelector(".image")?.getAttribute("src")).toBe(
     "https://images.example.test/first-0.png",
   );
-  first.session = { key: "agent:main:images-0", kind: "direct", permissionMode: "workspace" };
+  setFirstProps((props) => {
+    props.session = { key: "agent:main:images-0", kind: "direct", permissionMode: "workspace" };
+  });
   await waitForSolid(() => expect(first.querySelector("openclaw-image-lightbox")).toBeNull());
+  view.unmount();
+  expect(observers.size).toBe(0);
 });
 
 it.each(["initial discovery", "revision refresh"])(
@@ -177,14 +185,16 @@ it.each(["initial discovery", "revision refresh"])(
       })
       .mockReturnValueOnce(failedRefresh.promise)
       .mockReturnValueOnce(retry.promise);
-    const { row } = mountMedia(request);
+    const { row, setProps } = mountMedia(request);
     await waitForSolid(() => expect(observers.has(row)).toBe(true));
     observers.get(row)?.(true);
     if (!initialDiscovery) {
       await waitForSolid(() =>
         expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0"),
       );
-      row.revision = 1;
+      setProps((props) => {
+        props.revision = 1;
+      });
     }
     try {
       await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
@@ -207,7 +217,9 @@ it.each(["initial discovery", "revision refresh"])(
       );
       expect(row.querySelector('[role="status"]')).toBeNull();
       request.mockResolvedValueOnce({ artifacts: [] });
-      row.revision = initialDiscovery ? 1 : 2;
+      setProps((props) => {
+        props.revision = initialDiscovery ? 1 : 2;
+      });
       await waitForSolid(() => expect(request).toHaveBeenCalledTimes(4));
       await waitForSolid(() => expect(row.querySelector("img")).toBeNull());
     } finally {
@@ -227,7 +239,7 @@ it.each(["session", "agent", "connection"] as const)(
       .mockResolvedValueOnce(images("original", 1))
       .mockReturnValueOnce(stale.promise)
       .mockReturnValueOnce(fresh.promise);
-    const { harness, row } = mountMedia(request, {
+    const { harness, row, setProps } = mountMedia(request, {
       session: { key: "agent:main:images", kind: "direct", sessionId: "original" },
     });
     await waitForSolid(() => expect(observers.has(row)).toBe(true));
@@ -235,13 +247,19 @@ it.each(["session", "agent", "connection"] as const)(
     await waitForSolid(() =>
       expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0"),
     );
-    row.revision = 1;
+    setProps((props) => {
+      props.revision = 1;
+    });
     try {
       await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
       if (change === "session") {
-        row.session = { key: "agent:main:images", kind: "direct", sessionId: "reset" };
+        setProps((props) => {
+          props.session = { key: "agent:main:images", kind: "direct", sessionId: "reset" };
+        });
       } else if (change === "agent") {
-        row.agentId = "other";
+        setProps((props) => {
+          props.agentId = "other";
+        });
       } else {
         harness.publish({ client: createTestGatewayClient(request) });
       }
@@ -249,7 +267,8 @@ it.each(["session", "agent", "connection"] as const)(
       expect(row.querySelector("img")).toBeNull();
       if (change !== "connection") {
         stale.resolve(images("stale", 1));
-        await row.updateComplete;
+        await Promise.resolve();
+        flush();
         expect(row.querySelector("img")).toBeNull();
       }
       fresh.resolve(images("fresh", 1));
@@ -259,7 +278,8 @@ it.each(["session", "agent", "connection"] as const)(
       expect(row.querySelectorAll("img")).toHaveLength(1);
       if (change === "connection") {
         stale.resolve(images("stale"));
-        await row.updateComplete;
+        await Promise.resolve();
+        flush();
         expect(row.querySelectorAll("img")).toHaveLength(1);
         expect(row.querySelector("img")?.getAttribute("alt")).toBe("fresh-0");
         row.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
@@ -282,39 +302,29 @@ it("coalesces queued revisions without moving the session behind later arrivals"
   const request = vi.fn(async () => pending[request.mock.calls.length - 1]!.promise);
   const harness = createGatewayHarness(createTestGatewayClient(request));
   const context = createContext(harness.gateway, createSessions("main", []));
-  const show = (revision: number) => {
-    const rows = container.querySelectorAll<MediaRow>("openclaw-activity-session-media");
-    if (rows.length) {
-      rows[2]!.revision = revision;
-      flush();
-    } else {
-      mountSolid(
-        () =>
-          [0, 1, 2, 3].map((index) =>
-            createComponent(ActivitySessionMedia, {
-              context,
-              sessionKey: `agent:main:queue-${index}`,
-              agentId: "main",
-              revision: index === 2 ? revision : 0,
-            }),
-          ),
-        { container },
-      );
-      flush();
-    }
-  };
-  show(1);
+  const [revision, setRevision] = createSignal(1);
+  mountSolid(
+    () =>
+      [0, 1, 2, 3].map((index) =>
+        createComponent(ActivitySessionMedia, {
+          context,
+          sessionKey: `agent:main:queue-${index}`,
+          agentId: "main",
+          get revision() {
+            return index === 2 ? revision() : 0;
+          },
+        }),
+      ),
+    { container },
+  );
+  flush();
   await waitForSolid(() => expect(observers.size).toBe(4));
   for (const notify of observers.values()) {
     notify(true);
   }
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
-  show(2);
-  await Promise.all(
-    [...container.querySelectorAll<MediaRow>("openclaw-activity-session-media")].map(
-      (row) => row.updateComplete,
-    ),
-  );
+  setRevision(2);
+  flush();
   pending[0]!.resolve(images("queue-0"));
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
   expect(request.mock.calls[2]).toEqual([
@@ -353,11 +363,10 @@ it.each([
       if (error) {
         request.mockResolvedValueOnce(result).mockRejectedValueOnce(new Error("Unavailable"));
       }
-      const { row } = mountMedia(request, { sessionKey: "agent:main:stable" });
-      await row.updateComplete;
+      const { row, setProps } = mountMedia(request, { sessionKey: "agent:main:stable" });
       observers.get(row)?.(true);
       await vi.advanceTimersByTimeAsync(0);
-      await row.updateComplete;
+      flush();
       const media = row.querySelector(".activity-feed__media");
       const note = row.querySelector(".activity-feed__note");
       expect(Boolean(media)).toBe(count > 0 || cursor || omitted || error);
@@ -388,8 +397,10 @@ it.each([
         expect(media!.textContent).toContain(error ? "Couldn't load images" : "Older images");
         const settledCalls = request.mock.calls.length;
         request.mockReturnValueOnce(refresh.promise);
-        row.revision++;
-        await row.updateComplete;
+        setProps((props) => {
+          props.revision++;
+        });
+        flush();
         expect(request).toHaveBeenCalledTimes(settledCalls + 1);
         expect(row.querySelector(".activity-feed__media")).toBe(media);
         expect(media!.innerHTML).toBe(markup);
@@ -401,7 +412,7 @@ it.each([
       if (cursor && !error) {
         request.mockReturnValueOnce(older.promise);
         action!.click();
-        await row.updateComplete;
+        flush();
         if (revalidate) {
           expect(request).toHaveBeenLastCalledWith("artifacts.list", {
             sessionKey: "agent:main:stable",
@@ -415,7 +426,7 @@ it.each([
         expect(action!.textContent?.trim()).toBe("Loading…");
         older.resolve(images("older", revalidate ? 1 : 4));
         await vi.advanceTimersByTimeAsync(0);
-        await row.updateComplete;
+        flush();
         if (revalidate) {
           expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(count + 1);
         } else {
@@ -425,7 +436,7 @@ it.each([
       if (revalidate) {
         refresh.resolve(images("replacement"));
         await vi.advanceTimersByTimeAsync(0);
-        await row.updateComplete;
+        flush();
         expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(4);
         expect(row.querySelector("img")?.getAttribute("alt")).toBe("replacement-0");
         expect(row.querySelector(".activity-feed__note-action")).toBeNull();
@@ -439,7 +450,7 @@ it.each([
   },
 );
 
-it("downloads reference-only images through the shared inline bytes path with their agent", async () => {
+it("loads bounded reference-only previews through the shared RPC path with their agent", async () => {
   vi.useFakeTimers();
   try {
     const artifact = {
@@ -452,19 +463,23 @@ it("downloads reference-only images through the shared inline bytes path with th
     const request = vi.fn(async (method: string) =>
       method === "artifacts.list"
         ? { artifacts: [artifact, artifact] }
-        : { artifact, encoding: "base64", data: "cG5n" },
+        : {
+            artifact: { ...artifact, mimeType: "image/webp" },
+            encoding: "base64",
+            data: "cHJldmlldw==",
+          },
     );
     const { row } = mountMedia(request, { sessionKey: "global", agentId: "work" });
-    await row.updateComplete;
     observers.get(row)?.(true);
     await vi.advanceTimersByTimeAsync(0);
-    await row.updateComplete;
+    flush();
     expect(request).toHaveBeenCalledWith(
       "artifacts.download",
       {
         sessionKey: "global",
         agentId: "work",
         artifactId: "reference-image",
+        previewWidth: 480,
       },
       { timeoutMs: 30_000 },
     );
@@ -472,8 +487,8 @@ it("downloads reference-only images through the shared inline bytes path with th
     const imageSource = row.querySelector("img")!.src;
     expect(imageSource).toMatch(/^blob:/);
     const downloaded = await fetch(imageSource);
-    expect(downloaded.headers.get("content-type")).toBe("image/png");
-    expect(await downloaded.text()).toBe("png");
+    expect(downloaded.headers.get("content-type")).toBe("image/webp");
+    expect(await downloaded.text()).toBe("preview");
     expect(row.querySelector("img")?.getAttribute("alt")).toBe("Inline screenshot");
   } finally {
     vi.useRealTimers();
@@ -500,6 +515,7 @@ it("keeps queued pagination separate from background revalidation", async () => 
     });
     const harness = createGatewayHarness(createTestGatewayClient(request));
     const context = createContext(harness.gateway, createSessions("main", []));
+    const [revision, setRevision] = createSignal(0);
     mountSolid(
       () =>
         ["target", "0", "1"].map((sessionKey) =>
@@ -507,14 +523,16 @@ it("keeps queued pagination separate from background revalidation", async () => 
             context,
             sessionKey,
             agentId: "main",
+            get revision() {
+              return sessionKey === "target" ? revision() : 0;
+            },
           }),
         ),
       { container },
     );
     flush();
-    const rows = [...container.querySelectorAll<MediaRow>("openclaw-activity-session-media")];
+    const rows = [...container.querySelectorAll<HTMLElement>("openclaw-activity-session-media")];
     const row = rows[0]!;
-    await Promise.all(rows.map((element) => element.updateComplete));
     observers.get(row)?.(true);
     await vi.advanceTimersByTimeAsync(0);
     settled = true;
@@ -522,11 +540,11 @@ it("keeps queued pagination separate from background revalidation", async () => 
       observers.get(element)?.(true);
     }
     await vi.advanceTimersByTimeAsync(0);
-    row.revision++;
-    await row.updateComplete;
+    setRevision(1);
+    flush();
     row.querySelector<HTMLButtonElement>(".activity-feed__note-action")!.click();
     await vi.advanceTimersByTimeAsync(0);
-    await row.updateComplete;
+    flush();
     expect(row.querySelector("img")?.getAttribute("alt")).toBe("queued-0");
     expect(row.querySelector<HTMLButtonElement>(".activity-feed__note-action")?.disabled).toBe(
       true,
@@ -543,11 +561,11 @@ it("keeps queued pagination separate from background revalidation", async () => 
     });
     older.resolve(images("older", 1));
     await vi.advanceTimersByTimeAsync(0);
-    await row.updateComplete;
+    flush();
     expect(row.querySelectorAll("img")).toHaveLength(2);
     refresh.resolve(images("new"));
     await vi.advanceTimersByTimeAsync(0);
-    await row.updateComplete;
+    flush();
     expect(row.querySelectorAll("img")).toHaveLength(4);
     expect(row.querySelector("img")?.getAttribute("alt")).toBe("new-0");
   } finally {

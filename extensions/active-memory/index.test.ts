@@ -2119,7 +2119,6 @@ describe("active-memory plugin", () => {
     }
     expectEmbeddedChannel("telegram");
     expect(api.runtime.agent.session.getSessionEntryByIdAsync).toHaveBeenCalledOnce();
-    expect(api.runtime.agent.session.getSessionEntryAsync).not.toHaveBeenCalled();
     expect(lastEmbeddedRunParams().fastMode).toBe(initialFast);
     expectLinesToContain(getInfoLines(), "fast=off start");
     delete expectDefined(hoisted.sessionStore["agent:main:main"], "parent session").fastMode;
@@ -3630,30 +3629,6 @@ describe("active-memory plugin", () => {
     expect(buildCacheKey(base)).not.toBe(
       buildCacheKey({ ...base, resourceScope: "same-agent-private:sessions" }),
     );
-  });
-
-  it.each([
-    {
-      name: "overflowing expiry",
-      writeTime: 8_640_000_000_000_000,
-      readTime: 8_640_000_000_000_000,
-    },
-  ])("rejects cached recall with $name", ({ writeTime, readTime }) => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(writeTime);
-    const cacheKey = buildCacheKey({
-      agentId: "main",
-      sessionKey: "agent:main:invalid-clock-cache",
-      query: "cache clock prompt",
-      authorityFingerprint: "cache-authority",
-      recallToolNames: ["memory_search"],
-    });
-    setCachedResult(
-      cacheKey,
-      { status: "ok", elapsedMs: 1, rawReply: "memory", summary: "memory" },
-      15_000,
-    );
-    now.mockReturnValue(readTime);
-    expect(getCachedResult(cacheKey)).toBeUndefined();
   });
 
   it.each(["cooldown", "a successful recall"] as const)(

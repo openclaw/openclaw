@@ -15,7 +15,6 @@ import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
-import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { buildMentionConfig } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
@@ -50,7 +49,7 @@ export function createWebOnMessageHandler(params: {
     msg: AdmittedWebInboundMessage,
     peerId: string,
   ): AdmittedWebInboundMessage => {
-    const admission = requireWhatsAppInboundAdmission(msg);
+    const admission = msg.admission;
     if (
       admission.conversation.kind === "group" ||
       msg.platform.sender?.e164 ||
@@ -103,7 +102,7 @@ export function createWebOnMessageHandler(params: {
     const cfg = params.loadConfig?.() ?? params.cfg;
     const peerId = resolvePeerId(normalizedMsg);
     const msg = withDirectSenderPeer(normalizedMsg, peerId);
-    const admission = requireWhatsAppInboundAdmission(msg);
+    const admission = msg.admission;
     if (admission.ingress.admission !== "dispatch" && admission.ingress.admission !== "observe") {
       return;
     }
@@ -126,10 +125,6 @@ export function createWebOnMessageHandler(params: {
       accountId: routeAccountId,
     });
     const baseMentionConfig = buildMentionConfig(cfg);
-
-    if (conversationId === msg.platform.recipientJid) {
-      logVerbose(`📱 Same-phone mode detected (from === to: ${conversationId})`);
-    }
 
     const configuredRoute = resolveConfiguredBindingRoute({
       cfg,
@@ -219,7 +214,6 @@ export function createWebOnMessageHandler(params: {
           agentId: route.agentId,
           sessionKey: route.sessionKey,
           verbose: params.verbose,
-          info: params.replyLogger.info.bind(params.replyLogger),
           warn: params.replyLogger.warn.bind(params.replyLogger),
         });
         ackAlreadySent = ackReaction !== null;

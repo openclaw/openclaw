@@ -1,13 +1,14 @@
 // Tests node-role capability approvals stored on canonical paired-device records.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
+import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
 import {
   approveNodePairing,
@@ -353,6 +354,58 @@ describe("node surface approvals", () => {
         created: false,
       });
       await expect(finalizeNodePairingCleanupClaim(snapshot.cleanupClaim!)).resolves.toEqual([]);
+      await expect(
+        approveNodePairing(
+          pending.request.requestId,
+          { callerScopes: ["operator.pairing", "operator.admin"] },
+          baseDir,
+        ),
+      ).resolves.toMatchObject({ requestId: pending.request.requestId });
+    });
+  });
+
+  test("claims and reuses a committed reconnect while the pairing writer is occupied", async ({
+    signal,
+  }) => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const pending = await requestExpandedSurface(baseDir);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const writer = withDevicePairingLock(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      let snapshot: Awaited<ReturnType<typeof beginNodePairingConnect>> | undefined;
+      try {
+        await withinTest(entered.promise, signal);
+        snapshot = await withinTest(beginNodePairingConnect("node-1", baseDir), signal);
+        expect(snapshot.pairedNode?.commands).toEqual(["system.run"]);
+        expect(snapshot.cleanupClaim).toBeDefined();
+        await expect(
+          withinTest(
+            reusePendingNodePairingForReconnect(
+              {
+                nodeId: "node-1",
+                platform: "darwin",
+                commands: ["system.run", "canvas.snapshot"],
+              },
+              snapshot.cleanupClaim,
+              baseDir,
+            ),
+            signal,
+          ),
+        ).resolves.toMatchObject({
+          request: { requestId: pending.request.requestId },
+          created: false,
+        });
+      } finally {
+        release.resolve();
+        await writer;
+        if (snapshot?.cleanupClaim) {
+          await releaseNodePairingCleanupClaim(snapshot.cleanupClaim);
+        }
+      }
       await expect(
         approveNodePairing(
           pending.request.requestId,

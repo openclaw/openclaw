@@ -35,6 +35,80 @@ async function receivedSessions(page: Page): Promise<unknown[]> {
 }
 
 suite.define(() => {
+  it.each(["roster", "preview-off"] as const)(
+    "preserves the visible consumers in %s presentation",
+    async (mode) => {
+      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+        await page.addInitScript(
+          ({ settingsKey, presentation }) => {
+            localStorage.setItem(
+              "openclaw:sidebar:sessions:show-preview",
+              String(presentation === "roster"),
+            );
+            localStorage.setItem(
+              settingsKey,
+              JSON.stringify({ sidebarAgentsMode: presentation === "roster" ? "roster" : "chip" }),
+            );
+          },
+          {
+            settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+            presentation: mode,
+          },
+        );
+        const keys = [
+          first,
+          ...Array.from({ length: 6 }, (_, index) => `agent:main:background-${index}`),
+        ];
+        const gateway = await installMockGateway(page, {
+          sessionKey: first,
+          sessions: keys.map((key, index) =>
+            sessionRow(key, `Running ${index}`, 100 - index, {
+              hasActiveRun: true,
+              activeRunIds: [`run-${index}`],
+              status: "running",
+            }),
+          ),
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, first));
+        await page.locator(`[data-session-key="${keys[1]}"]`).first().waitFor();
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: first } });
+        if (mode === "roster") {
+          const subscriptions = await gateway.getRequests("sessions.messages.subscribe");
+          expect(subscriptions).toHaveLength(1);
+          expect(subscriptions).toMatchObject([{ params: { key: first } }]);
+        } else {
+          await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: keys[1] } });
+          await gateway.emitGatewayEvent("session.observer", {
+            sessionKey: keys[1],
+            agentId: "main",
+            runId: "run-1",
+            revision: 1,
+            updatedAt: Date.now(),
+            health: "waiting-on-user",
+            headline: "Waiting for the next instruction",
+          });
+          await page
+            .locator(`[data-session-key="${keys[1]}"]`)
+            .getByText("Waiting for the next instruction", { exact: true })
+            .waitFor();
+        }
+        await gateway.emitGatewayEvent("chat", {
+          sessionKey: first,
+          runId: "run-0",
+          state: "delta",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Visible chat stays live" }],
+          },
+        });
+        await page
+          .locator(".chat-thread-inner")
+          .getByText("Visible chat stays live", { exact: true })
+          .waitFor();
+      });
+    },
+  );
+
   it("delivers both split panes and sidebar narration while excluding unrelated streams across reconnect", async () => {
     await suite.withPage(
       { locale: "en-US", viewport: { width: 1440, height: 900 }, serviceWorkers: "block" },

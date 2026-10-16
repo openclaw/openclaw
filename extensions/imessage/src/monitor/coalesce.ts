@@ -38,11 +38,7 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): IMessagePa
       payloadIndex < MAX_COALESCED_ENTRIES - 1 || payloadIndex === payloads.length - 1;
     payloadIndex += 1;
     const createdAt = payload.created_at;
-    if (
-      typeof createdAt === "string" &&
-      createdAt.length > 0 &&
-      (latestCreatedAt === undefined || createdAt > latestCreatedAt)
-    ) {
+    if (createdAt && (latestCreatedAt === undefined || createdAt > latestCreatedAt)) {
       latestCreatedAt = createdAt;
     }
     if (!reply && (payload.thread_originator_guid != null || payload.reply_to_guid != null)) {

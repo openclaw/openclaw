@@ -7,9 +7,7 @@ import { configureProgramHelp } from "../cli/program/help.js";
 import { readBestEffortConfigSnapshot } from "../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
-  getRuntimeConfigSnapshotMetadata,
   setRuntimeConfigSnapshot,
-  setRuntimeConfigSourceSnapshotIfCurrent,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
@@ -265,7 +263,7 @@ module.exports = { id: "unrelated-help", register(api) {
     },
   );
 
-  it.each(["process.env", "config", "source"] as const)(
+  it.each(["process.env", "config", "runtime"] as const)(
     "refreshes eligible owners and executable callbacks after in-place %s input changes",
     async (input) => {
       const root = fs.realpathSync(makePluginLoaderTempDir());
@@ -319,7 +317,7 @@ module.exports = { id: "unrelated-help", register(api) {
             plugins: { enabled: true },
             auth: { profiles: {} },
           };
-          setRuntimeConfigSnapshot(cfg, input === "source" ? { ...cfg } : cfg);
+          setRuntimeConfigSnapshot(cfg, cfg);
           const gateway = resolvePluginRuntimeLoadContext({ config: cfg });
           setCurrentPluginMetadataSnapshot(gateway.metadataSnapshot, {
             config: cfg,
@@ -336,15 +334,8 @@ module.exports = { id: "unrelated-help", register(api) {
                 ? { fixture: { provider: plugin.id, mode: "api_key" } }
                 : {};
             } else {
-              expect(
-                setRuntimeConfigSourceSnapshotIfCurrent({
-                  expectedRevision: getRuntimeConfigSnapshotMetadata()!.revision,
-                  sourceConfig: {
-                    ...cfg,
-                    plugins: { enabled: true, entries: { [plugin.id]: { enabled } } },
-                  },
-                }),
-              ).toBe(true);
+              cfg.plugins = { enabled: true, entries: { [plugin.id]: { enabled } } };
+              setRuntimeConfigSnapshot(cfg, cfg);
             }
             expect((await loadPluginCliDescriptors(params)).map((entry) => entry.name)).toEqual(
               enabled ? ["prepared"] : [],

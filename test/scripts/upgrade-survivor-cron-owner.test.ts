@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
@@ -42,6 +42,11 @@ function fixture(candidateProjection = false, baselineVersion = "2026.9.4") {
       payload_kind TEXT NOT NULL, job_json TEXT NOT NULL, state_json TEXT NOT NULL DEFAULT '{}',
       runtime_updated_at_ms INTEGER, schedule_identity TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL, PRIMARY KEY (store_key, job_id)
+    ) STRICT`);
+    db.exec(`CREATE TABLE diagnostic_events (
+      scope TEXT NOT NULL, event_key TEXT NOT NULL, payload_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL, sequence INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (scope, event_key)
     ) STRICT`);
     if (candidateProjection) {
       db.exec("ALTER TABLE cron_jobs ADD COLUMN grant_definition_generation INTEGER");
@@ -114,10 +119,13 @@ it.each([
       const saved = JSON.parse(readFileSync(f.configPath, "utf8"));
       expect(saved.agents).not.toHaveProperty("ownership");
       expect(saved.agents.entries.ops.default).toBe(true);
-      const legacy = JSON.parse(readFileSync(saved.cron.store, "utf8"));
-      expect(legacy.jobs).toHaveLength(1);
-      expect(legacy.jobs[0].id).toBe("owner-proof-json-import");
-      expect(legacy.jobs[0]).not.toHaveProperty("agentId");
+      expect(existsSync(saved.cron.store)).toBe(false);
+      const specimen = JSON.parse(
+        readFileSync(path.join(f.artifacts, "cron-owner-fixture.json"), "utf8"),
+      );
+      expect(specimen.definitions).toHaveLength(rows.length);
+      expect(specimen.before.legacySourceSha256).toBe(null);
+      expect(specimen.before.quarantinedJobs).toBe(0);
     } finally {
       db.close();
     }
@@ -152,6 +160,7 @@ last_update_observation_root="$UNIT_ROOT/observations"
 package_root() { printf '%s\\n' "$UNIT_ROOT/package"; }
 phase() {
   printf '%s\\n' "$1" >> "$UNIT_ROOT/events"
+  if [ "$1" = cron-owner-candidate-startup ]; then printf '%s\\n' "$@" > "$UNIT_ROOT/startup-arguments"; fi
   if [ "$1" = assert-cron-owner-update ] && [ "$UNIT_FAIL_ASSERTION" = 1 ]; then return 42; fi
 }
 ${source.slice(start, end)}
@@ -182,6 +191,17 @@ ${source.slice(start, end)}
         expect(result.status, result.stdout + result.stderr).toBe(0);
         before("assert-cron-owner-update", "cron-owner-repeat-doctor");
         before("assert-cron-owner-idempotence", "cron-owner-candidate-gateway-start");
+        before("cron-owner-candidate-gateway-start", "cron-owner-candidate-startup");
+        before("cron-owner-candidate-startup", "run-cron-owner-runtime");
+        expect(
+          readFileSync(path.join(root, "startup-arguments"), "utf8").trim().split("\n"),
+        ).toEqual([
+          "cron-owner-candidate-startup",
+          "probe_gateway_endpoint",
+          "/startupz",
+          "started",
+          path.join(root, "cron-owner-startup.json"),
+        ]);
         before("cron-owner-candidate-gateway-stop", "assert-cron-owner-runtime");
       }
     },

@@ -82,6 +82,7 @@ export async function dispatchSqliteWorkerJob(
         assertCurrentJob();
         stateAccess.assertAccessAllowed({
           maintenanceScope: job.maintenanceScope,
+          schemaLease: job.cleanupAccess,
         });
       };
       const isPending = (error: unknown) =>
@@ -208,7 +209,7 @@ function prepareSqliteWorkerOperationAdmission(
         job.maintenanceScope?.assertAdmission();
         actor?.stateAccess.assertReadAllowed({
           maintenanceScope: job.maintenanceScope,
-          schemaLease,
+          schemaLease: schemaLease ?? job.cleanupAccess,
         });
       };
       retained.admission.bindDatabaseAuthority({

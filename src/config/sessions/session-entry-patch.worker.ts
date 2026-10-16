@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type {
   SqliteWorkerBackend,
   SqliteWorkerOperations,
@@ -48,7 +48,7 @@ import { readSessionSourceValidation } from "./session-source-predicate.worker.j
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 
 export type SessionWorkerDatabaseBinding = {
-  database: DatabaseSync;
+  database: EngineConnection;
   databasePath: string;
   admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
 };
@@ -74,16 +74,9 @@ export function bindSessionWorkerBackend<Operations extends SqliteWorkerOperatio
     throw new Error(`${owner} lost its canonical database owner`);
   }
   const context = createSessionWorkerOperationContext(database, options, bound, domain);
-  return {
+  return bindSqliteWorkerDatabase<Operations>(database.db, {
     execute: createExecute(context, database),
-    assertSettled() {
-      assertTransactionUsable(database.db);
-      if (database.db.isTransaction) {
-        throw new Error(`${domain} transaction did not settle`);
-      }
-    },
-    close() {},
-  };
+  });
 }
 
 /** Connection-bound domains share the executor's transaction and publication grants. */
@@ -203,6 +196,7 @@ export function commitSessionEntryPatch(
         },
       };
       let mutation;
+      let lifecycleEffects: SessionEntryPatchCommitted["lifecycleEffects"];
       if ("operation" in input) {
         if (input.validateCanonicalKeys) {
           assertCanonicalSqliteSessionKeysCurrent(database);
@@ -247,6 +241,9 @@ export function commitSessionEntryPatch(
           existing,
           writeBase,
           operation: input.operation,
+          onLifecycleProjection: (effects) => {
+            lifecycleEffects = effects;
+          },
         });
         mutation = writeSessionEntryPatchInDatabase(database, {
           sessionKey: input.sessionKey,
@@ -285,6 +282,7 @@ export function commitSessionEntryPatch(
         kind: "session-entry-patch",
         entry: mutation.entry,
         applied: mutation.applied,
+        lifecycleEffects,
         publication,
         transcriptPredicate:
           mutation.entry.sessionId === predicate.transcriptPredicate?.sessionId

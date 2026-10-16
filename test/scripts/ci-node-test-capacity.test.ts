@@ -151,3 +151,32 @@ it("retains hosted placement", () => {
   const job = selectedCliJob();
   expect(resolveSelectedNodeTestRunner(job, "github")).toBe(job.runner);
 });
+
+it("uses 16-class capacity for the qualified isolated LLM boundary selection", () => {
+  const job = selectedCliJob();
+  job.groups[0]!.configs = ["test/vitest/vitest.unit-fast-isolated.config.ts"];
+  job.groups[0]!.includePatterns = [
+    "src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts",
+  ];
+  job.groups[0]!.env = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
+  expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe("blacksmith-16vcpu-ubuntu-2404");
+});
+
+it.each(["same", "separate"])(
+  "retains 32-class capacity with an unqualified isolated sibling in the %s group",
+  (placement) => {
+    const job = selectedCliJob();
+    const group = job.groups[0]!;
+    group.configs = ["test/vitest/vitest.unit-fast-isolated.config.ts"];
+    group.includePatterns = [
+      "src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts",
+    ];
+    const sibling = "src/agents/embedded-agent-runner/run/unqualified.test.ts";
+    if (placement === "same") {
+      group.includePatterns.push(sibling);
+    } else {
+      job.groups.push({ ...group, includePatterns: [sibling] });
+    }
+    expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe("blacksmith-32vcpu-ubuntu-2404");
+  },
+);

@@ -18,8 +18,8 @@ export function createRetiredStateInspectionError(
   );
 }
 
-export function assertNoRetiredStateFiles(label: string, paths: readonly string[]): void {
-  const existing = paths.filter((filePath) => {
+export function listExistingRetiredStateFiles(paths: readonly string[]): string[] {
+  return paths.filter((filePath) => {
     try {
       // A broken link still owns an operator-selected source; do not silently ignore it.
       fs.lstatSync(filePath);
@@ -31,11 +31,15 @@ export function assertNoRetiredStateFiles(label: string, paths: readonly string[
       throw createRetiredStateInspectionError(filePath, error);
     }
   });
+}
+
+export function assertNoRetiredStateFiles(label: string, paths: readonly string[]): void {
+  const existing = listExistingRetiredStateFiles(paths);
   if (existing.length === 0) {
     return;
   }
   throw new RetiredStateFormatError(
     `${label}: retired files whose last writer predates July 1, 2026: ${existing.join(", ")}. ` +
-      `The files were left unchanged. Upgrade through OpenClaw 2026.9.7, run "${formatCliCommand("openclaw doctor --fix")}" on the original host, then retry this upgrade.`,
+      `The files were left unchanged. Run "${formatCliCommand("openclaw doctor --fix")}" to migrate or archive them, then retry.`,
   );
 }

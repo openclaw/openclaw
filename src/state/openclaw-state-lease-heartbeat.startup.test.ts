@@ -35,12 +35,6 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         workers.push(this);
       }
 
-      postMessage(message: { close: true }) {
-        if (message.close) {
-          queueMicrotask(() => this.emit("message", { closed: true }));
-        }
-      }
-
       async terminate() {
         this.emit("exit", 0);
         return 0;

@@ -183,7 +183,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
             }),
             bot,
             streamMode: "partial",
-            telegramDeps: {
+            moduleMocks: {
               ...telegramDepsForTest,
               resolveStorePath: () => scope.storePath,
               getSessionEntryAsync: store.getSessionEntryAsync,
@@ -318,7 +318,7 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
         context,
         replyToMode: "off",
         streamMode: "partial",
-        telegramDeps: {
+        moduleMocks: {
           ...telegramDepsForTest,
           resolveStorePath: () => scope.storePath,
           getSessionEntryAsync: async () => entry,

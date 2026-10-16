@@ -30,7 +30,8 @@ async function mountImage(item: ImageLightboxItem, deferredClose = false) {
     mediaKind: item.kind ?? "image",
     gallery: item.gallery,
     connectVideo: item.connectVideo,
-    loadFullResolution: item.loadFullResolution,
+    loadDisplayImage: item.loadDisplayImage,
+    readOriginalBlob: item.readOriginalBlob,
     src: item.src,
     originalSrc: item.originalSrc ?? "",
     imageTitle: item.title,
@@ -149,7 +150,7 @@ describe("progressive image viewer geometry", () => {
         title: "Synthetic screenshot",
         width,
         height,
-        loadFullResolution: () => full.promise,
+        loadDisplayImage: () => full.promise,
       });
       const fitted = image.getBoundingClientRect();
       expect(fitted.width).toBeGreaterThan(0);
@@ -172,6 +173,7 @@ describe("progressive image viewer geometry", () => {
       await image.decode();
       await nextFrame();
       const after = image.getBoundingClientRect();
+      expect(viewer.querySelector("img")).toBe(image);
       expect(zoom.textContent).toBe(zoomBefore);
       for (const dimension of ["x", "y", "width", "height"] as const) {
         expect(after[dimension]).toBeCloseTo(before[dimension], 1);
@@ -180,7 +182,7 @@ describe("progressive image viewer geometry", () => {
   );
 
   it.each([320, 390, 1440])(
-    "places Open original after media without covering zoom chrome at %ipx",
+    "places the secondary Download image action after media without covering zoom chrome at %ipx",
     async (width) => {
       await page.viewport(width, 1000);
       const { viewer, image } = await mountImage({
@@ -188,7 +190,9 @@ describe("progressive image viewer geometry", () => {
         originalSrc: "https://example.invalid/original.png",
         title: "Footer placement",
       });
-      const original = viewer.querySelector<HTMLAnchorElement>(".open-original")!;
+      const original = viewer.querySelector<HTMLButtonElement>(".download-image")!;
+      expect(viewer.querySelector(".open-original")).toBeNull();
+      expect(original.getAttribute("aria-label")).toBe("Download image");
       await expect.element(original).toBeVisible();
       const footer = original.closest<HTMLElement>("openclaw-modal-actions")!;
       expect(footer.parentElement?.lastElementChild).toBe(footer);
@@ -201,9 +205,17 @@ describe("progressive image viewer geometry", () => {
       expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
       expect(bounds.width).toBeGreaterThanOrEqual(44);
       const close = viewer.querySelector<HTMLButtonElement>(".close")!;
+      const external = viewer.querySelector<HTMLAnchorElement>(".external-image")!;
+      expect(external.href).toBe("https://example.invalid/original.png");
+      expect(external.getAttribute("aria-label")).toBe("Open in new tab");
+      expect(external.getBoundingClientRect().width).toBeGreaterThanOrEqual(44);
       close.focus();
       await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+      expect(document.activeElement).toBe(external);
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
       expect(document.activeElement).toBe(original);
+      await userEvent.keyboard("{Tab}");
+      expect(document.activeElement).toBe(external);
       await userEvent.keyboard("{Tab}");
       expect(document.activeElement).toBe(close);
     },

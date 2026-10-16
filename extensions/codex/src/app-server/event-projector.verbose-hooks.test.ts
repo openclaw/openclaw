@@ -21,6 +21,7 @@ import {
   forCurrentTurn,
   turnCompleted,
 } from "./event-projector.test-harness.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
 import * as sessionHistory from "./session-history.js";
 
 registerCodexEventProjectorTestLifecycle();
@@ -304,14 +305,16 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     const params = await createParams();
     const projector = await createProjector({ ...params, onAgentEvent });
 
-    await projector.handleNotification({
-      method: "hook/started",
-      params: {
-        threadId: THREAD_ID,
-        turnId: null,
-        run: { ...hookRun, id: "hook-thread-1", eventName: "sessionStart", scope: "thread" },
-      },
-    });
+    await projector.handleNotification(
+      prepareCodexServerNotification({
+        method: "hook/started",
+        params: {
+          threadId: THREAD_ID,
+          turnId: null,
+          run: { ...hookRun, id: "hook-thread-1", eventName: "sessionStart", scope: "thread" },
+        },
+      }),
+    );
 
     const started = findAgentEvent(onAgentEvent, {
       stream: "codex_app_server.hook",

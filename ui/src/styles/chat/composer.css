@@ -2,7 +2,7 @@
 .chat-controls__inline-select-menu,
 .agent-chat__capability-menu-panel,
 .chat-controls__permission-menu,
-.chat-talk-input-picker::part(menu) {
+.chat-talk-input-picker__menu {
   border: 1px solid var(--chat-composer-popover-border, var(--overlay-border));
   border-radius: var(--chat-composer-popover-radius, var(--radius-lg));
   background: var(--chat-composer-popover-background, var(--bg-elevated));
@@ -10,17 +10,15 @@
   corner-shape: superellipse(1.5);
 }
 
-.chat-controls__inline-select[open] > wa-popup::part(popup),
-.chat-controls__inline-select[open] > .chat-picker-overlay {
+/* Retire entry animation before the overlay waits for closing presentation. */
+.chat-controls__inline-select[open] > .chat-picker-overlay:where(:not([data-phase="closing"])) {
   animation: chat-composer-picker-in var(--control-ui-transition-fast) ease;
 }
 
-.chat-controls__inline-select[open] > wa-popup[data-current-placement^="top"]::part(popup),
 .chat-controls__inline-select[open] > .chat-picker-overlay[data-placement^="top"] {
   transform-origin: bottom;
 }
 
-.chat-controls__inline-select[open] > wa-popup[data-current-placement^="bottom"]::part(popup),
 .chat-controls__inline-select[open] > .chat-picker-overlay[data-placement^="bottom"] {
   transform-origin: top;
 }
@@ -890,7 +888,7 @@
   transform: rotate(180deg);
 }
 
-.chat-talk-input-picker::part(menu) {
+.chat-talk-input-picker__menu {
   width: min(300px, calc(100vw - 24px));
   padding: 8px;
 }
@@ -969,7 +967,7 @@
 
 /* Sole content of the popover when no input can be selected, so it carries the
    row's own weight instead of reading as a footnote under the heading. */
-.chat-talk-input-picker__notice {
+.chat-talk-input-picker__notice:disabled {
   padding: 0;
   opacity: 1;
   color: inherit;
@@ -1077,7 +1075,8 @@
   line-height: 1.35;
 }
 
-.chat-talk-input-picker__preference::part(checkmark) {
+.chat-talk-input-picker__preference > .oc-menu-item__check,
+.chat-talk-input-picker__item > .oc-menu-item__check {
   display: none;
 }
 
@@ -1560,6 +1559,23 @@ html[dir="rtl"] .chat-attachment-loading > span {
   }
 }
 
+.chat-attachment-failures {
+  margin: 0 var(--chat-composer-editor-inset-inline) var(--chat-composer-editor-inset-block);
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.chat-attachment-failures__help {
+  margin-block-start: 4px;
+  color: var(--text);
+}
+
 .chat-attachment-error {
   display: grid;
   width: 100%;
@@ -1878,6 +1894,13 @@ html[dir="rtl"] .chat-attachment-loading > span {
 .agent-chat__photo-input,
 .agent-chat__camera-input {
   display: none;
+  position: fixed;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .chat-controls__model {
@@ -3431,8 +3454,12 @@ html[dir="rtl"] .chat-attachment-loading > span {
 .agent-chat__welcome-avatar {
   width: 96px;
   height: 96px;
-  border-radius: 50%;
   object-fit: cover;
+}
+
+.agent-chat__welcome-avatar,
+.agent-chat__welcome-avatar .identity-avatar--agent {
+  border-radius: 50%;
 }
 
 .agent-chat__welcome-avatar .identity-avatar__text {
@@ -3585,9 +3612,14 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .agent-chat__recent-time {
+  /* The timestamp never yields width: the name and subtitle truncate first, so
+     every row keeps a one-line timestamp flush with the right edge. */
+  flex: none;
   margin-left: auto;
   color: var(--muted);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: end;
   white-space: nowrap;
 }
 

@@ -1,10 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveEmbeddedSessionLane } from "../../../agents/embedded-agent-runner/lanes.js";
-import {
-  clearCommandLane,
-  countQueuedCommandsInLane,
-  prepareCommandLaneClear,
-} from "../../../process/command-queue.js";
+import { clearCommandLane, countQueuedCommandsInLane } from "../../../process/command-queue.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
@@ -91,7 +87,7 @@ function resolveSessionLifecycleQueueKeys(params: SessionLifecycleQueueTarget) {
   };
 }
 
-/** Capture pending sources before Stop callbacks can replace their queue or session. */
+/** Stop selects current pending work, including input arriving during preparation. */
 export function prepareSessionFollowupCleanup(params: {
   keys: Array<string | undefined>;
   agentId: string;
@@ -103,22 +99,6 @@ export function prepareSessionFollowupCleanup(params: {
   const keys = new Set(
     params.keys.map((key) => normalizeOptionalString(key)).filter((key) => key !== undefined),
   );
-  const captures = [...keys].flatMap((key) => {
-    const queue = FOLLOWUP_QUEUES.get(key);
-    if (!queue) {
-      return [];
-    }
-    const isPending = (source: FollowupRun) =>
-      source.steerPending?.phase !== "injecting" &&
-      !queue.inFlight.has(source) &&
-      !queue.activeSummarySources.has(source);
-    // Admission can retarget the next claim before run.sessionId is refreshed.
-    // Exact Stop must not transfer to another incarnation; broad Stop includes both.
-    const sources = [...new Set(followupQueueSources(queue))].filter(
-      (source) => isPending(source) && matchesSessionFollowupRun(source, params),
-    );
-    return [{ key, queue, isPending, sources }];
-  });
   let consumed = false;
   return (sessionId = params.sessionId) => {
     if (consumed) {
@@ -126,22 +106,24 @@ export function prepareSessionFollowupCleanup(params: {
     }
     consumed = true;
     let removed = 0;
-    for (const { key, queue, isPending, sources } of captures) {
+    for (const key of keys) {
       params.assertCurrent();
-      if (FOLLOWUP_QUEUES.get(key) !== queue) {
+      const queue = FOLLOWUP_QUEUES.get(key);
+      if (!queue) {
         continue;
       }
-      const matchesCurrentTarget = (source: FollowupRun) =>
-        isPending(source) && matchesSessionFollowupRun(source, { ...params, sessionId });
-      const current = sources.filter(matchesCurrentTarget);
+      const current = [...new Set(followupQueueSources(queue))].filter(
+        (source) =>
+          source.steerPending?.phase !== "injecting" &&
+          !queue.inFlight.has(source) &&
+          !queue.activeSummarySources.has(source) &&
+          matchesSessionFollowupRun(source, { ...params, sessionId }),
+      );
       const pending = current.filter((source) => queue.items.includes(source));
       const summaries = current.filter(
         (source) =>
           queue.summarySources.includes(source) ||
-          queue.summaryElisions.some((entry) => {
-            const mapped = entry.sourceRefs.get(source) ?? source;
-            return entry.sources.includes(mapped) && matchesCurrentTarget(mapped);
-          }),
+          queue.summaryElisions.some((entry) => entry.sources.includes(source)),
       );
       // Detach the whole accepted set before lifecycle callbacks can revoke or re-enter Stop.
       removeQueuedItemsByRef(queue.items, pending);
@@ -168,8 +150,6 @@ export function prepareSessionFollowupCleanup(params: {
         }
       }
       completeFollowupRuns(detached, onSettlementError);
-      // Settlement of accepted removals is unconditional; later effects need current authority.
-      params.assertCurrent();
       if (
         FOLLOWUP_QUEUES.get(key) === queue &&
         !queue.draining &&
@@ -188,7 +168,6 @@ export function prepareSessionFollowupCleanup(params: {
 export function clearSessionLifecycleQueues(
   params: SessionLifecycleQueueTarget & { assertCurrent: () => void },
 ): ClearSessionQueueResult {
-  params.assertCurrent();
   const { keys, sessionKeyAliases } = resolveSessionLifecycleQueueKeys(params);
   const followupCleared = prepareSessionFollowupCleanup({
     ...params,
@@ -202,28 +181,7 @@ export function clearSessionLifecycleQueues(
 export function prepareSessionLifecycleQueueCleanup(
   params: SessionLifecycleQueueTarget & { assertCurrent: () => void },
 ): (sessionId?: string) => ClearSessionQueueResult {
-  params.assertCurrent();
-  const { keys, sessionKeyAliases, matchesLaneEntry } = resolveSessionLifecycleQueueKeys(params);
-  const clearFollowups = prepareSessionFollowupCleanup({
-    ...params,
-    keys,
-    sessionKeyAliases,
-  });
-  const lanes = keys.map((key) =>
-    prepareCommandLaneClear(resolveEmbeddedSessionLane(key), matchesLaneEntry(key)),
-  );
-  return (sessionId = params.sessionId) => {
-    params.assertCurrent();
-    const followupCleared = clearFollowups(sessionId);
-    let laneCleared = 0;
-    for (const clearLane of lanes) {
-      params.assertCurrent();
-      laneCleared += clearLane(
-        (target) => !target || sessionId === undefined || target.sessionId === sessionId,
-      );
-    }
-    return { followupCleared, laneCleared, keys };
-  };
+  return (sessionId = params.sessionId) => clearSessionLifecycleQueues({ ...params, sessionId });
 }
 
 export function clearSessionLifecycleLanes(

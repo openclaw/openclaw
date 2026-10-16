@@ -1,5 +1,5 @@
 import { getAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, readErrorName } from "openclaw/plugin-sdk/error-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   readMemoryFile,
-  MEMORY_INDEX_VECTOR_TABLE as VECTOR_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemoryReadResult,
   type MemorySearchManager,
@@ -18,6 +17,7 @@ import { WorkerTaskError } from "openclaw/plugin-sdk/process-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
+import { tokenizeFtsQuery } from "./keyword-query.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
 import {
   createMemoryEmbeddingOperationError,
@@ -31,7 +31,7 @@ import {
 } from "./manager-keyword-retrieval.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import type { MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
-import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
+import { admitMemoryVectorIndex, searchMemoryVectorIndex } from "./manager-search-knn.js";
 import { searchVector } from "./manager-search-vector.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
@@ -66,7 +66,15 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     if (!normalizedQuery) {
       return [];
     }
-    const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
+    const postgres = this.publishedDatabase.admission?.engine === "postgres";
+    if (postgres && normalizedQuery.length > 4096) {
+      throw new Error("PostgreSQL memory search query must not exceed 4096 characters");
+    }
+    if (postgres && tokenizeFtsQuery(normalizedQuery).length > 128) {
+      throw new Error("PostgreSQL memory search query must not exceed 128 terms");
+    }
+    const requestedResults = opts?.maxResults ?? this.settings.query.maxResults;
+    const maxResults = postgres ? Math.min(200, requestedResults) : requestedResults;
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const hasActiveProject = (opts?.activeProjectKeys?.length ?? 0) > 0;
     // Rank one shared window before trimming small requests. Preserve the historical
@@ -198,6 +206,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           if (err instanceof WorkerTaskError && err.code === "overloaded") {
             throw err;
           }
+          if (readErrorName(err) === "DatabaseSearchCapabilityUnavailableError") {
+            throw err;
+          }
           if (
             this.providerRequirement.mode === "optional" &&
             isMemoryEmbeddingOperationError(err)
@@ -213,6 +224,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             await this.syncAdmitted({ reason: "search-bootstrap" }).catch(
               (fallbackErr: unknown) => {
                 if (fallbackErr instanceof WorkerTaskError && fallbackErr.code === "overloaded") {
+                  throw fallbackErr;
+                }
+                if (readErrorName(fallbackErr) === "DatabaseSearchCapabilityUnavailableError") {
                   throw fallbackErr;
                 }
                 const message = redactSensitiveText(formatErrorMessage(fallbackErr), {
@@ -306,6 +320,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           { allowEmbeddingBootstrapFallback: true },
         ).catch((err: unknown) => {
           if (err instanceof WorkerTaskError && err.code === "overloaded") {
+            throw err;
+          }
+          if (readErrorName(err) === "DatabaseSearchCapabilityUnavailableError") {
             throw err;
           }
           log.warn(`memory sync failed (search-identity-repair): ${formatErrorMessage(err)}`);
@@ -614,6 +631,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     if (error instanceof WorkerTaskError && error.code === "overloaded") {
       throw error;
     }
+    if (readErrorName(error) === "DatabaseSearchCapabilityUnavailableError") {
+      throw error;
+    }
     log.warn(`memory search: ${kind} query failed: ${formatErrorMessage(error)}`);
     return [];
   }
@@ -645,41 +665,55 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         },
         signal,
       );
-    const results = await searchVector({
-      vectorTable: VECTOR_TABLE,
-      ...query,
-      signal,
-      ensureVectorReady: async () => {
-        if (!this.vector.enabled) {
-          return false;
-        }
-        if (
-          indexState.vectorState.state === "incomplete" ||
-          indexState.vectorState.state === "unverified"
-        ) {
-          this.markConfiguredSourcesForFullReindex();
-          return false;
-        }
-        return indexState.vectorState.state === "complete";
-      },
-      runFallback: readVectorRows,
-      runVectorKnn: async (request, knnSignal) => {
-        const response = await runVectorKnnInSubprocess({
-          databasePath: resolveUserPath(this.settings.store.databasePath),
-          extensionPath: this.vector.extensionPath,
-          request,
-          signal: knnSignal,
-        });
-        if (!response.fallbackScanRequired) {
-          this.vector.available = true;
-          this.vector.semanticAvailable = true;
-          this.vector.dims = queryVec.length;
-          this.vector.loadError = undefined;
-        }
-        return response;
-      },
-      sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
-    });
+    let results: Awaited<ReturnType<typeof readVectorRows>>;
+    if (this.publishedDatabase.admission?.engine === "postgres") {
+      results = await readVectorRows();
+      this.vector.available = true;
+      this.vector.semanticAvailable = true;
+      this.vector.dims = queryVec.length;
+      this.vector.loadError = undefined;
+    } else {
+      const vectorIndex = admitMemoryVectorIndex({
+        databasePath: resolveUserPath(this.settings.store.databasePath),
+      });
+      results = await searchVector({
+        ...query,
+        signal,
+        ensureVectorReady: async () => {
+          if (!this.vector.enabled) {
+            return false;
+          }
+          if (
+            indexState.vectorState.state === "incomplete" ||
+            indexState.vectorState.state === "unverified"
+          ) {
+            this.markConfiguredSourcesForFullReindex();
+            return false;
+          }
+          return indexState.vectorState.state === "complete";
+        },
+        runFallback: readVectorRows,
+        runVectorKnn: async (request, knnSignal) => {
+          const response = await searchMemoryVectorIndex(
+            vectorIndex.capability,
+            vectorIndex.index,
+            request,
+            {
+              extensionPath: this.vector.extensionPath,
+              signal: knnSignal,
+            },
+          );
+          if (!response.fallbackScanRequired) {
+            this.vector.available = true;
+            this.vector.semanticAvailable = true;
+            this.vector.dims = queryVec.length;
+            this.vector.loadError = undefined;
+          }
+          return response;
+        },
+        sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
+      });
+    }
     // Keyword candidates outside the vector window still need their stored
     // similarity; treating an unqueried vector as zero loses rare-term answers.
     const candidates = [...results];

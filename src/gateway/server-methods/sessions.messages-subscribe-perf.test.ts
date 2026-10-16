@@ -83,12 +83,11 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
     databaseOptions,
     now: () => 5000,
   });
-  const list = store.listPendingOperatorApprovals;
-  const expiryReads = vi.spyOn(store, "expireDueOperatorApprovals");
-  const pendingReads = vi
-    .spyOn(store, "listPendingOperatorApprovals")
+  const prepare = store.prepareOperatorApprovalReplay;
+  const preparations = vi
+    .spyOn(store, "prepareOperatorApprovalReplay")
     .mockImplementation(async (params) => {
-      const result = await list(params);
+      const result = await prepare(params);
       if (!unrelatedApproval) {
         throw new Error("Expected the unrelated synthetic approval");
       }
@@ -133,7 +132,6 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
         undefined,
       );
     }
-    expect(pendingReads).toHaveBeenCalledTimes(round + 1);
-    expect(expiryReads).toHaveBeenCalledTimes(round + 1);
+    expect(preparations).toHaveBeenCalledTimes(round + 1);
   }
 });

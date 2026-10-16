@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
@@ -46,9 +47,10 @@ export async function tryRunDoctorResultBridge(argv: string[]): Promise<boolean>
   let exitCode = 1;
   let failed = false;
   try {
+    const invocation = resolveOpenClawCliInvocation({ entryPath: argv[1], args: argv.slice(2) });
     worker = runUpdateDoctorProcess(
       { root, runId: randomUUID(), onProcessSettlement: (step) => (settlement = step) },
-      [process.execPath, ...process.execArgv, ...argv.slice(1)],
+      [invocation.command, ...invocation.args],
       {
         cwd: process.cwd(),
         baseEnv: process.env,

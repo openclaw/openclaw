@@ -5,7 +5,6 @@ import { getPluginRegistryForContext } from "../../../plugins/runtime/gateway-re
 import { isDecisionAssistanceEligible } from "../../decision-assistance.js";
 import { resolveDecisionModelSetting } from "../../decision-model-setting.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { log } from "../logger.js";
 import { prepareDecisionContext, type DecisionContextFacts } from "./attempt-decision-context.js";
 
 // UTF-16 code units of conversation text plus verbatim ordinary hook fields.
@@ -40,7 +39,6 @@ export type DecisionPrefilterResult = {
   status: "proposed" | "retained" | "skipped" | "unavailable";
   reason: string;
   context?: DecisionContextFacts;
-  latencyMs?: number;
 };
 
 /** Ordinary unavailability preserves tools; cancellation and contract errors remain terminal. */
@@ -87,7 +85,6 @@ export async function evaluateAttemptDecisionToolPrefilter(
   if (context.facts.contextChars + promptBuildChars > MAX_DECISION_TEXT_CHARS) {
     return skip("prompt-build-context-too-large", context.facts);
   }
-  const started = log.isEnabled("debug") ? performance.now() : undefined;
   const selection = resolveDecisionModelSetting(config, params.agentId);
   const isCurrent = () => {
     params.signal.throwIfAborted();
@@ -136,6 +133,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
     {
       agentId: params.agentId,
       purpose: "tool-prefilter.semantic-gate",
+      priority: "optional",
       rubricVersion: "9",
       timeoutMs: 500,
       signal: params.signal,
@@ -148,7 +146,6 @@ export async function evaluateAttemptDecisionToolPrefilter(
   );
   const facts = {
     context: context.facts,
-    ...(started === undefined ? {} : { latencyMs: Math.max(0, performance.now() - started) }),
   };
   if (!isCurrent()) {
     return { shouldPruneTools: false, status: "retained", reason: "selection-changed", ...facts };

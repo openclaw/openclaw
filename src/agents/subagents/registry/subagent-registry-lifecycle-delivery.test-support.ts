@@ -19,6 +19,7 @@ import {
   findSwarmCollectorSession,
   subagentRuns,
 } from "./subagent-registry-memory.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -85,7 +86,7 @@ export function registerLifecycleDeliveryReceiptCases({
           idempotencyKey: entry.swarmLaunchIdempotencyKey,
         }),
       ).toMatchObject({ runId: entry.runId });
-      await completeRun(controller, entry);
+      await completeRun(controller, entry, { terminalReply: undefined });
     }
     for (const entry of entries) {
       expect(findSwarmCollectorSession(entry.childSessionKey, entry.childAgentId)).toMatchObject({
@@ -154,10 +155,14 @@ export function registerLifecycleDeliveryReceiptCases({
 
     expect(readLifecycleRun(entry)).toMatchObject({
       execution: { status: "terminal", suppressSessionEffects: true },
-      completion: { resultText: "final completion reply" },
+      completion: { terminalReply: visibleCompletion.terminalReply },
       delivery: { status: "delivered", deliveredAt: 12_300 },
       cleanupCompletedAt: expect.any(Number),
     });
+    expect(readLifecycleRun(entry).completion?.resultText).toBeUndefined();
+    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion?.resultText).toBe(
+      "final completion reply",
+    );
     expect(readLifecycleRun(entry).childSessionIdentity).toBeUndefined();
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
     expect(cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
