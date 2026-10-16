@@ -149,6 +149,27 @@ In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, 
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
 
+## Context breakdown
+
+Open **Details → Context** to see the current usage and an estimated breakdown
+of messages and other context, workspace memory, tool schemas, skills, and the
+remaining system prompt. Expand memory, tools, or skills to inspect individual
+contributors. The report loads only while this section is open; **Refresh**
+reloads the saved report without starting an agent turn.
+
+Contributor sizes use character-based token estimates from the last matching
+run report, not the provider's tokenizer. Workspace memory and skills are
+subtracted from the system prompt so they are not counted twice. **Messages &
+other** is the estimated remainder, including context the report does not track
+separately. Unverified injection sizes stay unknown rather than showing zero.
+MCP and deferred tools are not separate categories in this report.
+
+When a matching last-run prompt budget is available, the section shows the
+remaining budget and the reserve outside it. These are estimates, not a promise
+of the exact auto-compaction point. **Compact session** uses the existing
+compaction command and appears only with the required permissions; it is
+disabled while a run is active. It preserves the composer draft.
+
 ## Image viewing
 
 Uploaded and managed chat images use compressed, size-bounded previews instead
