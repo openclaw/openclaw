@@ -165,15 +165,22 @@ describe("googleChatApprovalNativeRuntime", () => {
     view: ExecApprovalPendingView | PluginApprovalPendingView = createPendingView(),
   ) {
     const nowMs = Date.now();
-    const request = {
+    const requestBase = {
       id: view.approvalId,
-      request:
-        view.approvalKind === "plugin"
-          ? { title: view.title, description: view.description ?? "", severity: view.severity }
-          : { command: view.commandText },
       createdAtMs: nowMs,
       expiresAtMs: view.expiresAtMs,
     };
+    const request =
+      view.approvalKind === "plugin"
+        ? {
+            ...requestBase,
+            request: {
+              title: view.title,
+              description: view.description ?? "",
+              severity: view.severity,
+            },
+          }
+        : { ...requestBase, request: { command: view.commandText } };
     const pendingPayload = await googleChatApprovalNativeRuntime.presentation.buildPendingPayload({
       ...handlerContext,
       request,
