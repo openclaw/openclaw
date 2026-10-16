@@ -167,6 +167,39 @@ it("uses local identity for a configless cold start without fetching", async () 
   expect(install).toHaveBeenCalledExactlyOnceWith(false, expect.any(AbortSignal));
 });
 
+it("publishes discovered package install facts so healthy manual installs read as up to date", async () => {
+  install.mockResolvedValueOnce({
+    root: null,
+    installReceipt: null,
+    status: { root: null, installKind: "package", packageManager: "npm" },
+  });
+  await lifecycle.initialize();
+  const result = await status({ update: { channel: "stable", auto: { enabled: false } } });
+  expect(result.schedule.install).toEqual({ kind: "package" });
+});
+
+it("keeps undiscovered and host-owned installs off the status schedule", async () => {
+  install.mockResolvedValueOnce({
+    root: null,
+    installReceipt: null,
+    status: { root: null, installKind: "unknown", packageManager: "unknown" },
+  });
+  await lifecycle.initialize();
+  const unknownResult = await status({ update: { channel: "stable", auto: { enabled: false } } });
+  expect(unknownResult.schedule.install).toBeUndefined();
+
+  install.mockResolvedValueOnce({
+    root: null,
+    installReceipt: null,
+    status: { root: null, installKind: "host", packageManager: "unknown" },
+  });
+  await lifecycle.initialize();
+  const hostResult = await status({ update: { channel: "stable", auto: { enabled: true } } });
+  // Host-owned installs stay off the schedule exactly as before this change.
+  expect(hostResult.schedule.install).toBeUndefined();
+  expect(hostResult.schedule.autoEnabled).toBe(true);
+});
+
 it("reports exhausted Git discovery without retrying from status reads and clears it on refresh", async () => {
   install.mockResolvedValueOnce({
     root: "/openclaw",

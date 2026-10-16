@@ -47,7 +47,14 @@ export function getGatewayUpdateSchedule(
     ...(campaign ? { campaign } : {}),
   };
   const install = currentUpdateCheckLifecycle().installStatus;
-  return install && (install.status.error?.timeoutMs || install.status.installKind === "immutable")
+  // Attach discovered install facts whenever the install identity is known, not
+  // only for probe errors or immutable checkouts: a healthy package install with
+  // no pending update must not read as "update status unavailable" (#173199).
+  // Host-owned installs keep their existing projection (no install target).
+  const kind = install?.status.installKind;
+  return install &&
+    (install.status.error?.timeoutMs ||
+      (kind !== undefined && kind !== "unknown" && kind !== "host"))
     ? withUpdateInstallStatus(result, install.status, true, install.installReceipt, install.root)
     : result;
 }
