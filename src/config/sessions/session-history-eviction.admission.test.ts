@@ -133,16 +133,12 @@ it.each([
     const currentSessionId = "current-generation";
     const dayMs = 24 * 60 * 60 * 1000;
     const oldAt = Date.now() - 8 * dayMs;
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      { sessionId: oldSessionId, updatedAt: oldAt },
-    );
-    await appendTranscriptMessage(
-      { sessionKey, sessionId: oldSessionId, storePath },
-      {
-        message: { role: "user", content: "synthetic historical payload " + "x".repeat(64 * 1024) },
-      },
-    );
+    const currentScope = { sessionKey, storePath };
+    const oldScope = { ...currentScope, sessionId: oldSessionId };
+    await replaceSessionEntry(currentScope, { sessionId: oldSessionId, updatedAt: oldAt });
+    await appendTranscriptMessage(oldScope, {
+      message: { role: "user", content: "x".repeat(64 * 1024) },
+    });
     await resetSessionEntryLifecycle({
       storePath,
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
@@ -150,16 +146,20 @@ it.each([
     });
     const target = resolveSqliteTargetFromSessionStorePath(storePath);
     const options = { agentId: target.agentId ?? "main", path: target.path };
+    const queueWriter = (run: () => void | Promise<void>) =>
+      own(
+        runExclusiveSqliteSessionWrite(
+          options,
+          async () => run(),
+          "session.history.eviction-prepare",
+        ),
+      );
     // Instrument the next executor before discovery retains it for preparation.
     await closeOpenClawAgentDatabaseByPathAsync(options.path);
     const database = openOpenClawAgentDatabase(options);
-    const historyBefore = loadTranscriptEventsSync({
-      sessionKey,
-      sessionId: oldSessionId,
-      storePath,
-    });
+    const historyBefore = loadTranscriptEventsSync(oldScope);
     expect(historyBefore.length).toBeGreaterThan(0);
-    const currentEntry = loadSessionEntryReadOnly({ sessionKey, storePath });
+    const currentEntry = loadSessionEntryReadOnly(currentScope);
     expect(currentEntry).toMatchObject({ sessionId: currentSessionId });
     // Synthetic bootstrap fixes victim age; it does not change the cleanup algorithm.
     database.db
@@ -171,7 +171,7 @@ it.each([
     const { measureSessionPhysicalDiskUsage } = await import("./disk-budget.js");
     const before = await measureSessionPhysicalDiskUsage(storePath);
 
-    const events: string[] = [];
+    let blockerReleased = false;
     let observingAdmission = false;
     let parentChecks = 0;
     let laterWriterRan = false;
@@ -196,7 +196,6 @@ it.each([
             statement.all = () => {
               if (observingAdmission) {
                 parentChecks += 1;
-                events.push("parent-integrity-check");
               }
               return all();
             };
@@ -209,31 +208,22 @@ it.each([
     const beforePreparation = async () => {
       hook.beforePlan = undefined;
       hook.afterMaterialize = undefined;
-      events.push("preparation-ready");
       expect(database.db.isTransaction).toBe(false);
       if (cold) {
         closeCachedOpenClawAgentDatabase(database);
         invalidateOpenClawAgentDatabaseValidation(database.path);
         revokeSqliteDatabaseAdmissionsForPath(database.path);
         expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
-        events.push("parent-handle-closed");
       }
       observingAdmission = true;
       if (cold) {
         integrityGate.arm();
       }
-      void own(
-        runExclusiveSqliteSessionWrite(
-          options,
-          async () => {
-            events.push("blocker-entered");
-            blockerEntered.resolve();
-            await releaseBlocker.promise;
-            events.push("blocker-released");
-          },
-          "session.history.eviction-prepare",
-        ),
-      );
+      void queueWriter(async () => {
+        blockerEntered.resolve();
+        await releaseBlocker.promise;
+        blockerReleased = true;
+      });
       await blockerEntered.promise;
       preparationReady.resolve();
     };
@@ -256,16 +246,10 @@ it.each([
     );
     await preparationReady.promise;
     await yieldToEventLoop();
-    const laterWriter = own(
-      runExclusiveSqliteSessionWrite(
-        options,
-        async () => {
-          laterWriterRan = true;
-          events.push("later-writer");
-        },
-        "session.history.eviction-prepare",
-      ),
-    );
+    const laterWriter = queueWriter(() => {
+      expect(blockerReleased).toBe(true);
+      laterWriterRan = true;
+    });
     expect(laterWriterRan).toBe(false);
     releaseBlocker.resolve();
     const boundary = await Promise.race([
@@ -276,16 +260,9 @@ it.each([
     if (boundary === "worker") {
       await laterWriter;
       let followingWriterRan = false;
-      followingWriter = own(
-        runExclusiveSqliteSessionWrite(
-          options,
-          async () => {
-            followingWriterRan = true;
-            events.push("following-writer");
-          },
-          "session.history.eviction-prepare",
-        ),
-      );
+      followingWriter = queueWriter(() => {
+        followingWriterRan = true;
+      });
       await yieldToEventLoop();
       // Both archive reads and cold integrity validation release writer admission;
       // transaction ordering resumes only when the reclaimer requests its write.
@@ -297,24 +274,18 @@ it.each([
         const peer = realOpen(database.path);
         try {
           const updatedAt = Date.now();
+          const row = getSessionKysely(peer)
+            .updateTable("session_nodes")
+            .where("session_key", "=", sessionKey);
           executeSqliteQuerySync(
             peer,
-            getSessionKysely(peer)
-              .updateTable("session_nodes")
-              .set({
-                updated_at: updatedAt,
-                entry_json: JSON.stringify({ ...currentEntry, updatedAt }),
-              })
-              .where("session_key", "=", sessionKey),
+            row.set({
+              updated_at: updatedAt,
+              entry_json: JSON.stringify({ ...currentEntry, updatedAt }),
+            }),
           );
           // Match the canonical writer's validity settlement after its payload/projection update.
-          executeSqliteQuerySync(
-            peer,
-            getSessionKysely(peer)
-              .updateTable("session_nodes")
-              .set({ entry_valid: 1 })
-              .where("session_key", "=", sessionKey),
-          );
+          executeSqliteQuerySync(peer, row.set({ entry_valid: 1 }));
         } finally {
           peer.close();
         }
@@ -334,21 +305,19 @@ it.each([
     await laterWriter;
     await followingWriter;
     observingAdmission = false;
+    expect(laterWriterRan).toBe(true);
     expect(boundary).toBe(cold ? "worker" : "completed");
-    expect(events.indexOf("later-writer")).toBeGreaterThan(events.indexOf("blocker-released"));
     expect(parentChecks).toBe(0);
     expect(integrityGate.count()).toBe(cold ? 1 : 0);
     expect(isSessionLifecycleMutationActive(storePath, [oldSessionId])).toBe(false);
     if (outcome === "revoked") {
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
     }
-    expect(loadSessionEntryReadOnly({ sessionKey, storePath })).toMatchObject({
+    expect(loadSessionEntryReadOnly(currentScope)).toMatchObject({
       sessionId: currentSessionId,
     });
     if (outcome !== "reclaim") {
-      expect(loadTranscriptEventsSync({ sessionKey, sessionId: oldSessionId, storePath })).toEqual(
-        historyBefore,
-      );
+      expect(loadTranscriptEventsSync(oldScope)).toEqual(historyBefore);
     }
   },
 );

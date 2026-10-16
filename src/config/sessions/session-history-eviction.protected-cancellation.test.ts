@@ -137,7 +137,7 @@ describe("protected historical session cancellation", () => {
         }
         return result;
       });
-      const admissions: Array<{ kind: "history-eviction" | "entry"; admissionId: number }> = [];
+      let admissionCount = 0;
       const workerOwner = await import("./session-accessor.sqlite-reclamation-worker.js");
       const withWorker = workerOwner.withSqliteReclamationWorker;
       const observeAdmissions = vi
@@ -156,7 +156,7 @@ describe("protected historical session cancellation", () => {
                 return run({
                   ...params,
                   withWriteAdmission: async (operation, admission) => {
-                    admissions.push({ kind, admissionId: admission.admissionId });
+                    admissionCount++;
                     if ((stage === "worker" || stage === "archived entry") && !protectionChanged) {
                       releasePressure();
                     }
@@ -186,7 +186,7 @@ describe("protected historical session cancellation", () => {
         expect(protectionChanged).toBe(true);
         expect(fs.existsSync(peerArtifact)).toBe(false);
         if (stage === "materialization" || stage === "worker" || stage === "archived entry") {
-          expect(admissions.length).toBeGreaterThan(0);
+          expect(admissionCount).toBeGreaterThan(0);
         }
         for (const [index, history] of histories.entries()) {
           expect(sessionExists(history.sessionId), history.sessionId).toBe(true);
@@ -203,7 +203,7 @@ describe("protected historical session cancellation", () => {
           ]);
           expect(reclaimedHistories).toEqual([]);
         } else {
-          expect(admissions).toEqual([]);
+          expect(admissionCount).toBe(0);
           expect(reclaimedHistories).toEqual([]);
         }
         expect(result).toMatchObject({ removedEntries: 0, removedFiles: 0 });

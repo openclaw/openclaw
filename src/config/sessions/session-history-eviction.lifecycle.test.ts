@@ -31,6 +31,9 @@ import {
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 
 const evictionWarnSpy = vi.hoisted(() => vi.fn());
+const maintenance = { mode: "enforce" as const, maxDiskBytes: 1, highWaterBytes: 1 };
+const contains = (facts: Record<string, unknown>) =>
+  expect.arrayContaining([expect.objectContaining(facts)]);
 vi.mock("../../logging/subsystem.js", async () => {
   const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
     "../../logging/subsystem.js",
@@ -59,19 +62,24 @@ describe("SQLite post-commit history maintenance", () => {
     storePath = store;
   });
 
+  const historical = (name: string, content: string, updatedAt = Date.now()) =>
+    createHistoricalTranscript({
+      sessionKey: `agent:main:${name}`,
+      sessionId: `${name}-old`,
+      nextSessionId: `${name}-live`,
+      content,
+      updatedAt,
+    });
+  const enforce = () =>
+    enforceSqliteSessionHistoryDiskBudget({ storePath, mode: "enforce", maintenance });
+
   it
     .runIf(process.platform !== "win32")
     .for(["initial measurement", "publication writer"] as const)(
     "refuses a replaced physical store during %s",
     async (boundary, { signal }) => {
       const sessionId = "publication-source-old";
-      await createHistoricalTranscript({
-        sessionKey: "agent:main:publication-source",
-        sessionId,
-        nextSessionId: "publication-source-live",
-        content: "archive the original physical generation",
-        updatedAt: 1,
-      });
+      await historical("publication-source", "archive the original physical generation", 1);
       const owner = database();
       const replacementPath = testState.statePath("publication-replacement.sqlite");
       const replacement = openOpenClawAgentDatabase({
@@ -92,34 +100,24 @@ describe("SQLite post-commit history maintenance", () => {
       const entered = createDeferred();
       const release = createDeferred();
       const publish = archivePublication.publishSessionStateArchivesInWorker;
-      let paused = false;
+      const pause = async <T>(value: T) => {
+        entered.resolve();
+        await release.promise;
+        return value;
+      };
       const measure = diskBudget.measureSessionPhysicalDiskUsage;
-      const measurement = vi
-        .spyOn(diskBudget, "measureSessionPhysicalDiskUsage")
-        .mockImplementation(async (pathname) => {
-          const result = await measure(pathname);
-          if (!paused && boundary === "initial measurement") {
-            paused = true;
-            entered.resolve();
-            await release.promise;
-          }
-          return result;
-        });
-      const writer = vi
-        .spyOn(archivePublication, "publishSessionStateArchivesInWorker")
-        .mockImplementation(async (params) => {
-          if (!paused && boundary === "publication writer") {
-            paused = true;
-            entered.resolve();
-            await release.promise;
-          }
-          return publish(params);
-        });
-      const sweep = enforceSqliteSessionHistoryDiskBudget({
-        storePath,
-        mode: "enforce",
-        maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
-      });
+      const boundarySpy =
+        boundary === "initial measurement"
+          ? vi
+              .spyOn(diskBudget, "measureSessionPhysicalDiskUsage")
+              .mockImplementationOnce(async (pathname) => pause(await measure(pathname)))
+          : vi
+              .spyOn(archivePublication, "publishSessionStateArchivesInWorker")
+              .mockImplementationOnce(async (params) => {
+                await pause(undefined);
+                return publish(params);
+              });
+      const sweep = enforce();
       const heldPath = `${owner.path}.held`;
       let replaced = false;
       try {
@@ -140,8 +138,7 @@ describe("SQLite post-commit history maintenance", () => {
           fs.renameSync(owner.path, replacementPath);
           fs.renameSync(heldPath, owner.path);
         }
-        writer.mockRestore();
-        measurement.mockRestore();
+        boundarySpy.mockRestore();
       }
       expect(sessionExists(sessionId)).toBe(boundary === "initial measurement");
       expect(
@@ -167,13 +164,7 @@ describe("SQLite post-commit history maintenance", () => {
       const queueSpy = vi.spyOn(queue, "runQueuedStoreWrite");
       evictionWarnSpy.mockClear();
       for (const name of ["target", "unrelated"]) {
-        await createHistoricalTranscript({
-          sessionKey: `agent:main:${name}`,
-          sessionId: `${name}-old`,
-          nextSessionId: `${name}-live`,
-          content: "retained history".repeat(4096),
-          updatedAt: Date.now(),
-        });
+        await historical(name, "retained history".repeat(4096));
       }
       // Join setup's full sweep chain before pressure; only this lifecycle attempt may force it.
       await joinSessionHistoryBudgetSweeps(queueSpy);
@@ -181,9 +172,7 @@ describe("SQLite post-commit history maintenance", () => {
       const archive = path.join(tempDir, "retained.jsonl.deleted.2026-01-01T00-00-00.000Z");
       fs.writeFileSync(archive, Buffer.alloc(64 * 1024));
       await replaceConfigFile({
-        nextConfig: {
-          session: { maintenance: { mode: "enforce", maxDiskBytes: 1, highWaterBytes: 1 } },
-        },
+        nextConfig: { session: { maintenance } },
         afterWrite: { mode: "auto" },
       });
       const owner = database();
@@ -195,20 +184,16 @@ describe("SQLite post-commit history maintenance", () => {
       const assertActive = resolveAdmittedRunActiveAssertion(await admission.admit("embedded"))!;
       const target = { canonicalKey: sessionKey, storeKeys: [sessionKey] };
       if (phase === "rollback") {
-        const generation = owner.db
-          .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
-          .get("target-old") as { generation: string };
         // sqlite-allow-raw -- a conflicting canonical row reaches the Worker's connection.
         owner.db
           .prepare(
             `INSERT INTO session_transcript_archives (
                session_id, generation, session_key, reason, encoding, archive_blob,
                archive_sha256, archive_name, created_at, published_at
-             ) VALUES (?, ?, ?, 'deleted', 'identity', ?, ?, ?, 1, NULL)`,
+             ) SELECT session_id, generation, ?, 'deleted', 'identity', ?, ?, ?, 1, NULL
+               FROM transcript_rewrite_watermarks WHERE session_id = 'target-old'`,
           )
           .run(
-            "target-old",
-            generation.generation,
             sessionKey,
             Buffer.from("conflict"),
             "0".repeat(64),
@@ -273,28 +258,27 @@ describe("SQLite post-commit history maintenance", () => {
         expect.soft(checkpoint.mock.calls.length > 0).toBe(committed);
         const blockedCheckpoint = {
           state: "blocked",
-          readerDiagnostics: expect.arrayContaining([
-            expect.objectContaining({
-              connections: expect.arrayContaining([
-                expect.objectContaining({ operation: readerOperation, transactionOpen: true }),
-              ]),
-            }),
-          ]),
+          readerDiagnostics: contains({
+            connections: contains({ operation: readerOperation, transactionOpen: true }),
+          }),
+        };
+        const deferred = {
+          reason: "checkpoint-incomplete",
+          checkpoint: expect.objectContaining(blockedCheckpoint),
         };
         expect(await Promise.all(swept)).toEqual(
           committed
             ? [
                 expect.objectContaining({
-                  deferredReason: "checkpoint-incomplete",
+                  deferredReason: deferred.reason,
                   removedFiles: 0,
                   removedEntries: 0,
-                  checkpoint: expect.objectContaining(blockedCheckpoint),
+                  checkpoint: deferred.checkpoint,
                 }),
               ]
             : [],
         );
-        expect(fs.existsSync(archive)).toBe(true);
-        expect(sessionExists("unrelated-old")).toBe(true);
+        expect([fs.existsSync(archive), sessionExists("unrelated-old")]).toEqual([true, true]);
         if (committed) {
           await expect(checkpoint.mock.results[0]?.value).resolves.toMatchObject({
             completed: false,
@@ -303,27 +287,22 @@ describe("SQLite post-commit history maintenance", () => {
           });
           expect(evictionWarnSpy).toHaveBeenCalledWith(
             "session history disk budget deferred until a completed WAL checkpoint is observed",
-            expect.objectContaining({
-              reason: "checkpoint-incomplete",
-              checkpoint: expect.objectContaining(blockedCheckpoint),
-            }),
+            expect.objectContaining(deferred),
           );
         } else {
           expect(evictionWarnSpy).not.toHaveBeenCalled();
         }
         if (phase === "complete") {
           // The requested deletion is committed even while unrelated pressure cleanup is deferred.
-          expect(sessionExists("target-old")).toBe(false);
-          expect(sessionExists("target-live")).toBe(false);
+          expect([sessionExists("target-old"), sessionExists("target-live")]).toEqual([
+            false,
+            false,
+          ]);
         }
         reader.exec("ROLLBACK");
         if (committed) {
           expect(database().walMaintenance.checkpoint()).toBe(true);
-          const recovered = await enforceSqliteSessionHistoryDiskBudget({
-            storePath,
-            mode: "enforce",
-            maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
-          });
+          const recovered = await enforce();
           expect(recovered?.deferredReason).toBeUndefined();
           expect(recovered?.removedEntries).toBeGreaterThan(0);
         }
