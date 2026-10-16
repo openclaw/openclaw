@@ -8,6 +8,7 @@ import { readSqliteNativeMutationRevision } from "../sqlite-schema-facts.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
+  deferSqliteWorkerCommitReceipt,
   observeSqliteWorkerCommittedFacts,
   withSqliteWorkerOperationAdmission,
 } from "../sqlite-worker-operation-admission.js";
@@ -164,7 +165,7 @@ describe("PostgreSQL bridge request correlation", () => {
     expect(readSqliteDatabaseScopedWriteToken(fixture.db.anchor, "entry")).toBe(before);
   });
 
-  it.each(["read", "write", "rollback"] as const)(
+  it.each(["read", "write", "rollback", "inner-rollback"] as const)(
     "publishes worker receipts only for committed mutations (%s)",
     (mode) => {
       const fixture = transportFixture("normal");
@@ -177,6 +178,16 @@ describe("PostgreSQL bridge request correlation", () => {
             () => {
               fixture.command(mode === "read" ? "SELECT" : "INSERT");
               fixture.db.exec(mode === "read" ? "SELECT 1" : "INSERT INTO proof VALUES (7)");
+              if (mode === "inner-rollback") {
+                fixture.command("SAVEPOINT");
+                expect(() =>
+                  fixture.db.runTransaction(() => {
+                    deferSqliteWorkerCommitReceipt(fixture.db, { value: 7 });
+                    fixture.command("ROLLBACK");
+                    throw new Error("cancel inner receipt");
+                  }),
+                ).toThrow("cancel inner receipt");
+              }
               if (mode === "rollback") {
                 fixture.command("ROLLBACK");
                 throw new Error("cancel write");
@@ -197,7 +208,7 @@ describe("PostgreSQL bridge request correlation", () => {
           run();
         }
         admission.service();
-        expect(receipts).toEqual(mode === "write" ? [{}] : []);
+        expect(receipts).toEqual(mode === "write" || mode === "inner-rollback" ? [{}] : []);
       } finally {
         admission.finish();
       }
