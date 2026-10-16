@@ -361,7 +361,7 @@ describe("dreaming service reconciliation", () => {
         stateDir: ".",
         logger,
         scheduler: api.scheduler,
-        getCron: () => cron,
+        getCron: () => ({ ...cron, removeStaleJobFamily: async () => 0 }),
       });
 
       let stopped = false;

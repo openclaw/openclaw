@@ -845,6 +845,7 @@ describe("visitor-access plugin lifecycle", () => {
     await registered.stop();
     expect(authority?.signal.aborted).toBe(true);
     expect(signal.aborted).toBe(true);
+    await closeOpenClawStateDatabaseAsync();
     expect(vi.getTimerCount()).toBe(0);
     const callsAfterStop = fetcher.mock.calls.length;
     const result = await registered.execute("visitor_invite", { email: "late@example.test" });
