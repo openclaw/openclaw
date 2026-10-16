@@ -250,7 +250,7 @@ suite.define(() => {
         const hovercardModule = controlUiE2eBuiltModuleRequest(
           "ui/src/components/link-reader-hovercard.ts",
         );
-        await page.route(hovercardModule, (route) => route.abort());
+        await page.route(hovercardModule, (request) => request.abort());
         const gateway = await installMockGateway(page, {
           automaticallyFetchFavicons: true,
           historyMessages: route === "chat" ? historyMessages : [],

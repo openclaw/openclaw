@@ -12,11 +12,19 @@ const defaults: HovercardProperties = {
   claimedReaders: EMPTY_LINK_READERS,
 };
 
-export interface LinkReaderHovercardProvider extends HovercardProperties {}
-
 // This host owns behavior, not its caller's DOM. Lazy activation must not mount a
 // second renderer over the transcript and disturb the pointer that requested it.
-export class LinkReaderHovercardProvider extends HTMLElement implements HovercardMethods {
+export class LinkReaderHovercardProvider
+  extends HTMLElement
+  implements HovercardProperties, HovercardMethods
+{
+  declare client: HovercardProperties["client"];
+  declare agentId: HovercardProperties["agentId"];
+  declare sessionKey: HovercardProperties["sessionKey"];
+  declare readers: HovercardProperties["readers"];
+  declare previewSeeds: HovercardProperties["previewSeeds"];
+  declare pagePreviewContext: HovercardProperties["pagePreviewContext"];
+  declare claimedReaders: HovercardProperties["claimedReaders"];
   readonly #values = new Map<string, unknown>();
   readonly #owner: HovercardOwner;
   #initialized = false;
