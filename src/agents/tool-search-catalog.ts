@@ -41,7 +41,8 @@ const catalogMetadata = new WeakMap<
   { toolExecutionAllow?: readonly string[] }
 >();
 
-// Registration keeps entries id-sorted and unique, so equal catalogs match position by position.
+// Registered entries are immutable snapshots, so reuse compares live descriptors. Registration
+// keeps entries id-sorted and unique, so equal catalogs match position by position.
 function sameCatalogDescriptors(
   previous: readonly ToolSearchCatalogEntry[],
   next: readonly ToolSearchCatalogEntry[],
