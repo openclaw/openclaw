@@ -703,7 +703,7 @@ describe("agent event handler", () => {
         expect(progressFor(run.clientRunId)).toHaveLength(leadingFrames);
       }
       expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledTimes(runs.length);
-      vi.advanceTimersByTime(75);
+      vi.advanceTimersByTime(100);
       expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledTimes(runs.length * 2);
       for (const run of runs) {
         const progress = progressFor(run.clientRunId);
@@ -721,7 +721,7 @@ describe("agent event handler", () => {
       for (const run of runs) {
         expect(progressFor(run.clientRunId)).toHaveLength(leadingFrames * 2);
       }
-      vi.advanceTimersByTime(75);
+      vi.advanceTimersByTime(100);
       for (const run of runs) {
         const expected = run.chunks.join("");
         const progress = progressFor(run.clientRunId);
@@ -895,7 +895,7 @@ describe("agent event handler", () => {
         ["lifecycle", { phase: "end" }],
       ]);
       const abortedDeliveries = deliveredFor("client-candidate-abort");
-      vi.advanceTimersByTime(75);
+      vi.advanceTimersByTime(100);
       expect(deliveredFor("client-candidate-abort")).toEqual(abortedDeliveries);
       const sibling = deliveredFor("client-candidate-sibling");
       expect(sibling.findLast((payload) => payload.stream === "item")?.data).toEqual(
@@ -2566,7 +2566,7 @@ describe("agent event handler", () => {
         );
 
         releaseAgentRunContext(retiredRunId, retiredClaim);
-        vi.advanceTimersByTime(75);
+        vi.advanceTimersByTime(100);
 
         const delivered = agentBroadcastCalls(delivery).map(
           ([, payload]) => payload as AgentEventPayload,
@@ -2635,7 +2635,7 @@ describe("agent event handler", () => {
       currentClaim = claim();
       emitText("Fresh", "Fresh");
       await stop.drain();
-      vi.advanceTimersByTime(75);
+      vi.advanceTimersByTime(100);
 
       expect(h.targetedChat().map(([, payload]) => payload.message.content[0].text)).toEqual([
         "First",
@@ -2700,18 +2700,18 @@ describe("agent event handler", () => {
           registerAgentRunContext(runId, { sessionKey: "session-B" }, claimId);
         } else if (change === "subscriber removal") {
           h.sessionMessageSubscribers.unsubscribe("conn-A", "session-A");
-          vi.advanceTimersByTime(75);
+          vi.advanceTimersByTime(100);
           expect(h.targetedAgent()).toHaveLength(1);
           expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledTimes(1);
           h.sessionMessageSubscribers.subscribe("conn-replacement", "session-A");
         } else {
           h.sessionMessageSubscribers.unsubscribe("conn-A", "session-A");
           h.sessionMessageSubscribers.subscribe("conn-replacement", "session-A");
-          vi.advanceTimersByTime(75);
+          vi.advanceTimersByTime(100);
         }
         preview("New visible");
         await stop.drain();
-        vi.advanceTimersByTime(75);
+        vi.advanceTimersByTime(100);
 
         expect(
           h.targetedAgent().map(([, event, recipients]) => {

@@ -182,7 +182,10 @@ it("gives arriving text batches one fixed downstream window without delaying ter
   await emit(3, "assistant", { text: "ABC", delta: "C" });
   vi.advanceTimersByTime(20);
   await emit(4, "assistant", { text: "ABCD", delta: "D" });
-  vi.advanceTimersByTime(15);
+  vi.advanceTimersByTime(39);
+  expect(payloads(frames, "chat")).toHaveLength(1);
+  expect(payloads(frames, "agent")).toHaveLength(1);
+  vi.advanceTimersByTime(1);
   expect(payloads(frames, "chat")).toHaveLength(2);
   expect(payloads(frames, "agent")).toHaveLength(2);
   expect(chatDeltaText(frames)).toBe("ABCD");
@@ -232,7 +235,7 @@ it("restores the wire baseline when an anonymous snapshot invalidates retired ow
   });
   expect(payloads(frames, "chat").at(-1)).toMatchObject({ deltaText: "", replace: true });
   await emit(2, "assistant", { text: "Saved. More." });
-  vi.advanceTimersByTime(75);
+  vi.advanceTimersByTime(100);
   expect(payloads(frames, "chat").at(-1)).toMatchObject({
     deltaText: "Saved. More.",
   });
@@ -514,7 +517,7 @@ it("keeps unidentified third-party text live through unrelated commits", async (
     deltaText: replacement,
   });
   await emit(3, "assistant", { delta: " More." });
-  vi.advanceTimersByTime(75);
+  vi.advanceTimersByTime(100);
   expect(payloads(frames, "chat").at(-1)).toMatchObject({ deltaText: " More." });
   persist(3);
   expect(projectInFlightRunSnapshot({ chatRunState: harness.chatRunState, runId }).text).toBe(
@@ -552,7 +555,7 @@ it("replaces committed live text and preserves an indented tail for existing and
   ]);
   expect(harness.chatRunState.resolveBuffer("tail-run").text).toBe(tail);
   await emit(3, "assistant", { itemId: "tail", text: `${tail} More.`, delta: " More." });
-  vi.advanceTimersByTime(75);
+  vi.advanceTimersByTime(100);
   expect(payloads(frames, "chat").at(-1)).toMatchObject({ deltaText: " More." });
   expect(payloads(returning, "chat").at(-1)).toMatchObject({
     message: { content: [{ type: "text", text: `${tail} More.` }] },
@@ -901,7 +904,7 @@ it.each(["native", "dispatch", "abort", "retry", "clearRun", "clear"] as const)(
       text += delta;
       await emit(index * 2 + 1, "item", answerCandidate("answer", text));
       await emit(index * 2 + 2, "assistant", { text, delta });
-      vi.advanceTimersByTime(75);
+      vi.advanceTimersByTime(100);
     }
     // The existing producer pacing still delivers updates to nodes, but a
     // socket with an unfinished write must not retain every historical prefix.

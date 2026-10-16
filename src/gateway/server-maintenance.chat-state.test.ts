@@ -52,7 +52,7 @@ function seedStaleRunBuffers(deps: MaintenanceTimerDeps, runId: string): void {
   Object.assign(deps.chatRunState.getOrCreate(runId), {
     buffer: "buffer",
     rawBuffer: "buffer",
-    deltaSentAt: Date.now(),
+    sentChatDelta: true,
     assistantScope: { itemId: "assistant-1", prefix: "", boundaryNewlines: 0, separatorLength: 0 },
   });
   vi.setSystemTime(now);
@@ -63,7 +63,7 @@ function expectStaleRunBuffersPresent(deps: MaintenanceTimerDeps, runId: string)
     buffer: "buffer",
     rawBuffer: "buffer",
     display: expect.any(Object),
-    deltaSentAt: expect.any(Number),
+    sentChatDelta: true,
     assistantScope: { itemId: "assistant-1", prefix: "", boundaryNewlines: 0, separatorLength: 0 },
   });
 }
@@ -72,7 +72,7 @@ function expectStaleRunBuffersSwept(deps: MaintenanceTimerDeps, runId: string): 
   const run = deps.chatRunState.runs.get(runId);
   expect(run?.buffer).toBeUndefined();
   expect(run?.rawBuffer).toBeUndefined();
-  expect(run?.deltaSentAt).toBeUndefined();
+  expect(run?.sentChatDelta).toBeUndefined();
   expect(run?.assistantScope).toBeUndefined();
   expect(run?.display).toBeUndefined();
 }
@@ -116,7 +116,7 @@ describe("gateway chat-state maintenance", () => {
           data: { phase: "start", toolCallId: "read-1", name: "read" },
         });
       } else if (kind === "recent") {
-        deps.chatRunState.getOrCreate(runId).agentText = { thinking: { lastSentAt: Date.now() } };
+        deps.chatRunState.getOrCreate(runId).agentText = { thinking: { sent: true } };
       }
       vi.setSystemTime(now);
       if (kind === "recent") {
@@ -129,7 +129,7 @@ describe("gateway chat-state maintenance", () => {
         const assistant = deps.chatRunState.getOrCreate(runId).agentText?.assistant;
         expect(assistant).toBeDefined();
         if (assistant) {
-          assistant.lastSentAt = staleRunTimestamp();
+          assistant.sent = true;
         }
       }
       const timers = startGatewayMaintenanceTimers(deps);

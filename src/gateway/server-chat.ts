@@ -111,7 +111,7 @@ function shouldMirrorAssistantEventToHiddenSessionMessages(
   );
 }
 
-const LIVE_TEXT_PACING_MS = 75;
+const LIVE_TEXT_PACING_MS = 100;
 
 export type NodeSendToSession = (
   sessionKey: string,

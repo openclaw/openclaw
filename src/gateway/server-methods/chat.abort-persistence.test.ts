@@ -129,7 +129,7 @@ function bufferedContext(
       runs.map(([runId, , options]) => [runId, createActiveRun("main", { sessionId, ...options })]),
     ),
     chatRunState: createAbortTestRunState(
-      runs.map(([runId, buffer]) => [runId, { buffer, deltaSentAt: Date.now() }]),
+      runs.map(([runId, buffer]) => [runId, { buffer, sentChatDelta: true }]),
     ),
     ...overrides,
   });
@@ -447,7 +447,7 @@ describe("chat abort transcript persistence", () => {
     context.chatAbortControllers.set(runId, createActiveRun("main", { sessionId }));
     const retryRun = context.chatRunState.getOrCreate(runId);
     retryRun.buffer = "Partial from run abort";
-    retryRun.deltaSentAt = Date.now();
+    retryRun.sentChatDelta = true;
 
     await abort(context, { sessionKey: "main", runId }, respond);
 

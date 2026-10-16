@@ -379,7 +379,7 @@ export function registerBoundedWidgetSnapshotsTest({
     };
     const snapshot = async () => {
       await h.emit("run-widgets", "assistant", { text: `Widgets ready: ${seq}.` }, { seq: ++seq });
-      vi.advanceTimersByTime(75);
+      vi.advanceTimersByTime(100);
       return h
         .chat()
         .at(-1)?.[1]

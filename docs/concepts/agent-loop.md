@@ -258,7 +258,7 @@ and duration without waiting for retry grace.
 
 Live snapshots are scoped to their assistant message. A correction can shorten or clear the current preview without erasing earlier messages. Pending text is flushed before the terminal event; pacing live updates does not delay tool execution or transcript writes.
 
-The Gateway sends leading text immediately, then groups live text in a fixed 75 ms window starting with the first unsent update. Later appends join that window without extending it. This downstream cadence remains separate from model-stream batching; tool boundaries, corrections, and terminal events flush immediately.
+The Gateway sends leading text immediately, then groups live text in a fixed 100 ms window starting with the first unsent update. Later appends join that window without extending it. This downstream cadence remains separate from model-stream batching; tool boundaries, corrections, and terminal events flush immediately.
 
 Run-duration metadata belongs to the current run, including when preparation fails before the model starts. In Control UI completed-work rollups, independent sends have separate elapsed-time boundaries: a failed turn and the idle time before the next send are not part of that next turn's work. Steering remains associated with its target run rather than being treated as an independent retry.
 
