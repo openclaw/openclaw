@@ -6,6 +6,7 @@ import { prepareConfigRuntimeEnv } from "../config-env-vars.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { SessionStoreRegistryReadRequired } from "./session-sqlite-target.js";
+import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import {
   captureSessionStoreReadCandidates,
   prepareSessionStoreTargetInventory,
@@ -91,6 +92,26 @@ test("isolates detached inventory configs and explicit environments across calle
   expect(replacement.paths.get("main")?.configured).toBe(cfg.session!.store);
   expect(original.env.OPENCLAW_STATE_DIR).toBe(root);
   expect(replacement.env.OPENCLAW_STATE_DIR).toBe(path.join(root, "replacement-state"));
+});
+
+test("captures default-store custody before fixed-store recovery creates its directory", () => {
+  const root = tempDirs.make("session-inventory-admission-");
+  const request = prepareSessionStoreTargetInventory(
+    {
+      agents: { entries: { main: {} } },
+      session: { store: path.join(root, "shared.sqlite") },
+    },
+    ["main"],
+    { OPENCLAW_STATE_DIR: root },
+    "recovery",
+  );
+  const databasePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
+  // Admission creates the default database only after recovery captured its paths.
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  fs.writeFileSync(databasePath, "");
+  expect(assertSessionStoreReadCandidate(databasePath, request.candidates)).toBe(
+    fs.realpathSync.native(databasePath),
+  );
 });
 
 test("captures explicit environments afresh even for the active config", () => {

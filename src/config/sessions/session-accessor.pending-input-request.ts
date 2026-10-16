@@ -6,6 +6,7 @@ import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcri
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionPendingInputRow } from "./session-accessor.sqlite-pending-inputs.js";
 import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { SessionPendingInputConflictError } from "./session-pending-input-custody-error.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 function resolvePendingInputRequestHash(
@@ -102,7 +103,9 @@ export function resolveCommittedPendingInputRequestHash(
     // Consumption retired the raw receipt. The scoped transcript retains
     // the run-bound key and approved bytes, not the original request hash.
     if (candidate.idempotencyKey !== `${options.runId}:user`) {
-      throw new Error("Input completion retry conflicts with the accepted run");
+      throw new SessionPendingInputConflictError(
+        "Input completion retry conflicts with the accepted run",
+      );
     }
     const committedProvenance = committedMessage.provenance;
     const sourceSessionKey = committedProvenance?.sourceSessionKey;
@@ -135,7 +138,9 @@ export function resolveCommittedPendingInputRequestHash(
     sanitizeTranscriptMessageForStorage(prepared);
   const { timestamp: _committedTimestamp, ...stableCommitted } = committedMessage;
   if (stableStringify(stablePrepared) !== stableStringify(stableCommitted)) {
-    throw new Error("Input completion retry conflicts with the committed input");
+    throw new SessionPendingInputConflictError(
+      "Input completion retry conflicts with the committed input",
+    );
   }
   return candidate.requestHash;
 }

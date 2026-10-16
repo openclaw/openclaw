@@ -1,6 +1,7 @@
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -8,7 +9,15 @@ import {
 import type { SessionPendingInput } from "../config/sessions/session-pending-input.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
-import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
+import {
+  AgentDatabaseAdmissionError,
+  createAgentDatabaseInspectionRefusal,
+  failPendingAgentDatabase,
+  preparePendingAgentDatabase,
+  readAgentDatabaseAdmissionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
+import { withAgentDatabasePreparationContext } from "../state/agent-database-preparation-context.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test-support.js";
 import type { SessionSendDelivery } from "./session-send-delivery.js";
@@ -95,8 +104,8 @@ const input: SessionPendingInput = {
   },
 };
 const config: OpenClawConfig = {
-  agents: { entries: { main: {} } },
-  tools: { sessions: { visibility: "all" } },
+  agents: { entries: { main: {}, secondary: {} } },
+  tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
   session: { communication: { send: "always", receive: "always" } },
 };
 let sourceEntry: {
@@ -151,7 +160,68 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   clearRuntimeConfigSnapshot();
+  recordAgentDatabaseAdmissions([]);
 });
+
+it.each(["admitted", "failed", "cancelled"] as const)(
+  "rescans only pending stores when their admission owner settles: %s",
+  async (outcome) => {
+    const refusal = createAgentDatabaseInspectionRefusal({
+      agentId: "main",
+      paths: ["/fixture/sessions.json"],
+      reason: "Synthetic startup inspection",
+      pending: true,
+    });
+    recordAgentDatabaseAdmissions([refusal]);
+    io.discover.mockImplementation(async () =>
+      readAgentDatabaseAdmissionRefusal("main")
+        ? []
+        : [{ agentId: "main", storePath: "/fixture/sessions.json" }],
+    );
+    const joined = createDeferred();
+    const prepared = createDeferred();
+    const cancellation = controller();
+    const recovery = withAgentDatabasePreparationContext(
+      () => ({
+        waitForAgentPreparation: () => {
+          joined.resolve();
+          return prepared.promise;
+        },
+      }),
+      () => recoverSessionSendDeliveries(context, cancellation.signal),
+    );
+    try {
+      await Promise.race([joined.promise, recovery]);
+      expect(dispatch).not.toHaveBeenCalled();
+      if (outcome === "failed") {
+        failPendingAgentDatabase(refusal, new Error("Synthetic inspection failure"), {});
+      } else {
+        await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {});
+      }
+      if (outcome === "cancelled") {
+        cancellation.abort();
+      }
+      prepared.resolve();
+      if (outcome === "cancelled") {
+        await expect(recovery).rejects.toThrow();
+      } else {
+        await recovery;
+      }
+      if (outcome === "admitted") {
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(dispatch.mock.calls[0]![0].idempotencyKey).toBe(delivery.runId);
+        expect(io.discover.mock.calls[1]![0].agentIds).toEqual(new Set(["main"]));
+      } else {
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(io.discover).toHaveBeenCalledOnce();
+      }
+      expect(io.report).not.toHaveBeenCalled();
+    } finally {
+      prepared.resolve();
+      await recovery.catch(() => {});
+    }
+  },
+);
 
 it("retries transient admission with the saved input and delivery identity, in order", async () => {
   const next = {
@@ -338,6 +408,107 @@ it("retries discovery without losing the saved delivery", async () => {
   await Promise.all([recovery, vi.runAllTimersAsync()]);
   expect(dispatch).toHaveBeenCalledOnce();
   expect(io.report).not.toHaveBeenCalled();
+});
+
+it("waits for logical-agent admission in an already discovered shared store", async () => {
+  const refusal = createAgentDatabaseInspectionRefusal({
+    agentId: "secondary",
+    paths: ["/fixture/secondary.sqlite"],
+    reason: "Synthetic startup inspection",
+    pending: true,
+  });
+  recordAgentDatabaseAdmissions([refusal]);
+  io.discover.mockImplementation(async ({ agentIds }: { agentIds?: ReadonlySet<string> }) =>
+    !agentIds || agentIds.has("main")
+      ? [{ agentId: "main", storePath: "/fixture/shared.sqlite" }]
+      : [],
+  );
+  const sharedDelivery = {
+    ...delivery,
+    target: { ...delivery.target, agentId: "secondary", sessionKey: "agent:secondary:target" },
+  };
+  const sharedInput = {
+    ...input,
+    message: { ...input.message, __openclaw: { sessionSendDelivery: sharedDelivery } },
+  };
+  io.entries.mockResolvedValue([
+    { sessionKey: sharedDelivery.target.sessionKey, entry: targetEntry },
+  ]);
+  io.pending.mockResolvedValue({ items: [sharedInput], total: 1 });
+  io.source.mockResolvedValue({
+    snapshot: {
+      current: true,
+      pending: {
+        input_id: input.id,
+        state: "interrupted",
+        consumed_event_id: null,
+        message_json: JSON.stringify(sharedInput.message),
+      },
+    },
+    assertCurrent() {},
+  });
+  io.load.mockImplementation(async ({ key }: { key: string }) => {
+    const agentId = key === delivery.source.sessionKey ? "main" : "secondary";
+    if (readAgentDatabaseAdmissionRefusal(agentId)) {
+      throw new AgentDatabaseAdmissionError(refusal);
+    }
+    return {
+      agentId,
+      canonicalKey: key,
+      storePath: "/fixture/shared.sqlite",
+      store: { [key]: key === delivery.source.sessionKey ? sourceEntry : targetEntry },
+    };
+  });
+  const joined = createDeferred();
+  const prepared = createDeferred();
+  const recovery = withAgentDatabasePreparationContext(
+    () => ({
+      waitForAgentPreparation: () => {
+        joined.resolve();
+        return prepared.promise;
+      },
+    }),
+    () => recoverSessionSendDeliveries(context, controller().signal),
+  );
+  try {
+    await Promise.all([joined.promise, vi.runAllTimersAsync()]);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(io.report).not.toHaveBeenCalled();
+    await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {});
+    prepared.resolve();
+    await recovery;
+  } finally {
+    prepared.resolve();
+    await recovery.catch(() => {});
+  }
+  expect(dispatch).toHaveBeenCalledOnce();
+  expect(dispatch.mock.calls[0]![0]).toMatchObject({
+    agentId: "secondary",
+    sessionKey: "agent:secondary:target",
+    idempotencyKey: delivery.runId,
+  });
+  expect(io.report).not.toHaveBeenCalled();
+});
+
+it("retains changed-content conflicts with a typed reason and no retry", async () => {
+  dispatch.mockRejectedValue(
+    new GatewayClientRequestError({
+      code: "UNAVAILABLE",
+      message: "Input completion idempotency key conflicts with the accepted input",
+      details: { code: "SESSION_INPUT_IDEMPOTENCY_CONFLICT" },
+      retryable: false,
+    }),
+  );
+  await recoverSessionSendDeliveries(context, controller().signal);
+  expect(dispatch).toHaveBeenCalledOnce();
+  expect(io.report.mock.calls[0]![1].selectReport(undefined).details.inputs).toEqual([
+    {
+      inputId: input.id,
+      sourceSessionKey: delivery.source.sessionKey,
+      reason: "idempotency-conflict",
+      attempts: 1,
+    },
+  ]);
 });
 
 it.each([

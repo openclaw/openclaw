@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -100,6 +101,66 @@ describe("committed pending input release", () => {
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
   });
+
+  it.each([
+    { completion: false, consumed: false },
+    { completion: true, consumed: false },
+    { completion: true, consumed: true },
+  ])(
+    "reconciles saved JSON across restart (completion: $completion, consumed: $consumed)",
+    async ({ completion, consumed }) => {
+      const id = "saved-json";
+      const first = await stage(id, {
+        trackCompletion: true,
+        message: {
+          ...message(id),
+          __openclaw: {
+            transport: { clients: [{ id: "cli", mode: "cli", displayName: undefined }] },
+          },
+        },
+      });
+      if (consumed) {
+        await promote(first);
+      }
+      if (completion) {
+        await first.completeAsync!(
+          buildAgentRunTerminalOutcome({ status: "error", stopReason: "restart" }),
+        );
+      }
+      first.finish("interrupted");
+      await first.settled?.();
+      rotateAgentEventLifecycleGeneration();
+
+      await expect(
+        stage(id, {
+          trackCompletion: true,
+          message: { ...first.message, content: "Different input" },
+        }),
+      ).rejects.toThrow("conflicts");
+      const resumed = await stage(id, { trackCompletion: true, message: first.message });
+      await promote(resumed);
+      await resumed.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
+      resumed.finish("interrupted");
+      await resumed.settled?.();
+      rotateAgentEventLifecycleGeneration();
+
+      const settled = await stage(id, { trackCompletion: true, message: first.message });
+      expect(settled.state).toBe("consumed");
+      expect(settled.completion?.reason).toBe("completed");
+      expect(await listSessionPendingInputs(scope())).toEqual({ items: [], total: 0 });
+      const transcript = await loadTranscriptEvents(scope());
+      expect(
+        transcript.filter((event) => asOptionalRecord(event)?.type === "message"),
+      ).toHaveLength(1);
+      await expect(
+        stage(id, {
+          trackCompletion: true,
+          message: { ...first.message, content: "Different input" },
+        }),
+      ).rejects.toMatchObject({ code: "SESSION_INPUT_IDEMPOTENCY_CONFLICT" });
+      expect(await loadTranscriptEvents(scope())).toEqual(transcript);
+    },
+  );
 
   it.each([false, true])(
     "permits only exact committed persistence after custody closes (collected: %s)",

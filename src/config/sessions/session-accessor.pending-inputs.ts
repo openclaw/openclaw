@@ -50,7 +50,10 @@ import {
   withCurrentPendingInputAuthority,
   type SessionPendingInputAuthority,
 } from "./session-pending-input-authority.js";
-import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import {
+  SessionPendingInputConflictError,
+  SessionPendingInputCustodyError,
+} from "./session-pending-input-custody-error.js";
 import type { PendingInputCustodyGrant } from "./session-pending-input-operations.types.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
@@ -316,8 +319,34 @@ async function stagePreparedPendingInput(
     const replayRequest = resolvePendingInputReplayRequest(preparedRequest, previous ?? existing);
     const { message, stableMessage } = replayRequest;
     let requestHash = replayRequest.requestHash;
+    const accepted = previous ?? existing;
+    if (
+      accepted &&
+      accepted.run_id === options.runId &&
+      accepted.request_hash !== requestHash &&
+      !options.requestFingerprint &&
+      !accepted.request_hash.startsWith("request:")
+    ) {
+      // JSON persistence drops undefined properties that the original hash retained.
+      // Prove the whole saved payload before reusing that receipt's original hash.
+      let acceptedMessage =
+        existing?.message_json ?? (committed ? JSON.stringify(committed.message) : undefined);
+      if (!acceptedMessage && previous && isFinalInputCompletion(previous.outcome)) {
+        const source = await readPendingInputSource(scope, identity.idempotencyKey, false);
+        source?.assertCurrent();
+        await assertCurrent();
+        if (source?.snapshot.current && source.snapshot.committed) {
+          acceptedMessage = JSON.stringify(source.snapshot.committed);
+        }
+      }
+      if (acceptedMessage === JSON.stringify(message)) {
+        requestHash = accepted.request_hash;
+      }
+    }
     if (previous && (previous.request_hash !== requestHash || previous.run_id !== options.runId)) {
-      throw new Error("Input completion idempotency key conflicts with the accepted input");
+      throw new SessionPendingInputConflictError(
+        "Input completion idempotency key conflicts with the accepted input",
+      );
     }
     if (previous && isFinalInputCompletion(previous.outcome)) {
       return {
@@ -343,7 +372,9 @@ async function stagePreparedPendingInput(
         !matchesSessionPendingInputRequest(existing, stableMessage, requestHash) ||
         existing.run_id !== options.runId
       ) {
-        throw new Error("Pending input idempotency key conflicts with the accepted input");
+        throw new SessionPendingInputConflictError(
+          "Pending input idempotency key conflicts with the accepted input",
+        );
       }
       if (existing.consumed_event_id != null) {
         return {
@@ -485,7 +516,7 @@ async function stagePreparedPendingInput(
         if (!committedHash) {
           return undefined;
         }
-        requestHash = committedHash;
+        requestHash = accepted?.request_hash ?? committedHash;
         await assertCurrent();
       }
       retained = true;

@@ -1,3 +1,5 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
 import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import { discoverRestartRecoveryStoreTargets } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import type { AgentToolGatewayRequestCaller } from "../agents/tools/in-process-gateway.js";
@@ -7,10 +9,12 @@ import {
 } from "../agents/tools/sessions-send-communication.js";
 import { appendSessionTranscriptReport } from "../config/sessions/session-accessor.js";
 import { readPendingInputRecoveryEntriesInWorker } from "../config/sessions/session-entry-read-maintenance.js";
+import { SessionPendingInputConflictError } from "../config/sessions/session-pending-input-custody-error.js";
 import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
 import { readPendingInputSource } from "../config/sessions/session-pending-input-source.js";
 import type { SessionPendingInput } from "../config/sessions/session-pending-input.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
@@ -19,7 +23,13 @@ import { getRetryAttemptErrors } from "../infra/retry-attempt-errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import type { CommunicationEndpoint } from "../sessions/communication-admission.js";
-import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  AgentDatabaseAdmissionError,
+  listAgentDatabaseAdmissionRefusals,
+  readAgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
+import { waitForAgentDatabasePreparation } from "../state/agent-database-preparation-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -46,11 +56,41 @@ export async function recoverSessionSendDeliveries(
   context: GatewayRequestContext,
   signal: AbortSignal,
 ): Promise<void> {
+  if (!context.recoveryRuntime) {
+    return;
+  }
+  const config = context.getRuntimeConfig();
+  const pendingAgents = listAgentDatabaseAdmissionRefusals()
+    .filter((refusal) => refusal.code === "agent-database-inspection-pending")
+    .map((refusal) => refusal.agentId);
+  await recoverSessionSendDeliveriesForAgents(context, config, signal);
+  // Join the existing startup owner; discovery omits stores still awaiting admission.
+  const rescans = await Promise.allSettled(
+    pendingAgents.map(async (agentId) => {
+      await waitForAgentDatabasePreparation(agentId, { signal });
+      signal.throwIfAborted();
+      if (!readAgentDatabaseAdmissionRefusal(agentId)) {
+        await recoverSessionSendDeliveriesForAgents(context, config, signal, new Set([agentId]));
+      }
+    }),
+  );
+  for (const result of rescans) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+  }
+}
+
+async function recoverSessionSendDeliveriesForAgents(
+  context: GatewayRequestContext,
+  config: OpenClawConfig,
+  signal: AbortSignal,
+  agentIds?: ReadonlySet<string>,
+): Promise<void> {
   const runtime = context.recoveryRuntime;
   if (!runtime) {
     return;
   }
-  const config = context.getRuntimeConfig();
   const assertCurrent = () => {
     signal.throwIfAborted();
     if (context.getRuntimeConfig() !== config) {
@@ -83,6 +123,7 @@ export async function recoverSessionSendDeliveries(
   const targets = await retry(() =>
     discoverRestartRecoveryStoreTargets({
       cfg: config,
+      agentIds,
       shouldContinue: () => !signal.aborted,
     }),
   );
@@ -93,6 +134,7 @@ export async function recoverSessionSendDeliveries(
     for (const { sessionKey, entry } of entries) {
       const scope = {
         ...target,
+        agentId: parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
         sessionKey,
         sessionId: entry.sessionId,
         expectedLifecycleRevision: entry.lifecycleRevision,
@@ -115,6 +157,7 @@ export async function recoverSessionSendDeliveries(
           | "permission-denied"
           | "transient-admission"
           | "store-unavailable"
+          | "idempotency-conflict"
           | "unknown";
         attempts: number;
       }[] = [];
@@ -128,6 +171,16 @@ export async function recoverSessionSendDeliveries(
         try {
           await retry(async () => {
             attempts++;
+            // A shared store can be readable while an endpoint's logical agent is still pending.
+            for (const agentId of new Set([delivery.source.agentId, delivery.target.agentId])) {
+              if (
+                readAgentDatabaseAdmissionRefusal(agentId)?.code ===
+                "agent-database-inspection-pending"
+              ) {
+                await waitForAgentDatabasePreparation(agentId, { signal });
+                assertCurrent();
+              }
+            }
             let communication:
               | Awaited<ReturnType<typeof prepareSessionsSendCommunication>>
               | undefined;
@@ -162,7 +215,7 @@ export async function recoverSessionSendDeliveries(
               if (
                 destination.sessionKey !== sessionKey ||
                 destination.entry?.sessionId !== entry.sessionId ||
-                destination.agentId !== target.agentId
+                destination.agentId !== scope.agentId
               ) {
                 throw new SessionSendEndpointChangedError(
                   "Session delivery target does not own this input",
@@ -248,10 +301,15 @@ export async function recoverSessionSendDeliveries(
                   ? "permission-denied"
                   : isTransient(error)
                     ? "transient-admission"
-                    : error instanceof SessionStoreUnavailableError ||
-                        error instanceof AgentDatabaseAdmissionError
-                      ? "store-unavailable"
-                      : "unknown",
+                    : error instanceof SessionPendingInputConflictError ||
+                        (error instanceof GatewayProtocolRequestError &&
+                          asOptionalRecord(error.details)?.code ===
+                            "SESSION_INPUT_IDEMPOTENCY_CONFLICT")
+                      ? "idempotency-conflict"
+                      : error instanceof SessionStoreUnavailableError ||
+                          error instanceof AgentDatabaseAdmissionError
+                        ? "store-unavailable"
+                        : "unknown",
             attempts,
           });
           const causes = [
@@ -276,6 +334,7 @@ export async function recoverSessionSendDeliveries(
                 "permission-denied": "current session permissions do not allow automatic delivery",
                 "transient-admission": `the Gateway was still unavailable after ${attempts} automatic attempts`,
                 "store-unavailable": "session storage was unavailable",
+                "idempotency-conflict": "the delivery key belongs to different input",
                 unknown: "delivery failed",
               }[reason];
               return `- From ${sourceSessionKey}: ${description}.`;

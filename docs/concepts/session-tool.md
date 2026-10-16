@@ -267,13 +267,19 @@ saved input. After an unexpected shutdown or update restart, startup re-admits
 only unconsumed inputs whose exact source and target sessions still exist and
 whose current communication policies and visibility permit delivery. It reuses
 the original input identity, preserving per-target order and consumption
-deduplication; it does not rerun the sender's task. Cancellation, reset, archival,
+deduplication; it does not rerun the sender's task. An identical saved input
+reuses its accepted receipt, and a completed input returns its recorded outcome
+without another delivery or recovery notice. Reusing the key for different input
+remains a blocked identity conflict. Shared storage does not change the logical
+agent that owns the destination session. Cancellation, reset, archival,
 revoked access, or a policy requiring fresh approval prevents automatic recovery.
+If background database inspection delays admission, recovery waits for that
+inspection and revisits the affected stores after they become available.
 Inputs saved by older versions without delivery ownership remain available for
 inspection, not automatic retry. In history, `queued` means an input has current
 custody, not that the model is executing it; an input that remains `interrupted`
 is saved but is not being retried. A display-only notice distinguishes changed
-sessions, denied communication, and unavailable admission without feeding those
+sessions, conflicting input identities, denied communication, and unavailable admission without feeding those
 diagnostics back to the model. Task continuations and steering retain their
 separate lifecycle owners.
 

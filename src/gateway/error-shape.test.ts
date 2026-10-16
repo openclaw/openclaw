@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
+import { SessionPendingInputConflictError } from "../config/sessions/session-pending-input-custody-error.js";
 import { IncognitoSessionEndedError } from "../state/incognito-session-error.js";
 import { errorShapeFromError } from "./error-shape.js";
 
@@ -16,5 +17,17 @@ it("reports ended incognito sessions as typed nonretryable client failures throu
     message: ended.message,
     retryable: false,
     details: { code: "INCOGNITO_SESSION_ENDED" },
+  });
+});
+
+it("preserves an input identity conflict through a cleanup wrapper", () => {
+  const conflict = new SessionPendingInputConflictError("Input identity conflicts");
+  expect(
+    errorShapeFromError(ErrorCodes.UNAVAILABLE, new AggregateError([conflict]), {
+      retryable: true,
+    }),
+  ).toMatchObject({
+    retryable: false,
+    details: { code: conflict.code },
   });
 });

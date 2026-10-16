@@ -1,5 +1,6 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { SessionPendingInputConflictError } from "../config/sessions/session-pending-input-custody-error.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import {
@@ -15,17 +16,20 @@ export function errorShapeFromError(
   opts?: Parameters<typeof errorShape>[2] & { message?: string },
 ) {
   const { message, ...metadata } = opts ?? {};
-  const ended = collectNestedErrorCandidates(error).find(
-    (candidate) => candidate instanceof IncognitoSessionEndedError,
+  const refusal = collectNestedErrorCandidates(error).find(
+    (candidate) =>
+      candidate instanceof IncognitoSessionEndedError ||
+      candidate instanceof SessionPendingInputConflictError,
   );
   const shape =
     error instanceof AgentDatabaseAdmissionError
       ? createAgentDatabaseAdmissionErrorShape(error.refusal)
-      : ended instanceof IncognitoSessionEndedError
-        ? errorShape(ErrorCodes.UNAVAILABLE, ended.message, {
+      : refusal instanceof IncognitoSessionEndedError ||
+          refusal instanceof SessionPendingInputConflictError
+        ? errorShape(ErrorCodes.UNAVAILABLE, refusal.message, {
             ...metadata,
             retryable: false,
-            details: { code: ended.code },
+            details: { code: refusal.code },
           })
         : errorShape(code, message ?? formatErrorMessageWithCode(error), metadata);
   copyErrorDiagnostic(error, shape);

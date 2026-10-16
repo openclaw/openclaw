@@ -374,7 +374,10 @@ export function prepareSessionStoreTargetInventory(
   const logicalPaths = new Set(
     agentIds.flatMap((agentId) => {
       const captured = paths.get(agentId)!;
-      return perAgent ? [captured.configured, captured.default] : [captured.configured];
+      // Startup admission may create a configured agent's default store after capture.
+      return perAgent || selection === "recovery"
+        ? [captured.configured, captured.default]
+        : [captured.configured];
     }),
   );
   if (perAgent && retired.size > 0) {

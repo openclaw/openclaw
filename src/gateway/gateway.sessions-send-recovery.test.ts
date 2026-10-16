@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { createServer } from "node:http";
 import { expect, it, vi } from "vitest";
 import type { ChatPendingInputsPage } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -10,21 +11,26 @@ import {
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 // Real public sessions_send, real provider socket, cold Gateway process restart.
-// The provider deliberately holds only the first target turn before restart.
-it(
-  "recovers accepted peer updates once, in order, without reviving withdrawn authority",
+// A logical secondary agent shares the physical main store throughout recovery.
+it.for(["managed", "SIGTERM", "SIGKILL"] as const)(
+  "recovers accepted peer updates after %s once, in order, without reviving withdrawn authority",
   { timeout: 240_000 },
-  async (test) => {
+  async (mode, test) => {
     await runQaGatewayTestFixture(test, async ({ signal, verifyCleanup }) => {
       const observed: string[] = [];
       const accepted = new Map<string, string>();
       const requests: string[] = [];
-      const target = "agent:main:dashboard:peer-target";
+      const attempted: string[] = [];
+      const target = "agent:secondary:dashboard:peer-target";
       let hold = true;
       let held = false;
+      let holdRecovery = mode === "SIGKILL";
+      let recoveryHeld = false;
       const providerServer = createServer((request, response) => {
         void (async () => {
           const chunks: Buffer[] = [];
@@ -113,12 +119,17 @@ it(
             held = true;
             return;
           }
-          const marker = text
-            .match(/PEER_UPDATE_[0-9]+|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE/gu)
-            ?.at(-1);
-          if (marker) {
-            observed.push(marker);
+          // Orphan repair can carry the interrupted input into the next prompt.
+          const markers: string[] =
+            text.match(
+              /PEER_UPDATE_[0-9]+|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE/gu,
+            ) ?? [];
+          attempted.push(...markers);
+          if (holdRecovery && markers.includes("PEER_UPDATE_1")) {
+            recoveryHeld = true;
+            return;
           }
+          observed.push(...markers);
           writeOpenAiResponsesText(response, {
             text: "RECEIVED",
             messageId: randomUUID(),
@@ -205,8 +216,9 @@ it(
                 },
               },
             },
-            entries: { main: {} },
+            entries: { main: {}, secondary: {} },
           },
+          session: { store: gateway.state.path("shared-sessions.sqlite") },
           models: {
             mode: "replace",
             providers: {
@@ -218,23 +230,28 @@ it(
             codeMode: false,
             toolSearch: false,
             sessions: { visibility: "all" },
+            agentToAgent: { enabled: true },
           },
           plugins: { slots: { memory: "none" } },
         } satisfies OpenClawConfig;
         await gateway.state.writeConfig(config);
         await gateway.startGateway();
         client = await connect();
-        for (const key of [target, source, resetSource, revokedSource]) {
+        for (const key of [source, resetSource, revokedSource, target]) {
           await client.request(
             "sessions.create",
-            { key, agentId: "main", communication: { send: "always", receive: "always" } },
+            {
+              key,
+              agentId: key === target ? "secondary" : "main",
+              communication: { send: "always", receive: "always" },
+            },
             { signal },
           );
         }
         await client.request(
           "agent",
           {
-            agentId: "main",
+            agentId: "secondary",
             sessionKey: target,
             message: "HOLD_TARGET",
             deliver: false,
@@ -284,15 +301,38 @@ it(
           { signal },
         );
         const firstPid = gateway.child?.pid;
-        await client.stopAndWait();
-        client = undefined;
-        // Kill only the isolated process: no graceful cleanup can manufacture persistence.
-        expect(gateway.child?.kill("SIGKILL")).toBe(true);
-        await gateway.stopGateway();
+        const restart = async (kind: typeof mode) => {
+          const child = gateway.child;
+          if (!child?.pid) {
+            throw new Error("Owned Gateway process unavailable");
+          }
+          await client?.stopAndWait();
+          client = undefined;
+          const closed = once(child, "close", { signal });
+          if (kind === "managed") {
+            expect(
+              writeGatewayRestartIntentSync({
+                env: gateway.env,
+                targetPid: child.pid,
+                intent: { reason: "gateway.restart", force: true, waitMs: 100 },
+              }),
+            ).toBe(true);
+          }
+          expect(child.kill(kind === "SIGKILL" ? "SIGKILL" : "SIGTERM")).toBe(true);
+          await closed;
+          await gateway.startGateway();
+          expect(gateway.child?.pid).not.toBe(child.pid);
+          client = await connect();
+        };
         hold = false;
-        await gateway.startGateway();
+        await restart(mode);
         expect(gateway.child?.pid).not.toBe(firstPid);
-        client = await connect();
+        if (mode === "SIGKILL") {
+          await vi.waitFor(() => expect(recoveryHeld).toBe(true), { timeout: 30_000 });
+          // The successor accepted the input but has not completed its provider turn.
+          holdRecovery = false;
+          await restart("SIGKILL");
+        }
         await vi.waitFor(
           () =>
             expect(observed).toEqual([
@@ -304,17 +344,31 @@ it(
             ]),
           { timeout: 60_000, interval: 200 },
         );
-        const after = await client.request<{ pendingInputs: ChatPendingInputsPage }>(
-          "chat.history",
-          { sessionKey: target },
-          { signal },
-        );
         // Explicit cancellation withdraws the row from display; the two blocked
         // source deliveries remain inspectable and were not sent to the model.
-        expect(after.pendingInputs.items.map((item) => item.state)).toEqual([
-          "interrupted",
-          "interrupted",
-        ]);
+        const after = await vi.waitFor(
+          async () => {
+            const history = await client!.request<{ pendingInputs: ChatPendingInputsPage }>(
+              "chat.history",
+              { sessionKey: target },
+              { signal },
+            );
+            expect(history.pendingInputs.items.map((item) => item.state)).toEqual([
+              "interrupted",
+              "interrupted",
+            ]);
+            const sessions = await client!.request<SessionsListResult>(
+              "sessions.list",
+              { agentId: "secondary" },
+              { signal },
+            );
+            expect(sessions.sessions.find((session) => session.key === target)).toMatchObject({
+              hasActiveRun: false,
+            });
+            return history;
+          },
+          { timeout: 30_000 },
+        );
         expect(after.pendingInputs.items.map((item) => item.runId)).toEqual([
           accepted.get("RESET_SOURCE_UPDATE"),
           accepted.get("REVOKED_UPDATE"),
@@ -345,7 +399,16 @@ it(
           "current session permissions do not allow automatic delivery",
         );
         expect(JSON.stringify(finalHistory)).toContain("session was reset, archived, or replaced");
+        expect(JSON.stringify(finalHistory)).not.toContain(`- From ${source}:`);
         expect(observed).toEqual([
+          "PEER_UPDATE_1",
+          "PEER_UPDATE_2",
+          "PEER_UPDATE_3",
+          "PEER_UPDATE_4",
+          "PEER_UPDATE_5",
+        ]);
+        expect(attempted).toEqual([
+          ...(mode === "SIGKILL" ? ["PEER_UPDATE_1"] : []),
           "PEER_UPDATE_1",
           "PEER_UPDATE_2",
           "PEER_UPDATE_3",
@@ -355,6 +418,7 @@ it(
         console.info(
           JSON.stringify({
             proof: "peer-input-recovery",
+            mode,
             firstPid,
             finalPid: gateway.child?.pid,
             observed,
