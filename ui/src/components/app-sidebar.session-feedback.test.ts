@@ -225,7 +225,7 @@ describe("sidebar session feedback", () => {
     { mode: "roster", filter: "owner:profile-ada", failure: false },
     { mode: "roster", filter: "owner:profile-ada", failure: true },
   ] as const)(
-    "explains only settled empty $mode filters ($filter, failure=$failure)",
+    "limits settled empty-session feedback to session mode ($mode, $filter, failure=$failure)",
     async ({ mode, filter, failure }) => {
       const { sidebar, context, result, sessions } = await mountRoster(undefined, []);
       await useSidebarMode(sidebar, context, mode);
@@ -242,7 +242,8 @@ describe("sidebar session feedback", () => {
         await selectFilter(sidebar, "status:active");
       }
       await selectFilter(sidebar, filter);
-      await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent?.includes(hint)).toBe(mode === "chip");
       if (failure) {
         const pending = createDeferred<never>();
         sessions.list.mockImplementation(async () => await pending.promise);
@@ -267,7 +268,8 @@ describe("sidebar session feedback", () => {
           expect(sidebar.textContent).not.toContain(hint);
         }
         await selectFilter(sidebar, "status:active");
-        await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
+        await settleLitElement(sidebar);
+        expect(sidebar.textContent?.includes(hint)).toBe(mode === "chip");
         if (mode === "roster") {
           result.hasMore = true;
           await rosterActivityStore(context).refresh();
