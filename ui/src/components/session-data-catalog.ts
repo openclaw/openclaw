@@ -9,7 +9,6 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
-import type { SolidControllerHost } from "../lib/reactive/solid-controller-host.ts";
 import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import {
   buildCatalogSessionKey,
@@ -19,7 +18,6 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   refreshSessionCatalogsLive,
   SessionCatalogLiveState,
-  sessionCatalogListClient,
 } from "./app-sidebar-session-catalog-live.ts";
 import {
   excludeSessionCatalogRows,
@@ -42,7 +40,7 @@ import {
 } from "./panel-refresh-status.ts";
 import type { ContextualSidebar } from "./sidebar-context-state.ts";
 
-export interface SessionDataControllerHost extends SolidControllerHost {
+export interface SessionDataInputs {
   readonly isConnected: boolean;
   readonly connected: boolean;
   readonly navigationVisible: boolean;
@@ -55,7 +53,7 @@ export interface SessionDataControllerHost extends SolidControllerHost {
   samePresence(previous: PresencePayload | undefined, next: PresencePayload | undefined): boolean;
   getRouteSessionKey(): string;
   childSessionParents(): Set<string>;
-  readonly sessionDataContext: ApplicationContext | undefined;
+  readonly sessionDataContext: ApplicationContext;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;
   promoteCreatedSession(sessionKey: string): void;
@@ -63,13 +61,11 @@ export interface SessionDataControllerHost extends SolidControllerHost {
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
   sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
   sessionCatalogIdsWithoutVisibleRows(): readonly string[];
-  querySelector(selectors: string): Element | null;
 }
 
 export interface SessionCatalogDataOwner {
   readonly context: ApplicationContext | undefined;
   readonly isSessionDataHostConnected: boolean;
-  readonly sessionDataHostConnected: boolean;
   readonly sessionCatalogRowsVisible: boolean;
   sessionCatalogs: SessionCatalog[];
   sessionCatalogRefreshStatus: PanelRefreshStatus;
@@ -144,7 +140,7 @@ function visibleSessionCatalogClient(owner: SessionCatalogDataOwner): GatewayBro
   if (document.visibilityState === "hidden") {
     return null;
   }
-  return sessionCatalogListClient(owner.context?.gateway.snapshot, owner.sessionDataHostConnected);
+  return owner.sessionCatalogGatewayClient();
 }
 
 function refreshSessionCatalogsInBackground(owner: SessionCatalogDataOwner): Promise<void> {
@@ -216,13 +212,12 @@ export function scheduleSessionCatalogRefresh(owner: SessionCatalogDataOwner): v
 }
 
 function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): Promise<void> {
-  const snapshot = owner.context?.gateway.snapshot;
   return owner.sessionCatalogLive.requestRefresh({
     visible: document.visibilityState !== "hidden",
     connected:
       owner.isSessionDataHostConnected &&
       owner.sessionCatalogAgentId !== null &&
-      Boolean(sessionCatalogListClient(snapshot, owner.sessionDataHostConnected)),
+      Boolean(owner.sessionCatalogGatewayClient()),
     generation: owner.sessionScopeGeneration,
     refresh: () => refreshSessionCatalogsInBackground(owner),
   });
@@ -388,12 +383,7 @@ export async function loadMoreSessionCatalog(
   }
   const client = owner.sessionCatalogGatewayClient();
   const agentId = resolveSessionCatalogAgentId(owner);
-  if (
-    !client ||
-    !owner.sessionDataHostConnected ||
-    !agentId ||
-    agentId !== owner.sessionCatalogAgentId
-  ) {
+  if (!client || !agentId || agentId !== owner.sessionCatalogAgentId) {
     return;
   }
   const generation = owner.sessionScopeGeneration;

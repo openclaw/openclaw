@@ -1747,7 +1747,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/session-management.mutation-scope.e2e.test.ts",
     ["chat"],
-    [...sessionMenuOwnerRoots, "ui/src/components/session-data-controller.ts"],
+    [...sessionMenuOwnerRoots, "ui/src/components/session-data.ts"],
   ),
   pageWatch("ui/src/e2e/session-management.new-group.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(

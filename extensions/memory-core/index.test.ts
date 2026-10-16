@@ -79,6 +79,26 @@ function registerMemoryCoreRuntime(): MemoryPluginRuntime {
   return runtime;
 }
 
+// Captures only the prompt builder, which stays registered when memory tools are disabled.
+function captureMemoryPromptBuilder(config: OpenClawConfig) {
+  let promptBuilder:
+    | NonNullable<Parameters<OpenClawPluginApi["registerMemoryCapability"]>[0]["promptBuilder"]>
+    | undefined;
+  plugin.register(
+    createTestPluginApi({
+      config,
+      runtime: hostRuntimeWithConfig(() => config),
+      registerMemoryCapability(capability) {
+        promptBuilder = capability.promptBuilder;
+      },
+    }),
+  );
+  if (!promptBuilder) {
+    throw new Error("expected memory prompt builder");
+  }
+  return promptBuilder;
+}
+
 function captureMemoryModelContract(initialConfig: OpenClawConfig) {
   let promptBuilder:
     | NonNullable<Parameters<OpenClawPluginApi["registerMemoryCapability"]>[0]["promptBuilder"]>
@@ -136,6 +156,37 @@ describe("buildPromptSection", () => {
       promptBuilder({ availableTools: new Set(["memory_search", "memory_get"]), agentId: "main" }),
     ).toContain("## Memory Recall");
     expect(systemAgentReads).toBe(0);
+  });
+
+  it("adds project write guidance only for safe host project keys", () => {
+    const { promptBuilder } = captureMemoryModelContract({ agents: { entries: { main: {} } } });
+    const prompt = (projectKey?: string) =>
+      promptBuilder({
+        availableTools: new Set(["memory_search"]),
+        agentId: "main",
+        projectKey,
+      }).join("\n");
+
+    expect(prompt("github.com/OpenClaw/OpenClaw")).toContain(
+      "<!-- project: github.com/OpenClaw/OpenClaw -->",
+    );
+    for (const projectKey of [undefined, "path:/tmp/unsafe-->note", "path:/tmp/a\nb"]) {
+      expect(prompt(projectKey)).not.toContain("<!-- project:");
+    }
+  });
+
+  // Curated writes use file tools, so disabling search must not drop the guidance.
+  it("keeps project write guidance when memory search is disabled", () => {
+    const prompt = captureMemoryPromptBuilder({
+      memory: { search: { enabled: false } },
+      agents: { entries: { main: {} } },
+    } as OpenClawConfig)({
+      availableTools: new Set(["memory_search", "memory_get"]),
+      agentId: "main",
+      projectKey: "github.com/OpenClaw/OpenClaw",
+    });
+
+    expect(prompt.join("\n")).toContain("<!-- project: github.com/OpenClaw/OpenClaw -->");
   });
 
   it("describes the two-step flow when both memory tools are available", () => {
