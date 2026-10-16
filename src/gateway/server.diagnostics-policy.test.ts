@@ -1,5 +1,6 @@
 import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
+import { totalmem } from "node:os";
 import { expect, it, vi } from "vitest";
 import {
   areDiagnosticsEnabledForProcess,
@@ -9,6 +10,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import type { GatewaySchedulerClock } from "../infra/gateway-scheduler.js";
 import * as workerCpu from "../infra/worker-cpu.js";
+import * as workerMessages from "../infra/worker-message-metrics.js";
 import { createOwnedWorkerTaskPool } from "../infra/worker-task-pool.js";
 import type {
   PoolFixtureInput,
@@ -113,15 +115,17 @@ it("owns diagnostic dispatch and heartbeat across initial disable, enable, disab
     const activeWorker = workers.find((worker) => worker !== idleWorker)!;
     const idleExit = once(idleWorker, "exit");
     const readMemoryUsage = process.memoryUsage;
+    const criticalRss = totalmem();
     // Inject counters, not allocations; retirement still crosses the real scheduler and Worker.
     Object.assign(
       vi.spyOn(process, "memoryUsage").mockImplementation(() => ({
         ...readMemoryUsage(),
-        rss: 64 * 1024 ** 3,
+        rss: criticalRss,
       })),
-      { rss: () => readMemoryUsage.rss() },
+      { rss: () => criticalRss },
     );
     const workerSamples = vi.spyOn(workerCpu, "sampleTrackedWorkerMemory");
+    const workerMessageSamples = vi.spyOn(workerMessages, "getWorkerMessageMetrics");
     const events: string[] = [];
     unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
     const tick = async () => {
@@ -133,6 +137,7 @@ it("owns diagnostic dispatch and heartbeat across initial disable, enable, disab
     expect(pressureSamples).toHaveBeenCalledTimes(1);
     expect(events).toEqual([]);
     expect(workerSamples).not.toHaveBeenCalled();
+    expect(workerMessageSamples).not.toHaveBeenCalled();
     await idleExit;
     expect(idleWorker.threadId).toBe(-1);
     expect(activeWorker.threadId).toBeGreaterThan(0);
@@ -158,6 +163,7 @@ it("owns diagnostic dispatch and heartbeat across initial disable, enable, disab
     expect(events.filter((event) => event === "diagnostic.heartbeat")).toHaveLength(1);
     expect(pressureSamples).toHaveBeenCalledTimes(3);
     expect(workerSamples).toHaveBeenCalledTimes(1);
+    expect(workerMessageSamples).toHaveBeenCalledTimes(1);
 
     kernel.configureDiagnostics({ diagnostics: { enabled: false } });
     await tick();
@@ -165,6 +171,7 @@ it("owns diagnostic dispatch and heartbeat across initial disable, enable, disab
     expect(events.filter((event) => event === "diagnostic.heartbeat")).toHaveLength(1);
     expect(pressureSamples).toHaveBeenCalledTimes(4);
     expect(workerSamples).toHaveBeenCalledTimes(1);
+    expect(workerMessageSamples).toHaveBeenCalledTimes(1);
 
     kernel.configureDiagnostics({});
     await tick();
