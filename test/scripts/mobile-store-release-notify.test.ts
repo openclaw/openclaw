@@ -217,7 +217,7 @@ describe("scheduled mobile store release notifications", () => {
         redirect: "error",
         abortable: true,
         body: {
-          content: `✅ **PASS — ${platform} Store Release**\n${detail}\n[**View run ↗**](https://github.com/openclaw/openclaw/actions/runs/123/attempts/1)`,
+          content: `✅ **${platform} release uploaded successfully**\n${detail}\n[**View run ↗**](https://github.com/openclaw/openclaw/actions/runs/123/attempts/1)`,
           flags: 4,
           allowed_mentions: { parse: [] },
         },
@@ -263,7 +263,9 @@ describe("scheduled mobile store release notifications", () => {
       `https://api.github.com${path}`,
       `https://api.github.com${path.replace("&page=1", "&page=2")}`,
     ]);
-    expect(result.posts[0]?.body?.content).toContain("✅ **PASS — iOS Store Release · Attempt 2**");
+    expect(result.posts[0]?.body?.content).toContain(
+      "✅ **iOS release uploaded successfully · Attempt 2**",
+    );
     expect(result.posts[0]?.body?.content).toContain("/attempts/2)");
   });
 
@@ -293,7 +295,7 @@ describe("scheduled mobile store release notifications", () => {
       });
       expect(result.status, result.output).toBe(0);
       expect(result.posts[0]?.body?.content).toContain(
-        `❌ **FAIL — iOS Store Release**\n${reason} Store acceptance is unconfirmed.`,
+        `⚠️ **iOS release needs attention**\n${reason} Store acceptance is unconfirmed.`,
       );
       expect(result.posts[0]?.body?.flags).toBe(4);
     },
@@ -319,7 +321,7 @@ describe("scheduled mobile store release notifications", () => {
     ({ jobs, detail }) => {
       const result = evaluate({ jobs });
       expect(result.posts[0]?.body?.content).toContain(
-        `❌ **FAIL — iOS Store Release**\n${detail}`,
+        `⚠️ **iOS release needs attention**\n${detail}`,
       );
     },
   );
@@ -375,7 +377,7 @@ describe("scheduled mobile store release notifications", () => {
     expect(result.status, result.output).toBe(0);
     expect(result.waits).toEqual([1_000, 2_000]);
     expect(result.posts[0]?.body?.content).toContain(
-      "❌ **FAIL — iOS Store Release**\nRelease job details could not be retrieved.",
+      "⚠️ **iOS release needs attention**\nRelease job details could not be retrieved.",
     );
     expect(result.output).not.toContain(webhook);
   });

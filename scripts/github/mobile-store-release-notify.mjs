@@ -220,7 +220,7 @@ async function main() {
   const { passed, detail } = releaseResult(run, jobs, release.platform);
   const attempt = run.run_attempt > 1 ? ` · Attempt ${run.run_attempt}` : "";
   const content = [
-    `${passed ? "✅ **PASS" : "❌ **FAIL"} — ${release.platform} Store Release${attempt}**`,
+    `${passed ? "✅" : "⚠️"} **${release.platform} release ${passed ? "uploaded successfully" : "needs attention"}${attempt}**`,
     detail,
     `[**View run ↗**](https://github.com/${repository}/actions/runs/${run.id}/attempts/${run.run_attempt})`,
   ].join("\n");

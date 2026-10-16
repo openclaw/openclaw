@@ -225,12 +225,14 @@ existing `ios-store-release` and `android-store-release` environments and their
 credentials; environment approval rules still apply.
 
 **Mobile Store Release Notifications** observes completed weekly attempts and
-posts one short PASS/FAIL message per platform with the run link. Manual store
+posts one short status message per platform with the run link. Successful runs
+say **iOS release uploaded successfully** or **Android release uploaded successfully**;
+other outcomes say **iOS release needs attention** or **Android release needs attention**. Manual store
 releases, daily distributions, and screenshot-only runs stay silent. A rerun
-posts its own result with the attempt number. PASS requires a successful run
+posts its own result with the attempt number. Reporting success requires a successful run
 and a successful upload job and step; it does not mean the app is publicly
 available. Cancellation, timeout, skipped releases, and unconfirmed outcomes
-report FAIL. Details come from job/step metadata, never raw logs. If the combined
+report that the release needs attention. Details come from job/step metadata, never raw logs. If the combined
 preparation/upload command fails, store acceptance is unconfirmed; the notifier
 does not infer whether an inner upload completed.
 
