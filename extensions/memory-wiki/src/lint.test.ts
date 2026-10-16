@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { describe, expect, it, vi } from "vitest";
+import * as compiler from "./compile.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import {
   renderWikiMarkdown,
@@ -518,6 +519,54 @@ describe("lintMemoryWikiVault", () => {
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain(
       "Frontmatter failed to parse: Unexpected scalar",
     );
+  });
+
+  it("preserves report notes when the lint writer cannot read the existing report", async () => {
+    const { rootDir, config } = await createVault();
+    const reportPath = path.join(rootDir, "reports", "lint.md");
+    await fs.mkdir(path.dirname(reportPath), { recursive: true });
+    const original = renderWikiMarkdown({
+      frontmatter: { pageType: "report", id: "report.lint", title: "Lint Report" },
+      body: "# Lint Report\n\n## Notes\nHuman notes must survive a failed read.\n",
+    });
+    await fs.writeFile(reportPath, original, "utf8");
+    const originalBytes = await fs.readFile(reportPath);
+    const readError = Object.assign(new Error("injected report read failure"), { code: "EACCES" });
+    const readFile = fs.readFile;
+    const compile = compiler.compileMemoryWikiVault;
+    let compiled = false;
+    let injected = false;
+    const readSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(
+        async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
+          if (compiled && args[0] === reportPath) {
+            injected = true;
+            throw readError;
+          }
+          return readFile(...args);
+        },
+      );
+    const compileSpy = vi
+      .spyOn(compiler, "compileMemoryWikiVault")
+      .mockImplementationOnce(async (...args) => {
+        const result = await compile(...args);
+        compiled = true;
+        return result;
+      });
+    let failure: unknown;
+    try {
+      await lintMemoryWikiVault(config);
+    } catch (error) {
+      failure = error;
+    } finally {
+      readSpy.mockRestore();
+      compileSpy.mockRestore();
+    }
+
+    expect(injected).toBe(true);
+    expect(failure).toBe(readError);
+    expect(await fs.readFile(reportPath)).toEqual(originalBytes);
   });
 
   it("keeps the previous lint report when atomic publication fails", async () => {

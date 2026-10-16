@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
@@ -23,6 +24,7 @@ import {
   type WikiPageSummary,
 } from "./markdown.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
+import { readExistingWikiPage } from "./vault-page-write.js";
 
 const LINT_ISSUE_KINDS = {
   "invalid-frontmatter": ["error", "structure"],
@@ -355,19 +357,20 @@ async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): 
   const directoryPath = path.dirname(reportPath);
   await fs.mkdir(directoryPath, { recursive: true });
   const dirMode = (await fs.stat(directoryPath)).mode & 0o7777;
-  const originalBytes = await fs.readFile(reportPath).catch(() => null);
-  const original =
-    originalBytes === null
-      ? renderWikiMarkdown({
-          frontmatter: {
-            pageType: "report",
-            id: "report.lint",
-            title: "Lint Report",
-            status: "active",
-          },
-          body: "# Lint Report\n",
-        })
-      : decodeWikiPageUtf8(originalBytes, reportPath);
+  const original = await readExistingWikiPage(
+    async () => decodeWikiPageUtf8(await fs.readFile(reportPath), reportPath),
+    (error) => extractErrorCode(error) === "ENOENT",
+    () =>
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "report",
+          id: "report.lint",
+          title: "Lint Report",
+          status: "active",
+        },
+        body: "# Lint Report\n",
+      }),
+  );
   // The lint report is itself a wiki page. Keep its metadata fail-closed before
   // replacing the managed body so malformed frontmatter is never rewritten.
   parseWikiMarkdown(original);
