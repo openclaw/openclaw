@@ -2599,7 +2599,6 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "expireStagingAndLoadDeliveryQueueEntriesInDatabase",
-          "expireStagingAndLoadDeliveryQueueEntriesInDatabase.read",
           "countFailedDeliveryQueueEntriesInDatabase",
           "inspectDeliveryQueueReceiptInDatabase",
         ],
