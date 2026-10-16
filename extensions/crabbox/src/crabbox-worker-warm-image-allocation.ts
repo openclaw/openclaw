@@ -1,5 +1,4 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   buildCrabboxAllocationArgs,
   type resolveCrabboxProvisionProfile,
@@ -7,7 +6,7 @@ import {
 import { runProvisionWarmup } from "./crabbox-worker-provision-commands.js";
 import {
   type CheckpointContext,
-  type createCheckpointCommands,
+  checkpointCommand,
   parseForkedCheckpoint,
 } from "./crabbox-worker-warm-image-checkpoint.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
@@ -47,23 +46,19 @@ type AllocationOwner = NonNullable<Awaited<ReturnType<Store["lookupLease"]>>>;
 
 export function createCrabboxWarmImageAllocation({
   state,
-  runCommand,
   lookupLease,
   selectAllocation,
   openStore,
-  checkpointCommand,
   policy,
   assertCurrent,
 }: {
   state: CrabboxState;
-  runCommand: CrabboxCommandRunner;
   lookupLease: Store["lookupLease"];
   selectAllocation: (
     context: AllocationContext,
     profile: AllocationContext["profile"] & { class: string },
   ) => Promise<AllocationOwner>;
   openStore: () => Store;
-  checkpointCommand: ReturnType<typeof createCheckpointCommands>["checkpointCommand"];
   policy: CrabboxWarmImagePolicy;
   assertCurrent: (context: CheckpointContext) => void;
 }) {
@@ -147,10 +142,7 @@ export function createCrabboxWarmImageAllocation({
       context.reportStartStatus?.(startStatus);
     }
     assertCurrent(context);
-    await runProvisionWarmup({
-      ...context,
-      runCommand,
-    });
+    await runProvisionWarmup(context);
     return { kind: "cold" };
   };
 }

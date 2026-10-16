@@ -22,7 +22,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
-it("releases prompt payloads while completed attempts' review callbacks remain reachable", () => {
+it("releases prompt payloads while completed attempts' resource owners remain reachable", () => {
   class PromptPayload extends Set<string> {}
   let sequence = 0;
   const createRetainedReview = (release: boolean) => {
@@ -31,10 +31,10 @@ it("releases prompt payloads while completed attempts' review callbacks remain r
     lease.state.removedRuntimeContextKeys = new PromptPayload(["runtime-context"]);
     owner.resources.promptStateLease = lease;
     if (release) {
-      owner.releaseReview();
+      owner.takeForCleanup();
     }
     lease[Symbol.dispose]();
-    return owner.reviewTranscript;
+    return owner;
   };
   const callbacks = [createRetainedReview(false)];
   try {
@@ -44,7 +44,7 @@ it("releases prompt payloads while completed attempts' review callbacks remain r
     }
     callbacks.shift();
     expect(queryObjects(PromptPayload)).toBe(0);
-    expect(callbacks.every((review) => review() === undefined)).toBe(true);
+    expect(callbacks.every((owner) => owner.reviewTranscript() === undefined)).toBe(true);
   } finally {
     callbacks.length = 0;
   }

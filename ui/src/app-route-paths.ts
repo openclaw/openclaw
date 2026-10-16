@@ -104,7 +104,7 @@ const APP_ROUTE_DEFINITIONS = {
 export type RouteId = keyof typeof APP_ROUTE_DEFINITIONS;
 // SAFETY: Object.keys returns only the own keys of this closed route catalog.
 export const APP_ROUTE_IDS = Object.keys(APP_ROUTE_DEFINITIONS) as RouteId[];
-const APP_ROUTE_PATHS: string[] = [];
+export const APP_ROUTE_PATHS: string[] = [];
 const ROUTE_ID_BY_PATH = new Map<string, RouteId>();
 // Static paths and aliases share one prepared index; earlier declarations keep priority.
 for (const routeId of APP_ROUTE_IDS) {
@@ -447,6 +447,12 @@ const DYNAMIC_ROUTE_PATH_PARAMS = {
   chat: INTERNAL_SESSION_PATH_PARAM,
   dashboard: INTERNAL_SESSION_PATH_PARAM,
 } as const;
+
+// These namespaces belong to app documents. /plugins also owns Gateway HTTP
+// routes, so offline admission there stays limited to its exact catalog root.
+export const APP_ROUTE_OFFLINE_PREFIXES = APP_ROUTE_IDS.filter(
+  (routeId) => routeId !== "plugins" && Object.hasOwn(DYNAMIC_ROUTE_PATH_PARAMS, routeId),
+).map((routeId) => `${pathForRoute(routeId)}/`);
 
 const DYNAMIC_ROUTE_MATCHERS = [
   ["terminal", terminalSessionIdFromPath],

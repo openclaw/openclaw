@@ -7,6 +7,7 @@ import { slugifySessionKey } from "../agents/sandbox/shared.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
   createSandboxMediaContexts,
+  createSandboxWorkspacePreparation,
   createSandboxMediaStageConfig,
   withSandboxMediaTempHome,
 } from "./stage-sandbox-media.test-harness.js";
@@ -21,7 +22,12 @@ const mediaRootMocks = vi.hoisted(() => ({
   resolveChannelRemoteInboundAttachmentRoots: vi.fn(),
 }));
 
-vi.mock("../agents/sandbox.js", () => sandboxMocks);
+// mock-isolation: SCP source-policy cases own synthetic sandbox and cache directories.
+vi.mock("../agents/sandbox.js", () => ({
+  ...sandboxMocks,
+  prepareSandboxWorkspaceForSession: async (...args: unknown[]) =>
+    createSandboxWorkspacePreparation(await sandboxMocks.ensureSandboxWorkspaceForSession(...args)),
+}));
 vi.mock("../media/channel-inbound-roots.js", () => mediaRootMocks);
 vi.mock("../process/exec.js", async () => {
   const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");

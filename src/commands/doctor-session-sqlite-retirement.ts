@@ -16,7 +16,6 @@ import {
 import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
   hasSymbolicLinkInDirectoryPath,
-  readSessionSqliteMigrationManifest,
   writeSessionSqliteMigrationManifest,
   type ActiveSessionSqliteMigrationRun,
   type SessionSqliteMigrationTargetInput,
@@ -274,24 +273,24 @@ export async function retireSessionSqliteRecovery(params: {
       ) {
         throw new Error("Recovery selection changed during confirmation; preview again.");
       }
-      for (const refs of references.values()) {
-        for (const ref of refs) {
-          if (
-            JSON.stringify(readSessionSqliteMigrationManifest(ref.run.manifestPath)) !==
-            JSON.stringify(ref.run.manifest)
-          ) {
-            throw new Error("Recovery manifest changed during confirmation; preview again.");
-          }
-          if (
-            !(rechecked.references.get(ref.move.archivePath) ?? []).some(
-              (current) =>
-                current.trusted === ref.trusted &&
-                current.target.storePath === ref.target.storePath &&
-                current.target.sqlitePath === ref.target.sqlitePath,
-            )
-          ) {
-            throw new Error("Recovery target changed during confirmation; preview again.");
-          }
+      const manifests = (refs: typeof references) =>
+        new Map([...refs.values()].flat().map(({ run }) => [run.manifestPath, run.manifest]));
+      const currentManifests = manifests(rechecked.references);
+      for (const [manifestPath, manifest] of manifests(references)) {
+        if (JSON.stringify(currentManifests.get(manifestPath)) !== JSON.stringify(manifest)) {
+          throw new Error("Recovery manifest changed during confirmation; preview again.");
+        }
+      }
+      for (const ref of [...references.values()].flat()) {
+        if (
+          !(rechecked.references.get(ref.move.archivePath) ?? []).some(
+            (current) =>
+              current.trusted === ref.trusted &&
+              current.target.storePath === ref.target.storePath &&
+              current.target.sqlitePath === ref.target.sqlitePath,
+          )
+        ) {
+          throw new Error("Recovery target changed during confirmation; preview again.");
         }
       }
       await assertStateWriteAllowed(report.stateDir);

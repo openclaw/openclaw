@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logDecisionToolPrefilter } from "../../../decisions/diagnostics.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
@@ -7,6 +8,15 @@ import {
   applyResolvedToolPromptFinalizer,
   createPromptBuildToolPolicy,
 } from "./attempt-prompt-support.js";
+
+// mock-isolation: Observe policy facts without creating the process-global logger or warning budget.
+vi.mock("../../../decisions/diagnostics.js", () => ({
+  logDecisionToolPrefilter: vi.fn(),
+}));
+
+beforeEach(() => {
+  vi.mocked(logDecisionToolPrefilter).mockClear();
+});
 
 function catalogEntry(
   name: string,
@@ -87,6 +97,7 @@ describe("applyPromptBuildToolsAllow", () => {
       // A subsequent hook revision may use the new full host baseline, never the old generation.
       policy.apply(["write"]);
       expect(catalogRef.current!.entries.map((entry) => entry.tool)).toEqual([freshWrite]);
+      expect(logDecisionToolPrefilter).not.toHaveBeenCalled();
     },
   );
 
@@ -128,6 +139,11 @@ describe("applyPromptBuildToolsAllow", () => {
       let current = true;
       policy.apply(["read"], () => current);
       expect(policy.current.tools.map((t) => t.name)).toEqual(["message"]);
+      expect(logDecisionToolPrefilter).toHaveBeenCalledExactlyOnceWith({
+        effect: "applied",
+        modelFacingToolsBefore: mode === "structured" ? 3 : 2,
+        modelFacingToolsAfter: 1,
+      });
       // A permission publication installs a new baseline while the optional cap is active.
       const freshRead = { name: "read", generation: "new" };
       const freshMessage = { name: "message", generation: "new" };
@@ -146,6 +162,11 @@ describe("applyPromptBuildToolsAllow", () => {
       const prepare = vi.fn(async () => {});
       await policy.prepareForDispatch(prepare);
       expect(prepare).toHaveBeenCalledOnce();
+      expect(logDecisionToolPrefilter).toHaveBeenLastCalledWith({
+        effect: "restored",
+        modelFacingToolsBefore: 1,
+        modelFacingToolsAfter: 2,
+      });
       expect(policy.current.tools).toEqual([freshRead, freshMessage]);
       expect(policy.current.callableToolNames).toContain("read");
       expect(policy.current.callableToolNames).not.toContain("write");
@@ -156,6 +177,7 @@ describe("applyPromptBuildToolsAllow", () => {
       }
       expect(policy.prepareForDispatch(prepare)).toBeUndefined();
       expect(prepare).toHaveBeenCalledOnce();
+      expect(logDecisionToolPrefilter).toHaveBeenCalledTimes(2);
     },
   );
 

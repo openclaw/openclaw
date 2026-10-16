@@ -23,6 +23,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
 import { applyCanonicalOwnerEvidence } from "./doctor-session-canonical-owner-evidence.js";
 
 export type CanonicalSessionCandidate = {
@@ -172,6 +173,7 @@ export function collectCanonicalSessionRepairGroups(
   stores: readonly ExistingAgentDatabaseTarget[],
 ): CanonicalSessionRepairGroup[] {
   const candidates = collectCanonicalSessionCandidateFacts(params, stores);
+  const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
   const byCanonicalKey = new Map<string, CanonicalSessionCandidateFact[]>();
   for (const candidate of candidates) {
     const sentinelOwner =
@@ -198,14 +200,14 @@ export function collectCanonicalSessionRepairGroups(
           candidate.inventoryFact.rawCompareRequired ||
           candidate.lineageRepairRequired ||
           candidate.sessionKey !== candidate.canonicalKey ||
-          candidate.sqlitePath !== destination.sqlitePath,
+          !isSameDatabasePath(candidate.sqlitePath, destination.sqlitePath),
       );
     if (!repairRequired) {
       return [];
     }
     const canonicalRowSurvives = group.some(
       (candidate) =>
-        candidate.sqlitePath === destination.sqlitePath &&
+        isSameDatabasePath(candidate.sqlitePath, destination.sqlitePath) &&
         candidate.sessionKey === candidate.canonicalKey,
     );
     return [{ candidates: group, removedRows: group.length - (canonicalRowSurvives ? 1 : 0) }];

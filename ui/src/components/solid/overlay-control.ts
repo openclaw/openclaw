@@ -21,6 +21,16 @@ export function useOverlayControl(
   const owner = getOwner();
   const lazy = untrack(() => props.lazy);
   let disposeBody: (() => void) | undefined;
+  const mountBody = () => {
+    if (lazy && renderBody && !disposeBody) {
+      runWithOwner(owner, () => {
+        disposeBody = createRoot((dispose) => {
+          insert(overlay.surface, renderBody());
+          return dispose;
+        });
+      });
+    }
+  };
   const clearBody = () => {
     if (disposeBody) {
       disposeBody();
@@ -60,12 +70,7 @@ export function useOverlayControl(
         }
         if (lazy && renderBody && !disposeBody && !event.defaultPrevented) {
           // Admission and initial keyboard focus need the body synchronously.
-          runWithOwner(owner, () => {
-            disposeBody = createRoot((dispose) => {
-              insert(overlay.surface, renderBody());
-              return dispose;
-            });
-          });
+          mountBody();
           queueMicrotask(() => {
             if (!overlay.open && lazy === "while-open") {
               clearBody();
@@ -102,5 +107,5 @@ export function useOverlayControl(
       stopHidden?.();
     };
   };
-  return { connect, bodyMounted: () => Boolean(disposeBody) };
+  return { connect, mountBody, bodyMounted: () => Boolean(disposeBody) };
 }

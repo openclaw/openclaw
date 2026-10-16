@@ -264,6 +264,18 @@ transaction. SQLite retains its existing shadow-file publication. Memory search
 on PostgreSQL remains refused until its search and forget/status lifecycle is
 enabled together; this foundation does not change the support matrix above.
 
+The internal memory search worker supports the admitted PostgreSQL projections
+for conformance testing. Vector queries filter model aliases, sources, and any
+candidate IDs before exact cosine ordering and the result limit. Keyword queries
+use native full-text ranking, or literal contains predicates for the configured
+trigram tokenizer. Only bounded result payloads cross into JavaScript. Hybrid
+merging keeps the existing default weights of 0.7 vector and 0.3 text; PostgreSQL
+text scores remain engine-local and are not calibrated to SQLite BM25. A
+keyword-only store needs no vector extension; requesting semantic search without
+an admitted vector capability raises `DATABASE_SEARCH_CAPABILITY_UNAVAILABLE`.
+This internal entry requires explicit test activation and does not enable public
+PostgreSQL memory search.
+
 Full text uses a named `simple` plus `unaccent` configuration, a stored generated
 `tsvector`, and GIN. Queries bind literal terms and compile conjunctions,
 disjunctions, adjacent phrases, and final-lexeme prefixes. User text is never
@@ -273,7 +285,8 @@ from SQLite BM25. Tokenization also differs for punctuation, compound words, and
 Unicode. Snippets use `ts_headline` only after a materialized, bounded candidate
 selection, with a word budget of 2–48, a character cap of 500, and empty highlight markers. Trigram
 contains uses its own GIN index and escaped literal `ILIKE`; it is not a universal
-fallback for full-text queries.
+fallback for full-text queries. Trigram matches rank by native `word_similarity`
+before the result limit; multi-term memory queries average their term scores.
 
 Semantic search uses exact float32 `vector(n)` cosine distance, with model and
 source eligibility in the same query before ordering and limit. The canonical

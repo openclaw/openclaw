@@ -10,6 +10,7 @@ import {
   mountRouterOutlet,
   settleRouterOutlet,
 } from "./router-outlet.test-support.tsx";
+import { retryControlUiImport } from "./stale-chunk-reload.ts";
 
 type RouteId = "first" | "second";
 type TestContext = { label: string };
@@ -36,6 +37,54 @@ afterEach(() => {
 });
 
 describe("router outlet pending presentation", () => {
+  it("retains the page and destination through an offline import, then retries without reloading", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn().mockRejectedValue(new TypeError("VPN unavailable"));
+    vi.stubGlobal("fetch", fetch);
+    const load = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch dynamically imported module"))
+      .mockResolvedValue(module("second"));
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "first",
+          path: "/first",
+          component: () => module("first"),
+          loader: () => ({ label: "first" }),
+        }),
+        definePage({
+          id: "second",
+          path: "/second",
+          component: () => retryControlUiImport(load),
+          loader: () => ({ label: "second" }),
+        }),
+      ],
+    });
+    onTestFinished(() => {
+      router.stop();
+      vi.unstubAllGlobals();
+    });
+    const outlet = mountRouterOutlet({ router });
+    await router.navigate("first", { label: "test" });
+    await settleRouterOutlet(outlet);
+    const first = outlet.querySelector('[data-route="first"]');
+    const navigation = router.navigate("second", { label: "test" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await settleRouterOutlet(outlet);
+    expect(outlet.querySelector('[data-route="first"]')).toBe(first);
+    expect(router.getState().pendingMatches[0]?.routeId).toBe("second");
+    expect(load).toHaveBeenCalledOnce();
+    fetch.mockResolvedValue(new Response(null, { status: 200 }));
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    await navigation;
+    await settleRouterOutlet(outlet);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(outlet.querySelector('[data-route="second"]')?.textContent).toBe("second");
+    expect(outlet.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("keeps the previous page through a cold navigation and updates the loaded destination", async () => {
     vi.useFakeTimers();
     const secondModule = createDeferredCore<TestModule>();

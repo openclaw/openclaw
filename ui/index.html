@@ -477,8 +477,9 @@
             recoveryNavigation =
               Number.isInteger(count) && count >= 1 && count <= maxRecoveryNavigations ? count : 1;
           }
-          if (recoveryNavigation) {
+          if (recoveryNavigation || initialUrl.searchParams.has("openclaw_http_auth")) {
             initialUrl.searchParams.delete("openclaw_mount_recovery");
+            initialUrl.searchParams.delete("openclaw_http_auth");
             window.history.replaceState(null, "", initialUrl.href);
           }
         } catch (e) {}
@@ -514,22 +515,6 @@
           scheduleRecovery();
         }
 
-        function unregisterServiceWorkers() {
-          if (!navigator.serviceWorker?.getRegistrations) return;
-          // Recovery must not depend on a possibly broken worker. Navigations bypass it,
-          // so a reload can self-heal after the registrations are removed.
-          void navigator.serviceWorker
-            .getRegistrations()
-            .then(function (registrations) {
-              return Promise.all(
-                registrations.map(function (registration) {
-                  return registration.unregister();
-                }),
-              );
-            })
-            .catch(function () {});
-        }
-
         function retryCurrentDocument() {
           if (bootSettled || recoveryController || typeof window.fetch !== "function") return;
           var documentUrl = new URL(window.location.href);
@@ -559,7 +544,7 @@
             })
             .catch(function () {
               if (recoveryController !== controller) return;
-              unregisterServiceWorkers();
+              // Network failure says nothing about worker health. Keep offline recovery.
               finishRecoveryAttempt();
             })
             .finally(function () {
@@ -641,7 +626,6 @@
         if (retry) {
           retry.addEventListener("click", function () {
             cancelRecovery();
-            unregisterServiceWorkers();
             window.location.reload();
           });
         }

@@ -477,6 +477,7 @@ suite.define(() => {
     const basePath = "/openclaw";
     const { page } = await openThemedChat("absolutely", "dark", { basePath });
     const requested: string[] = [];
+    const fontRequests: URL[] = [];
     // The preview server does not stamp Gateway HTML. Reproduce the actual
     // document contract, rather than letting runtime repair a wrong boot URL.
     await page.route("**/*", async (route) => {
@@ -501,8 +502,7 @@ suite.define(() => {
       await route.fulfill({ response: await route.fetch({ url: url.href }) });
     });
     await page.route(`**${basePath}/fonts/**`, async (route) => {
-      const { pathname } = new URL(route.request().url());
-      requested.push(pathname);
+      fontRequests.push(new URL(route.request().url()));
       await route.fulfill({ status: 404, body: "", contentType: "text/css" });
     });
 
@@ -511,18 +511,19 @@ suite.define(() => {
       .locator(".agent-chat__composer-combobox textarea")
       .waitFor({ state: "visible", timeout: 30_000 });
 
-    const linkHref = await page.evaluate(
-      () =>
-        document.getElementById("openclaw-typeface-space-grotesk")?.getAttribute("href") ?? null,
-    );
-
     const buildId = await page.locator("html").getAttribute("data-openclaw-control-ui-build-id");
     if (buildId !== null) {
       expect(buildId).not.toBe("");
     }
-    const fontUrl = new URL(linkHref ?? "", suite.server.baseUrl);
-    expect(fontUrl.pathname).toBe(`${basePath}/fonts/space-grotesk.css`);
-    expect(fontUrl.searchParams.get("v")).toBe(buildId);
+    // Failed optional stylesheets are removed so another selection can retry.
+    // The actual request still has to carry the mount prefix and build identity.
+    await expect
+      .poll(() => fontRequests.some((url) => url.pathname.endsWith("/space-grotesk.css")))
+      .toBe(true);
+    const fontUrl = fontRequests.find((url) => url.pathname.endsWith("/space-grotesk.css"));
+    expect(fontUrl?.pathname).toBe(`${basePath}/fonts/space-grotesk.css`);
+    expect(fontUrl?.searchParams.get("v")).toBe(buildId);
+    await expect.poll(() => page.locator("#openclaw-typeface-space-grotesk").count()).toBe(0);
     // The palette link is built in the first-paint script from the mount prefix
     // the gateway stamps on <html>, so it has to follow the mount too.
     const paletteHref = await page.evaluate(
@@ -538,7 +539,5 @@ suite.define(() => {
         getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
       ),
     ).toBe("#1c1c1a");
-    // The browser must actually fetch below the mount, not at the root.
-    await expect.poll(() => requested).toContain(`${basePath}/fonts/space-grotesk.css`);
   });
 });

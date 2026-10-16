@@ -21,6 +21,7 @@ describe("model catalog normalization", () => {
       ],
       contextWindowDefault: "1m",
       contextTokens: 200000,
+      parameterCount: 70_000_000_000,
       maxTokens: 128000,
       thinkingLevelMap: { off: null, minimal: "low", max: "max" },
       cost: {

@@ -60,18 +60,13 @@ export function McpServersCard(props: McpServersCardProps) {
     subscribe: (source, notify) => source.subscribe(notify),
     equality: "revision",
   });
-  // Admission reads the same synchronous presentation state that the view projects.
-  const state: { busy: boolean; message: McpServerMessage | null; formOpen: boolean } = {
-    busy: false,
-    message: null,
-    formOpen: false,
-  };
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const invalidate = () => setRevision((value) => value + 1);
-  const view = () => {
-    revision();
-    return state;
-  };
+  const [view, setView] = createSignal<{
+    busy: boolean;
+    message: McpServerMessage | null;
+    formOpen: boolean;
+  }>({ busy: false, message: null, formOpen: false });
+  // Admission must be synchronous even before Solid publishes the busy state.
+  let mutationPending = false;
   let active = true;
   const login = createWizardLogin({
     getClient: () => context.gateway.snapshot.client ?? null,
@@ -81,8 +76,7 @@ export function McpServersCard(props: McpServersCardProps) {
     sessionExpiredMessage: () => t("mcpServers.signInExpired"),
   });
   void context.runtimeConfig.ensureLoaded().catch((error: unknown) => {
-    state.message = { kind: "error", text: formatUiError(error) };
-    invalidate();
+    setView((state) => ({ ...state, message: { kind: "error", text: formatUiError(error) } }));
   });
   const hello = createMemo(() => gateway.read().snapshot.hello);
   // A new transport retires the previous sign-in before another interaction can start one.
@@ -108,7 +102,7 @@ export function McpServersCard(props: McpServersCardProps) {
   const canMutate = () => mutationBlockedReason() === null && login.state().phase === "idle";
   const signIn = (server: McpServerSummary) => {
     if (
-      state.busy ||
+      mutationPending ||
       !canMutate() ||
       !server.enabled ||
       server.signIn !== "operator" ||
@@ -116,8 +110,7 @@ export function McpServersCard(props: McpServersCardProps) {
     ) {
       return;
     }
-    state.message = null;
-    invalidate();
+    setView((state) => ({ ...state, message: null }));
     login.runner.prepareSignIn("oauth", server.name);
     void login.runner.startMcpLogin(server.name);
   };
@@ -126,34 +119,37 @@ export function McpServersCard(props: McpServersCardProps) {
     note: string;
     successText: string;
   }): Promise<boolean> => {
-    if (!active || !canMutate() || state.busy) {
+    if (!active || !canMutate() || mutationPending) {
       return false;
     }
-    state.busy = true;
-    state.message = null;
-    invalidate();
+    mutationPending = true;
+    setView((state) => ({ ...state, busy: true, message: null }));
     try {
       await patchMcpServers(context.runtimeConfig, options);
-      state.message = { kind: "success", text: options.successText };
+      setView((state) => ({ ...state, message: { kind: "success", text: options.successText } }));
       return true;
     } catch (error) {
-      state.message = { kind: "error", text: formatUiError(error) };
+      setView((state) => ({ ...state, message: { kind: "error", text: formatUiError(error) } }));
       return false;
     } finally {
-      state.busy = false;
-      invalidate();
+      mutationPending = false;
+      setView((state) => ({ ...state, busy: false }));
     }
   };
   const addServer = async (form: McpServerForm) => {
     if (!MCP_SERVER_NAME_PATTERN.test(form.name)) {
-      state.message = { kind: "error", text: t("mcpServers.nameInvalid") };
-      invalidate();
+      setView((state) => ({
+        ...state,
+        message: { kind: "error", text: t("mcpServers.nameInvalid") },
+      }));
       return;
     }
     const target = parseMcpTarget(form.target, form.transport);
     if (!target) {
-      state.message = { kind: "error", text: t("mcpServers.targetInvalid") };
-      invalidate();
+      setView((state) => ({
+        ...state,
+        message: { kind: "error", text: t("mcpServers.targetInvalid") },
+      }));
       return;
     }
     if (
@@ -163,8 +159,7 @@ export function McpServersCard(props: McpServersCardProps) {
         successText: t("mcpServers.addedSuccess", { name: form.name }),
       })
     ) {
-      state.formOpen = false;
-      invalidate();
+      setView((state) => ({ ...state, formOpen: false }));
     }
   };
   const toggleServer = (name: string, enabled: boolean) =>
@@ -203,11 +198,11 @@ export function McpServersCard(props: McpServersCardProps) {
               title={mutationBlockedReason() ?? ""}
               disabled={disabled()}
               onClick={() => {
-                state.formOpen = !state.formOpen;
-                if (state.formOpen) {
-                  state.message = null;
-                }
-                invalidate();
+                setView((state) => ({
+                  ...state,
+                  formOpen: !state.formOpen,
+                  message: state.formOpen ? state.message : null,
+                }));
               }}
             >
               <span aria-hidden="true">
@@ -224,8 +219,7 @@ export function McpServersCard(props: McpServersCardProps) {
               blockedReason={mutationBlockedReason()}
               onSubmit={(form) => void addServer(form)}
               onCancel={() => {
-                state.formOpen = false;
-                invalidate();
+                setView((state) => ({ ...state, formOpen: false }));
               }}
             />
           </Show>

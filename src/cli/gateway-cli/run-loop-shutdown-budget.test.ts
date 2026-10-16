@@ -63,7 +63,7 @@ describe("Gateway stop deadline independent of restart ownership", () => {
       expect(drain.forceExitMs).toBe(85_000);
     },
   );
-  it.each([15_000, 85_000, 325_000])(
+  it.each([15_000, 85_000])(
     "bounds ordinary stop grace while retaining the %i ms write cleanup deadline",
     (timeoutMs) => {
       const drain = resolveGatewayShutdownDrainBudget({

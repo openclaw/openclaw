@@ -122,6 +122,8 @@ Doctor's explicit verification remain in place.
 
 Fresh agent databases install the current canonical schema directly, without
 running legacy migration discovery or repairing indexes that were just created.
+The schema owner reads ownership and version inside the write transaction, so
+concurrent initializers cannot replace another agent's claim while waiting for the lock.
 After the creation transaction commits, the schema owner publishes the admitted
 catalog and canonical-validation facts for later opens and workers. Tracked DDL
 and rollback still invalidate those facts; existing databases retain their first

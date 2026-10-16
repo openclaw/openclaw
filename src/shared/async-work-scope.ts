@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import "./detached-async-context.js";
-import { createDeferredCore } from "./deferred.js";
+import { createDeferredCore, type Deferred } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 type AsyncWorkScopeFrame = { scope: AsyncWorkScope; parent?: AsyncWorkScopeFrame };
@@ -172,7 +172,10 @@ export async function runWithTrackedCancellation<T>(
   if (!parentWork) {
     return await run(signal);
   }
-  const result = createDeferredCore<T>();
+  // Cancellation can outlive the foreground promise and its producer.
+  let settlement: Deferred<T> | undefined = createDeferredCore<T>();
+  const result = settlement.promise;
+  let foreground: typeof run | undefined = run;
   // The parent owns cleanup before invocation, but the caller only waits for its result.
   void parentWork
     .track(async () => {
@@ -190,9 +193,17 @@ export async function runWithTrackedCancellation<T>(
         closeWork();
       }
       try {
-        result.resolve(await work.track(() => run(controller.signal)));
+        let value: T | undefined = await work.track(() => {
+          const invoke = foreground!;
+          foreground = undefined;
+          return invoke(controller.signal);
+        });
+        settlement?.resolve(value);
+        settlement = undefined;
+        value = undefined;
       } catch (error) {
-        result.reject(error);
+        settlement?.reject(error);
+        settlement = undefined;
       } finally {
         try {
           await AsyncWorkScope.runWhenAllIdle(
@@ -205,6 +216,9 @@ export async function runWithTrackedCancellation<T>(
         }
       }
     })
-    .catch(result.reject);
-  return await result.promise;
+    .catch((error: unknown) => {
+      settlement?.reject(error);
+      settlement = undefined;
+    });
+  return await result;
 }
