@@ -304,7 +304,7 @@ export function prepareClientCredentialMigration(
       const previous = readClientCredentialReceipt(database);
       if (nativeBootstrap && previous?.receipt.source?.kind === "independent") {
         // Rebuilding derived rows never makes a consumed legacy input eligible again.
-        receipt.legacyImports = { ...previous.receipt.legacyImports, ...receipt.legacyImports };
+        receipt.legacyImports = { ...receipt.legacyImports, ...previous.receipt.legacyImports };
       }
       const independent =
         previous?.phase === "complete" &&
