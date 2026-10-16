@@ -42,6 +42,16 @@ import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./op
 type Execution = ReturnType<typeof capture>;
 type Options = ReturnType<typeof fixture>;
 
+function onExit(cleanup: () => Promise<unknown>) {
+  return {
+    async [Symbol.asyncDispose]() {
+      await cleanup();
+    },
+  };
+}
+function directoryAlias(target: string, alias: string) {
+  fs.symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+}
 function creatorFor(options: Options, observed = readDatabasePathIdentitySync(options.path)) {
   return capture(options, { expectedCreationIdentity: observed });
 }
@@ -68,6 +78,25 @@ function initialized(sessionKey: string, sessionId: string) {
     placeholder: { sessionId },
     transcriptPublication: transcriptPublication(sessionKey, sessionId),
   };
+}
+async function readAliasAndClose(
+  options: Options,
+  sessionKey: string,
+  assertRegistry?: () => void,
+) {
+  const execution = capture(options);
+  try {
+    await expect(initialize(execution, sessionKey, "alias-session")).resolves.toEqual({
+      kind: "session-transcript-initialized",
+      sessionKey,
+      transcriptPublication: undefined,
+    });
+    assertRegistry?.();
+    await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+    expect(() => execution.assertCurrent()).toThrow(/closed/);
+  } finally {
+    await execution.release();
+  }
 }
 function initialize(execution: Execution, sessionKey: string, sessionId: string) {
   return execution.runExisting(source(), (scope) =>
@@ -101,31 +130,28 @@ it("exposes a prepared generation only after registration publication and keeps 
     observedUnpublishedIdentity ||= execution.fileIdentity !== undefined;
     expect(execution.capturePreparedGenerationClaim()).toBeUndefined();
   };
+  await using _ = onExit(() => execution.release());
+  expect(execution.capturePreparedGenerationClaim()).toBeUndefined();
+  await execution.prepare(requestSource);
+  expect(observedUnpublishedIdentity).toBe(true);
+  const claim = execution.capturePreparedGenerationClaim();
+  expect(claim).toBeDefined();
+  claim!.assertCurrent();
+  const warmStages: string[] = [];
+  const warmSource = source((request) => warmStages.push(request.stage));
+  const host = observeHostDataSql();
   try {
-    expect(execution.capturePreparedGenerationClaim()).toBeUndefined();
-    await execution.prepare(requestSource);
-    expect(observedUnpublishedIdentity).toBe(true);
-    const claim = execution.capturePreparedGenerationClaim();
-    expect(claim).toBeDefined();
-    claim!.assertCurrent();
-    const warmStages: string[] = [];
-    const warmSource = source((request) => warmStages.push(request.stage));
-    const host = observeHostDataSql();
-    try {
-      await Promise.all([execution.prepare(warmSource), execution.prepare(warmSource)]);
-      await execution.prepare(warmSource);
-      expect(warmStages).toEqual([]);
-      expect(host.queries).toEqual([]);
-    } finally {
-      host.restore();
-    }
-    claim!.assertCurrent();
-    await execution.release();
-    expect(() => execution.capturePreparedGenerationClaim()).toThrow(/released/);
-    expect(() => claim!.assertCurrent()).toThrow(/released/);
+    await Promise.all([execution.prepare(warmSource), execution.prepare(warmSource)]);
+    await execution.prepare(warmSource);
+    expect(warmStages).toEqual([]);
+    expect(host.queries).toEqual([]);
   } finally {
-    await execution.release();
+    host.restore();
   }
+  claim!.assertCurrent();
+  await execution.release();
+  expect(() => execution.capturePreparedGenerationClaim()).toThrow(/released/);
+  expect(() => claim!.assertCurrent()).toThrow(/released/);
 });
 
 it("retains both borrowers when config changes after a completed native open", async () => {
@@ -193,146 +219,96 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
     sessionKey,
     transcriptPublication: undefined,
   };
+  await using _ = onExit(() => releaseAll(creator, sibling));
+  await creator.prepare(source());
+  const registry = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
+    env: options.env,
+  }).read();
+  await expect(creator.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
+    initialized(sessionKey, "alias-session"),
+  );
+  await expect(sibling.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
+    existingTranscript,
+  );
+  expect(registry.assertCurrent).not.toThrow();
+  expect(sibling.path).toBe(options.path);
+  expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
+  await Promise.all([creator.release(), sibling.release()]);
+  await readAliasAndClose(options, sessionKey);
+  await readAliasAndClose(aliased, sessionKey, () => expect(registry.assertCurrent).not.toThrow());
+  const retainedValidation = getOpenClawAgentDatabaseValidationForTransfer(options);
+  assert(retainedValidation);
+  expect(Atomics.load(new Int32Array(retainedValidation.valid), 0)).toBe(1);
+  fs.unlinkSync(options.path);
+  const replacement = creatorFor(options);
   try {
-    await creator.prepare(source());
-    const registry = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
-      env: options.env,
-    }).read();
-    await expect(creator.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
-      {
-        ...existingTranscript,
-        placeholder: { sessionId: "alias-session" },
-        transcriptPublication: transcriptPublication(sessionKey, "alias-session"),
-      },
+    let checkedReplacementProof = false;
+    await replacement.prepare(
+      source((request) => {
+        if (isPreparing(request, "shared-owner")) {
+          checkedReplacementProof = true;
+          expect(Atomics.load(new Int32Array(retainedValidation.valid), 0)).toBe(0);
+          expect(getOpenClawAgentDatabaseValidationForTransfer(options)).toBeUndefined();
+        }
+      }),
     );
-    await expect(sibling.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
-      existingTranscript,
-    );
-    expect(registry.assertCurrent).not.toThrow();
-    expect(sibling.path).toBe(options.path);
-    expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
-    await Promise.all([creator.release(), sibling.release()]);
-    const later = capture(options);
-    try {
-      await expect(later.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
-        existingTranscript,
-      );
-      await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
-      expect(() => later.assertCurrent()).toThrow(/closed/);
-    } finally {
-      await later.release();
-    }
-    const reopened = capture(aliased);
-    try {
-      await expect(
-        reopened.runExisting(source(), (scope) => scope.execute(command)),
-      ).resolves.toEqual(existingTranscript);
-      expect(registry.assertCurrent).not.toThrow();
-      await closeOpenClawAgentDatabaseByPathAsync(aliased.path, options.agentId);
-      expect(() => reopened.assertCurrent()).toThrow(/closed/);
-    } finally {
-      await reopened.release();
-    }
-    const retainedValidation = getOpenClawAgentDatabaseValidationForTransfer(options);
-    assert(retainedValidation);
-    expect(Atomics.load(new Int32Array(retainedValidation.valid), 0)).toBe(1);
-    fs.unlinkSync(options.path);
-    const replacement = creatorFor(options);
-    try {
-      let checkedReplacementProof = false;
-      await replacement.prepare(
-        source((request) => {
-          if (isPreparing(request, "shared-owner")) {
-            checkedReplacementProof = true;
-            expect(Atomics.load(new Int32Array(retainedValidation.valid), 0)).toBe(0);
-            expect(getOpenClawAgentDatabaseValidationForTransfer(options)).toBeUndefined();
-          }
-        }),
-      );
-      expect(checkedReplacementProof).toBe(true);
-      expect(registry.assertCurrent).toThrow("registry changed");
-      await expect(
-        replacement.runExisting(source(), (scope) => scope.execute(command)),
-      ).resolves.toEqual({
-        ...existingTranscript,
-        placeholder: { sessionId: "alias-session" },
-        transcriptPublication: transcriptPublication(sessionKey, "alias-session"),
-      });
-    } finally {
-      await replacement.release();
-    }
+    expect(checkedReplacementProof).toBe(true);
+    expect(registry.assertCurrent).toThrow("registry changed");
+    await expect(
+      replacement.runExisting(source(), (scope) => scope.execute(command)),
+    ).resolves.toEqual(initialized(sessionKey, "alias-session"));
   } finally {
-    await releaseAll(creator, sibling);
+    await replacement.release();
   }
 });
 
-it("retains every execution alias until the shared maintenance scope closes", async () => {
-  const options = fixture();
-  openOpenClawAgentDatabase(options);
-  const alias = path.join(options.env.OPENCLAW_STATE_DIR, "maintenance-alias");
-  fs.symlinkSync(
-    path.dirname(options.path),
-    alias,
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  const parent = createOpenClawDatabaseMaintenanceScope();
-  const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
-  const captured = child.run(() =>
-    capture({
-      ...options,
-      path: path.join(alias, path.basename(options.path)),
-    }),
-  );
-  const retained = parent.run(() => capture(options));
-  try {
-    await child.close();
-    expect(() => retained.assertCurrent()).not.toThrow();
-    await parent.close();
-    expect(() => retained.assertCurrent()).toThrow(/closed/);
-  } finally {
-    await Promise.allSettled([
-      captured.release(),
-      retained.release(),
-      child.close(),
-      parent.close(),
-    ]);
-  }
-});
-
-it.each(["child-first", "parent-first"] as const)(
+it.each(["native-open", "child-first", "parent-first"] as const)(
   "retains executor aliases across %s maintenance borrowing",
   async (order) => {
     const { options, aliased } = aliasedFixture();
+    if (order === "native-open") {
+      openOpenClawAgentDatabase(options);
+    }
     const parent = createOpenClawDatabaseMaintenanceScope();
     const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
     const creator =
-      order === "child-first"
-        ? child.run(() => capture(aliased))
-        : parent.run(() => capture(options));
-    const borrower =
-      order === "child-first"
+      order === "parent-first"
         ? parent.run(() => capture(options))
         : child.run(() => capture(aliased));
-    const parentBorrower = order === "child-first" ? borrower : creator;
-    const childBorrower = order === "child-first" ? creator : borrower;
+    const borrower =
+      order === "parent-first"
+        ? child.run(() => capture(aliased))
+        : parent.run(() => capture(options));
+    const parentBorrower = order === "parent-first" ? creator : borrower;
+    const childBorrower = order === "parent-first" ? borrower : creator;
     try {
-      await parent.run(() => creator.prepare(source()));
+      if (order !== "native-open") {
+        await parent.run(() => creator.prepare(source()));
+      }
       const identity = parentBorrower.fileIdentity;
-      expect(identity).toBeDefined();
-      await childBorrower.release();
+      if (order !== "native-open") {
+        expect(identity).toBeDefined();
+        await childBorrower.release();
+      }
       await child.close();
-      await expect(
-        parent.run(() =>
-          initialize(parentBorrower, "agent:main:maintenance-borrow", "retained-session"),
-        ),
-      ).resolves.toEqual(initialized("agent:main:maintenance-borrow", "retained-session"));
-      expect(parentBorrower.fileIdentity).toEqual(identity);
+      expect(() => parentBorrower.assertCurrent()).not.toThrow();
+      if (order !== "native-open") {
+        await expect(
+          parent.run(() =>
+            initialize(parentBorrower, "agent:main:maintenance-borrow", "retained-session"),
+          ),
+        ).resolves.toEqual(initialized("agent:main:maintenance-borrow", "retained-session"));
+        expect(parentBorrower.fileIdentity).toEqual(identity);
+      }
       await parent.close();
       expect(() => parentBorrower.assertCurrent()).toThrow(/closed/);
     } finally {
-      await releaseAll(creator, borrower);
-      await child.close();
-      await parent.close();
+      await Promise.allSettled([
+        creator.release(),
+        borrower.release(),
+        child.close(),
+        parent.close(),
+      ]);
     }
   },
 );
@@ -354,37 +330,36 @@ it.each(["missing", "schema-missing"] as const)(
       await execution.prepare(source());
       return execution.captureGenerationClaim();
     };
-    try {
-      const results = await Promise.allSettled(observations.map(create));
-      expect(results.filter((result) => result.status === "rejected")).toEqual([]);
-      const claims = executions.map((execution) => execution.captureGenerationClaim());
-      expect(new Set(claims.map((claim) => claim.incarnation)).size).toBe(1);
-      expect(new Set(claims.map((claim) => claim.identity)).size).toBe(1);
-      const firstObservation = observations[0];
-      const firstClaim = claims[0];
-      assert(firstObservation);
-      assert(firstClaim);
-      const late = await create(firstObservation);
-      expect(late.incarnation).toBe(firstClaim.incarnation);
-      expect(late.identity).toBe(firstClaim.identity);
-      expect(() =>
-        capture({ ...options, agentId: "other" }, { expectedCreationIdentity: firstObservation }),
-      ).toThrow(/requested agent other/);
-      expect(() =>
-        capture({ ...options, env: fixture().env }, { expectedCreationIdentity: firstObservation }),
-      ).toThrow(/another shared-state database/);
-      await Promise.all(
-        executions.map(async (execution, index) => {
-          const sessionKey = `agent:main:concurrent-${index}`;
-          const sessionId = `concurrent-session-${index}`;
-          await expect(initialize(execution, sessionKey, sessionId)).resolves.toEqual(
-            initialized(sessionKey, sessionId),
-          );
-        }),
-      );
-    } finally {
-      await Promise.allSettled(executions.map((execution) => execution.release()));
-    }
+    await using _ = onExit(() =>
+      Promise.allSettled(executions.map((execution) => execution.release())),
+    );
+    const results = await Promise.allSettled(observations.map(create));
+    expect(results.filter((result) => result.status === "rejected")).toEqual([]);
+    const claims = executions.map((execution) => execution.captureGenerationClaim());
+    expect(new Set(claims.map((claim) => claim.incarnation)).size).toBe(1);
+    expect(new Set(claims.map((claim) => claim.identity)).size).toBe(1);
+    const firstObservation = observations[0];
+    const firstClaim = claims[0];
+    assert(firstObservation);
+    assert(firstClaim);
+    const late = await create(firstObservation);
+    expect(late.incarnation).toBe(firstClaim.incarnation);
+    expect(late.identity).toBe(firstClaim.identity);
+    expect(() =>
+      capture({ ...options, agentId: "other" }, { expectedCreationIdentity: firstObservation }),
+    ).toThrow(/requested agent other/);
+    expect(() =>
+      capture({ ...options, env: fixture().env }, { expectedCreationIdentity: firstObservation }),
+    ).toThrow(/another shared-state database/);
+    await Promise.all(
+      executions.map(async (execution, index) => {
+        const sessionKey = `agent:main:concurrent-${index}`;
+        const sessionId = `concurrent-session-${index}`;
+        await expect(initialize(execution, sessionKey, sessionId)).resolves.toEqual(
+          initialized(sessionKey, sessionId),
+        );
+      }),
+    );
   },
 );
 
@@ -395,18 +370,15 @@ it.skipIf(process.platform === "win32")(
     const observed = readDatabasePathIdentitySync(options.path);
     const creator = creatorFor(options, observed);
     const retainedPath = `${options.path}.retained`;
+    await using _ = onExit(() => creator.release());
+    await creator.prepare(source());
+    fs.renameSync(options.path, retainedPath);
     try {
-      await creator.prepare(source());
-      fs.renameSync(options.path, retainedPath);
-      try {
-        fs.writeFileSync(options.path, "replacement target");
-        expect(() => creatorFor(options, observed)).toThrow(/identity changed/);
-      } finally {
-        fs.unlinkSync(options.path);
-        fs.renameSync(retainedPath, options.path);
-      }
+      fs.writeFileSync(options.path, "replacement target");
+      expect(() => creatorFor(options, observed)).toThrow(/identity changed/);
     } finally {
-      await creator.release();
+      fs.unlinkSync(options.path);
+      fs.renameSync(retainedPath, options.path);
     }
   },
 );
@@ -437,85 +409,79 @@ it("retains the first creator's file witness on a preexisting execution owner", 
   fs.renameSync(options.path, `${options.path}.original`);
   fs.writeFileSync(options.path, "");
   const later = creatorFor(options);
-  try {
-    await expect(later.prepare(source())).rejects.toThrow(
-      /identity changed|captured creating reference/,
-    );
-    expect(fs.readFileSync(options.path)).toHaveLength(0);
-  } finally {
-    await releaseAll(ordinary, creator, later);
-  }
+  await using _ = onExit(() => releaseAll(ordinary, creator, later));
+  await expect(later.prepare(source())).rejects.toThrow(
+    /identity changed|captured creating reference/,
+  );
+  expect(fs.readFileSync(options.path)).toHaveLength(0);
 });
 
 it("prepares its originally missing store and records native birth without changing identity", async () => {
   const options = fixture();
   const observed = readDatabasePathIdentitySync(options.path);
   const execution = creatorFor(options, observed);
-  try {
-    expect(execution.fileIdentity).toBeUndefined();
-    await execution.prepare(source());
-    const physical = readDatabasePathIdentitySync(options.path);
-    expect(physical.canonicalPath).toBe(observed.canonicalPath);
-    expect(execution.fileIdentity).toMatchObject({
-      kind: "file",
-      physicalIdentity: physical.key.slice("file:".length),
-      birthtime: physical.birthtime,
+  await using _ = onExit(() => execution.release());
+  expect(execution.fileIdentity).toBeUndefined();
+  await execution.prepare(source());
+  const physical = readDatabasePathIdentitySync(options.path);
+  expect(physical.canonicalPath).toBe(observed.canonicalPath);
+  expect(execution.fileIdentity).toMatchObject({
+    kind: "file",
+    physicalIdentity: physical.key.slice("file:".length),
+    birthtime: physical.birthtime,
+  });
+  await expect(execution.runExisting(source(), async () => "retained")).resolves.toBe("retained");
+  const unrelatedInitialization = vi.fn(() => {
+    throw new Error("A warm borrower must not recapture initialization configuration");
+  });
+  const env = { ...options.env };
+  if (process.platform !== "win32") {
+    Object.defineProperty(env, "UNRELATED_INITIALIZATION", {
+      enumerable: true,
+      get: unrelatedInitialization,
     });
-    await expect(execution.runExisting(source(), async () => "retained")).resolves.toBe("retained");
-    const unrelatedInitialization = vi.fn(() => {
-      throw new Error("A warm borrower must not recapture initialization configuration");
-    });
-    const env = { ...options.env };
-    if (process.platform !== "win32") {
-      Object.defineProperty(env, "UNRELATED_INITIALIZATION", {
-        enumerable: true,
-        get: unrelatedInitialization,
-      });
-    }
-    const warm = capture({
-      ...options,
-      env,
-    });
-    try {
-      await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
-      expect(unrelatedInitialization).not.toHaveBeenCalled();
-    } finally {
-      await warm.release();
-    }
-    const windows = (() => {
-      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      try {
-        return capture({
-          ...options,
-          env: {
-            HOME: options.env.OPENCLAW_STATE_DIR,
-            OpenClaw_State_Dir: options.env.OPENCLAW_STATE_DIR,
-          },
-        });
-      } finally {
-        platform.mockRestore();
-      }
-    })();
-    try {
-      await expect(windows.runExisting(source(), async () => "same owner")).resolves.toBe(
-        "same owner",
-      );
-    } finally {
-      await windows.release();
-    }
-    expect(() =>
-      capture(options, {
-        expectedIdentity: {
-          kind: "file",
-          physicalIdentity: physical.key.slice("file:".length),
-          nativeLocation: physical.canonicalPath,
-          birthtime: (fs.statSync(options.path, { bigint: true }).birthtimeNs + 1n).toString(),
-        },
-      }),
-    ).toThrow(/identity|physical file/);
-  } finally {
-    await execution.release();
   }
+  const warm = capture({
+    ...options,
+    env,
+  });
+  try {
+    await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
+    expect(unrelatedInitialization).not.toHaveBeenCalled();
+  } finally {
+    await warm.release();
+  }
+  const windows = (() => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      return capture({
+        ...options,
+        env: {
+          HOME: options.env.OPENCLAW_STATE_DIR,
+          OpenClaw_State_Dir: options.env.OPENCLAW_STATE_DIR,
+        },
+      });
+    } finally {
+      platform.mockRestore();
+    }
+  })();
+  try {
+    await expect(windows.runExisting(source(), async () => "same owner")).resolves.toBe(
+      "same owner",
+    );
+  } finally {
+    await windows.release();
+  }
+  expect(() =>
+    capture(options, {
+      expectedIdentity: {
+        kind: "file",
+        physicalIdentity: physical.key.slice("file:".length),
+        nativeLocation: physical.canonicalPath,
+        birthtime: (fs.statSync(options.path, { bigint: true }).birthtimeNs + 1n).toString(),
+      },
+    }),
+  ).toThrow(/identity|physical file/);
 });
 
 it.each(["fresh root", "existing agent"] as const)(
@@ -523,11 +489,7 @@ it.each(["fresh root", "existing agent"] as const)(
   async (layout) => {
     const options = fixture();
     const alias = path.join(tempDirs.make("agent-registry-alias-"), "state");
-    fs.symlinkSync(
-      options.env.OPENCLAW_STATE_DIR,
-      alias,
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    directoryAlias(options.env.OPENCLAW_STATE_DIR, alias);
     const relative = path.join("agents", "main", "agent", "openclaw-agent.sqlite");
     const aliased =
       layout === "existing agent"
@@ -539,11 +501,7 @@ it.each(["fresh root", "existing agent"] as const)(
           };
     if (layout === "existing agent") {
       fs.mkdirSync(path.dirname(path.dirname(options.path)), { recursive: true });
-      fs.symlinkSync(
-        tempDirs.make("agent-registry-external-"),
-        path.dirname(options.path),
-        process.platform === "win32" ? "junction" : "dir",
-      );
+      directoryAlias(tempDirs.make("agent-registry-external-"), path.dirname(options.path));
     }
     if (layout !== "fresh root") {
       openOpenClawAgentDatabase(aliased);
@@ -571,38 +529,28 @@ it.each(["fresh root", "existing agent"] as const)(
   },
 );
 
-it("reserves schema-missing first birth against a sibling captured before its witness", async () => {
-  const options = fixture();
-  emptyStore(options);
-  const observed = readDatabasePathIdentitySync(options.path);
-  const sibling = capture(options);
-  const creator = creatorFor(options, observed);
-  try {
-    await expect(sibling.prepare(source())).rejects.toThrow(/captured creating reference/);
-    expect(fs.readFileSync(options.path)).toHaveLength(0);
+it.each(["missing", "schema-missing"] as const)(
+  "creates a %s target through its already captured logical owner",
+  async (kind) => {
+    const options = fixture();
+    if (kind === "schema-missing") {
+      emptyStore(options);
+    }
+    const observed = readDatabasePathIdentitySync(options.path);
+    const sibling = capture(options);
+    let creator: Execution | undefined = undefined;
+    await using _ = onExit(() => releaseAll(creator, sibling));
+    creator = creatorFor(options, observed);
+    if (kind === "schema-missing") {
+      await expect(sibling.prepare(source())).rejects.toThrow(/captured creating reference/);
+      expect(fs.readFileSync(options.path)).toHaveLength(0);
+    }
     await creator.prepare(source());
     await expect(sibling.prepare(source())).resolves.toBeUndefined();
-    expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
-  } finally {
-    await releaseAll(creator, sibling);
-  }
-});
-
-it("creates an absent target through its already captured logical owner", async () => {
-  const options = fixture();
-  const observed = readDatabasePathIdentitySync(options.path);
-  const sibling = capture(options);
-  let creator: ReturnType<typeof capture> | undefined;
-  try {
-    creator = creatorFor(options, observed);
-    await creator.prepare(source());
-    await sibling.prepare(source());
     expect(creator.fileIdentity).toMatchObject({ kind: "file" });
     expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
-  } finally {
-    await releaseAll(creator, sibling);
-  }
-});
+  },
+);
 
 it.each([
   { name: "replacement", write: replaceSessionEntry },
@@ -614,30 +562,27 @@ it.each([
     const sibling = capture(options);
     const sessionKey = "agent:main:first-entry";
     const entry = { sessionId: "first-session", updatedAt: 1 };
-    try {
-      expect(fs.existsSync(options.path)).toBe(false);
-      const writeStartedAt = Date.now();
-      const written = await write(
-        { agentId: options.agentId, env: options.env, storePath: options.path, sessionKey },
-        entry,
-      );
-      const writeFinishedAt = Date.now();
-      assert(written);
-      expect(written.sessionId).toBe(entry.sessionId);
-      if (name === "replacement") {
-        expect(written).toEqual({ ...entry, delivery: { kind: "none" } });
-      } else {
-        expect(written.updatedAt).toBeGreaterThanOrEqual(writeStartedAt);
-        expect(written.updatedAt).toBeLessThanOrEqual(writeFinishedAt);
-      }
-      const read = await sibling.runExisting(source(), (scope) =>
-        scope.execute({ type: "session.entry.read", input: { sessionKeys: [sessionKey] } }),
-      );
-      assert(read);
-      expect(read.entries).toEqual([{ sessionKey, entry: written }]);
-    } finally {
-      await sibling.release();
+    await using _ = onExit(() => sibling.release());
+    expect(fs.existsSync(options.path)).toBe(false);
+    const writeStartedAt = Date.now();
+    const written = await write(
+      { agentId: options.agentId, env: options.env, storePath: options.path, sessionKey },
+      entry,
+    );
+    const writeFinishedAt = Date.now();
+    assert(written);
+    expect(written.sessionId).toBe(entry.sessionId);
+    if (name === "replacement") {
+      expect(written).toEqual({ ...entry, delivery: { kind: "none" } });
+    } else {
+      expect(written.updatedAt).toBeGreaterThanOrEqual(writeStartedAt);
+      expect(written.updatedAt).toBeLessThanOrEqual(writeFinishedAt);
     }
+    const read = await sibling.runExisting(source(), (scope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: [sessionKey] } }),
+    );
+    assert(read);
+    expect(read.entries).toEqual([{ sessionKey, entry: written }]);
   },
 );
 
@@ -647,17 +592,14 @@ it("releases an unused creation reservation while a sibling remains", async () =
   const creator = creatorFor(options, observed);
   const joining = creatorFor(options, observed);
   const sibling = capture(options);
-  try {
-    await creator.release();
-    await expect(sibling.prepare(source())).rejects.toThrow(/captured creating reference/);
-    await joining.release();
-    expect(readDatabasePathIdentitySync(options.path)).toEqual(observed);
-    await sibling.prepare(source());
-    expect(sibling.fileIdentity).toMatchObject({ kind: "file" });
-    await expect(sibling.runExisting(source(), async () => "prepared")).resolves.toBe("prepared");
-  } finally {
-    await releaseAll(creator, joining, sibling);
-  }
+  await using _ = onExit(() => releaseAll(creator, joining, sibling));
+  await creator.release();
+  await expect(sibling.prepare(source())).rejects.toThrow(/captured creating reference/);
+  await joining.release();
+  expect(readDatabasePathIdentitySync(options.path)).toEqual(observed);
+  await sibling.prepare(source());
+  expect(sibling.fileIdentity).toMatchObject({ kind: "file" });
+  await expect(sibling.runExisting(source(), async () => "prepared")).resolves.toBe("prepared");
 });
 
 it("releases a creation reservation after source refusal before native opening", async () => {
@@ -740,23 +682,22 @@ it("retains a creator that joins while a refused generation closes", async () =>
   revoked.assertCurrent = () => {
     throw refusal;
   };
-  try {
-    await expect(creator.prepare(revoked)).rejects.toBe(refusal);
-    const releasing = creator.release();
-    // Release enters native cleanup at its first continuation; borrow before close settles.
-    await Promise.resolve();
-    const joining = creatorFor(options, observed);
-    executions.push(joining);
-    await releasing;
-    const later = creatorFor(options, observed);
-    executions.push(later);
-    await Promise.all([joining.prepare(source()), later.prepare(source())]);
-    expect(joining.captureGenerationClaim().incarnation).toBe(
-      later.captureGenerationClaim().incarnation,
-    );
-  } finally {
-    await Promise.allSettled(executions.map((execution) => execution.release()));
-  }
+  await using _ = onExit(() =>
+    Promise.allSettled(executions.map((execution) => execution.release())),
+  );
+  await expect(creator.prepare(revoked)).rejects.toBe(refusal);
+  const releasing = creator.release();
+  // Release enters native cleanup at its first continuation; borrow before close settles.
+  await Promise.resolve();
+  const joining = creatorFor(options, observed);
+  executions.push(joining);
+  await releasing;
+  const later = creatorFor(options, observed);
+  executions.push(later);
+  await Promise.all([joining.prepare(source()), later.prepare(source())]);
+  expect(joining.captureGenerationClaim().incarnation).toBe(
+    later.captureGenerationClaim().incarnation,
+  );
 });
 
 it("keeps another captured borrower live after a caller-specific native open refusal", async () => {
@@ -788,19 +729,14 @@ it("keeps another captured borrower live after a caller-specific native open ref
       throw refusal;
     }
   };
-  try {
-    await expect(rejected.runExisting(revoked, async () => "not admitted")).rejects.toThrow(
-      refusal,
-    );
-    expect(reachedNativeOpen).toBe(true);
-    expect(() => retained.assertCurrent()).not.toThrow();
-    await expect(
-      initialize(retained, "agent:main:after-open-refusal", "retained-borrower"),
-    ).resolves.toEqual(initialized("agent:main:after-open-refusal", "retained-borrower"));
-    expect(readDatabasePathIdentitySync(options.path)).toEqual(physical);
-  } finally {
-    await releaseAll(rejected, retained);
-  }
+  await using _ = onExit(() => releaseAll(rejected, retained));
+  await expect(rejected.runExisting(revoked, async () => "not admitted")).rejects.toThrow(refusal);
+  expect(reachedNativeOpen).toBe(true);
+  expect(() => retained.assertCurrent()).not.toThrow();
+  await expect(
+    initialize(retained, "agent:main:after-open-refusal", "retained-borrower"),
+  ).resolves.toEqual(initialized("agent:main:after-open-refusal", "retained-borrower"));
+  expect(readDatabasePathIdentitySync(options.path)).toEqual(physical);
 });
 
 it("rechecks source authority after registration notification before authorizing native open", async () => {
@@ -834,13 +770,10 @@ it("rechecks source authority after registration notification before authorizing
       });
     },
   };
-  try {
-    await expect(execution.prepare(requestSource)).rejects.toThrow(revoked);
-    expect(authorizedOpen).not.toHaveBeenCalled();
-    expect(fs.existsSync(options.path)).toBe(false);
-  } finally {
-    await execution.release();
-  }
+  await using _ = onExit(() => execution.release());
+  await expect(execution.prepare(requestSource)).rejects.toThrow(revoked);
+  expect(authorizedOpen).not.toHaveBeenCalled();
+  expect(fs.existsSync(options.path)).toBe(false);
 });
 
 it.skipIf(process.platform === "win32")(
@@ -888,24 +821,21 @@ it("reserves absent first birth and refuses a competitor introduced at the nativ
   const creator = creatorFor(options);
   const sibling = capture(options);
   let replaced = false;
-  try {
-    await expect(sibling.prepare(source())).rejects.toThrow(/captured creating reference/);
-    expect(fs.existsSync(options.path)).toBe(false);
-    await expect(
-      creator.prepare(
-        source((request) => {
-          if (!replaced && isPreparing(request, "shared-owner")) {
-            emptyStore(options);
-            replaced = true;
-          }
-        }),
-      ),
-    ).rejects.toThrow(/changed before creating open/);
-    expect(replaced).toBe(true);
-    expect(fs.readFileSync(options.path)).toHaveLength(0);
-  } finally {
-    await releaseAll(creator, sibling);
-  }
+  await using _ = onExit(() => releaseAll(creator, sibling));
+  await expect(sibling.prepare(source())).rejects.toThrow(/captured creating reference/);
+  expect(fs.existsSync(options.path)).toBe(false);
+  await expect(
+    creator.prepare(
+      source((request) => {
+        if (!replaced && isPreparing(request, "shared-owner")) {
+          emptyStore(options);
+          replaced = true;
+        }
+      }),
+    ),
+  ).rejects.toThrow(/changed before creating open/);
+  expect(replaced).toBe(true);
+  expect(fs.readFileSync(options.path)).toHaveLength(0);
 });
 
 it.each(["missing", "stale"] as const)(

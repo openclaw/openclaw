@@ -38,23 +38,23 @@ function expectVersion(database: DatabaseSync, version = OPENCLAW_AGENT_SCHEMA_V
   expect(readRow(database, "PRAGMA user_version")?.user_version).toBe(version);
   expect(readRow(database, "SELECT schema_version FROM schema_meta")?.schema_version).toBe(version);
 }
+function admit(database: DatabaseSync, path: string, env: NodeJS.ProcessEnv, register?: boolean) {
+  return ensureOpenClawAgentDatabaseSchema(database, { agentId: "main", path, env, register });
+}
 function migrateLegacyStore(database: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv) {
   return withAgentDatabaseMaintenanceLease({ env }, async () =>
-    ensureOpenClawAgentDatabaseSchema(database, {
-      agentId: "main",
-      env,
-      path: pathname,
-      register: false,
-    }),
+    admit(database, pathname, env, false),
   );
 }
-
+function seedVersion(database: DatabaseSync, version: number) {
+  database.exec(`PRAGMA user_version = ${version};
+    INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+    VALUES ('primary', 'agent', ${version}, 'main', 1, 1);`);
+}
 function seedSchema(database: DatabaseSync) {
   database.exec(OPENCLAW_AGENT_SCHEMA_V25_SQL);
-  database.exec(`PRAGMA user_version = 25;
-    INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-    VALUES ('primary', 'agent', 25, 'main', 1, 1);
-    INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+  seedVersion(database, 25);
+  database.exec(`INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
     VALUES ('agent:main:main', 'history', '{"sessionId":"history","updatedAt":1}', 1);
     INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
     VALUES ('history', 'agent:main:main', 1, 1);
@@ -228,12 +228,7 @@ describe("agent JSON predicate migration", () => {
           );
         }
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-          const migrate = () =>
-            ensureOpenClawAgentDatabaseSchema(database, {
-              agentId: "main",
-              env: state.env,
-              path: pathname,
-            });
+          const migrate = () => admit(database, pathname, state.env);
           if (outcome === "rollback") {
             expect(migrate).toThrow(/authoriz/u);
           } else {
@@ -242,7 +237,6 @@ describe("agent JSON predicate migration", () => {
               [
                 "schema_meta",
                 "session_nodes",
-                // Old schema-25 stores also need the current readers' startup columns.
                 "session_windows",
                 "transcript_events",
                 "context_engine_turn_outbox",
@@ -261,7 +255,6 @@ describe("agent JSON predicate migration", () => {
           (row) => row.name,
         );
         expect(columns.includes("navigation_type")).toBe(outcome !== "rollback");
-        // Read-only session readers refuse migrated stores without startup columns.
         expect(hasPendingAgentStartupColumns(captureSqliteSchemaFacts(database).tableSql)).toBe(
           outcome === "rollback",
         );
@@ -303,10 +296,8 @@ describe("agent outbox sequence migration", () => {
           restoreEmptyV21StorageForHistoricalFixture(database);
         }
         removeCanonicalValidationFromHistoricalAgentFixture(database);
-        database.exec(`DROP TABLE session_participants;
-          PRAGMA user_version = 17;
-          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-          VALUES ('primary', 'agent', 17, 'main', 1, 1);`);
+        database.exec("DROP TABLE session_participants");
+        seedVersion(database, 17);
         const rows = [
           { enqueue_sequence: -7, advancement_key: "z-first", payload_json: '{"state":"ready"}' },
           { enqueue_sequence: 40, advancement_key: "a-last", payload_json: '{"state":"blocked"}' },
@@ -362,9 +353,7 @@ describe("agent outbox sequence migration", () => {
             "utf8",
           ),
         );
-        database.exec(`PRAGMA user_version = 26;
-        INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-        VALUES ('primary', 'agent', 26, 'main', 1, 1);`);
+        seedVersion(database, 26);
         const insert = database.prepare(`INSERT INTO context_engine_turn_outbox
         (rowid, advancement_key, engine_id, session_id, payload_json, payload_state, attempt_count, last_attempt_at, last_error, created_at)
         VALUES (?, ?, 'test', 'session', ?, ?, 3, 7, 'retry', ?)`);
@@ -387,12 +376,7 @@ describe("agent outbox sequence migration", () => {
         ).toEqual(originalRows);
       }
       using reopened = new DatabaseSync(pathname);
-      ensureOpenClawAgentDatabaseSchema(reopened, {
-        agentId: "main",
-        env: state.env,
-        path: pathname,
-        register: false,
-      });
+      admit(reopened, pathname, state.env, false);
       reopened
         .prepare(`INSERT INTO context_engine_turn_outbox
         (advancement_key, engine_id, session_id, payload_json, created_at)
