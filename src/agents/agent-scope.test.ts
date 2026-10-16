@@ -55,6 +55,16 @@ function fallbackEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
     ...overrides,
   };
 }
+type ProbeParams = Parameters<typeof resolveAutoFallbackPrimaryProbe>[0];
+function probeEntry(entry: ProbeParams["entry"], overrides: Partial<ProbeParams> = {}) {
+  return resolveAutoFallbackPrimaryProbe({
+    entry,
+    primaryProvider: "anthropic",
+    primaryModel: "claude-sonnet-4-6",
+    probeState: new Map(),
+    ...overrides,
+  });
+}
 
 describe("resolveAgentConfig", () => {
   it("prefers per-agent verbose defaults over global defaults", () => {
@@ -93,14 +103,10 @@ describe("resolveAgentConfig", () => {
   });
 
   it("resolves explicit and effective model primary separately", () => {
-    const cfgWithStringDefault = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-sonnet-4-6",
-        },
-        entries: { main: {} },
-      },
-    } as unknown as OpenClawConfig;
+    const cfgWithStringDefault = agentConfig({
+      defaults: { model: "anthropic/claude-sonnet-4-6" },
+      entries: { main: {} },
+    });
     expect(resolveAgentExplicitModelPrimary(cfgWithStringDefault, "main")).toBeUndefined();
     expect(resolveAgentEffectiveModelPrimary(cfgWithStringDefault, "main")).toBe(
       "anthropic/claude-sonnet-4-6",
@@ -319,11 +325,8 @@ describe("resolveAgentConfig", () => {
       authProfileOverrideSource: "auto",
     });
     const probe = (now: number, currentEntry = entry) =>
-      resolveAutoFallbackPrimaryProbe({
-        entry: currentEntry,
+      probeEntry(currentEntry, {
         sessionKey: "agent:main:session",
-        primaryProvider: "anthropic",
-        primaryModel: "claude-sonnet-4-6",
         now,
         minIntervalMs: 60_000,
         probeState,
@@ -356,32 +359,18 @@ describe("resolveAgentConfig", () => {
   it("skips primary probes for strict or stale fallback selections", () => {
     const baseEntry = fallbackEntry();
 
+    expect(probeEntry({ ...baseEntry, modelOverrideSource: "user" })).toBeUndefined();
     expect(
-      resolveAutoFallbackPrimaryProbe({
-        entry: { ...baseEntry, modelOverrideSource: "user" },
-        primaryProvider: "anthropic",
-        primaryModel: "claude-sonnet-4-6",
-        probeState: new Map(),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveAutoFallbackPrimaryProbe({
-        entry: baseEntry,
+      probeEntry(baseEntry, {
         primaryProvider: "openai",
         primaryModel: "gpt-5.4",
-        probeState: new Map(),
       }),
     ).toBeUndefined();
     expect(
-      resolveAutoFallbackPrimaryProbe({
-        entry: {
-          ...baseEntry,
-          providerOverride: "anthropic",
-          modelOverride: "claude-sonnet-4-6",
-        },
-        primaryProvider: "anthropic",
-        primaryModel: "claude-sonnet-4-6",
-        probeState: new Map(),
+      probeEntry({
+        ...baseEntry,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
       }),
     ).toBeUndefined();
   });
@@ -418,64 +407,49 @@ describe("resolveAgentConfig", () => {
 
   it("recognizes recovered auto fallback provenance without a source marker", () => {
     expect(
-      resolveAutoFallbackPrimaryProbe({
-        entry: {
-          providerOverride: "google",
-          modelOverride: "gemini-3-pro",
-          modelOverrideFallbackOriginProvider: "anthropic",
-          modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
-        },
-        primaryProvider: "anthropic",
-        primaryModel: "claude-sonnet-4-6",
-        probeState: new Map(),
+      probeEntry({
+        providerOverride: "google",
+        modelOverride: "gemini-3-pro",
+        modelOverrideFallbackOriginProvider: "anthropic",
+        modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
       }),
     ).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
 
-  it("clears only auto-owned fallback selection state for a primary probe", () => {
-    const entry = fallbackEntry({
-      authProfileOverride: "fallback-key",
-      authProfileOverrideSource: "auto",
-      authProfileOverrideCompactionCount: 1,
-      fallbackNotice: {
-        kind: "active",
-        selectedModel: "google/gemini-3-pro",
-        activeModel: "google/gemini-3-pro",
-        reason: "rate_limit",
+  it.each([
+    {
+      name: "auto",
+      overrides: {
+        authProfileOverride: "fallback-key",
+        authProfileOverrideSource: "auto",
+        authProfileOverrideCompactionCount: 1,
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "google/gemini-3-pro",
+          activeModel: "google/gemini-3-pro",
+          reason: "rate_limit",
+        },
       },
-    });
-
-    clearAutoFallbackPrimaryProbeSelection(entry, 2);
-
-    expect(entry).toEqual({ sessionId: "session", updatedAt: 2 });
-  });
-
-  it("clears legacy auto auth selection when clearing primary probe state", () => {
-    const entry = fallbackEntry({
-      authProfileOverride: "fallback-key",
-      authProfileOverrideCompactionCount: 1,
-    });
-
-    clearAutoFallbackPrimaryProbeSelection(entry, 2);
-
-    expect(entry).toEqual({ sessionId: "session", updatedAt: 2 });
-  });
-
-  it("preserves user-owned auth selection when clearing primary probe state", () => {
-    const entry = fallbackEntry({
-      authProfileOverride: "selected-key",
-      authProfileOverrideSource: "user",
-    });
-
-    clearAutoFallbackPrimaryProbeSelection(entry, 2);
-
-    expect(entry).toEqual({
-      sessionId: "session",
-      updatedAt: 2,
-      authProfileOverride: "selected-key",
-      authProfileOverrideSource: "user",
-    });
-  });
+      expected: {},
+    },
+    {
+      name: "legacy",
+      overrides: { authProfileOverride: "fallback-key", authProfileOverrideCompactionCount: 1 },
+      expected: {},
+    },
+    {
+      name: "user",
+      overrides: { authProfileOverride: "selected-key", authProfileOverrideSource: "user" },
+      expected: { authProfileOverride: "selected-key", authProfileOverrideSource: "user" },
+    },
+  ] as const)(
+    "clears fallback state while respecting $name auth ownership",
+    ({ overrides, expected }) => {
+      const entry = fallbackEntry(overrides);
+      clearAutoFallbackPrimaryProbeSelection(entry, 2);
+      expect(entry).toEqual({ sessionId: "session", updatedAt: 2, ...expected });
+    },
+  );
 
   it("resolves subagent model fallbacks from the selected subagent model source", () => {
     const cfg = agentConfig({

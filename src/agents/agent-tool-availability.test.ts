@@ -1,23 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   bindAgentToolAvailability,
-  finalizeAgentToolAvailability,
-  markAgentToolExecutionUnavailable,
+  finalizeAgentToolAvailability as finalize,
+  markAgentToolExecutionUnavailable as denyExecution,
 } from "./agent-tool-availability.js";
-import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import { copyAgentToolMetadata as copyMetadata } from "./agent-tool-metadata.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
-  rewrapToolWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
+  rewrapToolWithBeforeToolCallHook as rewrapHook,
+  wrapToolWithBeforeToolCallHook as wrapHook,
 } from "./agent-tools.before-tool-call.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import { SWARM_CODE_MODE_IDEMPOTENCY_KEY } from "./subagents/swarm/swarm-code-mode.js";
 import {
-  applyToolSearchCatalog,
+  applyToolSearchCatalog as applyCatalog,
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
   createToolSearchTools,
-  restrictToolSearchCatalog,
+  restrictToolSearchCatalog as restrictCatalog,
 } from "./tool-search.js";
 import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
@@ -39,6 +39,15 @@ function spawnTool(signal?: AbortSignal) {
 }
 function reader() {
   return createAgentsWaitTool({ config, agentSessionKey: "agent:main:main", agentId: "main" });
+}
+function deniedCopy<T extends ReturnType<typeof reader>>(tool: T, message: string) {
+  return copyMetadata(tool, {
+    ...tool,
+    execute: vi.fn(tool.execute).mockRejectedValue(new Error(message)),
+  });
+}
+function collect(tool: ReturnType<typeof spawnTool>, id: string) {
+  return tool.execute(id, { task: "inspect", collect: true });
 }
 function catalogFixture() {
   const catalogConfig = {
@@ -118,12 +127,12 @@ describe("execution allowlist availability", () => {
       },
     });
 
-    finalizeAgentToolAvailability(tools, { toolExecutionAllow: Object.freeze(allow) });
+    finalize(tools, { toolExecutionAllow: Object.freeze(allow) });
 
     expect(callableNames).toEqual(expected);
   });
 
-  it("reads current execution caps when restricting and rebuilding a catalog", async () => {
+  it("rechecks execution caps on catalog restriction and rebuild", async () => {
     const { config: catalogConfig, catalogRef, controls } = catalogFixture();
     const tool = spawnTool();
     const params = {
@@ -137,22 +146,22 @@ describe("execution allowlist availability", () => {
       expect(tool.parameters).not.toHaveProperty("properties.collect");
     };
     try {
-      applyToolSearchCatalog(params);
+      applyCatalog(params);
       expect(tool.parameters).toHaveProperty("properties.collect");
 
       params.toolExecutionAllow[1] = "read";
-      restrictToolSearchCatalog({
+      restrictCatalog({
         catalogRef,
         allowedToolNames: new Set(["sessions_spawn", "agents_wait"]),
       });
       await expectUnavailable();
 
       params.toolExecutionAllow[1] = "agents_wait";
-      applyToolSearchCatalog(params);
+      applyCatalog(params);
       expect(tool.parameters).toHaveProperty("properties.collect");
 
       params.toolExecutionAllow = ["sessions_spawn", "read"];
-      applyToolSearchCatalog(params);
+      applyCatalog(params);
       await expectUnavailable();
     } finally {
       clearToolSearchCatalog({ catalogRef });
@@ -167,15 +176,15 @@ describe("collector tool availability", () => {
     const hidden = first.parameters;
     expect(second.parameters).toBe(hidden);
 
-    finalizeAgentToolAvailability([first, reader()]);
-    finalizeAgentToolAvailability([second, reader()]);
+    finalize([first, reader()]);
+    finalize([second, reader()]);
     expect(second.parameters).toBe(first.parameters);
     expect(first.parameters).toHaveProperty("properties.collect");
 
-    finalizeAgentToolAvailability([first]);
+    finalize([first]);
     expect(first.parameters).not.toHaveProperty("properties.collect");
     await expectCollectionDenied(first);
-    await second.execute("allowed", { task: "inspect", collect: true });
+    await collect(second, "allowed");
     expect(spawn).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ collect: true }),
       expect.anything(),
@@ -185,21 +194,21 @@ describe("collector tool availability", () => {
   it("preserves normalized collector fields across availability changes", () => {
     const source = spawnTool();
     const wait = reader();
-    finalizeAgentToolAvailability([source, wait]);
+    finalize([source, wait]);
     const normalized = normalizeToolParameters(source, { modelProvider: "google" });
 
-    finalizeAgentToolAvailability([normalized, wait]);
+    finalize([normalized, wait]);
     expectNormalizedCollector(normalized);
 
-    finalizeAgentToolAvailability([normalized]);
+    finalize([normalized]);
     expect(normalized.parameters).not.toHaveProperty("properties.outputSchema");
-    const wrapped = wrapToolWithBeforeToolCallHook(normalized);
-    finalizeAgentToolAvailability([wrapped, wait]);
+    const wrapped = wrapHook(normalized);
+    finalize([wrapped, wait]);
     expectNormalizedCollector(wrapped);
   });
 
   it.each(["missing", "lookalike", "quarantined", "denied", "execution-denied"] as const)(
-    "hides and refuses collection with a %s reader, without disabling ordinary spawning or fastMode",
+    "refuses a %s reader but preserves ordinary spawning and fastMode",
     async (kind) => {
       const tool = spawnTool();
       const wait = reader();
@@ -208,9 +217,9 @@ describe("collector tool availability", () => {
         candidate.parameters = { type: "array", items: { type: "string" } };
       }
       if (kind === "execution-denied") {
-        markAgentToolExecutionUnavailable(candidate);
+        denyExecution(candidate);
       }
-      finalizeAgentToolAvailability(
+      finalize(
         [tool, ...(kind === "missing" ? [] : [candidate])],
         kind === "denied" ? { toolExecutionAllow: ["sessions_spawn"] } : undefined,
       );
@@ -236,13 +245,13 @@ describe("collector tool availability", () => {
     { boundary: "reuse", readerState: "lookalike" },
     { boundary: "restriction", readerState: "same-object-denied" },
   ] as const)(
-    "revokes collection after $boundary with a $readerState reader and unchanged descriptors",
+    "revokes collection after $boundary with $readerState despite unchanged descriptors",
     async ({ boundary, readerState }) => {
       const { config: catalogConfig, catalogRef, controls } = catalogFixture();
       const tool = spawnTool();
-      const wait = wrapToolWithBeforeToolCallHook(reader());
+      const wait = wrapHook(reader());
       const compact = (currentReader: typeof wait) =>
-        applyToolSearchCatalog({
+        applyCatalog({
           tools: [...controls, tool, currentReader],
           config: catalogConfig,
           catalogRef,
@@ -256,7 +265,7 @@ describe("collector tool availability", () => {
         if (boundary === "reuse") {
           expect(compact(wait).catalogReused).toBe(true);
         } else {
-          expect(restrictToolSearchCatalog({ catalogRef, allowedToolNames })).toBe(2);
+          expect(restrictCatalog({ catalogRef, allowedToolNames })).toBe(2);
         }
         expect(catalogRef.current).toBe(firstCatalog);
         expect(catalogRef.current?.entries).toBe(firstEntries);
@@ -266,17 +275,12 @@ describe("collector tool availability", () => {
           readerState === "lookalike"
             ? { ...wait }
             : readerState === "denied-wrapper"
-              ? markAgentToolExecutionUnavailable(
-                  copyAgentToolMetadata(wait, {
-                    ...wait,
-                    execute: vi.fn(wait.execute).mockRejectedValue(new Error("executor denied")),
-                  }),
-                )
-              : markAgentToolExecutionUnavailable(wait);
+              ? denyExecution(deniedCopy(wait, "executor denied"))
+              : denyExecution(wait);
         if (boundary === "reuse") {
           compact(currentReader);
         } else {
-          restrictToolSearchCatalog({ catalogRef, allowedToolNames });
+          restrictCatalog({ catalogRef, allowedToolNames });
         }
 
         // Exercise the real spawn guard before schema assertions can hide an admitted child.
@@ -293,54 +297,45 @@ describe("collector tool availability", () => {
     },
   );
 
-  it("keeps its binding through hook rebuilds and metadata copies without replacing a later denial", async () => {
+  it("preserves binding and later denial across hook rebuilds and metadata copies", async () => {
     const original = spawnTool();
-    const wrapped = rewrapToolWithBeforeToolCallHook(wrapToolWithBeforeToolCallHook(original));
-    const wait = rewrapToolWithBeforeToolCallHook(wrapToolWithBeforeToolCallHook(reader()));
-    const denied = copyAgentToolMetadata(wrapped, {
-      ...wrapped,
-      execute: vi.fn(wrapped.execute).mockRejectedValue(new Error("later executor policy")),
-    });
+    const wrapped = rewrapHook(wrapHook(original));
+    const wait = rewrapHook(wrapHook(reader()));
+    const denied = deniedCopy(wrapped, "later executor policy");
     const executor = denied.execute;
-    finalizeAgentToolAvailability([denied, wait]);
+    finalize([denied, wait]);
     expect(denied.parameters).toHaveProperty("properties.collect");
     expect(denied.execute).toBe(executor);
-    await expect(denied.execute("denied", { task: "inspect", collect: true })).rejects.toThrow(
-      "later executor policy",
-    );
+    await expect(collect(denied, "denied")).rejects.toThrow("later executor policy");
     expect(spawn).not.toHaveBeenCalled();
-    await wrapped.execute("allowed", { task: "inspect", collect: true });
+    await collect(wrapped, "allowed");
     expect(spawn).toHaveBeenCalledOnce();
-    finalizeAgentToolAvailability([denied]);
-    await expect(wrapped.execute("narrowed", { task: "inspect", collect: true })).rejects.toThrow(
-      "Collector results are unavailable",
-    );
+    finalize([denied]);
+    await expect(collect(wrapped, "narrowed")).rejects.toThrow("Collector results are unavailable");
     expect(spawn).toHaveBeenCalledOnce();
   });
 
   it("cannot reactivate a closed generation through copied definitions", async () => {
     const controller = new AbortController();
     const old = wrapToolWithAbortSignal(spawnTool(controller.signal), controller.signal);
-    const retained = copyAgentToolMetadata(old, { ...old });
-    finalizeAgentToolAvailability([retained, reader()]);
+    const retained = copyMetadata(old, { ...old });
+    finalize([retained, reader()]);
     controller.abort(new Error("generation closed"));
-    finalizeAgentToolAvailability([retained, reader()]);
-    await expect(retained.execute("stale", { task: "inspect", collect: true })).rejects.toThrow();
+    finalize([retained, reader()]);
+    await expect(collect(retained, "stale")).rejects.toThrow();
     expect(spawn).not.toHaveBeenCalled();
     const current = spawnTool();
-    finalizeAgentToolAvailability([current, reader()]);
-    await current.execute("current", { task: "inspect", collect: true });
+    finalize([current, reader()]);
+    await collect(current, "current");
     expect(spawn).toHaveBeenCalledOnce();
   });
 
   it("does not override an explicit Swarm opt-out when a native reader is supplied", async () => {
     const tool = createSessionsSpawnTool({ config: { ...config, tools: { swarm: false } } });
-    finalizeAgentToolAvailability([tool, reader()]);
+    finalize([tool, reader()]);
     expect(tool.parameters).not.toHaveProperty("properties.collect");
     expect(tool.parameters).not.toHaveProperty("properties.fastMode");
-    await expect(tool.execute("disabled", { task: "inspect", collect: true })).rejects.toThrow(
-      "tools.swarm.enabled=true",
-    );
+    await expect(collect(tool, "disabled")).rejects.toThrow("tools.swarm.enabled=true");
     expect(spawn).not.toHaveBeenCalled();
   });
 });

@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { shouldCompact } from "../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { AgentCompactionConfig } from "../config/types.agent-defaults.js";
 import {
-  applyAgentAutoCompactionGuard,
-  applyAgentCompactionSettingsFromConfig,
-  DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
+  applyAgentAutoCompactionGuard as applyGuard,
+  applyAgentCompactionSettingsFromConfig as applySettings,
+  DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR as reserveFloor,
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
 } from "./agent-settings.js";
@@ -26,11 +26,10 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
       const settingsManager = settingsWithReserve(20_000, !configuredEnabled);
       const setCompactionEnabled = vi.spyOn(settingsManager, "setCompactionEnabled");
       const cfg = compactionConfig({ enabled: configuredEnabled });
-
-      applyAgentCompactionSettingsFromConfig({ settingsManager, cfg });
+      applySettings({ settingsManager, cfg });
       await settingsManager.reload();
       expect(settingsManager.getCompactionEnabled()).toBe(configuredEnabled);
-      applyAgentCompactionSettingsFromConfig({ settingsManager, cfg });
+      applySettings({ settingsManager, cfg });
 
       expect(setCompactionEnabled).toHaveBeenCalledExactlyOnceWith(configuredEnabled);
       expect(settingsManager.getCompactionEnabled()).toBe(configuredEnabled);
@@ -38,7 +37,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
   );
 
   const forcedDisableCases: Array<
-    [string, Omit<Parameters<typeof applyAgentAutoCompactionGuard>[0], "settingsManager">]
+    [string, Omit<Parameters<typeof applyGuard>[0], "settingsManager">]
   > = [
     ["safeguard mode", { compactionMode: "safeguard" }],
     [
@@ -46,7 +45,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
       {
         contextEngineInfo: {
           id: "third-party",
-          name: "Third-party Context Engine",
+          name: "Third-party",
           version: "0.1.0",
           ownsCompaction: true,
         },
@@ -61,11 +60,8 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     (_label, guardParams) => {
       const settingsManager = settingsWithReserve(20_000, false);
 
-      applyAgentCompactionSettingsFromConfig({
-        settingsManager,
-        cfg: compactionConfig({ enabled: true }),
-      });
-      applyAgentAutoCompactionGuard({ settingsManager, ...guardParams });
+      applySettings({ settingsManager, cfg: compactionConfig({ enabled: true }) });
+      applyGuard({ settingsManager, ...guardParams });
       expect(settingsManager.getCompactionEnabled()).toBe(false);
     },
   );
@@ -76,7 +72,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     });
     const setCompactionEnabled = vi.spyOn(settingsManager, "setCompactionEnabled");
 
-    applyAgentCompactionSettingsFromConfig({
+    applySettings({
       settingsManager,
       cfg: { agents: { defaults: { compaction: {} } } },
     });
@@ -89,13 +85,11 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     const settingsManager = SettingsManager.inMemory();
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
-    applyAgentCompactionSettingsFromConfig({ settingsManager });
+    applySettings({ settingsManager });
 
-    expect(settingsManager.getCompactionReserveTokens()).toBe(
-      DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
-    );
+    expect(settingsManager.getCompactionReserveTokens()).toBe(reserveFloor);
     expect(applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR },
+      compaction: { reserveTokens: reserveFloor },
     });
   });
 
@@ -104,29 +98,25 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
       compaction: { reserveTokens: 16_384 },
     });
 
-    applyAgentCompactionSettingsFromConfig({
+    applySettings({
       settingsManager,
       contextTokenBudget: 100_000,
     });
-    expect(settingsManager.getCompactionReserveTokens()).toBe(
-      DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
-    );
+    expect(settingsManager.getCompactionReserveTokens()).toBe(reserveFloor);
 
     settingsManager.applyOverrides({ compaction: { reserveTokens: 16_384 } });
-    applyAgentCompactionSettingsFromConfig({
+    applySettings({
       settingsManager,
       contextTokenBudget: 100_000,
     });
-    expect(settingsManager.getCompactionReserveTokens()).toBe(
-      DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
-    );
+    expect(settingsManager.getCompactionReserveTokens()).toBe(reserveFloor);
   });
 
   it("does not override when already above floor and not in safeguard mode", () => {
     const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 32_000 } });
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
-    applyAgentCompactionSettingsFromConfig({
+    applySettings({
       settingsManager,
       cfg: { agents: { defaults: { compaction: { mode: "default" } } } },
     });
@@ -139,10 +129,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     const settingsManager = settingsWithReserve(20_000);
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
-    applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      cfg: compactionConfig({ keepRecentTokens: 15_000 }),
-    });
+    applySettings({ settingsManager, cfg: compactionConfig({ keepRecentTokens: 15_000 }) });
 
     expect(settingsManager.getCompactionKeepRecentTokens()).toBe(15_000);
     expect(applyOverrides).toHaveBeenCalledWith({
@@ -154,7 +141,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 25_000 } });
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
-    applyAgentCompactionSettingsFromConfig({
+    applySettings({
       settingsManager,
       cfg: { agents: { defaults: { compaction: { mode: "safeguard" } } } },
     });
@@ -167,7 +154,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 25_000 } });
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
-    applyAgentCompactionSettingsFromConfig({
+    applySettings({
       settingsManager,
       cfg: { agents: { defaults: { compaction: { mode: "safeguard", keepRecentTokens: 0 } } } },
     });
@@ -182,7 +169,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     const settingsManager = SettingsManager.inMemory();
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
-    applyAgentCompactionSettingsFromConfig({
+    applySettings({
       settingsManager,
       contextTokenBudget: 16_384,
     });
@@ -203,7 +190,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 2_048 } });
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
-    applyAgentCompactionSettingsFromConfig({
+    applySettings({
       settingsManager,
       contextTokenBudget: 16_384,
     });
@@ -216,7 +203,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
 
   it("keeps a fresh 32K tool turn out of compaction until the conversation grows", () => {
     const settingsManager = SettingsManager.inMemory();
-    applyAgentCompactionSettingsFromConfig({ settingsManager, contextTokenBudget: 32_768 });
+    applySettings({ settingsManager, contextTokenBudget: 32_768 });
     const settings = settingsManager.getCompactionSettings();
 
     // Live local-model proof used 12,824 prompt tokens on its first successful tool turn.
@@ -229,18 +216,9 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     const settingsManager = settingsWithReserve(16_384);
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
-    // The large-window default keeps its existing 20,000-token reserve.
-    applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      contextTokenBudget: 200_000,
-    });
-
-    expect(settingsManager.getCompactionReserveTokens()).toBe(
-      DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
-    );
-    expect(applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR },
-    });
+    applySettings({ settingsManager, contextTokenBudget: 200_000 });
+    expect(settingsManager.getCompactionReserveTokens()).toBe(reserveFloor);
+    expect(applyOverrides).toHaveBeenCalledWith({ compaction: { reserveTokens: reserveFloor } });
   });
 });
 
@@ -342,7 +320,7 @@ describe("applyAgentAutoCompactionGuard", () => {
       compaction: { enabled: true, reserveTokens: 50_000 },
     });
 
-    applyAgentAutoCompactionGuard({
+    applyGuard({
       settingsManager,
       compactionMode: "safeguard",
     });
@@ -364,7 +342,7 @@ describe("applyAgentAutoCompactionGuard", () => {
     });
     const setCompactionEnabled = vi.spyOn(settingsManager, "setCompactionEnabled");
 
-    applyAgentAutoCompactionGuard({
+    applyGuard({
       settingsManager,
       contextEngineInfo: {
         id: "legacy",

@@ -52,6 +52,13 @@ function failingExecDefinition(name: string, parameters: AgentTool["parameters"]
 function firstLogErrorMessage(): unknown {
   return mocks.logError.mock.calls[0]?.[0];
 }
+function expectPrivateExecLog(...secrets: string[]) {
+  const message = String(firstLogErrorMessage());
+  expect(message).toBe("[tools] exec failed: exec denied: allowlist miss");
+  for (const secret of [...secrets, "export XAI_API_KEY"]) {
+    expect(message).not.toContain(secret);
+  }
+}
 function editDefinition(execute: AgentTool["execute"]) {
   return definitionFor(
     wrapToolParamValidation(
@@ -141,11 +148,7 @@ describe("agent tool definition adapter logging", () => {
       timeout: 5,
     });
 
-    const message = String(firstLogErrorMessage());
-    expect(message).toBe("[tools] exec failed: exec denied: allowlist miss");
-    expect(message).not.toContain(commandSecret);
-    expect(message).not.toContain(envSecret);
-    expect(message).not.toContain("export XAI_API_KEY");
+    expectPrivateExecLog(commandSecret, envSecret);
     expect(result.details).toEqual({
       status: "error",
       tool: "exec",
@@ -167,11 +170,7 @@ describe("agent tool definition adapter logging", () => {
           ? JSON.stringify({ command, timeout: 5 })
           : { command: [command], env: `OPENAI_API_KEY=${envSecret}` },
       );
-      const message = String(firstLogErrorMessage());
-      expect(message).toBe("[tools] exec failed: exec denied: allowlist miss");
-      expect(message).not.toContain(commandSecret);
-      expect(message).not.toContain(envSecret);
-      expect(message).not.toContain("export XAI_API_KEY");
+      expectPrivateExecLog(commandSecret, envSecret);
     },
   );
 
