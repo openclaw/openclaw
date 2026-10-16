@@ -417,86 +417,16 @@ describe("update formatting", () => {
     expected?: string;
     contains?: string;
     excludes?: string;
-  }>([
-    {
-      name: "stale built commit",
-      update: {
-        installKind: "git",
-        git: { ...cleanGit, sha: "abc123456789", builtSha: "def987654321" },
-      },
-      contains: "stale build (running def98765, run pnpm build)",
-    },
-    {
-      name: "current built commit",
-      update: {
-        installKind: "git",
-        git: { ...cleanGit, sha: "abc123456789", builtSha: "abc123456789" },
-      },
-      excludes: "stale build",
-    },
-    {
-      name: "git status with registry summary",
-      update: {
-        installKind: "git",
-        git: { ...cleanGit, sha: "abc123456789", dirty: true, behind: 2 },
-        registry: { latestVersion: VERSION },
-        deps: {
-          manager: "pnpm",
-          status: "ok",
-          lockfilePath: "pnpm-lock.yaml",
-          markerPath: "node_modules/.modules.yaml",
-        },
-      },
-      expected: `Update: git main · ↔ origin/main · dirty · behind 2 · npm latest ${VERSION} · deps ok`,
-    },
-    {
-      name: "beta registry tag",
-      update: {
-        installKind: "package",
-        packageManager: "npm",
-        registry: { latestVersion: VERSION, tag: "beta" },
-      },
-      expected: `Update: npm · up to date · npm beta ${VERSION}`,
-    },
-    {
-      name: "installed version ahead of extended-stable",
-      update: {
-        installKind: "package",
-        packageManager: "npm",
-        registry: { latestVersion: "1.0.0", tag: "extended-stable" },
-      },
-      expected: "Update: npm · ahead of extended-stable (1.0.0)",
-    },
-    {
-      name: "structured extended-stable resolver failure",
-      update: {
-        installKind: "git",
-        packageManager: "pnpm",
-        registry: {
-          latestVersion: null,
-          tag: "extended-stable",
-          error: "unsupported_git_channel",
-          reason: "unsupported_git_channel",
-        },
-      },
-      contains: "extended-stable requires a package install",
-    },
-    {
-      name: "package-manager registry error",
-      update: {
-        installKind: "package",
-        packageManager: "npm",
-        registry: { latestVersion: null, error: "offline" },
-        deps: {
-          manager: "npm",
-          status: "missing",
-          lockfilePath: "package-lock.json",
-          markerPath: "node_modules",
-        },
-      },
-      expected: "Update: npm · npm latest unknown · deps missing",
-    },
-  ])("renders $name", ({ update, expected, contains, excludes }) => {
+  }>`
+    name                                             | update                                                                                                                                                                                                                                                | expected                                                                                   | contains                                            | excludes
+    ${"stale built commit"}                          | ${{ installKind: "git", git: { ...cleanGit, sha: "abc123456789", builtSha: "def987654321" } }}                                                                                                                                                        | ${undefined}                                                                               | ${"stale build (running def98765, run pnpm build)"} | ${undefined}
+    ${"current built commit"}                        | ${{ installKind: "git", git: { ...cleanGit, sha: "abc123456789", builtSha: "abc123456789" } }}                                                                                                                                                        | ${undefined}                                                                               | ${undefined}                                        | ${"stale build"}
+    ${"git status with registry summary"}            | ${{ installKind: "git", git: { ...cleanGit, sha: "abc123456789", dirty: true, behind: 2 }, registry: { latestVersion: VERSION }, deps: { manager: "pnpm", status: "ok", lockfilePath: "pnpm-lock.yaml", markerPath: "node_modules/.modules.yaml" } }} | ${`Update: git main · ↔ origin/main · dirty · behind 2 · npm latest ${VERSION} · deps ok`} | ${undefined}                                        | ${undefined}
+    ${"beta registry tag"}                           | ${{ installKind: "package", packageManager: "npm", registry: { latestVersion: VERSION, tag: "beta" } }}                                                                                                                                               | ${`Update: npm · up to date · npm beta ${VERSION}`}                                        | ${undefined}                                        | ${undefined}
+    ${"installed version ahead of extended-stable"}  | ${{ installKind: "package", packageManager: "npm", registry: { latestVersion: "1.0.0", tag: "extended-stable" } }}                                                                                                                                    | ${"Update: npm · ahead of extended-stable (1.0.0)"}                                        | ${undefined}                                        | ${undefined}
+    ${"structured extended-stable resolver failure"} | ${{ installKind: "git", packageManager: "pnpm", registry: { latestVersion: null, tag: "extended-stable", error: "unsupported_git_channel", reason: "unsupported_git_channel" } }}                                                                     | ${undefined}                                                                               | ${"extended-stable requires a package install"}     | ${undefined}
+    ${"package-manager registry error"}              | ${{ installKind: "package", packageManager: "npm", registry: { latestVersion: null, error: "offline" }, deps: { manager: "npm", status: "missing", lockfilePath: "package-lock.json", markerPath: "node_modules" } }}                                 | ${"Update: npm · npm latest unknown · deps missing"}                                       | ${undefined}                                        | ${undefined}
+  `("renders $name", ({ update, expected, contains, excludes }) => {
     const line = formatUpdateOneLiner(buildUpdate(update));
     if (expected !== undefined) {
       expect(line).toBe(expected);

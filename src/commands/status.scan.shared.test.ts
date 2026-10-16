@@ -17,6 +17,7 @@ import {
 } from "../gateway/minimal-gateway.test-helpers.js";
 import type { GatewayProbeAuth } from "../gateway/probe.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
 import { createUnreachableGatewayProbe } from "./gateway-status/test-support.js";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import {
@@ -41,18 +42,17 @@ const resolveGatewayProbeSnapshot = (
   });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   cleanupTempDirs(tempDirs);
 });
 
 const mocks = vi.hoisted(() => ({
   buildGatewayConnectionDetailsWithResolvers: vi.fn(),
-  resolveGatewayProbeTarget: vi.fn(),
   probeGateway: vi.fn<typeof import("../gateway/probe.js").probeGateway>(),
   waitForGatewayDiagnosticReadiness: vi.fn(),
   callGateway: vi.fn<typeof import("../gateway/call.js").callGateway>(),
   resolveGatewayProbeAuthResolution: vi.fn(),
-  pickGatewaySelfPresence: vi.fn(),
 }));
 
 function readGatewayCall() {
@@ -70,10 +70,6 @@ vi.mock("../gateway/connection-details.js", async (importOriginal) => ({
   buildGatewayConnectionDetailsWithResolvers: mocks.buildGatewayConnectionDetailsWithResolvers,
 }));
 
-vi.mock("../gateway/probe-target.js", () => ({
-  resolveGatewayProbeTarget: mocks.resolveGatewayProbeTarget,
-}));
-
 vi.mock("../gateway/probe.js", () => ({ probeGateway: mocks.probeGateway }));
 
 vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
@@ -86,15 +82,10 @@ vi.mock("./status.gateway-probe.js", () => ({
   resolveGatewayProbeAuthResolution: mocks.resolveGatewayProbeAuthResolution,
 }));
 
-vi.mock("./gateway-presence.js", () => ({
-  pickGatewaySelfPresence: mocks.pickGatewaySelfPresence,
-}));
-
 function setConnection(url: string) {
   mocks.buildGatewayConnectionDetailsWithResolvers.mockReturnValue({
     url,
     urlSource: "local loopback",
-    message: `Gateway target: ${url}`,
   });
 }
 
@@ -104,23 +95,12 @@ describe("resolveGatewayProbeSnapshot", () => {
     vi.spyOn(performance, "now").mockReturnValue(0);
     mocks.waitForGatewayDiagnosticReadiness.mockReset();
     setConnection(localUrl);
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "local",
-      gatewayMode: "local",
-      remoteUrlMissing: false,
-    });
     mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({ auth, warning: "warn" });
-    mocks.pickGatewaySelfPresence.mockReturnValue({ host: "box" });
     mocks.callGateway.mockRejectedValue(new Error("status rpc unavailable"));
   });
 
   it("skips auth resolution and probe for missing remote urls by default", async () => {
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "remote",
-      gatewayMode: "remote",
-      remoteUrlMissing: true,
-    });
-    const result = await resolveGatewayProbeSnapshot();
+    const result = await resolveGatewayProbeSnapshot({ cfg: { gateway: { mode: "remote" } } });
 
     expect(mocks.resolveGatewayProbeAuthResolution).not.toHaveBeenCalled();
     expect(mocks.probeGateway).not.toHaveBeenCalled();
@@ -134,39 +114,32 @@ describe("resolveGatewayProbeSnapshot", () => {
 
   it("waits through a 22-second cold start before probing the selected Gateway", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    try {
-      const startedAt = Date.now();
-      mocks.waitForGatewayDiagnosticReadiness.mockImplementation(async () => {
-        await new Promise((resolve) => {
-          setTimeout(resolve, 22_000);
-        });
-        vi.spyOn(performance, "now").mockReturnValue(22_000);
-        return { healthy: true, elapsedMs: 22_000, waitOutcome: "healthy" };
+    const startedAt = Date.now();
+    mocks.waitForGatewayDiagnosticReadiness.mockImplementation(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 22_000);
       });
-      mocks.probeGateway.mockImplementation(async () => ({
-        ...unreachableProbe(),
-        ok: Date.now() - startedAt >= 22_000,
-      }));
-      const pending = resolveGatewayProbeSnapshot();
-      await vi.advanceTimersByTimeAsync(22_000);
-      const result = await pending;
+      vi.spyOn(performance, "now").mockReturnValue(22_000);
+      return { healthy: true, elapsedMs: 22_000, waitOutcome: "healthy" };
+    });
+    mocks.probeGateway.mockImplementation(async () => ({
+      ...unreachableProbe(),
+      ok: Date.now() - startedAt >= 22_000,
+    }));
+    const pending = resolveGatewayProbeSnapshot();
+    await vi.advanceTimersByTimeAsync(22_000);
+    const result = await pending;
 
-      expect(result).toMatchObject({ gatewayReachable: true, localGatewayHealthy: true });
-      expect(readProbeCall()).toMatchObject({
-        timeoutMs: 38_000,
-        auth,
-      });
-      expect(mocks.waitForGatewayDiagnosticReadiness).toHaveBeenCalledWith({
-        config: {},
-        timeoutMs: 60_000,
-        deadlineMs: 60_000,
-        onProgress: undefined,
-        token: "tok",
-        password: "pw",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(result).toMatchObject({ gatewayReachable: true, localGatewayHealthy: true });
+    expect(readProbeCall()).toMatchObject({ timeoutMs: 38_000, auth });
+    expect(mocks.waitForGatewayDiagnosticReadiness).toHaveBeenCalledWith({
+      config: {},
+      timeoutMs: 60_000,
+      deadlineMs: 60_000,
+      onProgress: undefined,
+      token: "tok",
+      password: "pw",
+    });
   });
 
   it.each([
@@ -193,20 +166,18 @@ describe("resolveGatewayProbeSnapshot", () => {
     },
   );
 
-  it.each(["plugin-errors", "probe-failed"])(
+  it.each([
+    ["plugin-errors", ["fixture plugin failed"], true],
+    ["probe-failed", undefined, false],
+  ] as const)(
     "does not claim current local health from %s",
-    async (observation) => {
+    async (_observation, activatedPluginErrors, ok) => {
       mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
         healthy: true,
         waitOutcome: "healthy",
-        ...(observation === "plugin-errors"
-          ? { activatedPluginErrors: ["fixture plugin failed"] }
-          : {}),
+        ...(activatedPluginErrors ? { activatedPluginErrors } : {}),
       });
-      mocks.probeGateway.mockResolvedValue({
-        ...unreachableProbe(),
-        ok: observation !== "probe-failed",
-      });
+      mocks.probeGateway.mockResolvedValue({ ...unreachableProbe(), ok });
       const result = await resolveGatewayProbeSnapshot();
       expect(result.localGatewayHealthy).toBe(false);
     },
@@ -215,10 +186,8 @@ describe("resolveGatewayProbeSnapshot", () => {
   it("treats scope-limited read probes as reachable", async () => {
     mocks.probeGateway.mockResolvedValue({
       ...unreachableProbe(),
-      connectLatencyMs: 51,
       gatewayReached: true,
       error: "missing scope: operator.read",
-      close: null,
       auth: {
         role: "operator",
         scopes: [],
@@ -355,7 +324,15 @@ describe("resolveGatewayProbeSnapshot", () => {
         startup.resolve({ completion });
         return completion;
       });
-    const driveStartup = async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    let pending: ReturnType<typeof resolveGatewayProbeSnapshot> | undefined;
+    try {
+      pending = resolveGatewayProbeSnapshot({
+        cfg: { gateway: { auth: { mode: "token", token: "tok" } } },
+        opts: createStatusGatewayProbeBudget(parsed?.timeoutMs),
+      });
+
+      // Drive deadline time only after real socket requests cross their boundary.
       const { completion } = await racePromiseWithAbortSignal(startup.promise, signal);
       const state = { settled: false };
       const settle = () => {
@@ -367,17 +344,6 @@ describe("resolveGatewayProbeSnapshot", () => {
         await vi.advanceTimersToNextTimerAsync();
       }
       await completion;
-    };
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    let pending: ReturnType<typeof resolveGatewayProbeSnapshot> | undefined;
-    try {
-      pending = resolveGatewayProbeSnapshot({
-        cfg: { gateway: { auth: { mode: "token", token: "tok" } } },
-        opts: createStatusGatewayProbeBudget(parsed?.timeoutMs),
-      });
-
-      // Drive deadline time only after real socket requests cross their boundary.
-      await driveStartup();
       await racePromiseWithAbortSignal(statusRequested.promise, signal);
       await vi.advanceTimersByTimeAsync(100);
       const result = await pending;
@@ -398,11 +364,6 @@ describe("resolveGatewayProbeSnapshot", () => {
   });
 
   it("does not use the status RPC fallback for remote probe failures", async () => {
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "remote",
-      gatewayMode: "remote",
-      remoteUrlMissing: false,
-    });
     mocks.probeGateway.mockResolvedValue(unreachableProbe("wss://gateway.example/ws"));
 
     const result = await resolveGatewayProbeSnapshot({
@@ -424,9 +385,7 @@ it("builds the Tailscale URL from the device hostname and configured Control UI 
   ).toBe("https://node.tailnet.ts.net/control");
 });
 
-function memoryManager<
-  T extends import("../memory-host-sdk/engine-storage.js").MemoryProviderStatus,
->(status: T) {
+function memoryManager(status: MemoryProviderStatus) {
   return {
     probeVectorStoreAvailability: vi.fn(async () => true),
     probeVectorAvailability: vi.fn(async () => true),
@@ -470,7 +429,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     });
     isMemoryProviderNative.mockReturnValue(true);
     const result = await memorySnapshot({
-      cfg: { plugins: { slots: { memory: "records" } } },
       memoryPlugin: { enabled: true, slot: "records" },
       getMemoryProvider,
     });
@@ -491,26 +449,23 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it.each(["unconfigured", "ownerless", "cold-start"])(
-    "keeps %s Memory Core from opening a manager",
-    async (state) => {
-      if (state === "cold-start") {
-        requireDefaultDatabasePath.mockReturnValue(absentDatabase);
-      }
-      const params: Partial<MemoryParams> =
-        state === "ownerless"
-          ? {
-              cfg: { agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } } },
-              agentStatus: { defaultId: null },
-            }
-          : {};
+  it.each<{
+    state: string;
+    params: Partial<MemoryParams>;
+    path: string | null;
+    unused: typeof resolveMemoryConfig | typeof isMemoryProviderNative;
+  }>`
+    state             | params                                                                                                                | path              | unused
+    ${"unconfigured"} | ${{}}                                                                                                                 | ${null}           | ${isMemoryProviderNative}
+    ${"ownerless"}    | ${{ cfg: { agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } } }, agentStatus: { defaultId: null } }} | ${null}           | ${resolveMemoryConfig}
+    ${"cold-start"}   | ${{}}                                                                                                                 | ${absentDatabase} | ${resolveMemoryConfig}
+  `(
+    "keeps $state Memory Core from opening a manager",
+    async ({ params, path: databasePath, unused }) => {
+      requireDefaultDatabasePath.mockReturnValue(databasePath);
       await expect(memorySnapshot(params)).resolves.toBeNull();
       expect(getMemorySearchManager).not.toHaveBeenCalled();
-      if (state === "unconfigured") {
-        expect(isMemoryProviderNative).not.toHaveBeenCalled();
-      } else {
-        expect(resolveMemoryConfig).not.toHaveBeenCalled();
-      }
+      expect(unused).not.toHaveBeenCalled();
     },
   );
 
@@ -575,7 +530,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     db.exec(`
       CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE files (path TEXT PRIMARY KEY);
-      CREATE TABLE chunks (id TEXT PRIMARY KEY);
       INSERT INTO files VALUES ('MEMORY.md');
     `);
     db.close();
