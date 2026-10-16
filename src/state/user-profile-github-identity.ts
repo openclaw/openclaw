@@ -45,6 +45,7 @@ import type {
   UserProfileGitHubAttribution,
   UserProfileGitHubAttributionRead,
   UserProfileRoleAuthority,
+  UserProfilesDatabase,
   EnterpriseGitHubIdentity,
 } from "./user-profiles.types.js";
 
@@ -319,7 +320,7 @@ function resolveUserProfileGitHubAttributionInDatabase(
   if (profileIds.length === 0 || !tableExists(db, "user_profiles")) {
     return { identities: new Map(), canonicalProfileIds: [] };
   }
-  const query = getNodeSqliteKysely<DB>(db)
+  const query = getNodeSqliteKysely<UserProfilesDatabase & Pick<DB, "user_preferences">>(db)
     .selectFrom("user_profiles as requested")
     .leftJoin("user_profiles as profile", (join) =>
       join.on((eb) =>
