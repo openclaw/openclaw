@@ -6,7 +6,7 @@ import {
   selectSessionCommunication,
   type SessionCommunicationMenuAction,
 } from "./session-communication-options.ts";
-import { SessionDetailsOwner } from "./session-details-owner.ts";
+import { SessionDetailsOwner } from "./session-details-controller.ts";
 
 type SessionMenuSettingsOptions = {
   context: () => ApplicationContext | undefined;
