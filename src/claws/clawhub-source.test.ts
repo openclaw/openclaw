@@ -44,7 +44,7 @@ vi.mock("../infra/clawhub-install-trust.js", () => ({
 vi.mock("../infra/install-flow.js", () => ({
   withExtractedArchiveRoot: mocks.extract,
 }));
-// mock-isolation: Manifest reads use fixture results independent of archive internals.
+// mock-isolation: Catalog fixtures use the real reader; resolver fixtures control source identity.
 vi.mock("./reader.js", () => ({
   readClawManifestFile: mocks.read,
 }));
@@ -150,8 +150,13 @@ beforeEach(async () => {
   const extractedRoot = path.join(temp, "extracted");
   const archivePath = path.join(temp, "catalog.clawpack");
   await fs.mkdir(extractedRoot);
-  await fs.writeFile(path.join(extractedRoot, "package.json"), "{}\n");
+  await fs.writeFile(
+    path.join(extractedRoot, "package.json"),
+    JSON.stringify({ name: packageName, version, openclaw: { claw: "claw.json" } }),
+  );
   await fs.writeFile(path.join(extractedRoot, "SOUL.md"), "# Research brief\n");
+  await fs.writeFile(path.join(extractedRoot, "USER.md"), "# Reader preferences\n");
+  await fs.writeFile(path.join(extractedRoot, "BOOTSTRAP.md"), "# First-run setup\n");
   await fs.writeFile(path.join(extractedRoot, "brief.md"), "# Brief template\n");
   await fs.writeFile(archivePath, archiveBytes);
   const contentsManifest = {
@@ -160,7 +165,10 @@ beforeEach(async () => {
     metadata: {},
     workspace: {
       bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } },
-      files: [{ source: "brief.md", path: "brief.md" }],
+      files: [
+        { source: "USER.md", path: "USER.md" },
+        { source: "brief.md", path: "brief.md" },
+      ],
     },
     packages: [
       { kind: "skill", source: "clawhub", ref: "@openclaw/citation-check", version: "1.1.0" },
@@ -177,37 +185,10 @@ beforeEach(async () => {
       },
     ],
   } satisfies ClawManifest;
-  mocks.read.mockImplementation(async (root: string) => ({
-    ok: true,
-    manifest: contentsManifest,
-    source: {
-      kind: "package",
-      name: packageName,
-      version,
-      packageRoot: root,
-      manifestPath: path.join(root, "CLAW.md"),
-      integrityKind: "development-snapshot",
-      integrity: "sha256:development",
-      byteLength: archiveBytes.byteLength,
-    },
-    diagnostics: [],
-    snapshot: {
-      workspaceSources: [
-        {
-          sourcePath: "SOUL.md",
-          realPath: path.join(root, "SOUL.md"),
-          byteLength: Buffer.byteLength("# Research brief\n"),
-          digest: `sha256:${createHash("sha256").update("# Research brief\n").digest("hex")}`,
-        },
-        {
-          sourcePath: "brief.md",
-          realPath: path.join(root, "brief.md"),
-          byteLength: Buffer.byteLength("# Brief template\n"),
-          digest: `sha256:${createHash("sha256").update("# Brief template\n").digest("hex")}`,
-        },
-      ],
-    },
-  }));
+  await fs.writeFile(path.join(extractedRoot, "claw.json"), JSON.stringify(contentsManifest));
+  const { readClawManifestFile } =
+    await vi.importActual<typeof import("./reader.js")>("./reader.js");
+  mocks.read.mockImplementation(readClawManifestFile);
   mocks.skillCard.mockResolvedValue("# Citation check\n");
   mocks.download.mockResolvedValue({
     archivePath,
@@ -336,7 +317,7 @@ describe("official ClawHub Claw catalog", () => {
       packageName,
       version,
       agentName: "Research Briefing",
-      workspaceFiles: 2,
+      workspaceFiles: 4,
       skills: 1,
       plugins: 1,
       mcpServers: 1,
@@ -344,7 +325,9 @@ describe("official ClawHub Claw catalog", () => {
       contents: {
         instructions: [
           { name: "SOUL.md", source: "SOUL.md", excerpt: "Research brief" },
+          { name: "USER.md", source: "USER.md", excerpt: "Reader preferences" },
           { name: "brief.md", source: "brief.md", excerpt: "Brief template" },
+          { name: "BOOTSTRAP.md", source: "BOOTSTRAP.md", excerpt: "First-run setup" },
         ],
         skills: [{ name: "@openclaw/citation-check", version: "1.1.0", excerpt: "Citation check" }],
         integrations: [
@@ -378,9 +361,16 @@ describe("official ClawHub Claw catalog", () => {
   });
 
   it("previews verified workspace files and declared skills", async () => {
-    await expect(
-      readClawHubClawPreview({ packageName, version, kind: "instruction", name: "brief.md" }),
-    ).resolves.toEqual({ kind: "instruction", name: "brief.md", content: "# Brief template\n" });
+    for (const [name, content] of [
+      ["SOUL.md", "# Research brief\n"],
+      ["USER.md", "# Reader preferences\n"],
+      ["brief.md", "# Brief template\n"],
+      ["BOOTSTRAP.md", "# First-run setup\n"],
+    ] as const) {
+      await expect(
+        readClawHubClawPreview({ packageName, version, kind: "instruction", name }),
+      ).resolves.toEqual({ kind: "instruction", name, content });
+    }
     await expect(
       readClawHubClawPreview({
         packageName,
@@ -415,6 +405,23 @@ describe("official ClawHub Claw catalog", () => {
     await expect(
       readClawHubClawPreview({ packageName, version, kind: "instruction", name: "missing.md" }),
     ).rejects.toMatchObject({ code: "clawhub_preview_unavailable" });
+  });
+
+  it.each(["USER.md", "BOOTSTRAP.md"])("rejects %s changed after verification", async (name) => {
+    const { readClawManifestFile } =
+      await vi.importActual<typeof import("./reader.js")>("./reader.js");
+    mocks.read.mockImplementation(async (root: string) => {
+      const verified = await readClawManifestFile(root);
+      await fs.writeFile(path.join(root, name), "# Changed content\n");
+      return verified;
+    });
+
+    await expect(
+      readClawHubClawPreview({ packageName, version, kind: "instruction", name }),
+    ).rejects.toMatchObject({
+      code: "clawhub_preview_unavailable",
+      message: "This workspace file changed during preview.",
+    });
   });
 
   it("lists and previews the SOUL file generated from the Claw document", async () => {
