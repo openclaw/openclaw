@@ -76,12 +76,10 @@ function createTestAdapter(): TestAdapter {
   return adapter;
 }
 
-function createRunContext(params: {
-  runId: string;
-  signal?: AbortSignal;
-  beforeExecution?: () => Promise<void>;
-  assertCurrent?: () => void;
-}): PreparedCliRunContext {
+function createRunContext(
+  runId: string,
+  options: { signal?: AbortSignal; beforeExecution?: () => Promise<void> } = {},
+): PreparedCliRunContext {
   const backend = {
     command: "agent-cli",
     args: [],
@@ -93,7 +91,7 @@ function createRunContext(params: {
 
   return {
     params: {
-      admittedRunContext: createTestAdmittedRunContext(params.runId),
+      admittedRunContext: createTestAdmittedRunContext(runId),
       agentId: "main",
       sessionId: "session-1",
       sessionKey: "agent:main:main",
@@ -103,9 +101,8 @@ function createRunContext(params: {
       provider: "test-cli",
       model: "test-model",
       timeoutMs: 60_000,
-      runId: params.runId,
-      ...(params.signal ? { abortSignal: params.signal } : {}),
-      ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
+      runId,
+      abortSignal: options.signal,
     },
     started: Date.now(),
     startedMonotonicMs: performance.now(),
@@ -119,7 +116,7 @@ function createRunContext(params: {
     preparedBackend: {
       backend,
       env: {},
-      ...(params.beforeExecution ? { beforeExecution: params.beforeExecution } : {}),
+      beforeExecution: options.beforeExecution,
     },
     reusableCliSession: { mode: "none" },
     hadSessionFile: false,
@@ -131,6 +128,61 @@ function createRunContext(params: {
     claudeSkillsPluginArgs: [],
     authEpochVersion: 2,
   };
+}
+
+type PluginTarget = Extract<PreparedCliRunContext["executionTarget"], { kind: "plugin" }>;
+
+function configurePlugin(
+  context: PreparedCliRunContext,
+  execute: PluginTarget["execute"],
+  command = "/bin/sh",
+) {
+  Object.assign(context.preparedBackend.backend, {
+    command,
+    output: "jsonl",
+    jsonlDialect: "claude-stream-json",
+  });
+  context.executionTarget = { kind: "plugin", execute };
+}
+
+function assistantEvent(text: string) {
+  return {
+    type: "assistant",
+    message: { role: "assistant", stop_reason: null, content: [{ type: "text", text }] },
+  };
+}
+
+function expiringAuthority(context: PreparedCliRunContext) {
+  let current = true;
+  context.params.assertCurrent = () => {
+    if (!current) {
+      throw new Error("Completion authority expired");
+    }
+  };
+  return () => {
+    current = false;
+  };
+}
+
+function startFencedProcess(
+  supervisor: ReturnType<typeof createProcessSupervisor>,
+  context: PreparedCliRunContext,
+  runId: string,
+) {
+  const scopeKey = buildCliSupervisorScopeKey({
+    backend: context.preparedBackend.backend,
+    backendId: context.backendResolved.id,
+    cliSessionId: "resume-1",
+  });
+  if (!scopeKey) {
+    throw new Error("Expected the resumed CLI supervisor scope");
+  }
+  const startup = createDeferred<ChildAdapter>();
+  const adapter = createTestAdapter();
+  createChildAdapterMock.mockReturnValueOnce(startup.promise);
+  const spawn = vi.spyOn(supervisor, "spawn");
+  const first = supervisor.spawn({ runId, scopeKey, mode: "child", argv: ["agent-cli"] });
+  return { startup, adapter, spawn, first };
 }
 
 describe("CLI execution cancellation", () => {
@@ -147,7 +199,6 @@ describe("CLI execution cancellation", () => {
     vi.useRealTimers();
     setCliRunnerExecuteTestDeps({ getProcessSupervisor: restoreProcessSupervisor });
     vi.restoreAllMocks();
-    vi.useRealTimers();
   });
 
   it.each([true, false])(
@@ -156,39 +207,25 @@ describe("CLI execution cancellation", () => {
       // Reach the fixture's explicit abort even when policy workers start cold.
       vi.useFakeTimers({ toFake: ["Date"] });
       const controller = new AbortController();
-      const context = createRunContext({ runId: "interrupted-output", signal: controller.signal });
-      context.preparedBackend.backend.command = process.execPath;
-      context.preparedBackend.backend.output = "jsonl";
-      context.preparedBackend.backend.jsonlDialect = "claude-stream-json";
+      const context = createRunContext("interrupted-output", { signal: controller.signal });
       context.backendResolved.parseJsonlEvent = (line) => {
         if (JSON.parse(line).type === "parser-failure") {
           throw new Error("Unrelated parser failure");
         }
         return null;
       };
-      context.executionTarget = {
-        kind: "plugin",
-        async *execute() {
-          yield {
-            type: "assistant",
-            message: {
-              role: "assistant",
-              stop_reason: null,
-              content: [
-                {
-                  type: "text",
-                  text: protocol ? '<invoke name="Read">' : "Ordinary partial prose",
-                },
-              ],
-            },
-          };
+      configurePlugin(
+        context,
+        async function* () {
+          yield assistantEvent(protocol ? '<invoke name="Read">' : "Ordinary partial prose");
           if (!protocol) {
             yield { type: "parser-failure" };
           }
           controller.abort();
           throw new Error("Interrupted fixture");
         },
-      };
+        process.execPath,
+      );
 
       await expect(executePreparedCliRun(context)).rejects.toMatchObject(
         protocol
@@ -220,10 +257,7 @@ describe("CLI execution cancellation", () => {
     const resolveApproval = vi
       .spyOn(executeDeps, "resolveRegisteredExecApprovalDecision")
       .mockResolvedValue("deny");
-    const context = createRunContext({
-      runId: "run-node-cancelled-approval",
-      signal: controller.signal,
-    });
+    const context = createRunContext("run-node-cancelled-approval", { signal: controller.signal });
     context.executionTarget = { kind: "node", placement: { nodeId: "node-a" } };
     context.backendResolved.id = "claude-cli";
     context.params.provider = "claude-cli";
@@ -241,19 +275,13 @@ describe("CLI execution cancellation", () => {
   it("rejects expired authority after preparation before plugin execution", async () => {
     const entered = createDeferred();
     const prepared = createDeferred();
-    const context = createRunContext({
-      runId: "expired-plugin",
+    const context = createRunContext("expired-plugin", {
       beforeExecution: async () => {
         entered.resolve();
         await prepared.promise;
       },
     });
-    let current = true;
-    context.params.assertCurrent = () => {
-      if (!current) {
-        throw new Error("Completion authority expired");
-      }
-    };
+    const expire = expiringAuthority(context);
     const pluginExecute = vi.fn(async function* () {
       yield { type: "result", result: "unexpected" };
     });
@@ -263,7 +291,7 @@ describe("CLI execution cancellation", () => {
     const run = executePreparedCliRun(context);
     const rejected = expect(run).rejects.toThrow("Completion authority expired");
     await entered.promise;
-    current = false;
+    expire();
     prepared.resolve();
 
     await rejected;
@@ -272,32 +300,17 @@ describe("CLI execution cancellation", () => {
   });
 
   it("rejects expired authority behind a supervisor scope fence without replacing its process", async () => {
-    const context = createRunContext({ runId: "expired-replacement" });
-    let current = true;
-    context.params.assertCurrent = () => {
-      if (!current) {
-        throw new Error("Completion authority expired");
-      }
-    };
-    const scopeKey = buildCliSupervisorScopeKey({
-      backend: context.preparedBackend.backend,
-      backendId: context.backendResolved.id,
-      cliSessionId: "resume-1",
-    });
-    const startup = createDeferred<ChildAdapter>();
-    const adapter = createTestAdapter();
-    createChildAdapterMock.mockReturnValueOnce(startup.promise);
-    const spawn = vi.spyOn(supervisor, "spawn");
-    const first = supervisor.spawn({
-      runId: "surviving-process",
-      scopeKey,
-      mode: "child",
-      argv: ["agent-cli"],
-    });
+    const context = createRunContext("expired-replacement");
+    const expire = expiringAuthority(context);
+    const { startup, adapter, spawn, first } = startFencedProcess(
+      supervisor,
+      context,
+      "surviving-process",
+    );
     const replacement = executePreparedCliRun(context, "resume-1");
     const rejected = expect(replacement).rejects.toThrow("Completion authority expired");
     await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
-    current = false;
+    expire();
     startup.resolve(adapter);
 
     const firstRun = await first;
@@ -320,11 +333,9 @@ describe("CLI execution cancellation", () => {
     createChildAdapterMock.mockReturnValueOnce(startup.promise);
 
     const run = executePreparedCliRun(
-      createRunContext({ runId: "cli-pending", signal: controller.signal }),
+      createRunContext("cli-pending", { signal: controller.signal }),
     );
-    await vi.waitFor(() => {
-      expect(createChildAdapterMock).toHaveBeenCalledOnce();
-    });
+    await vi.waitFor(() => expect(createChildAdapterMock).toHaveBeenCalledOnce());
 
     controller.abort();
     expect(cancel).toHaveBeenCalledWith("cli-pending", "manual-cancel");
@@ -340,28 +351,13 @@ describe("CLI execution cancellation", () => {
 
   it("never starts a resumed replacement cancelled behind a real supervisor scope fence", async () => {
     const controller = new AbortController();
-    const context = createRunContext({ runId: "cli-resume", signal: controller.signal });
-    const scopeKey = buildCliSupervisorScopeKey({
-      backend: context.preparedBackend.backend,
-      backendId: context.backendResolved.id,
-      cliSessionId: "resume-1",
-    });
-    if (!scopeKey) {
-      throw new Error("Expected the resumed CLI supervisor scope");
-    }
-
-    const firstStartup = createDeferred<ChildAdapter>();
-    const firstAdapter = createTestAdapter();
+    const context = createRunContext("cli-resume", { signal: controller.signal });
     const cancel = vi.spyOn(supervisor, "cancel");
-    const spawn = vi.spyOn(supervisor, "spawn");
-    createChildAdapterMock.mockReturnValueOnce(firstStartup.promise);
-
-    const first = supervisor.spawn({
-      runId: "cli-existing",
-      scopeKey,
-      mode: "child",
-      argv: ["agent-cli"],
-    });
+    const { startup, adapter, spawn, first } = startFencedProcess(
+      supervisor,
+      context,
+      "cli-existing",
+    );
     const replacement = executePreparedCliRun(context, "resume-1");
 
     await vi.waitFor(() => {
@@ -369,16 +365,16 @@ describe("CLI execution cancellation", () => {
       expect(createChildAdapterMock).toHaveBeenCalledOnce();
     });
     expect(cancel).not.toHaveBeenCalled();
-    expect(firstAdapter.kill).not.toHaveBeenCalled();
+    expect(adapter.kill).not.toHaveBeenCalled();
 
     controller.abort();
     expect(cancel).toHaveBeenCalledWith("cli-resume", "manual-cancel");
-    firstStartup.resolve(firstAdapter);
+    startup.resolve(adapter);
 
     const firstRun = await first;
     await expect(replacement).rejects.toMatchObject({ name: "AbortError" });
     expect(createChildAdapterMock).toHaveBeenCalledOnce();
-    expect(firstAdapter.kill).not.toHaveBeenCalled();
+    expect(adapter.kill).not.toHaveBeenCalled();
     const replacementRun = await spawn.mock.results[1]!.value;
     await expect(replacementRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
     expect(replacementRun.activity.resultSettled).toBe(true);
@@ -387,67 +383,38 @@ describe("CLI execution cancellation", () => {
     await expect(firstRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
   });
 
-  it("reports the exact composed prompt the CLI receives", async () => {
-    const context = createRunContext({ runId: "cli-sent-prompt" });
-    context.preparedBackend.backend.command = "/bin/sh";
-    context.preparedBackend.backend.output = "jsonl";
-    context.preparedBackend.backend.jsonlDialect = "claude-stream-json";
-    context.promptContext = { prependContext: "red prefix", appendContext: "red suffix" };
-    context.backendResolved.textTransforms = { input: [{ from: "red", to: "blue" }] };
-    context.executionTarget = {
-      kind: "plugin",
-      async *execute() {
-        yield { type: "result", subtype: "success", result: "completed" };
-      },
-    };
-    const prompts: string[] = [];
-
-    await executePreparedCliRun(context, undefined, {
-      onPromptPrepared: (prompt) => prompts.push(prompt),
-    });
-
-    expect(prompts).toEqual(["blue prefix\n\nhello\n\nblue suffix"]);
-  });
-
   it("passes plugin-owned system prompts without writing temporary files or exposing prompt argv", async () => {
     const writeCliSystemPromptFile = vi.spyOn(executeDeps, "writeCliSystemPromptFile");
-    const context = createRunContext({ runId: "plugin-native-system-prompt" });
-    context.preparedBackend.backend.command = "/bin/sh";
-    context.preparedBackend.backend.output = "jsonl";
-    context.preparedBackend.backend.jsonlDialect = "claude-stream-json";
+    const context = createRunContext("plugin-native-system-prompt");
     context.preparedBackend.backend.systemPromptFileArg = "--append-system-prompt-file";
     context.preparedBackend.backend.systemPromptArg = "--append-system-prompt";
-    let executionArgs: readonly string[] | undefined;
-    let executionPrompt: string | undefined;
-    let executionContext: unknown;
+    let executionContext: Parameters<PluginTarget["execute"]>[0] | undefined;
     context.promptContext = {
       prependContext: "private red prefix",
       appendContext: "private red suffix",
     };
     context.backendResolved.textTransforms = { input: [{ from: "red", to: "blue" }] };
-    context.executionTarget = {
-      kind: "plugin",
-      async *execute(execution) {
-        executionContext = execution;
-        executionArgs = execution.args;
-        executionPrompt = execution.systemPrompt;
-        yield { type: "result", subtype: "success", result: "completed" };
-      },
-    };
-
-    await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "completed" });
-
-    expect(executionPrompt).toBe("system");
-    expect(executionContext).toEqual(
-      expect.objectContaining({
-        promptContext: {
-          prependContext: "private blue prefix",
-          appendContext: "private blue suffix",
-        },
+    configurePlugin(context, async function* (execution) {
+      executionContext = execution;
+      yield { type: "result", subtype: "success", result: "completed" };
+    });
+    const prompts: string[] = [];
+    await expect(
+      executePreparedCliRun(context, undefined, {
+        onPromptPrepared: (prompt) => prompts.push(prompt),
       }),
-    );
-    expect(executionArgs).not.toContain("--append-system-prompt-file");
-    expect(executionArgs).not.toContain("--append-system-prompt");
+    ).resolves.toMatchObject({ text: "completed" });
+
+    expect(prompts).toEqual(["private blue prefix\n\nhello\n\nprivate blue suffix"]);
+    expect(executionContext).toMatchObject({
+      systemPrompt: "system",
+      promptContext: {
+        prependContext: "private blue prefix",
+        appendContext: "private blue suffix",
+      },
+    });
+    expect(executionContext?.args).not.toContain("--append-system-prompt-file");
+    expect(executionContext?.args).not.toContain("--append-system-prompt");
     expect(writeCliSystemPromptFile).not.toHaveBeenCalled();
     expect(createChildAdapterMock).not.toHaveBeenCalled();
   });
@@ -458,11 +425,7 @@ describe("CLI execution cancellation", () => {
     const beforeExecution = vi.fn(async () => await preparation.promise);
     const spawn = vi.spyOn(supervisor, "spawn");
     const run = executePreparedCliRun(
-      createRunContext({
-        runId: "cli-preparation",
-        signal: controller.signal,
-        beforeExecution,
-      }),
+      createRunContext("cli-preparation", { signal: controller.signal, beforeExecution }),
     );
     await vi.waitFor(() => expect(beforeExecution).toHaveBeenCalledOnce());
     controller.abort();
@@ -478,7 +441,7 @@ describe("CLI execution cancellation", () => {
     const firstAdapter = createTestAdapter();
     createChildAdapterMock.mockResolvedValueOnce(firstAdapter);
 
-    const first = executePreparedCliRun(createRunContext({ runId: "cli-queue-first" }));
+    const first = executePreparedCliRun(createRunContext("cli-queue-first"));
     await vi.waitFor(() => expect(firstAdapter.onStdout).toHaveBeenCalledOnce());
 
     const controller = new AbortController();
@@ -488,10 +451,7 @@ describe("CLI execution cancellation", () => {
       queueKeyResolved.resolve();
       return resolveQueueKey(params);
     });
-    const secondContext = createRunContext({
-      runId: "cli-queue-aborted",
-      signal: controller.signal,
-    });
+    const secondContext = createRunContext("cli-queue-aborted", { signal: controller.signal });
     secondContext.params.sessionId = "session-2";
     secondContext.params.sessionKey = "agent:main:second";
     const second = executePreparedCliRun(secondContext);
@@ -514,7 +474,7 @@ describe("CLI execution cancellation", () => {
     const coerce = vi.spyOn(failoverErrors, "coerceToFailoverError").mockImplementation(() => {
       throw new Error("provider coercion was consulted");
     });
-    const context = createRunContext({ runId: "checkpoint-rejected" });
+    const context = createRunContext("checkpoint-rejected");
     context.preparedBackend.backend.resumeAtArg = "--checkpoint";
     context.params.cliSessionResumeAt = "assistant-checkpoint";
     const adapter = createTestAdapter();
@@ -553,30 +513,15 @@ describe("CLI execution cancellation", () => {
       const coerce = vi.spyOn(failoverErrors, "coerceToFailoverError").mockImplementation(() => {
         throw new Error("provider coercion was consulted");
       });
-      const context = createRunContext({ runId: `plugin-checkpoint-${kind}` });
-      Object.assign(context.preparedBackend.backend, {
-        command: "/bin/sh",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        resumeAtArg: "--checkpoint",
-      });
+      const context = createRunContext(`plugin-checkpoint-${kind}`);
+      context.preparedBackend.backend.resumeAtArg = "--checkpoint";
       context.params.cliSessionResumeAt = "assistant-checkpoint";
-      context.executionTarget = {
-        kind: "plugin",
-        async *execute() {
-          if (kind === "observed activity") {
-            yield {
-              type: "assistant",
-              message: {
-                role: "assistant",
-                stop_reason: null,
-                content: [{ type: "text", text: "already started" }],
-              },
-            };
-          }
-          throw failure;
-        },
-      };
+      configurePlugin(context, async function* () {
+        if (kind === "observed activity") {
+          yield assistantEvent("already started");
+        }
+        throw failure;
+      });
 
       const result = executePreparedCliRun(context, "resume-1");
       await expect(result).rejects.toBe(failure);

@@ -126,6 +126,17 @@ it("steers configured, session and explicit inputs through current authority int
     });
     context.workspaceDir = root;
     context.cwd = root;
+    const recordInput = (text: string) =>
+      createUserTurnTranscriptRecorder({
+        input: { text, idempotencyKey: text },
+        target: {
+          agentId: "main",
+          sessionKey,
+          sessionId: context.params.sessionId,
+          sessionEntry: undefined,
+          cwd: root,
+        },
+      });
     const followupRun = createQueueTestRun({ prompt: "initial", originatingChannel: "webchat" });
     Object.assign(followupRun.run, context.params);
     const operation = createReplyOperation({
@@ -217,6 +228,7 @@ it("steers configured, session and explicit inputs through current authority int
         { text: "explicit tell", queue: { mode: "collect" as const }, command: "/tell" },
         { text: "started-cancelled", queue: { mode: "steer" as const } },
       ];
+      const routeInputs = routes.map((route) => route.text);
       for (const route of routes) {
         const cfg = { ...config, messages: { queue: route.queue } };
         let inlineMode: "steer" | undefined;
@@ -245,16 +257,7 @@ it("steers configured, session and explicit inputs through current authority int
             : undefined,
         });
         expect(resolvedQueue.mode).toBe("steer");
-        const recorder = createUserTurnTranscriptRecorder({
-          input: { text: route.text, idempotencyKey: route.text },
-          target: {
-            agentId: "main",
-            sessionKey,
-            sessionId: context.params.sessionId,
-            sessionEntry: undefined,
-            cwd: root,
-          },
-        });
+        const recorder = recordInput(route.text);
         const incoming = {
           ...followupRun,
           prompt: route.text,
@@ -284,7 +287,7 @@ it("steers configured, session and explicit inputs through current authority int
         expect(recorder.hasPersisted()).toBe(true);
       }
       expect(followup).not.toHaveBeenCalled();
-      expect(await readInputs()).toEqual(["initial", ...routes.map((route) => route.text)]);
+      expect(await readInputs()).toEqual(["initial", ...routeInputs]);
 
       // Revoke stored policy after selection but before the ordered final worker read.
       const read = sessionReads.withSessionEntriesFromStoresInWorker;
@@ -328,7 +331,7 @@ it("steers configured, session and explicit inputs through current authority int
       expect(revoked, JSON.stringify(refusal)).toBe(true);
       // Changed execution policy leaves unconsumed input eligible for a fresh followup.
       expect(refusal).toMatchObject({ status: "rejected", reason: "runtime_rejected" });
-      expect(await readInputs()).toEqual(["initial", ...routes.map((route) => route.text)]);
+      expect(await readInputs()).toEqual(["initial", ...routeInputs]);
       vi.restoreAllMocks();
       rejectSourceCleanup = true;
       const uncertain = await beginReplyMessageInjectionTarget(target, "post-submit-cleanup");
@@ -336,26 +339,17 @@ it("steers configured, session and explicit inputs through current authority int
       await expect(uncertain.outcome).resolves.toMatchObject({ status: "indeterminate" });
       rejectSourceCleanup = false;
       await cleanupInputObserved.promise;
-      const exitRecorder = createUserTurnTranscriptRecorder({
-        input: { text: "started-exit", idempotencyKey: "started-exit" },
-        target: {
-          agentId: "main",
-          sessionKey,
-          sessionId: context.params.sessionId,
-          sessionEntry: undefined,
-          cwd: root,
-        },
-      });
+      const exitRecorder = recordInput("started-exit");
       const exit = await beginReplyMessageInjectionTarget(target, "started-exit", {
         userTurnTranscriptRecorder: exitRecorder,
       });
       await expect(exit.acceptance).resolves.toBe(true);
       await expect(exit.outcome).resolves.toMatchObject({ status: "accepted" });
       await expect(run).rejects.toThrow();
-      const expectedInputs = [...routes.map((route) => route.text), "started-exit"];
+      const expectedInputs = [...routeInputs, "started-exit"];
       expect(await readInputs()).toEqual([
         "initial",
-        ...routes.map((route) => route.text),
+        ...routeInputs,
         "post-submit-cleanup",
         "started-exit",
       ]);
