@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import { createGatewayDispatchStartupTrace } from "../cli/startup-trace.js";
 import { measureDoctorConfigPreflightStep } from "../commands/doctor-config-preflight-measure.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const eventLoopDelay = vi.hoisted(() => ({
   instances: [] as Array<{
@@ -44,6 +45,48 @@ describe("gateway startup trace", () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
+
+  it.each([
+    { trace: "0", duration: 249, fail: false, nested: false, visible: false },
+    { trace: undefined, duration: 250, fail: false, nested: false, visible: true },
+    { trace: "0", duration: 500, fail: true, nested: false, visible: true },
+    { trace: "1", duration: 500, fail: false, nested: false, visible: true },
+    { trace: "0", duration: 500, fail: false, nested: true, visible: false },
+  ])(
+    "reports slow service startup once without payloads ($trace, $duration ms, failure=$fail, nested=$nested)",
+    async ({ trace: enabled, duration, fail, nested, visible }) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const log = createSubsystemLogger("gateway-startup-test");
+      const info = vi.spyOn(log, "info").mockImplementation(() => {});
+      const trace = createGatewayStartupTrace(log, 0);
+      const name = `sidecars.plugin-services.plugin-a.service-a${nested ? ".remote-request" : ""}`;
+      const failure = new Error("synthetic sensitive service payload");
+      try {
+        const measured = trace.measure(name, () => {
+          now += duration;
+          if (fail) {
+            throw failure;
+          }
+        });
+        if (fail) {
+          await expect(measured).rejects.toBe(failure);
+        } else {
+          await measured;
+        }
+        expect(info.mock.calls.map(([message]) => message)).toEqual(
+          visible
+            ? [
+                `startup trace: ${name} ${duration.toFixed(1)}ms total=${duration.toFixed(1)}ms eventLoopMax=0.0ms outcome=${fail ? "failure" : "success"}`,
+              ]
+            : [],
+        );
+      } finally {
+        trace.close();
+      }
+    },
+  );
 
   it.each([
     { updateCanary: false, markers: 2 },

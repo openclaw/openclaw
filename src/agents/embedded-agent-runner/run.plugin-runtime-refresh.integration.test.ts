@@ -636,7 +636,7 @@ describe("plugin runtime refresh admission", () => {
       } else {
         expect(finalizer).not.toHaveBeenCalled();
         expect(result.meta.error?.message).toContain(handoffError.message);
-        expect(result.payloads).not.toContainEqual({ text: "Recovered summary" });
+        expect(result.payloads).toBeUndefined();
       }
     },
   );

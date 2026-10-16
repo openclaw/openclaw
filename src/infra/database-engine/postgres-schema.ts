@@ -6,6 +6,7 @@ import {
   readPostgresCatalog,
   type PostgresCatalogFact,
 } from "./postgres-catalog.js";
+import { postgresSearchSql } from "./postgres-search-schema.js";
 
 export const postgresSchemaMetadataSql = `CREATE TABLE openclaw_schema_meta (
   store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL,
@@ -112,7 +113,11 @@ export function postgresSchemaSql(
     ordered.set(fragment.id, fragment.sql);
   };
   active.forEach(add);
-  return [schema.postgres ?? "", ...ordered.values()].join("\n");
+  return [
+    schema.postgres ?? "",
+    ...ordered.values(),
+    ...(schema.search ? [`;\n${postgresSearchSql(schema.search)}`] : []),
+  ].join("\n");
 }
 
 export function recordPostgresSchema(

@@ -24,6 +24,7 @@ import {
   classifyAgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
+import { resolveCommandReplyExpectation, resolveReplyCompletion } from "../reply-completion.js";
 import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
@@ -241,6 +242,7 @@ export async function runAcpAgentCommand(params: {
     attemptExecutionRuntime.emitAcpLifecycleError({
       ...runtimeEventContext,
       error: acpError,
+      terminalReply: visibleTextAccumulator.finalizeReplySnapshot(),
       ...(terminalOutcome ? { terminalOutcome } : {}),
     });
     throw acpError;
@@ -321,8 +323,41 @@ export async function runAcpAgentCommand(params: {
     attemptExecutionRuntime.emitAcpLifecycleError({
       ...runtimeEventContext,
       error: restartAbortReason,
+      terminalReply,
     });
     throw restartAbortReason;
+  }
+  const expectation =
+    resolveCommandReplyExpectation({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      messageChannel:
+        params.opts.runContext?.messageChannel ??
+        params.opts.messageProvider ??
+        params.opts.channel,
+      opts: params.opts,
+    }) ?? "required";
+  if (
+    resultStatus !== "cancelled" &&
+    !params.opts.abortSignal?.aborted &&
+    resolveReplyCompletion(
+      expectation,
+      terminalReply.disposition === "visible" ? "ready" : terminalReply.disposition,
+    ).outcome === "missing"
+  ) {
+    const { toAcpRuntimeError } = await loadAcpRuntimeErrorsRuntime();
+    const error = toAcpRuntimeError({
+      error: new Error("ACP backend returned an empty response."),
+      fallbackCode: "ACP_TURN_FAILED",
+      fallbackMessage: "ACP backend returned an empty response.",
+    });
+    attemptExecutionRuntime.emitAcpLifecycleError({
+      ...runtimeEventContext,
+      error,
+      terminalReply,
+    });
+    throw error;
   }
   attemptExecutionRuntime.emitAcpLifecycleEnd({
     ...lifecycleContext,

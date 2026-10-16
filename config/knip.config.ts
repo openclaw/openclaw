@@ -75,6 +75,8 @@ const repositoryScriptEntries = [
   "scripts/bundle-a2ui.mts!",
   // The standalone build guide invokes this builder by path.
   "scripts/build-bun-standalone.mjs!",
+  // Maintainers invoke the isolated macOS standalone Doctor proof by path.
+  "scripts/verify-standalone-doctor.mjs!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
   "scripts/build-plugin-control-ui.mts!",

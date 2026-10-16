@@ -137,17 +137,33 @@ describe("prepareEmbeddedRunTerminal", () => {
   });
 
   it.each([
-    { assistantTexts: ["Earlier", "  Latest 😀  ", "\t\r\n"], expected: "Latest 😀" },
-    { assistantTexts: ["Earlier", "\ufeff\u2003Latest\u00a0", "\u2028"], expected: "Latest" },
+    {
+      assistantTexts: ["Earlier", "  Latest 😀  ", "\t\r\n"],
+      expected: "Latest 😀",
+      expectedRaw: "  Latest 😀  ",
+    },
+    {
+      assistantTexts: ["Earlier", "\ufeff\u2003Latest\u00a0", "\u2028"],
+      expected: "Latest",
+      expectedRaw: "\ufeff\u2003Latest\u00a0",
+    },
     { assistantTexts: ["Earlier", " \u200b "], expected: "Earlier" },
     { assistantTexts: [" \u200b\u200d\u2060 "], expected: undefined },
-    { assistantTexts: ["  First line \n second line  "], expected: "First line \n second line" },
-    { assistantTexts: ["Earlier", " \ud800text\udc00 "], expected: "\ud800text\udc00" },
+    {
+      assistantTexts: ["  First line \n second line  "],
+      expected: "First line \n second line",
+      expectedRaw: "  First line \n second line  ",
+    },
+    {
+      assistantTexts: ["Earlier", " \ud800text\udc00 "],
+      expected: "\ud800text\udc00",
+      expectedRaw: " \ud800text\udc00 ",
+    },
     { assistantTexts: ["", " \t\r\n", "\ufeff\u2003"], expected: undefined },
     { assistantTexts: [], expected: undefined },
   ])(
     "selects final fallback text without changing its source %#",
-    async ({ assistantTexts, expected }) => {
+    async ({ assistantTexts, expected, expectedRaw = expected }) => {
       const original = [...assistantTexts];
       const prepared = await prepareAttempt({
         attempt: attemptResult({
@@ -163,8 +179,8 @@ describe("prepareEmbeddedRunTerminal", () => {
         },
       });
 
-      expect(prepared.finalAssistantVisibleText).toBe(expected);
-      expect(prepared.finalAssistantRawText).toBe(expected);
+      expect(prepared.finalAssistantVisibleText).toBe(expected ?? "");
+      expect(prepared.finalAssistantRawText).toBe(expectedRaw);
       expect(assistantTexts).toEqual(original);
     },
   );
@@ -206,7 +222,7 @@ describe("prepareEmbeddedRunTerminal", () => {
         },
       });
       const expected = keepAnswer ? "Completed answer." : undefined;
-      expect(prepared.finalAssistantVisibleText).toBe(expected);
+      expect(prepared.finalAssistantVisibleText).toBe(expected ?? "");
       expect(prepared.finalAssistantRawText).toBe(expected);
     },
   );
@@ -347,7 +363,7 @@ describe("prepareEmbeddedRunTerminal", () => {
         },
       });
 
-      expect(prepared.finalAssistantVisibleText).toBeUndefined();
+      expect(prepared.finalAssistantVisibleText).toBe("");
       expect(prepared.finalAssistantRawText).toBeUndefined();
     },
   );
@@ -622,7 +638,7 @@ describe("prepareEmbeddedRunTerminal", () => {
       },
     });
 
-    expect(prepared.finalAssistantVisibleText).toBeUndefined();
+    expect(prepared.finalAssistantVisibleText).toBe("");
     expect(prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout).toBeUndefined();
     expect(prepared.hasSuccessfulFinalAssistantAfterPromptTimeout).toBe(false);
   });
@@ -1038,16 +1054,6 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       },
       rerouted: false,
     });
-  });
-
-  it("records producer source delivery without an extracted messaging target", async () => {
-    const prepared = await prepareStats({
-      attempt: {
-        sourceReplyDelivered: true,
-        messagingToolSentTargets: [],
-      },
-    });
-    expect(prepared.agentMeta.terminalReceipt?.sourceReplyDelivered).toBe(true);
   });
 
   it("marks a provider-only response route as rerouted", async () => {

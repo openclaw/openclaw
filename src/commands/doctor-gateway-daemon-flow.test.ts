@@ -21,7 +21,11 @@ import {
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const readPin = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
+// mock-isolation: Service-planning fixtures replace pin admission without opening stores or native locks.
+vi.mock("../daemon/runtime-pin-state.js", () => ({
+  readDaemonRuntimePinForInstall: readPin,
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T) => read(),
+}));
 const runExec = vi.hoisted(() => vi.fn<typeof import("../process/exec.js").runExec>());
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),

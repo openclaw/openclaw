@@ -388,10 +388,13 @@ describe("native transcript catalog SDK", () => {
       }
       expect(first.items.map((item) => [item.type, item.text])).toEqual([
         ["agentMessage", "Answer"],
-        ["agentMessage", "Second answer part"],
+        ["agentMessage", "NO_REPLY"],
       ]);
-      const second = await read(1, first.nextCursor);
-      expect(second.items).toMatchObject([{ type: "agentMessage", text: "First answer part" }]);
+      const second = await read(2, first.nextCursor);
+      expect(second.items.map((item) => [item.type, item.text])).toEqual([
+        ["agentMessage", "Second answer part"],
+        ["agentMessage", "First answer part"],
+      ]);
       const third = await read(2, second.nextCursor);
       expect(third.items.map((item) => [item.type, item.text])).toEqual([
         ["userMessage", "Visible question"],

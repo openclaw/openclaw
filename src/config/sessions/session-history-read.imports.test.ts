@@ -62,6 +62,8 @@ it("keeps lazy readers independent of unrelated runtime barrels", () => {
   ).toEqual([]);
   expect(
     findSourceImportBackedges("src/infra/session-cost-usage-worker.ts", [
+      "src/config/io.ts",
+      "src/config/io.runtime.ts",
       "src/config/sessions/session-accessor.ts",
       "packages/ai/src/transports.ts",
     ]),

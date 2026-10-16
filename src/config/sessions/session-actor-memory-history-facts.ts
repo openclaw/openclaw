@@ -12,7 +12,10 @@ import {
 import { hasInterSessionUserProvenance } from "../../sessions/input-provenance.js";
 import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
-import { matchesTranscriptEvent } from "../../sessions/transcript-visible-record.js";
+import {
+  createVisibleAssistantResultEventMatcher,
+  matchesTranscriptEvent,
+} from "../../sessions/transcript-visible-record.js";
 import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.metadata.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import type {
@@ -413,9 +416,15 @@ export function readSessionActorMemoryHistoryFacts(
       return maintenance(window, navigation, query.input.request);
     case "session.history.match": {
       const match = query.input.match;
+      const matchesVisibleFinal =
+        match.kind === "visible-final"
+          ? createVisibleAssistantResultEventMatcher(match.runId)
+          : undefined;
       const row = window.events.findLast(
         ({ event }) =>
-          matchesTranscriptEvent(event, match) &&
+          (matchesVisibleFinal
+            ? matchesVisibleFinal(event)
+            : matchesTranscriptEvent(event, match)) &&
           (match.kind !== "active-assistant" ||
             window.hot.transcript.anchors.some(
               (anchor) => anchor.entryId === asOptionalRecord(event)?.id,

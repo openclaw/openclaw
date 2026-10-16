@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
@@ -8,7 +9,6 @@ import { ChatPaneRuntime } from "../chat-pane-render.ts";
 import { createPaneTestHost } from "../chat-pane.test-support.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
-import { nativePaneLayout } from "./chat-transcript-native-pane.test-support.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 
@@ -57,7 +57,7 @@ class GeometryPane extends ChatPaneRuntime {
       };
     });
     return {
-      layout: nativePaneLayout(GeometryLayout, layout),
+      layout: solidContent(GeometryLayout, layout),
       dialog: undefined,
       capabilityDialogs: undefined,
     };
