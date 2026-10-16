@@ -11,7 +11,8 @@ import {
 } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import { readBackupEngine } from "../../snapshot/database-backup.js";
+import { capturePostgresBackup, readBackupEngine } from "../../snapshot/database-backup.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -22,6 +23,7 @@ import {
   type DatabasePortManifest,
 } from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { agentPortProvider } from "./agent-port.js";
 import { canonical, connection, files } from "./port-command.integration.test-support.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
@@ -121,13 +123,54 @@ describe.skipIf(!connection)("family-scoped database port", () => {
     120_000,
   );
 
-  it("refuses agents on a different engine from state before any publication", async () => {
-    const before = fs.readFileSync(state.configPath);
-    await expect(port({ family: "agent", to: "postgres" })).rejects.toThrow(
-      /different engine than state until PR3/,
-    );
-    expect(fs.readFileSync(state.configPath)).toEqual(before);
-  });
+  it("recovers and backs up scoped PostgreSQL agents with SQLite state", async () => {
+    const agent = path.join(state.agentDir("main"), "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(agent), { recursive: true });
+    const descriptor = await agentPortProvider.loadDescriptor();
+    {
+      using db = openNodeSqliteDatabase(agent);
+      db.exec(descriptor.sqlite);
+      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+        INSERT INTO schema_meta VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', NULL, 1, 1);
+        INSERT INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0);
+        INSERT INTO cache_entries VALUES ('retained', 'sentinel', '"agent-data"', NULL, NULL, 1);`);
+    }
+    const unrelated = hash(workboard);
+    const write = configIo.writeConfigFile;
+    vi.spyOn(configIo, "writeConfigFile").mockImplementationOnce(async (...args) => {
+      await write(...args);
+      throw new Error("synthetic interruption after agent publication");
+    });
+    await expect(port({ family: "agent", to: "postgres" })).rejects.toThrow();
+    vi.restoreAllMocks();
+    expect(readBackupEngine(agent).engine).toBe("postgres");
+    expect(() => assertDatabasePortStartupAllowed(state.stateDir)).toThrow();
+    await port({ resume: databasePortManifestPath(state.stateDir) });
+    expect(() => assertDatabasePortStartupAllowed(state.stateDir)).not.toThrow();
+    expect(config().database).toMatchObject({
+      engine: "sqlite",
+      families: { agent: { engine: "postgres" } },
+    });
+    expect(readBackupEngine(shared).engine).toBe("sqlite");
+    const backup = await capturePostgresBackup({
+      sourcePath: agent,
+      directory: state.path("agent-backup"),
+      profile: "exact",
+      config: config(),
+      assertCurrent() {},
+    });
+    expect(backup.source.owner).toBe("agent");
+    await port({ family: "agent", to: "sqlite" });
+    expect(config().database?.families).toBeUndefined();
+    expect(readBackupEngine(shared).engine).toBe("sqlite");
+    expect(hash(workboard)).toBe(unrelated);
+    using db = openNodeSqliteDatabase(agent, { readOnly: true });
+    expect(
+      db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get(),
+    ).toEqual({
+      value_json: '"agent-data"',
+    });
+  }, 120_000);
 
   describe("interrupted scoped publication", () => {
     beforeAll(async () => {

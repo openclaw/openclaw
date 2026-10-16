@@ -56,29 +56,12 @@ export function assertPortSelection(
         "Mixed-engine database port requires --family <state|agent|workboard|logbook|team-reports>; port one family at a time.",
       );
     }
-    if (to) {
-      if (family === "agent" && to !== engines.state) {
-        throw new Error(
-          "database port --family agent cannot put agents on a different engine than state until PR3 agent-pair conformance is complete.",
-        );
-      }
-      const candidate = family
-        ? {
-            ...config,
-            database: {
-              ...config.database,
-              families: {
-                ...config.database?.families,
-                [family]: { engine: to },
-              },
-            },
-          }
-        : { ...config, database: { ...config.database, engine: to } };
-      const selected = resolveDatabaseFamilyEngines(candidate);
-      if (
-        !family &&
-        listDatabaseEngineStores().some((store) => store.postgres && selected[store.id] !== to)
-      ) {
+    if (to && !family) {
+      const selected = resolveDatabaseFamilyEngines({
+        ...config,
+        database: { ...config.database, engine: to },
+      });
+      if (listDatabaseEngineStores().some((store) => store.postgres && selected[store.id] !== to)) {
         throw new Error(
           "Engine-pinning family overrides require --family; port each configured family separately.",
         );

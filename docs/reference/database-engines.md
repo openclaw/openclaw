@@ -273,7 +273,7 @@ selection requires `--family`.
 | PostgreSQL state with SQLite agents/plugins                      | Runtime, scoped ports, matched backup/restore, and compatible updates.           |
 | SQLite state with PostgreSQL Workboard, Logbook, or Team Reports | Runtime, scoped ports, matched backup/restore, and compatible updates.           |
 | PostgreSQL state and agents with either engine for plugins       | Runtime, matched backup/restore, and compatible updates.                         |
-| SQLite state with PostgreSQL agents                             | Runtime, scoped ports, matched backup/restore, and compatible updates.           |
+| SQLite state with PostgreSQL agents                              | Runtime, scoped ports, matched backup/restore, and compatible updates.           |
 
 Back up a mixed installation with `openclaw backup create --verify`; any
 PostgreSQL store requires the Gateway stopped through its service owner.
