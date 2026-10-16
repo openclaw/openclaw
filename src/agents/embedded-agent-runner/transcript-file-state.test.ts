@@ -6,6 +6,12 @@ import { parseSessionEntries, SessionManager } from "../sessions/index.js";
 import { textToolResult } from "../test-helpers/sparse-transcript.test-support.js";
 
 const roots: string[] = [];
+function appendUser(state: SessionManager, content = "continued") {
+  return state.getEntry(state.appendMessage({ role: "user", content, timestamp: Date.now() }))!;
+}
+function branchIds(state: SessionManager, leaf?: string) {
+  return state.getBranch(leaf).map((entry) => entry.id);
+}
 
 function controlEntry(
   type: string,
@@ -88,9 +94,7 @@ afterEach(async () => {
 
 describe("readTranscriptState", () => {
   it("normalizes appended session names to one line", async () => {
-    const state = await readFixture([], {
-      timestamp: "2026-07-16T00:00:00.000Z",
-    });
+    const state = await readFixture([], { timestamp: "2026-07-16T00:00:00.000Z" });
 
     const entry = state.getEntry(state.appendSessionInfo("  first\nsecond\r\nthird  "))!;
 
@@ -139,10 +143,7 @@ describe("readTranscriptState", () => {
   it("canonicalizes opaque append parents before a legacy migration rewrite", async () => {
     const sessionFile = await writeTranscriptFixture(
       [
-        {
-          type: "message",
-          message: { role: "assistant", content: "legacy active" },
-        },
+        { type: "message", message: { role: "assistant", content: "legacy active" } },
         controlEntry("metadata", "plugin-metadata", "missing-before-migration"),
       ],
       { version: 1, timestamp: "2026-06-15T00:00:00.000Z" },
@@ -150,39 +151,22 @@ describe("readTranscriptState", () => {
 
     const state = await readTranscriptState(sessionFile);
     const activeLeafId = state.getLeafId();
-    const appended = state.getEntry(
-      state.appendMessage({ role: "user", content: "continued", timestamp: Date.now() }),
-    )!;
-    await persistTranscriptStateMutation({
-      sessionFile,
-      state,
-      appendedEntries: [appended],
-    });
+    const appended = appendUser(state);
+    await persistTranscriptStateMutation({ sessionFile, state, appendedEntries: [appended] });
 
     expect(state.migrated).toBe(true);
     expect(appended.parentId).toBe(activeLeafId);
     const reopened = await readTranscriptState(sessionFile);
-    expect(reopened.getBranch().map((entry) => entry.id)).toEqual([activeLeafId, appended.id]);
+    expect(branchIds(reopened)).toEqual([activeLeafId, appended.id]);
   });
 
   it("preserves legacy compaction keep indexes across JSON-valid non-object rows", async () => {
     const state = await readFixture(
       [
-        {
-          type: "message",
-          message: { role: "user", content: "legacy prelude" },
-        },
+        { type: "message", message: { role: "user", content: "legacy prelude" } },
         "null",
-        {
-          type: "message",
-          message: { role: "user", content: "legacy kept suffix" },
-        },
-        {
-          type: "compaction",
-          summary: "summary",
-          firstKeptEntryIndex: 3,
-          tokensBefore: 200,
-        },
+        { type: "message", message: { role: "user", content: "legacy kept suffix" } },
+        { type: "compaction", summary: "summary", firstKeptEntryIndex: 3, tokensBefore: 200 },
       ],
       { version: 1 },
     );
@@ -255,11 +239,9 @@ describe("readTranscriptState", () => {
     expect(state.buildSessionContext().messages).toMatchObject([
       { role: "user", content: "kept through cycle" },
     ]);
-    const appended = state.getEntry(
-      state.appendMessage({ role: "user", content: "continued", timestamp: Date.now() }),
-    )!;
+    const appended = appendUser(state);
     expect(appended.parentId).toBe("active-entry");
-    expect(state.getBranch().map((entry) => entry.id)).toEqual(["active-entry", appended.id]);
+    expect(branchIds(state)).toEqual(["active-entry", appended.id]);
   });
 
   it("drops labels targeting rejected entries before transcript rewrite replay", async () => {
@@ -298,7 +280,7 @@ describe("readTranscriptState", () => {
 
     const selectedState = await readTranscriptState(sessionFile);
     expect(selectedState.getLeafId()).toBe(rootEntry.id);
-    expect(selectedState.getBranch().map((entry) => entry.id)).toEqual([rootEntry.id]);
+    expect(branchIds(selectedState)).toEqual([rootEntry.id]);
 
     const replacementEntry = messageEntry("replacement-assistant", leafEntry.id, {
       role: "assistant",
@@ -314,10 +296,7 @@ describe("readTranscriptState", () => {
     expect(reopened.getEntries().find((entry) => entry.id === replacementEntry.id)).toEqual(
       expect.objectContaining({ parentId: rootEntry.id }),
     );
-    expect(reopened.getBranch().map((entry) => entry.id)).toEqual([
-      rootEntry.id,
-      replacementEntry.id,
-    ]);
+    expect(branchIds(reopened)).toEqual([rootEntry.id, replacementEntry.id]);
   });
 
   it("keeps parentless canonical ancestry through rewrite replay", async () => {
@@ -326,13 +305,11 @@ describe("readTranscriptState", () => {
         {
           type: "message",
           id: "user-1",
-
           message: { role: "user", content: "question", timestamp: 1 },
         },
         {
           type: "message",
           id: "assistant-1",
-
           message: { role: "assistant", content: "answer", timestamp: 2 },
         },
         controlEntry("leaf", "active-leaf", "assistant-1", { targetId: "assistant-1" }),
@@ -340,7 +317,7 @@ describe("readTranscriptState", () => {
       { timestamp: "2026-06-15T00:00:00.000Z" },
     );
 
-    expect(state.getBranch().map((entry) => entry.id)).toEqual(["user-1", "assistant-1"]);
+    expect(branchIds(state)).toEqual(["user-1", "assistant-1"]);
   });
 
   it("preserves marked side ancestry without capturing the next active append", async () => {
@@ -367,23 +344,14 @@ describe("readTranscriptState", () => {
       { timestamp: "2026-06-15T00:00:00.000Z" },
     );
 
-    expect(state.getBranch("side-two").map((entry) => entry.id)).toEqual([
-      "active-root",
-      "side-one",
-      "side-two",
-    ]);
-    expect(state.getBranch().map((entry) => entry.id)).toEqual(["active-root"]);
+    expect(branchIds(state, "side-two")).toEqual(["active-root", "side-one", "side-two"]);
+    expect(branchIds(state)).toEqual(["active-root"]);
     expect(state.getLeafId()).toBe("active-root");
     expect(state.getAppendParentId()).toBe("side-two");
     expect(state.getAppendMode()).toBe("side");
 
-    const nextUser = state.getEntry(
-      state.appendMessage({ role: "user", content: "next question", timestamp: Date.now() }),
-    )!;
-    expect(state.getBranch(nextUser.id).map((entry) => entry.id)).toEqual([
-      "active-root",
-      nextUser.id,
-    ]);
+    const nextUser = appendUser(state, "next question");
+    expect(branchIds(state, nextUser.id)).toEqual(["active-root", nextUser.id]);
   });
 
   it("keeps a terminal leaf control's opaque append parent", async () => {
@@ -404,14 +372,8 @@ describe("readTranscriptState", () => {
     );
 
     const state = await readTranscriptState(sessionFile);
-    const appended = state.getEntry(
-      state.appendMessage({ role: "user", content: "continued", timestamp: Date.now() }),
-    )!;
-    await persistTranscriptStateMutation({
-      sessionFile,
-      state,
-      appendedEntries: [appended],
-    });
+    const appended = appendUser(state);
+    await persistTranscriptStateMutation({ sessionFile, state, appendedEntries: [appended] });
     const persisted = (await fs.readFile(sessionFile, "utf8"))
       .trim()
       .split(/\r?\n/)
@@ -419,7 +381,7 @@ describe("readTranscriptState", () => {
 
     expect(state.getLeafId()).toBe(appended.id);
     expect(appended.parentId).toBe("active-root");
-    expect(state.getBranch().map((entry) => entry.id)).toEqual(["active-root", appended.id]);
+    expect(branchIds(state)).toEqual(["active-root", appended.id]);
     expect(persisted.at(-1)).toMatchObject({ id: appended.id, parentId: "active-root" });
   });
 
@@ -440,19 +402,13 @@ describe("readTranscriptState", () => {
     );
 
     const state = await readTranscriptState(sessionFile);
-    const appended = state.getEntry(
-      state.appendMessage({ role: "user", content: "continued", timestamp: Date.now() }),
-    )!;
-    await persistTranscriptStateMutation({
-      sessionFile,
-      state,
-      appendedEntries: [appended],
-    });
+    const appended = appendUser(state);
+    await persistTranscriptStateMutation({ sessionFile, state, appendedEntries: [appended] });
 
     expect(appended.parentId).toBe("active-root");
-    expect(state.getBranch().map((entry) => entry.id)).toEqual(["active-root", appended.id]);
+    expect(branchIds(state)).toEqual(["active-root", appended.id]);
     const reopened = await readTranscriptState(sessionFile);
     expect(reopened.getLeafId()).toBe(appended.id);
-    expect(reopened.getBranch().map((entry) => entry.id)).toEqual(["active-root", appended.id]);
+    expect(branchIds(reopened)).toEqual(["active-root", appended.id]);
   });
 });
