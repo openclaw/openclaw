@@ -229,13 +229,7 @@ function buildManagedResponse(
   const wrappedBody = wrapGuardedBodyStream({
     body: response.body,
     // Lease release must survive a failed guard release so local services do not leak.
-    cleanup: async () => {
-      try {
-        await release().catch(() => undefined);
-      } finally {
-        finalizeLocalServiceLease();
-      }
-    },
+    cleanup: () => release().finally(finalizeLocalServiceLease),
     refreshTimeout,
   });
   return new Response(wrappedBody, response);
