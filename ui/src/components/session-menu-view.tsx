@@ -98,7 +98,7 @@ export function useSessionMenuEntries(
   const item = (entry: ItemOptions): MenuItem => ({
     id: entry.kind,
     label: entry.label,
-    class: `session-menu__item${entry.kind === "delete" ? " session-menu__item--destructive" : ""}`,
+    class: ["session-menu__item", { "session-menu__item--destructive": entry.kind === "delete" }],
     variant: entry.kind === "delete" ? "danger" : undefined,
     disabled: disabled(entry.kind),
     attributes: {
@@ -123,13 +123,11 @@ export function useSessionMenuEntries(
       id: state.compact ? `compact:open-${entry.view}` : `submenu:${entry.view}`,
       label: entry.label,
       labelClass: "session-menu__text",
-      class: [
-        "session-menu__item",
-        !state.compact && entry.view === "assign-owner" ? "people-menu__submenu" : "",
-        !state.compact && entry.view === "advanced" ? "session-menu__advanced" : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
+      class: {
+        "session-menu__item": true,
+        "people-menu__submenu": !state.compact && entry.view === "assign-owner",
+        "session-menu__advanced": !state.compact && entry.view === "advanced",
+      },
       disabled: entry.disabled,
       attributes: {
         title: entry.title,

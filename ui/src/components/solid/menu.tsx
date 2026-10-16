@@ -54,7 +54,7 @@ export type MenuItem = {
   disabled?: boolean;
   checked?: boolean;
   type?: "checkbox" | "radio";
-  class?: string;
+  class?: JSX.ClassValue;
   variant?: "danger";
   /** Lazy branches construct their entries on first open. */
   children?: readonly MenuEntry[] | (() => readonly MenuEntry[]);
