@@ -1,5 +1,6 @@
 import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import {
@@ -12,6 +13,18 @@ import { requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI route readiness" });
+const backgroundMethods = ["cron.list", "cron.status", "system.info"];
+const readSelection = (composer: Locator) =>
+  composer.evaluate((element: HTMLTextAreaElement) => ({
+    start: element.selectionStart,
+    end: element.selectionEnd,
+    direction: element.selectionDirection,
+  }));
+async function screenshot(page: Page, name: string) {
+  if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
+    await page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`) });
+  }
+}
 
 suite.define(() => {
   it.each([
@@ -34,9 +47,6 @@ suite.define(() => {
           const sessionId = "session:history-ready";
           const activeLeafEntryId = "history-ready-leaf";
           const submittedMessage = "Send this before history arrives.";
-          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
-            ? suite.artifactDir
-            : undefined;
           if (width > 400) {
             const scope = gatewayOriginScope(suite.server.baseUrl.replace(/^http/u, "ws"));
             await page.addInitScript(
@@ -80,9 +90,7 @@ suite.define(() => {
             false,
           );
           await composer.fill(submittedMessage);
-          if (artifactDir) {
-            await page.screenshot({ path: path.join(artifactDir, "01-loading-before-submit.png") });
-          }
+          await screenshot(page, "01-loading-before-submit");
           await expect.poll(() => pane.locator(".chat-send-btn--send").isEnabled()).toBe(true);
           if (width > 400) {
             await composer.press("Enter");
@@ -93,11 +101,7 @@ suite.define(() => {
           await pane.locator(".chat-queue").getByText(submittedMessage, { exact: true }).waitFor();
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           expect(await pane.locator(".loading-skeleton").isVisible()).toBe(true);
-          if (artifactDir) {
-            await page.screenshot({
-              path: path.join(artifactDir, "02-accepted-while-loading.png"),
-            });
-          }
+          await screenshot(page, "02-accepted-while-loading");
 
           await composer.fill("Next draft written before history arrives.");
           const input = await composer.elementHandle();
@@ -115,11 +119,7 @@ suite.define(() => {
             pendingDraft = await composer.inputValue();
             expect(pendingDraft).toContain("編集中");
           }
-          const selection = await composer.evaluate((element: HTMLTextAreaElement) => ({
-            start: element.selectionStart,
-            end: element.selectionEnd,
-            direction: element.selectionDirection,
-          }));
+          const selection = await readSelection(composer);
           await page.evaluate(
             () =>
               new Promise((resolve) => {
@@ -134,9 +134,9 @@ suite.define(() => {
                 (request) => requireRecord(request.params).involvingMe === true,
               ),
             ).toHaveLength(0);
-            expect(await gateway.getRequests("cron.list")).toHaveLength(0);
-            expect(await gateway.getRequests("cron.status")).toHaveLength(0);
-            expect(await gateway.getRequests("system.info")).toHaveLength(0);
+            for (const method of backgroundMethods) {
+              expect(await gateway.getRequests(method)).toHaveLength(0);
+            }
           }
           await gateway.resolveDeferred("chat.startup");
           await expect.poll(() => pane.locator(".loading-skeleton").count()).toBe(0);
@@ -147,13 +147,7 @@ suite.define(() => {
             ),
           ).toBe(true);
           expect(await composer.inputValue()).toBe(pendingDraft);
-          expect(
-            await composer.evaluate((element: HTMLTextAreaElement) => ({
-              start: element.selectionStart,
-              end: element.selectionEnd,
-              direction: element.selectionDirection,
-            })),
-          ).toEqual(selection);
+          expect(await readSelection(composer)).toEqual(selection);
           const after = await composer.boundingBox();
           expect(after?.x).toBeCloseTo(before!.x, 0);
           expect(after?.y).toBeCloseTo(before!.y, 0);
@@ -181,17 +175,9 @@ suite.define(() => {
                 ),
               )
               .toBe(true);
-            await Promise.all([
-              gateway.waitForRequest("cron.list"),
-              gateway.waitForRequest("cron.status"),
-              gateway.waitForRequest("system.info"),
-            ]);
+            await Promise.all(backgroundMethods.map((method) => gateway.waitForRequest(method)));
             expect(await composer.inputValue()).toBe(pendingDraft);
-            if (artifactDir) {
-              await page.screenshot({
-                path: path.join(artifactDir, "03-ready-with-next-draft.png"),
-              });
-            }
+            await screenshot(page, "03-ready-with-next-draft");
           }
         },
       );
