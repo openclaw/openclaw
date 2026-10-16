@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it } from "vitest";
 import { publishRuntimeToolInputSchema } from "../providers/tool-schema-json-projection.js";
 import type { Context } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
@@ -23,6 +24,17 @@ const context: Context = {
 };
 const marker = { type: "ephemeral" };
 const marked = (text: string) => [{ type: "text", text, cache_control: marker }];
+const wireMessages = (date: string) => [
+  { role: "system", content: [...marked("STABLE"), { type: "text", text: `Today: ${date}` }] },
+  { role: "user", content: marked("Question") },
+];
+function build(
+  route = model,
+  input = context,
+  options?: Parameters<typeof buildOpenAICompletionsParams>[2],
+) {
+  return buildOpenAICompletionsParams(route, input, options);
+}
 
 function markers(payload: unknown) {
   return JSON.stringify(payload).match(/"cache_control":/g) ?? [];
@@ -36,10 +48,10 @@ describe("managed Completions cache markers", () => {
       ...context,
       tools: [{ name: "lookup", description: "Lookup", parameters: schema }],
     };
-    const markedRequest = buildOpenAICompletionsParams(model, publishedContext, {
+    const markedRequest = build(model, publishedContext, {
       cacheRetention: "short",
     });
-    const unmarkedRequest = buildOpenAICompletionsParams(model, publishedContext, {
+    const unmarkedRequest = build(model, publishedContext, {
       cacheRetention: "none",
     });
     expect(markedRequest.tools?.[0]).toHaveProperty("cache_control", marker);
@@ -49,7 +61,7 @@ describe("managed Completions cache markers", () => {
   });
 
   it("keeps every message as a string for string-only endpoints with caching enabled", () => {
-    const payload = buildOpenAICompletionsParams(
+    const payload = build(
       { ...model, compat: { requiresStringContent: true, cacheControlFormat: "anthropic" } },
       context,
       { cacheRetention: "short" },
@@ -68,7 +80,7 @@ describe("managed Completions cache markers", () => {
   it.each([undefined, false, true])(
     "honors explicit custom-endpoint long retention support: %s",
     (supportsLongCacheRetention) => {
-      const payload = buildOpenAICompletionsParams(
+      const payload = build(
         {
           ...model,
           provider: "custom",
@@ -86,8 +98,8 @@ describe("managed Completions cache markers", () => {
   );
 
   it("preserves the marked stable prefix across suffix changes and sorted tool permutations", () => {
-    const first = buildOpenAICompletionsParams(model, context, undefined);
-    const second = buildOpenAICompletionsParams(
+    const first = build();
+    const second = build(
       model,
       {
         ...context,
@@ -96,20 +108,8 @@ describe("managed Completions cache markers", () => {
       },
       undefined,
     );
-    expect(first.messages).toEqual([
-      {
-        role: "system",
-        content: [...marked("STABLE"), { type: "text", text: "Today: 2026-09-06" }],
-      },
-      { role: "user", content: marked("Question") },
-    ]);
-    expect(second.messages).toEqual([
-      {
-        role: "system",
-        content: [...marked("STABLE"), { type: "text", text: "Today: 2026-09-07" }],
-      },
-      { role: "user", content: marked("Question") },
-    ]);
+    expect(first.messages).toEqual(wireMessages("2026-09-06"));
+    expect(second.messages).toEqual(wireMessages("2026-09-07"));
     expect(first.tools).toEqual(second.tools);
     expect(first.tools).toMatchObject([
       { function: { name: "alpha" } },
@@ -130,14 +130,7 @@ describe("managed Completions cache markers", () => {
           provider: model.provider,
           model: model.id,
           content: [{ type: "toolCall", id: "call_1", name: "alpha", arguments: {} }],
-          usage: {
-            input: 1,
-            output: 1,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 2,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: { ...createZeroUsage(), input: 1, output: 1, totalTokens: 2 },
           stopReason: "toolUse",
           timestamp: 2,
         },
@@ -155,7 +148,7 @@ describe("managed Completions cache markers", () => {
         [toolLoop, supportsTools ? "Result" : "Question"],
         [[...toolLoop, { role: "user", content: "Next", timestamp: 4 }], "Next"],
       ] satisfies Array<[Context["messages"], string]>) {
-        const payload = buildOpenAICompletionsParams(
+        const payload = build(
           route,
           {
             ...context,
@@ -190,7 +183,7 @@ describe("managed Completions cache markers", () => {
   ])("honors retention and route contracts for %s at %s", (provider, baseUrl, count, longTtl) => {
     const route = { ...model, provider, baseUrl };
     for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
-      const payload = buildOpenAICompletionsParams(route, context, { cacheRetention });
+      const payload = build(route, context, { cacheRetention });
       expect(markers(payload)).toHaveLength(cacheRetention === "none" ? 0 : count);
       expect(JSON.stringify(payload).includes('"ttl":"1h"')).toBe(
         longTtl && cacheRetention === "long",

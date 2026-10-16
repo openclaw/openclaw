@@ -53,19 +53,16 @@ function resolveTestEndpointClass(baseUrl: string | undefined): string {
   ) {
     return "azure-openai";
   }
-  if (host.endsWith("openrouter.ai")) {
-    return "openrouter";
-  }
-  if (host.endsWith("opencode.ai")) {
-    return "opencode-native";
-  }
-  if (host.endsWith("xiaomimimo.com")) {
-    return "xiaomi-native";
-  }
-  if (host.endsWith("aiplatform.googleapis.com")) {
-    return "google-vertex";
-  }
-  return "custom";
+  return (
+    (
+      [
+        ["openrouter.ai", "openrouter"],
+        ["opencode.ai", "opencode-native"],
+        ["xiaomimimo.com", "xiaomi-native"],
+        ["aiplatform.googleapis.com", "google-vertex"],
+      ] as const
+    ).find(([suffix]) => host.endsWith(suffix))?.[1] ?? "custom"
+  );
 }
 
 function resolveTestCapabilities(
@@ -289,12 +286,9 @@ export const staleKimiK27Model = makeCompletionsModel({
 });
 
 export const customQwenReasoningModel = makeCompletionsModel({
+  ...customKimiProxyModel,
   id: "Qwen3.6-35B-A3B",
   name: "Qwen3.6 35B",
-  provider: "custom-openai-proxy",
-  baseUrl: "https://proxy.example.com/v1",
-  contextWindow: 262_144,
-  maxTokens: 32_000,
 });
 
 export function getAssistantMessage(params: { messages: unknown }) {

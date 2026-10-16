@@ -17,6 +17,17 @@ const toolCall = {
   type: "function",
   function: { name: "count", arguments: '{"amount":1}' },
 };
+const candidate = { content: "unfinished", tool_calls: [toolCall] };
+function jsonLengthResponse() {
+  return Response.json({
+    id: "chatcmpl-json",
+    object: "chat.completion",
+    created: 1,
+    model: "test-model",
+    choices: [{ index: 0, message: { role: "assistant", ...candidate }, finish_reason: "length" }],
+    usage,
+  });
+}
 
 function sse(chunks: ChatCompletionChunk[], done = true) {
   return new Response(
@@ -83,30 +94,12 @@ describe("compatible context-capped responses", () => {
   it.each(["SSE", "JSON"] as const)(
     "rejects capped %s length without publishing candidate text or tools",
     async (format) => {
-      const chunks = [
-        makeCompletionsChunk({ content: "unfinished", tool_calls: [toolCall] }),
-        makeCompletionsChunk({}, "length", { usage }),
-      ];
       const { result, request, events, onResponse } = await runResponse({
-        chunks,
+        chunks: [makeCompletionsChunk(candidate), makeCompletionsChunk({}, "length", { usage })],
         ...(format === "JSON"
           ? {
               model: { params: { streaming: false } },
-              response: () =>
-                Response.json({
-                  id: "chatcmpl-json",
-                  object: "chat.completion",
-                  created: 1,
-                  model: "test-model",
-                  choices: [
-                    {
-                      index: 0,
-                      message: { role: "assistant", content: "unfinished", tool_calls: [toolCall] },
-                      finish_reason: "length",
-                    },
-                  ],
-                  usage,
-                }),
+              response: jsonLengthResponse,
             }
           : {}),
       });

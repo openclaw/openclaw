@@ -1,7 +1,3 @@
-/**
- * Tests Anthropic server-compaction capture, replay, and rejection through the
- * Messages transport.
- */
 import type { AssistantMessage, Context, SimpleStreamOptions } from "@openclaw/llm-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAiTransportHost, configureAiTransportHost } from "../host.js";
@@ -25,24 +21,43 @@ const buildGuardedModelFetchMock = vi.fn();
 const guardedFetchMock = vi.fn();
 const coreTransportHost = getAiTransportHost();
 
-type AnthropicStreamContext = Context;
 type AnthropicStreamOptions = SimpleStreamOptions & AnthropicTransportOptions;
 
-function latestAnthropicRequest() {
+function latestMessages() {
   const [, init] = guardedFetchMock.mock.calls.at(-1) ?? [];
   const body = init?.body;
-  return {
-    payload: typeof body === "string" ? (JSON.parse(body) as Record<string, unknown>) : {},
-  };
+  return (JSON.parse(body) as { messages: Record<string, unknown>[] }).messages;
 }
 
 async function runTransportStream(
   model: AnthropicMessagesModel,
-  context: AnthropicStreamContext,
-  options: AnthropicStreamOptions,
+  messages: Context["messages"],
+  options: AnthropicStreamOptions = replayOptions,
 ) {
-  return (await createAnthropicMessagesTransportStreamFn()(model, context, options)).result();
+  return (await createAnthropicMessagesTransportStreamFn()(model, { messages }, options)).result();
 }
+
+function queueReply(id: string, blocks: Record<string, unknown>[] = [], compacting = false) {
+  guardedFetchMock.mockResolvedValueOnce(
+    createSseResponse([
+      anthropicMessageStart({
+        id,
+        ...(compacting ? { model: "claude-sonnet-4-6" } : {}),
+        usage: { input_tokens: compacting ? 50_001 : 1, output_tokens: 0 },
+      }),
+      ...blocks,
+      anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
+      { type: "message_stop" },
+    ]),
+  );
+}
+const blockStop = (index: number) => ({ type: "content_block_stop", index });
+const replayIdentity = { authProfileId: "anthropic:work", sessionId: "session-1" };
+const replayOptions = {
+  apiKey: "sk-ant-api",
+  anthropicServerCompaction: true,
+  ...replayIdentity,
+};
 
 describe("anthropic transport stream compaction", () => {
   beforeEach(() => {
@@ -58,68 +73,38 @@ describe("anthropic transport stream compaction", () => {
   });
 
   it("replays captured compaction after restart without trusting usage from disabled replay", async () => {
-    guardedFetchMock
-      .mockResolvedValueOnce(
-        createSseResponse([
-          anthropicMessageStart({
-            id: "msg_compaction",
-            model: "claude-sonnet-4-6",
-            usage: { input_tokens: 50_001, output_tokens: 0 },
-          }),
-          anthropicContentBlockStart(0, {
-            type: "compaction",
-            content: null,
-            encrypted_content: "opaque-initial-compaction",
-          }),
-          anthropicContentBlockDelta(0, {
-            type: "compaction_delta",
-            content: "summary ",
-            encrypted_content: "opaque-partial-compaction",
-          }),
-          anthropicContentBlockDelta(0, {
-            type: "compaction_delta",
-            content: "checkpoint",
-            encrypted_content: "opaque-final-compaction",
-          }),
-          { type: "content_block_stop", index: 0 },
-          anthropicContentBlockStart(1, { type: "text", text: "Done." }),
-          { type: "content_block_stop", index: 1 },
-          anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-          { type: "message_stop" },
-        ]),
-      )
-      .mockResolvedValueOnce(
-        createSseResponse([
-          anthropicMessageStart({
-            id: "msg_disabled",
-            usage: { input_tokens: 1, output_tokens: 0 },
-          }),
-          anthropicContentBlockStart(0, { type: "text", text: "Replay was disabled." }),
-          { type: "content_block_stop", index: 0 },
-          anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-          { type: "message_stop" },
-        ]),
-      )
-      .mockResolvedValueOnce(
-        createSseResponse([
-          anthropicMessageStart({ id: "msg_replay", usage: { input_tokens: 1, output_tokens: 0 } }),
-          anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-          { type: "message_stop" },
-        ]),
-      );
-    const model = makeAnthropicTransportModel();
-    const replayOptions = {
-      apiKey: "sk-ant-api",
-      anthropicServerCompaction: true,
-      authProfileId: "anthropic:work",
-      sessionId: "session-1",
-    } as unknown as AnthropicStreamOptions;
-    const firstUser = { role: "user" as const, content: "old question", timestamp: 1 };
-    const first = await runTransportStream(
-      model,
-      { messages: [firstUser] } as AnthropicStreamContext,
-      replayOptions,
+    queueReply(
+      "msg_compaction",
+      [
+        anthropicContentBlockStart(0, {
+          type: "compaction",
+          content: null,
+          encrypted_content: "opaque-initial-compaction",
+        }),
+        anthropicContentBlockDelta(0, {
+          type: "compaction_delta",
+          content: "summary ",
+          encrypted_content: "opaque-partial-compaction",
+        }),
+        anthropicContentBlockDelta(0, {
+          type: "compaction_delta",
+          content: "checkpoint",
+          encrypted_content: "opaque-final-compaction",
+        }),
+        blockStop(0),
+        anthropicContentBlockStart(1, { type: "text", text: "Done." }),
+        blockStop(1),
+      ],
+      true,
     );
+    queueReply("msg_disabled", [
+      anthropicContentBlockStart(0, { type: "text", text: "Replay was disabled." }),
+      blockStop(0),
+    ]);
+    queueReply("msg_replay");
+    const model = makeAnthropicTransportModel();
+    const firstUser = { role: "user" as const, content: "old question", timestamp: 1 };
+    const first = await runTransportStream(model, [firstUser]);
 
     expect(first.providerReplay).toMatchObject({
       type: "anthropic-compaction",
@@ -135,17 +120,15 @@ describe("anthropic transport stream compaction", () => {
       ],
     };
     const offOptions = { ...replayOptions, anthropicServerCompaction: false };
-    const offResult = await runTransportStream(model, offContext, offOptions);
-    expect(JSON.stringify(latestAnthropicRequest().payload.messages)).not.toContain(
-      '"type":"compaction"',
-    );
+    const offResult = await runTransportStream(model, offContext.messages, offOptions);
+    expect(JSON.stringify(latestMessages())).not.toContain('"type":"compaction"');
     expect(offResult.usage.contextUsage).toEqual({
       state: "available",
       promptTokens: 1,
       totalTokens: 2,
     });
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise persisted JSON reload, not an in-memory clone.
-    const resumed: AnthropicStreamContext["messages"] = JSON.parse(
+    const resumed: Context["messages"] = JSON.parse(
       JSON.stringify([
         ...offContext.messages,
         offResult,
@@ -153,11 +136,9 @@ describe("anthropic transport stream compaction", () => {
       ]),
     );
 
-    await runTransportStream(model, { messages: resumed }, replayOptions);
+    await runTransportStream(model, resumed);
 
-    const replayMessages = latestAnthropicRequest().payload.messages as Array<
-      Record<string, unknown>
-    >;
+    const replayMessages = latestMessages();
     expect(replayMessages.map((message) => message.role)).toEqual([
       "assistant",
       "user",
@@ -191,34 +172,22 @@ describe("anthropic transport stream compaction", () => {
   });
 
   it("keeps full history for client recovery when the compaction summary is null", async () => {
-    guardedFetchMock
-      .mockResolvedValueOnce(
-        createSseResponse([
-          anthropicMessageStart({
-            id: "msg_null_compaction",
-            model: "claude-sonnet-4-6",
-            usage: { input_tokens: 50_001, output_tokens: 0 },
-          }),
-          anthropicContentBlockStart(0, {
-            type: "compaction",
-            content: null,
-            encrypted_content: null,
-          }),
-          anthropicContentBlockDelta(0, { type: "compaction_delta", content: null }),
-          { type: "content_block_stop", index: 0 },
-          anthropicContentBlockStart(1, { type: "text", text: "Done." }),
-          { type: "content_block_stop", index: 1 },
-          anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-          { type: "message_stop" },
-        ]),
-      )
-      .mockResolvedValueOnce(
-        createSseResponse([
-          anthropicMessageStart({ id: "msg_next", usage: { input_tokens: 1, output_tokens: 0 } }),
-          anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-          { type: "message_stop" },
-        ]),
-      );
+    queueReply(
+      "msg_null_compaction",
+      [
+        anthropicContentBlockStart(0, {
+          type: "compaction",
+          content: null,
+          encrypted_content: null,
+        }),
+        anthropicContentBlockDelta(0, { type: "compaction_delta", content: null }),
+        blockStop(0),
+        anthropicContentBlockStart(1, { type: "text", text: "Done." }),
+        blockStop(1),
+      ],
+      true,
+    );
+    queueReply("msg_next");
     const model = makeAnthropicTransportModel();
     const options = {
       apiKey: "sk-ant-api",
@@ -227,34 +196,22 @@ describe("anthropic transport stream compaction", () => {
     } as unknown as AnthropicStreamOptions;
     const firstUser = { role: "user" as const, content: "old question", timestamp: 1 };
 
-    const first = await runTransportStream(
-      model,
-      { messages: [firstUser] } as AnthropicStreamContext,
-      options,
-    );
+    const first = await runTransportStream(model, [firstUser], options);
     expect(first.providerReplay).toBeUndefined();
     expect(first.content.map((block) => block.type)).toEqual(["text"]);
 
     await runTransportStream(
       model,
-      {
-        messages: [firstUser, first, { role: "user", content: "new question", timestamp: 2 }],
-      } as AnthropicStreamContext,
+      [firstUser, first, { role: "user", content: "new question", timestamp: 2 }],
       options,
     );
-    const nextMessages = latestAnthropicRequest().payload.messages as Array<
-      Record<string, unknown>
-    >;
+    const nextMessages = latestMessages();
     expect(nextMessages.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
     expect(JSON.stringify(nextMessages)).not.toContain('"type":"compaction"');
   });
 
   it("records suppression and notifies the owner when Anthropic rejects a replayed compaction block", async () => {
     const model = makeAnthropicTransportModel();
-    const replayIdentity = {
-      authProfileId: "anthropic:work",
-      sessionId: "session-1",
-    };
     const checkpoint: AssistantMessage = {
       role: "assistant",
       content: [{ type: "text", text: "answer after compaction" }],
@@ -278,19 +235,12 @@ describe("anthropic transport stream compaction", () => {
 
     const result = await runTransportStream(
       model,
-      {
-        messages: [
-          { role: "user", content: "old question" },
-          checkpoint,
-          { role: "user", content: "new question" },
-        ],
-      } as AnthropicStreamContext,
-      {
-        apiKey: "sk-ant-api",
-        anthropicServerCompaction: true,
-        ...replayIdentity,
-        onCompactionRejected,
-      } as unknown as AnthropicStreamOptions,
+      [
+        { role: "user", content: "old question" },
+        checkpoint,
+        { role: "user", content: "new question" },
+      ] as Context["messages"],
+      { ...replayOptions, onCompactionRejected },
     );
 
     expect(result.stopReason).toBe("error");
