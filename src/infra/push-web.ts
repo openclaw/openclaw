@@ -172,12 +172,13 @@ export async function clearBoundWebPushSubscription(params: {
   });
 }
 
-type WebPushPayload = {
+export type WebPushPayload = {
   title: string;
   body?: string;
   renotify?: boolean;
   tag?: string;
   url?: string;
+  preview?: import("../../packages/gateway-protocol/src/schema/push.js").WebPushContentPreview;
 };
 
 async function sendPreparedWebPushNotification(

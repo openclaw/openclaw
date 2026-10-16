@@ -1328,7 +1328,13 @@ const enSettings = {
       humanMentioned: "Someone mentions me",
       scheduledTaskFailed: "Scheduled task failed",
       lockScreenDetail: "Lock-screen detail",
-      lockScreenDetailHint: "Private hides names; detailed content is sanitized.",
+      lockScreenDetailHint: "Private hides names. Detailed allows optional content previews.",
+      answerPreview: "Show final-answer previews",
+      answerPreviewHint:
+        "Allow short final-answer excerpts in notifications, including on the lock screen. Excerpts may contain sensitive information.",
+      questionPreview: "Show question previews",
+      questionPreviewHint:
+        "Allow question text and simple choices in notifications, including on the lock screen. Questions may contain sensitive information.",
       private: "Private",
       namesOnly: "Names only",
       detailed: "Detailed",
@@ -1340,6 +1346,8 @@ const enSettings = {
       onlyAgents: "Only these agents",
       inherit: "Use account default",
       inheritDetail: "Use account detail level",
+      inheritDetailHint:
+        "Using the account detail level also uses its preview choices. A device override starts with previews off.",
       inheritQuietHours: "Use account quiet hours",
       overrideAgents: "Override for this device",
     },

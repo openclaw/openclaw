@@ -1,7 +1,9 @@
 import type { GatewayClientCap } from "../../packages/gateway-protocol/src/client-info.js";
+import type { QuestionRecord } from "../../packages/gateway-protocol/src/schema/questions.js";
 import type { LiveTextProjectionText } from "./live-text-continuity.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import type { SessionAncestorReferences } from "./session-ancestor-references.js";
+import type { SessionSharingTarget } from "./session-sharing-target.types.js";
 
 export type SessionEventProjection = {
   payload: unknown;
@@ -62,6 +64,19 @@ export type GatewayBroadcastOpts = {
   sessionSubscriptionVerified?: boolean;
   /** Question owner authorizes ordinary own-run recipients without a broad question grant. */
   questionRecipient?: (client: GatewayClient) => boolean;
+  /** Optional content disclosure only; the push owner still admits every recipient. */
+  questionPreview?: {
+    record: QuestionRecord;
+    canPreview: (client: GatewayClient, target: SessionSharingTarget | null) => boolean;
+  };
+  /** Full projected terminal answer before persisted bytes retire from the live display tail. */
+  answerPreviewText?: string;
+  /** Original completion publication; current push authority still admits each recipient. */
+  answerPreview?: {
+    payload: unknown;
+    text?: string;
+    canPreview: (target: SessionSharingTarget | null) => boolean;
+  };
   stateVersion?: GatewayBroadcastStateVersion;
   /** Private live-text ownership; omitting coalesce flushes this group's progress. */
   liveText?: {
@@ -84,6 +99,13 @@ export type GatewayBroadcastOpts = {
       text?: LiveTextProjectionText;
     };
   };
+};
+
+export type LivePayloadOptions = Pick<
+  GatewayBroadcastOpts,
+  "agentId" | "dropIfSlow" | "answerPreviewText" | "liveText"
+> & {
+  controlUiVisible?: boolean;
 };
 
 export type GatewayBroadcastFn = (

@@ -26,6 +26,7 @@ import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
+import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "../session-sharing.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
@@ -149,6 +150,114 @@ async function fixture(state: OpenClawTestState) {
     call("question.request", { ...requestParams, id, timeoutMs: 10_000 }, client);
   return { owner, viewer, producer, cfg, entry, write, call, request, sourceController };
 }
+
+it("retains canonical preview authority on a role-less Gateway without changing broadcast scope", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = {};
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: requestParams.sessionKey },
+      { sessionId: "personal-session", lifecycleRevision: "personal-generation", updatedAt: 1 },
+    );
+    const response = await callQuestionRpc(
+      "question.request",
+      { ...requestParams, id: "personal-question", timeoutMs: 10_000 },
+      { client: adminRequestClient, cfg, registered: true },
+    );
+    expect(response[0]).toBe(true);
+    const publication = broadcast.mock.calls.find(([event]) => event === "question.requested");
+    const preview = publication?.[2]?.questionPreview;
+    expect(preview?.record).toBe(publication?.[1]);
+    expect(publication?.[2]?.sessionKeys).toBeUndefined();
+    expect(publication?.[2]?.agentId).toBeUndefined();
+    if (!preview) {
+      throw new Error("Expected canonical question preview authority");
+    }
+    const facts = await prepareSessionMutationFacts({
+      cfg,
+      sessionKey: requestParams.sessionKey,
+      agentId: "main",
+      allowMissing: true,
+    });
+    try {
+      expect(
+        preview.canPreview(
+          {
+            ...adminRequestClient,
+            connect: {
+              ...adminRequestClient.connect,
+              scopes: ["operator.read", "operator.questions"],
+            },
+          },
+          facts.readCurrent(cfg).target,
+        ),
+      ).toBe(true);
+    } finally {
+      facts.release();
+    }
+  });
+});
+
+it.each([
+  "label change",
+  "expiry",
+  "answered",
+  "reused id",
+  "requester loss",
+  "session replacement",
+] as const)(
+  "keeps delayed question previews bound to their original request after %s",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const f = await fixture(state);
+      expect((await f.request())[0]).toBe(true);
+      const publication = broadcast.mock.calls.find(([event]) => event === "question.requested");
+      const preview = publication?.[2]?.questionPreview;
+      expect(preview).toBeDefined();
+      if (!preview) {
+        throw new Error("Expected canonical question preview authority");
+      }
+      const recipient: GatewayClient = {
+        ...f.owner,
+        connect: { ...f.owner.connect, scopes: ["operator.read", "operator.questions"] },
+      };
+      const canPreview = async (client = recipient) => {
+        const facts = await prepareSessionMutationFacts({
+          cfg: f.cfg,
+          sessionKey: requestParams.sessionKey,
+          agentId: "main",
+          allowMissing: true,
+        });
+        try {
+          return preview.canPreview(client, facts.readCurrent(f.cfg).target);
+        } finally {
+          facts.release();
+        }
+      };
+      // RPC completion has released synchronous fanout facts. Only the preview's
+      // retained source identity may survive the storage await before disclosure.
+      expect(publication?.[2]?.questionRecipient?.(recipient)).toBe(false);
+      expect(await canPreview()).toBe(true);
+      expect(await canPreview(f.owner)).toBe(false);
+      if (change === "label change") {
+        await f.write({ label: "Renamed conversation", updatedAt: 2 });
+      } else if (change === "expiry") {
+        vi.setSystemTime(preview.record.expiresAtMs);
+      } else if (change === "answered") {
+        manager.resolve(preview.record.id, { answers: { destination: ["Home"] } });
+      } else if (change === "reused id") {
+        manager.reset();
+        manager.request({ ...requestParams, id: preview.record.id });
+      } else if (change === "requester loss") {
+        f.sourceController.abort();
+      } else {
+        await f.write({ sessionId: "replacement-session", lifecycleRevision: "replacement" });
+      }
+      expect(await canPreview()).toBe(change === "label change");
+    });
+  },
+);
 
 it("keeps a trusted narrow question on worker-backed RPCs and fanout through label changes and completion", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

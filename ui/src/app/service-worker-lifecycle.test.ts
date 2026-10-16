@@ -317,6 +317,29 @@ describe("Control UI service worker notification scope", () => {
     expect(requested.options).toMatchObject({ tag, renotify: false });
     expect(terminal.options).toMatchObject({ tag, renotify: false });
   });
+
+  it("ignores additive preview metadata and opens the authenticated route without answer actions", async () => {
+    const worker = createNotificationServiceWorker(nestedScope, []);
+    const payload = {
+      title: "OpenClaw needs an answer",
+      body: "Continue?\n• Yes\n• No",
+      url: "ask/request%3A42",
+      preview: {
+        version: 1,
+        kind: "question",
+        requestId: "request:42",
+        question: { id: "next", choices: ["Yes", "No"], allowTextReply: true },
+      },
+    };
+    const notification = await worker.dispatchPush(payload);
+    expect(notification.options.body).toBe("Continue?\n• Yes\n• No");
+    expect(notification.options).not.toHaveProperty("actions");
+    expect(notification.options.data).toEqual({ url: "ask/request%3A42", explicitUrl: true });
+    await worker.dispatchNotificationClick(notification.options.data);
+    expect(worker.clients.openWindow).toHaveBeenCalledExactlyOnceWith(
+      new URL("ask/request%3A42", nestedScope).href,
+    );
+  });
 });
 
 type ActivateEventStub = {

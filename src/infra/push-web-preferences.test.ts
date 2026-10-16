@@ -48,6 +48,80 @@ describe("Web Push notification preferences", () => {
     expect(user.categories.humanMentioned).toBe(false);
   });
 
+  it.each([
+    { detailLevel: "detailed", consent: undefined },
+    { detailLevel: "detailed", consent: true },
+    { detailLevel: "detailed", consent: "1" },
+    { detailLevel: "detailed", consent: 0 },
+    { detailLevel: "detailed", consent: 2 },
+    { detailLevel: "private", consent: 1 },
+    { detailLevel: "identified", consent: 1 },
+    { detailLevel: undefined, consent: 1 },
+  ])(
+    "excludes content without current explicit Detailed consent: %j",
+    ({ detailLevel, consent }) => {
+      const source = {
+        detailLevel,
+        answerPreviewConsentVersion: consent,
+        questionPreviewConsentVersion: consent,
+      };
+      for (const preferences of [
+        normalizeWebPushNotificationPreferences(source),
+        normalizeWebPushDevicePreferences(source),
+      ]) {
+        expect(preferences).not.toHaveProperty("answerPreviewConsentVersion");
+        expect(preferences).not.toHaveProperty("questionPreviewConsentVersion");
+      }
+    },
+  );
+
+  it.each([
+    { device: {}, answer: 1, question: 1 },
+    { device: { detailLevel: "detailed" }, answer: undefined, question: undefined },
+    {
+      device: { detailLevel: "detailed", answerPreviewConsentVersion: 1 },
+      answer: 1,
+      question: undefined,
+    },
+    {
+      device: { detailLevel: "detailed", questionPreviewConsentVersion: 1 },
+      answer: undefined,
+      question: 1,
+    },
+    {
+      device: { detailLevel: "private", answerPreviewConsentVersion: 1 },
+      answer: undefined,
+      question: undefined,
+    },
+  ])("uses consent from the detail-level owner: %j", ({ device, answer, question }) => {
+    const effective = resolveEffectiveWebPushPreferences({
+      user: {
+        detailLevel: "detailed",
+        answerPreviewConsentVersion: 1,
+        questionPreviewConsentVersion: 1,
+      },
+      device,
+    });
+    expect(effective.answerPreviewConsentVersion).toBe(answer);
+    expect(effective.questionPreviewConsentVersion).toBe(question);
+  });
+
+  it("does not restore cleared consent when Detailed is selected again", () => {
+    for (const normalize of [
+      normalizeWebPushNotificationPreferences,
+      normalizeWebPushDevicePreferences,
+    ]) {
+      const privatePreferences = normalize({
+        detailLevel: "private",
+        answerPreviewConsentVersion: 1,
+        questionPreviewConsentVersion: 1,
+      });
+      const detailedPreferences = normalize({ ...privatePreferences, detailLevel: "detailed" });
+      expect(detailedPreferences).not.toHaveProperty("answerPreviewConsentVersion");
+      expect(detailedPreferences).not.toHaveProperty("questionPreviewConsentVersion");
+    }
+  });
+
   it("handles overnight quiet hours in the configured time zone", () => {
     const defaults = normalizeWebPushNotificationPreferences(undefined);
     const effective = resolveEffectiveWebPushPreferences({

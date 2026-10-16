@@ -7,7 +7,10 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
-import type { WebPushNotificationCategory } from "../../packages/gateway-protocol/src/schema/push.js";
+import type {
+  WebPushContentPreview,
+  WebPushNotificationCategory,
+} from "../../packages/gateway-protocol/src/schema/push.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import {
@@ -20,10 +23,15 @@ import {
   hasBoundWebPushSubscriptions,
   prepareWebPushNotificationSender,
   type BoundWebPushSubscription,
+  type WebPushPayload,
 } from "../infra/push-web.js";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
+import {
+  resolveWebPushAnswerPreview,
+  resolveWebPushQuestionPreview,
+} from "./event-web-push-preview.js";
 import { QUESTIONS_SCOPE } from "./method-scopes.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
@@ -36,6 +44,8 @@ import {
 } from "./web-push-authority.js";
 
 const EVENT_PUSH_TTL_SECONDS = 5 * 60;
+// Leave room for Web Push encryption overhead within the common 4096-byte limit.
+const PREVIEW_PAYLOAD_MAX_BYTES = 3800;
 const defaultLog = createSubsystemLogger("gateway/web-push");
 
 type EventNotification = {
@@ -184,8 +194,10 @@ export function createEventWebPushDelivery(params: {
           const agentLabel = normalizeWebPushDisplayLabel(agentId);
           const groups = new Map<
             string,
-            { title: string; body: string; subscriptions: BoundWebPushSubscription[] }
+            { payload: WebPushPayload; subscriptions: BoundWebPushSubscription[] }
           >();
+          let answerPreview: WebPushContentPreview | undefined;
+          let answerPreviewResolved = false;
           for (const target of targets) {
             if (mention && target.userProfileId !== recipientProfileId) {
               continue;
@@ -224,8 +236,73 @@ export function createEventWebPushDelivery(params: {
                 ? notification.body
                 : (notification.identifiedBody ??
                   (agentLabel ? `${agentLabel}: ${notification.body}` : notification.body));
-            const key = JSON.stringify({ title, body });
-            const group = groups.get(key) ?? { title, body, subscriptions: [] };
+            let pushPayload: WebPushPayload = {
+              title,
+              body,
+              tag: notification.tag,
+              renotify: false,
+              url,
+            };
+            let preview: WebPushContentPreview | undefined;
+            const questionPreview = opts?.questionPreview;
+            const answerSource = opts?.answerPreview;
+            if (preferences.detailLevel === "detailed") {
+              if (
+                notification.category === "agent-finished" &&
+                preferences.answerPreviewConsentVersion === 1 &&
+                answerSource !== undefined &&
+                answerSource.payload === payload &&
+                sessionKeys.length === 1 &&
+                sessionKey !== undefined &&
+                answerSource.canPreview(authority.sessions.get(sessionKey)?.target ?? null)
+              ) {
+                if (!answerPreviewResolved) {
+                  answerPreview = resolveWebPushAnswerPreview(
+                    payload,
+                    sessionKeys,
+                    cfg,
+                    answerSource.text,
+                  );
+                  answerPreviewResolved = true;
+                }
+                preview = answerPreview;
+              } else if (
+                notification.category === "agent-question" &&
+                preferences.questionPreviewConsentVersion === 1 &&
+                questionPreview !== undefined &&
+                questionPreview.record === payload &&
+                sessionKeys.length === 1 &&
+                sessionKey !== undefined &&
+                questionPreview.record.sessionKey === sessionKey &&
+                questionPreview.canPreview(
+                  client,
+                  authority.sessions.get(sessionKey)?.target ?? null,
+                )
+              ) {
+                preview = resolveWebPushQuestionPreview(questionPreview.record, cfg);
+              }
+            }
+            if (preview) {
+              const candidate = {
+                ...pushPayload,
+                body:
+                  preview.kind === "answer"
+                    ? preview.text
+                    : [
+                        preview.question.text,
+                        ...preview.question.choices.map((choice) => `• ${choice}`),
+                      ].join("\n"),
+                preview,
+              };
+              // Fallback as a whole: never truncate question choices, identifiers, or routes.
+              if (
+                Buffer.byteLength(JSON.stringify(candidate), "utf8") <= PREVIEW_PAYLOAD_MAX_BYTES
+              ) {
+                pushPayload = candidate;
+              }
+            }
+            const key = JSON.stringify(pushPayload);
+            const group = groups.get(key) ?? { payload: pushPayload, subscriptions: [] };
             group.subscriptions.push(target.subscription);
             groups.set(key, group);
           }
@@ -245,13 +322,7 @@ export function createEventWebPushDelivery(params: {
                 [...groups.values()].map((group) =>
                   sender({
                     subscriptions: group.subscriptions,
-                    payload: {
-                      title: group.title,
-                      body: group.body,
-                      tag: notification.tag,
-                      renotify: false,
-                      url,
-                    },
+                    payload: group.payload,
                     deliveryOptions: {
                       TTL: EVENT_PUSH_TTL_SECONDS,
                       urgency: notification.category.includes("failed") ? "high" : "normal",

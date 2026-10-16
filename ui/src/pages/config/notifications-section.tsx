@@ -161,6 +161,37 @@ function AgentIdsRow(props: { agentIds: string[]; onChange: (value: string[]) =>
   );
 }
 
+type PreviewConsent = Pick<
+  WebPushNotificationPreferences,
+  "answerPreviewConsentVersion" | "questionPreviewConsentVersion"
+>;
+
+function ContentPreviewRows(props: {
+  preferences: PreviewConsent;
+  onChange: (value: PreviewConsent) => void;
+}) {
+  return (
+    <div class="settings-subrows">
+      <SettingsToggleRow
+        title={t("configView.notifications.answerPreview")}
+        description={t("configView.notifications.answerPreviewHint")}
+        checked={props.preferences.answerPreviewConsentVersion === 1}
+        onChange={(checked) =>
+          props.onChange({ answerPreviewConsentVersion: checked ? 1 : undefined })
+        }
+      />
+      <SettingsToggleRow
+        title={t("configView.notifications.questionPreview")}
+        description={t("configView.notifications.questionPreviewHint")}
+        checked={props.preferences.questionPreviewConsentVersion === 1}
+        onChange={(checked) =>
+          props.onChange({ questionPreviewConsentVersion: checked ? 1 : undefined })
+        }
+      />
+    </div>
+  );
+}
+
 function UserNotificationPreferences(props: {
   preferences: WebPushNotificationPreferences;
   onChange: (value: WebPushNotificationPreferences) => void;
@@ -187,8 +218,17 @@ function UserNotificationPreferences(props: {
           description={t("configView.notifications.lockScreenDetailHint")}
           value={props.preferences.detailLevel}
           options={detailLevelOptions()}
-          onChange={(value) => patch({ detailLevel: detailLevel(value) })}
+          onChange={(value) =>
+            patch({
+              detailLevel: detailLevel(value),
+              answerPreviewConsentVersion: undefined,
+              questionPreviewConsentVersion: undefined,
+            })
+          }
         />
+        <Show when={props.preferences.detailLevel === "detailed"}>
+          <ContentPreviewRows preferences={props.preferences} onChange={patch} />
+        </Show>
         <SettingsToggleRow
           title={t("configView.notifications.quietHours")}
           checked={props.preferences.quietHours.enabled}
@@ -241,15 +281,23 @@ function DeviceNotificationPreferences(props: {
         />
         <SettingsSelectRow
           title={t("configView.notifications.lockScreenDetail")}
+          description={t("configView.notifications.inheritDetailHint")}
           value={props.preferences.detailLevel ?? "inherit"}
           options={[
             { value: "inherit", label: t("configView.notifications.inheritDetail") },
             ...detailLevelOptions(),
           ]}
           onChange={(value) =>
-            patch({ detailLevel: value === "inherit" ? undefined : detailLevel(value) })
+            patch({
+              detailLevel: value === "inherit" ? undefined : detailLevel(value),
+              answerPreviewConsentVersion: undefined,
+              questionPreviewConsentVersion: undefined,
+            })
           }
         />
+        <Show when={props.preferences.detailLevel === "detailed"}>
+          <ContentPreviewRows preferences={props.preferences} onChange={patch} />
+        </Show>
         <SettingsSelectRow
           title={t("configView.notifications.quietHours")}
           value={

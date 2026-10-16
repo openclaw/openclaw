@@ -53,6 +53,21 @@ function detailLevel(value: unknown): WebPushDetailLevel | undefined {
   return value === "private" || value === "identified" || value === "detailed" ? value : undefined;
 }
 
+function normalizePreviewConsent(source: Record<string, unknown>) {
+  // Detailed predates content previews. Only an explicit, understood consent
+  // version permits content, and a privacy downgrade permanently clears it.
+  return source.detailLevel === "detailed"
+    ? {
+        ...(source.answerPreviewConsentVersion === 1
+          ? { answerPreviewConsentVersion: 1 as const }
+          : {}),
+        ...(source.questionPreviewConsentVersion === 1
+          ? { questionPreviewConsentVersion: 1 as const }
+          : {}),
+      }
+    : {};
+}
+
 function normalizeAgentIds(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -111,6 +126,7 @@ export function normalizeWebPushNotificationPreferences(
     },
     detailLevel:
       detailLevel(source.detailLevel) ?? DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.detailLevel,
+    ...normalizePreviewConsent(source),
     quietHours:
       normalizeQuietHours(source.quietHours) ??
       DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.quietHours,
@@ -130,6 +146,7 @@ export function normalizeWebPushDevicePreferences(value: unknown): WebPushDevice
     label: normalizeWebPushDisplayLabel(source.label) ?? "",
     ...(categories && Object.keys(categories).length > 0 ? { categories } : {}),
     ...(normalizedDetailLevel ? { detailLevel: normalizedDetailLevel } : {}),
+    ...normalizePreviewConsent(source),
     ...(normalizedQuietHours ? { quietHours: normalizedQuietHours } : {}),
     ...(normalizedAgentIds ? { agentIds: normalizedAgentIds } : {}),
   };
@@ -141,11 +158,15 @@ export function resolveEffectiveWebPushPreferences(params: {
 }): WebPushNotificationPreferences & { enabled: boolean; label: string } {
   const user = normalizeWebPushNotificationPreferences(params.user);
   const device = normalizeWebPushDevicePreferences(params.device);
+  // An explicit device detail choice owns its consent; never silently carry
+  // account consent into a previously configured device override.
+  const detailOwner = device.detailLevel === undefined ? user : device;
   return {
     enabled: device.enabled,
     label: device.label,
     categories: { ...user.categories, ...device.categories },
     detailLevel: device.detailLevel ?? user.detailLevel,
+    ...normalizePreviewConsent(detailOwner),
     quietHours: device.quietHours ?? user.quietHours,
     agentIds: device.agentIds ?? user.agentIds,
   };

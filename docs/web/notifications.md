@@ -57,7 +57,50 @@ The detail levels are:
 
 - **Private** — generic attention text only.
 - **Names only** — may include a sanitized person, session, device, agent, task, or automation label.
-- **Detailed** — currently uses the same bounded, sanitized producer-owned labels. Message excerpts, raw prompts, command arguments, output, environment values, and errors never enter the push payload.
+- **Detailed** — uses the same bounded, sanitized producer-owned labels unless you separately enable one of the content previews below. Existing Detailed preferences do not enable previews.
+
+### Optional content previews
+
+With **Detailed** selected, you can separately enable **Show final-answer previews** and
+**Show question previews**. Both are off by default. Preview text can contain
+sensitive information and remain visible in the browser or OS notification center,
+including on the lock screen. Known credential patterns are redacted, but this
+does not make private conversation text safe to share.
+
+- Final-answer previews use only the visible final answer from the exact completed
+  run. They contain at most 240 UTF-16 code units, including any ellipsis, without
+  splitting a displayed character. Hidden reasoning, tool content, silent replies,
+  delivery mirrors, and error details are not preview sources. Missing text keeps
+  the existing generic notification; the Gateway never looks up a later message.
+  If the original session is reset or its source cannot be verified, content is
+  also omitted. Answers already shortened by the event producer stay generic.
+- Simple question previews require one current ordinary question with a short,
+  unchanged prompt and up to three short, distinct choices. Secret, form, resource,
+  multiple-selection, multi-question, and other complex requests keep generic
+  text. Choices are never shortened, relabeled, or inferred. Questions with custom
+  option values or descriptions also require opening the app.
+
+Account preview choices follow the account's Detailed preference. A browser with
+its own detail override must enable its own previews; an old Detailed override
+does not inherit account consent. Selecting a different detail level clears the
+preview choices at that layer. Selecting Detailed again does not restore them.
+Opening Settings or saving another setting never enables a preview.
+
+Turning previews off affects future sends. It cannot recall notifications already
+delivered to a browser or its push service. Older Gateways remain labels-only;
+preference saves that drop the new consent fields disable previews on upgrade.
+
+The browser service worker displays the preview body and keeps its existing
+authenticated click-through route. It does not submit answers from notifications.
+Clients consuming the optional versioned question snapshot must fetch and authorize
+the exact request again before offering or sending an answer. They must check its
+pending status, expiry, session/run binding, and exact question and choice content.
+A push snapshot never grants permission to answer.
+
+Approval prompts, human-mention messages, command arguments, tool output,
+environment values, and failure details remain excluded, even with preview consent.
+Oversized preview envelopes fall back to the existing notification without partial
+question or routing data.
 
 On iPhone and iPad, Web Push is available only after two steps. First, install the Control UI with **Share → Add to Home Screen**. Then open that installed app. A normal Safari tab remains usable for the Control UI. In that tab, the Notifications page reports the install requirement. It does not attempt to dereference an unavailable `PushManager`.
 

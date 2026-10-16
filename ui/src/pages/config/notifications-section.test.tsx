@@ -3,6 +3,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  WebPushDevicePreferences,
+  WebPushNotificationPreferences,
+} from "../../../../packages/gateway-protocol/src/schema/push.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -181,6 +185,100 @@ type DevicePreferencesListener = NonNullable<
 >;
 
 describe("Web Push preference controls", () => {
+  it.each(["user", "device"] as const)(
+    "requires separate preview choices and clears them on %s privacy changes",
+    (scope) => {
+      const [user, setUser] = createSignal<WebPushNotificationPreferences>({
+        ...userPreferences,
+        detailLevel: "detailed",
+      });
+      const [device, setDevice] = createSignal<WebPushDevicePreferences>({
+        enabled: true,
+        label: "phone",
+        detailLevel: "detailed",
+      });
+      const onUser = vi.fn((value: WebPushNotificationPreferences) => setUser(value));
+      const onDevice = vi.fn((value: WebPushDevicePreferences) => setDevice(value));
+      const view = mountSolid(() => (
+        <NotificationsSection
+          connected={true}
+          onWebPushSetUserPreferences={onUser}
+          onWebPushSetDevicePreferences={onDevice}
+          webPush={{
+            supported: true,
+            permission: "granted",
+            subscription: "registered",
+            loading: false,
+            preferences: {
+              durableIdentity: true,
+              user: user(),
+              device: device(),
+              effective: {
+                ...user(),
+                ...device(),
+                categories: { ...user().categories, ...device().categories },
+              },
+            },
+          }}
+        />
+      ));
+      const group = expectDefined(
+        view.container.querySelectorAll(".settings-stack > .settings-section")[
+          scope === "user" ? 0 : 1
+        ],
+        "preference section",
+      );
+      const previewToggle = (title: string) => {
+        const row = [...group.querySelectorAll(".settings-row")].find(
+          (candidate) => candidate.querySelector(".settings-row__title")?.textContent === title,
+        );
+        return expectDefined(row?.querySelector<HTMLInputElement>('input[role="switch"]'), title);
+      };
+      const current = scope === "user" ? user : device;
+      expect(onUser).not.toHaveBeenCalled();
+      expect(onDevice).not.toHaveBeenCalled();
+      expect(previewToggle("Show final-answer previews").checked).toBe(false);
+      expect(previewToggle("Show question previews").checked).toBe(false);
+      expect(group.textContent).toContain("including on the lock screen");
+
+      // Saving an unrelated preference must not grant either content permission.
+      const unrelated = expectDefined(
+        group.querySelector<HTMLInputElement>('input[role="switch"]'),
+        "preference toggle",
+      );
+      unrelated.click();
+      flush();
+      expect(current().answerPreviewConsentVersion).toBeUndefined();
+      expect(current().questionPreviewConsentVersion).toBeUndefined();
+
+      previewToggle("Show final-answer previews").click();
+      flush();
+      expect(current().answerPreviewConsentVersion).toBe(1);
+      expect(current().questionPreviewConsentVersion).toBeUndefined();
+      previewToggle("Show question previews").click();
+      flush();
+      previewToggle("Show final-answer previews").click();
+      flush();
+      expect(current().answerPreviewConsentVersion).toBeUndefined();
+      expect(current().questionPreviewConsentVersion).toBe(1);
+
+      const detail = expectDefined(
+        group.querySelector<HTMLSelectElement>('select[aria-label="Lock-screen detail"]'),
+        "detail selector",
+      );
+      detail.value = "private";
+      detail.dispatchEvent(new Event("change"));
+      flush();
+      expect(current().questionPreviewConsentVersion).toBeUndefined();
+      expect(group.textContent).not.toContain("Show question previews");
+      detail.value = "detailed";
+      detail.dispatchEvent(new Event("change"));
+      flush();
+      expect(previewToggle("Show final-answer previews").checked).toBe(false);
+      expect(previewToggle("Show question previews").checked).toBe(false);
+    },
+  );
+
   function renderPreferences(
     options: {
       onDevice?: DevicePreferencesListener;
