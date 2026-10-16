@@ -159,15 +159,19 @@ export async function configureOmlxInteractive(
     options: listing.provider.models.map((model) => ({ value: model.id, label: model.name })),
   });
   ctx.signal?.throwIfAborted();
-  listing.provider.apiKey = apiKey ? "omlx:default" : OMLX_LOCAL_API_KEY;
+  const credential = apiKey
+    ? buildApiKeyCredential(OMLX_PROVIDER_ID, credentialInput, undefined, {
+        secretInputMode: credentialMode,
+      })
+    : undefined;
+  listing.provider.apiKey = credential?.keyRef ?? (apiKey ? "omlx:default" : OMLX_LOCAL_API_KEY);
+  listing.provider.auth = credential?.keyRef ? "api-key" : listing.provider.auth;
   const result = setupResult(listing, modelId, ctx.config);
-  if (apiKey) {
+  if (credential) {
     result.profiles = [
       {
         profileId: "omlx:default",
-        credential: buildApiKeyCredential(OMLX_PROVIDER_ID, credentialInput, undefined, {
-          secretInputMode: credentialMode,
-        }),
+        credential,
       },
     ];
   }
@@ -243,11 +247,18 @@ export async function configureOmlxNonInteractive(
     return null;
   }
   const { listing, modelId, resolved } = prepared;
+  let credential:
+    | ReturnType<ProviderAuthMethodNonInteractiveContext["toApiKeyCredential"]>
+    | undefined;
   const config = await configureOpenAICompatibleSelfHostedProviderNonInteractive({
     ctx: {
       ...ctx,
       opts: { ...ctx.opts, customApiKey: resolved?.key ?? OMLX_LOCAL_API_KEY },
       resolveApiKey: async () => resolved ?? { key: OMLX_LOCAL_API_KEY, source: "flag" },
+      toApiKeyCredential: (params) => {
+        credential = ctx.toApiKeyCredential(params);
+        return credential;
+      },
     },
     providerId: OMLX_PROVIDER_ID,
     providerLabel: "oMLX",
@@ -260,13 +271,16 @@ export async function configureOmlxNonInteractive(
   }
   config.models.providers.omlx = {
     ...listing.provider,
-    apiKey: resolved
-      ? resolved.key === OMLX_LOCAL_API_KEY
-        ? OMLX_LOCAL_API_KEY
-        : resolved.source === "profile"
-          ? listing.provider.apiKey
-          : "omlx:default"
-      : listing.provider.apiKey,
+    auth: credential?.keyRef ? "api-key" : listing.provider.auth,
+    apiKey:
+      credential?.keyRef ??
+      (resolved
+        ? resolved.key === OMLX_LOCAL_API_KEY
+          ? OMLX_LOCAL_API_KEY
+          : resolved.source === "profile"
+            ? listing.provider.apiKey
+            : "omlx:default"
+        : listing.provider.apiKey),
   };
   return config;
 }

@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   applyProviderAuthConfigPatch,
+  buildApiKeyCredential,
   CUSTOM_LOCAL_AUTH_MARKER,
   ensureAuthProfileStoreAsync,
   type OpenClawConfig,
@@ -19,6 +20,7 @@ import type {
   ProviderAuthMethodNonInteractiveContext,
   ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-setup";
+import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -358,16 +360,28 @@ describe("oMLX setup through the inference catalog", () => {
     );
   });
 
-  it.each(["interactive", "noninteractive"] as const)(
-    "binds the explicit credential from initial %s setup ahead of ambient auth",
-    async (mode) => {
+  it.each([
+    { mode: "interactive", credentialMode: "plaintext" },
+    { mode: "noninteractive", credentialMode: "plaintext" },
+    { mode: "interactive", credentialMode: "ref" },
+    { mode: "noninteractive", credentialMode: "ref" },
+  ] as const)(
+    "retains the selected $credentialMode credential after initial $mode setup",
+    async ({ mode, credentialMode }) => {
       const ambientKey = "ambient-setup-key";
       const selectedKey = "explicit-setup-key";
+      const selectedRef = {
+        source: "env",
+        provider: "default",
+        id: "OMLX_SELECTED_SETUP_KEY",
+      } as const;
       vi.stubEnv("OMLX_API_KEY", ambientKey);
+      vi.stubEnv(selectedRef.id, selectedKey);
       await withOpenClawTestState({ label: "omlx-initial-credential" }, async (state) => {
         const fetchMock = fixture();
         const agentId = "secondary";
         const agentDir = state.agentDir(agentId);
+        const consumerAgentDir = credentialMode === "ref" ? state.agentDir("cold") : agentDir;
         await state.writeAuthProfiles({
           version: 1,
           profiles: {
@@ -387,10 +401,19 @@ describe("oMLX setup through the inference catalog", () => {
         if (mode === "interactive") {
           const ctx = interactiveContext(selectedKey);
           ctx.agentDir = agentDir;
-          ctx.env = { OMLX_API_KEY: ambientKey };
+          ctx.env = { OMLX_API_KEY: ambientKey, [selectedRef.id]: selectedKey };
+          if (credentialMode === "ref") {
+            ctx.secretInputMode = "ref";
+            ctx.prompter = createQueuedWizardPrompter({
+              textValues: ["http://127.0.0.1:8000/v1", selectedRef.id],
+              selectValues: ["env", modelId],
+            }).prompter;
+          }
           ctx.prompter.confirm = vi.fn(async () => false);
           const result = await configureOmlxInteractive(ctx);
-          expect(ctx.prompter.confirm).toHaveBeenCalledOnce();
+          if (credentialMode === "plaintext") {
+            expect(ctx.prompter.confirm).toHaveBeenCalledOnce();
+          }
           await state.writeAuthProfiles(
             {
               version: 1,
@@ -408,42 +431,65 @@ describe("oMLX setup through the inference catalog", () => {
           ctx.resolveApiKey = vi.fn(async () => ({ key: selectedKey, source: "flag" as const }));
           ctx.toApiKeyCredential = vi.fn<
             ProviderAuthMethodNonInteractiveContext["toApiKeyCredential"]
-          >(({ provider, resolved }) => ({ type: "api_key", provider, key: resolved.key }));
+          >(({ provider, resolved }) =>
+            buildApiKeyCredential(provider, credentialMode === "ref" ? selectedRef : resolved.key),
+          );
           const configured = await configureOmlxNonInteractive(ctx);
           if (!configured) {
             throw new Error("Missing initial oMLX setup configuration");
           }
           config = configured;
+          expect(ctx.toApiKeyCredential).toHaveBeenCalledOnce();
         }
         expect(new Headers(fetchMock.mock.lastCall?.[1]?.headers).get("authorization")).toBe(
           `Bearer ${selectedKey}`,
         );
         const store = await ensureAuthProfileStoreAsync(agentDir);
+        fetchMock.mockClear();
         await expect(
           discoverOmlxProvider({
             ...catalogContext(),
             config,
-            agentDir,
-            env: { OMLX_API_KEY: ambientKey },
+            agentDir: consumerAgentDir,
+            env: { OMLX_API_KEY: ambientKey, [selectedRef.id]: selectedKey },
           }),
         ).resolves.toBeTruthy();
+        expect(fetchMock).toHaveBeenCalled();
         const discoveryAuthorization = new Headers(fetchMock.mock.lastCall?.[1]?.headers).get(
           "authorization",
         );
+        expect(discoveryAuthorization).toBe(`Bearer ${selectedKey}`);
+        let runtimeConfig = config;
+        if (credentialMode === "ref") {
+          // Embedding/chat consumers receive resolved runtime config; discovery receives raw config.
+          const provider = config.models?.providers?.omlx;
+          if (!provider) {
+            throw new Error("Missing oMLX provider configuration");
+          }
+          const resolved = await resolveConfiguredSecretInputString({
+            config,
+            env: process.env,
+            value: provider.apiKey,
+            path: "models.providers.omlx.apiKey",
+          });
+          runtimeConfig = applyProviderAuthConfigPatch(config, {
+            models: { providers: { omlx: { ...provider, apiKey: resolved.value } } },
+          });
+        }
         const adapter = capturePluginRegistration(plugin).embeddingProviders[0];
         if (!adapter) {
           throw new Error("Missing registered oMLX embedding provider");
         }
         const embedding = await adapter.create({
-          config,
-          agentDir,
+          config: runtimeConfig,
+          agentDir: consumerAgentDir,
           model: "text-embedding-mini",
         });
         await expect(embedding.provider?.embed("orchard")).resolves.toEqual([1, 0]);
         const chatAuth = await resolveApiKeyForProvider({
           provider: "omlx",
-          cfg: config,
-          agentDir,
+          cfg: runtimeConfig,
+          agentDir: consumerAgentDir,
         });
         expect({
           credential: store.profiles["omlx:default"],
@@ -455,14 +501,18 @@ describe("oMLX setup through the inference catalog", () => {
           chatKey: chatAuth.apiKey,
           chatProfile: chatAuth.profileId,
         }).toEqual({
-          credential: { type: "api_key", provider: "omlx", key: selectedKey },
-          binding: "omlx:default",
+          credential: {
+            type: "api_key",
+            provider: "omlx",
+            ...(credentialMode === "ref" ? { keyRef: selectedRef } : { key: selectedKey }),
+          },
+          binding: credentialMode === "ref" ? selectedRef : "omlx:default",
           discoveryAuthorization: `Bearer ${selectedKey}`,
           embeddingAuthorization: `Bearer ${selectedKey}`,
           chatKey: selectedKey,
-          chatProfile: "omlx:default",
+          chatProfile: credentialMode === "ref" ? undefined : "omlx:default",
         });
-        if (mode === "noninteractive") {
+        if (mode === "noninteractive" && credentialMode === "plaintext") {
           const repeated = nonInteractiveContext();
           repeated.config = config;
           repeated.baseConfig = config;
