@@ -9,7 +9,7 @@ import {
 } from "../../lib/config/config-test-harness.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { updatePickers } from "../../test-helpers/select-picker.ts";
+import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createCuratedSettingsEditor } from "./curated-settings-editor.ts";
 import { curatedSettingsPresentation } from "./curated-settings-presentation.ts";
@@ -123,6 +123,7 @@ describe("plugin-owned Dreaming settings presentation", () => {
     );
     await updatePickers(container);
     const row = rowFor(container, "Dreaming model");
+    await openPicker(row.querySelector("openclaw-select-picker")!);
 
     expect(row.textContent).toContain("Default: openai/gpt-5.6");
     expect(
