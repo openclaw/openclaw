@@ -47,15 +47,26 @@ function writeOwner(
   return manifest;
 }
 
-function disableOwner(config: OpenClawConfig, id: string): OpenClawConfig {
+function disabled(config: OpenClawConfig, id: string): OpenClawConfig {
+  const plugins = config.plugins;
   return {
     ...config,
-    plugins: {
-      ...config.plugins,
-      entries: {
-        ...config.plugins?.entries,
-        [id]: { enabled: false },
-      },
+    plugins: { ...plugins, entries: { ...plugins?.entries, [id]: { enabled: false } } },
+  };
+}
+
+const recorded = (file: string) => (existsSync(file) ? readFileSync(file, "utf8") : "");
+const registryLabels = (registry: PluginRegistry) =>
+  labels(registry.providers.map(({ provider }) => provider));
+
+function providerConfig(
+  api: string,
+  id = "custom",
+  overrides: { baseUrl?: string; auth?: "aws-sdk" } = {},
+): OpenClawConfig {
+  return {
+    models: {
+      providers: { [id]: { api, baseUrl: "https://example.test", models: [], ...overrides } },
     },
   };
 }
@@ -115,7 +126,18 @@ function fixture(declaration: "setup" | "activation" | "cli", registersProvider 
       labels(resolveLoadedProviderPluginsForHooks({ ...query, ...overrides })),
     inGeneration: <T>(pluginRegistry: PluginRegistry, run: () => T) =>
       withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot, pluginRegistry }, run),
-    registrations: () => (existsSync(marker) ? readFileSync(marker, "utf8") : ""),
+    registrations: () => recorded(marker),
+    withRegistry: (registry: PluginRegistry, retained: boolean, run: () => void) => {
+      if (retained) {
+        withPluginRuntimeGenerationScope(
+          { metadataSnapshot: snapshot, pluginRegistry: registry },
+          run,
+        );
+      } else {
+        setActivePluginRegistry(registry, "test-active");
+        run();
+      }
+    },
     load: (channelPluginLoadIntent: "setup" | "full", onlyPluginIds = query.onlyPluginIds) =>
       loadOpenClawPlugins({
         config,
@@ -161,19 +183,11 @@ describe("provider selection registration coverage", () => {
       { providers: ["unrelated"] },
     );
     const snapshot = createPluginMetadataSnapshotFixture({ plugins: [bedrock, unrelated] });
-    const config: OpenClawConfig = {
-      plugins: { allow: ["amazon-bedrock", "unrelated-owner"] },
-      models: {
-        providers: {
-          "amazon-bedrock-east1": {
-            api: "bedrock-converse-stream",
-            auth: "aws-sdk",
-            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-            models: [],
-          },
-        },
-      },
-    };
+    const config = providerConfig("bedrock-converse-stream", "amazon-bedrock-east1", {
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      auth: "aws-sdk",
+    });
+    config.plugins = { allow: ["amazon-bedrock", "unrelated-owner"] };
     const handle = resolveProviderRuntimePluginHandle({
       provider: "amazon-bedrock-east1",
       config,
@@ -195,11 +209,7 @@ describe("provider selection registration coverage", () => {
       source: `/plugins/${id}/index.js`,
       provider: { id, label: id, auth: [] },
     }));
-    const config: OpenClawConfig = {
-      models: {
-        providers: { custom: { api: "ollama", baseUrl: "https://example.test", models: [] } },
-      },
-    };
+    const config = providerConfig("ollama");
     const lookup = () => resolveProviderRuntimePluginHandle({ provider: "custom", config });
     const plan = vi.spyOn(activationPlanner, "resolveManifestActivationPluginIds");
     try {
@@ -224,16 +234,16 @@ describe("provider selection registration coverage", () => {
       const proof = fixture("setup");
       const loaded = proof.load("full");
       const all = ["Helper", "Other"];
-      expect(loaded.providers.map(({ provider }) => provider.label)).toEqual(all);
+      expect(registryLabels(loaded)).toEqual(all);
       const query = {
         ...proof.query,
-        config: disableOwner(proof.query.config, "helper-owner"),
+        config: disabled(proof.query.config, "helper-owner"),
       };
       const verify = () => {
         const expected = scope === "retained" ? all : ["Other"];
         expect(proof.loaded(query)).toEqual(expected);
         expect(proof.selected(query)).toEqual(expected);
-        expect(loaded.providers.map(({ provider }) => provider.label)).toEqual(all);
+        expect(registryLabels(loaded)).toEqual(all);
         expect(proof.registrations()).toBe("registered");
         expect(proof.selected()).toEqual(all);
         expect(proof.selected({ ...query, providerRefs: ["other-provider"] })).toEqual(["Other"]);
@@ -244,12 +254,7 @@ describe("provider selection registration coverage", () => {
           expected,
         );
       };
-      if (scope === "retained") {
-        proof.inGeneration(loaded, verify);
-      } else {
-        setActivePluginRegistry(loaded, "mixed-current-policy");
-        verify();
-      }
+      proof.withRegistry(loaded, scope === "retained", verify);
     },
   );
 
@@ -290,7 +295,7 @@ describe("provider selection registration coverage", () => {
       ...proof.query,
       config:
         scope === "disabled alias owner" || scope === "retained disabled owner"
-          ? disableOwner(proof.query.config, "other-owner")
+          ? disabled(proof.query.config, "other-owner")
           : proof.query.config,
       pluginMetadataSnapshot:
         scope === "replaced alias owner"
@@ -317,19 +322,12 @@ describe("provider selection registration coverage", () => {
       expect(
         handle.plugin?.normalizeModelId?.({ provider: "helper-provider", modelId: "legacy" }),
       ).toBe(blockedAlias ? undefined : "alias-current");
-      expect(existsSync(aliasCalls) ? readFileSync(aliasCalls, "utf8") : "").toBe(
-        blockedAlias ? "" : "called",
-      );
+      expect(recorded(aliasCalls)).toBe(blockedAlias ? "" : "called");
       expect(proof.registrations()).toBe(expectedRegistrations);
       expect(existsSync(unexpectedImport)).toBe(false);
       expect(proof.selected({ ...query, onlyPluginIds: ["helper-owner"] })).toEqual([]);
     };
-    if (scope === "retained disabled owner") {
-      proof.inGeneration(loaded, verify);
-    } else {
-      setActivePluginRegistry(loaded, "active-alias");
-      verify();
-    }
+    proof.withRegistry(loaded, scope === "retained disabled owner", verify);
   });
 
   it("keeps a failed declared receiver reserved for raw parser and hook lookups", () => {
@@ -358,25 +356,12 @@ describe("provider selection registration coverage", () => {
     expect(proof.selected({ providerRefs: ["helper-provider"] })).toEqual([]);
   });
 
-  it("completes a provider selected through setup metadata", () => {
-    const proof = fixture("setup");
-    const partial = proof.load("setup");
-    setActivePluginRegistry(partial, "partial");
-    expect(partial.providers.map((entry) => entry.provider.label)).toEqual(["Other"]);
-    expect(proof.loaded()).toBeUndefined();
-    expect(proof.selected()).toEqual(["Helper", "Other"]);
-    expect(proof.load("full").providers.map((entry) => entry.provider.label)).toEqual([
-      "Helper",
-      "Other",
-    ]);
-  });
-
   it("reuses a complete active registry after a partial request with activation metadata", () => {
     const proof = fixture("activation");
     const partial = proof.load("setup");
     const complete = proof.load("full");
     setActivePluginRegistry(complete, "complete-active");
-    expect(partial.providers.map(({ provider }) => provider.label)).toEqual(["Other"]);
+    expect(registryLabels(partial)).toEqual(["Other"]);
     withPluginRuntimeRegistryScope(partial, () => {
       expect(proof.loaded()).toEqual(["Helper", "Other"]);
       expect(proof.selected()).toEqual(["Helper", "Other"]);
@@ -384,25 +369,30 @@ describe("provider selection registration coverage", () => {
     expect(proof.registrations()).toBe("registered");
   });
 
-  it("completes a non-provider activation helper's setup registration", () => {
-    const proof = fixture("activation", false);
-    const registry = proof.load("setup");
-    setActivePluginRegistry(registry, "setup");
-    expect(proof.registrations()).toBe("");
-    proof.inGeneration(registry, () => {
-      expect(proof.selected()).toEqual(["Other"]);
-      expect(proof.registrations()).toBe("");
-    });
-    expect(proof.loaded()).toBeUndefined();
-    expect(proof.selected()).toEqual(["Other"]);
-    expect(proof.registrations()).toBe("registered");
-  });
-
-  it("does not require provider registration from a CLI-backend-only owner", () => {
-    const proof = fixture("cli", false);
-    setActivePluginRegistry(proof.load("setup"), "cli-only");
-    expect(proof.loaded()).toEqual(["Other"]);
-    expect(proof.selected()).toEqual(["Other"]);
-    expect(proof.registrations()).toBe("");
-  });
+  it.each([
+    ["setup", true, undefined, ["Helper", "Other"], "registered"],
+    ["activation", false, undefined, ["Other"], "registered"],
+    ["cli", false, ["Other"], ["Other"], ""],
+  ] as const)(
+    "completes setup registrations required by %s metadata",
+    (kind, provider, loaded, selected, registrations) => {
+      const proof = fixture(kind, provider);
+      const registry = proof.load("setup");
+      setActivePluginRegistry(registry, "setup");
+      if (kind === "activation") {
+        expect(proof.registrations()).toBe("");
+        proof.inGeneration(registry, () => {
+          expect(proof.selected()).toEqual(["Other"]);
+          expect(proof.registrations()).toBe("");
+        });
+      }
+      expect(registryLabels(registry)).toEqual(["Other"]);
+      expect(proof.loaded()).toEqual(loaded);
+      expect(proof.selected()).toEqual(selected);
+      expect(proof.registrations()).toBe(registrations);
+      if (kind === "setup") {
+        expect(registryLabels(proof.load("full"))).toEqual(selected);
+      }
+    },
+  );
 });

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import * as machineState from "../state/config-machine-state.js";
@@ -34,14 +34,6 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 const PLUGIN_ID = "fixture-public-provider";
-const artifacts = [
-  ["web-search-contract-api.js", "WebSearchProvider"],
-  ["web-fetch-contract-api.js", "WebFetchProvider"],
-  ["web-fetch-provider.js", "WebFetchProvider"],
-  ["document-extractor.js", "DocumentExtractor"],
-  ["web-content-extractor.js", "WebContentExtractor"],
-] as const;
-
 function environment(marker: string) {
   const root = dirs.make("openclaw-public-artifact-env-");
   const bundledDir = path.join(root, "bundled");
@@ -51,29 +43,31 @@ function environment(marker: string) {
   fs.mkdirSync(pluginDir, { recursive: true });
   fs.mkdirSync(workspaceDir);
   fs.writeFileSync(evaluationsPath, "");
+  const write = (file: string, body: string | object) =>
+    fs.writeFileSync(
+      path.join(pluginDir, file),
+      typeof body === "string" ? body : JSON.stringify(body),
+    );
   const manifest = {
     id: PLUGIN_ID,
     enabledByDefault: true,
     configSchema: { type: "object", additionalProperties: false },
-    contracts: {
-      webSearchProviders: [PLUGIN_ID],
-      webFetchProviders: [PLUGIN_ID],
-      documentExtractors: [PLUGIN_ID],
-      webContentExtractors: [PLUGIN_ID],
-    },
+    contracts: Object.fromEntries(
+      artifacts.map(([, type]) => [
+        `${type.charAt(0).toLowerCase()}${type.slice(1)}s`,
+        [PLUGIN_ID],
+      ]),
+    ),
   };
-  fs.writeFileSync(path.join(pluginDir, "openclaw.plugin.json"), JSON.stringify(manifest));
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({ type: "commonjs", openclaw: { extensions: ["./index.js"] } }),
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "index.js"),
+  write("openclaw.plugin.json", manifest);
+  write("package.json", { type: "commonjs", openclaw: { extensions: ["./index.js"] } });
+  write(
+    "index.js",
     "throw new Error('Public artifact resolution must not activate the runtime entry');\n",
   );
-  for (const [basename, suffix] of artifacts) {
-    fs.writeFileSync(
-      path.join(pluginDir, basename),
+  for (const [basename, suffix] of new Map(artifacts.map(([file, type]) => [file, type]))) {
+    write(
+      basename,
       `require('node:fs').appendFileSync(${JSON.stringify(evaluationsPath)}, ${JSON.stringify(`${basename}\n`)});
 module.exports.createFixture${suffix} = () => ({
   id: ${JSON.stringify(PLUGIN_ID)}, label: ${JSON.stringify(marker)}, hint: '',
@@ -83,143 +77,133 @@ module.exports.createFixture${suffix} = () => ({
 });\n`,
     );
   }
-  return {
-    env: {
-      VITEST: "true",
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-    },
-    workspaceDir,
-    manifestRecords: [createPluginManifestRecordFixture({ ...manifest, rootDir: pluginDir })],
-    evaluations: () => fs.readFileSync(evaluationsPath, "utf8").split("\n").filter(Boolean),
+  const env = {
+    VITEST: "true",
+    OPENCLAW_STATE_DIR: path.join(root, "state"),
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
   };
-}
-
-function useProcessEnvironment(fixture: ReturnType<typeof environment>) {
-  for (const [key, value] of Object.entries(fixture.env)) {
-    vi.stubEnv(key, value);
-  }
-}
-
-function resolution(fixture: ReturnType<typeof environment>, allow = [PLUGIN_ID]) {
-  return {
-    env: fixture.env,
-    workspaceDir: fixture.workspaceDir,
-    manifestRecords: fixture.manifestRecords,
+  const manifestRecords = [createPluginManifestRecordFixture({ ...manifest, rootDir: pluginDir })];
+  const params = (allow = [PLUGIN_ID]) => ({
+    env,
+    workspaceDir,
+    manifestRecords,
     onlyPluginIds: [PLUGIN_ID],
     config: { plugins: { allow, entries: { [PLUGIN_ID]: { enabled: true } } } },
+  });
+  return {
+    env,
+    manifestRecords,
+    params,
+    evaluations: () => fs.readFileSync(evaluationsPath, "utf8").split("\n").filter(Boolean),
+    labels: (resolve: (input: Resolution) => { label: string }[], allow?: string[]) =>
+      resolve(params(allow)).map((entry) => entry.label),
+    async run<T>(test: () => T) {
+      for (const [key, value] of Object.entries(env)) {
+        vi.stubEnv(key, value);
+      }
+      await using cache = createPluginCache();
+      return await withPluginCache(cache, test);
+    },
   };
 }
-
-type Resolution = ReturnType<typeof resolution>;
-const setupResolvers = [
+type Resolution = Parameters<typeof resolveRuntimeWebSearchProviders>[0];
+const artifacts = [
   [
     "web-search-contract-api.js",
+    "WebSearchProvider",
     (params: Resolution) => resolvePluginWebSearchProviders({ ...params, mode: "setup" }),
   ],
   [
     "web-fetch-contract-api.js",
+    "WebFetchProvider",
     (params: Resolution) => resolvePluginWebFetchProviders({ ...params, mode: "setup" }),
   ],
+  ["web-search-contract-api.js", "WebSearchProvider", resolveRuntimeWebSearchProviders],
+  ["web-fetch-provider.js", "WebFetchProvider", resolveRuntimeWebFetchProviders],
+  ["document-extractor.js", "DocumentExtractor", resolvePluginDocumentExtractors],
+  ["web-content-extractor.js", "WebContentExtractor", resolvePluginWebContentExtractors],
 ] as const;
+const setupResolvers = artifacts.slice(0, 2);
 
-describe("public artifact environment ownership", () => {
-  it.each(["missing", "nonbundled"] as const)(
-    "does not substitute a stock provider for a %s prepared owner",
-    async (kind) => {
-      const fixture = environment("stock");
-      useProcessEnvironment(fixture);
-      await using cache = createPluginCache();
-      withPluginCache(cache, () => {
-        expect(
-          resolveBundledWebSearchProvidersFromPublicArtifacts({
-            ...resolution(fixture),
-            manifestRecords:
-              kind === "missing"
-                ? []
-                : fixture.manifestRecords.map((record) => ({
-                    ...record,
-                    origin: "global" as const,
-                  })),
-          }),
-        ).toBeNull();
-      });
-      expect(fixture.evaluations()).toEqual([]);
-    },
-  );
+it.each(["missing", "nonbundled"] as const)(
+  "does not substitute a stock provider for a %s prepared owner",
+  async (kind) => {
+    const fixture = environment("stock");
+    await fixture.run(() => {
+      expect(
+        resolveBundledWebSearchProvidersFromPublicArtifacts({
+          ...fixture.params(),
+          manifestRecords:
+            kind === "missing"
+              ? []
+              : fixture.manifestRecords.map((record) => ({
+                  ...record,
+                  origin: "global" as const,
+                })),
+        }),
+      ).toBeNull();
+    });
+    expect(fixture.evaluations()).toEqual([]);
+  },
+);
 
-  it.each([
-    ...setupResolvers,
-    ["web-search-contract-api.js", resolveRuntimeWebSearchProviders],
-    ["web-fetch-provider.js", resolveRuntimeWebFetchProviders],
-    ["document-extractor.js", resolvePluginDocumentExtractors],
-    ["web-content-extractor.js", resolvePluginWebContentExtractors],
-  ] as const)("loads and reuses each caller's %s artifact [%#]", async (artifact, resolve) => {
+it.each(artifacts)(
+  "loads and reuses each caller's %s artifact [%#]",
+  async (artifact, _type, resolve) => {
     const ambient = environment("ambient");
     const caller = environment("caller");
-    useProcessEnvironment(ambient);
-    await using cache = createPluginCache();
-    withPluginCache(cache, () => {
+    await ambient.run(() => {
       for (const [fixture, expected] of [
         [caller, "caller"],
         [ambient, "ambient"],
         [caller, "caller"],
       ] as const) {
-        expect(resolve(resolution(fixture)).map((provider) => provider.label)).toEqual([expected]);
+        expect(fixture.labels(resolve)).toEqual([expected]);
       }
     });
     expect(ambient.evaluations()).toEqual([artifact]);
     expect(caller.evaluations()).toEqual([artifact]);
-  });
+  },
+);
 
-  describe.each(setupResolvers)("%s compatibility", (_artifact, resolve) => {
-    it.each(["compat", "allowlist"] as const)(
-      "uses the caller's %s policy instead of the opposite process policy",
-      async (mode) => {
-        const ambient = environment("ambient");
-        const caller = environment("caller");
-        useProcessEnvironment(ambient);
-        writeConfigMachineState(
-          "plugins.bundledDiscovery",
-          mode === "compat" ? "allowlist" : "compat",
-          { env: ambient.env },
-        );
-        writeConfigMachineState("plugins.bundledDiscovery", mode, { env: caller.env });
-        clearBundledDiscoveryModeMemo();
-        await using cache = createPluginCache();
-        withPluginCache(cache, () => {
-          expect(
-            resolve(resolution(caller, ["another-plugin"])).map((entry) => entry.label),
-          ).toEqual(mode === "compat" ? ["caller"] : []);
-        });
-      },
-    );
-  });
+it.each(
+  setupResolvers.flatMap(([artifact, , resolve]) =>
+    (["compat", "allowlist"] as const).map((mode) => ({ artifact, resolve, mode })),
+  ),
+)(
+  "$artifact uses the caller's $mode policy instead of the opposite process policy",
+  async ({ mode, resolve }) => {
+    const ambient = environment("ambient");
+    const caller = environment("caller");
+    await ambient.run(() => {
+      writeConfigMachineState(
+        "plugins.bundledDiscovery",
+        mode === "compat" ? "allowlist" : "compat",
+        { env: ambient.env },
+      );
+      writeConfigMachineState("plugins.bundledDiscovery", mode, { env: caller.env });
+      clearBundledDiscoveryModeMemo();
+      expect(caller.labels(resolve, ["another-plugin"])).toEqual(
+        mode === "compat" ? ["caller"] : [],
+      );
+    });
+  },
+);
 
-  it("reuses prepared discovery policy across repeated web setup calls without synchronous state reads", async () => {
-    const fixture = environment("prepared");
-    useProcessEnvironment(fixture);
+it("reuses prepared discovery policy across repeated web setup calls without synchronous state reads", async () => {
+  const fixture = environment("prepared");
+  await fixture.run(async () => {
     writeConfigMachineState("plugins.bundledDiscovery", "compat", { env: fixture.env });
     clearBundledDiscoveryModeMemo();
     await closeOpenClawStateDatabaseAsync();
-    await using cache = createPluginCache();
-    await withPluginCache(cache, async () => {
-      await prepareBundledDiscoveryMode(fixture.env);
-      const reads = vi.spyOn(machineState, "readConfigMachineState");
-      for (let attempt = 0; attempt < 3; attempt++) {
-        expect(
-          resolvePluginWebSearchProviders({
-            ...resolution(fixture, ["another-plugin"]),
-            mode: "setup",
-          }).map((provider) => provider.label),
-        ).toEqual(["prepared"]);
-      }
-      expect(reads.mock.calls.filter(([key]) => key === "plugins.bundledDiscovery")).toHaveLength(
-        0,
-      );
-    });
-    expect(fixture.evaluations()).toEqual(["web-search-contract-api.js"]);
+    await prepareBundledDiscoveryMode(fixture.env);
+    const reads = vi.spyOn(machineState, "readConfigMachineState");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect(fixture.labels(artifacts[0][2], ["another-plugin"])).toEqual(["prepared"]);
+    }
+    expect(reads.mock.calls.filter(([key]) => key === "plugins.bundledDiscovery")).toHaveLength(0);
   });
+  expect(fixture.evaluations()).toEqual(["web-search-contract-api.js"]);
 });

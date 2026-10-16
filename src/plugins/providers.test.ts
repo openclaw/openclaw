@@ -56,7 +56,7 @@ function supported(
   return manifest(id, { modelSupport, ...(origin ? { origin } : {}) });
 }
 
-function createProviderRegistrySnapshotFixture(): PluginRegistrySnapshot {
+function registrySnapshot(): PluginRegistrySnapshot {
   const plugins = manifestLoader().plugins.map((plugin) =>
     Object.assign(
       {
@@ -74,7 +74,6 @@ function createProviderRegistrySnapshotFixture(): PluginRegistrySnapshot {
       plugin.enabledByDefault === true ? { enabledByDefault: true } : {},
     ),
   );
-
   return {
     ...createEmptyPluginMetadataSnapshot().index,
     policyHash: "test",
@@ -103,7 +102,7 @@ function expectActivatedOwner(
   expect(call?.config?.plugins?.entries?.[id]).toEqual({ enabled: true });
 }
 
-function expectModelOwningPluginIds(model: string, expectedPluginIds?: readonly string[]) {
+function expectOwners(model: string, expectedPluginIds?: readonly string[]) {
   expect(owners.resolveOwningPluginIdsForModelRef({ model })).toEqual(expectedPluginIds);
 }
 
@@ -138,7 +137,7 @@ describe("resolvePluginProviders", () => {
         metadataLoader(params);
         return {
           manifestRegistry: manifestLoader(),
-          index: createProviderRegistrySnapshotFixture(),
+          index: registrySnapshot(),
         };
       };
       return {
@@ -174,24 +173,22 @@ describe("resolvePluginProviders", () => {
   it("offers only opted-in personal methods under the installed plugin policy", async () => {
     const { listPersonalAccountAuthChoices, resolvePersonalAccountAuthMethod } =
       await import("./personal-account-auth.js");
-    const bundled = manifest("personal-provider");
-    const personalKey = { method: "api-key", personalAccount: true };
-    bundled.providerAuthChoices = [
-      {
-        provider: "personal-provider",
-        ...personalKey,
-        choiceId: "personal-key",
-      },
-      { provider: "personal-provider", method: "host-import", choiceId: "host-import" },
-    ];
-    const workspace = manifest("workspace-provider", { origin: "workspace" });
-    workspace.providerAuthChoices = [
-      {
-        provider: "workspace-provider",
-        ...personalKey,
-        choiceId: "workspace-key",
-      },
-    ];
+    const personal = (provider: string, choiceId: string) => ({
+      provider,
+      choiceId,
+      method: "api-key",
+      personalAccount: true,
+    });
+    const bundled = manifest("personal-provider", {
+      providerAuthChoices: [
+        personal("personal-provider", "personal-key"),
+        { provider: "personal-provider", method: "host-import", choiceId: "host-import" },
+      ],
+    });
+    const workspace = manifest("workspace-provider", {
+      origin: "workspace",
+      providerAuthChoices: [personal("workspace-provider", "workspace-key")],
+    });
     setManifestPlugins([bundled, workspace]);
     expect(listPersonalAccountAuthChoices({}).map((choice) => choice.choiceId)).toEqual([
       "personal-key",
@@ -225,7 +222,7 @@ describe("resolvePluginProviders", () => {
         }),
       ];
       setManifestPlugins(plugins);
-      const snapshot = createProviderRegistrySnapshotFixture();
+      const snapshot = registrySnapshot();
       indexLoader.mockReturnValue(snapshot);
       indexWithMetadataLoader.mockReturnValue({
         snapshot,
@@ -275,14 +272,18 @@ describe("resolvePluginProviders", () => {
 
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
-    runtimeLoader.mockReset();
-    setupLoader.mockReset();
-    metadataLoader.mockReset();
-    indexLoader.mockReset();
-    indexLoader.mockImplementation(() => createProviderRegistrySnapshotFixture());
-    indexWithMetadataLoader.mockReset();
+    for (const loader of [
+      runtimeLoader,
+      setupLoader,
+      metadataLoader,
+      indexLoader,
+      indexWithMetadataLoader,
+    ]) {
+      loader.mockReset();
+    }
+    indexLoader.mockImplementation(registrySnapshot);
     indexWithMetadataLoader.mockImplementation(() => ({
-      snapshot: createProviderRegistrySnapshotFixture(),
+      snapshot: registrySnapshot(),
       source: "derived",
       diagnostics: [],
     }));
@@ -297,13 +298,7 @@ describe("resolvePluginProviders", () => {
     setManifestPlugins([
       manifest("static-bundled", {
         enabledByDefault: true,
-        modelCatalog: {
-          providers: {
-            "static-bundled": {
-              models: [{ id: "static-model" }],
-            },
-          },
-        },
+        modelCatalog: { providers: { "static-bundled": { models: [{ id: "static-model" }] } } },
       }),
       manifest("runtime-bundled", {
         enabledByDefault: true,
@@ -407,61 +402,56 @@ describe("resolvePluginProviders", () => {
       supported("workspace-openai", { modelPrefixes: ["gpt-"] }, "workspace"),
     ]);
 
-    expectModelOwningPluginIds("gpt-5.4", ["workspace-openai"]);
+    expectOwners("gpt-5.4", ["workspace-openai"]);
   });
 
   it("rejects unsafe model patterns that would match the model", () => {
     setManifestPlugins([supported("malicious", { modelPatterns: ["(a+)+$"] })]);
 
     // An unguarded pattern would match and incorrectly claim the model.
-    expectModelOwningPluginIds("a", undefined);
+    expectOwners("a", undefined);
   });
 
-  it("preserves LM Studio @iq* quant suffixes when resolving model-owned provider plugins", () => {
-    setManifestPlugins([
-      supported("lmstudio", { modelPatterns: ["^qwen3\\.6-27b@iq3_xxs$"] }),
-      supported("workspace-prefix", { modelPrefixes: ["qwen3.6-27b@"] }, "workspace"),
+  it.each([
+    {
+      behavior: "preserves LM Studio @iq* quant suffixes",
+      id: "lmstudio",
+      label: "LM Studio",
+      model: "qwen3.6-27b@iq3_xxs",
+      plugins: [
+        supported("lmstudio", { modelPatterns: ["^qwen3\\.6-27b@iq3_xxs$"] }),
+        supported("workspace-prefix", { modelPrefixes: ["qwen3.6-27b@"] }, "workspace"),
+      ],
+    },
+    {
+      behavior: "auto-loads a same-id prefix after ambiguous pattern matches",
+      id: "openai",
+      label: "OpenAI",
+      model: "gpt-5.4",
+      plugins: [
+        supported("openai", { modelPrefixes: ["gpt-", "o1", "o3", "o4"] }),
+        ...["openai", "second-pattern"].map((id) =>
+          supported(id, {
+            modelPatterns: ["^gpt-"],
+            modelPrefixes: ["gpt-"],
+          }),
+        ),
+      ],
+    },
+  ])("$behavior when resolving model-owned providers", ({ id, label, model, plugins }) => {
+    // Duplicate provider declarations must not duplicate ownership.
+    if (id === "openai") {
+      plugins[0].providers = [id, id];
+    }
+    setManifestPlugins(plugins);
+    runtimeLoader.mockReturnValue(providerRegistry(id, label));
+    if (id === "lmstudio") {
+      expectOwners(model, [id]);
+      expectOwners("qwen3.6-27b", undefined);
+    }
+    expect(resolvePluginProviders({ config: {}, modelRefs: [model] })).toEqual([
+      { id, label, auth: [], pluginId: id },
     ]);
-    const registry = providerRegistry("lmstudio", "LM Studio");
-    runtimeLoader.mockReturnValue(registry);
-
-    expectModelOwningPluginIds("qwen3.6-27b@iq3_xxs", ["lmstudio"]);
-    expectModelOwningPluginIds("qwen3.6-27b", undefined);
-
-    const providers = resolvePluginProviders({
-      config: {},
-      modelRefs: ["qwen3.6-27b@iq3_xxs"],
-    });
-
-    expect(providers).toEqual([
-      { id: "lmstudio", label: "LM Studio", auth: [], pluginId: "lmstudio" },
-    ]);
-    expectActivatedOwner("lmstudio");
-  });
-
-  it("auto-loads a same-id prefix record after ambiguous pattern matches", () => {
-    setManifestPlugins([
-      manifest("openai", {
-        providers: ["openai", "openai"],
-        modelSupport: {
-          modelPrefixes: ["gpt-", "o1", "o3", "o4"],
-        },
-      }),
-      ...["openai", "second-pattern"].map((id) =>
-        manifest(id, {
-          modelSupport: { modelPatterns: ["^gpt-"], modelPrefixes: ["gpt-"] },
-        }),
-      ),
-    ]);
-    const registry = providerRegistry("openai", "OpenAI");
-    runtimeLoader.mockReturnValue(registry);
-
-    const providers = resolvePluginProviders({
-      config: {},
-      modelRefs: ["gpt-5.4"],
-    });
-
-    expect(providers).toEqual([{ id: "openai", label: "OpenAI", auth: [], pluginId: "openai" }]);
-    expectActivatedOwner("openai");
+    expectActivatedOwner(id);
   });
 });

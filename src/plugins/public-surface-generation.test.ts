@@ -20,6 +20,7 @@ import { adoptProcessPluginCache, createPluginCache, withPluginCache } from "./p
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { loadPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
+import { writeArtifact } from "./public-surface.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord } from "./registry-types.js";
 import { resetPluginRuntimeStateForTest, stageActivePluginRegistry } from "./runtime.js";
@@ -35,23 +36,24 @@ const temp = createTempDirTracker();
 const records: PluginRecord[] = [];
 
 function write(root: string, file: string, content: string) {
-  const destination = path.join(root, file);
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.writeFileSync(destination, content);
+  writeArtifact(path.join(root, file), content);
 }
 
-function loadApi(pluginRoot: string, pluginId?: string) {
+const makeRoot = () => fs.realpathSync(temp.make("openclaw-public-surface-"));
+
+function loadApi(pluginRoot: string, pluginId?: string, origin?: "global" | "bundled") {
   return loadPluginPublicArtifactModuleSync<PublicApi>({
     pluginRoot,
     pluginId,
+    origin,
     artifactBasename: "api.js",
   });
 }
 
-function loadFacade(dirName: string) {
+function loadFacade(dirName: string, artifactBasename = "runtime-api.js") {
   return loadBundledPluginPublicSurfaceModuleSyncCore<PublicApi>({
     dirName,
-    artifactBasename: "runtime-api.js",
+    artifactBasename,
   });
 }
 
@@ -71,20 +73,14 @@ afterEach(async () => {
   const disposals = await Promise.allSettled(
     records.splice(0).map(async (record) => await getPluginInstance(record)?.dispose()),
   );
-  const failures: unknown[] = disposals.flatMap((result) =>
+  const cleanups = await Promise.allSettled(
+    [resetPluginRuntimeStateForTest, resetFacadeLoaderStateForTest, temp.cleanup].map(
+      async (cleanup) => cleanup(),
+    ),
+  );
+  const failures = [...disposals, ...cleanups].flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
-  for (const cleanup of [
-    resetPluginRuntimeStateForTest,
-    resetFacadeLoaderStateForTest,
-    temp.cleanup,
-  ]) {
-    try {
-      cleanup();
-    } catch (error) {
-      failures.push(error);
-    }
-  }
   if (failures.length) {
     throw new AggregateError(failures, "Plugin fixture cleanup failed");
   }
@@ -137,6 +133,7 @@ function prepare(
   };
   const instance = expectDefined(getPluginInstance(record), "captured plugin instance");
   return {
+    root: rootDir,
     registry,
     record,
     instance,
@@ -152,6 +149,12 @@ function register(fixture: ReturnType<typeof prepare>, value: string) {
   fixture.entry.default.register(value);
   fixture.publish();
   return fixture;
+}
+
+function sourceFixture(version: string, pluginId?: string) {
+  const root = makeRoot();
+  writeSource(root, version);
+  return prepare(root, pluginId);
 }
 
 describe("managed plugin public surfaces", () => {
@@ -204,7 +207,7 @@ describe("managed plugin public surfaces", () => {
   it.each(["id", "folder", "channel"] as const)(
     "selects the unique loaded %s owner before considering lower-priority aliases",
     (tier) => {
-      const parent = fs.realpathSync(temp.make("openclaw-public-owner-priority-"));
+      const parent = makeRoot();
       const dirName = "runtime-selected";
       const prepareOwner = (name: string, folder: string, id: string) => {
         const root = path.join(parent, name, folder);
@@ -230,11 +233,7 @@ describe("managed plugin public surfaces", () => {
       }
       winner.registry.plugins.unshift(first.record, second.record);
       winner.publish();
-      const load = () =>
-        loadBundledPluginPublicSurfaceModuleSyncCore<Pick<PublicApi, "read">>({
-          dirName,
-          artifactBasename: "api.js",
-        });
+      const load = () => loadFacade(dirName, "api.js");
       expect(load().read()).toBe("winner");
 
       winner.registry.plugins.push(
@@ -251,17 +250,13 @@ describe("managed plugin public surfaces", () => {
     const hooks = Reflect.get(Module, "registerHooks");
     Reflect.set(Module, "registerHooks", undefined);
     try {
-      const root = fs.realpathSync(temp.make("openclaw-native-public-dist-"));
+      const root = makeRoot();
       writeSource(root, "library");
       fs.rmSync(path.join(root, "api.ts"));
       fs.rmSync(path.join(root, "runtime-api.ts"));
       write(root, "dist/api.js", 'export { read } from "../state.js";');
       const active = register(prepare(root, "native-dist-fixture"), "registered");
-      const api = loadPluginPublicArtifactModuleSync<{ read(): string }>({
-        pluginRoot: root,
-        artifactBasename: "api.js",
-        origin: "global",
-      });
+      const api = loadApi(root, undefined, "global");
       expect(api.read()).toBe("registered");
       expect(getPluginValueInstance(api)).toBe(active.instance);
     } finally {
@@ -270,9 +265,8 @@ describe("managed plugin public surfaces", () => {
   });
 
   it("shares installed registration state with captured APIs, refreshes a retained facade, and fences old exports", async () => {
-    const root = fs.realpathSync(temp.make("openclaw-public-generation-"));
-    writeSource(root, "source-one");
-    const first = register(prepare(root), "registered-one");
+    const first = register(sourceFixture("source-one"), "registered-one");
+    const { root } = first;
     const load = () => loadApi(root);
     const facade = () => loadFacade(first.record.id);
     const lazy = createLazyFacadeObjectValue(() => facade().view);
@@ -284,9 +278,7 @@ describe("managed plugin public surfaces", () => {
     write(root, "state.ts", 'export const read = () => "uncommitted edit";');
     const originalApi = load();
     const originalRead = originalApi.read;
-    expect(originalRead()).toBe("registered-one");
-    expect(facade().read()).toBe("registered-one");
-    expect(lazy.read()).toBe("registered-one");
+    expect([originalRead(), facade().read(), lazy.read()]).toEqual(Array(3).fill("registered-one"));
     const retainedLazyRead = lazy.read;
     for (const [property, descriptor] of [
       ["read", { configurable: false, writable: false }],
@@ -332,11 +324,9 @@ describe("managed plugin public surfaces", () => {
     await first.instance.dispose();
     writeSource(root, "source-two", "ts", 2);
     const second = register(prepare(root), "registered-two");
-    expect(load().read()).toBe("registered-two");
-    expect(lazy.read()).toBe("registered-two");
-    expect(frozen.length).toBe(2);
+    expect([load().read(), lazy.read(), frozen[1]?.()]).toEqual(Array(3).fill("registered-two"));
+    expect(frozen).toHaveLength(2);
     expect(Object.keys(frozen)).toEqual(["0", "1"]);
-    expect(frozen[1]?.()).toBe("registered-two");
     expect(originalRead).toThrow(/reloaded|disabled|retiring/);
     expect(retainedLazyRead).toThrow(/reloaded|disabled|retiring/);
     expect(() => withRequest(first.registry, load)).toThrow(MissingPublicSurfaceError);
@@ -352,7 +342,7 @@ describe("managed plugin public surfaces", () => {
   it.each(["relative", "tsconfig"] as const)(
     "loads captured dependencies and %s source mappings after originals are removed",
     (mapping) => {
-      const parent = fs.realpathSync(temp.make("openclaw-public-dependencies-"));
+      const parent = makeRoot();
       const root = path.join(parent, "plugin");
       writeSource(root, "source");
       const dependency = path.join(root, "node_modules", "captured-dependency");
@@ -361,10 +351,7 @@ describe("managed plugin public surfaces", () => {
       write(
         root,
         "package.json",
-        JSON.stringify({
-          type: "module",
-          dependencies: { "captured-dependency": "1.0.0" },
-        }),
+        '{"type":"module","dependencies":{"captured-dependency":"1.0.0"}}',
       );
       if (mapping === "tsconfig") {
         vi.stubEnv("JITI_TSCONFIG_PATHS", "true");
@@ -388,15 +375,13 @@ describe("managed plugin public surfaces", () => {
       );
       register(prepare(root), "registered");
       fs.rmSync(root, { recursive: true });
-      const api = loadApi(root);
-      expect(api.read()).toBe("registered:dependency");
+      expect(loadApi(root).read()).toBe("registered:dependency");
     },
   );
 
   it("requires exact identity when package siblings have separate module instances", () => {
-    const root = fs.realpathSync(temp.make("openclaw-public-cohort-"));
-    writeSource(root, "source");
-    const first = prepare(root, "first");
+    const first = sourceFixture("source", "first");
+    const { root } = first;
     const second = prepare(root, "second");
     first.entry.default.register("first-instance");
     second.entry.default.register("second-instance");
@@ -404,9 +389,11 @@ describe("managed plugin public surfaces", () => {
     second.publish();
     const load = (pluginId?: string) => loadApi(root, pluginId);
     expect(() => load()).toThrow(/ambiguous runtime ownership/);
-    expect(load("first").read()).toBe("first-instance");
-    expect(load("second").read()).toBe("second-instance");
-    expect(withRequest(second.registry, () => load().read(), "first")).toBe("first-instance");
+    expect([
+      load("first").read(),
+      load("second").read(),
+      withRequest(second.registry, () => load().read(), "first"),
+    ]).toEqual(["first-instance", "second-instance", "first-instance"]);
   });
 
   it.each([
@@ -420,7 +407,7 @@ describe("managed plugin public surfaces", () => {
   ] as const)(
     "keeps public APIs on the registered %s graph when source and build coexist in %s (entry in %s)",
     (extension, buildDirectory, entryDirectory) => {
-      const root = fs.realpathSync(temp.make("openclaw-public-mixed-source-"));
+      const root = makeRoot();
       const buildRoot = path.join(root, buildDirectory);
       writeSource(buildRoot, "stale-build", "js");
       writeSource(root, "source");
@@ -454,9 +441,8 @@ describe("managed plugin public surfaces", () => {
   it.each(["disabled", "uninstalled"] as const)(
     "does not reload a %s plugin through a retained facade or runtime request",
     async (state) => {
-      const root = fs.realpathSync(temp.make("openclaw-public-disabled-"));
-      writeSource(root, "active");
-      const active = prepare(root);
+      const active = sourceFixture("active");
+      const { root } = active;
       active.publish();
       const load = () => loadApi(root);
       const lazy = createLazyFacadeObjectValue(() => load().view);
@@ -483,7 +469,7 @@ describe("managed plugin public surfaces", () => {
   );
 
   it("resolves captured public entries through the original root and its canonical alias", () => {
-    const directory = fs.realpathSync(temp.make("openclaw-public-alias-"));
+    const directory = makeRoot();
     const root = path.join(directory, "source");
     const alias = path.join(directory, "linked");
     writeSource(root, "captured");
@@ -504,7 +490,7 @@ describe("managed plugin public surfaces", () => {
   ] as const)(
     "keeps %s bundled inspection libraries usable while fencing %s activated runtime exports",
     async (extension, _mode, loadActivated) => {
-      const directory = fs.realpathSync(temp.make("openclaw-public-bundled-"));
+      const directory = makeRoot();
       const pluginId = "bundled-surface-fixture";
       const root = path.join(directory, pluginId);
       writeSource(root, "library", extension);

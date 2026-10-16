@@ -624,9 +624,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
 
   it("configures provider config and auth profile", async () => {
     const params = {
-      providerId: "vllm",
-      providerLabel: "vLLM",
-      envVar: "VLLM_API_KEY",
+      ...providers.vllm,
       baseUrl: "http://127.0.0.1:8100/v1/",
       apiKey: "vllm-test-key",
       modelId: "Qwen/Qwen3-8B",
@@ -666,7 +664,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
   });
 
   it("reuses an existing provider auth profile in ref mode", async () => {
-    const params = { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY" };
+    const params = providers.vllm;
     const modelId = "Qwen/Qwen3-32B";
     const profileSecret = "fixture-existing-self-hosted-profile-secret";
     const selectedProfileId = `${params.providerId}:owner@example.com`;
