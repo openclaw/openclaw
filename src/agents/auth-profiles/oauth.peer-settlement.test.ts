@@ -305,17 +305,7 @@ describe("OAuth refresh peer settlement", () => {
 
     const resolving = fx.resolve(ownerAgentDir);
     await started;
-    await persistAuthProfileBatch({
-      agentDir: ownerAgentDir,
-      profiles: [
-        {
-          profileId,
-          credential: oauth("relogin-a", { accountId: "acct-a" }),
-        },
-      ],
-      resetFailureState: true,
-      allowOAuthGenerationReplacement: true,
-    });
+    await fx.reconnect(ownerAgentDir, oauth("relogin-a", { accountId: "acct-a" }));
     finishRefresh();
 
     await expect(resolving).resolves.toMatchObject({ apiKey: "relogin-a-access" });

@@ -38,7 +38,6 @@ import {
 } from "./store-runtime.js";
 import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
 import type { OAuthCredential } from "./types.js";
-import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: vi.fn(async () => null),
@@ -339,14 +338,9 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
     if (originalCredential?.type !== "oauth") {
       throw new Error("expected original OAuth credential");
     }
-    await expect(
-      persistAuthProfileBatch({
-        agentDir: fx.mainDir,
-        profiles: [{ profileId, credential: originalCredential }],
-        resetFailureState: true,
-        allowOAuthGenerationReplacement: true,
-      }),
-    ).rejects.toThrow("Refused to restore fenced OAuth refresh generation");
+    await expect(fx.reconnect(fx.mainDir, originalCredential)).rejects.toThrow(
+      "Refused to restore fenced OAuth refresh generation",
+    );
     const ownerFence = read(fx.mainDir);
     expect(ownerFence?.type === "oauth" && isOAuthRefreshFence(ownerFence)).toBe(true);
 
@@ -412,17 +406,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
 
     const resolving = fx.resolve(peers[0]);
     await started;
-    await persistAuthProfileBatch({
-      agentDir: fx.mainDir,
-      profiles: [
-        {
-          profileId,
-          credential: oauth("relogin", { accountId: "acct-a" }),
-        },
-      ],
-      resetFailureState: true,
-      allowOAuthGenerationReplacement: true,
-    });
+    await fx.reconnect(fx.mainDir, oauth("relogin", { accountId: "acct-a" }));
     expect(read(fx.mainDir)).toMatchObject({
       access: "relogin-access",
       refresh: "relogin-refresh",
@@ -474,12 +458,7 @@ describe("OAuth external owner boundaries", () => {
     const credential = storeWith(MINIMAX_CLI_PROFILE_ID, cliCredential());
     saveAuthProfileStore(credential, fx.mainDir);
     const nativeCredential = cliCredential("device-code");
-    await persistAuthProfileBatch({
-      agentDir: fx.mainDir,
-      profiles: [{ profileId: MINIMAX_CLI_PROFILE_ID, credential: nativeCredential }],
-      resetFailureState: true,
-      allowOAuthGenerationReplacement: true,
-    });
+    await fx.reconnect(fx.mainDir, nativeCredential, MINIMAX_CLI_PROFILE_ID);
     expect(loadPersistedAuthProfileStore(fx.mainDir)?.profiles[MINIMAX_CLI_PROFILE_ID]).toEqual(
       nativeCredential,
     );

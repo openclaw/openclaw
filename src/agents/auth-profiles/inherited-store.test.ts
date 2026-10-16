@@ -12,6 +12,10 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  createAuthProfileStoreFixture,
+  createOAuthRefreshCredential,
+} from "./credential-fixtures.test-support.js";
 import { createExternalAuthRuntime } from "./external-auth.js";
 import { refreshAuthProfileFileState } from "./file-state.js";
 import {
@@ -196,41 +200,28 @@ it.each(["explicit empty ids", "authoritative empty", "no overlay", "published o
     const agentDir = mainDir;
     const emptyOverlay = mode === "explicit empty ids" || mode === "authoritative empty";
     const durable: AuthProfileStore = emptyOverlay
-      ? {
-          version: 1,
-          profiles: {
-            "openai:default": {
-              type: "oauth",
-              provider: "openai",
-              access: "access",
-              refresh: "refresh",
-              expires: Date.now() + 60_000,
-            },
-          },
-        }
+      ? createAuthProfileStoreFixture({
+          "openai:default": createOAuthRefreshCredential(),
+        })
       : createStore("custom:durable", "durable-fixture");
     if (mode === "published overlay") {
       Object.assign(durable.profiles, createStore("custom:updated", "older-fixture").profiles);
     }
-    const published: AuthProfileStore | undefined =
-      mode === "no overlay"
-        ? undefined
-        : {
-            ...durable,
-            profiles: emptyOverlay
-              ? durable.profiles
-              : {
-                  ...createStore("custom:updated", "published-fixture").profiles,
-                  ...createStore("custom:external", "external-fixture").profiles,
-                },
-            runtimeExternalProfileIds:
-              mode === "published overlay"
-                ? ["custom:external"]
-                : mode === "explicit empty ids"
-                  ? []
-                  : undefined,
-            runtimeExternalProfileIdsAuthoritative: true,
-          };
+    const overlay: AuthProfileStore = {
+      ...durable,
+      runtimeExternalProfileIds: undefined,
+      runtimeExternalProfileIdsAuthoritative: true,
+    };
+    if (mode === "explicit empty ids") {
+      overlay.runtimeExternalProfileIds = [];
+    } else if (mode === "published overlay") {
+      overlay.profiles = {
+        ...createStore("custom:updated", "published-fixture").profiles,
+        ...createStore("custom:external", "external-fixture").profiles,
+      };
+      overlay.runtimeExternalProfileIds = ["custom:external"];
+    }
+    const published = mode === "no overlay" ? undefined : overlay;
     const database = persist(durable, "main");
     if (published) {
       prepareSharedAuthStoreOwnershipForNative();

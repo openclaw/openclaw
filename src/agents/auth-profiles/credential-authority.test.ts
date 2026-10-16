@@ -79,17 +79,31 @@ const credential = (key: string): AuthProfileCredential => ({
 const store = (key: string) => ({ version: 1, profiles: { [profileId]: credential(key) } });
 const nativeRuntime = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
 const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
+const sdkWriters = ["saveAuthProfileStore", "upsertAuthProfile"] as const;
 const metadata = () => ({
   order: { fixture: [profileId] },
   usageStats: { [profileId]: { lastUsed: 100, cooldownUntil: 200 } },
 });
 type Fixture = ReturnType<typeof fixture>;
 
+function authorityReader(authority: ReturnType<typeof captureAuthProfileCredentialAuthority>) {
+  const read = () => authority.readCurrentCredential();
+  return { read, denied: () => expect(read).toThrow("authority is unavailable") };
+}
+
+function persistedCredential(
+  db: Parameters<typeof readAuthProfileJsonCellText>[0],
+  kind: "shared-state" | "agent",
+  required = false,
+) {
+  const raw = readAuthProfileJsonCellText(db, "store", kind);
+  return raw === undefined && !required
+    ? undefined
+    : coercePersistedAuthProfileStore(JSON.parse(raw!))?.profiles[profileId];
+}
+
 function expectCredential(current: Fixture, key: string) {
-  expect([current.readPersisted(), current.authority.readCurrentCredential()]).toEqual([
-    credential(key),
-    credential(key),
-  ]);
+  expect([current.readPersisted(), current.read()]).toEqual([credential(key), credential(key)]);
 }
 
 function expectDenied(authority: Fixture["authority"], message = "authority is unavailable") {
@@ -160,12 +174,7 @@ function fixture(
       profileId,
     );
   const authority = capture();
-  const readPersisted = () => {
-    const raw = readAuthProfileJsonCellText(database.db, "store", kind);
-    return raw === undefined
-      ? undefined
-      : coercePersistedAuthProfileStore(JSON.parse(raw))?.profiles[profileId];
-  };
+  const readPersisted = () => persistedCredential(database.db, kind);
   authority.observe(readPersisted());
   const transact = <T>(operation: Parameters<typeof runAuthProfileWriteTransaction<T>>[1]) =>
     runAuthProfileWriteTransaction(agentDir, operation, { env });
@@ -174,6 +183,16 @@ function fixture(
   const snapshot = () => captureAuthProfileStorePersistenceSnapshot(agentDir, { env });
   const save = (key: string, supplied = false) =>
     saveSdkAuthProfileStore(store(key), agentDir, saveOptions, supplied ? database : undefined);
+  const inSdk = <T>(operation: () => T) =>
+    withEnv({ OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: undefined }, operation);
+  const sdk = (writer: (typeof sdkWriters)[number], key: string) =>
+    inSdk(() => {
+      if (writer === "saveAuthProfileStore") {
+        save(key);
+      } else {
+        upsertSdkAuthProfile({ profileId, credential: credential(key), agentDir });
+      }
+    });
   const remove = () => transact(({ db }) => deleteAuthProfileJsonCell(db, "store", kind));
   const prepareRead = (dir = agentDir, value = store("snapshot")) =>
     nativeRuntime.prepareAuthProfileCredentialRead({ agentDir: dir, profileId, store: value });
@@ -185,11 +204,14 @@ function fixture(
     context,
     capture,
     authority,
+    ...authorityReader(authority),
     readPersisted,
     transact,
     write,
     snapshot,
     save,
+    inSdk,
+    sdk,
     remove,
     prepareRead,
   };
@@ -209,7 +231,13 @@ function absentAgentFixture() {
   authority.observe(undefined);
   const transact = <T>(operation: Parameters<typeof runAuthProfileWriteTransaction<T>>[1]) =>
     runAuthProfileWriteTransaction(agentDir, operation, { env: shared.env });
-  return { ...shared, authority, transact, canonicalPath: captured.canonicalPath };
+  return {
+    ...shared,
+    authority,
+    ...authorityReader(authority),
+    transact,
+    canonicalPath: captured.canonicalPath,
+  };
 }
 
 function observePhysicalCommit(db: DatabaseSync, assert: () => void) {
@@ -250,7 +278,7 @@ describe.each(["shared-state", "agent"] as const)("%s credential authority", (ki
     expect(() =>
       current.transact(({ db }) => {
         writeAuthProfileJsonCell(db, "store", kind, store("rolled-back"));
-        expect(() => current.authority.readCurrentCredential()).toThrow();
+        expect(current.read).toThrow();
         throw new Error("cancelled native update");
       }),
     ).toThrow("cancelled native update");
@@ -268,34 +296,11 @@ describe.each(["shared-state", "agent"] as const)("%s credential authority", (ki
     const current = fixture(kind);
     current.transact(({ db }) => {
       writeAuthProfileJsonCell(db, "state", kind, { version: 1, ...metadata() });
-      expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
+      expect(current.read()).toEqual(credential("original"));
       deleteAuthProfileJsonCell(db, "state", kind);
-      expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
+      expect(current.read()).toEqual(credential("original"));
     });
-    expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
-  });
-
-  it("keeps an unacknowledged native write denied after a later successful commit", () => {
-    const current = fixture(kind);
-    const db = current.database.db;
-    const restore = failAfterNativeWrite(db, () => {
-      expect(() => current.authority.readCurrentCredential()).toThrow();
-    });
-    try {
-      expect(() => writeAuthProfileJsonCell(db, "store", kind, store("uncertain"))).toThrow(
-        "lost native acknowledgement",
-      );
-    } finally {
-      restore();
-    }
-    expect(current.readPersisted()).toEqual(credential("uncertain"));
-    expectDenied(current.authority);
-    current.write("later");
-    expect(current.readPersisted()).toEqual(credential("later"));
-    expectDenied(current.authority);
-    const cold = current.capture();
-    cold.observe(current.readPersisted());
-    expectDenied(cold);
+    expect(current.read()).toEqual(credential("original"));
   });
 
   it("publishes native prepared saves and exact-owned secret rollback through the same authority", () => {
@@ -303,7 +308,7 @@ describe.each(["shared-state", "agent"] as const)("%s credential authority", (ki
     const baseline = current.snapshot();
     withCommit(
       current,
-      () => expectDenied(current.authority),
+      () => current.denied(),
       () =>
         current.transact((database, owner) =>
           nativeRuntime.saveAuthProfileStoreWithPreparedOwner(
@@ -315,11 +320,11 @@ describe.each(["shared-state", "agent"] as const)("%s credential authority", (ki
           ),
         ),
     );
-    expect(current.authority.readCurrentCredential()).toEqual(credential("applied"));
+    expect(current.read()).toEqual(credential("applied"));
     const applied = current.snapshot();
     withCommit(
       current,
-      () => expectDenied(current.authority),
+      () => current.denied(),
       () => restoreAuthProfileStorePersistenceSnapshot(baseline, applied, current.agentDir),
     );
     expectCredential(current, "original");
@@ -333,27 +338,24 @@ describe("credential authority captured before local database creation", () => {
       writeAuthProfileJsonCell(owner.db, "state", "agent", { version: 1, order: {} });
       return owner;
     });
-    expect(current.authority.readCurrentCredential()).toBeUndefined();
+    expect(current.read()).toBeUndefined();
     const commit = observePhysicalCommit(requireNativeSqliteDatabase(database.db), () => {
-      expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
+      expect(current.read).toThrow("authority is unavailable");
     });
     let observed: AuthProfileCredential | undefined;
     try {
       current.transact(({ db }) => {
         writeAuthProfileJsonCell(db, "store", "agent", store("local"));
-        expect(() => current.authority.readCurrentCredential()).toThrow();
+        expect(current.read).toThrow();
         deferSqlitePostCommitPublication(db, () => {
-          observed = current.authority.readCurrentCredential();
+          observed = current.read();
         });
       });
     } finally {
       commit.mockRestore();
     }
     expect(observed).toEqual(credential("local"));
-    const raw = readAuthProfileJsonCellText(database.db, "store", "agent");
-    expect(current.authority.readCurrentCredential()).toEqual(
-      coercePersistedAuthProfileStore(JSON.parse(raw!))?.profiles[profileId],
-    );
+    expect(current.read()).toEqual(persistedCredential(database.db, "agent", true));
   });
 
   it.each(["ordinary", "catalog"] as const)(
@@ -378,33 +380,15 @@ describe("credential authority captured before local database creation", () => {
             })
           : undefined;
       const catalog = ordinary ? undefined : beginAuthProfileCredentialBatch(current.context);
-      expect(() => current.authority.readCurrentCredential()).toThrow();
+      expect(current.read).toThrow();
       ordinary?.committed(structuredClone(receipt));
       catalog?.committed([structuredClone(receipt)]);
-      expect(() => current.authority.readCurrentCredential()).toThrow();
+      expect(current.read).toThrow();
       ordinary?.finish(true);
       catalog?.finish(true);
-      expect(current.authority.readCurrentCredential()).toEqual(credential("worker"));
+      expect(current.read()).toEqual(credential("worker"));
     },
   );
-
-  it("keeps an unknown native outcome denied on the captured absent source", () => {
-    const current = absentAgentFixture();
-    const database = current.transact((owner) => owner);
-    const restore = failAfterNativeWrite(requireNativeSqliteDatabase(database.db), () => {
-      expect(() => current.authority.readCurrentCredential()).toThrow();
-    });
-    try {
-      expect(() =>
-        writeAuthProfileJsonCell(database.db, "store", "agent", store("unknown")),
-      ).toThrow("lost native acknowledgement");
-    } finally {
-      restore();
-    }
-    expectDenied(current.authority);
-    current.transact(({ db }) => writeAuthProfileJsonCell(db, "store", "agent", store("later")));
-    expectDenied(current.authority);
-  });
 
   it("refuses a catalog receipt overtaken by a native writer on its newly created source", () => {
     const current = absentAgentFixture();
@@ -424,49 +408,56 @@ describe("credential authority captured before local database creation", () => {
     } finally {
       batch.finish(true);
     }
-    expectDenied(current.authority);
-    const raw = readAuthProfileJsonCellText(database.db, "store", "agent");
-    expect(coercePersistedAuthProfileStore(JSON.parse(raw!))?.profiles[profileId]).toEqual(
-      credential("newer-native"),
-    );
+    current.denied();
+    expect(persistedCredential(database.db, "agent", true)).toEqual(credential("newer-native"));
   });
 });
 
-const sdkWriters = ["saveAuthProfileStore", "upsertAuthProfile"] as const;
-
-function inSdkEnvironment<T>(current: ReturnType<typeof fixture>, operation: () => T): T {
-  return withEnv(
-    {
-      OPENCLAW_STATE_DIR: current.env.OPENCLAW_STATE_DIR,
-      OPENCLAW_AGENT_DIR: undefined,
-    },
-    operation,
-  );
-}
+it.each(["shared-state", "agent", "absent"] as const)(
+  "keeps an unacknowledged native write denied after later commits (%s source)",
+  (source) => {
+    const current = source === "absent" ? absentAgentFixture() : fixture(source);
+    const kind = source === "shared-state" ? source : "agent";
+    const database = source === "absent" ? current.transact((owner) => owner) : current.database;
+    const nativeDb = requireNativeSqliteDatabase(database.db);
+    const restore = failAfterNativeWrite(nativeDb, () => expect(current.read).toThrow());
+    try {
+      expect(() => writeAuthProfileJsonCell(nativeDb, "store", kind, store("uncertain"))).toThrow(
+        "lost native acknowledgement",
+      );
+    } finally {
+      restore();
+    }
+    if (source !== "absent") {
+      expect(current.readPersisted()).toEqual(credential("uncertain"));
+    }
+    current.denied();
+    current.transact(({ db }) => writeAuthProfileJsonCell(db, "store", kind, store("later")));
+    if (source !== "absent") {
+      expect(current.readPersisted()).toEqual(credential("later"));
+    }
+    current.denied();
+    if (source !== "absent") {
+      const cold = current.capture();
+      cold.observe(current.readPersisted());
+      expectDenied(cold);
+    }
+  },
+);
 
 function useReaderEnvironment(current: Fixture) {
   vi.stubEnv("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
   vi.stubEnv("OPENCLAW_AGENT_DIR", undefined);
 }
 
-function writeThroughSdk(
-  writer: (typeof sdkWriters)[number],
-  current: ReturnType<typeof fixture>,
-  key: string,
-): void {
-  inSdkEnvironment(current, () => {
-    if (writer === "saveAuthProfileStore") {
-      current.save(key);
-    } else {
-      upsertSdkAuthProfile({ profileId, credential: credential(key), agentDir: current.agentDir });
-    }
-  });
-}
-
-function expectRetainedCustody(databasePath: string) {
+function expectRetainedCustody(databasePath: string, retained = true) {
   const competing = tryAcquireGatewayStateOwner(databasePath);
   try {
-    expect(competing).toBeNull();
+    if (retained) {
+      expect(competing).toBeNull();
+    } else {
+      expect(competing).not.toBeNull();
+    }
   } finally {
     competing?.release();
   }
@@ -487,33 +478,23 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
       current,
       () => {
         expectRetainedCustody(rootPath);
-        expectDenied(current.authority);
+        current.denied();
         deferSqlitePostCommitPublication(current.database.db, () => {
-          observed = current.authority.readCurrentCredential();
+          observed = current.read();
         });
         if (outcome === "rollback") {
           throw new Error("cancelled SDK commit");
         }
       },
-      () =>
-        runOutcome(
-          () => writeThroughSdk(writer, current, "sdk-committed"),
-          outcome,
-          "cancelled SDK commit",
-        ),
+      () => runOutcome(() => current.sdk(writer, "sdk-committed"), outcome, "cancelled SDK commit"),
     );
     expect(observed).toEqual(outcome === "commit" ? credential("sdk-committed") : undefined);
     expect(current.readPersisted()).toEqual(
       credential(outcome === "commit" ? "sdk-committed" : "original"),
     );
-    expect(current.authority.readCurrentCredential()).toEqual(current.readPersisted());
+    expect(current.read()).toEqual(current.readPersisted());
     expect(fs.existsSync(marker)).toBe(false);
-    const nextOwner = tryAcquireGatewayStateOwner(rootPath);
-    try {
-      expect(nextOwner).not.toBeNull();
-    } finally {
-      nextOwner?.release();
-    }
+    expectRetainedCustody(rootPath, false);
   });
 
   it("preserves credential authority throughout an SDK metadata-only save", () => {
@@ -523,10 +504,10 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
       current,
       () => {
         commits += 1;
-        expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
+        expect(current.read()).toEqual(credential("original"));
       },
       () =>
-        inSdkEnvironment(current, () =>
+        current.inSdk(() =>
           saveSdkAuthProfileStore(
             { ...store("original"), ...metadata() },
             current.agentDir,
@@ -535,7 +516,7 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
         ),
     );
     expect(commits).toBe(1);
-    expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
+    expect(current.read()).toEqual(credential("original"));
   });
 
   it.each(sdkWriters)("%s rejects a live foreign Gateway before mutating credentials", (writer) => {
@@ -555,9 +536,7 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
       { flag: "wx" },
     );
     try {
-      expect(() => writeThroughSdk(writer, current, "rejected")).toThrow(
-        GatewayStateOwnerContentionError,
-      );
+      expect(() => current.sdk(writer, "rejected")).toThrow(GatewayStateOwnerContentionError);
     } finally {
       fs.rmSync(marker, { force: true });
     }
@@ -572,7 +551,7 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
     const rootPath = path.join(alias, "state", "openclaw.sqlite");
     expect(current.context.stateIntegrity).toBeDefined();
     expect(rootPath).not.toBe(current.context.stateIntegrity?.identity.canonicalPath);
-    withWorker(current.context, () => writeThroughSdk(writer, current, "sdk-alias"));
+    withWorker(current.context, () => current.sdk(writer, "sdk-alias"));
     expectCredential(current, "sdk-alias");
   });
 
@@ -587,7 +566,7 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
       }
       expect(() =>
         withWorker({ ...current.context, stateIntegrity }, () =>
-          inSdkEnvironment(current, () =>
+          current.inSdk(() =>
             runSqliteImmediateTransactionSync(current.database.db, () =>
               current.save("unowned", true),
             ),
@@ -609,18 +588,18 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
           ? runOpenClawStateWriteTransaction(operation, { env: current.env })
           : runSqliteImmediateTransactionSync(current.database.db, operation);
       const save = () =>
-        inSdkEnvironment(current, () =>
+        current.inSdk(() =>
           runOuterTransaction(() => {
             // This observer predates the save; committed facts must still precede every observer.
             deferSqlitePostCommitPublication(current.database.db, () => {
-              observed = current.authority.readCurrentCredential();
+              observed = current.read();
             });
             runSqliteImmediateTransactionSync(current.database.db, () => {
               current.save("supplied", true);
             });
             current.save("latest");
             expectRetainedCustody(rootPath);
-            expectDenied(current.authority);
+            current.denied();
             if (outcome === "rollback") {
               throw new Error("cancelled SDK update");
             }
@@ -629,12 +608,7 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
       runOutcome(save, outcome, "cancelled SDK update");
       expect(observed).toEqual(outcome === "commit" ? credential("latest") : undefined);
       expectCredential(current, outcome === "commit" ? "latest" : "original");
-      const nextOwner = tryAcquireGatewayStateOwner(rootPath);
-      try {
-        expect(nextOwner).not.toBeNull();
-      } finally {
-        nextOwner?.release();
-      }
+      expectRetainedCustody(rootPath, false);
     },
   );
 
@@ -650,17 +624,17 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
           lease = getStateDatabaseSchemaLease(rootPath);
           expect(lease).toBeDefined();
           expectRetainedCustody(rootPath);
-          expectDenied(current.authority);
+          current.denied();
           exec(sql);
           throw new Error("lost SDK commit acknowledgement");
         }
         return exec(sql);
       });
       try {
-        expect(() => writeThroughSdk(writer, current, "unknown")).toThrow();
+        expect(() => current.sdk(writer, "unknown")).toThrow();
         expectRetainedCustody(rootPath);
         expect(lease).toBeDefined();
-        expect(() => writeThroughSdk(writer, current, "must-stay-denied")).toThrow();
+        expect(() => current.sdk(writer, "must-stay-denied")).toThrow();
         const persisted = lease?.run(() =>
           inspectAuthProfileJsonCellReadOnly(
             { kind, path: current.database.path, env: current.env },
@@ -668,7 +642,7 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
           ),
         );
         expect(persisted).toMatchObject({ status: "readable", raw: store("unknown") });
-        expectDenied(current.authority);
+        current.denied();
         const cold = current.capture();
         cold.observe(credential("unknown"));
         expectDenied(cold);
@@ -681,15 +655,15 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
 
   it("matches the canonical worker's cold read after both released SDK writers", async () => {
     const current = fixture(kind);
-    writeThroughSdk("saveAuthProfileStore", current, "saved");
-    writeThroughSdk("upsertAuthProfile", current, "upserted");
+    current.sdk("saveAuthProfileStore", "saved");
+    current.sdk("upsertAuthProfile", "upserted");
     const cold = await nativeRuntime.loadAuthProfileStoreForRuntimeAsync(
       current.agentDir,
       { externalCli: { mode: "none" }, inheritedAuthDir: current.agentDir },
       current.env,
     );
     expect(cold.profiles[profileId]).toEqual(credential("upserted"));
-    expect(current.authority.readCurrentCredential()).toEqual(cold.profiles[profileId]);
+    expect(current.read()).toEqual(cold.profiles[profileId]);
   });
 });
 
@@ -833,15 +807,13 @@ it.each(["commit", "rollback"])(
           });
         });
         expect(captured.receipt.facts.get("store")).toEqual({ kind: "postimage", value: next });
-        expectDenied(current.authority);
+        current.denied();
         if (outcome === "rollback") {
           throw new Error("synthetic rollback");
         }
       });
     runOutcome(transact, outcome, "synthetic rollback");
-    expect(current.authority.readCurrentCredential()).toEqual(
-      credential(outcome === "commit" ? "anchored" : "original"),
-    );
+    expect(current.read()).toEqual(credential(outcome === "commit" ? "anchored" : "original"));
     if (outcome === "commit") {
       expect(current.readPersisted()).toEqual(credential("anchored"));
     }
@@ -889,7 +861,7 @@ it.each(["commit", "rollback"])(
       if (outcome === "rollback") {
         expect(transact).toThrow("synthetic rollback");
         expect(owner.committed).toBeUndefined();
-        expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
+        expect(current.read()).toEqual(credential("original"));
       } else {
         transact();
         expect(owner.committed).toMatchObject({
@@ -897,7 +869,7 @@ it.each(["commit", "rollback"])(
             authCredentials: { facts: new Map([["store", { kind: "postimage", value: next }]]) },
           },
         });
-        expect(current.authority.readCurrentCredential()).toEqual(credential("worker-anchored"));
+        expect(current.read()).toEqual(credential("worker-anchored"));
       }
     } finally {
       writer.mockRestore();

@@ -23,6 +23,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { ensureAuthProfileStore } from "./store-runtime.js";
 import type { AuthProfileCredential, OAuthCredential } from "./types.js";
+import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 export const profileId = "openai:default";
 export const provider = "openai";
@@ -116,6 +117,14 @@ export function useOAuthCoordinationFixture() {
         store: ensureAuthProfileStore(agentDir),
         profileId: id,
         agentDir,
+      });
+    },
+    reconnect(agentDir: string, credential: OAuthCredential, id = profileId) {
+      return persistAuthProfileBatch({
+        agentDir,
+        profiles: [{ profileId: id, credential }],
+        resetFailureState: true,
+        allowOAuthGenerationReplacement: true,
       });
     },
     blockRefresh(credential: () => OAuthCredential) {
