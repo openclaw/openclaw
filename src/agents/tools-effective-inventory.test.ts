@@ -1,7 +1,3 @@
-/**
- * Regression coverage for effective tool inventory resolution.
- * Verifies grouped tool sources, plugin registry inputs, and session-context filters.
- */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -31,6 +27,46 @@ function mockTool(params: {
     setPluginToolMeta(tool, pluginMeta);
   }
   return tool;
+}
+
+function expectedTool(id: string, label: string, description: string, source: string, extra = {}) {
+  return { id, label, description, rawDescription: description, source, ...extra };
+}
+
+function pluginTool(name: string, label: string, description: string, pluginId: string) {
+  return mockTool({ name, label, description, pluginMeta: { pluginId, optional: false } });
+}
+function expectedGroup(id: string, label: string, tool: ReturnType<typeof expectedTool>) {
+  return { id, label, source: id, tools: [tool] };
+}
+async function loadExecHarness() {
+  await loadHarness({
+    tools: [mockTool({ name: "exec", label: "Exec", description: "Run shell commands" })],
+  });
+}
+
+function expectNormalizedModel(api: string, model: Record<string, unknown>) {
+  expect(effectiveInventoryState.normalizeToolsMock).toHaveBeenCalledWith(
+    expect.objectContaining({ modelApi: api, model: expect.objectContaining(model) }),
+  );
+  expect(effectiveInventoryState.createToolsMock).toHaveBeenCalledWith(
+    expect.objectContaining({ modelApi: api }),
+  );
+}
+
+function expectTransportContext(api: string, baseUrl: string | undefined) {
+  expect(effectiveInventoryState.normalizeTransportMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      workspaceDir: "/tmp/workspace-main",
+      context: expect.objectContaining({
+        config: expect.any(Object),
+        workspaceDir: "/tmp/workspace-main",
+        provider: "openai",
+        api,
+        baseUrl,
+      }),
+    }),
+  );
 }
 
 const effectiveInventoryState = vi.hoisted(() => ({
@@ -127,12 +163,7 @@ describe("resolveEffectiveToolInventory", () => {
     await loadHarness({
       tools: [
         mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
-        mockTool({
-          name: "docs_lookup",
-          label: "Docs Lookup",
-          description: "Search docs",
-          pluginMeta: { pluginId: "docs", optional: false },
-        }),
+        pluginTool("docs_lookup", "Docs Lookup", "Search docs", "docs"),
         mockTool({
           name: "message_actions",
           label: "Message Actions",
@@ -149,64 +180,30 @@ describe("resolveEffectiveToolInventory", () => {
       agentId: "main",
       profile: "full",
       groups: [
-        {
-          id: "core",
-          label: "Built-in tools",
-          source: "core",
-          tools: [
-            {
-              id: "exec",
-              label: "Exec",
-              description: "Run shell commands",
-              rawDescription: "Run shell commands",
-              source: "core",
-            },
-          ],
-        },
-        {
-          id: "plugin",
-          label: "Connected tools",
-          source: "plugin",
-          tools: [
-            {
-              id: "docs_lookup",
-              label: "Docs Lookup",
-              description: "Search docs",
-              rawDescription: "Search docs",
-              source: "plugin",
-              pluginId: "docs",
-            },
-          ],
-        },
-        {
-          id: "channel",
-          label: "Channel tools",
-          source: "channel",
-          tools: [
-            {
-              id: "message_actions",
-              label: "Message Actions",
-              description: "Act on messages",
-              rawDescription: "Act on messages",
-              source: "channel",
-              channelId: "telegram",
-            },
-          ],
-        },
+        expectedGroup(
+          "core",
+          "Built-in tools",
+          expectedTool("exec", "Exec", "Run shell commands", "core"),
+        ),
+        expectedGroup(
+          "plugin",
+          "Connected tools",
+          expectedTool("docs_lookup", "Docs Lookup", "Search docs", "plugin", { pluginId: "docs" }),
+        ),
+        expectedGroup(
+          "channel",
+          "Channel tools",
+          expectedTool("message_actions", "Message Actions", "Act on messages", "channel", {
+            channelId: "telegram",
+          }),
+        ),
       ],
     });
   });
 
   it("groups bundled MCP tools separately from generic plugin tools", async () => {
     await loadHarness({
-      tools: [
-        mockTool({
-          name: "reproProbe__probe_tool",
-          label: "Probe",
-          description: "Probe MCP",
-          pluginMeta: { pluginId: "bundle-mcp", optional: false },
-        }),
-      ],
+      tools: [pluginTool("reproProbe__probe_tool", "Probe", "Probe MCP", "bundle-mcp")],
     });
 
     const result = await resolveEffectiveToolInventory({ cfg: {} });
@@ -217,14 +214,9 @@ describe("resolveEffectiveToolInventory", () => {
         label: "MCP server tools",
         source: "mcp",
         tools: [
-          {
-            id: "reproProbe__probe_tool",
-            label: "Probe",
-            description: "Probe MCP",
-            rawDescription: "Probe MCP",
-            source: "mcp",
+          expectedTool("reproProbe__probe_tool", "Probe", "Probe MCP", "mcp", {
             pluginId: "bundle-mcp",
-          },
+          }),
         ],
       },
     ]);
@@ -233,18 +225,8 @@ describe("resolveEffectiveToolInventory", () => {
   it("disambiguates duplicate labels with source ids", async () => {
     await loadHarness({
       tools: [
-        mockTool({
-          name: "docs_lookup",
-          label: "Lookup",
-          description: "Search docs",
-          pluginMeta: { pluginId: "docs", optional: false },
-        }),
-        mockTool({
-          name: "jira_lookup",
-          label: "Lookup",
-          description: "Search Jira",
-          pluginMeta: { pluginId: "jira", optional: false },
-        }),
+        pluginTool("docs_lookup", "Lookup", "Search docs", "docs"),
+        pluginTool("jira_lookup", "Lookup", "Search Jira", "jira"),
       ],
     });
 
@@ -285,28 +267,18 @@ describe("resolveEffectiveToolInventory", () => {
         setActivePluginRegistry(registry);
         return options.tools;
       }),
-      tools: [
-        mockTool({
-          name: "docs_lookup",
-          label: "Lookup",
-          description: "Search docs",
-          pluginMeta: { pluginId: "docs", optional: false },
-        }),
-      ],
+      tools: [pluginTool("docs_lookup", "Lookup", "Search docs", "docs")],
     });
 
     const result = await resolveEffectiveToolInventory({ cfg: {} });
 
-    expect(result.groups[0]?.tools[0]).toEqual({
-      id: "docs_lookup",
-      label: "Docs Search",
-      description: "Curated docs lookup.",
-      rawDescription: "Curated docs lookup.",
-      source: "plugin",
-      pluginId: "docs",
-      risk: "low",
-      tags: ["docs", "fixture"],
-    });
+    expect(result.groups[0]?.tools[0]).toEqual(
+      expectedTool("docs_lookup", "Docs Search", "Curated docs lookup.", "plugin", {
+        pluginId: "docs",
+        risk: "low",
+        tags: ["docs", "fixture"],
+      }),
+    );
   });
 
   it("quarantines tools with schemas that cannot be projected to the model runtime", async () => {
@@ -400,17 +372,7 @@ describe("resolveEffectiveToolInventory", () => {
   });
 
   it("applies provider transport normalization to bundled static model context", async () => {
-    const normalizeToolsMock = vi.fn((options: { tools: AnyAgentTool[] }) => options.tools);
-    await loadHarness({
-      tools: [
-        mockTool({
-          name: "exec",
-          label: "Exec",
-          description: "Run shell commands",
-        }),
-      ],
-      normalizeToolsMock,
-    });
+    await loadExecHarness();
     effectiveInventoryState.staticCatalogModelMock.mockReturnValue({
       id: "gpt-test",
       name: "GPT Test",
@@ -438,46 +400,15 @@ describe("resolveEffectiveToolInventory", () => {
       modelId: "gpt-test",
     });
 
-    expect(normalizeToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelApi: "openai-responses",
-        model: expect.objectContaining({
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-        }),
-      }),
-    );
-    expect(effectiveInventoryState.normalizeTransportMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/workspace-main",
-        context: expect.objectContaining({
-          config: expect.any(Object),
-          workspaceDir: "/tmp/workspace-main",
-          provider: "openai",
-          api: "openai-completions",
-          baseUrl: "https://proxy.example.com/v1",
-        }),
-      }),
-    );
-    expect(effectiveInventoryState.createToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelApi: "openai-responses",
-      }),
-    );
+    expectNormalizedModel("openai-responses", {
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    expectTransportContext("openai-completions", "https://proxy.example.com/v1");
   });
 
   it("normalizes configured model context when the model omits api", async () => {
-    const normalizeToolsMock = vi.fn((options: { tools: AnyAgentTool[] }) => options.tools);
-    await loadHarness({
-      tools: [
-        mockTool({
-          name: "exec",
-          label: "Exec",
-          description: "Run shell commands",
-        }),
-      ],
-      normalizeToolsMock,
-    });
+    await loadExecHarness();
     effectiveInventoryState.normalizeTransportMock.mockReturnValue({
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -506,46 +437,15 @@ describe("resolveEffectiveToolInventory", () => {
       modelId: "gpt-5.5-codex",
     });
 
-    expect(effectiveInventoryState.normalizeTransportMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/workspace-main",
-        context: expect.objectContaining({
-          config: expect.any(Object),
-          workspaceDir: "/tmp/workspace-main",
-          provider: "openai",
-          api: "openai-responses",
-          baseUrl: undefined,
-        }),
-      }),
-    );
-    expect(effectiveInventoryState.createToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelApi: "openai-chatgpt-responses",
-      }),
-    );
-    expect(normalizeToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelApi: "openai-chatgpt-responses",
-        model: expect.objectContaining({
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-        }),
-      }),
-    );
+    expectTransportContext("openai-responses", undefined);
+    expectNormalizedModel("openai-chatgpt-responses", {
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
   });
 
   it("preserves bundled static transport when configured model row omits api", async () => {
-    const normalizeToolsMock = vi.fn((options: { tools: AnyAgentTool[] }) => options.tools);
-    await loadHarness({
-      tools: [
-        mockTool({
-          name: "exec",
-          label: "Exec",
-          description: "Run shell commands",
-        }),
-      ],
-      normalizeToolsMock,
-    });
+    await loadExecHarness();
     effectiveInventoryState.staticCatalogModelMock.mockReturnValue({
       id: "claude-sonnet-test",
       name: "Bundled Claude Sonnet",
@@ -576,21 +476,11 @@ describe("resolveEffectiveToolInventory", () => {
       modelId: "claude-sonnet-test",
     });
 
-    expect(effectiveInventoryState.createToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelApi: "anthropic-messages",
-      }),
-    );
-    expect(normalizeToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelApi: "anthropic-messages",
-        model: expect.objectContaining({
-          name: "Configured Claude Sonnet",
-          api: "anthropic-messages",
-          baseUrl: "https://api.githubcopilot.com",
-        }),
-      }),
-    );
+    expectNormalizedModel("anthropic-messages", {
+      name: "Configured Claude Sonnet",
+      api: "anthropic-messages",
+      baseUrl: "https://api.githubcopilot.com",
+    });
   });
 
   it("uses prepared model context before quarantining runtime-normalized tools", async () => {
@@ -710,9 +600,7 @@ describe("resolveEffectiveToolInventory", () => {
   });
 
   it("includes the resolved tool profile", async () => {
-    await loadHarness({
-      tools: [mockTool({ name: "exec", label: "Exec", description: "Run shell commands" })],
-    });
+    await loadExecHarness();
 
     const result = await resolveEffectiveToolInventory({
       cfg: { tools: { profile: "minimal", byProvider: { openai: { profile: "coding" } } } },

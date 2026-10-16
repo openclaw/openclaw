@@ -131,6 +131,28 @@ function ownerCount() {
   return api.getPreparedModelRuntimeOwnerCountForTest();
 }
 
+type ColdFixture = ReturnType<typeof createFixture>;
+type Snapshot = Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>>["snapshot"];
+function loadDonor(fixture: ColdFixture) {
+  return loadAndActivateRootPluginRegistry({
+    config: fixture.config,
+    workspaceDir: fixture.input.workspaceDir,
+    onlyPluginIds: [pluginId],
+    cache: false,
+  });
+}
+function resolveFixtureModel(fixture: ColdFixture, snapshot: Snapshot) {
+  return resolveModelAsync(provider, pinnedId, fixture.input.agentDir, fixture.config, {
+    ...snapshot.createStores(),
+    agentId: "main",
+    workspaceDir: fixture.input.workspaceDir,
+    preparedModelRuntime: snapshot,
+  });
+}
+function expectConnection(fixture: ColdFixture, index: number, isOpen: boolean, disposals: number) {
+  expect(fixture.connections[index]).toMatchObject({ database: { isOpen }, disposals });
+}
+
 async function withColdFixture(run: (fixture: ReturnType<typeof createFixture>) => Promise<void>) {
   await withOpenClawTestState(
     { prefix: "openclaw-cold-inventory-", layout: "split" },
@@ -449,12 +471,7 @@ describe("cold dynamic-model effective inventory", () => {
     "retires a copied registry view on %s while its donor stays authoritative",
     async (retirement) => {
       await withColdFixture(async (fixture) => {
-        const donor = await loadAndActivateRootPluginRegistry({
-          config: fixture.config,
-          workspaceDir: fixture.input.workspaceDir,
-          onlyPluginIds: [pluginId],
-          cache: false,
-        });
+        const donor = await loadDonor(fixture);
         const donorCurrent = capturePluginLifecycleAuthority(donor);
         const lease = await acquireReadOnlyPreparedModelRuntime(fixture.runtimeInput);
         let closing: Promise<void> | undefined;
@@ -499,12 +516,7 @@ describe("cold dynamic-model effective inventory", () => {
 
   it("retains SDK provider resources through a copied view without preserving its authority", async () => {
     await withColdFixture(async (fixture) => {
-      const donor = await loadAndActivateRootPluginRegistry({
-        config: fixture.config,
-        workspaceDir: fixture.input.workspaceDir,
-        onlyPluginIds: [pluginId],
-        cache: false,
-      });
+      const donor = await loadDonor(fixture);
       const host = new LegacyPluginSdkResourceHost();
       const lease = await acquireReadOnlyPreparedModelRuntime(fixture.runtimeInput);
       const resolve = () =>
@@ -530,14 +542,12 @@ describe("cold dynamic-model effective inventory", () => {
         expect(providers[0]!.isCacheTtlEligible?.({ provider, modelId: pinnedId })).toBe(true);
         await lease[Symbol.asyncDispose]();
         await closePreparedModelRuntimeSnapshots();
-        expect(fixture.connections[1]!.database.isOpen).toBe(true);
-        expect(fixture.connections[1]!.disposals).toBe(0);
+        expectConnection(fixture, 1, true, 0);
         expect(current?.()).toBe(false);
         expect(() => resolve()).toThrow("inspection resources have been released");
         expect(providers[0]!.isCacheTtlEligible?.({ provider, modelId: pinnedId })).toBe(true);
         await host.close();
-        expect(fixture.connections[1]!.database.isOpen).toBe(false);
-        expect(fixture.connections[1]!.disposals).toBe(1);
+        expectConnection(fixture, 1, false, 1);
         expect(fixture.connections[0]!.database.isOpen).toBe(true);
       } finally {
         await lease[Symbol.asyncDispose]();
@@ -548,20 +558,16 @@ describe("cold dynamic-model effective inventory", () => {
 
   it("owns an explicit empty read-only selection without loading provider runtime", async () => {
     await withColdFixture(async (fixture) => {
-      const lease = await acquireReadOnlyPreparedModelRuntime({
+      await using lease = await acquireReadOnlyPreparedModelRuntime({
         ...fixture.input,
         config: { ...fixture.config, plugins: { ...fixture.config.plugins, enabled: false } },
         loadRuntimePlugins: true,
         runtimePluginSelections: [],
       });
-      try {
-        expect(lease.snapshot.pluginRegistry?.plugins).toEqual([]);
-        expect(lease.snapshot.pluginRegistry?.providers).toEqual([]);
-        expect(fixture.connections).toEqual([]);
-        expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(false);
-      } finally {
-        await lease[Symbol.asyncDispose]();
-      }
+      expect(lease.snapshot.pluginRegistry?.plugins).toEqual([]);
+      expect(lease.snapshot.pluginRegistry?.providers).toEqual([]);
+      expect(fixture.connections).toEqual([]);
+      expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(false);
     });
   });
 
@@ -577,18 +583,7 @@ describe("cold dynamic-model effective inventory", () => {
         const connection = fixture.connections[0]!;
         await first[Symbol.asyncDispose]();
         expect(connection.disposals).toBe(0);
-        const resolved = await resolveModelAsync(
-          provider,
-          pinnedId,
-          input.agentDir,
-          fixture.config,
-          {
-            ...second.snapshot.createStores(),
-            agentId: "main",
-            workspaceDir: input.workspaceDir,
-            preparedModelRuntime: second.snapshot,
-          },
-        );
+        const resolved = await resolveFixtureModel(fixture, second.snapshot);
         expect(resolved.model?.id).toBe(pinnedId);
         expect(connection.database.isOpen).toBe(true);
         await second[Symbol.asyncDispose]();
@@ -659,12 +654,10 @@ describe("cold dynamic-model effective inventory", () => {
         replacement = await pendingReplacement;
         expect(fixture.connections).toHaveLength(3);
         await expect.poll(() => original.disposals).toBe(1);
-        expect(fixture.connections[2]!.database.isOpen).toBe(true);
-        expect(fixture.connections[2]!.disposals).toBe(0);
+        expectConnection(fixture, 2, true, 0);
         await replacement[Symbol.asyncDispose]();
         await expect.poll(() => fixture.connections[2]!.disposals).toBe(1);
-        expect(rootConnection.disposals).toBe(0);
-        expect(rootConnection.database.isOpen).toBe(true);
+        expectConnection(fixture, 0, true, 0);
       } finally {
         gate.resume.resolve();
         await replacement?.[Symbol.asyncDispose]();
@@ -699,15 +692,13 @@ describe("cold dynamic-model effective inventory", () => {
         await nextTurn();
         expect(closed).toBe(false);
         expect(isRegistryCurrent?.()).toBe(false);
-        expect(fixture.connections[0]!.database.isOpen).toBe(true);
-        expect(fixture.connections[0]!.disposals).toBe(0);
+        expectConnection(fixture, 0, true, 0);
         await expect(acquireReadOnlyPreparedModelRuntime(fixture.input)).rejects.toThrow(
           "process lifetime closed",
         );
         await lease[Symbol.asyncDispose]();
         await closing;
-        expect(fixture.connections[0]!.disposals).toBe(1);
-        expect(fixture.connections[0]!.database.isOpen).toBe(false);
+        expectConnection(fixture, 0, false, 1);
       } finally {
         await lease[Symbol.asyncDispose]();
         await closing;
@@ -873,38 +864,25 @@ describe("cold dynamic-model effective inventory", () => {
 
   it("keeps a catalog-only generation isolated after selected runtime preparation", async () => {
     await withColdFixture(async (fixture) => {
-      const catalogLease = await acquireReadOnlyPreparedModelRuntime(fixture.input);
-      try {
-        const lease = await acquireReadOnlyPreparedModelRuntime(fixture.runtimeInput);
-        try {
-          expect(ownerCount()).toBe(2);
-          const resolve = (snapshot: typeof lease.snapshot) =>
-            resolveModelAsync(provider, pinnedId, fixture.input.agentDir, fixture.config, {
-              ...snapshot.createStores(),
-              agentId: "main",
-              workspaceDir: fixture.input.workspaceDir,
-              preparedModelRuntime: snapshot,
-            });
-          const resolved = await resolve(lease.snapshot);
-          expect(resolved.model).toMatchObject({
-            id: pinnedId,
-            provider,
-            api: "openai-completions",
-          });
-          expect(resolved.error).toBeUndefined();
-          // Loading B must not lend hooks to A: a generation miss remains authoritative.
-          const catalogResolved = await resolve(catalogLease.snapshot);
-          expect(catalogResolved.model).toBeUndefined();
-          expect(catalogResolved.error).toContain(`Unknown model: ${provider}/${pinnedId}`);
-          expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(true);
-          expect(pickerIds(fixture)).toEqual([curatedId]);
-        } finally {
-          await lease[Symbol.asyncDispose]();
-        }
-        expect(ownerCount()).toBe(1);
-      } finally {
-        await catalogLease[Symbol.asyncDispose]();
+      await using catalogLease = await acquireReadOnlyPreparedModelRuntime(fixture.input);
+      {
+        await using lease = await acquireReadOnlyPreparedModelRuntime(fixture.runtimeInput);
+        expect(ownerCount()).toBe(2);
+        const resolved = await resolveFixtureModel(fixture, lease.snapshot);
+        expect(resolved.model).toMatchObject({
+          id: pinnedId,
+          provider,
+          api: "openai-completions",
+        });
+        expect(resolved.error).toBeUndefined();
+        // Loading B must not lend hooks to A: a generation miss remains authoritative.
+        const catalogResolved = await resolveFixtureModel(fixture, catalogLease.snapshot);
+        expect(catalogResolved.model).toBeUndefined();
+        expect(catalogResolved.error).toContain(`Unknown model: ${provider}/${pinnedId}`);
+        expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(true);
+        expect(pickerIds(fixture)).toEqual([curatedId]);
       }
+      expect(ownerCount()).toBe(1);
     });
   });
 

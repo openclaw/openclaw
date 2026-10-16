@@ -24,6 +24,15 @@ function messageWithReplay(providerReplay: unknown) {
   return castAgentMessage({ role: "assistant", ...route, content: [], providerReplay });
 }
 
+function sanitize(message: unknown) {
+  return sanitizeTranscriptMessage(castAgentMessage(message));
+}
+function sanitizeAssistantBlock(block: unknown, api = route.api) {
+  return sanitize({ role: "assistant", ...route, api, content: [block] });
+}
+const text = (value: string) => ({ type: "text", text: value });
+const compaction = { type: "compaction", id: "cmp_1", encrypted_content: ciphertext };
+
 describe("transcript normalization", () => {
   it("preserves secret-shaped text, tool arguments, details, and sender metadata", () => {
     const source = "API_TOKEN = computeToken()\nAPI_KEY=sk-abcdef1234567890xyz";
@@ -32,7 +41,7 @@ describe("transcript normalization", () => {
       {
         role: "assistant",
         content: [
-          { type: "text", text: source },
+          text(source),
           { type: "toolCall", id: "call_1", name: "exec", arguments: { command: source } },
         ],
       },
@@ -40,20 +49,19 @@ describe("transcript normalization", () => {
         role: "toolResult",
         toolCallId: "call_1",
         toolName: "read",
-        content: [{ type: "text", text: source }],
+        content: [text(source)],
         details: { apiKey: "plainsecretvalue123", password: "hunter2" },
       },
     ];
     for (const message of messages) {
-      expect(sanitizeTranscriptMessage(castAgentMessage(message))).toBe(message);
+      expect(sanitize(message)).toBe(message);
     }
   });
 
   it("normalizes circular result structures without masking their string fields", () => {
     const details: Record<string, unknown> = { apiKey: "plainsecretvalue123" };
     details.self = details;
-    const message = castAgentMessage({ role: "toolResult", content: [], details });
-    expect(sanitizeTranscriptMessage(message)).toHaveProperty("details", {
+    expect(sanitize({ role: "toolResult", content: [], details })).toHaveProperty("details", {
       apiKey: "plainsecretvalue123",
       self: "[Circular]",
     });
@@ -61,16 +69,16 @@ describe("transcript normalization", () => {
   });
 
   it("canonicalizes inline image MIME and data URLs while preserving adjacent text", () => {
-    const message = castAgentMessage({
+    const message = {
       role: "toolResult",
       content: [
-        { type: "text", text: "sk-abcdef1234567890xyz" },
+        text("sk-abcdef1234567890xyz"),
         { type: "image", data: image, mimeType: "image/jpeg" },
         { type: "image_url", image_url: { url: `data:image/png;charset=utf-8;base64,${image}` } },
       ],
-    });
-    expect(sanitizeTranscriptMessage(message)).toHaveProperty("content", [
-      { type: "text", text: "sk-abcdef1234567890xyz" },
+    };
+    expect(sanitize(message)).toHaveProperty("content", [
+      text("sk-abcdef1234567890xyz"),
       { type: "image", data: image, mimeType: "image/png" },
       { type: "image_url", image_url: { url: `data:image/png;base64,${image}` } },
     ]);
@@ -81,26 +89,20 @@ describe("transcript normalization", () => {
     { label: "empty", content: [] },
     { label: "cleartext", content: [{ type: "reasoning_text", text: "not part of replay" }] },
   ])("canonicalizes Responses reasoning and retains empty containers: $label", ({ content }) => {
-    const message = castAgentMessage({
-      role: "assistant",
-      ...route,
-      content: [
-        {
-          type: "thinking",
-          thinking: "",
-          thinkingSignature: JSON.stringify({
-            type: "reasoning",
-            id: "rs_1",
-            summary: [{ type: "summary_text", text: "not part of replay" }],
-            content,
-            encrypted_content: ciphertext,
-            status: "completed",
-            extra: "not part of replay",
-          }),
-        },
-      ],
+    const result = sanitizeAssistantBlock({
+      type: "thinking",
+      thinking: "",
+      thinkingSignature: JSON.stringify({
+        type: "reasoning",
+        id: "rs_1",
+        summary: [{ type: "summary_text", text: "not part of replay" }],
+        content,
+        encrypted_content: ciphertext,
+        status: "completed",
+        extra: "not part of replay",
+      }),
     });
-    expect(sanitizeTranscriptMessage(message)).toHaveProperty(
+    expect(result).toHaveProperty(
       "content.0.thinkingSignature",
       JSON.stringify({
         id: "rs_1",
@@ -114,30 +116,26 @@ describe("transcript normalization", () => {
   });
 
   it("canonicalizes OpenAI-compatible tool reasoning without changing arguments", () => {
-    const message = castAgentMessage({
-      role: "assistant",
-      ...route,
-      api: "openai-completions",
-      content: [
-        {
-          type: "toolCall",
-          id: "call_1",
-          name: "exec",
-          arguments: { command: "API_TOKEN=sk-abcdef1234567890xyz" },
-          thoughtSignature: JSON.stringify({
-            type: "reasoning.encrypted",
-            data: ciphertext,
-            format: null,
-            extra: "discarded",
-          }),
-        },
-      ],
-    });
-    expect(sanitizeTranscriptMessage(message)).toHaveProperty("content.0", {
+    const toolCall = {
       type: "toolCall",
       id: "call_1",
       name: "exec",
       arguments: { command: "API_TOKEN=sk-abcdef1234567890xyz" },
+    };
+    const result = sanitizeAssistantBlock(
+      {
+        ...toolCall,
+        thoughtSignature: JSON.stringify({
+          type: "reasoning.encrypted",
+          data: ciphertext,
+          format: null,
+          extra: "discarded",
+        }),
+      },
+      "openai-completions",
+    );
+    expect(result).toHaveProperty("content.0", {
+      ...toolCall,
       thoughtSignature: JSON.stringify({
         type: "reasoning.encrypted",
         data: ciphertext,
@@ -165,7 +163,7 @@ describe("transcript normalization", () => {
           role: "user",
           content: [{ type: "input_text", text: "API_KEY=sk-abcdef1234567890xyz" }],
         },
-        { type: "compaction", id: "cmp_1", encrypted_content: ciphertext },
+        compaction,
       ],
       null,
       2,
@@ -189,10 +187,7 @@ describe("transcript normalization", () => {
       ...replay,
       compactedWindow: {
         state: "ready",
-        output: JSON.stringify([
-          { type: "message", role: "user", content: [content] },
-          { type: "compaction", id: "cmp_1", encrypted_content: ciphertext },
-        ]),
+        output: JSON.stringify([{ type: "message", role: "user", content: [content] }, compaction]),
       },
     });
     expect(sanitizeTranscriptMessage(message)).toHaveProperty("providerReplay", {
@@ -211,15 +206,12 @@ describe("transcript normalization", () => {
       encryptedContent: ciphertext,
       replayIndex: 0,
     };
-    const message = castAgentMessage({
-      role: "assistant",
-      ...route,
+    const message = {
+      ...messageWithReplay(providerReplay),
       provider: "anthropic",
       api: "anthropic-messages",
-      content: [],
-      providerReplay,
-    });
+    };
     const { id: _id, ...expected } = providerReplay;
-    expect(sanitizeTranscriptMessage(message)).toHaveProperty("providerReplay", expected);
+    expect(sanitize(message)).toHaveProperty("providerReplay", expected);
   });
 });

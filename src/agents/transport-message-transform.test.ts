@@ -1,5 +1,3 @@
-// Transport message transform tests cover replay cleanup for provider-specific
-// tool-call/result sequencing before messages are sent back to transports.
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
@@ -22,6 +20,45 @@ function makeModel(api: Api, provider: string, id: string): Model {
 }
 
 type ToolResultMessage = Extract<Context["messages"][number], { role: "toolResult" }>;
+const userMessage = (content: string, timestamp = Date.now()) => ({
+  role: "user" as const,
+  content,
+  timestamp,
+});
+const text = (value: string) => ({ type: "text" as const, text: value });
+const openai = makeModel("openai-responses", "openai", "gpt-5.4");
+function toolResult(
+  toolCallId: string,
+  output: string,
+  toolName = "read",
+  isError = false,
+): ToolResultMessage {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName,
+    content: [text(output)],
+    isError,
+    timestamp: Date.now(),
+  };
+}
+function thinkingMessage(
+  overrides: Partial<Extract<Context["messages"][number], { role: "assistant" }>>,
+  thinking: string,
+  thinkingSignature: string,
+  visible?: string,
+) {
+  return {
+    ...assistantToolCall("unused"),
+    api: "anthropic-messages" as const,
+    stopReason: "stop" as const,
+    ...overrides,
+    content: [
+      { type: "thinking" as const, thinking, thinkingSignature },
+      ...(visible ? [text(visible)] : []),
+    ],
+  };
+}
 
 function requireToolResultMessage(
   message: Context["messages"][number] | undefined,
@@ -65,11 +102,7 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
         stopReason: "stop",
         content: [{ type: "text", text: "completed answer" }],
       });
-      const user: Context["messages"][number] = {
-        role: "user",
-        content: "continue",
-        timestamp: 1,
-      };
+      const user = userMessage("continue", 1);
       const messages: Context["messages"] = [];
       messages[1] = hidden;
       messages[3] = failed;
@@ -97,27 +130,13 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
   );
 
   it("preserves unframed tool results only for a selected compaction replay window", () => {
-    const model = makeModel("openai-responses", "openai", "gpt-5.4");
+    const model = openai;
     const messages = [
       assistantToolCall("call_early"),
-      { role: "user", content: "continue", timestamp: Date.now() },
+      userMessage("continue"),
       assistantToolCall("call_after"),
-      {
-        role: "toolResult",
-        toolCallId: "call_early",
-        toolName: "read",
-        content: [{ type: "text", text: "displaced retained result" }],
-        isError: false,
-        timestamp: Date.now(),
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_before",
-        toolName: "read",
-        content: [{ type: "text", text: "real result after compaction" }],
-        isError: false,
-        timestamp: Date.now(),
-      },
+      toolResult("call_early", "displaced retained result"),
+      toolResult("call_before", "real result after compaction"),
     ] as Context["messages"];
 
     const normal = transformTransportMessages(messages, model);
@@ -150,32 +169,17 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     ).toHaveLength(1);
   });
 
-  it.each([
-    {
-      source: { provider: "anthropic", model: "claude-sonnet-4-6" },
-      target: { provider: "anthropic", model: "claude-fable-5" },
-    },
-  ])("drops model-bound thinking for Fable/Mythos switches", ({ source, target }) => {
+  it("drops model-bound thinking for Fable/Mythos switches", () => {
     const result = transformTransportMessages(
       [
-        {
-          role: "assistant",
-          provider: source.provider,
-          api: "anthropic-messages",
-          model: source.model,
-          stopReason: "stop",
-          timestamp: Date.now(),
-          content: [
-            {
-              type: "thinking",
-              thinking: "model-bound thought",
-              thinkingSignature: "sig_model_bound",
-            },
-            { type: "text", text: "visible answer" },
-          ],
-        },
+        thinkingMessage(
+          { provider: "anthropic", model: "claude-sonnet-4-6" },
+          "model-bound thought",
+          "sig_model_bound",
+          "visible answer",
+        ),
       ] as Context["messages"],
-      makeModel("anthropic-messages", target.provider, target.model),
+      makeModel("anthropic-messages", "anthropic", "claude-fable-5"),
     );
 
     expect(result[0]).toMatchObject({
@@ -186,34 +190,15 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
 
   // Live-verified 2026-09-02 with thinking-binding-controls: these replays return
   // input_transformations: [] on claude-fable-5-1, so the earlier reasoning stays usable.
-  it.each([
-    {
-      source: {
-        provider: "microsoft-foundry",
-        model: "prod-primary",
-        responseModel: "claude-opus-5",
-      },
-    },
-  ])("keeps readable Claude thinking when moving onto Fable 5.1", ({ source }) => {
+  it("keeps readable Claude thinking when moving onto Fable 5.1", () => {
     const result = transformTransportMessages(
       [
-        {
-          role: "assistant",
-          provider: source.provider,
-          api: "anthropic-messages",
-          model: source.model,
-          responseModel: source.responseModel,
-          stopReason: "stop",
-          timestamp: Date.now(),
-          content: [
-            {
-              type: "thinking",
-              thinking: "earlier reasoning",
-              thinkingSignature: "sig_readable",
-            },
-            { type: "text", text: "visible answer" },
-          ],
-        },
+        thinkingMessage(
+          { provider: "microsoft-foundry", model: "prod-primary", responseModel: "claude-opus-5" },
+          "earlier reasoning",
+          "sig_readable",
+          "visible answer",
+        ),
       ] as Context["messages"],
       makeModel("anthropic-messages", "anthropic", "claude-fable-5-1"),
     );
@@ -234,12 +219,9 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
         stopReason: "stop",
         content: { type: "text", text: "legacy object" },
       },
-      { role: "user", content: "continue", timestamp: Date.now() },
+      userMessage("continue"),
     ] as unknown as Context["messages"];
-    const objectResult = transformTransportMessages(
-      objectContentMessages,
-      makeModel("openai-responses", "openai", "gpt-5.4"),
-    );
+    const objectResult = transformTransportMessages(objectContentMessages, openai);
     expect(objectResult[0]).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "legacy object" }],
@@ -251,63 +233,39 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
         stopReason: "stop",
         content: null,
       },
-      { role: "user", content: "continue", timestamp: Date.now() },
+      userMessage("continue"),
     ] as unknown as Context["messages"];
-    const nullResult = transformTransportMessages(
-      nullContentMessages,
-      makeModel("openai-responses", "openai", "gpt-5.4"),
-    );
+    const nullResult = transformTransportMessages(nullContentMessages, openai);
     expect(nullResult[0]).toMatchObject({ role: "assistant", content: [] });
     expect(nullResult[1]).toMatchObject({ role: "user" });
   });
 
-  describe.each(["error"] as const)("%s replay without visible output", (stopReason) => {
-    it.each([
-      {
-        name: "the no-content placeholder with hidden reasoning",
-        content: [
-          { type: "text", text: NO_CONTENT_PLACEHOLDER },
-          { type: "thinking", thinking: "hidden partial reasoning" },
-        ],
-      },
-    ] satisfies Array<{
-      name: string;
-      content: Extract<Context["messages"][number], { role: "assistant" }>["content"];
-    }>)("drops $name across a model change without inventing a visible turn", ({ content }) => {
-      const failed = makeAssistantMessageFixture({ model: "source-model", stopReason, content });
-      const user: Context["messages"][number] = {
-        role: "user",
-        content: "what is the weather?",
-        timestamp: 3,
-      };
-
-      expect(
-        transformTransportMessages(
-          [failed, user],
-          makeModel("openai-responses", "openai", "gpt-5.4"),
-        ),
-      ).toEqual([user]);
+  it("drops the no-content placeholder with hidden reasoning across a model change", () => {
+    const failed = makeAssistantMessageFixture({
+      model: "source-model",
+      stopReason: "error",
+      content: [
+        { type: "text", text: NO_CONTENT_PLACEHOLDER },
+        { type: "thinking", thinking: "hidden partial reasoning" },
+      ],
     });
+    const user = userMessage("what is the weather?", 3);
+    expect(transformTransportMessages([failed, user], openai)).toEqual([user]);
   });
 
   it("drops max-token reasoning-only transport assistant turns before replay", () => {
     const messages: Context["messages"] = [
-      {
-        role: "assistant",
-        provider: "amazon-bedrock",
-        api: "bedrock-converse-stream",
-        model: "global.anthropic.claude-sonnet-4-6",
-        stopReason: "length",
-        timestamp: Date.now(),
-        content: [
-          {
-            type: "thinking",
-            thinking: "partial hidden reasoning",
-            thinkingSignature: "partial-signature",
-          },
-        ],
-      } as Extract<Context["messages"][number], { role: "assistant" }>,
-      { role: "user", content: "retry after max token thinking", timestamp: Date.now() },
+      thinkingMessage(
+        {
+          provider: "amazon-bedrock",
+          api: "bedrock-converse-stream",
+          model: "global.anthropic.claude-sonnet-4-6",
+          stopReason: "length",
+        },
+        "partial hidden reasoning",
+        "partial-signature",
+      ),
+      userMessage("retry after max token thinking"),
     ];
 
     const result = transformTransportMessages(
@@ -327,15 +285,8 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     const messages: Context["messages"] = [
       assistantToolCall("call_repeated"),
       assistantToolCall("call_repeated", "exec", "error"),
-      {
-        role: "toolResult",
-        toolCallId: "call_repeated",
-        toolName: "exec",
-        content: [{ type: "text", text: "failed turn output" }],
-        isError: true,
-        timestamp: Date.now(),
-      },
-      { role: "user", content: "retry after error", timestamp: Date.now() },
+      toolResult("call_repeated", "failed turn output", "exec", true),
+      userMessage("retry after error"),
     ];
 
     const result = transformTransportMessages(
