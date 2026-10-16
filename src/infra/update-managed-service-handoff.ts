@@ -1164,12 +1164,10 @@ async function spawnManagedServiceUpdateHandoff(
     argv1: resolveOpenClawCliEntryPath(params.argv1 ?? process.argv[1]),
   };
   const commandArgv = params.action
-    ? [
-        params.action.nodeRunner,
-        ...resolveRuntimeArgs(params.action.nodeRunner),
-        params.action.entrypoint,
-        "triage",
-      ]
+    ? resolveManagedServiceCliArgv(
+        { execPath: params.action.nodeRunner, argv1: params.action.entrypoint },
+        ["triage"],
+      )
     : resolveUpdateCliArgv({ ...commandOptions, ...commandRuntime });
   if (owner.operatorRestartWarning) {
     commandArgv.push("--no-restart");

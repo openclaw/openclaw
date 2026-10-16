@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isPromise } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   SQLITE_WORKER_PREPARE_COMMAND,
   type SqliteWorkerPreparedBackend,
@@ -65,7 +65,7 @@ export type AgentDatabaseDomainOperations = {
 /** One admitted publication scope borrows the canonical connection; it never owns its close. */
 export function createAgentDatabaseDomainOwner(context: {
   databasePath: string;
-  assertCurrent(): DatabaseSync;
+  assertCurrent(): EngineConnection;
   assertCleanupCurrent(): void;
   admit(
     stage: "transaction" | "commit",

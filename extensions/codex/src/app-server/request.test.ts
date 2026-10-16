@@ -590,9 +590,8 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     ).rejects.toThrow("codex app-server request timed out");
     expect(request).not.toHaveBeenCalled();
     expect(controlObservation.phase).not.toHaveBeenCalledWith("client-request");
-    // Cleanup finishes before the outer deadline decision; this is not the rejection's origin.
     expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
-      phase: "release-client",
+      phase: "prepare",
       category: "deadline-observed",
     });
   });
@@ -668,7 +667,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     }
   });
 
-  it("abandons a pending acquisition without issuing a request after the deadline", async () => {
+  it("abandons a pending acquisition without issuing a request after the startup deadline", async () => {
     vi.useFakeTimers();
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
     const request = vi.fn(async () => ({ ok: true }));
@@ -685,17 +684,22 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       method: "thread/list",
       requestParams: { limit: 10 },
       timeoutMs: 50,
+      pluginConfig: { appServer: { requestTimeoutMs: 10 } },
       controlObservation,
     });
-    const rejection = expect(result).rejects.toThrow("codex app-server thread/list timed out");
+    const rejection = expect(result).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+      userMessage:
+        "Codex app-server startup exceeded its wait budget. Retry this request; if it persists, check the Gateway logs.",
+    });
     await acquisitionStarted.promise;
     const acquireOptions = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0] as
       | { abandonSignal?: AbortSignal; timeoutMs?: number }
       | undefined;
 
     expect(acquireOptions?.timeoutMs).toBeGreaterThan(0);
-    expect(acquireOptions?.timeoutMs).toBeLessThanOrEqual(50);
-    await vi.advanceTimersByTimeAsync(50);
+    expect(acquireOptions?.timeoutMs).toBeLessThanOrEqual(100);
+    await vi.advanceTimersByTimeAsync(150);
     await rejection;
     expect(acquireOptions?.abandonSignal?.aborted).toBe(true);
     expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
@@ -708,6 +712,64 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     await Promise.resolve();
     expect(request).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { requestTimeoutMs: 10, acquisitionDelayMs: 101, expired: true },
+    { requestTimeoutMs: 120_000, acquisitionDelayMs: 700_000, expired: false },
+  ])(
+    "honors the configured $requestTimeoutMs ms startup budget through control requests",
+    async ({ requestTimeoutMs, acquisitionDelayMs, expired }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const harness = createClientHarness();
+      const entered = createDeferred<void>();
+      const acquisition = createDeferred<typeof harness.client>();
+      sharedClientMocks.getSharedCodexAppServerClient.mockImplementationOnce(() => {
+        entered.resolve();
+        return acquisition.promise;
+      });
+      const pending = codexControlRequest(
+        { appServer: { requestTimeoutMs, transport: "unix", url: "unix://" } },
+        "thread/list",
+        { limit: 10 },
+        {
+          timeoutMs: 50,
+          startOptions: {
+            transport: "unix",
+            homeScope: "user",
+            command: "codex",
+            args: [],
+            headers: {},
+            url: "unix://",
+          },
+        },
+      ).then(
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error }),
+      );
+      try {
+        await Promise.race([entered.promise, pending]);
+        expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(acquisitionDelayMs);
+        acquisition.resolve(harness.client);
+        await vi.advanceTimersByTimeAsync(0);
+        if (expired) {
+          expect(harness.writes).toEqual([]);
+          expect((await pending).error).toMatchObject({ name: "AgentHarnessPreflightError" });
+        } else {
+          expect(harness.writes).toHaveLength(1);
+          const request = JSON.parse(harness.writes[0]!);
+          expect(request.method).toBe("thread/list");
+          harness.send({ id: request.id, result: { data: [] } });
+          expect(await pending).toEqual({ value: { data: [] }, error: undefined });
+        }
+        expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
+      } finally {
+        acquisition.resolve(harness.client);
+        harness.client.close();
+        await pending;
+      }
+    },
+  );
 
   it("does not resume or publish a control attachment after its passive preflight times out", async () => {
     const root = sessionDirs.make();
@@ -850,8 +912,10 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const page = createDeferred<{ data: never[]; nextCursor: string }>();
     const request = vi.fn(() => page.promise);
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-    const result = withCodexAppServerJsonClient({ timeoutMs: 50 }, async (scopedRequest) =>
-      listAllCodexAppServerModels({ request: scopedRequest }),
+    const controlObservation = { phase: vi.fn(), failed: vi.fn() };
+    const result = withCodexAppServerJsonClient(
+      { timeoutMs: 50, controlObservation },
+      async (scopedRequest) => listAllCodexAppServerModels({ request: scopedRequest }),
     );
     const rejection = expect(result).rejects.toThrow("codex app-server request timed out");
     await vi.advanceTimersByTimeAsync(50);
@@ -860,6 +924,10 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledOnce();
     expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
+    expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
+      phase: "client-request",
+      category: "deadline-observed",
+    });
   });
 
   it("blocks thread starts with sandbox environments when exec host=node is active", async () => {

@@ -56,6 +56,7 @@ const targets =
         "src/infra/postgres-sync",
         "src/infra/database-engine",
         "src/state/openclaw-state-db.postgres.test.ts",
+        "src/state/openclaw-agent-db.postgres.test.ts",
         "src/gateway/server-database-engine.postgres.test.ts",
         "src/transcripts/meeting-chronology.postgres.test.ts",
       ];

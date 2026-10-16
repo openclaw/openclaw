@@ -96,7 +96,9 @@ describe("session placement draft advancement", () => {
         throw new DOMException("storage disabled", "SecurityError");
       }),
       removeItem: vi.fn(),
-      setItem: vi.fn(),
+      setItem: vi.fn(() => {
+        throw new DOMException("storage disabled", "SecurityError");
+      }),
     });
     const request = vi.fn().mockRejectedValue(new Error("history unavailable"));
     const clearRecovery = vi.fn();

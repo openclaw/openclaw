@@ -1,4 +1,5 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { hasCompletionMessageSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
@@ -7,8 +8,12 @@ import {
   resolveSourceReplyDelivery,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
+  createMissingReplyNotice,
+  MISSING_REPLY_NOTICE_TEXT,
+  isRequiredReplyExpectation,
   isSyntheticSourceReplyTurn,
   resolveReplyCompletion,
+  shouldDeliverMissingReplyNotice,
 } from "../../agents/reply-completion.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
 import { logVerbose } from "../../globals.js";
@@ -19,6 +24,7 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
+  retainSilentFinalPayloads,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -27,7 +33,6 @@ import {
 } from "./agent-runner-core.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import {
-  buildEmptyInteractiveReplyPayload,
   markPostCompactionModelFailurePayload,
   renderPostCompactionModelFailurePayload,
 } from "./agent-runner-failure-reply.js";
@@ -50,10 +55,7 @@ import {
   isReplyOperationStalledBeforeOutput,
   STALLED_TURN_NOTICE_TEXT,
 } from "./stalled-turn-recovery.js";
-import {
-  buildStrandedReplyDeliveryFailurePayload,
-  resolveStrandedReplyRecovery,
-} from "./stranded-reply-recovery.js";
+import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import { buildWaitingStatusPayload } from "./waiting-status.js";
 
@@ -91,7 +93,16 @@ function resolveFollowupPayloadContext(turn: AdmittedFollowupTurn) {
 export async function resolveFollowupDeliveryDecision(params: {
   turn: AdmittedFollowupTurn;
   execution: AgentTurnExecutionResult;
-  accounting?: AccountedAgentTurn & {
+  accounting?: Pick<
+    AccountedAgentTurn,
+    | "providerUsed"
+    | "modelUsed"
+    | "terminalFailurePayload"
+    | "payloadArray"
+    | "usage"
+    | "preserveUserFacingSessionState"
+    | "replyUsageState"
+  > & {
     compactionNotice?: ReplyPayload;
     diagnosticsPayload?: ReplyPayload;
   };
@@ -120,7 +131,7 @@ export async function resolveFollowupDeliveryDecision(params: {
   });
   const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
   const isInteractive =
-    terminalReplyExpectation === "required" ||
+    isRequiredReplyExpectation(terminalReplyExpectation) ||
     (!isSyntheticSourceReplyTurn({ inputProvenance: turn.queued.run.inputProvenance }) &&
       !isInternalMessageChannel(
         turn.queued.originatingChannel ?? turn.queued.run.messageProvider,
@@ -197,6 +208,20 @@ export async function resolveFollowupDeliveryDecision(params: {
     model: accounting.modelUsed,
   };
   const result = execution.outcome.result;
+  const terminalRunFailed = execution.outcome.status === "failed";
+  const missingReplyNoticeAllowed = shouldDeliverMissingReplyNotice({
+    ...turn.queued.run,
+    terminalReplyExpectation,
+    trigger: turn.queued.run.internalEventExecution ? "event" : "user",
+    currentInboundEventKind: turn.queued.currentInboundEventKind,
+  });
+  const authoredSilence =
+    !terminalRunFailed &&
+    result.meta?.aborted !== true &&
+    !result.meta?.error &&
+    result.didSendDeterministicApprovalPrompt !== true &&
+    !accounting.terminalFailurePayload &&
+    result.meta?.terminalReply?.disposition === "silent";
   const pendingContinuation =
     result.meta?.yielded === true ||
     result.meta?.continuationPending === true ||
@@ -214,22 +239,29 @@ export async function resolveFollowupDeliveryDecision(params: {
     terminalReplyExpectation,
     result.meta?.error?.kind === "hook_block" || result.didSendDeterministicApprovalPrompt === true
       ? "blocked"
-      : sourceReplyDelivery !== "missing"
-        ? sourceReplyDelivery
-        : pendingContinuation
-          ? "pending"
-          : "empty",
+      : authoredSilence
+        ? "silent"
+        : sourceReplyDelivery !== "missing"
+          ? sourceReplyDelivery
+          : pendingContinuation
+            ? "pending"
+            : "empty",
   );
+  const explicitSilence = completion.outcome === "silent";
+  const sourcePayloads = authoredSilence
+    ? retainSilentFinalPayloads(accounting.payloadArray)
+    : accounting.payloadArray;
+  if (explicitSilence && sourcePayloads.length === 0) {
+    return { kind: "suppress", reason: "silent" };
+  }
   const completedSourceDelivery = hasCompletedSourceReplyDeliveryEvidence(result);
   const hasLegacyMessagingToolEvidence =
     result.sourceReplyDeliveryState === undefined &&
     resolveExplicitFinalSourceReplyDeliveryEvidence(result) === undefined;
   const assistantFinalText = normalizeAssistantFinalDeliveryText(
-    typeof result.meta?.finalAssistantVisibleText === "string"
-      ? result.meta.finalAssistantVisibleText
-      : "",
+    result.meta?.finalAssistantVisibleText ?? "",
   );
-  let payloads = preparePayloads(accounting.payloadArray, {
+  let payloads = preparePayloads(sourcePayloads, {
     reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
     commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
     sentMediaUrls: result.messagingToolSentMediaUrls,
@@ -247,12 +279,16 @@ export async function resolveFollowupDeliveryDecision(params: {
     await opts?.onObservedReplyDelivery?.();
   }
   const recovery =
-    accounting.terminalFailurePayload || completion.outcome !== "missing"
+    explicitSilence ||
+    terminalRunFailed ||
+    !missingReplyNoticeAllowed ||
+    completion.outcome !== "missing"
       ? ({ kind: "none" } as const)
       : resolveStrandedReplyRecovery({
           base: turn.queued,
           payloads,
           finalText: assistantFinalText,
+          terminalReply: result.meta?.terminalReply,
           sourceReplyDeliveryMode: sourcePolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourcePolicy.sendPolicyDenied,
           successfulSourceReplyDelivery: completedSourceDelivery,
@@ -278,13 +314,21 @@ export async function resolveFollowupDeliveryDecision(params: {
       isReplyPayloadTerminalContent(payload) &&
       // Private terminal content is not an empty result. Source visibility is
       // enforced below; genuine failures and yield acknowledgments still win.
-      ((!accounting.terminalFailurePayload && !pendingContinuation) ||
+      ((!terminalRunFailed && !pendingContinuation) ||
         sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
+  if (!hasTerminalPayload && completion.outcome === "missing" && !turn.operation.result) {
+    turn.operation.retainFailureUntilComplete();
+    turn.operation.fail("run_failed", new Error(MISSING_REPLY_NOTICE_TEXT));
+    opts?.onAgentRunTerminalOutcome?.("failed");
+  }
   const waitingStatusParams = {
     completion,
     continuationPending: result.meta?.continuationPending === true,
+    mediaContinuation:
+      result.meta?.continuationPending === true &&
+      !hasCompletionMessageSessionSpawn(result.acceptedSessionSpawns),
     yielded: result.meta?.yielded === true,
     yieldAcknowledgment: result.meta?.yieldAcknowledgment,
     // Child spawns are side effects, not user-visible messages. They must not
@@ -294,11 +338,12 @@ export async function resolveFollowupDeliveryDecision(params: {
       hasVisibleCommittedMessagingToolDeliveryEvidence(result) ||
       result.didSendDeterministicApprovalPrompt === true,
   };
-  const waitingStatusPayload = accounting.terminalFailurePayload
+  const waitingStatusPayload = terminalRunFailed
     ? undefined
     : buildWaitingStatusPayload(waitingStatusParams);
-  const fallbackPayload = accounting.terminalFailurePayload
-    ? isInteractive &&
+  const fallbackPayload = terminalRunFailed
+    ? accounting.terminalFailurePayload &&
+      isInteractive &&
       completion.outcome !== "delivered" &&
       completion.outcome !== "pending" &&
       completion.outcome !== "blocked"
@@ -306,7 +351,10 @@ export async function resolveFollowupDeliveryDecision(params: {
         ? markReplyPayloadForSourceSuppressionDelivery(accounting.terminalFailurePayload)
         : accounting.terminalFailurePayload
       : undefined
-    : (waitingStatusPayload ?? buildEmptyInteractiveReplyPayload({ completion }));
+    : (waitingStatusPayload ??
+      (missingReplyNoticeAllowed && completion.outcome === "missing"
+        ? createMissingReplyNotice()
+        : undefined));
   if (!hasTerminalPayload && fallbackPayload) {
     payloads.push(...preparePayloads([fallbackPayload]));
   }
@@ -367,12 +415,7 @@ async function sendFollowupPayloads(params: {
     workspaceDir: turn.queued.run.workspaceDir,
     agentDir: turn.queued.run.agentDir,
   });
-  const payloads = params.payloads.filter(
-    (payload) =>
-      hasOutboundReplyContent(payload) &&
-      (!deliveryPlan.isSilentPayload(payload) ||
-        getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
-  );
+  const payloads = params.payloads.filter((payload) => hasOutboundReplyContent(payload));
   if (payloads.length === 0) {
     return { kind: "completed", payloads: [] };
   }
@@ -617,7 +660,7 @@ export async function deliverFollowupDecision(params: {
     }
     payloads = resolveFollowupDeliveryPayloads({
       ...resolveFollowupPayloadContext(turn),
-      payloads: [buildStrandedReplyDeliveryFailurePayload()],
+      payloads: [createMissingReplyNotice()],
     });
   } else {
     payloads = decision.payloads;

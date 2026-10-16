@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { createMissingReplyNotice } from "../../agents/reply-completion.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
@@ -27,10 +28,7 @@ import { readPostCompactionContext } from "./post-compaction-context.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, refreshQueuedFollowupSession } from "./queue.js";
 import { isInternalSourceReplyChannel } from "./source-reply-delivery-mode.js";
-import {
-  buildStrandedReplyDeliveryFailurePayload,
-  resolveStrandedReplyRecovery,
-} from "./stranded-reply-recovery.js";
+import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 
 export async function completeReplyAgentRun(input: {
   context: FinalizeReplyAgentRunInput;
@@ -100,7 +98,7 @@ export async function completeReplyAgentRun(input: {
     }
 
     if (verboseEnabled) {
-      const suffix = typeof count === "number" ? ` (count ${count})` : "";
+      const suffix = count !== undefined ? ` (count ${count})` : "";
       prefixNotices.push(
         setReplyPayloadMetadata(
           { text: `🧹 Auto-compaction complete${suffix}.` },
@@ -141,7 +139,14 @@ export async function completeReplyAgentRun(input: {
   // durable delivery retries. Hidden reasoning, message-tool-only replies,
   // and sendPolicy-denied replies must not become heartbeat-replayable text.
   const isStrandedReplyRetryRun = followupRun.strandedReplyRetry === true;
-  if (sessionKey && storePath && (finalPayloads.length > 0 || isStrandedReplyRetryRun)) {
+  if (
+    sessionKey &&
+    storePath &&
+    runResult.meta?.terminalReply?.disposition !== "silent" &&
+    (finalPayloads.length > 0 ||
+      isStrandedReplyRetryRun ||
+      runResult.meta?.terminalReply !== undefined)
+  ) {
     const sourceReplyPolicy = resolveSourceReplyPolicy({
       cfg,
       sessionCtx,
@@ -150,27 +155,26 @@ export async function completeReplyAgentRun(input: {
       runtimePolicySessionKey,
       opts,
     });
-    // #85714: warn only for unusually substantive private final text. In
-    // message_tool_only, no tool call can be intentional silence, and
-    // final payloads also include verbose/status/usage metadata.
     const assistantFinalText = normalizeAssistantFinalDeliveryText(
-      typeof runResult.meta?.finalAssistantVisibleText === "string"
-        ? runResult.meta.finalAssistantVisibleText
-        : (rawAssistantText ?? ""),
+      runResult.meta?.finalAssistantVisibleText ?? rawAssistantText ?? "",
     );
     // Heartbeats already deliver fallback finals via sendDurableMessageBatch;
     // recovering here would duplicate that message.
-    const recovery = resolveStrandedReplyRecovery({
-      base: followupRun,
-      payloads: finalPayloads,
-      finalText: assistantFinalText,
-      sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
-      sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-      successfulSourceReplyDelivery: completedSourceReplyDelivery,
-      isHeartbeat,
-      isRoomEvent: sessionCtx.InboundEventKind === "room_event",
-    });
-    if (recovery.kind === "retry" || (recovery.kind === "diagnostic" && recovery.warn)) {
+    const recovery =
+      prepared.replyCompletion.outcome === "pending"
+        ? { kind: "none" as const }
+        : resolveStrandedReplyRecovery({
+            base: followupRun,
+            payloads: finalPayloads,
+            finalText: assistantFinalText,
+            terminalReply: runResult.meta?.terminalReply,
+            sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+            sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+            successfulSourceReplyDelivery: completedSourceReplyDelivery,
+            isHeartbeat,
+            isRoomEvent: sessionCtx.InboundEventKind === "room_event",
+          });
+    if (recovery.kind === "retry") {
       warnPrivateMessageToolFinal({
         sessionKey,
         channel:
@@ -194,7 +198,7 @@ export async function completeReplyAgentRun(input: {
         { position: "front" },
       );
       if (!retryEnqueued) {
-        finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
+        finalPayloads = [...finalPayloads, createMissingReplyNotice()];
       }
     }
     const recoverablePendingFinalText = buildRecoverablePendingFinalDeliveryText(

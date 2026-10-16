@@ -2,6 +2,7 @@ name: Website Installer Sync
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - scripts/install.sh
       - scripts/install-cli.sh
@@ -32,37 +33,116 @@ permissions:
   contents: read
 
 concurrency:
-  group: website-installer-sync-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  # Passive draft events must not cancel useful validation; conversion intentionally does.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || format('website-installer-sync-{0}', github.event_name == 'workflow_dispatch' && github.run_id || github.ref) }}
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  scope:
+    name: Select installer platforms
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: &linux_runner_ubuntu ubuntu-24.04
+    outputs:
+      unix: ${{ steps.scope.outputs.unix }}
+      windows: ${{ steps.scope.outputs.windows }}
+    steps:
+      - name: Checkout event merge
+        id: checkout
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Select changed installer platforms
+        id: scope
+        env:
+          INSTALLER_CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const selected = { unix: true, windows: true };
+            if (context.eventName === "pull_request") {
+              try {
+                if (process.env.INSTALLER_CHECKOUT_OUTCOME !== "success") {
+                  throw new Error("event checkout unavailable");
+                }
+                const paths = {
+                  unix: [
+                    "scripts/install.sh",
+                    "scripts/install-cli.sh",
+                    "scripts/install-policy.sh",
+                    "scripts/build-installers.mjs",
+                    "scripts/lib/standalone-installers.mjs",
+                    ".github/workflows/website-installer-sync.yml",
+                  ],
+                  windows: [
+                    "scripts/install.ps1",
+                    ".github/workflows/website-installer-sync.yml",
+                  ],
+                };
+                // Compare the tested merge tree to its exact base; disabling rename
+                // detection keeps both sides of moved installer inputs in scope.
+                for (const [platform, inputs] of Object.entries(paths)) {
+                  const result = await exec.getExecOutput("git", [
+                    "diff", "--quiet", "--no-renames", "HEAD^1", "HEAD", "--", ...inputs,
+                  ], { ignoreReturnCode: true, silent: true });
+                  if (result.exitCode !== 0 && result.exitCode !== 1) {
+                    throw new Error("event diff unavailable");
+                  }
+                  selected[platform] = result.exitCode === 1;
+                }
+              } catch {
+                selected.unix = selected.windows = true;
+                core.warning("Installer path selection unavailable; validating every platform.");
+              }
+            }
+            for (const [platform, enabled] of Object.entries(selected)) {
+              core.setOutput(platform, String(enabled));
+              core.info(`${platform} installer validation: ${enabled ? "enabled" : "skipped (no changed inputs)"}`);
+            }
+
   static:
-    runs-on: ubuntu-24.04
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' }}
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Assemble standalone installers
+        if: needs.scope.outputs.unix == 'true'
         run: node scripts/build-installers.mjs
 
       - name: Shell syntax
+        if: needs.scope.outputs.unix == 'true'
         run: |
           for installer in dist/installers/install.sh dist/installers/install-cli.sh; do
             bash -n "$installer"
           done
 
       - name: ShellCheck
+        if: needs.scope.outputs.unix == 'true'
         run: shellcheck -e SC1091 dist/installers/install.sh dist/installers/install-cli.sh
 
       - name: Installer help and dry-runs
+        if: needs.scope.outputs.unix == 'true'
         run: |
           bash dist/installers/install.sh --help >/tmp/install-help.txt
           bash dist/installers/install.sh --dry-run --no-onboard --no-prompt
           bash dist/installers/install-cli.sh --help >/tmp/install-cli-help.txt
 
       - name: PowerShell syntax
+        if: needs.scope.outputs.windows == 'true'
         shell: pwsh
         run: |
           $errors = $null
@@ -76,7 +156,9 @@ jobs:
           }
 
   linux-docker:
-    runs-on: ubuntu-24.04
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,7 +182,9 @@ jobs:
             bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
 
   debian-installer:
-    runs-on: ubuntu-24.04
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -128,7 +212,9 @@ jobs:
           CONTAINER
 
   linux-build-tools-failure:
-    runs-on: ubuntu-24.04
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -193,7 +279,9 @@ jobs:
           CONTAINER
 
   linux-non-root:
-    runs-on: ubuntu-24.04
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -231,12 +319,14 @@ jobs:
           CONTAINER
 
   fedora-installer:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
     name: Fedora installer (${{ matrix.user }})
     strategy:
       fail-fast: false
       matrix:
         user: [root, non-root]
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -290,6 +380,8 @@ jobs:
           fi
 
   macos-installer:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
     runs-on: macos-15
     steps:
       - name: Checkout
@@ -314,6 +406,8 @@ jobs:
           openclaw --version
 
   windows-installer:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.windows == 'true' }}
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -394,7 +488,7 @@ jobs:
     if: >
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && inputs.sync_website)
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     env:
       OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}
     steps:

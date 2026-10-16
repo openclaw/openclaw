@@ -16,6 +16,60 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus runtime metrics", () => {
+  it("counts attributed main-thread stalls by task and reports bounded-buffer losses", () => {
+    const metrics = createMetricsHarness();
+    try {
+      metrics.record({ type: "gateway.main_thread.stall", stalls: [], dropped: 0 });
+      expect(metrics.render()).not.toContain("openclaw_gateway_main_thread_stall");
+      const batch = {
+        type: "gateway.main_thread.stall" as const,
+        stalls: [
+          { task: "rpc.sessions.list", durationMs: 250 },
+          { task: "rpc.sessions.list", durationMs: 750 },
+          { task: "timer.cron", durationMs: 2_000 },
+          { task: "/private/session/path", durationMs: 500 },
+        ],
+        dropped: 3,
+      };
+      metrics.record(batch, untrusted);
+      expect(metrics.render()).not.toContain("openclaw_gateway_main_thread_stall");
+      metrics.record(batch, Object.freeze({ trusted: false, internal: true }));
+      const rendered = metrics.render();
+      for (const [bound, count] of [
+        ["0.25", 1],
+        ["0.5", 1],
+        ["1", 2],
+        ["2.5", 2],
+        ["5", 2],
+        ["10", 2],
+        ["+Inf", 2],
+      ] as const) {
+        expect(rendered).toContain(
+          `openclaw_gateway_main_thread_stall_seconds_bucket{le="${bound}",task="rpc.sessions.list"} ${count}\n`,
+        );
+      }
+      expect(rendered).toContain(
+        'openclaw_gateway_main_thread_stall_seconds_count{task="rpc.sessions.list"} 2\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_gateway_main_thread_stall_seconds_sum{task="rpc.sessions.list"} 1\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_gateway_main_thread_stall_seconds_count{task="timer.cron"} 1\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_gateway_main_thread_stall_seconds_count{task="unknown"} 1\n',
+      );
+      expect(rendered).not.toContain("/private/session/path");
+      expect(rendered).toContain("openclaw_gateway_main_thread_stalls_dropped_total 3\n");
+      expect(metrics.render()).toBe(rendered);
+      metrics.record({ type: "gateway.main_thread.stall", stalls: [], dropped: 2 });
+      expect(metrics.render()).toContain("openclaw_gateway_main_thread_stalls_dropped_total 5\n");
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it("separates Code Mode isolate GC and replaces live memory gauges at each sample", () => {
     const metrics = createMetricsHarness();
     const memory = {

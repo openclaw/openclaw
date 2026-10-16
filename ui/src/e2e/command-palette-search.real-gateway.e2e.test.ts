@@ -285,6 +285,14 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
     unauthorized: 0,
     invalidRequest: 0,
     unavailable: 0,
+    unavailableReasons: {
+      startup: 0,
+      restarting: 0,
+      suspending: 0,
+      buildMismatch: 0,
+      profile: 0,
+      other: 0,
+    },
     pairingRequired: 0,
     socketErrors: 0,
     closes: 0,
@@ -346,6 +354,26 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
           connection.invalidRequest += Number(error.code === "INVALID_REQUEST");
           connection.unavailable += Number(error.code === "UNAVAILABLE");
           connection.pairingRequired += Number(error.code === "PAIRING_REQUIRED");
+          if (error.code === "UNAVAILABLE") {
+            const details = isRecord(error.details) ? error.details : {};
+            // Retain only known categories, never arbitrary error text or auth frames.
+            if (details.reason === "startup-sidecars") {
+              connection.unavailableReasons.startup++;
+            } else if (details.reason === "gateway-restarting") {
+              connection.unavailableReasons.restarting++;
+            } else if (details.reason === "gateway-suspending") {
+              connection.unavailableReasons.suspending++;
+            } else if (
+              details.code === "PROTOCOL_MISMATCH" ||
+              details.code === "CONTROL_UI_BUILD_MISMATCH"
+            ) {
+              connection.unavailableReasons.buildMismatch++;
+            } else if (details.code === "AUTHENTICATED_PROFILE_UNAVAILABLE") {
+              connection.unavailableReasons.profile++;
+            } else {
+              connection.unavailableReasons.other++;
+            }
+          }
         }
         return;
       }

@@ -373,7 +373,7 @@ export function registerAgentDeleteRollbackTests(harness: AgentDeleteRecoveryHar
 
     const respond = await call("agents.delete", { agentId: "test-agent" });
 
-    expectRespondErrorContaining(respond, "not found");
+    expectRespondErrorContaining(respond, "only configured agent");
     expect(mocks.beginAgentDeletionRetire).toHaveBeenCalledOnce();
     expect(mocks.beginAgentDeletionRollback).toHaveBeenCalledOnce();
     expect(mocks.closeOpenClawAgentDatabaseByPath).not.toHaveBeenCalled();

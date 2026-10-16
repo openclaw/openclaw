@@ -5,6 +5,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { ModelAuthStatusResult, ModelCatalogResult } from "../../api/types.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
+import { openPicker } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
@@ -21,6 +22,7 @@ import {
   retryCatalog,
   requestCount,
   waitForProviders,
+  publishRouteData,
 } from "./model-providers-page.test-support.tsx";
 
 afterEach(() => {
@@ -216,14 +218,13 @@ describe("Models page catalog publication", () => {
         expected,
       );
       expect(utilityTrigger.getAttribute("aria-label")).toContain(expected);
+      const requestsBeforeOpen = request.mock.calls.length;
+      await openModelPicker(page, "utility");
+      await drainPageUpdates(page);
       expect(
         utility.querySelector('[role="option"][data-value="__openclaw_automatic_utility__"]')
           ?.textContent,
       ).toContain(expected);
-
-      const requestsBeforeOpen = request.mock.calls.length;
-      await openModelPicker(page, "utility");
-      await drainPageUpdates(page);
       expect(request).toHaveBeenCalledTimes(requestsBeforeOpen);
       page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
       await waitForSolid(() =>
@@ -287,6 +288,7 @@ describe("Models page catalog publication", () => {
     await drainPageUpdates(page);
     expect(discover).not.toHaveBeenCalled();
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(2);
+    await openModelPicker(page);
     expect(page.querySelector('[role="option"][data-value="openai/writer"]')).not.toBeNull();
   });
 
@@ -323,13 +325,12 @@ describe("Models page catalog publication", () => {
     publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
     await waitForSolid(() => expect(publicationStarted).toBe(true));
     await drainPageUpdates(page);
-    expect(page.state.data?.catalogError).toBeNull();
     expect(page.querySelectorAll('.model-providers__catalog-progress[role="alert"]')).toHaveLength(
       1,
     );
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
     publication.resolve(failed);
-    await waitForSolid(() => expect(page.state.data?.catalogError).not.toBeNull());
+    await waitForSolid(() => expect(page.view.props.catalogDiscoveryError).not.toBeNull());
     await drainPageUpdates(page);
 
     const warnings = page.querySelectorAll('.model-providers__catalog-progress[role="alert"]');
@@ -338,6 +339,7 @@ describe("Models page catalog publication", () => {
     expect(page.querySelector(".model-providers__provider-list .provider-usage-error")).toBeNull();
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
     expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
+    await openModelPicker(page);
     expect(
       page.querySelector('[role="option"][data-value="openai/prepared-primary"]'),
     ).not.toBeNull();
@@ -351,7 +353,7 @@ describe("Models page catalog publication", () => {
     expect(discover).toHaveBeenCalledTimes(2);
     expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
     expect(page.querySelector('[role="option"][data-value="openai/recovered"]')).not.toBeNull();
-    expect(page.state.data?.catalogError).toBeNull();
+    expect(page.view.props.catalogDiscoveryError).toBeNull();
   });
 
   it.each(["utility"] as const)(
@@ -400,24 +402,30 @@ describe("Models page catalog publication", () => {
       await waitForSolid(() => expect(displayedCatalog(page)?.models).toEqual(published.models));
       await drainPageUpdates(page);
       expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
+      const selected: (string | null | undefined)[] = [];
       for (const picker of chatModelPickers(page)) {
+        await openPicker(picker);
         expect(
           picker.querySelector('[role="option"][data-value="openai/discovered"]'),
         ).not.toBeNull();
         expect(
           picker.querySelector('[role="option"][data-value="typesafe/jev-latest"]'),
         ).toBeNull();
+        selected.push(
+          picker.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+        );
       }
       const decision = modelPicker(page, "decision");
+      await openPicker(decision);
       expect(
         decision.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
       ).toBe("typesafe/jev-latest");
       expect(decision.querySelector('[role="option"][data-value="openai/discovered"]')).toBeNull();
-      expect(
-        chatModelPickers(page).map((picker) =>
-          picker.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-        ),
-      ).toEqual(["openai/prepared-primary", "openai/prepared-utility", "openai/prepared-fallback"]);
+      expect(selected).toEqual([
+        "openai/prepared-primary",
+        "openai/prepared-utility",
+        "openai/prepared-fallback",
+      ]);
       const laterPublication: ModelCatalogResult = {
         ...published,
         models: [
@@ -475,11 +483,19 @@ describe("Models page catalog publication", () => {
     );
     await openModelPicker(page);
     expect(displayedCatalog(page)?.models).toEqual([]);
-    expect(
-      chatModelPickers(page).map((picker) =>
+    const selected: (string | null | undefined)[] = [];
+    for (const picker of chatModelPickers(page)) {
+      await openPicker(picker);
+      selected.push(
         picker.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-      ),
-    ).toEqual(["openai/prepared-primary", "openai/prepared-utility", "openai/prepared-fallback"]);
+      );
+    }
+    expect(selected).toEqual([
+      "openai/prepared-primary",
+      "openai/prepared-utility",
+      "openai/prepared-fallback",
+    ]);
+    await openModelPicker(page, "decision");
     expect(
       modelPicker(page, "decision")
         .querySelector('[role="option"][data-value="typesafe/jev-latest"]')
@@ -527,7 +543,7 @@ describe("Models page catalog publication", () => {
     await drainPageUpdates(page);
     expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
     expect(page.querySelector('[role="option"][data-value="openai/recovered"]')).not.toBeNull();
-    expect(page.state.data?.catalogError).toBeNull();
+    expect(page.view.props.catalogDiscoveryError).toBeNull();
     expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
@@ -587,8 +603,8 @@ describe("Models page catalog publication", () => {
     await waitForProviders(second, savedModelConfig);
     await retryCatalog(first);
     await retryCatalog(second);
-    expect(first.state.selectedAgentId).toBe("main");
-    expect(second.state.selectedAgentId).toBe("writer");
+    expect(first.view.props.usageAgentId).toBe("main");
+    expect(second.view.props.usageAgentId).toBe("writer");
     publishCatalog(context, "main", preparedCatalog);
     first.routeData = {
       ...createEmptyModelProvidersRouteData(context),
@@ -608,7 +624,9 @@ describe("Models page catalog publication", () => {
     await drainPageUpdates(first);
     await drainPageUpdates(second);
     expect(displayedCatalog(first)?.models).toEqual(preparedCatalog.models);
+    await openModelPicker(second);
     expect(second.querySelector('[role="option"][data-value="openai/shared"]')).not.toBeNull();
+    await openModelPicker(first);
     expect(first.querySelector('[role="option"][data-value="openai/shared"]')).toBeNull();
     expect(first.querySelector(".model-providers__catalog-progress")).toBeNull();
     expect(second.querySelector(".model-providers__catalog-progress")).toBeNull();
@@ -617,7 +635,7 @@ describe("Models page catalog publication", () => {
     const { context, request } = createHarness("main");
     const page = appendPage(context);
     await waitForProviders(page);
-    page.setState("data", {
+    publishRouteData(page, {
       ...EMPTY_MODEL_PROVIDERS_DATA,
       authStatus: createAuthStatus([
         ...["claude-cli", "anthropic"].map((provider) => ({
@@ -634,14 +652,14 @@ describe("Models page catalog publication", () => {
       ]),
       updatedAt: 1,
     });
-    const unrelatedProvider = structuredClone(page.state.data?.authStatus?.providers[2]);
+    const unrelatedProvider = structuredClone(page.view.props.authStatus?.providers[2]);
 
-    page.profileActions.setOrder("anthropic", "anthropic", ["claude:two", "claude:one"]);
+    page.view.props.onProfileOrderChange("anthropic", "anthropic", ["claude:two", "claude:one"]);
 
     await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));
-    await vi.waitFor(() => expect(page.state.profileOrders.anthropic).toBeUndefined());
+    await vi.waitFor(() => expect(page.view.props.profileOrders.anthropic).toBeUndefined());
     expect(
-      page.state.data?.authStatus?.providers.map(({ provider, profileOrder }) => ({
+      page.view.props.authStatus?.providers.map(({ provider, profileOrder }) => ({
         provider,
         profileOrder,
       })),
@@ -650,7 +668,7 @@ describe("Models page catalog publication", () => {
       { provider: "anthropic", profileOrder: ["claude:two", "claude:one"] },
       { provider: "openai", profileOrder: ["openai:one", "openai:two"] },
     ]);
-    expect(page.state.data?.authStatus?.providers[2]).toEqual(unrelatedProvider);
+    expect(page.view.props.authStatus?.providers[2]).toEqual(unrelatedProvider);
   });
 
   it("keeps a saved profile order when an older refresh finishes afterward", async () => {
@@ -674,7 +692,7 @@ describe("Models page catalog publication", () => {
         },
       ],
     };
-    page.setState("data", {
+    publishRouteData(page, {
       ...EMPTY_MODEL_PROVIDERS_DATA,
       authStatus,
       updatedAt: 1,
@@ -693,21 +711,21 @@ describe("Models page catalog publication", () => {
       return originalRequest(method);
     });
 
-    const refreshing = page.refresh("forced");
+    page.view.props.onRefresh();
     await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(1));
-    page.profileActions.setOrder("openai", "openai", ["openai:two", "openai:one"]);
+    page.view.props.onProfileOrderChange("openai", "openai", ["openai:two", "openai:one"]);
     await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));
     await vi.waitFor(() => expect(authStatusCalls).toBe(2));
-    await vi.waitFor(() => expect(page.state.profileOrders.openai).toBeUndefined());
-    expect(page.state.data?.authStatus?.providers[0]?.profileOrder).toEqual([
+    await vi.waitFor(() => expect(page.view.props.profileOrders.openai).toBeUndefined());
+    expect(page.view.props.authStatus?.providers[0]?.profileOrder).toEqual([
       "openai:two",
       "openai:one",
     ]);
 
     staleStatus.resolve(authStatus);
-    await refreshing;
+    await drainPageUpdates(page);
 
-    expect(page.state.data?.authStatus?.providers[0]?.profileOrder).toEqual([
+    expect(page.view.props.authStatus?.providers[0]?.profileOrder).toEqual([
       "openai:two",
       "openai:one",
     ]);

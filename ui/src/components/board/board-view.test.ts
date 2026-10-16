@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import "../../lib/toast-host.ts";
+import "../mcp-app-view-registration.ts";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
 import "./board-view.ts";
@@ -477,9 +479,6 @@ describe("openclaw-board-view", () => {
   });
 
   it("shows stale MCP Apps with retry and delete without breaking the board", async () => {
-    if (!customElements.get("mcp-app-view")) {
-      customElements.define("mcp-app-view", class extends HTMLElement {});
-    }
     const widgetAppView = vi.fn(async () => ({
       status: "stale" as const,
       error: "origin transcript pruned",
@@ -494,6 +493,7 @@ describe("openclaw-board-view", () => {
     const view = await mount({
       snapshot: source,
       callbacks: callbacks({ applyOps, widgetAppView, refreshWidgetAppView }),
+      context: gatewayContext(null),
     });
 
     await vi.waitFor(() =>
@@ -711,6 +711,25 @@ describe("openclaw-board-view", () => {
     await Promise.resolve();
     expect(document.activeElement).toBe(menuButton);
     expect(applyOps).not.toHaveBeenCalled();
+  });
+
+  it("settles a same-turn resize from the pointer-up position", async () => {
+    const applyOps = vi.fn(async () => undefined);
+    const view = await mount({ callbacks: callbacks({ applyOps }) });
+    const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle")!;
+    const pointer = (target: EventTarget, type: string, clientY: number) => {
+      const event = new MouseEvent(type, { button: 0, clientX: 100, clientY, bubbles: true });
+      Object.defineProperty(event, "pointerId", { value: 7 });
+      target.dispatchEvent(event);
+    };
+    pointer(handle, "pointerdown", 100);
+    pointer(window, "pointerup", 100 + 2 * (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP));
+    expect(applyOps).toHaveBeenCalledExactlyOnceWith([
+      { kind: "widget_resize", name: "alpha", sizeW: 6, sizeH: 6, heightMode: "fixed" },
+    ]);
+    await settleCells(view);
+    expect(view.querySelector(".board-widget--dragging")).toBeNull();
+    expect(view.querySelector(".board-announcer")?.textContent).toContain("Resized Alpha status");
   });
 
   it("cancels an in-progress gesture when the board becomes inactive", async () => {

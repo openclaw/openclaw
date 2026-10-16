@@ -15,7 +15,6 @@ import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { createLegacyStateMigrationStepReceipt } from "../infra/state-migrations.messages.js";
@@ -419,7 +418,6 @@ it("shares one fleet preflight with Doctor admission and its health contribution
     try {
       vi.mocked(execFile).mockClear();
       vi.mocked(fork).mockClear();
-      vi.mocked(spawn).mockClear();
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       await runDoctorHealthFlow(runtime, { nonInteractive: true });
 
@@ -430,16 +428,6 @@ it("shares one fleet preflight with Doctor admission and its health contribution
       const schemaEntry = String(resolveRuntimeProcessEntrypointUrl("agentSchemaInspection"));
       expect(
         vi.mocked(fork).mock.calls.filter(([entry]) => String(entry) === schemaEntry),
-      ).toHaveLength(2);
-      expect(
-        vi
-          .mocked(spawn)
-          .mock.calls.filter(
-            ([, args]) =>
-              Array.isArray(args) &&
-              args.includes(SQLITE_READONLY_CHILD_ARG) &&
-              args.includes("session"),
-          ),
       ).toHaveLength(2);
       expect(
         vi

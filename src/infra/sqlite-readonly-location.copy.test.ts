@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -98,28 +99,18 @@ function createWalActivationFixture() {
 }
 
 function afterPrivateCopy(stagingRoot: string, operation: (pathname: string) => void): void {
-  const open = fs.openSync.bind(fs);
-  const close = fs.closeSync.bind(fs);
   const fsync = fs.fsyncSync.bind(fs);
-  const targets = new Map<number, string>();
-  vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
-    const descriptor = open(pathname, flags, mode);
-    const resolved = path.resolve(String(pathname));
-    if (resolved.startsWith(`${stagingRoot}${path.sep}`) && flags === "wx") {
-      targets.set(descriptor, resolved);
-    }
-    return descriptor;
-  });
-  vi.spyOn(fs, "closeSync").mockImplementation((descriptor) => {
-    try {
-      close(descriptor);
-    } finally {
-      targets.delete(descriptor);
-    }
-  });
   vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
     fsync(descriptor);
-    const target = targets.get(descriptor);
+    // Native cloning returns an owned fd without going through fs.openSync.
+    const copied = fs.fstatSync(descriptor, { bigint: true });
+    const target = fs
+      .readdirSync(stagingRoot, { recursive: true })
+      .map((entry) => path.join(stagingRoot, String(entry)))
+      .find((pathname) => {
+        const current = fs.statSync(pathname, { bigint: true });
+        return current.isFile() && current.dev === copied.dev && current.ino === copied.ino;
+      });
     if (target) {
       operation(target);
     }
@@ -166,6 +157,110 @@ function interceptSourceReads(
 }
 
 describe("stable read-only snapshot copies", () => {
+  it.skipIf(process.platform === "win32").each(["-journal", "-wal"])(
+    "preserves an admitted %s alias and retries its retargeted inode",
+    (suffix) => {
+      const fixture = createFixture(Buffer.alloc(0));
+      const source = new (requireNodeSqlite().DatabaseSync)(fixture.sourcePath);
+      source.exec("PRAGMA user_version=7;");
+      source.close();
+      const bytes = fs.readFileSync(fixture.sourcePath);
+      const alias = fixture.sourcePath + suffix;
+      const original = path.join(fixture.sourceRoot, "original-sidecar");
+      const successor = path.join(fixture.sourceRoot, "successor-sidecar");
+      fs.writeFileSync(original, "");
+      fs.writeFileSync(successor, "");
+      fs.symlinkSync(original, alias);
+
+      expectSnapshot(fixture, bytes);
+      const retargeted = afterFirstCopy(() => {
+        fs.unlinkSync(alias);
+        fs.symlinkSync(successor, alias);
+      });
+      const wait = vi.spyOn(Atomics, "wait");
+      expectSnapshot(fixture, bytes);
+      expect(retargeted()).toBe(true);
+      expect(wait).toHaveBeenCalledTimes(1);
+      expect(fs.readlinkSync(alias)).toBe(successor);
+      expect(fs.readFileSync(original)).toEqual(Buffer.alloc(0));
+      expect(fs.readFileSync(successor)).toEqual(Buffer.alloc(0));
+    },
+  );
+
+  it.each(["destination identity", "fsync"])(
+    "does not mask a %s failure when the source also changes",
+    (failure) => {
+      const fixture = createFixture(patternedBytes(4099));
+      const original = `${fixture.sourcePath}.original`;
+      const error =
+        failure === "destination identity"
+          ? new FsSafeError("path-mismatch", "destination identity changed")
+          : Object.assign(new Error("private copy fsync failed"), { code: "EIO" });
+      let injected = false;
+      const fail = (descriptor: number) => {
+        if (!injected && fs.fstatSync(descriptor).size === 4099) {
+          injected = true;
+          fs.renameSync(fixture.sourcePath, original);
+          fs.writeFileSync(fixture.sourcePath, "successor");
+          throw error;
+        }
+      };
+      if (failure === "destination identity") {
+        const chmod = fs.fchmodSync.bind(fs);
+        vi.spyOn(fs, "fchmodSync").mockImplementation((descriptor, mode) => {
+          fail(descriptor);
+          chmod(descriptor, mode);
+        });
+      } else {
+        const fsync = fs.fsyncSync.bind(fs);
+        vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+          fail(descriptor);
+          fsync(descriptor);
+        });
+      }
+      const wait = vi.spyOn(Atomics, "wait");
+      expect(() =>
+        prepareSqliteReadOnlyLocationSyncInProcess(fixture.sourcePath, fixture.stagingRoot),
+      ).toThrow(error);
+      expect(injected).toBe(true);
+      expect(wait).not.toHaveBeenCalled();
+      expect(fs.readFileSync(original)).toEqual(patternedBytes(4099));
+      expect(fs.readFileSync(fixture.sourcePath, "utf8")).toBe("successor");
+      expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
+    },
+  );
+
+  it.each(["replacement", "disappearance"])(
+    "preserves a guarded admission failure after source %s without retrying",
+    (change) => {
+      const bytes = patternedBytes(4099);
+      const fixture = createFixture(bytes);
+      const canonicalSource = fs.realpathSync.native(fixture.sourcePath);
+      const original = `${fixture.sourcePath}.original`;
+      const open = fs.openSync.bind(fs);
+      let injected = false;
+      vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+        // The guarded helper uses native read flags after our named-path pin.
+        if (!injected && String(pathname) === canonicalSource && typeof flags === "number") {
+          injected = true;
+          fs.renameSync(fixture.sourcePath, original);
+          if (change === "replacement") {
+            fs.writeFileSync(fixture.sourcePath, bytes);
+          }
+        }
+        return open(pathname, flags, mode);
+      });
+      const wait = vi.spyOn(Atomics, "wait");
+      expect(() =>
+        prepareSqliteReadOnlyLocationSyncInProcess(fixture.sourcePath, fixture.stagingRoot),
+      ).toThrow(FsSafeError);
+      expect(injected).toBe(true);
+      expect(wait).not.toHaveBeenCalled();
+      expect(fs.readFileSync(original)).toEqual(bytes);
+      expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
+    },
+  );
+
   it("rechecks journal state when an inactive WAL family gains sidecars during schema inspection", async () => {
     const { family, fixture, injected } = createWalActivationFixture();
 

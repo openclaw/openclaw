@@ -4,7 +4,6 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { RouteLocation } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 // mock-isolation: Observe page bindings without registering the real pane tag and starting its domain owners.
@@ -28,17 +27,15 @@ import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts"
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { ChatPageState } from "./chat-page-state.ts";
 import {
   createChatPageNavigationContext,
   settleChatPage,
   createSplitLayout,
-  setLayout,
   setNavigationContext,
   setViewerPresenceContext,
   stubMatchMedia,
 } from "./chat-page.test-support.ts";
-import { ChatPage, ChatPageView } from "./chat-page.ts";
+import { ChatPage } from "./chat-page.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const WORK_SESSION_KEY = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
@@ -52,8 +49,7 @@ const CATALOG_SESSION_KEY = buildCatalogSessionKey(CATALOG_KEY, "research");
 const sessionPath = (sessionKey: string) =>
   sessionNavigationTarget({ face: "chat", sessionKey, fallbackAgentId: "main" }).options.pathname;
 import type { ChatMessageCache } from "./session-message-cache.ts";
-import type { ChatSplitLayout } from "./split-layout-types.ts";
-import { insertPane, setPaneSession, singlePaneLayout } from "./split-layout.ts";
+import { setPaneSession } from "./split-layout.ts";
 
 type RenderedPane = HTMLElement & {
   paneId: string;
@@ -73,14 +69,10 @@ type RenderedPane = HTMLElement & {
   captureNavigationFace?: () => "chat" | "dashboard";
 };
 
-type RenderedDivider = HTMLElement & { orientation: "horizontal" | "vertical" };
+type RenderedDivider = HTMLElement & { orientation: "horizontal" | "vertical"; splitRatio: number };
 
 function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
   return expectDefined(items[index], `${label} ${index}`);
-}
-
-function getLayout(page: ChatPage): ChatSplitLayout | undefined {
-  return (ChatPageState.forHost(page) as unknown as { layout: ChatSplitLayout | undefined }).layout;
 }
 
 function dispatchSessionDrag(
@@ -146,14 +138,14 @@ describe("chat page split layout host", () => {
   });
 
   it.each([false, true])(
-    "derives mobile chrome after direct Solid attachment (onboarding=%s)",
+    "derives mobile chrome for the registered page host (onboarding=%s)",
     async (onboarding) => {
       stubMatchMedia(true);
       const container = document.body.appendChild(document.createElement("div"));
       container.className = onboarding ? "shell shell--onboarding" : "shell";
       const { context } = createChatPageNavigationContext();
       const view = mountSolid(
-        () => createComponent(ChatPageView, { context, data: { sessionKey: "main" } }),
+        () => Object.assign(new ChatPage(), { context, data: { sessionKey: "main" } }),
         { container },
       );
       try {
@@ -254,7 +246,7 @@ describe("chat page split layout host", () => {
     const first = itemAt(page.querySelectorAll<RenderedPane>("openclaw-chat-pane"), 0, "pane");
     first.onOpenSplitView?.();
     await settleChatPage(page);
-    const activePaneId = getLayout(page)?.activePaneId;
+    const activePaneId = loadSettings().chatSplitLayout?.activePaneId;
     expect(activePaneId).not.toBe(first.paneId);
     page.presented = false;
     await settleChatPage(page);
@@ -263,7 +255,7 @@ describe("chat page split layout host", () => {
 
     first.onFocusPane?.(first.paneId);
 
-    expect(getLayout(page)?.activePaneId).toBe(activePaneId);
+    expect(loadSettings().chatSplitLayout?.activePaneId).toBe(activePaneId);
     expect(navigation.replace).not.toHaveBeenCalled();
   });
 
@@ -283,7 +275,9 @@ describe("chat page split layout host", () => {
     });
     window.dispatchEvent(split);
     expect(split.defaultPrevented).toBe(true);
-    expect(getLayout(page)?.columns.at(1)?.panes.at(0)?.sessionKey).toBe(WORK_SESSION_KEY);
+    expect(loadSettings().chatSplitLayout?.columns.at(1)?.panes.at(0)?.sessionKey).toBe(
+      WORK_SESSION_KEY,
+    );
     expect(navigation.replace).toHaveBeenLastCalledWith("chat", {
       pathname: sessionPath(WORK_SESSION_KEY),
       search: "?__openclawSessionFacePreference=1",
@@ -295,7 +289,7 @@ describe("chat page split layout host", () => {
         cancelable: true,
       }),
     );
-    expect(getLayout(page)?.activePaneId).toBe("p1");
+    expect(loadSettings().chatSplitLayout?.activePaneId).toBe("p1");
 
     window.dispatchEvent(
       new CustomEvent(UI_COMMAND_EVENT, {
@@ -306,7 +300,7 @@ describe("chat page split layout host", () => {
         cancelable: true,
       }),
     );
-    expect(getLayout(page)).toBeUndefined();
+    expect(loadSettings().chatSplitLayout).toBeUndefined();
   });
 
   it("leaves UI split commands unhandled on narrow viewports", async () => {
@@ -327,7 +321,7 @@ describe("chat page split layout host", () => {
     window.dispatchEvent(split);
     // Unhandled so the app host falls back to navigating to the session.
     expect(split.defaultPrevented).toBe(false);
-    expect(getLayout(page)).toBeUndefined();
+    expect(loadSettings().chatSplitLayout).toBeUndefined();
   });
 
   it("replaces a cold literal main route after canonical defaults resolve", async () => {
@@ -555,8 +549,8 @@ describe("chat page split layout host", () => {
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     page.data = { sessionKey: "main" };
+    patchSettings({ chatSplitLayout: createSplitLayout("main") });
     document.body.append(page);
-    setLayout(page, createSplitLayout("main"));
     await settleChatPage(page);
 
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
@@ -580,9 +574,11 @@ describe("chat page split layout host", () => {
     );
     await settleChatPage(page);
     expect(page.querySelector("resizable-divider")).toBe(dividers[0]);
-    expect(getLayout(page)?.columnWeights[0]).toBeCloseTo(0.7);
-    expect(getLayout(page)?.columnWeights[1]).toBeCloseTo(0.3);
-    expect(loadSettings().chatSplitLayout).toBeUndefined();
+    expect(itemAt(dividers, 0, "split divider").splitRatio).toBeCloseTo(0.7);
+    const columns = page.querySelectorAll<HTMLElement>(".chat-split-view__column");
+    expect(Number(itemAt(columns, 0, "split column").style.flexGrow)).toBeCloseTo(0.7);
+    expect(Number(itemAt(columns, 1, "split column").style.flexGrow)).toBeCloseTo(0.3);
+    expect(loadSettings().chatSplitLayout?.columnWeights).toEqual([0.5, 0.5]);
 
     itemAt(dividers, 0, "split divider").dispatchEvent(new CustomEvent("resize-end"));
     expect(loadSettings().chatSplitLayout?.columnWeights[0]).toBeCloseTo(0.7);
@@ -600,7 +596,14 @@ describe("chat page split layout host", () => {
     itemAt(cells, 0, "split cell").dispatchEvent(new Event("focusin", { bubbles: true }));
     expect(navigation.replace).toHaveBeenCalledOnce();
 
-    setLayout(page, insertPane(singlePaneLayout("c1", "p1", "main"), "p1", "main", "down"));
+    itemAt(panes, 1, "closing pane").onClosePane?.("p2");
+    await settleChatPage(page);
+    window.dispatchEvent(
+      new CustomEvent(UI_COMMAND_EVENT, {
+        cancelable: true,
+        detail: { command: { kind: "split", direction: "down", sessionKey: "main" } },
+      }),
+    );
     await settleChatPage(page);
     const horizontal = expectDefined(
       page.querySelector<RenderedDivider>("resizable-divider"),
@@ -613,8 +616,11 @@ describe("chat page split layout host", () => {
     await settleChatPage(page);
     expect(page.querySelector("resizable-divider")).toBe(horizontal);
     expect(document.activeElement).toBe(horizontal);
-    expect(getLayout(page)?.columns[0]?.paneWeights[0]).toBeCloseTo(0.65);
-    expect(getLayout(page)?.columns[0]?.paneWeights[1]).toBeCloseTo(0.35);
+    expect(horizontal.splitRatio).toBeCloseTo(0.65);
+    const rows = page.querySelectorAll<HTMLElement>(".chat-split-view__cell");
+    expect(Number(itemAt(rows, 0, "split row").style.flexGrow)).toBeCloseTo(0.65);
+    expect(Number(itemAt(rows, 1, "split row").style.flexGrow)).toBeCloseTo(0.35);
+    expect(loadSettings().chatSplitLayout?.columns[0]?.paneWeights).toEqual([0.5, 0.5]);
   });
 
   it.each(["command", "close"] as const)(
@@ -623,8 +629,10 @@ describe("chat page split layout host", () => {
       const page = new ChatPage();
       const navigation = setNavigationContext(page);
       page.data = { sessionKey: "main", face: "chat" };
+      patchSettings({
+        chatSplitLayout: setPaneSession(createSplitLayout("main"), "p1", WORK_SESSION_KEY),
+      });
       document.body.append(page);
-      setLayout(page, setPaneSession(createSplitLayout("main"), "p1", WORK_SESSION_KEY));
       await settleChatPage(page);
       const [dashboard, chat] = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
       expectDefined(dashboard, "dashboard pane").captureNavigationFace = () => "dashboard";
@@ -662,22 +670,12 @@ describe("chat page split layout host", () => {
     page.data = { sessionKey: "main" };
     document.body.append(page);
     await settleChatPage(page);
-    setLayout(page, {
-      columns: [
-        {
-          id: "c1",
-          panes: [{ id: "p1", sessionKey: "main" }],
-          paneWeights: [1],
-        },
-        {
-          id: "c2",
-          panes: [{ id: "p2", sessionKey: "agent:main:other" }],
-          paneWeights: [1],
-        },
-      ],
-      columnWeights: [0.5, 0.5],
-      activePaneId: "p2",
-    });
+    window.dispatchEvent(
+      new CustomEvent(UI_COMMAND_EVENT, {
+        cancelable: true,
+        detail: { command: { kind: "split", direction: "right", sessionKey: "agent:main:other" } },
+      }),
+    );
     await settleChatPage(page);
     await Promise.resolve();
     expectPresence(["agent:main:main", "agent:main:other"]);
@@ -695,7 +693,7 @@ describe("chat page split layout host", () => {
     await Promise.resolve();
     expectPresence(["agent:main:replacement"]);
 
-    page.requestUpdate();
+    page.navDrawerOpen = true;
     page.remove();
     await settleChatPage(page);
     expectPresence([]);
@@ -717,7 +715,6 @@ describe("chat page split layout host", () => {
     await settleChatPage(page);
     dispatchSessionDrag(stubDropBounds(page), "drop", 200);
 
-    expect(getLayout(page)).toBeUndefined();
     expect(loadSettings().chatSplitLayout).toBeUndefined();
     expect(navigation.navigate).toHaveBeenCalledWith("chat", {
       pathname: sessionPath(WORK_SESSION_KEY),
@@ -735,13 +732,12 @@ describe("chat page split layout host", () => {
     await settleChatPage(page);
     dispatchSessionDrag(stubDropBounds(page), "drop", 105);
 
-    const layout = getLayout(page);
+    const layout = loadSettings().chatSplitLayout;
     expect(layout?.columns.map((column) => column.panes.map((pane) => pane.sessionKey))).toEqual([
       [WORK_SESSION_KEY],
       ["main"],
     ]);
     expect(layout?.activePaneId).toBe("p2");
-    expect(loadSettings().chatSplitLayout).toEqual(layout);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: sessionPath(WORK_SESSION_KEY),
       search: "?__openclawSessionFacePreference=1",
@@ -752,18 +748,17 @@ describe("chat page split layout host", () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
     const navigation = setNavigationContext(page);
+    patchSettings({ chatSplitLayout: createSplitLayout("main") });
     document.body.append(page);
-    setLayout(page, createSplitLayout("main"));
     await settleChatPage(page);
     dispatchSessionDrag(stubDropBounds(page), "drop", 200, 145);
 
-    const layout = getLayout(page);
+    const layout = loadSettings().chatSplitLayout;
     expect(layout?.columns.at(0)?.panes.map((pane) => pane.sessionKey)).toEqual([
       "main",
       WORK_SESSION_KEY,
     ]);
     expect(layout?.activePaneId).toBe("p3");
-    expect(loadSettings().chatSplitLayout).toEqual(layout);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: sessionPath(WORK_SESSION_KEY),
       search: "?__openclawSessionFacePreference=1",
@@ -775,12 +770,12 @@ describe("chat page split layout host", () => {
     page.data = { sessionKey: "main" };
     const layout = createSplitLayout("main");
     const navigation = setNavigationContext(page);
+    patchSettings({ chatSplitLayout: layout });
     document.body.append(page);
-    setLayout(page, layout);
     await settleChatPage(page);
     dispatchSessionDrag(stubDropBounds(page), "drop", 200, 100, "main");
 
-    expect(getLayout(page)).toBe(layout);
+    expect(loadSettings().chatSplitLayout).toEqual(layout);
     expect(navigation.navigate).not.toHaveBeenCalled();
     expect(navigation.replace).not.toHaveBeenCalled();
   });
@@ -836,10 +831,9 @@ describe("chat page split layout host", () => {
       dispatchSessionDrag(target, "dragover", 100);
       frame?.(0);
       dispatchSessionDrag(target, "drop", 100);
-      expect(getLayout(page)?.columns.map((column) => column.panes[0]?.sessionKey)).toEqual([
-        destination === "unbound" ? WORK_SESSION_KEY : "global",
-        "main",
-      ]);
+      expect(
+        loadSettings().chatSplitLayout?.columns.map((column) => column.panes[0]?.sessionKey),
+      ).toEqual([destination === "unbound" ? WORK_SESSION_KEY : "global", "main"]);
       await settleChatPage(page);
       expect(page.querySelector(".chat-split-view__drop-indicator")).toBeNull();
     },
@@ -858,10 +852,9 @@ describe("chat page split layout host", () => {
       const page = new ChatPage();
       page.data = { sessionKey: "main" };
       const navigation = setNavigationContext(page);
-      document.body.append(page);
       const layout = createSplitLayout("main");
-      const state = ChatPageState.forHost(page);
-      setLayout(page, layout);
+      patchSettings({ chatSplitLayout: layout });
+      document.body.append(page);
       await settleChatPage(page);
 
       const pane = stubDropBounds(page);
@@ -883,7 +876,7 @@ describe("chat page split layout host", () => {
       dispatchSessionDrag(unrelatedTarget, "drop", 200);
       await settleChatPage(page);
       expect(page.querySelector(".chat-split-view__drop-indicator")).toBeNull();
-      expect(getLayout(page)).toBe(layout);
+      expect(loadSettings().chatSplitLayout).toEqual(layout);
       expect(navigation.replace).not.toHaveBeenCalled();
 
       dispatchSessionDrag(header, "dragenter", 200);
@@ -915,7 +908,7 @@ describe("chat page split layout host", () => {
       await settleChatPage(page);
       expect(page.querySelector(".chat-split-view__drop-indicator")).toBeNull();
       expect(dispatchSessionDrag(header, "drop", 105).defaultPrevented).toBe(false);
-      expect((state as unknown as { layout: ChatSplitLayout }).layout).toBe(layout);
+      expect(loadSettings().chatSplitLayout).toEqual(layout);
       expect(navigation.navigate).not.toHaveBeenCalled();
       expect(navigation.replace).not.toHaveBeenCalled();
     },

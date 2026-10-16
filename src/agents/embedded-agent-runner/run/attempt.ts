@@ -208,11 +208,6 @@ async function runEmbeddedAttemptOwned(
     prepStages.mark("skills");
 
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
-    if (isRawModelRun && log.isEnabled("debug")) {
-      log.debug(
-        `raw model run enabled: modelRun=${params.modelRun === true} promptMode=${params.promptMode ?? "unset"}`,
-      );
-    }
     const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
     if (activeContextEngine && activeContextEngine.info.id !== "legacy") {
       assertContextEngineHostSupport({
@@ -378,7 +373,6 @@ async function runEmbeddedAttemptOwned(
       );
       const promptToolPolicy = createPromptBuildToolPolicy({
         session: preparedSessionRuntime.agentSession.activeSession,
-        readModelTools: () => preparedSessionRuntime.agentSession.activeSession.agent.state.tools,
         effectiveTools,
         uncompactedEffectiveTools,
         tools: preparedBundleTools.tools,
@@ -420,6 +414,8 @@ async function runEmbeddedAttemptOwned(
         lifecycle: {
           applyPermissionMode: (mode, revokeApprovals) =>
             withRuntimeToolSchemaQuarantine(async (recordQuarantine) => {
+              // Record within the current operator's synchronous authorization scope.
+              params.permissionChange?.recordApplied(mode);
               await preparedToolBase.refreshPermissionMode(mode, revokeApprovals);
               preparedBundleTools.refreshTools(recordQuarantine);
               preparedToolCatalog.refreshTools(recordQuarantine);
@@ -434,7 +430,6 @@ async function runEmbeddedAttemptOwned(
                       })
                   : undefined,
               );
-              params.permissionChange?.recordApplied(mode);
             }),
           readYieldState: () => ({
             yieldAbortSettled,

@@ -46,7 +46,7 @@ import {
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
 import { settleEmbeddedRun } from "./run/run-settlement.js";
-import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
+import { prepareEmbeddedRunRuntime } from "./run/runtime.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./run/settled-turn-finalization.js";
 import {
@@ -109,9 +109,7 @@ export async function runPreparedEmbeddedLoop(
   ({ provider, modelId } = preparedRuntime);
   const {
     model,
-    attemptAuthProfileStore,
     profileCandidates,
-    profileFailureStore,
     pluginHarnessOwnsAuthBootstrap,
     attemptedThinking,
     getApiKeyInfo,
@@ -514,7 +512,7 @@ export async function runPreparedEmbeddedLoop(
             providerOwner: preparedRuntime.snapshot().providerRuntimeHandle.plugin,
             model: model.id,
             activeErrorContext,
-            authProfileStore: attemptAuthProfileStore,
+            authProfileStore: preparedRuntime.attemptAuthProfileStore,
             authProfileId: lastProfileId,
             outerContextTokenMeta,
             usageAccumulator,
@@ -542,10 +540,7 @@ export async function runPreparedEmbeddedLoop(
         finalizationOutcome: settledTurnFinalizationOutcome,
       } = finalizedTerminal;
       lastRunPromptUsage = finalizedTerminal.lastRunPromptUsage;
-      if (
-        settledTurnFinalizationOutcome === "answered" ||
-        settledTurnFinalizationOutcome === "completed-empty"
-      ) {
+      if (settledTurnFinalizationOutcome === "answered") {
         assistantProfileFailureReason = null;
       }
 
@@ -589,8 +584,8 @@ export async function runPreparedEmbeddedLoop(
         ...(effectiveModel.baseUrl ? { modelTransportBaseUrl: effectiveModel.baseUrl } : {}),
         requestTransportOverrides,
         authProfileId: lastProfileId,
-        profileFailureStore,
-        attemptAuthProfileStore,
+        profileFailureStore: preparedRuntime.profileFailureStore,
+        attemptAuthProfileStore: preparedRuntime.attemptAuthProfileStore,
         apiKeyInfo: getApiKeyInfo(),
         agentHarnessId: agentHarness.id,
         settledTurnFinalizationOutcome,
@@ -623,19 +618,23 @@ export async function runPreparedEmbeddedLoop(
     // must restore terminal suppression before asynchronous settlement begins.
     contextRecoveryState.restoreTimeoutRecoveryAbandonment();
     permissionChanges.close();
-    await settleEmbeddedRun({
-      runInput: admittedRunInput,
-      runtime: preparedRuntime,
-      compaction: {
-        state: contextRecoveryState,
-        session: sessionPromptState,
-        originalTarget: originalCompactionTarget,
-        durable: durableCompactionAccounting,
-        authority: accountingAuthority,
-      },
-      ownedContextEngineLease: ownsContextEngineLogicalTurnLease
-        ? contextEngineLogicalTurnLease
-        : undefined,
-    });
+    try {
+      await settleEmbeddedRun({
+        runInput: admittedRunInput,
+        runtime: preparedRuntime,
+        compaction: {
+          state: contextRecoveryState,
+          session: sessionPromptState,
+          originalTarget: originalCompactionTarget,
+          durable: durableCompactionAccounting,
+          authority: accountingAuthority,
+        },
+        ownedContextEngineLease: ownsContextEngineLogicalTurnLease
+          ? contextEngineLogicalTurnLease
+          : undefined,
+      });
+    } finally {
+      await preparedRuntime.releaseTransport();
+    }
   }
 }

@@ -4,8 +4,6 @@ import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
-import { icons } from "../../../components/icons.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -22,6 +20,7 @@ import {
 } from "../chat-pane.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import type { HeaderMenuAction } from "./chat-header-session-menu.ts";
+import { PaneHeaderView } from "./chat-pane-header.tsx";
 import "./chat-header-session-menu.ts";
 import type { ChatSessionSharingProps } from "./chat-session-sharing.ts";
 import { openNativeSessionMenu } from "./native-session-menu.runtime.ts";
@@ -339,8 +338,9 @@ describe("chat header session menu", () => {
       containers.push(container);
       mountSolid(
         () =>
-          createComponent(LitContent, {
-            value: pane.renderPaneHeader(
+          createComponent(
+            PaneHeaderView,
+            pane.renderPaneHeader(
               createPaneHeaderWorkspaceFixture(state),
               session,
               false,
@@ -348,7 +348,7 @@ describe("chat header session menu", () => {
               false,
               null,
             ),
-          }),
+          ),
         { container },
       );
       const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
@@ -399,8 +399,9 @@ describe("chat header session menu", () => {
     containers.push(container);
     mountSolid(
       () =>
-        createComponent(LitContent, {
-          value: pane.renderPaneHeader(
+        createComponent(
+          PaneHeaderView,
+          pane.renderPaneHeader(
             createPaneHeaderWorkspaceFixture(state),
             session,
             false,
@@ -408,7 +409,7 @@ describe("chat header session menu", () => {
             false,
             null,
           ),
-        }),
+        ),
       { container },
     );
     const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
@@ -534,13 +535,13 @@ describe("chat header session menu", () => {
         {
           id: "plugin/export",
           label: "Export transcript",
-          icon: icons.plug,
+          icon: "plug",
           onActivate: exportTranscript,
         },
         {
           id: "stop-cloud-worker",
           label: "Stop cloud worker",
-          icon: icons.stop,
+          icon: "stop",
           variant: "danger",
           disabled: true,
           description: "Worker is restarting",

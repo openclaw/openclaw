@@ -92,19 +92,16 @@ export function renderControl(
     thinkingDefault: "medium",
   },
 ) {
-  const container = document.createElement("div");
-  mountSolid(
-    () =>
-      createComponent(NewSessionModelControlView, {
-        control,
-        options: {
-          ...(agent ? { agent } : {}),
-          agentId,
-          context,
-          sending: false,
-        },
-      }),
-    { container },
+  const { container } = mountSolid(() =>
+    createComponent(NewSessionModelControlView, {
+      control,
+      options: {
+        ...(agent ? { agent } : {}),
+        agentId,
+        context,
+        sending: false,
+      },
+    }),
   );
   return container;
 }

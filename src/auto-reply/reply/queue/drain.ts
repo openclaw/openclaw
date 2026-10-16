@@ -15,8 +15,8 @@ import {
 import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
+  isGatewayRestartDraining,
   runWithGatewayDetachedWorkContinuation,
-  waitForGatewayRestartFenceSettlement,
 } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
@@ -65,14 +65,12 @@ import {
   trimSummaryElisionsToCap,
 } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
-import { FollowupRunDeferredError, isFollowupRunAborted, type FollowupRun } from "./types.js";
-
-type InternalFollowupRun = FollowupRun & {
-  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
-  currentTurnImagesPrepared?: true;
-  /** Admission-owned layout; fact indexes are relative to this run's media array. */
-  mediaImageLayout?: MediaImageLayout;
-};
+import {
+  FollowupRunDeferredError,
+  isFollowupRunAborted,
+  type FollowupRun,
+  type InternalFollowupRun,
+} from "./types.js";
 
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
@@ -227,7 +225,7 @@ function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string)
 }
 
 function collectQueuedPromptMedia(
-  items: FollowupRun[],
+  items: InternalFollowupRun[],
 ): Pick<FollowupRun, "images" | "imageOrder" | "media"> &
   Pick<InternalFollowupRun, "currentTurnImagesPrepared" | "mediaImageLayout"> {
   const images: NonNullable<FollowupRun["images"]> = [];
@@ -238,12 +236,11 @@ function collectQueuedPromptMedia(
   const currentTurnImagesPrepared = items.every(hasPreparedCurrentTurnImages);
   for (const item of items) {
     const mediaOffset = media.length;
-    const internalItem = item as InternalFollowupRun;
     images.push(...(item.images ?? []));
     imageOrder.push(...(item.imageOrder ?? []));
     if (currentTurnImagesPrepared) {
       const itemSlots: MediaImageLayout["slots"] =
-        internalItem.mediaImageLayout?.slots ?? item.imageOrder?.map((kind) => ({ kind })) ?? [];
+        item.mediaImageLayout?.slots ?? item.imageOrder?.map((kind) => ({ kind })) ?? [];
       mediaImageSlots.push(
         ...itemSlots.map((slot) =>
           slot.factIndex === undefined
@@ -252,7 +249,7 @@ function collectQueuedPromptMedia(
         ),
       );
       suppressedFactIndexes.push(
-        ...(internalItem.mediaImageLayout?.suppressedFactIndexes ?? []).map(
+        ...(item.mediaImageLayout?.suppressedFactIndexes ?? []).map(
           (factIndex) => factIndex + mediaOffset,
         ),
       );
@@ -343,7 +340,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
     );
     const timestamp = messages.reduce<number | undefined>((latest, message) => {
       const candidate = message?.timestamp;
-      return typeof candidate === "number" && (latest === undefined || candidate > latest)
+      return candidate !== undefined && (latest === undefined || candidate > latest)
         ? candidate
         : latest;
     }, undefined);
@@ -405,14 +402,62 @@ function requiresIndividualCollectDrain(item: FollowupRun): boolean {
   );
 }
 
+type AggregateCancellation = {
+  signal?: AbortSignal;
+  admit: () => void;
+  dispose: () => void;
+};
+
+function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCancellation {
+  const ownerSignal = resolveAggregateOwner(items)?.abortSignal;
+  const signals = new Set(items.flatMap((item) => item.abortSignal ?? []));
+  if (signals.size === 0 || (signals.size === 1 && ownerSignal)) {
+    return {
+      signal: ownerSignal,
+      admit: () => undefined,
+      dispose: () => undefined,
+    };
+  }
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  for (const signal of signals) {
+    if (signal.aborted) {
+      abort();
+    } else {
+      signal.addEventListener("abort", abort, { once: true });
+    }
+  }
+  const disposeSignal = (signal: AbortSignal) => {
+    signal.removeEventListener("abort", abort);
+    signals.delete(signal);
+  };
+  return {
+    signal: controller.signal,
+    admit: () => {
+      // Before admission every source remains independently cancellable. Once
+      // atomic, only the latest source owns aggregate client cancellation.
+      // Original operator-grant revocation stays bound separately to the run.
+      for (const signal of signals) {
+        if (signal !== ownerSignal) {
+          disposeSignal(signal);
+        }
+      }
+    },
+    dispose: () => {
+      for (const signal of signals) {
+        disposeSignal(signal);
+      }
+    },
+  };
+}
+
 function createAggregateDelivery(
   items: readonly FollowupRun[],
   consume: () => void,
   complete: () => void,
 ) {
   assertSingleAdmissionOwner(items);
-  const owner = resolveAggregateOwner(items);
-  const signals = items.flatMap((item) => item.abortSignal ?? []);
+  const cancellation = createAggregateCancellation(items);
   let admitted = false;
   const needsAdmission =
     items.length > 1 || items.some((item) => hasExclusiveTurnAdmission(item.turnAdoptionLifecycle));
@@ -434,6 +479,8 @@ function createAggregateDelivery(
           // Durable aggregate acceptance consumes every source even if one ingress ack fails.
           consume();
           await Promise.all(items.map((item) => admitFollowupRunLifecycle(item)));
+          cancellation.admit();
+          const owner = resolveAggregateOwner(items);
           for (const item of items) {
             if (item !== owner) {
               retireFollowupRunCancellation(item);
@@ -448,12 +495,12 @@ function createAggregateDelivery(
       }
     : undefined;
   return {
-    // Cancellation stays connected for the entire batch; no per-source ownership handoff.
-    abortSignal: signals.length > 0 ? AbortSignal.any(signals) : undefined,
+    abortSignal: cancellation.signal,
     turnAdoptionLifecycle: lifecycle,
     get admitted() {
       return admitted;
     },
+    dispose: cancellation.dispose,
   };
 }
 
@@ -551,6 +598,7 @@ async function runQueueSummaryDelivery(
     }
     return true;
   } finally {
+    aggregate.dispose();
     for (const source of delivery.sources) {
       queue.inFlight.delete(source);
       queue.activeSummarySources.delete(source);
@@ -719,6 +767,8 @@ async function runSyntheticOverflowSummary(params: {
     personalBootstrapEligible: runtimeMetadata.personalBootstrapEligible,
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,
+    forceRestartSafeTools: runtimeMetadata.forceRestartSafeTools,
+    forceCodeModeTools: runtimeMetadata.forceCodeModeTools,
     queuedFollowupReplyDisposition: runtimeMetadata.queuedFollowupReplyDisposition,
     runObservers: runtimeMetadata.runObservers,
     deliveryCorrelations: runtimeMetadata.deliveryCorrelations,
@@ -840,7 +890,7 @@ export function scheduleFollowupDrain(
   const drainQueuedFollowups = async (): Promise<void> => {
     drainStarted = true;
     let waitingForSteer = false;
-    let databaseAdmissionClosed = false;
+    let waitingForFreshKick = false;
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
@@ -970,6 +1020,7 @@ export function scheduleFollowupDrain(
             for (const item of activeGroupItems) {
               queue.inFlight.delete(item);
             }
+            aggregate.dispose();
           }
           if (!aggregate.admitted) {
             const canceledSources = activeGroupItems.filter(isFollowupRunAborted);
@@ -993,17 +1044,14 @@ export function scheduleFollowupDrain(
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
-      // A closing or retired database cannot serve this drain. Keep the input
-      // for a fresh owner signal or restart recovery, without a retry loop.
-      databaseAdmissionClosed = err instanceof AgentDatabaseExecutionAdmissionClosedError;
-      if (!(err instanceof FollowupRunDeferredError)) {
-        if (isGatewayRestartDrainError(err)) {
-          // A reversible signal fence may reopen. One-way abort synchronously
-          // retires the queue above; rollback leaves it here for normal retry.
-          await waitForGatewayRestartFenceSettlement();
-        } else {
-          defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
-        }
+      const restartDrainError = isGatewayRestartDrainError(err);
+      // Closed admission waits for a normal queue kick or restart recovery.
+      // A rolled-back restart does not need a separate automatic wakeup.
+      waitingForFreshKick =
+        err instanceof AgentDatabaseExecutionAdmissionClosedError ||
+        (restartDrainError && isGatewayRestartDraining());
+      if (!(err instanceof FollowupRunDeferredError) && !restartDrainError) {
+        defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
       }
     } finally {
       // A recovery or explicit clear can replace this generation while its
@@ -1019,19 +1067,16 @@ export function scheduleFollowupDrain(
         } else if (!hasPendingQueueWork) {
           FOLLOWUP_QUEUES.delete(key);
           clearFollowupDrainCallback(key);
-        } else if (!databaseAdmissionClosed || queue.rescheduleRequested) {
+        } else if (!waitingForFreshKick || queue.rescheduleRequested) {
           scheduleFollowupDrain(key, effectiveRunFollowup);
         }
       }
     }
   };
   // Queue drains outlive their enqueue request across debounce and retries.
-  // Give the detached chain its own root so inherited request admission cannot go stale.
-  // Queued turns re-admit on the generation current at drain time: the detached
-  // drain runs outside any ambient prepared-generation scope, so a parked turn
-  // never inherits the predecessor run's replaced generation. The drain also owns
-  // a fresh async work scope: drained turns run tracked agent work that must keep
-  // working after the triggering request's scope has closed.
+  // The detached root and fresh async scope keep tracked work alive after
+  // the triggering request's scope closes, and join it at ordinary shutdown.
+  // Queued turns re-admit against the current generation, not their predecessor's.
   void runWithGatewayDetachedWorkContinuation(
     () => runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
     "session:followup-drain",

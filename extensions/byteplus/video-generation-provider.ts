@@ -186,10 +186,10 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       if (duration !== undefined) {
         body.duration = duration;
       }
-      if (typeof req.audio === "boolean") {
+      if (req.audio !== undefined) {
         body.generate_audio = req.audio;
       }
-      if (typeof req.watermark === "boolean") {
+      if (req.watermark !== undefined) {
         body.watermark = req.watermark;
       }
 

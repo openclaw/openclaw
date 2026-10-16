@@ -34,7 +34,6 @@ import {
 } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type {
   ReplyAgentTurnContext,
@@ -226,9 +225,11 @@ export async function resolveTerminalReplyDelivery(params: {
     minimumAssistantMessageIndex,
     (error) => logVerbose(`reply delivery observation failed; retaining custody: ${String(error)}`),
   );
-  if (sourceDelivery === "delivered" || params.sourceReplyDeliveryState !== undefined) {
+  if (sourceDelivery === "delivered") {
     return sourceDelivery;
   }
+  // Runtime facts can miss host-owned block/direct sends. Their terminal
+  // receipts still confirm delivery or retain custody before recovery.
   let pending =
     sourceDelivery === "pending" ||
     blockReplyPipeline?.hasRetryBlockedTerminalDelivery?.(minimumAssistantMessageIndex) === true;
@@ -358,13 +359,13 @@ export async function handleReplyAgentRunError(
   } = context;
 
   if (isReplyOperationSuperseded(replyOperation)) {
-    return { text: SILENT_REPLY_TOKEN };
+    return {};
   }
   if (
     replyOperation.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_by_user"
   ) {
-    return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+    return returnWithQueuedFollowupDrain({});
   }
   if (
     replyOperation.result?.kind === "aborted" &&
@@ -375,7 +376,7 @@ export async function handleReplyAgentRunError(
       isReplyOperationSuperseded(replyOperation) ||
       resolveReplyOperationAbortReason(replyOperation) === "user"
     ) {
-      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+      return returnWithQueuedFollowupDrain({});
     }
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({

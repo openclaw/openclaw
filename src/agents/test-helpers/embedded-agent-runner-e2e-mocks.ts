@@ -180,6 +180,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     runAgentHarnessAttempt: (params: EmbeddedRunAttemptParams) =>
       options.runEmbeddedAttempt(params),
   }));
+  // mock-isolation: harness fixtures supply runtime plans without loading live plugin or auth catalogs.
   vi.doMock("../runtime-plan/build.js", () => ({
     buildAgentRuntimePlan: vi.fn(
       (params: {
@@ -226,7 +227,6 @@ export function installEmbeddedRunnerFastRunE2eMocks(
           resolvePolicy: vi.fn(() => undefined),
         },
         delivery: {
-          isSilentPayload: vi.fn(() => false),
           resolveFollowupRoute: vi.fn(() => undefined),
         },
         outcome: {
@@ -334,6 +334,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
   vi.doMock("../../plugins/provider-external-auth.js", () => ({
     resolveExternalAuthProfilesWithPlugins: vi.fn(() => []),
   }));
+  // mock-isolation: runner fixtures exercise core preparation without loading installed plugins.
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     applyProviderResolvedTransportWithPlugin: vi.fn(() => undefined),
     augmentModelCatalogWithProviderPlugins: vi.fn(async () => []),
@@ -343,6 +344,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     normalizeProviderTransportWithPlugin: vi.fn(() => undefined),
     prepareProviderDynamicModel: vi.fn(async () => undefined),
     prepareProviderRuntimeAuth: options.prepareProviderRuntimeAuth ?? vi.fn(async () => undefined),
+    prepareProviderSyntheticAuthWithPlugin: vi.fn(async () => undefined),
     resolveProviderAuthProfileId: vi.fn(() => undefined),
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
     resolveProviderDeprecatedAuthProfileIds: vi.fn(() => []),

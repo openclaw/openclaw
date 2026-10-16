@@ -1,16 +1,11 @@
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
-import { icons } from "../../components/icons.ts";
-import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
+import type { IconName } from "../../components/solid/icon.tsx";
+import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import {
-  emptyLegacyContent,
-  solidContent,
-  type LegacyTemplateResult,
-} from "../../lit/solid-content.tsx";
+import { emptyLegacyContent, solidContent } from "../../lit/solid-content.tsx";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
-import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import type { SidebarPanelDefinitionParams } from "./chat-pane-embedded-types.ts";
 import {
   BrowserPanel,
@@ -28,6 +23,7 @@ import {
   WorkspacePanel,
 } from "./chat-pane-embedded-view.tsx";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
+import { EmbeddedPluginPanel } from "./chat-pane-plugin-panel.tsx";
 import { getSessionWorkspace } from "./components/chat-session-workspace-state.ts";
 import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
@@ -52,7 +48,7 @@ export function sidebarPanelDefinitions(
   };
   const definePanel = (
     slot: Exclude<SidebarSlotId, `plugin:${string}` | "link-reader">,
-    icon: LegacyTemplateResult,
+    icon: IconName,
     content: SidebarPanelDefinition["content"],
     actions?: Pick<SidebarPanelDefinition, "headerAction" | "headerLink">,
   ): SidebarPanelDefinition => {
@@ -79,18 +75,19 @@ export function sidebarPanelDefinitions(
             : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
       ),
       content,
-      loading: renderPanelLoadingSkeleton(
-        textKey === "conversation" || textKey === "companion"
-          ? "chat"
-          : textKey === "subagents" || textKey === "processes"
-            ? "file-list"
-            : textKey === "portal"
-              ? "browser"
-              : textKey === "dashboard"
-                ? "board"
-                : textKey,
-        t(textKey === "desktop" ? "desktop.connecting" : "common.loading"),
-      ),
+      loading: solidContent(PanelLoadingSkeleton, {
+        variant:
+          textKey === "conversation" || textKey === "companion"
+            ? "chat"
+            : textKey === "subagents" || textKey === "processes"
+              ? "file-list"
+              : textKey === "portal"
+                ? "browser"
+                : textKey === "dashboard"
+                  ? "board"
+                  : textKey,
+        label: t(textKey === "desktop" ? "desktop.connecting" : "common.loading"),
+      }),
       empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
       ...actions,
       shortcut: SIDEBAR_PANEL_SHORTCUTS[slot]?.combo,
@@ -125,14 +122,14 @@ export function sidebarPanelDefinitions(
     }
   }
   return [
-    definePanel("conversation", icons.messageSquare, emptyLegacyContent),
-    definePanel("subagents", icons.bot, params ? solidContent(SubagentsPanel, params) : null),
-    definePanel("processes", icons.terminal, params ? solidContent(ProcessesPanel, params) : null),
+    definePanel("conversation", "messageSquare", emptyLegacyContent),
+    definePanel("subagents", "bot", params ? solidContent(SubagentsPanel, params) : null),
+    definePanel("processes", "terminal", params ? solidContent(ProcessesPanel, params) : null),
     definePanel(
       "detail",
-      icons.diff,
+      "diff",
       detailContent?.kind === "loading"
-        ? renderPanelLoadingSkeleton("review", t("common.loading"))
+        ? solidContent(PanelLoadingSkeleton, { variant: "review", label: t("common.loading") })
         : detailContent?.kind === "unavailable"
           ? solidContent(UnavailableDetail, { message: detailContent.message })
           : detailContent && params && detailTabPresent
@@ -142,46 +139,48 @@ export function sidebarPanelDefinitions(
               })
             : null,
     ),
-    definePanel("terminal", icons.terminal, terminal),
-    definePanel("browser", icons.globe, browser),
+    definePanel("terminal", "terminal", terminal),
+    definePanel("browser", "globe", browser),
     {
       slot: "link-reader",
       label: t("linkReader.title"),
-      icon: icons.link,
+      icon: "link",
       available: Boolean(params?.linkReaders?.length),
       content: params ? solidContent(LinkReaderPanel, params) : null,
-      loading: renderPanelLoadingSkeleton("files", t("linkReader.loadingPreview")),
+      loading: solidContent(PanelLoadingSkeleton, {
+        variant: "files",
+        label: t("linkReader.loadingPreview"),
+      }),
       empty: { description: t("linkReader.urlPlaceholder") },
     },
-    definePanel("portal", icons.globe, portal),
-    definePanel("workspace", icons.fileText, workspaceContent),
-    definePanel("companion", icons.messageSquarePlus, companion, {
+    definePanel("portal", "globe", portal),
+    definePanel("workspace", "fileText", workspaceContent),
+    definePanel("companion", "messageSquarePlus", companion, {
       headerAction: params ? solidContent(ClearCompanion, params) : undefined,
     }),
-    definePanel("desktop", icons.monitor, desktop, {
+    definePanel("desktop", "monitor", desktop, {
       headerLink: panelExternalLink(params?.desktopFocusHref, t("desktop.openWindow")),
     }),
-    definePanel("discussion", icons.messageSquare, discussion, {
+    definePanel("discussion", "messageSquare", discussion, {
       headerLink: panelExternalLink(
         params?.discussionOpenUrl,
         t("chat.sessionDiscussion.openExternal"),
       ),
     }),
-    definePanel("dashboard", icons.layoutDashboard, params?.dashboard ?? null),
+    definePanel("dashboard", "layoutDashboard", params?.dashboard ?? null),
     ...[...pluginPanels].map(([slot, entry]): SidebarPanelDefinition => ({
       slot,
       label: entry?.value.label ?? slot.slice("plugin:".length),
-      icon: icons.plug,
+      icon: "plug",
       available: entry !== undefined,
       content: entry
-        ? renderPluginContribution(
-            "panels",
-            entry.key,
-            { sessionKey: state?.sessionKey ?? "", agentId: params?.agentId ?? undefined },
-            params?.isPluginPanelPresented(slot),
-          )
+        ? solidContent(EmbeddedPluginPanel, {
+            contributionKey: entry.key,
+            props: { sessionKey: state?.sessionKey ?? "", agentId: params?.agentId ?? undefined },
+            presentation: params?.isPluginPanelPresented(slot) ?? true,
+          })
         : null,
-      loading: renderPanelLoadingSkeleton("files", t("common.loading")),
+      loading: solidContent(PanelLoadingSkeleton, { variant: "files", label: t("common.loading") }),
       empty: { description: entry?.value.label ?? t("pluginTabs.unavailableSubtitle") },
     })),
   ];

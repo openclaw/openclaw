@@ -102,6 +102,27 @@ it("keeps immutable creator, mutable owner and participants distinct without cla
     false,
   );
 });
+it("shows participant controls only while the session has participants", async () => {
+  const element = await mount();
+  expect(element.querySelector(".chat-details__meta-actions")).toBeNull();
+  element.props = {
+    ...element.props!,
+    selectedSession: {
+      ...element.props!.selectedSession!,
+      participants: [{ identity: { type: "profile", id: "participant" }, label: "Contributor" }],
+    },
+  };
+  await element.updateComplete;
+  expect(element.querySelector(".chat-details__participants")?.textContent).toContain(
+    "1 participants",
+  );
+  element.props = {
+    ...element.props!,
+    selectedSession: { ...element.props!.selectedSession!, participantCount: 0 },
+  };
+  await element.updateComplete;
+  expect(element.querySelector(".chat-details__meta-actions")).toBeNull();
+});
 it("uses the current PR renderer and preserves CI session identity and branch dismissal", async () => {
   const dismiss = vi.fn();
   const element = await mount({

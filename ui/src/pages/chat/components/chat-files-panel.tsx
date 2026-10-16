@@ -1,5 +1,4 @@
-import { For, Show, createEffect, createMemo, onCleanup } from "solid-js";
-import { icons } from "../../../components/icons.ts";
+import { For, Show, createEffect, createMemo, onCleanup, refresh } from "solid-js";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
@@ -9,13 +8,8 @@ import { PanelTabStrip } from "../../../components/panel-tab-strip-solid.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import {
-  defineSolidBridge,
-  LitContent,
-  type SolidBridgeElement,
-} from "../../../lit/solid-bridge.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
-import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -43,58 +37,59 @@ defineSolidBridge<Props, Methods>(
   "openclaw-chat-files-panel",
   (props, host) => {
     const contentId = `chat-files-content-${++filesPanelSequence}`;
+    let completeCommit = () => {};
     const appUnmount = new McpAppUnmountGate<Props>(
-      { requestUpdate: () => lifecycle.invalidate() },
+      { requestUpdate: () => void refresh(rendered) },
       () =>
         new Promise<void>((resolve) => {
-          lifecycle.afterCommit((complete) => {
-            resolve();
-            complete();
-          }, resolve);
+          completeCommit = resolve;
         }),
     );
-    const lifecycle = createSolidRenderLifecycle({
-      host,
-      presented: () => true,
-      read: () => {
-        const snapshot = {
-          previews: props.previews,
-          activeId: props.activeId,
-          tabsInHeader: props.tabsInHeader,
-          browser: props.browser,
-          renderDetail: props.renderDetail,
-          onSelect: props.onSelect,
-          onClose: props.onClose,
-        };
-        const appKeys = new Set(
-          snapshot.previews
-            .filter((entry) => entry.content.kind === "mcp-app")
-            .map((entry) => entry.id),
-        );
-        return appUnmount.render(
-          JSON.stringify([...appKeys]),
-          () => snapshot,
-          () =>
-            [...host.querySelectorAll<HTMLElement>("[data-app-tab-id]")].filter(
-              (element) => !appKeys.has(element.dataset.appTabId ?? ""),
-            ),
-        );
-      },
+    const rendered = createMemo(() => {
+      const snapshot = {
+        previews: props.previews,
+        activeId: props.activeId,
+        tabsInHeader: props.tabsInHeader,
+        browser: props.browser,
+        renderDetail: props.renderDetail,
+        onSelect: props.onSelect,
+        onClose: props.onClose,
+      };
+      const appKeys = new Set(
+        snapshot.previews
+          .filter((entry) => entry.content.kind === "mcp-app")
+          .map((entry) => entry.id),
+      );
+      return appUnmount.render(
+        JSON.stringify([...appKeys]),
+        () => snapshot,
+        () =>
+          [...host.querySelectorAll<HTMLElement>("[data-app-tab-id]")].filter(
+            (element) => !appKeys.has(element.dataset.appTabId ?? ""),
+          ),
+      );
     });
-    const rendered = lifecycle.snapshot;
+    createEffect(rendered, () => completeCommit());
+    // Disposal also settles the gate; it restarts only views that remain connected.
+    onCleanup(() => completeCommit());
     const hostedTabs = (): PanelHostedTab[] => {
       const tabs = props.previews.map(({ id, label, content }) => ({
         id,
         label,
         title: content.kind === "file" ? content.path : label,
         icon:
-          content.kind === "mcp-app"
-            ? icons.puzzle
-            : solidContent(AttachmentFileIcon, { filename: label, mode: "preview-with-favicon" }),
+          content.kind === "mcp-app" ? (
+            <Icon name="puzzle" />
+          ) : (
+            <AttachmentFileIcon filename={label} mode="preview-with-favicon" />
+          ),
         className: content.kind === "loading" ? "is-connecting" : undefined,
       }));
       return props.activeId === null && tabs.length
-        ? [{ id: "browse", label: t("chat.sidePanel.files"), icon: icons.folder }, ...tabs]
+        ? [
+            { id: "browse", label: t("chat.sidePanel.files"), icon: <Icon name="folder" /> },
+            ...tabs,
+          ]
         : tabs;
     };
     const activeHostedTabId = () => props.activeId ?? (props.previews.length ? "browse" : null);
@@ -103,7 +98,7 @@ defineSolidBridge<Props, Methods>(
         id: tab.id,
         label: tab.label,
         title: tab.title,
-        icon: <LitContent render={() => tab.icon} />,
+        icon: tab.icon,
         className: tab.className,
         domId: `${contentId}-tab-${tab.id}`,
         closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
@@ -169,7 +164,9 @@ defineSolidBridge<Props, Methods>(
         </Show>
         <div id={contentId} class="chat-files-panel__content">
           <div class="chat-files-panel__page" hidden={rendered().activeId !== null}>
-            <LitContent render={() => rendered().browser} />
+            <span class="lit-content" style={{ display: "contents" }}>
+              <LitContent value={rendered().browser} />
+            </span>
           </div>
           <For each={rendered().previews} keyed={(preview) => preview.id}>
             {(preview) => {
@@ -199,7 +196,9 @@ defineSolidBridge<Props, Methods>(
                       })()}
                     </div>
                   ) : (
-                    <LitContent render={renderDetail} />
+                    <span class="lit-content" style={{ display: "contents" }}>
+                      <LitContent value={renderDetail()} />
+                    </span>
                   )}
                 </div>
               );

@@ -21,11 +21,12 @@ import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
+import { ContentPresentation } from "../lib/solid/presentation.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import { renderLegacyTemplate, SolidContentPresentation } from "../lit/solid-content.tsx";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
-import type { ViewKind } from "./control-ui-view.ts";
+
+type ViewKind = "pages" | "panels" | "accessories" | "widgets" | "replacements";
 
 type ViewRegistration = ControlUiRegistration<{ mount: ControlUiView<unknown> }>;
 type PluginViewProps = {
@@ -33,11 +34,8 @@ type PluginViewProps = {
   contributionKey: string;
   surface: ControlUiSurface;
   props: unknown;
-  defaultView: unknown;
   mountDefaultView: ((target: HTMLElement) => () => void) | undefined;
   mountReplacementCompanion: ((target: HTMLElement) => () => void) | undefined;
-  replacementCompanion: unknown;
-  defaultHost: object | undefined;
   presented: boolean;
 };
 type PluginViewElement = SolidBridgeElement<
@@ -76,38 +74,18 @@ export function observePluginProperties<P extends object>(
   });
 }
 
-function MountedContent(props: {
-  value: unknown;
-  host?: object;
-  mount?: (target: HTMLElement) => () => void;
-}) {
-  const owner = getOwner();
+function MountedContent(props: { mount?: (target: HTMLElement) => () => void }) {
   let container!: HTMLDivElement;
   createEffect(
-    () => ({ mount: props.mount, value: props.mount ? undefined : props.value, host: props.host }),
-    ({ mount, value, host }) => {
-      if (mount) {
-        return mount(container);
-      }
-      runWithOwner(owner, () => renderLegacyTemplate(value, container, host));
-      return undefined;
-    },
+    () => props.mount,
+    (mount) => mount?.(container),
   );
-  onCleanup(() => renderLegacyTemplate(undefined, container));
-  return (
-    <div
-      style={{ display: "contents" }}
-      ref={(element) => {
-        container = element;
-      }}
-    />
-  );
+  return <div style={{ display: "contents" }} ref={(element) => (container = element)} />;
 }
 
 const views = new WeakMap<HTMLElement, { focus(options?: FocusOptions): void }>();
 
 function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
-  const owner = getOwner();
   const context = useOptionalApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const notify = () => setRevision((value) => value + 1);
@@ -244,13 +222,6 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
         presented: host.presented,
       };
       handle?.update?.(viewContext);
-      if (!host.mountDefaultView) {
-        for (const target of defaultContainers.keys()) {
-          runWithOwner(owner, () =>
-            renderLegacyTemplate(host.defaultView, target, host.defaultHost ?? host),
-          );
-        }
-      }
     } catch (failure) {
       fail(failure);
     }
@@ -264,13 +235,11 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
         props.surface,
         props.props,
         props.presented,
-        props.defaultView,
         props.mountDefaultView,
-        props.defaultHost,
       ];
     },
     () => {
-      // The Lit caller may already have restored its nodes before this queued effect runs.
+      // A retired host can remain queued until its owner commits the replacement.
       if (!host.isConnected) {
         return;
       }
@@ -314,15 +283,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
             throw new Error("This plugin UI view has ended.");
           }
           defaultContainers.get(target)?.();
-          let dispose: () => void;
-          if (host.mountDefaultView) {
-            dispose = host.mountDefaultView(target);
-          } else {
-            runWithOwner(owner, () =>
-              renderLegacyTemplate(host.defaultView, target, host.defaultHost ?? host),
-            );
-            dispose = () => renderLegacyTemplate(undefined, target);
-          }
+          const dispose = host.mountDefaultView?.(target) ?? (() => {});
           defaultContainers.set(target, dispose);
           notify();
           return () => {
@@ -399,20 +360,10 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       </Show>
       <Show
         when={state().registration && !state().error}
-        fallback={
-          <MountedContent
-            value={props.defaultView}
-            host={props.defaultHost ?? host}
-            mount={props.mountDefaultView}
-          />
-        }
+        fallback={<MountedContent mount={props.mountDefaultView} />}
       >
         <Show when={!state().delegated}>
-          <MountedContent
-            value={props.replacementCompanion}
-            host={props.defaultHost ?? host}
-            mount={props.mountReplacementCompanion}
-          />
+          <MountedContent mount={props.mountReplacementCompanion} />
         </Show>
         <Show when={state().mountGeneration + 1} keyed>
           {(_generation) => <ViewRoot />}
@@ -431,11 +382,8 @@ export const PluginView = defineSolidBridge<
     contributionKey: { default: "", attribute: false },
     surface: { default: "workspace", attribute: false },
     props: { default: {}, attribute: false },
-    defaultView: { default: undefined, attribute: false },
     mountDefaultView: { default: undefined, attribute: false },
     mountReplacementCompanion: { default: undefined, attribute: false },
-    replacementCompanion: { default: undefined, attribute: false },
-    defaultHost: { default: undefined, attribute: false },
     presented: { default: true, type: Boolean },
   },
   methods: { focus: (host, options) => views.get(host)?.focus(options) },
@@ -448,6 +396,7 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
   renderDefault: () => JSX.Element;
   renderCompanion?: () => JSX.Element;
   presented?: boolean;
+  enabled?: boolean;
 }) {
   const owner = getOwner();
   const context = useOptionalApplication();
@@ -456,10 +405,11 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
     subscribe: (source, publish) => source?.subscribe(publish) ?? (() => {}),
     equality: "revision",
   });
-  const contentPresented = useContext(SolidContentPresentation);
+  const contentPresented = useContext(ContentPresentation);
   const presented = () => (props.presented ?? true) && contentPresented();
   const selected = createParkedProjection(
-    () => runtime.read()?.selectedReplacement(props.surface),
+    () =>
+      props.enabled === false ? undefined : runtime.read()?.selectedReplacement(props.surface),
     presented,
   );
   const mount = (target: HTMLElement, view: () => JSX.Element) =>
@@ -487,8 +437,9 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
   const mountDefault = (target: HTMLElement) => mount(target, DefaultView);
   const mountCompanion = (target: HTMLElement) => mount(target, () => props.renderCompanion?.());
   return (
-    <Show when={selected()} fallback={<DefaultView />}>
+    <Show when={selected()} fallback={props.renderDefault()}>
       <PluginView
+        data-plugin-composer={props.surface === "composer" ? "" : undefined}
         surface={props.surface}
         props={props.props}
         presented={presented()}

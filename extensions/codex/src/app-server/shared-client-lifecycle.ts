@@ -71,7 +71,6 @@ export type SharedCodexAppServerClientEntry = {
   key: string;
   client?: CodexAppServerClient;
   startup?: SharedCodexAppServerClientStartup;
-  startupTransport?: Promise<CodexAppServerClient>;
   activeLeases: number;
   // Anonymous releases cannot consume explicit native-subagent retains.
   anonymousLeases: number;
@@ -80,7 +79,6 @@ export type SharedCodexAppServerClientEntry = {
   closeError?: Error;
   idleTimer?: ReturnType<typeof setTimeout>;
   hasOwnedThreads?: () => boolean;
-  startupAbort?: AbortController;
   onStartedClientCallbacks: Set<(client: CodexAppServerClient) => void>;
   acquireBoundary?: CodexAppServerAcquireBoundary;
   acquireBoundaryObservers?: Set<(boundary: CodexAppServerAcquireBoundary) => void>;
@@ -323,34 +321,6 @@ function closeRetiredSharedClientEntry(entry: SharedCodexAppServerClientEntry): 
   return true;
 }
 
-export function retirePendingSharedClientEntryIfUnclaimed(
-  entry: SharedCodexAppServerClientEntry,
-): void {
-  if (entry.activeLeases > 0 || entry.pendingAcquires > 0) {
-    return;
-  }
-  entry.startupAbort?.abort(new Error("Codex app-server startup was abandoned"));
-  entry.closeWhenIdle = true;
-  const state = getSharedCodexAppServerClientState();
-  if (state.clients.get(entry.key) === entry) {
-    state.clients.delete(entry.key);
-  }
-  closeRetiredSharedClientEntry(entry);
-}
-
-/** Failed final claimants join physical cleanup; healthy peers keep their startup. */
-export async function waitForUnclaimedSharedClientStartup(
-  entry: SharedCodexAppServerClientEntry,
-): Promise<void> {
-  if (!entry.startupTransport || entry.activeLeases > 0 || entry.pendingAcquires > 0) {
-    return;
-  }
-  await entry.startupTransport.then(
-    (client) => client.closeAndWait(),
-    () => {},
-  );
-}
-
 /** Exit registration also observes transports that have already terminated. */
 export function waitForCodexAppServerClientExit(client: CodexAppServerClient): Promise<void> {
   const metadata = getSharedCodexAppServerClientState().startMetadata.get(client);
@@ -432,6 +402,7 @@ export function refreshSharedClientIdleRetirement(client: CodexAppServerClient):
 function scheduleSharedClientIdleRetirement(entry: SharedCodexAppServerClientEntry): void {
   cancelSharedClientIdleRetirement(entry);
   if (
+    entry.acquireBoundary !== "ready" ||
     entry.activeLeases > 0 ||
     entry.pendingAcquires > 0 ||
     !entry.client ||

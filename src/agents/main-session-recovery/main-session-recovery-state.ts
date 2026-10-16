@@ -1,7 +1,5 @@
-import {
-  PENDING_FINAL_DELIVERY_CLEAR_PATCH,
-  sanitizePendingFinalDeliveryText,
-} from "../../auto-reply/reply/pending-final-delivery-state.js";
+import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
+import { PENDING_FINAL_DELIVERY_CLEAR_PATCH } from "../../auto-reply/reply/pending-final-delivery-state.js";
 import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
@@ -41,7 +39,7 @@ export type {
 } from "./main-session-recovery-types.js";
 
 const MAIN_RESTART_RECOVERY_REMEDIATION_HINT =
-  "inspect the failed main session and use /new or reset to start a replacement session";
+  "inspect the failed main session and use Resume in WebChat; in other channels, use /new or /reset to start a replacement session";
 
 function updateRecoveryState(
   entry: SessionEntry,
@@ -531,9 +529,9 @@ export function transitionMainSessionRecovery(
         lifecycleGeneration: command.lifecycleGeneration,
       });
       if (entry.pendingFinalDelivery?.kind === "replayable") {
-        const pendingText = sanitizePendingFinalDeliveryText(entry.pendingFinalDelivery.text);
-        if (pendingText) {
-          entry.pendingFinalDelivery = { ...entry.pendingFinalDelivery, text: pendingText };
+        const text = stripInternalMetadataForDisplay(entry.pendingFinalDelivery.text);
+        if (text.trim()) {
+          entry.pendingFinalDelivery = { ...entry.pendingFinalDelivery, text };
         } else {
           Object.assign(entry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         }

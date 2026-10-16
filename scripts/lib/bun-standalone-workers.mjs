@@ -2,8 +2,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-/** Keep launcher ownership in the runtime manifest; discover additional built plugin workers. */
-export function discoverStandaloneWorkers({ runtimeRoot, moduleEntries, runtimeEntrypoints }) {
+/** Keep launcher ownership in the runtime manifest; discover additional module workers. */
+export function discoverStandaloneWorkers({
+  runtimeRoot,
+  moduleEntries,
+  runtimeEntrypoints,
+  parse,
+}) {
   const entries = new Set(
     Object.values(runtimeEntrypoints).map(({ distWorkerPath }) => `dist/${distWorkerPath}`),
   );
@@ -14,6 +19,18 @@ export function discoverStandaloneWorkers({ runtimeRoot, moduleEntries, runtimeE
       entry === "dist/telegram-ingress-worker.runtime.js"
     ) {
       entries.add(entry);
+    } else if (/\.[cm]?js$/.test(entry) && !entry.split(/[\\/]/).includes("node_modules")) {
+      const contents = fs.readFileSync(path.join(runtimeRoot, entry), "utf8");
+      if (
+        contents.includes("import.meta") &&
+        /\b(?:Worker|createCpuTrackedWorker|createRetainedNativeWorker)\b/.test(contents) &&
+        hasSelfTargetedWorker(
+          contents,
+          parse(contents, { ecmaVersion: "latest", sourceType: "module" }),
+        )
+      ) {
+        entries.add(entry);
+      }
     }
   }
   const workers = [...entries].toSorted((left, right) =>
@@ -322,6 +339,35 @@ function workerBindings(contents, ast) {
       return false;
     },
   };
+}
+
+function hasSelfTargetedWorker(contents, ast) {
+  const { isWorkerCall } = workerBindings(contents, ast);
+  let found = false;
+  visitNodes(ast, (node) => {
+    if (!["CallExpression", "NewExpression"].includes(node.type) || !isWorkerCall(node)) {
+      return;
+    }
+    let target = node.arguments[0];
+    if (
+      target?.type === "NewExpression" &&
+      target.callee.name === "URL" &&
+      target.arguments.length === 1
+    ) {
+      target = target.arguments[0];
+    }
+    if (
+      target?.type === "MemberExpression" &&
+      !target.computed &&
+      target.property.name === "url" &&
+      target.object.type === "MetaProperty" &&
+      target.object.meta.name === "import" &&
+      target.object.property.name === "meta"
+    ) {
+      found = true;
+    }
+  });
+  return found;
 }
 
 function inlineWorkerPrograms(contents, ast, bindings) {

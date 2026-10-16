@@ -16,6 +16,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
+  captureDatabaseArtifact,
   exportPostgresBackup,
   restorePostgresBackup,
   fingerprintPostgresDatabase,
@@ -176,8 +177,19 @@ async function preparePostgresRestoreInWorker(params: {
   return await withDatabasePortConnection(params.config, async (client) => {
     const { loadDatabasePortDescriptor } =
       await import("../infra/database-engine/port-provider-descriptor.js");
-    const descriptor = await loadDatabasePortDescriptor(manifest.source.owner, params.config);
-    return restorePostgresBackup({ ...params, client, descriptor, manifest });
+    const descriptor = await loadDatabasePortDescriptor(
+      manifest.source.owner,
+      params.config,
+      manifest.source.schemaVersion,
+    );
+    const { namespace } = await restorePostgresBackup({ ...params, client, descriptor, manifest });
+    const { resolveDatabaseEngineInput } = await import("../infra/database-engine/config.js");
+    const input = await resolveDatabaseEngineInput(params.config);
+    params.assertCurrent();
+    await descriptor.admit?.(params.anchorPath, input);
+    // Owner admission can change anchor journal mode; bind the final bytes for publication.
+    const { sha256, size: sizeBytes } = await captureDatabaseArtifact(params.anchorPath);
+    return { namespace, sha256, sizeBytes };
   });
 }
 

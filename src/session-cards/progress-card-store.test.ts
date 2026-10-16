@@ -10,7 +10,10 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL } from "../state/openclaw-agent-progress-card-schema.js";
+import {
+  AGENT_PROGRESS_CARD_SCHEMA_SQL,
+  OPENCLAW_AGENT_BOARD_SCHEMA_SQL,
+} from "../state/openclaw-agent-schema-history.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import {
   clearSessionProgressCardForReset,
@@ -175,7 +178,12 @@ describe("session progress card store", () => {
   it("treats a missing lazy table as no card without creating it", () => {
     db.close();
     db = new DatabaseSync(":memory:");
-    db.exec(AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL);
+    db.exec(
+      OPENCLAW_AGENT_SCHEMA_SQL.replace(OPENCLAW_AGENT_BOARD_SCHEMA_SQL, "").replace(
+        AGENT_PROGRESS_CARD_SCHEMA_SQL,
+        "",
+      ),
+    );
 
     expect(clearSessionProgressCardForReset(db, SESSION_KEY)).toBe(false);
     expect(readSessionProgressCard(db, SESSION_KEY)).toBeNull();

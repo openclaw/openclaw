@@ -8,7 +8,6 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
-import type { SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -34,7 +33,7 @@ import {
   captureChatCommandComposerRecovery,
   settleChatCommandComposer,
 } from "./chat-send-composer.ts";
-import { ChatStateController } from "./chat-state-controller.ts";
+import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
 import { ChatAttachmentInputs } from "./components/chat-attachment-inputs.tsx";
@@ -106,13 +105,10 @@ describe("cross-region Home composer ownership", () => {
     current.chatMessage = "";
     current.chatQueue = [];
     const persistence = new ChatComposerPersistence(() => current);
-    const host: SolidControllerHost = {
-      addController: () => {},
-      removeController: () => {},
+    const controller = createChatState<ChatPageHost>({
       requestUpdate: () => {},
       updateComplete: Promise.resolve(true),
-    };
-    const controller = new ChatStateController<ChatPageHost>(host);
+    });
     current.canRestoreComposer = () => persistence.active;
     const notify = vi.fn(() => persistence.persistChangedState());
     current.requestUpdate = notify;
@@ -140,13 +136,14 @@ describe("cross-region Home composer ownership", () => {
       handoff.dispose();
       unsubscribe();
       persistence.stop();
-      controller.attachmentReads.abortReads();
+      controller.dispose();
       discardStateStagedAttachments(current);
     });
     return {
       current,
       persistence,
       controller,
+      dispose: controller.dispose,
       notify,
       view,
       handoff,
@@ -230,7 +227,7 @@ describe("cross-region Home composer ownership", () => {
       dock.view.presented = true;
       dock.handoff.claim();
       page.handoff.dispose();
-      page.controller.hostDisconnected();
+      page.dispose();
       expect(dock.controller.attachmentReads.pendingReads).toBe(1);
       page.notify.mockClear();
       dock.notify.mockClear();
@@ -574,6 +571,7 @@ describe("staged chat attachment pane handoff", () => {
     const host = Object.assign(document.createElement("div"), { requestUpdate: () => {} });
     host.append(...panes);
     return new ChatPageRetainedSessions(host, {
+      invalidate: () => host.requestUpdate(),
       context: () => context,
       presented: () => true,
       routeHref: () => window.location.href,

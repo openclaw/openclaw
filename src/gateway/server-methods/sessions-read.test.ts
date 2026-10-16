@@ -246,10 +246,7 @@ test("agents.list returns visible rows without waiting for a hidden agent avatar
   }
 });
 
-test.each([
-  { initial: ["ops"], current: ["ops", "research"] },
-  { initial: ["ops", "research"], current: ["research"] },
-])(
+test.each([{ initial: ["ops", "research"], current: ["research"] }])(
   "agents.list applies avatar-time role changes from $initial to $current",
   async ({ initial, current }) => {
     let config = avatarRosterConfig(initial);

@@ -21,6 +21,10 @@ tool policy and workspace permissions.
 Workboard tracks work on one Gateway. See the [Workboard guide](https://docs.openclaw.ai/plugins/workboard)
 for card workflows, worker dispatch, and sharing boundaries.
 
+Sessions board placement repair runs in the service background. Sessions board
+operations wait for repair; unrelated Gateway connections can proceed. Repair
+failures appear in plugin service health, and shutdown joins outstanding repair.
+
 ## Browser development
 
 The browser UI uses Solid 2 and bundles its own renderer through the plugin

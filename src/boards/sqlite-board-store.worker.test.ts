@@ -28,6 +28,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { BoardValidationError } from "./board-layout.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
@@ -185,7 +186,7 @@ it("executes Board mutations off the host and publishes each committed change on
       facts.push(change);
     }
   });
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  clearNodeSqliteKyselyCacheForDatabase(requireNativeSqliteDatabase(database.db));
   const host = observeHostDataSql();
   const expectPublication = (revision: number) => {
     expect(changes).toEqual([

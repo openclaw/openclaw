@@ -4,6 +4,7 @@ import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
+import { assertHomogeneousDatabaseEngines } from "../infra/database-engine/registry.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -44,6 +45,7 @@ async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
   if (!discoverySnapshot) {
     return;
   }
+  assertHomogeneousDatabaseEngines(discoverySnapshot.config, "restore");
   const agentRoots = await resolveBackupAgentRoots(discoverySnapshot.config);
   for (const { sourcePath } of agentRoots) {
     if (isPathInside(sourcePath, canonicalTarget)) {

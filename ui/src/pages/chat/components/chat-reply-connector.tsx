@@ -1,9 +1,9 @@
 import { createEffect, onCleanup, onSettled, useContext } from "solid-js";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 
 /** One observer per connector; updates redraw without replacing the SVG. */
 export function ReplyConnector() {
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   let element: SVGSVGElement;
   let observer: ResizeObserver | undefined;
   let disposed = false;

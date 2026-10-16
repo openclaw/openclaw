@@ -47,8 +47,7 @@ export async function buildReplyDiagnosticsPayload(params: {
     preflightCompactionApplied,
   } = params;
   const { runResult, providerUsed, modelUsed, contextTokensUsed, promptTokens } = accounting;
-  // Inherited preferences can change during execution; explicit turn choices
-  // still win over the generation-fenced session supplied by completion.
+  // Explicit turn choices win over the terminal owner's session preferences.
   const verboseEnabled =
     (normalizeVerboseLevel(
       followupRun.run.verboseLevelOverride ??
@@ -60,7 +59,7 @@ export async function buildReplyDiagnosticsPayload(params: {
   const traceLevel = followupRun.run.traceLevelOverride ?? activeSessionEntry?.traceLevel;
   const traceEnabled = traceAuthorized && (traceLevel === "on" || traceLevel === "raw");
   const thinkingClamp = runResult.meta?.requestShaping?.thinkingClamp;
-  if (!verboseEnabled && !traceEnabled && !thinkingClamp) {
+  if (!verboseEnabled && !traceEnabled) {
     return undefined;
   }
   const lines = [
@@ -84,9 +83,9 @@ export async function buildReplyDiagnosticsPayload(params: {
       authMode:
         runResult.meta?.requestShaping?.authMode ??
         (cfg?.models?.providers && providerUsed in cfg.models.providers
-          ? ((await resolveModelAuthModeAsync(providerUsed, cfg, undefined, {
+          ? await resolveModelAuthModeAsync(providerUsed, cfg, undefined, {
               workspaceDir: followupRun.run.workspaceDir,
-            })) ?? undefined)
+            })
           : undefined),
       thinking:
         runResult.meta?.requestShaping?.thinking ??

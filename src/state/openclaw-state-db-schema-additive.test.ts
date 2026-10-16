@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { ensureMemoryChunkProvenance } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
 import { ensureMemoryEntryOriginsSchema } from "../../packages/memory-host-sdk/src/memory-entry-origins.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { useSqliteSchemaTestFixture } from "../infra/sqlite-schema-facts.test-support.js";
 import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
@@ -20,6 +20,11 @@ import { ensureSessionGoalOperationsSchema } from "./openclaw-agent-goal-operati
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
+  assertAgentDeletionJournalAvailable,
+  ensureAgentDatabaseLeaseSchema,
+  ensureSecretStoreSchema,
+} from "./openclaw-state-db-schema-additive.js";
+import {
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
@@ -28,25 +33,6 @@ import {
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
-
-const trailingSchema = vi.hoisted(() => ({
-  tableName: "future_lazy_state",
-  sql: "CREATE TABLE IF NOT EXISTS future_lazy_state (id TEXT PRIMARY KEY) STRICT;",
-}));
-
-vi.mock("./openclaw-state-schema.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./openclaw-state-schema.js")>();
-  return {
-    ...actual,
-    OPENCLAW_STATE_SCHEMA_SQL: `${actual.OPENCLAW_STATE_SCHEMA_SQL}\n${trailingSchema.sql}\n`,
-  };
-});
-
-import {
-  assertAgentDeletionJournalAvailable,
-  ensureAgentDatabaseLeaseSchema,
-  ensureSecretStoreSchema,
-} from "./openclaw-state-db-schema-additive.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -100,13 +86,13 @@ it.each([
   }
 });
 
-it("keeps secret-store first use from installing later additive schema", () => {
+it("installs only the secret-store table and index on first use", () => {
   const database = new DatabaseSync(":memory:");
   try {
     ensureSecretStoreSchema(database);
     const names = database
-      .prepare("SELECT name FROM sqlite_schema WHERE name IN (?, ?, ?) ORDER BY name")
-      .all("secret_store_entries", "secret_store_entries_live_idx", trailingSchema.tableName)
+      .prepare("SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name")
+      .all()
       .map((row) => row.name);
 
     expect(names).toEqual(["secret_store_entries", "secret_store_entries_live_idx"]);

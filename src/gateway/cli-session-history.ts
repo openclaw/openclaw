@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 // Claude's native transcript augments display history, never canonical model context.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -11,6 +10,7 @@ import type {
 } from "../config/sessions/session-history-types.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import {
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
@@ -43,7 +43,7 @@ import type {
 } from "./session-transcript-read.types.js";
 
 export type CliHistoryRevision = {
-  database: DatabaseSync;
+  database: EngineConnection;
   generation?: string;
   indexedSeq: number;
   leafEventId: string | null;
@@ -54,7 +54,7 @@ export type CliHistoryReaders = SessionTranscriptPageReader & {
 };
 type Readers = CliHistoryReaders;
 type CachedIndex = {
-  database?: DatabaseSync;
+  database?: EngineConnection;
   key: string;
   index: CliHistoryIndex;
   release: () => void;
@@ -234,7 +234,9 @@ export async function prepareCliSessionHistoryReader(
           readWindow,
           displaySource,
           leafEventId,
-          release: registerNodeSqliteDisposeCallback(revision?.database, () => retire(identity)),
+          release: registerNodeSqliteDisposeCallback(sqlPublicationAnchor(revision.database), () =>
+            retire(identity),
+          ),
         };
         indexes.set(identity, cached);
         while (indexes.size > MAX_INDEXES) {

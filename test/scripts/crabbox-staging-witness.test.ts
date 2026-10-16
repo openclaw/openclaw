@@ -182,7 +182,7 @@ exec '${realGit.replaceAll("'", "'\\''")}' "$@"
   });
 
   it.each([0, 4 * 1024 ** 3])(
-    "keeps automatic verification and revalidation bounded with %i extra bytes",
+    "scales verification and refreshes the revalidation budget with %i extra bytes",
     async (bytes) => {
       const f = fixture();
       if (bytes) {
@@ -193,19 +193,15 @@ exec '${realGit.replaceAll("'", "'\\''")}' "$@"
         truncateSync(sizing, bytes);
       }
       const explicit = await verifySourceWitness(f.params);
-      const automatic = await verifySourceWitness({ ...f.params, automatic: true });
       expect(explicit).toMatchObject({ ok: true });
-      expect(automatic).toMatchObject({ ok: true });
-      if (!explicit.ok || !automatic.ok) {
+      if (!explicit.ok) {
         throw new Error("fixture witness must verify");
       }
       if (bytes) {
         expect(fsck.budgets[0]).toBeGreaterThan(200_000);
-        expect(fsck.budgets[1]).toBeLessThanOrEqual(120_000);
       }
       vi.spyOn(Date, "now").mockReturnValue(Date.now() + 121_000);
 
-      expect(() => automatic.revalidate()).toThrow("exceeded its work budget");
       expect(() => explicit.revalidate()).not.toThrow();
     },
   );

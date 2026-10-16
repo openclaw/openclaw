@@ -15,6 +15,10 @@ import {
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  requireMemorySearchCapability,
+  requireMemorySearchDatabase,
+} from "../memory-search-database.js";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import {
   MEMORY_INDEX_STATE_ID,
@@ -230,6 +234,7 @@ export function openMemoryDatabaseReadOnlyAtPath(
   allowExtension: boolean,
   agentId: string,
 ) {
+  requireMemorySearchCapability();
   const opened = openOpenClawAgentDatabaseReadOnly(
     { agentId, path: dbPath },
     { allowExtension, lifecycle: "agent" },
@@ -241,11 +246,18 @@ export function openMemoryDatabaseReadOnlyAtPath(
     throw new Error(`Memory index database schema is missing: ${dbPath}`);
   }
   const { database } = opened;
-  if (!tableExists(database.db, "main", MEMORY_INDEX_STATE_TABLE)) {
+  let db: DatabaseSync;
+  try {
+    db = requireMemorySearchDatabase(database.db);
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+  if (!tableExists(db, "main", MEMORY_INDEX_STATE_TABLE)) {
     database.close();
     return openUninitializedMemoryDatabase(allowExtension);
   }
-  return { db: database.db, release: database.close, hasIndex: true };
+  return { db, release: database.close, hasIndex: true };
 }
 
 export function closeMemoryDatabase(db: DatabaseSync): void {

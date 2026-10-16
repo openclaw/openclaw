@@ -1,21 +1,18 @@
 /* @vitest-environment jsdom */
-import { ContextEvent } from "@lit/context";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
-import { html, render as renderLit } from "lit";
-import { createRoot, createSignal, flush } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../components/login-gate.ts";
 import { i18n } from "../i18n/index.ts";
 import { storeDeviceAuthToken } from "../lib/nodes/index.ts";
-import { solidContent } from "../lit/solid-content.tsx";
+import { requestApplicationContext } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createLegacyFocusEscape } from "./app-root-lit.ts";
 import { mountOpenClawApp } from "./app-root.tsx";
 import type { BootRecord } from "./boot-record.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
-import { applicationContext } from "./context.ts";
 import { loadSettings, persistSessionToken } from "./settings.ts";
 
 // mock-isolation: root admission tests isolate shell rendering while exercising the real bootstrap owner.
@@ -294,14 +291,10 @@ describe("warm boot app root", () => {
     container.append(nested);
     let disposeNested: (() => void) | undefined;
     try {
-      // A legacy descendant can mount Solid while Gateway admission is queued.
-      createRoot((disposeRoot) => {
-        disposeNested = disposeRoot;
-        renderLit(html`${solidContent(() => document.createElement("span"), {})}`, nested);
-      });
+      // A descendant can mount another Solid root while Gateway admission is queued.
+      disposeNested = mountSolid(() => <span />, { container: nested }).unmount;
       await settleRootContent();
     } finally {
-      renderLit(null, nested);
       disposeNested?.();
       nested.remove();
     }
@@ -327,20 +320,20 @@ describe("warm boot app root", () => {
     expect(loginGate(second.container).props.showGatewaySecret).toBe(false);
   });
 
-  it("provides the same ApplicationContext to Lit descendants and retires it on disposal", async () => {
+  it("provides the same ApplicationContext to native descendants and retires it on disposal", async () => {
     const { container } = await createWarmSurface();
     await vi.dynamicImportSettled();
     await settleRootContent();
     const descendant = document.createElement("span");
     container.querySelector("openclaw-app-shell")!.append(descendant);
     const received = vi.fn();
-    descendant.dispatchEvent(new ContextEvent(applicationContext, descendant, received, true));
+    requestApplicationContext(descendant, received, true);
     expect(received.mock.calls[0]?.[0]).toBe(runtime!.context);
     dispose?.();
     dispose = undefined;
     received.mockClear();
     container.append(descendant);
-    descendant.dispatchEvent(new ContextEvent(applicationContext, descendant, received, true));
+    requestApplicationContext(descendant, received, true);
     expect(received).not.toHaveBeenCalled();
   });
 

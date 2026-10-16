@@ -53,7 +53,7 @@ function toolUseStopWithoutCall(overrides: Parameters<typeof makeEmbeddedRunnerA
 describe("terminal resolution for a tool-use stop without a tool call", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("retries once before surfacing the incomplete-turn warning", async () => {
+  it("retries once before returning a fallback-eligible failure without a candidate notice", async () => {
     const turn = toolUseStopWithoutCall();
     // Delivery hides the markup; the original assistant still drives incomplete-call detection.
     expect(turn.payloadsWithToolMedia).toEqual([expect.objectContaining({ text: "exec" })]);
@@ -75,9 +75,67 @@ describe("terminal resolution for a tool-use stop without a tool call", () => {
     if (exhausted.action !== "complete") {
       return;
     }
-    expect(exhausted.result.meta.error).toMatchObject({ kind: "incomplete_turn" });
-    expect(exhausted.result.payloads).toEqual([
-      { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
-    ]);
+    expect(exhausted.result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      fallbackSafe: true,
+    });
+    expect(exhausted.result.payloads).toBeUndefined();
+    expect(exhausted.result.meta.terminalReply).toEqual({ disposition: "empty" });
   });
+
+  it.each(["toolUse", "length"] as const)(
+    "preserves recovery or failure for %s-stopped NO_REPLY without a tool call",
+    async (stopReason) => {
+      const assistant = buildEmbeddedRunnerAssistant({
+        stopReason,
+        content: [{ type: "text", text: "NO_REPLY" }],
+      });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      });
+      const input = makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        runParams: {
+          messageChannel: "telegram",
+          sessionKey: "agent:main:telegram:direct:user",
+        },
+        payloadsWithToolMedia: buildEmbeddedRunPayloads({
+          assistantTexts: attempt.assistantTexts,
+          lastAssistant: assistant,
+          currentAssistant: assistant,
+          sessionKey: "agent:main:telegram:direct:user",
+        }),
+      });
+
+      let resolved = await resolveEmbeddedRunTerminal(input);
+      if (stopReason === "toolUse") {
+        // Unlike a structured call or pending work, this malformed stop ran nothing.
+        expect(resolved).toEqual({ action: "retry" });
+        expect(input.sessionPromptState.activateInternalPrompt).toHaveBeenCalledOnce();
+        resolved = await resolveEmbeddedRunTerminal(input);
+      }
+
+      expect(resolved.action).toBe("complete");
+      if (resolved.action !== "complete") {
+        throw new Error("expected an incomplete-turn result");
+      }
+      expect(resolved.result.meta.error).toMatchObject({ kind: "incomplete_turn" });
+      expect(resolved.result.meta.stopReason).toBe("error");
+      expect(resolved.result.sourceReplyDeliveryState).toBe("missing");
+      if (stopReason === "toolUse") {
+        expect(resolved.result.meta.terminalReply).toEqual({ disposition: "empty" });
+        expect(resolved.result.payloads).toBeUndefined();
+      } else {
+        expect(resolved.result.meta.terminalReply?.disposition).toBe("visible");
+        expect(resolved.result.payloads).toEqual([
+          expect.objectContaining({ text: expect.any(String), isError: true }),
+        ]);
+        expect(resolved.result.payloads?.[0]?.text).not.toBe("NO_REPLY");
+      }
+    },
+  );
 });

@@ -63,7 +63,7 @@ export function PanelTypeOption(props: { type: SidebarPanelDefinition; slotted?:
         class="side-panel-type-option__icon"
         aria-hidden="true"
       >
-        <LitContent value={props.type.icon} />
+        <Icon name={props.type.icon} />
       </span>
       <span class="side-panel-type-option__label">{props.type.label}</span>{" "}
       <Show when={props.type.shortcut}>
@@ -147,7 +147,7 @@ function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {
       : null;
   };
   return (
-    <Show when={favicon()} fallback={<LitContent value={props.tab.icon} />}>
+    <Show when={favicon()} fallback={props.tab.icon}>
       {(src) => <img class="tabstrip-tab__favicon" src={src()} alt="" />}
     </Show>
   );
@@ -204,10 +204,11 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
         }));
       }
       const type = sidebarPanelType(props.panelDefinitions, panel.slot);
-      const tab =
+      const conversation =
         panel.slot === "conversation" && props.conversationTab?.label
           ? props.conversationTab
-          : type;
+          : undefined;
+      const tab = conversation ?? type;
       return [
         {
           id: panel.id,
@@ -229,7 +230,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
             panel.slot === "dashboard" || canRestore
               ? () => props.callbacks?.togglePanelExpanded(panel.id)
               : undefined,
-          icon: <LitContent value={tab.icon} />,
+          icon: conversation ? <LitContent value={conversation.icon} /> : <Icon name={type.icon} />,
           closeLabel: t("chat.sidebarColumns.close", { panel: type.label }),
         },
       ];

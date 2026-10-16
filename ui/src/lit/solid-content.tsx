@@ -4,7 +4,6 @@ import { AsyncDirective, directive } from "lit/async-directive.js";
 import type { Part } from "lit/directive.js";
 import {
   createComponent,
-  createContext,
   createEffect,
   createMemo,
   createRoot,
@@ -18,21 +17,10 @@ import {
   type Accessor,
   type Component,
 } from "solid-js";
+import { ContentPresentation as SolidContentPresentation } from "../lib/solid/presentation.ts";
 
 export type { TemplateResult as LegacyTemplateResult } from "lit";
 export type { DirectiveResult as LegacyDirectiveResult } from "lit/directive.js";
-
-/** Render opaque plugin SDK templates with their event receiver. */
-export function renderLegacyTemplate(template: unknown, target: HTMLElement, host?: object): void {
-  if (template === undefined) {
-    unmountLitContent(target);
-  } else {
-    mountLitContent(template, target, { host });
-  }
-}
-
-/** Retained content keeps its DOM while foreground directive work is disconnected. */
-export const SolidContentPresentation = createContext<Accessor<boolean>>(() => true);
 
 export const emptyLegacyContent: typeof nothing = nothing;
 
@@ -47,20 +35,15 @@ type NestedSolidRoot = { element: HTMLElement; dispose: () => void };
 let currentLitRoots: Set<NestedSolidRoot> | undefined;
 const litContentMounts = new WeakMap<HTMLElement | DocumentFragment, LitContentMount>();
 
-/** Retire the existing range without restoring a possibly disposed creator. */
-function unmountLitContent(container: HTMLElement | DocumentFragment): void {
-  litContentMounts.get(container)?.dispose();
-}
-
 /** A top-level Lit caller settles now; nested Solid work settles with its owner. */
-export function flushLegacyContent(): void {
+function flushLegacyContent(): void {
   if (!getOwner() && !currentLitRoots) {
     flush();
   }
 }
 
 /** One retained Lit range owns each legacy content container. */
-export function mountLitContent(
+function mountLitContent(
   value: unknown,
   container: HTMLElement | DocumentFragment,
   options: { isConnected?: boolean; host?: object } = {},

@@ -364,6 +364,10 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             // Completed follow-ups start a new task; steer retains its task's lineage.
             taskRunId: preserveCompletedRun ? nextRunId : (source.taskRunId ?? source.runId),
             requesterTurnRunId: preserveCompletedRun ? undefined : source.requesterTurnRunId,
+            // A new task has a fresh caller; it cannot recover under the completed task's grant.
+            operatorRecoverySource: preserveCompletedRun
+              ? undefined
+              : source.operatorRecoverySource,
             requesterTurnYielded: preserveCompletedRun ? undefined : source.requesterTurnYielded,
             retireAfterRequesterTurn: preserveCompletedRun
               ? undefined

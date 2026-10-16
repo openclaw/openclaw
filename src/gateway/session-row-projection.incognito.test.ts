@@ -8,6 +8,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -128,6 +129,62 @@ it("reads a private parent once despite multiple durable store candidates", asyn
     }
   });
 });
+
+it.each(["capture", "prepared"] as const)(
+  "reads %s incognito rows after turn-handle release and retires them on session close",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const key = "agent:main:dashboard:incognito-released-turn";
+      const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: key },
+        { sessionId: "private-released", updatedAt: 1, incognito: true },
+      );
+      const owner = memorySessionActorOwners.read({ agentId: "main", path: storePath })!;
+      const actor = (await owner.acquireExisting(key, {
+        assertCurrent() {},
+        assertReadable() {},
+      }))!;
+      const binding = {
+        actor,
+        agentId: "main",
+        path: storePath,
+        authority: { assertCurrent() {}, authorize() {} },
+      };
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      try {
+        await actor.release();
+        if (mode === "prepared") {
+          await runWithSessionActorStorage(binding, () =>
+            projection.withPreparedExactRows(
+              () => [{ key, agentId: "main" }],
+              (read) => {
+                expect(read.describe({ key, agentId: "main" })?.entry?.sessionId).toBe(
+                  "private-released",
+                );
+              },
+            ),
+          );
+        }
+        const row = runWithSessionActorStorage(binding, () =>
+          projection.capture({ key, agentId: "main" }),
+        );
+        expect(row?.entry?.sessionId).toBe("private-released");
+        expect(projection.isCurrent(row!)).toBe(true);
+        owner.closeSession(key);
+        expect(projection.isCurrent(row!)).toBe(false);
+        expect(
+          runWithSessionActorStorage(binding, () => projection.capture({ key, agentId: "main" })),
+        ).toBeUndefined();
+      } finally {
+        await actor.release();
+        projection.dispose();
+      }
+    });
+  },
+);
 
 it("keeps archived incognito rows private and retires captures when their session or owner closes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

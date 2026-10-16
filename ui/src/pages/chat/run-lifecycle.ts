@@ -82,6 +82,7 @@ export type LocalTerminalReconcile = {
   phase: ChatRunUiStatus["phase"];
   sessionStatus: TerminalSessionRunStatus;
   errorMessage?: string;
+  suppressErrorNotice?: boolean;
 };
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
@@ -104,6 +105,7 @@ type ReconcileOptions = {
   outcome?: ChatRunUiStatus["phase"];
   sessionStatus?: TerminalSessionRunStatus;
   errorMessage?: string;
+  suppressErrorNotice?: boolean;
   runId?: string | null;
   sessionKey?: string | null;
   agentId?: string;
@@ -486,7 +488,9 @@ function reconcileSessionRows(
     agentId: options.agentId,
     runId: options.runId ?? host.chatRunId ?? null,
     status,
-    ...(options.outcome ? { errorMessage: options.errorMessage } : {}),
+    ...(options.outcome
+      ? { errorMessage: options.errorMessage, suppressErrorNotice: options.suppressErrorNotice }
+      : {}),
     endedAt: occurredAt,
   };
   if (host.sessionsResult) {
@@ -540,6 +544,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
         phase: options.outcome,
         sessionStatus: options.sessionStatus ?? (options.outcome === "done" ? "done" : "killed"),
         errorMessage: options.errorMessage,
+        suppressErrorNotice: options.suppressErrorNotice,
       };
     }
     if (options.publishRunStatus !== false) {
@@ -608,6 +613,7 @@ function reconcileStaleSelectedSessionRunAfterLocalCompletion(host: RunLifecycle
       outcome: recent.phase,
       sessionStatus: recent.sessionStatus,
       errorMessage: recent.errorMessage,
+      suppressErrorNotice: recent.suppressErrorNotice,
       sessionKey: recent.sessionKey,
       agentId: recent.agentId,
       runId: recent.runId,
@@ -687,7 +693,12 @@ export function reconcileChatRunFromSessionRow(
     return true;
   }
   let errorMessage: string | undefined;
-  if (runId && row.lastRunId === runId && (row.status === "failed" || row.status === "timeout")) {
+  if (
+    runId &&
+    row.lastRunId === runId &&
+    !row.suppressErrorNotice &&
+    (row.status === "failed" || row.status === "timeout")
+  ) {
     // Session publication can beat (or replace) chat.error. Show its diagnostic
     // before retiring the run, without freezing the bounded row summary into the
     // terminal reducer: a later live/history diagnostic can contain more detail.
@@ -708,6 +719,7 @@ export function reconcileChatRunFromSessionRow(
     outcome: row.status === "done" ? "done" : "interrupted",
     sessionStatus: row.status === "running" || row.status === undefined ? "killed" : row.status,
     errorMessage,
+    suppressErrorNotice: row.suppressErrorNotice,
     runId,
     sessionKey: host.sessionKey,
     sessionKeys: [row.key],

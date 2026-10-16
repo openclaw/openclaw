@@ -333,7 +333,11 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
   ],
   [
     key(machineState, "deleteConfigMachineState"),
-    [key("src/state/onboarding-recommendations.kernel.ts", "onboardingRecommendations.clear")],
+    [
+      key("src/state/onboarding-recommendations.kernel.ts", "onboardingRecommendations.clear"),
+      // Exclusive migration selects only daemon-runtime-pin rows before retiring their copied source.
+      key("src/infra/state-migrations.daemon-runtime-pins.ts", "migrateDaemonRuntimePins"),
+    ],
   ],
   [
     key(machineState, "importConfigMachineState"),
@@ -726,9 +730,15 @@ const sinks = new Map<string, number>([
   ],
 ]);
 
+// Generated v25 migration metadata is published only by the existing schema transaction.
+const subagentRecoveryMetadataSinks = new Set([
+  key("scripts/generate-postgres-schema.mts", "generatePostgresSchemas"),
+  key("src/state/postgres-schema.generated/runtime.ts", "<module>"),
+]);
 const rawMachineStateSinks = new Map([
   [key("src/state/openclaw-state-db-schema-v12-foldin.ts", "migrateSingletonStateFoldInV12"), 1],
   [key("src/state/openclaw-state-db-schema-v13-widerow.ts", "migrateJsonCanonicalWideRowsV13"), 2],
+  ...[...subagentRecoveryMetadataSinks].map((id): [string, number] => [id, 1]),
 ]);
 
 function mayIncludeAuthKey(
@@ -1270,7 +1280,11 @@ export function inspectPersonalCredentialWriters(
           rawSinkCounts.set(id, count);
           if (
             write[1]?.toLowerCase() !== "config_machine_state" ||
-            count > (rawMachineStateSinks.get(id) ?? 0)
+            count > (rawMachineStateSinks.get(id) ?? 0) ||
+            (subagentRecoveryMetadataSinks.has(id) &&
+              !/^UPDATE config_machine_state SET value_json = '25' WHERE state_key = 'state\.schema\.contentVersion' AND value_json = '24';\s*$/u.test(
+                node.text.slice(write.index),
+              ))
           ) {
             fail(node, "raw authority-table write bypasses the reviewed writer sinks");
           }
