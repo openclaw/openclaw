@@ -488,7 +488,10 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     const selected = found?.found
       ? found
       : opts?.allowResetArchiveFallback === true && !opts.currentOnly
-        ? await archivedTranscriptReader(target).readById(messageId, opts.historyVisibility)
+        ? await archivedTranscriptReader(target).readById(messageId, {
+            historyVisibility: opts.historyVisibility,
+            includeCompactionSummary: opts.includeCompactionSummary,
+          })
         : { found: false, oversized: false };
     return filterSessionMessageHistoryVisibility(
       selected,

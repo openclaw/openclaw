@@ -202,6 +202,47 @@ describe("archive selection", () => {
     });
   });
 
+  test("returns the stored compaction summary only to an exact-message archive read", async () => {
+    const id = "reset-archive-compaction-summary";
+    archive(id, [
+      message("kept", undefined, "user", "kept prompt"),
+      {
+        type: "compaction",
+        id: "comp-archived",
+        parentId: "kept",
+        timestamp: "2026-08-28T00-00-01.000Z",
+        summary: "retained archived summary",
+        firstKeptEntryId: "kept",
+        tokensBefore: 100,
+        tokensAfter: 25,
+      },
+    ]);
+    const requested = await reader(id).readById("comp-archived", {
+      includeCompactionSummary: true,
+    });
+    expect(requested).toMatchObject({ found: true, oversized: false });
+    expect(requireRecord(requested.message, "requested message")["__openclaw"]).toMatchObject({
+      kind: "compaction",
+      id: "comp-archived",
+      tokensBefore: 100,
+      tokensAfter: 25,
+      summary: "retained archived summary",
+    });
+    const defaultRead = await reader(id).readById("comp-archived");
+    expect(requireRecord(defaultRead.message, "default message")["__openclaw"]).not.toHaveProperty(
+      "summary",
+    );
+    // Retained-archive pages keep their marker-only projection.
+    const paged = await full(id);
+    expect(paged).toContainEqual(
+      expect.objectContaining({
+        content: [{ type: "text", text: "Compaction" }],
+        __openclaw: expect.objectContaining({ id: "comp-archived" }),
+      }),
+    );
+    expect(JSON.stringify(paged)).not.toContain("retained archived summary");
+  });
+
   test("accepts stale generated session archives when the header matches the current session", async () => {
     const id = "00000000-0000-4000-8000-000000000006";
     const stale = "00000000-0000-4000-8000-000000000007";

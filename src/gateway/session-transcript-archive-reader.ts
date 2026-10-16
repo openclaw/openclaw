@@ -252,8 +252,12 @@ export class ArchivedTranscriptReader {
 
   async readById(
     messageId: string,
-    historyVisibility?: { sessionStartedAt?: number },
+    options?: {
+      historyVisibility?: { sessionStartedAt?: number };
+      includeCompactionSummary?: boolean;
+    },
   ): Promise<ReadSessionMessageByIdResult> {
+    const historyVisibility = options?.historyVisibility;
     const filePath = await this.resolvePath();
     if (!filePath) {
       return { oversized: false, found: false };
@@ -280,7 +284,8 @@ export class ArchivedTranscriptReader {
     if (oversized && !historyVisibility) {
       return { oversized: true, found: true, seq: entry.seq };
     }
-    const message = indexedTranscriptEntryToMessage(entry);
+    // Only the selected entry may carry the stored summary; archive pages stay marker-only.
+    const message = indexedTranscriptEntryToMessage(entry, options);
     const preceding =
       historyVisibility &&
       isPreSessionStartAssistantMessage(message, historyVisibility.sessionStartedAt)
@@ -461,8 +466,11 @@ export class ArchivedTranscriptReader {
   }
 }
 
-function indexedTranscriptEntryToMessage(entry: MaterializedTranscriptEntry): unknown {
-  return projectTranscriptEntryMessage(entry.record, entry.seq, entry.transcriptPosition);
+function indexedTranscriptEntryToMessage(
+  entry: MaterializedTranscriptEntry,
+  options?: { includeCompactionSummary?: boolean },
+): unknown {
+  return projectTranscriptEntryMessage(entry.record, entry.seq, entry.transcriptPosition, options);
 }
 
 function indexedTranscriptEntryToMessages(entry: MaterializedTranscriptEntry): unknown[] {

@@ -241,8 +241,12 @@ export function readSessionActorMemoryProjection(
           },
         )
       : undefined;
-  const message = (row: SessionActorMemoryHistoryRow, seq: number) =>
-    projectTranscriptEntryMessage(row.event, seq, position(row));
+  // Only the exact-message selection forwards projection options: history pages stay marker-only.
+  const message = (
+    row: SessionActorMemoryHistoryRow,
+    seq: number,
+    options?: { includeCompactionSummary?: boolean },
+  ) => projectTranscriptEntryMessage(row.event, seq, position(row), options);
   const messages = (rows: SessionActorMemoryHistoryRow[], offset: number) =>
     rows.map((row, index) => message(row, offset + index + 1)).filter((value) => value !== null);
   const deltaCursor = generation
@@ -461,7 +465,7 @@ export function readSessionActorMemoryProjection(
       return {
         found: true,
         oversized: false,
-        message: message(row, index + 1),
+        message: message(row, index + 1, selection.options),
         seq: index + 1,
         ...(selection.options?.maxBytes !== undefined
           ? { serializedBytes: row.serializedBytes - 1 }
