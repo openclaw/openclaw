@@ -231,7 +231,7 @@ describe("first chat startup snapshot ordering", () => {
         expect(h.state.chatMessages).toEqual([]);
       }
       record.resolve({
-        projectionVersion: 2,
+        projectionVersion: 3,
         savedAt: Date.now(),
         sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
         sessionId: snapshot.sessionId,
@@ -398,7 +398,7 @@ describe("first chat startup snapshot ordering", () => {
     const loading = h.start();
     expect(h.request).toHaveBeenCalledOnce();
     record.resolve({
-      projectionVersion: 2,
+      projectionVersion: 3,
       savedAt: Date.now(),
       sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
       sessionId: stored.sessionId,
