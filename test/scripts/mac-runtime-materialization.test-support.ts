@@ -75,13 +75,15 @@ async function materializationFixture(mac: MacScriptFixture, complete = false) {
   const source = path.join(root, "canonical");
   const parent = path.join(root, "stage");
   const destination = path.join(parent, "derived");
+  const at = (...parts: string[]) => path.join(source, ...parts);
+  const put = (name: string, bytes: string | Buffer, mode?: number) => write(at(name), bytes, mode);
   await mkdir(source);
   await mkdir(parent);
   const binaries = await compiledMacNativeFixtures(root, mac);
   for (const [name, bytes] of Object.entries(
     complete ? binaries : { arm64: binaries.arm64, elf: binaries.elf },
   )) {
-    await write(path.join(source, `images/${name}`), bytes);
+    await put(`images/${name}`, bytes);
   }
   for (const filename of [
     "nested/win32/README.md",
@@ -90,55 +92,53 @@ async function materializationFixture(mac: MacScriptFixture, complete = false) {
     "opposite-linux/name.node",
     "space [*]?\nresource.js",
   ]) {
-    await write(
-      path.join(source, filename),
-      "// nonbinary resource remains byte-identical\n",
-      0o640,
-    );
+    await put(filename, "// nonbinary resource remains byte-identical\n", 0o640);
   }
-  await write(path.join(source, "engine.wasm"), Buffer.from("0061736d01000000", "hex"));
+  await put("engine.wasm", Buffer.from("0061736d01000000", "hex"));
   // Java and fat Mach-O share CAFEBABE. Classifier-owned non-native resources survive.
-  await write(
-    path.join(source, "Example.class"),
+  await put(
+    "Example.class",
     Buffer.from("cafebabe0000003400010001000000000000000000000000", "hex"),
   );
   for (let i = 0; i < (complete ? 70 : 2); i++) {
-    await write(path.join(source, `scripts/${i} [*]\n.js`), `// resource ${i}\n`);
+    await put(`scripts/${i} [*]\n.js`, `// resource ${i}\n`);
   }
   await mkdir(path.join(source, "empty"));
   await chmod(path.join(source, "empty"), 0o550);
   await symlink("../nested/win32/build.mjs", path.join(source, "scripts/npm-style"));
   await symlink("nested/win32", path.join(source, "directory-alias"));
+  const python = (args: string[], prelude = "") =>
+    mac.run(
+      "/usr/bin/python3",
+      [
+        "-B",
+        ...(prelude
+          ? [
+              "-c",
+              `${prelude}\nimport runpy, sys\nsys.argv = sys.argv[1:]\nrunpy.run_path(sys.argv[0], run_name="__main__")`,
+            ]
+          : []),
+        materializer,
+        ...args,
+      ],
+      { encoding: "utf8", env: { HOME: root, TMPDIR: root, PATH: systemPath } },
+    );
   return {
     root,
     source,
     parent,
     destination,
     binaries,
+    at,
+    put,
+    merge: (incoming: string, prelude = "") => python(["--merge", incoming, destination], prelude),
     async run(
       arch = "arm64",
       options: { source?: string; destination?: string; prelude?: string } = {},
     ) {
-      return await mac.run(
-        "/usr/bin/python3",
-        [
-          "-B",
-          ...(options.prelude
-            ? [
-                "-c",
-                `${options.prelude}\nimport runpy, sys\nsys.argv = sys.argv[1:]\nrunpy.run_path(sys.argv[0], run_name="__main__")`,
-              ]
-            : []),
-          materializer,
-          options.source ?? source,
-          options.destination ?? destination,
-          parent,
-          arch,
-        ],
-        {
-          encoding: "utf8",
-          env: { HOME: root, TMPDIR: root, PATH: systemPath },
-        },
+      return await python(
+        [options.source ?? source, options.destination ?? destination, parent, arch],
+        options.prelude,
       );
     },
   };
@@ -595,7 +595,7 @@ export function registerMacRuntimeMaterializationTests() {
       (kind, { mac }) =>
         mac.lifetime.run(async () => {
           const fixture = await materializationFixture(mac);
-          const shared = path.join(fixture.source, "shared");
+          const shared = fixture.at("shared");
           if (kind === "symlink") {
             await symlink("engine.wasm", shared);
           } else {
@@ -620,10 +620,7 @@ export function registerMacRuntimeMaterializationTests() {
               );
             }
           }
-          await write(
-            path.join(fixture.source, "000-new-architecture/addon.node"),
-            fixture.binaries.x86_64,
-          );
+          await fixture.put("000-new-architecture/addon.node", fixture.binaries.x86_64);
           const incoming = path.join(fixture.parent, "second");
           const second = await fixture.run(kind === "native" ? "arm64" : "x86_64", {
             destination: incoming,
@@ -631,14 +628,7 @@ export function registerMacRuntimeMaterializationTests() {
           expect(second.status, second.stderr).toBe(0);
           const destinationBefore = snapshot(fixture.destination);
           const sourceBefore = snapshot(incoming);
-          const result = await mac.run(
-            "/usr/bin/python3",
-            ["-B", materializer, "--merge", incoming, fixture.destination],
-            {
-              encoding: "utf8",
-              env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: systemPath },
-            },
-          );
+          const result = await fixture.merge(incoming);
           expect(result.status, result.stderr).not.toBe(0);
           expect(result.stderr).toContain("Conflicting shared runtime entry");
           expect(snapshot(fixture.destination)).toEqual(destinationBefore);
@@ -652,21 +642,18 @@ export function registerMacRuntimeMaterializationTests() {
         mac.lifetime.run(async () => {
           const fixture = await materializationFixture(mac);
           const relative = "node_modules/esbuild/bin/esbuild";
-          await write(path.join(fixture.source, relative), fixture.binaries.arm64, 0o755);
+          await fixture.put(relative, fixture.binaries.arm64, 0o755);
           const first = await fixture.run("arm64");
           expect(first.status, first.stderr).toBe(0);
-          await write(path.join(fixture.source, relative), fixture.binaries.x86_64, 0o755);
+          await fixture.put(relative, fixture.binaries.x86_64, 0o755);
           const incoming = path.join(fixture.parent, "second");
           const second = await fixture.run("x86_64", { destination: incoming });
           expect(second.status, second.stderr).toBe(0);
           const before = snapshot(fixture.destination);
           const sourceBefore = snapshot(incoming);
-          const result = await mac.run(
-            "/usr/bin/python3",
-            [
-              "-B",
-              "-c",
-              `
+          const result = await fixture.merge(
+            incoming,
+            `
 import os, runpy, shutil, subprocess, sys
 original_run = subprocess.run
 def run(args, **kwargs):
@@ -676,18 +663,7 @@ def run(args, **kwargs):
         shutil.copyfile(args[2], args[args.index("-output") + 1])
     return result
 subprocess.run = run
-sys.argv = sys.argv[1:]
-runpy.run_path(sys.argv[0], run_name="__main__")
 `,
-              materializer,
-              "--merge",
-              incoming,
-              fixture.destination,
-            ],
-            {
-              encoding: "utf8",
-              env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: systemPath },
-            },
           );
           expect(snapshot(incoming)).toEqual(sourceBefore);
           expect(readdirSync(fixture.parent).toSorted()).toEqual(["derived", "second"]);
@@ -727,18 +703,15 @@ runpy.run_path(sys.argv[0], run_name="__main__")
         const first = await fixture.run("arm64");
         expect(first.status, first.stderr).toBe(0);
         const name = "new-architecture/addon.node";
-        await write(path.join(fixture.source, name), fixture.binaries.x86_64);
+        await fixture.put(name, fixture.binaries.x86_64);
         const incoming = path.join(fixture.parent, "second");
         const second = await fixture.run("x86_64", { destination: incoming });
         expect(second.status, second.stderr).toBe(0);
         const outside = path.join(fixture.root, "outside");
         await write(outside, "outside bytes must not be copied");
-        const result = await mac.run(
-          "/usr/bin/python3",
-          [
-            "-B",
-            "-c",
-            `
+        const result = await fixture.merge(
+          incoming,
+          `
 import os, runpy, shutil, sys
 source = ${JSON.stringify(path.join(incoming, name))}
 outside = ${JSON.stringify(outside)}
@@ -750,15 +723,7 @@ def copy(source_stream, destination, *args):
         os.symlink(outside, source)
     return original_copy(source_stream, destination, *args)
 shutil.copyfileobj = copy
-sys.argv = sys.argv[1:]
-runpy.run_path(sys.argv[0], run_name="__main__")
 `,
-            materializer,
-            "--merge",
-            incoming,
-            fixture.destination,
-          ],
-          { encoding: "utf8", env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: systemPath } },
         );
         expect(result.status, result.stderr).not.toBe(0);
         expect(result.stderr).toMatch(/Inventory.*changed/);
@@ -771,12 +736,12 @@ runpy.run_path(sys.argv[0], run_name="__main__")
       (arch, { mac }) =>
         mac.lifetime.run(async () => {
           const fixture = await materializationFixture(mac, true);
-          await write(
-            path.join(fixture.source, "lib/node_modules/openclaw/dist/control-ui/index.html"),
+          await fixture.put(
+            "lib/node_modules/openclaw/dist/control-ui/index.html",
             "<!doctype html>\n",
           );
-          await write(
-            path.join(fixture.source, "lib/node_modules/openclaw/dist/control-ui/assets/app.js"),
+          await fixture.put(
+            "lib/node_modules/openclaw/dist/control-ui/assets/app.js",
             "// bundled Control UI\n",
           );
           for (const fat64 of [false, true]) {
@@ -814,20 +779,17 @@ runpy.run_path(sys.argv[0], run_name="__main__")
               expect(bytes.readUInt32LE(offset + 12)).toBe(1);
               bytes.writeUInt32LE(4, offset + 12);
             }
-            await write(path.join(fixture.source, `synthetic-core-fat${fat64 ? 64 : 32}`), bytes);
+            await fixture.put(`synthetic-core-fat${fat64 ? 64 : 32}`, bytes);
           }
           const oddNative = "images/odd [*]?\narm64";
-          await rename(
-            path.join(fixture.source, "images/arm64"),
-            path.join(fixture.source, oddNative),
-          );
+          await rename(fixture.at("images/arm64"), fixture.at(oddNative));
           for (const [name, contents, mode] of [
             ["database.js", "db.connect();\n", 0o644],
             ["unicode.js", "db.label = 'café';\n", 0o644],
             ["query.txt", "(Query expression)\n", 0o644],
             ["setuid.txt", "small inert resource\n", 0o4755],
           ] as const) {
-            const resource = path.join(fixture.source, "scripts", name);
+            const resource = fixture.at("scripts", name);
             await write(resource, contents, mode);
             expect(statSync(resource).mode & 0o7777).toBe(mode);
           }
@@ -837,19 +799,14 @@ runpy.run_path(sys.argv[0], run_name="__main__")
             ["Library/addon.node", "library/ADDON.NODE", "0-case-alias"],
             ["Café.txt", "Cafe\u0301.txt", "0-unicode-alias"],
           ] as const) {
-            await write(path.join(fixture.source, name), "retained lookup resource\n", 0o640);
-            expect(statSync(path.join(fixture.source, literal)).ino).toBe(
-              statSync(path.join(fixture.source, name)).ino,
-            );
-            await symlink(literal, path.join(fixture.source, alias));
+            await fixture.put(name, "retained lookup resource\n", 0o640);
+            expect(statSync(fixture.at(literal)).ino).toBe(statSync(fixture.at(name)).ino);
+            await symlink(literal, fixture.at(alias));
           }
-          await link(
-            path.join(fixture.source, "Library/addon.node"),
-            path.join(fixture.source, "Library/second.node"),
-          );
-          await symlink("library/SECOND.NODE", path.join(fixture.source, "0-hardlink-alias"));
-          await symlink("library/", path.join(fixture.source, "0-directory"));
-          await symlink("0-DIRECTORY/../engine.wasm", path.join(fixture.source, "0-parent-alias"));
+          await link(fixture.at("Library/addon.node"), fixture.at("Library/second.node"));
+          await symlink("library/SECOND.NODE", fixture.at("0-hardlink-alias"));
+          await symlink("library/", fixture.at("0-directory"));
+          await symlink("0-DIRECTORY/../engine.wasm", fixture.at("0-parent-alias"));
           await chmod(fixture.source, 0o750);
           const before = snapshot(fixture.source);
           const result = await fixture.run(arch);
@@ -877,10 +834,10 @@ runpy.run_path(sys.argv[0], run_name="__main__")
             "0-parent-alias",
           ]) {
             expect(readFileSync(path.join(fixture.destination, alias))).toEqual(
-              readFileSync(path.join(fixture.source, alias)),
+              readFileSync(fixture.at(alias)),
             );
             expect(readlinkSync(path.join(fixture.destination, alias))).toBe(
-              readlinkSync(path.join(fixture.source, alias)),
+              readlinkSync(fixture.at(alias)),
             );
           }
           const outputSecond = statSync(path.join(fixture.destination, "Library/second.node"));
@@ -962,7 +919,7 @@ runpy.run_path(sys.argv[0], run_name="__main__")
       mac.lifetime.run(async () => {
         const fixture = await materializationFixture(mac);
         const targets: Record<string, string> = {
-          absolute: path.join(fixture.source, "engine.wasm"),
+          absolute: fixture.at("engine.wasm"),
           escape: "../inert.c",
           omitted: "images/elf",
           "case-omitted": "IMAGES/ELF",
@@ -973,12 +930,12 @@ runpy.run_path(sys.argv[0], run_name="__main__")
         };
         const target = targets[kind] ?? "missing";
         if (kind === "indirect-cycle") {
-          await mkdir(path.join(fixture.source, "a"));
-          await mkdir(path.join(fixture.source, "b"));
-          await symlink("../b", path.join(fixture.source, "a/to-b"));
-          await symlink("../a", path.join(fixture.source, "b/to-a"));
+          await mkdir(fixture.at("a"));
+          await mkdir(fixture.at("b"));
+          await symlink("../b", fixture.at("a/to-b"));
+          await symlink("../a", fixture.at("b/to-a"));
         } else {
-          await symlink(target, path.join(fixture.source, "link"));
+          await symlink(target, fixture.at("link"));
         }
         const before = snapshot(fixture.source);
         const result = await fixture.run();
@@ -1035,16 +992,12 @@ runpy.run_path(sys.argv[0], run_name="__main__")
               }
             }
           }
-          await write(path.join(fixture.source, "magic"), bytes);
+          await fixture.put("magic", bytes);
           const before = snapshot(fixture.source);
-          const authority = await mac.run(
-            "/usr/bin/lipo",
-            ["-archs", path.join(fixture.source, "magic")],
-            {
-              encoding: "utf8",
-              env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: systemPath },
-            },
-          );
+          const authority = await mac.run("/usr/bin/lipo", ["-archs", fixture.at("magic")], {
+            encoding: "utf8",
+            env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: systemPath },
+          });
           const result = await fixture.run();
           // Newer Apple lipo also rejects big-endian thin headers. Its failure must
           // stop construction, never turn an unclassified native image into a resource.
@@ -1080,7 +1033,7 @@ runpy.run_path(sys.argv[0], run_name="__main__")
                     : kind === "pe"
                       ? fixture.binaries.pe.subarray(0, 16)
                       : Buffer.from("!<arch>\nmalformed");
-          await write(path.join(fixture.source, "broken"), bytes);
+          await fixture.put("broken", bytes);
           const before = snapshot(fixture.source);
           const result = await fixture.run();
           expect(result.status, result.stderr).not.toBe(0);
@@ -1187,7 +1140,7 @@ def verify_closed():
       (schedule, { mac }) =>
         mac.lifetime.run(async () => {
           const fixture = await materializationFixture(mac);
-          const inside = path.join(fixture.source, "images");
+          const inside = fixture.at("images");
           const outside = path.join(fixture.root, "outside");
           const outsideBytes = Buffer.concat([
             fixture.binaries.arm64,
@@ -1195,9 +1148,9 @@ def verify_closed():
           ]);
           await write(path.join(outside, "arm64"), outsideBytes);
           if (schedule === "symlink-aba") {
-            await write(path.join(fixture.source, "a.txt"), "original resource");
-            await write(path.join(fixture.source, "b.txt"), "substituted resource");
-            await symlink("a.txt", path.join(fixture.source, "alias"));
+            await fixture.put("a.txt", "original resource");
+            await fixture.put("b.txt", "substituted resource");
+            await symlink("a.txt", fixture.at("alias"));
           }
           const before = snapshot(fixture.source);
           const result = await fixture.run("arm64", {
@@ -1284,7 +1237,7 @@ def evidence():
           expect(readFileSync(path.join(outside, "arm64"))).toEqual(outsideBytes);
           if (schedule === "symlink-aba") {
             expect(snapshot(fixture.source)).toEqual(before);
-            expect(readlinkSync(path.join(fixture.source, "alias"))).toBe("a.txt");
+            expect(readlinkSync(fixture.at("alias"))).toBe("a.txt");
           }
         }),
     );
@@ -1292,7 +1245,7 @@ def evidence():
     it("rejects in-place source mutation restored after lipo before native omission", ({ mac }) =>
       mac.lifetime.run(async () => {
         const fixture = await materializationFixture(mac);
-        const target = path.join(fixture.source, "images/arm64");
+        const target = fixture.at("images/arm64");
         const replacement = path.join(fixture.root, "replacement");
         await write(replacement, fixture.binaries.x86_64);
         const before = snapshot(fixture.source);
@@ -1360,8 +1313,8 @@ def evidence():
       mac.lifetime.run(async () => {
         const fixture = await materializationFixture(mac);
         for (let index = 0; index < 130; index++) {
-          await write(path.join(fixture.source, `native-${index}`), fixture.binaries.arm64);
-          await write(path.join(fixture.source, `resource-${index}.js`), "// ordinary resource\n");
+          await fixture.put(`native-${index}`, fixture.binaries.arm64);
+          await fixture.put(`resource-${index}.js`, "// ordinary resource\n");
         }
         const before = snapshot(fixture.source);
         const result = await fixture.run("arm64", {
@@ -1400,12 +1353,7 @@ def evidence():
     it("rejects special input files without blocking or publishing", ({ mac }) =>
       mac.lifetime.run(async () => {
         const fixture = await materializationFixture(mac);
-        await runMacFixtureTool(
-          "/usr/bin/mkfifo",
-          [path.join(fixture.source, "fifo")],
-          fixture.root,
-          mac,
-        );
+        await runMacFixtureTool("/usr/bin/mkfifo", [fixture.at("fifo")], fixture.root, mac);
         const result = await fixture.run();
         expect(result.status, result.stderr).not.toBe(0);
         expect(result.stderr).toContain("Unsupported runtime filesystem entry");

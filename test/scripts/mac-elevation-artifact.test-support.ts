@@ -66,32 +66,29 @@ export async function artifactFixture(mac: MacScriptFixture) {
 <key>OpenClawRuntimeBuildID</key><string>${buildInfo.buildId}</string>
 </dict></plist>`,
   );
-  await write(app + "/Contents/MacOS/OpenClaw", binaries.universal, 0o755);
-  await write(app + "/Contents/MacOS/openclaw-mlx-tts", binaries.universal, 0o755);
-  await write(
-    app + "/Contents/Frameworks/shared [fixture].dylib",
-    binaries.universalLibrary,
-    0o755,
-  );
+  for (const [name, bytes] of [
+    ["MacOS/OpenClaw", binaries.universal],
+    ["MacOS/openclaw-mlx-tts", binaries.universal],
+    ["Frameworks/shared [fixture].dylib", binaries.universalLibrary],
+  ] as const) {
+    await write(path.join(app, "Contents", name), bytes, 0o755);
+  }
   const runtime = path.join(app, runtimeRoot);
   await write(path.join(runtime, "bin/bun"), binaries.universal, 0o755);
-  await write(path.join(runtime, "lib/libsqlite3.dylib"), binaries.universalLibrary);
-  await write(path.join(runtime, "lib/node_modules/openclaw/openclaw.mjs"), "// inert CLI entry\n");
-  await write(path.join(runtime, runtimeDist, "mac-node-worker.js"), "// inert worker entry\n");
-  await write(
-    path.join(runtime, runtimeDist, "extensions/browser/setup-entry.js"),
-    "// inert browser entry\n",
-  );
-  await write(path.join(runtime, runtimeDist, "control-ui/index.html"), "<!doctype html>\n");
-  await write(path.join(runtime, runtimeDist, "build-info.json"), JSON.stringify(buildInfo));
-  await write(path.join(runtime, addon), binaries.universalLibrary);
-  await write(path.join(runtime, library), binaries.universalLibrary);
-  await write(path.join(runtime, "lib/native.a"), binaries.universalArchive);
-  for (const arch of ["arm64", "x86_64"] as const) {
-    await write(
-      path.join(runtime, `lib/node_modules/native-darwin-${arch}/addon.node`),
-      binaries[arch === "arm64" ? "armLibrary" : "intelLibrary"],
-    );
+  for (const [name, bytes] of [
+    ["lib/libsqlite3.dylib", binaries.universalLibrary],
+    ["lib/node_modules/openclaw/openclaw.mjs", "// inert CLI entry\n"],
+    [`${runtimeDist}/mac-node-worker.js`, "// inert worker entry\n"],
+    [`${runtimeDist}/extensions/browser/setup-entry.js`, "// inert browser entry\n"],
+    [`${runtimeDist}/control-ui/index.html`, "<!doctype html>\n"],
+    [`${runtimeDist}/build-info.json`, JSON.stringify(buildInfo)],
+    [addon, binaries.universalLibrary],
+    [library, binaries.universalLibrary],
+    ["lib/native.a", binaries.universalArchive],
+    ["lib/node_modules/native-darwin-arm64/addon.node", binaries.armLibrary],
+    ["lib/node_modules/native-darwin-x86_64/addon.node", binaries.intelLibrary],
+  ] as const) {
+    await write(path.join(runtime, name), bytes);
   }
   await symlink("native [fixture]", path.join(runtime, "lib/node_modules/native-alias"));
   const jq = await mac.run("/bin/sh", ["-c", "command -v jq"], {
@@ -256,6 +253,8 @@ plutil() {
     );
     return result;
   };
+  const architectures = (name: string) =>
+    runMacFixtureTool("/usr/bin/lipo", ["-archs", `${app}/Contents/MacOS/${name}`], root, mac);
   const receipt = {
     schemaVersion: 1,
     kind: "openclaw-elevation-artifact",
@@ -273,18 +272,8 @@ plutil() {
     teamIdentifier: "FWJYW4S8P8",
     cdhashes: { arm64: "FIXTUREARM64", x86_64: "FIXTUREX8664" },
     architectures: {
-      main: await runMacFixtureTool(
-        "/usr/bin/lipo",
-        ["-archs", app + "/Contents/MacOS/OpenClaw"],
-        root,
-        mac,
-      ),
-      helper: await runMacFixtureTool(
-        "/usr/bin/lipo",
-        ["-archs", app + "/Contents/MacOS/openclaw-mlx-tts"],
-        root,
-        mac,
-      ),
+      main: await architectures("OpenClaw"),
+      helper: await architectures("openclaw-mlx-tts"),
     },
     entitlementsSha256: { main: digest(entitlements), helper: digest(entitlements) },
     notarizationId: "12345678-1234-1234-1234-123456789abc",

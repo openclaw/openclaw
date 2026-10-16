@@ -22,6 +22,27 @@ const temps = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
+function pythonInventory(root: string, marker: string, program: string, ...args: string[]) {
+  const prelude = `import os, pathlib, runpy, shutil, sys, unicodedata
+api = runpy.run_path('scripts/lib/mac-native-inventory.py')
+root = pathlib.Path(sys.argv[1])
+`;
+  const result = spawnSync("/usr/bin/python3", ["-B", "-c", prelude + program, root, ...args], {
+    encoding: "utf8",
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout.trim()).toBe(marker);
+}
+
+async function portabilityFixture(root: string) {
+  const { auditMacRuntimePortability } =
+    await import("../../scripts/lib/mac-runtime-portability.mjs");
+  const { machoFixture } = await import("../helpers/mac-native.js");
+  const bun = path.join(root, "bun");
+  writeFileSync(bun, machoFixture());
+  return { audit: () => auditMacRuntimePortability(root, bun), machoFixture };
+}
+
 describe("Mac app runtime publication", () => {
   baseIt.each([undefined])(
     "preserves the requested build-time installer Node version (%s)",
@@ -215,12 +236,8 @@ esac
 describe.runIf(process.platform === "darwin")("Mac runtime portability inventory", () => {
   const it = createMacScriptTest();
   it("audits supported thin and fat formats through real otool", async () => {
-    const { auditMacRuntimePortability } =
-      await import("../../scripts/lib/mac-runtime-portability.mjs");
-    const { machoFixture } = await import("../helpers/mac-native.js");
     const root = temps.make("openclaw-portability-native-");
-    const bun = path.join(root, "bun");
-    writeFileSync(bun, machoFixture());
+    const { audit, machoFixture } = await portabilityFixture(root);
     for (const bits of [32, 64]) {
       for (const little of [false, true]) {
         for (const fat of [false, true]) {
@@ -233,22 +250,19 @@ describe.runIf(process.platform === "darwin")("Mac runtime portability inventory
       }
     }
     symlinkSync("bun", path.join(root, "internal-link"));
-    expect(auditMacRuntimePortability(root, bun)).toBe(7);
+    expect(audit()).toBe(7);
   });
 
   it.for(["Java", "fat32 archive", "fat64 archive", "thin object", "fat32 object", "fat64 object"])(
     "preserves %s resources without treating them as loadable images",
     (kind, { mac }) =>
       mac.lifetime.run(async () => {
-        const { auditMacRuntimePortability } =
-          await import("../../scripts/lib/mac-runtime-portability.mjs");
-        const { machoFixture, nativeObjectFixture, universalArchiveFixture } =
+        const { nativeObjectFixture, universalArchiveFixture } =
           await import("../helpers/mac-native.js");
         const parent = mac.createTempDir("openclaw-portability-resource-");
         const root = path.join(parent, "runtime");
         mkdirSync(root);
-        const bun = path.join(root, "bun");
-        writeFileSync(bun, machoFixture());
+        const { audit } = await portabilityFixture(root);
         const filename = path.join(root, "opaque-resource");
         const format = kind.startsWith("fat32")
           ? "fat32"
@@ -263,7 +277,7 @@ describe.runIf(process.platform === "darwin")("Mac runtime portability inventory
               ? await universalArchiveFixture(inputs, format === "fat64", false, mac)
               : await nativeObjectFixture(inputs, format, mac);
         writeFileSync(filename, bytes);
-        expect(auditMacRuntimePortability(root, bun)).toBe(1);
+        expect(audit()).toBe(1);
         expect(readFileSync(filename)).toEqual(bytes);
       }),
   );
@@ -272,15 +286,10 @@ describe.runIf(process.platform === "darwin")("Mac runtime portability inventory
     "binds captured symlink targets before publication (replacement: %s)",
     (replace) => {
       const root = temps.make("openclaw-native-link-binding-");
-      const result = spawnSync(
-        "/usr/bin/python3",
-        [
-          "-B",
-          "-c",
-          `
-import os, pathlib, runpy, shutil, sys
-api = runpy.run_path('scripts/lib/mac-native-inventory.py')
-root = pathlib.Path(sys.argv[1])
+      pythonInventory(
+        root,
+        "symlink-binding-ok",
+        `
 source, output = root / 'source', root / 'output'
 source.mkdir(); output.mkdir()
 (source / 'a.txt').write_text('alpha')
@@ -325,27 +334,17 @@ else:
     assert (output / 'alias').read_text() == 'alpha'
 print('symlink-binding-ok')
 `,
-          root,
-          String(replace),
-        ],
-        { encoding: "utf8" },
+        String(replace),
       );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe("symlink-binding-ok");
     },
   );
 
   it("looks up actual filesystem child names without following links or leaking handles", () => {
     const root = temps.make("openclaw-native-child-lookup-");
-    const result = spawnSync(
-      "/usr/bin/python3",
-      [
-        "-B",
-        "-c",
-        `
-import os, pathlib, runpy, sys, unicodedata
-api = runpy.run_path('scripts/lib/mac-native-inventory.py')
-root = pathlib.Path(sys.argv[1])
+    pythonInventory(
+      root,
+      "child-lookup-ok",
+      `
 source = root / 'source'
 (source / 'Library').mkdir(parents=True)
 (source / 'Library/AddOn.node').write_text('resource')
@@ -385,12 +384,7 @@ else: raise AssertionError('Lookup survived tree closure')
 assert set(os.listdir('/dev/fd')) == initial_fds
 print('child-lookup-ok')
 `,
-        root,
-      ],
-      { encoding: "utf8" },
     );
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("child-lookup-ok");
   });
 
   it.each([
@@ -402,15 +396,10 @@ print('child-lookup-ok')
     "new-hardlink",
   ])("rejects changed child lookup bindings and closes handles (%s)", (mutation) => {
     const root = temps.make("openclaw-native-child-replacement-");
-    const result = spawnSync(
-      "/usr/bin/python3",
-      [
-        "-B",
-        "-c",
-        `
-import os, pathlib, runpy, sys
-api = runpy.run_path('scripts/lib/mac-native-inventory.py')
-root = pathlib.Path(sys.argv[1])
+    pythonInventory(
+      root,
+      "child-binding-rejected",
+      `
 source, outside = root / 'source', root / 'outside'
 (source / 'Library').mkdir(parents=True)
 (source / 'Library/addon').write_text('original')
@@ -447,13 +436,8 @@ assert (outside / 'addon').read_text() == 'outside'
 assert set(os.listdir('/dev/fd')) == initial_fds
 print('child-binding-rejected')
 `,
-        root,
-        mutation,
-      ],
-      { encoding: "utf8" },
+      mutation,
     );
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("child-binding-rejected");
   });
 
   it.each(["namespace-root", "namespace-nested", "discarded-resource", "incomplete"])(
@@ -471,14 +455,10 @@ print('child-binding-rejected')
         path.join(directory, "resource"),
         mode === "discarded-resource" ? machoFixture() : "resource",
       );
-      const result = spawnSync(
-        "/usr/bin/python3",
-        [
-          "-B",
-          "-c",
-          `
-import os, pathlib, runpy, sys
-api = runpy.run_path('scripts/lib/mac-native-inventory.py')
+      pythonInventory(
+        root,
+        "complete-audit-rejected",
+        `
 root, mode = pathlib.Path(sys.argv[1]), sys.argv[2]
 source = root / 'source'
 directory = source / 'child' if mode == 'namespace-nested' else source
@@ -519,13 +499,8 @@ assert resource.read_bytes() == original
 assert set(os.listdir('/dev/fd')) == initial_fds
 print('complete-audit-rejected')
 `,
-          root,
-          mode,
-        ],
-        { encoding: "utf8" },
+        mode,
       );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe("complete-audit-rejected");
     },
   );
 
@@ -533,14 +508,10 @@ print('complete-audit-rejected')
     "audits deep trees with linear opens and bounded handles (%s)",
     (mode) => {
       const root = temps.make("openclaw-native-audit-depth-");
-      const result = spawnSync(
-        "/usr/bin/python3",
-        [
-          "-B",
-          "-c",
-          `
-import os, pathlib, runpy, sys
-api = runpy.run_path('scripts/lib/mac-native-inventory.py')
+      pythonInventory(
+        root,
+        "bounded-audit-ok",
+        `
 root, mode = pathlib.Path(sys.argv[1]), sys.argv[2]
 source, outside = root / 'source', root / 'outside'
 source.mkdir(); outside.mkdir()
@@ -590,13 +561,8 @@ assert (outside / 'a-resource').read_text() == 'outside'
 assert set(os.listdir('/dev/fd')) == initial_fds
 print('bounded-audit-ok')
 `,
-          root,
-          mode,
-        ],
-        { encoding: "utf8" },
+        mode,
       );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe("bounded-audit-ok");
     },
   );
 
@@ -620,14 +586,10 @@ print('bounded-audit-ok')
       writeFileSync(path.join(source, "invalid"), machoFixture(32, true, true));
       symlinkSync("../outside", path.join(source, "link"));
       expect(spawnSync("/usr/bin/mkfifo", [path.join(source, "fifo")]).status).toBe(0);
-      const result = spawnSync(
-        "/usr/bin/python3",
-        [
-          "-c",
-          `
-import os, pathlib, runpy, shutil, sys
-api = runpy.run_path('scripts/lib/mac-native-inventory.py')
-root = pathlib.Path(sys.argv[1])
+      pythonInventory(
+        root,
+        "held-file-copy-ok",
+        `
 source = root / 'source'
 original = (source / 'dir/native').read_bytes()
 resources = {('resource.txt',): b'ordinary resource', ('resource.class',): bytes.fromhex('cafebabe0000003d0001')}
@@ -687,42 +649,27 @@ else: raise AssertionError('Closed tree remained usable')
 assert set(os.listdir('/dev/fd')) == initial_fds
 print('held-file-copy-ok')
 `,
-          root,
-          mode,
-        ],
-        { encoding: "utf8" },
+        mode,
       );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe("held-file-copy-ok");
     },
   );
 
   it.each(["file", "dangling"])("rejects %s symlinks outside the runtime", async (kind) => {
-    const { auditMacRuntimePortability } =
-      await import("../../scripts/lib/mac-runtime-portability.mjs");
-    const { machoFixture } = await import("../helpers/mac-native.js");
     const parent = temps.make("openclaw-portability-link-");
     const root = path.join(parent, "runtime");
     mkdirSync(root);
-    const bun = path.join(root, "bun");
-    writeFileSync(bun, machoFixture());
+    const { audit } = await portabilityFixture(root);
     const external = path.join(parent, "external");
     if (kind === "file") {
       writeFileSync(external, "outside");
     }
     symlinkSync(external, path.join(root, "link"));
-    expect(() => auditMacRuntimePortability(root, bun)).toThrow(
-      kind === "dangling" ? /ENOENT/ : /symlink escapes/,
-    );
+    expect(audit).toThrow(kind === "dangling" ? /ENOENT/ : /symlink escapes/);
   });
 
   it("does not borrow loader paths from a different architecture", async () => {
-    const { auditMacRuntimePortability } =
-      await import("../../scripts/lib/mac-runtime-portability.mjs");
-    const { machoFixture } = await import("../helpers/mac-native.js");
     const root = temps.make("openclaw-portability-slices-");
-    const bun = path.join(root, "bun");
-    writeFileSync(bun, machoFixture());
+    const { audit, machoFixture } = await portabilityFixture(root);
     const command = (id: number, value: string, offset: number) => {
       const name = Buffer.from(value + "\0");
       const bytes = Buffer.alloc(Math.ceil((offset + name.length) / 8) * 8);
@@ -764,7 +711,7 @@ print('held-file-copy-ok')
     mkdirSync(path.join(root, "valid"));
     writeFileSync(path.join(root, "valid/libdemo.dylib"), machoFixture(64, true, false, 6));
     expect(spawnSync("/usr/bin/lipo", ["-archs", addon]).status).toBe(0);
-    expect(() => auditMacRuntimePortability(root, bun)).toThrow(/Nonportable LC_LOAD_DYLIB/);
+    expect(audit).toThrow(/Nonportable LC_LOAD_DYLIB/);
   });
 
   it.each([
@@ -776,12 +723,8 @@ print('held-file-copy-ok')
     ["fat64", "/usr/lib/libSystem.B.dylib"],
     ["fat64", "/opt/homebrew/lib/nonportable.dylib"],
   ] as const)("audits load dependencies after inventory (%s, %s)", async (format, library) => {
-    const { auditMacRuntimePortability } =
-      await import("../../scripts/lib/mac-runtime-portability.mjs");
-    const { machoFixture } = await import("../helpers/mac-native.js");
     const root = temps.make("openclaw-portability-load-");
-    const bun = path.join(root, "bun");
-    writeFileSync(bun, machoFixture());
+    const { audit, machoFixture } = await portabilityFixture(root);
     const addon = path.join(root, "addon");
     const header = machoFixture(64, true, false, 6);
     const name = Buffer.from(library + "\0");
@@ -806,9 +749,9 @@ print('held-file-copy-ok')
     expect(load.status, load.stderr).toBe(0);
     expect(load.stdout).toContain(`name ${library} (offset 24)`);
     if (library === "/usr/lib/libSystem.B.dylib") {
-      expect(auditMacRuntimePortability(root, bun)).toBe(2);
+      expect(audit()).toBe(2);
     } else {
-      expect(() => auditMacRuntimePortability(root, bun)).toThrow(/Nonportable LC_LOAD_DYLIB/);
+      expect(audit).toThrow(/Nonportable LC_LOAD_DYLIB/);
     }
   });
 });

@@ -21,26 +21,8 @@ export async function runMacFixtureTool(
   return result.stdout.trim();
 }
 
-type NativeFixtures = Record<
-  | "arm64"
-  | "x86_64"
-  | "universal"
-  | "fat64"
-  | "universalArchive"
-  | "coff"
-  | "pe"
-  | "armLibrary"
-  | "intelLibrary"
-  | "universalLibrary"
-  | "elf"
-  | "armArchive"
-  | "intelArchive",
-  Buffer
->;
-type PreparedNativeFixtures = {
-  binaries: NativeFixtures;
-  objects: Record<"arm64" | "x86_64", Buffer>;
-};
+type PreparedNativeFixtures = Awaited<ReturnType<typeof compileMacNativeFixtures>>;
+type NativeFixtures = PreparedNativeFixtures["binaries"];
 let nativeFixtures: Promise<PreparedNativeFixtures> | undefined;
 
 export async function macObjectFixture(
@@ -78,17 +60,14 @@ export async function singleSliceMacFat64(
   arch: "arm64" | "x86_64",
   mac: MacScriptFixture,
 ) {
-  const input = path.join(root, `fat64-input-${arch}`);
-  const output = path.join(root, `fat64-single-${arch}`);
-  await writeFile(input, (await compiledMacNativeFixtures(root, mac))[arch]);
-  await runMacFixtureTool(
-    "/usr/bin/lipo",
-    ["-create", "-fat64", input, "-output", output],
+  const bytes = await macFatContainerFixture(
     root,
+    [(await compiledMacNativeFixtures(root, mac))[arch]],
+    true,
     mac,
   );
+  const output = path.join(root, "fat-container");
   expect(await runMacFixtureTool("/usr/bin/lipo", ["-archs", output], root, mac)).toBe(arch);
-  const bytes = await readFile(output);
   expect(bytes.subarray(0, 4).toString("hex")).toBe("cafebabf");
   return bytes;
 }
@@ -116,10 +95,8 @@ function prepareMacNativeFixtures(root: string, mac: MacScriptFixture) {
   return preparation;
 }
 
-async function compileMacNativeFixtures(
-  root: string,
-  mac: MacScriptFixture,
-): Promise<PreparedNativeFixtures> {
+async function compileMacNativeFixtures(root: string, mac: MacScriptFixture) {
+  const tool = (command: string, ...args: string[]) => runMacFixtureTool(command, args, root, mac);
   const source = path.join(root, "inert.c");
   await writeFile(source, "int main(void) { return 0; }\n");
   const files = {
@@ -143,73 +120,41 @@ async function compileMacNativeFixtures(
       const output = dynamic
         ? files[arch === "arm64" ? "armLibrary" : "intelLibrary"]
         : files[arch];
-      await runMacFixtureTool(
+      await tool(
         "/usr/bin/xcrun",
-        [
-          "clang",
-          "-arch",
-          arch,
-          "-mmacosx-version-min=14.0",
-          "-Wl,-no_adhoc_codesign",
-          ...(dynamic ? ["-dynamiclib"] : []),
-          source,
-          "-o",
-          output,
-        ],
-        root,
-        mac,
+        "clang",
+        "-arch",
+        arch,
+        "-mmacosx-version-min=14.0",
+        "-Wl,-no_adhoc_codesign",
+        ...(dynamic ? ["-dynamiclib"] : []),
+        source,
+        "-o",
+        output,
       );
-      expect(await runMacFixtureTool("/usr/bin/lipo", ["-archs", output], root, mac)).toBe(arch);
+      expect(await tool("/usr/bin/lipo", "-archs", output)).toBe(arch);
     }
     const object = files[arch === "arm64" ? "armObject" : "intelObject"];
     const archive = files[arch === "arm64" ? "armArchive" : "intelArchive"];
-    await runMacFixtureTool(
-      "/usr/bin/xcrun",
-      ["clang", "-arch", arch, "-c", source, "-o", object],
-      root,
-      mac,
-    );
-    await runMacFixtureTool("/usr/bin/ar", ["rcs", archive, object], root, mac);
-    expect(await runMacFixtureTool("/usr/bin/lipo", ["-archs", archive], root, mac)).toBe(arch);
+    await tool("/usr/bin/xcrun", "clang", "-arch", arch, "-c", source, "-o", object);
+    await tool("/usr/bin/ar", "rcs", archive, object);
+    expect(await tool("/usr/bin/lipo", "-archs", archive)).toBe(arch);
   }
-  await runMacFixtureTool(
-    "/usr/bin/lipo",
-    ["-create", files.arm64, files.x86_64, "-output", files.universal],
-    root,
-    mac,
-  );
-  await runMacFixtureTool(
-    "/usr/bin/lipo",
-    ["-create", files.armLibrary, files.intelLibrary, "-output", files.universalLibrary],
-    root,
-    mac,
-  );
-  await runMacFixtureTool(
-    "/usr/bin/xcrun",
-    ["clang", "-target", "x86_64-unknown-linux-gnu", "-c", source, "-o", files.elf],
-    root,
-    mac,
-  );
-  expect(await runMacFixtureTool("/usr/bin/file", ["-b", files.elf], root, mac)).toContain("ELF");
-  await runMacFixtureTool(
-    "/usr/bin/lipo",
-    ["-create", "-fat64", files.arm64, files.x86_64, "-output", files.fat64],
-    root,
-    mac,
-  );
-  await runMacFixtureTool(
-    "/usr/bin/lipo",
-    ["-create", files.armArchive, files.intelArchive, "-output", files.universalArchive],
-    root,
-    mac,
-  );
-  await runMacFixtureTool(
-    "/usr/bin/xcrun",
-    ["clang", "-target", "x86_64-pc-windows-msvc", "-c", source, "-o", files.coff],
-    root,
-    mac,
-  );
-  expect(await runMacFixtureTool("/usr/bin/file", ["-b", files.coff], root, mac)).toContain("COFF");
+  for (const [arm, intel, output, extra] of [
+    [files.arm64, files.x86_64, files.universal, []],
+    [files.armLibrary, files.intelLibrary, files.universalLibrary, []],
+    [files.arm64, files.x86_64, files.fat64, ["-fat64"]],
+    [files.armArchive, files.intelArchive, files.universalArchive, []],
+  ] as const) {
+    await tool("/usr/bin/lipo", "-create", ...extra, arm, intel, "-output", output);
+  }
+  for (const [target, output, format] of [
+    ["x86_64-unknown-linux-gnu", files.elf, "ELF"],
+    ["x86_64-pc-windows-msvc", files.coff, "COFF"],
+  ] as const) {
+    await tool("/usr/bin/xcrun", "clang", "-target", target, "-c", source, "-o", output);
+    expect(await tool("/usr/bin/file", "-b", output)).toContain(format);
+  }
   // Minimal inert PE32+ image: DOS header, NT/optional headers, one .text section.
   const pe = Buffer.alloc(1024);
   pe.write("MZ");
@@ -236,7 +181,7 @@ async function compileMacNativeFixtures(
   pe[512] = 0xc3;
   const peFile = path.join(root, "windows.exe");
   await writeFile(peFile, pe);
-  expect(await runMacFixtureTool("/usr/bin/file", ["-b", peFile], root, mac)).toContain("PE32+");
+  expect(await tool("/usr/bin/file", "-b", peFile)).toContain("PE32+");
   return {
     binaries: {
       arm64: await readFile(files.arm64),
