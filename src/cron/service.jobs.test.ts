@@ -17,17 +17,15 @@ import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
 const NOW = Date.parse("2026-07-21T12:00:00.000Z");
 const WEBHOOK = "https://example.invalid/cron";
-function input(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
-  return {
-    name: "job",
-    enabled: true,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "main",
-    wakeMode: "now",
-    payload: { kind: "systemEvent", text: "tick" },
-    ...overrides,
-  };
-}
+const input = (overrides: Partial<CronJobCreate> = {}): CronJobCreate => ({
+  name: "job",
+  enabled: true,
+  schedule: { kind: "every", everyMs: 60_000 },
+  sessionTarget: "main",
+  wakeMode: "now",
+  payload: { kind: "systemEvent", text: "tick" },
+  ...overrides,
+});
 
 type AgentPayload = Extract<CronJob["payload"], { kind: "agentTurn" }>;
 const agentPayload = (overrides: Partial<AgentPayload> = {}): AgentPayload => ({
@@ -36,30 +34,25 @@ const agentPayload = (overrides: Partial<AgentPayload> = {}): AgentPayload => ({
   ...overrides,
 });
 
-function agentInput(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
-  return input({
-    sessionTarget: "isolated",
-    payload: agentPayload(),
-    ...overrides,
-  });
-}
+const agentInput = (overrides: Partial<CronJobCreate> = {}) =>
+  input({ sessionTarget: "isolated", payload: agentPayload(), ...overrides });
 
-function fixtureJob(overrides: Partial<CronJob> = {}): CronJob {
-  return { ...input(), id: "job", createdAtMs: NOW, updatedAtMs: NOW, state: {}, ...overrides };
-}
+const fixtureJob = (overrides: Partial<CronJob> = {}): CronJob => ({
+  ...input(),
+  id: "job",
+  createdAtMs: NOW,
+  updatedAtMs: NOW,
+  state: {},
+  ...overrides,
+});
 
-function agentJob(delivery?: CronJob["delivery"], overrides: Partial<CronJob> = {}): CronJob {
-  return fixtureJob({ ...agentInput(), delivery, ...overrides });
-}
+const agentJob = (delivery?: CronJob["delivery"], overrides: Partial<CronJob> = {}) =>
+  fixtureJob({ ...agentInput(), delivery, ...overrides });
 
-function fixtureState(defaultAgentId?: string): CronServiceState {
-  return { deps: { nowMs: () => NOW, defaultAgentId } } as unknown as CronServiceState;
-}
+const fixtureState = () => ({ deps: { nowMs: () => NOW } }) as unknown as CronServiceState;
 
 const createTestJob = (jobInput = input(), opts?: Parameters<typeof createJob>[2]) =>
   createJob(fixtureState(), jobInput, opts);
-
-const scheduledJob = (schedule: CronJob["schedule"]) => createTestJob(input({ schedule }));
 
 const convergence = { enabledExplicit: true, nowMs: NOW };
 
@@ -109,20 +102,10 @@ it("clears a completion webhook explicitly", () => {
   expect(current.delivery?.completionDestination).toBeUndefined();
 });
 
-it("rejects completion webhooks on disabled delivery", () => {
-  expect(() =>
-    applyJobPatch(agentJob({ mode: "announce" }), {
-      delivery: { mode: "none", completionDestination: { mode: "webhook", to: WEBHOOK } },
-    }),
-  ).toThrow('cron completion destination webhook is only supported with delivery.mode="announce"');
-});
-
 it("normalizes delivery overrides and preserves the account until explicitly cleared", () => {
   const current = agentJob(
-    { mode: "announce", channel: "signal", to: "123" },
-    {
-      sessionTarget: "session:project-alpha",
-    },
+    { ...announce, channel: "signal" },
+    { sessionTarget: "session:project-alpha" },
   );
   applyJobPatch(current, {
     delivery: {
@@ -146,36 +129,9 @@ it("normalizes delivery overrides and preserves the account until explicitly cle
   expect(current.delivery?.accountId).toBeUndefined();
 });
 
-it("rejects an empty webhook target", () => {
-  expect(() =>
-    applyJobPatch(fixtureJob({ delivery: { mode: "webhook" } }), {
-      delivery: { mode: "webhook", to: "" },
-    }),
-  ).toThrow("cron webhook delivery requires delivery.to to be a valid http(s) URL");
-});
-
-it("rejects failure destinations on existing non-webhook main jobs", () => {
-  const current = fixtureJob({
-    delivery: {
-      mode: "announce",
-      channel: "telegram",
-      to: "123",
-      failureDestination: { mode: "announce", channel: "telegram", to: "999" },
-    },
-  });
-  expect(() => applyJobPatch(current, { enabled: true })).toThrow(
-    'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
-  );
-});
-
 it("validates and trims webhook failure destinations", () => {
   const failureDestination = { mode: "webhook" as const, to: "not-a-url" };
-  const current = agentJob({
-    mode: "announce",
-    channel: "telegram",
-    to: "123",
-    failureDestination,
-  });
+  const current = agentJob({ ...announce, failureDestination });
   expect(() => applyJobPatch(current, { enabled: true })).toThrow(
     "cron failure destination webhook requires delivery.failureDestination.to to be a valid http(s) URL",
   );
@@ -184,58 +140,46 @@ it("validates and trims webhook failure destinations", () => {
   expect(current.delivery?.failureDestination?.to).toBe(WEBHOOK);
 });
 
-const authoredSettings = {
-  lightContext: true,
-  model: "openai/gpt-5",
-  fallbacks: ["anthropic/claude-haiku-3-5"],
-  thinking: "low",
-  toolsAllow: ["read", "write"],
-};
-const replacementPayload = agentPayload({
-  message: "hello",
-  lightContext: true,
-  fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
-  toolsAllow: ["exec", "read"],
-  toolsAllowIsDefault: true,
-}) satisfies CronJobCreate["payload"];
-const customSession = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
-it.each<
-  [string, () => CronJob, CronJobPatch["payload"], CronJob["payload"], CronJob["sessionTarget"]?]
->([
-  [
-    "updates authored agent settings",
-    () => agentJob(),
-    { kind: "agentTurn", ...authoredSettings },
-    agentPayload({ ...authoredSettings }),
-  ],
-  [
-    "replaces a system payload with agent settings and default authority",
-    () => fixtureJob(),
-    replacementPayload,
-    replacementPayload,
-    customSession,
-  ],
-  [
-    "clears model-selection overrides without changing the message",
-    () =>
-      agentJob(undefined, {
-        payload: agentPayload({
-          model: "openai/gpt-5",
-          thinking: "high",
-          fallbacks: ["openrouter/gpt-4.1-mini"],
-        }),
-      }),
-    { kind: "agentTurn", model: null, thinking: null, fallbacks: null },
-    agentPayload(),
-  ],
-])("%s", (_name, makeJob, payload, expectedPayload, sessionTarget) => {
-  const current = makeJob();
-  const expected = structuredClone(expectedPayload);
-  applyJobPatch(current, { payload, ...(sessionTarget ? { sessionTarget } : {}) });
+it("updates authored agent settings without changing the message", () => {
+  const current = agentJob();
+  const settings = {
+    lightContext: true,
+    model: "openai/gpt-5",
+    fallbacks: ["anthropic/claude-haiku-3-5"],
+    thinking: "low",
+    toolsAllow: ["read", "write"],
+  };
+  const expected = structuredClone(agentPayload(settings));
+  applyJobPatch(current, { payload: { kind: "agentTurn", ...settings } });
   expect(current.payload).toEqual(expected);
-  if (sessionTarget) {
-    expect(current.sessionTarget).toBe(sessionTarget);
-  }
+});
+
+it("preserves default tool authority when replacing a system payload", () => {
+  const current = fixtureJob();
+  const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
+  const payload = agentPayload({
+    message: "hello",
+    toolsAllow: ["exec", "read"],
+    toolsAllowIsDefault: true,
+  });
+  const expected = structuredClone(payload);
+  applyJobPatch(current, { sessionTarget, payload });
+  expect(current.sessionTarget).toBe(sessionTarget);
+  expect(current.payload).toEqual(expected);
+});
+
+it("clears saved model-selection overrides without changing the message", () => {
+  const current = agentJob(undefined, {
+    payload: agentPayload({
+      model: "openai/gpt-5",
+      thinking: "high",
+      fallbacks: ["openrouter/gpt-4.1-mini"],
+    }),
+  });
+  applyJobPatch(current, {
+    payload: { kind: "agentTurn", model: null, thinking: null, fallbacks: null },
+  });
+  expect(current.payload).toEqual(agentPayload());
 });
 
 type AgentPatch = Omit<
@@ -257,71 +201,32 @@ it.each<[AgentPatch, string[], true | undefined]>([
   ]);
 });
 
-it("rejects overflowing intervals while preserving the inclusive Date boundary", () => {
-  expect(() => scheduledJob({ kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS })).toThrow(
-    "cron every schedule has no upcoming run time and would never fire",
-  );
-  expect(
-    scheduledJob({ kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 }).state.nextRunAtMs,
-  ).toBe(MAX_DATE_TIMESTAMP_MS);
-});
-
-it("rejects invalid one-shot timestamps at the service boundary", () => {
-  expect(
-    scheduledJob({ kind: "at", at: new Date(MAX_DATE_TIMESTAMP_MS).toISOString() }).state
-      .nextRunAtMs,
-  ).toBe(MAX_DATE_TIMESTAMP_MS);
-  expect(() => scheduledJob({ kind: "at", at: String(MAX_DATE_TIMESTAMP_MS + 1) })).toThrow(
-    "Date-valid absolute timestamp",
-  );
-});
-
-const configuredChannels = ["reef", "discord"];
-const options = { configuredChannels };
-const explicitDelivery = () => agentInput({ delivery: { mode: "announce", channel: "discord" } });
-
-it("revalidates patches that change delivery resolution", () => {
-  const current = createTestJob(explicitDelivery(), options);
-  expect(() => applyJobPatch(current, { delivery: { channel: "last" } }, options)).toThrow(
-    "cron announce delivery requires an explicit channel",
-  );
-});
+const options = { configuredChannels: ["reef", "discord"] };
 
 it("preserves explicit empty caps and leaves transport-only jobs capless", () => {
-  const noTools = createTestJob(
-    agentInput({
-      sessionTarget: "session:project-alpha",
-      payload: agentPayload({ message: "render", toolsAllow: [] }),
-    }),
-  );
-  const transportOnly = createTestJob(input());
-  expect(noTools.payload.toolsAllow).toEqual([]);
-  expect(transportOnly.payload.toolsAllow).toBeUndefined();
+  const noTools = agentInput({
+    sessionTarget: "session:project-alpha",
+    payload: agentPayload({ toolsAllow: [] }),
+  });
+  expect(createTestJob(noTools).payload.toolsAllow).toEqual([]);
+  expect(createTestJob().payload.toolsAllow).toBeUndefined();
 });
 
-it("preserves legacy and explicit authority during declarative convergence", () => {
-  const legacy = agentJob({ mode: "none" });
-  const explicit = agentJob(
+it.each([undefined, { toolsAllow: ["read", "cron"], toolsAllowIsDefault: true }] satisfies Array<
+  Pick<AgentPayload, "toolsAllow" | "toolsAllowIsDefault"> | undefined
+>)("preserves declarative tool authority %j", (cap) => {
+  const expected = structuredClone(cap);
+  const current = agentJob(
     { mode: "none" },
-    {
-      payload: agentPayload({
-        message: "explicit",
-        toolsAllow: ["read", "cron"],
-        toolsAllowIsDefault: true,
-      }),
-    },
+    cap ? { payload: agentPayload({ ...cap, message: "explicit" }) } : {},
   );
-  const declaration = agentInput({
-    payload: agentPayload({ message: "updated" }),
-    delivery: { mode: "none" },
-  });
-  applyDeclarativeJobSpec(legacy, declaration, convergence);
-  applyDeclarativeJobSpec(explicit, declaration, convergence);
-  expect(legacy.payload.toolsAllow).toBeUndefined();
-  expect(explicit.payload).toMatchObject({
-    toolsAllow: ["read", "cron"],
-    toolsAllowIsDefault: true,
-  });
+  applyDeclarativeJobSpec(
+    current,
+    agentInput({ payload: agentPayload({ message: "updated" }), delivery: { mode: "none" } }),
+    convergence,
+  );
+  expect(current.payload.toolsAllow).toEqual(expected?.toolsAllow);
+  expect(current.payload.toolsAllowIsDefault).toBe(expected?.toolsAllowIsDefault);
 });
 
 it("adopts explicit authority when a declaration becomes tool-bearing", () => {
@@ -336,17 +241,6 @@ it("adopts explicit authority when a declaration becomes tool-bearing", () => {
 const malformedScript = "const x = ;";
 const triggeredInput = (script = "return { fire: true }") => input({ trigger: { script } });
 
-it("rejects malformed trigger scripts on patch", () => {
-  const mutate = (script: string) => {
-    const current = createTestJob(triggeredInput());
-    return applyJobPatch(current, { trigger: { script } });
-  };
-  expect(() => mutate(malformedScript)).toThrow(
-    "cron trigger script has a syntax error: Unexpected token (line 1, column 10)",
-  );
-  expect(() => mutate("   ")).toThrow("cron trigger script must not be empty");
-});
-
 it("allows removal of a legacy malformed trigger", () => {
   const current = createTestJob(triggeredInput());
   current.trigger = { script: malformedScript };
@@ -354,71 +248,8 @@ it("allows removal of a legacy malformed trigger", () => {
   expect(current.trigger).toBeUndefined();
 });
 
-const scriptInput = () =>
-  input({
-    sessionTarget: "isolated",
-    payload: {
-      kind: "script",
-      script: "return { state: { count: 1 } }",
-      timeoutSeconds: 4_000,
-      toolBudget: 4_000,
-    },
-  });
+const scriptInput = () => agentInput({ payload: { kind: "script", script: "return {}" } });
 const enabled = { cronConfig: { triggers: { enabled: true } } };
-
-it("rejects malformed scripts on patch", () => {
-  const current = createTestJob(scriptInput());
-  expect(() =>
-    applyJobPatch(current, { payload: { kind: "script", script: "const x = ;" } }, enabled),
-  ).toThrow("cron script payload has a syntax error");
-});
-
-it("rejects condition triggers because both script kinds own trigger.state", () => {
-  const serviceState = fixtureState();
-  expect(() =>
-    createJob(serviceState, { ...scriptInput(), trigger: { script: "return { fire: true }" } }),
-  ).toThrow("cannot be combined with a condition trigger");
-  expect(() =>
-    applyJobPatch(
-      createJob(serviceState, scriptInput()),
-      { trigger: { script: "return { fire: true }" } },
-      enabled,
-    ),
-  ).toThrow("cannot be combined with a condition trigger");
-});
-
-it("rejects conversion to script while disabled and caps an enabled conversion", () => {
-  const base = createTestJob(agentInput());
-  expect(() =>
-    applyJobPatch(
-      structuredClone(base),
-      { payload: { kind: "script", script: "return {}" } },
-      {
-        cronConfig: { triggers: { enabled: false } },
-      },
-    ),
-  ).toThrow("the operator set cron.triggers.enabled: false");
-  applyJobPatch(
-    base,
-    {
-      payload: { kind: "script", script: "return {}", timeoutSeconds: 9_000, toolBudget: 9_000 },
-    },
-    enabled,
-  );
-  expect(base.payload).toMatchObject({ kind: "script", timeoutSeconds: 900, toolBudget: 200 });
-});
-
-it("rejects null bytes in custom session targets", () => {
-  expect(() => createTestJob(agentInput({ sessionTarget: "session:bad\0id" }))).toThrow(
-    "invalid cron sessionTarget session id",
-  );
-});
-
-it("rejects patching a main-session job to a non-default agent", () => {
-  expect(() =>
-    applyJobPatch(fixtureJob(), { agentId: "custom-agent" }, { defaultAgentId: "main" }),
-  ).toThrow('cron: sessionTarget "main" is only valid for the default agent');
-});
 
 const hourly: CronJob["schedule"] = {
   kind: "cron",
@@ -475,31 +306,12 @@ it("keeps a staggered slot in the current hour and includes its exact previous-r
 function maintenanceFixture(statePatch: CronJob["state"]) {
   const job = fixtureJob({
     id: "test-job",
-    name: "test job",
-    payload: { kind: "systemEvent", text: "test" },
     schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
     wakeMode: "next-heartbeat",
     state: statePatch,
   });
   return { job, state: createMockCronStateForJobs({ jobs: [job], nowMs: NOW }) };
 }
-
-it("leaves a queued marker from before a clock rollback for startup recovery", () => {
-  const futureQueuedAt = NOW + 3 * 60 * 60_000;
-  const { job, state } = maintenanceFixture({
-    nextRunAtMs: NOW + 60_000,
-    queuedAtMs: futureQueuedAt,
-  });
-  recomputeSingleJobForMaintenance(
-    state,
-    job,
-    { deferredNotifications: [] },
-    { reservations: new Map(), isJobActive: () => false },
-  );
-
-  expect(job.state.queuedAtMs).toBe(futureQueuedAt);
-  expect(job.state.nextRunAtMs).toBe(NOW + 60_000);
-});
 
 it("preserves a future running marker owned by a live execution", () => {
   const futureMarker = NOW + 3 * 60 * 60_000;
@@ -516,21 +328,123 @@ it("preserves a future running marker owned by a live execution", () => {
   }
 });
 
-it("leaves an overdue running marker and its deadline for startup recovery", () => {
-  const pastDue = NOW - 60_000;
-  const staleRunningAt = NOW - 3 * 60 * 60_000;
-  const { job, state } = maintenanceFixture({
-    nextRunAtMs: pastDue,
-    runningAtMs: staleRunningAt,
-    lastRunAtMs: pastDue + 1000,
+const patchErrors = {
+  completion: 'cron completion destination webhook is only supported with delivery.mode="announce"',
+  webhook: "cron webhook delivery requires delivery.to to be a valid http(s) URL",
+  mainFailure:
+    'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
+  triggerSyntax: "cron trigger script has a syntax error: Unexpected token (line 1, column 10)",
+  emptyTrigger: "cron trigger script must not be empty",
+  scriptSyntax: "cron script payload has a syntax error",
+  triggerConflict: "cannot be combined with a condition trigger",
+  disabledScript: "the operator set cron.triggers.enabled: false",
+  agent: 'cron: sessionTarget "main" is only valid for the default agent',
+  channel: "cron announce delivery requires an explicit channel",
+};
+const announce = { mode: "announce" as const, channel: "telegram", to: "123" };
+const invalidMainJob = () =>
+  fixtureJob({
+    delivery: { ...announce, failureDestination: { ...announce, to: "999" } },
   });
-  recomputeSingleJobForMaintenance(
-    state,
-    job,
-    { deferredNotifications: [], recomputeExpired: true, nowMs: NOW },
-    { reservations: new Map(), isJobActive: () => false },
-  );
-
-  expect(job.state.runningAtMs).toBe(staleRunningAt);
-  expect(job.state.nextRunAtMs).toBe(pastDue);
+const explicitChannelJob = () =>
+  createTestJob(agentInput({ delivery: { mode: "announce", channel: "discord" } }), options);
+type InvalidPatch = [
+  keyof typeof patchErrors,
+  () => CronJob,
+  CronJobPatch,
+  Parameters<typeof applyJobPatch>[2]?,
+];
+it.each<InvalidPatch>([
+  [
+    "completion",
+    () => agentJob({ mode: "announce" }),
+    { delivery: { mode: "none", completionDestination: { mode: "webhook", to: WEBHOOK } } },
+  ],
+  [
+    "webhook",
+    () => fixtureJob({ delivery: { mode: "webhook" } }),
+    { delivery: { mode: "webhook", to: "" } },
+  ],
+  ["mainFailure", invalidMainJob, { enabled: true }],
+  [
+    "triggerSyntax",
+    () => createTestJob(triggeredInput()),
+    { trigger: { script: malformedScript } },
+  ],
+  ["emptyTrigger", () => createTestJob(triggeredInput()), { trigger: { script: "   " } }],
+  [
+    "scriptSyntax",
+    () => createTestJob(scriptInput()),
+    { payload: { kind: "script", script: malformedScript } },
+    enabled,
+  ],
+  [
+    "triggerConflict",
+    () => createTestJob(scriptInput()),
+    { trigger: { script: "return { fire: true }" } },
+    enabled,
+  ],
+  [
+    "disabledScript",
+    () => createTestJob(agentInput()),
+    { payload: { kind: "script", script: "return {}" } },
+    { cronConfig: { triggers: { enabled: false } } },
+  ],
+  ["agent", fixtureJob, { agentId: "custom-agent" }, { defaultAgentId: "main" }],
+  ["channel", explicitChannelJob, { delivery: { channel: "last" } }, options],
+])("rejects invalid %s patch", (error, makeJob, patch, opts) => {
+  expect(() => applyJobPatch(makeJob(), patch, opts)).toThrow(patchErrors[error]);
 });
+
+const creationErrors = {
+  interval: "cron every schedule has no upcoming run time and would never fire",
+  timestamp: "Date-valid absolute timestamp",
+  trigger: patchErrors.triggerConflict,
+  session: "invalid cron sessionTarget session id",
+};
+it.each<[keyof typeof creationErrors, CronJobCreate]>([
+  ["interval", input({ schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS } })],
+  ["timestamp", input({ schedule: { kind: "at", at: String(MAX_DATE_TIMESTAMP_MS + 1) } })],
+  ["trigger", { ...scriptInput(), trigger: { script: "return { fire: true }" } }],
+  ["session", agentInput({ sessionTarget: "session:bad\0id" })],
+])("rejects invalid %s at creation", (error, jobInput) => {
+  expect(() => createTestJob(jobInput)).toThrow(creationErrors[error]);
+});
+
+it.each<CronJob["schedule"]>([
+  { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 },
+  { kind: "at", at: new Date(MAX_DATE_TIMESTAMP_MS).toISOString() },
+])("accepts the inclusive Date boundary for $kind", (schedule) => {
+  expect(createTestJob(input({ schedule })).state.nextRunAtMs).toBe(MAX_DATE_TIMESTAMP_MS);
+});
+
+it("caps enabled script conversions", () => {
+  const current = createTestJob(agentInput());
+  applyJobPatch(
+    current,
+    { payload: { kind: "script", script: "return {}", timeoutSeconds: 9_000, toolBudget: 9_000 } },
+    enabled,
+  );
+  expect(current.payload).toMatchObject({ kind: "script", timeoutSeconds: 900, toolBudget: 200 });
+});
+
+it.each([
+  ["queuedAtMs", NOW + 3 * 60 * 60_000, NOW + 60_000, false],
+  ["runningAtMs", NOW - 3 * 60 * 60_000, NOW - 60_000, true],
+] as const)(
+  "leaves stale %s and its deadline for startup recovery",
+  (field, marker, nextRunAtMs, overdue) => {
+    const expected = { nextRunAtMs, [field]: marker };
+    const { job, state } = maintenanceFixture({
+      ...expected,
+      ...(overdue ? { lastRunAtMs: nextRunAtMs + 1000 } : {}),
+    });
+    recomputeSingleJobForMaintenance(
+      state,
+      job,
+      { deferredNotifications: [], ...(overdue ? { recomputeExpired: true, nowMs: NOW } : {}) },
+      { reservations: new Map(), isJobActive: () => false },
+    );
+    expect(job.state).toMatchObject(expected);
+  },
+);

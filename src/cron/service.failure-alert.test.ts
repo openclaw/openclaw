@@ -11,6 +11,7 @@ import type { CronFailureNotificationDetail } from "./types.js";
 
 const privateError = "TOKEN=opaque /private/path command --secret provider body stack";
 const timeoutFailure = { status: "error", error: "timeout", provider: "anthropic" } as const;
+const telegramRoute = { channel: "telegram", to: "19098680" };
 
 const { withFailureAlertCron } = setupFailureAlertSuite();
 type AlertParams = Parameters<typeof withFailureAlertCron>;
@@ -73,9 +74,7 @@ describe("CronService failure alerts", () => {
         const error = "Local provider unavailable at http://127.0.0.1:11434 (private diagnostic)";
         const blocked = skipped(error);
         runIsolatedAgentJob.mockResolvedValue(blocked);
-        const job = await addJob("local report", {
-          owner: { sessionKey: "agent:main:owner" },
-        });
+        const job = await addJob("local report", { owner: { sessionKey: "agent:main:owner" } });
         for (let count = 1; count <= 3; count++) {
           vi.setSystemTime(cron.getJob(job.id)!.state.nextRunAtMs!);
           await expect(cron.run(job.id, "due")).resolves.toEqual({ ok: true, ran: true });
@@ -144,8 +143,8 @@ describe("CronService failure alerts", () => {
 
   it.each(["job opt-out", "global opt-out", "ordinary skip"] as const)(
     "keeps %s silent with the default skipped-alert policy",
-    async (scenario) => {
-      await withAlerts(
+    (scenario) =>
+      withAlerts(
         async ({ cron, runCronFailureRepair, addJob, runJob }) => {
           const job = await addJob(
             "silent skip",
@@ -162,8 +161,7 @@ describe("CronService failure alerts", () => {
             scenario === "ordinary skip" ? "cron-preflight" : "model-preflight",
           ),
         },
-      );
-    },
+      ),
   );
 
   it("groups delivery failures with the job cooldown without an after gate", () =>
@@ -242,10 +240,7 @@ describe("CronService failure alerts", () => {
         await runJob(job, 0);
 
         await runJob(job, 1);
-        const firstAlert = expectAlertFields(sendCronFailureAlert, {
-          channel: "telegram",
-          to: "19098680",
-        });
+        const firstAlert = expectAlertFields(sendCronFailureAlert, telegramRoute);
         expect(firstAlert.job.id).toBe(job.id);
         expectAlertTextContaining(sendCronFailureAlert, 'Automation "daily report" failed 2 times');
 
@@ -297,9 +292,9 @@ describe("CronService failure alerts", () => {
       },
     ));
 
-  it.each([false, true])("routes skipped alerts with an owned destination=%s", async (owned) => {
+  it.each([false, true])("routes skipped alerts with an owned destination=%s", (owned) => {
     const name = owned ? "skipped job with a failure destination" : "updated skipped alert job";
-    await withAlerts(
+    return withAlerts(
       async ({ cron, sendCronFailureAlert, addJob, runJob }) => {
         const route = { channel: "telegram", to: "12345" };
         const job = await addJob(
@@ -319,10 +314,7 @@ describe("CronService failure alerts", () => {
           sendCronFailureAlert,
           owned ? { mode: "announce", channel: "slack", to: "#alerts" } : route,
         );
-        expectAlertTextContaining(
-          sendCronFailureAlert,
-          'Automation "' + name + '" skipped 1 times',
-        );
+        expectAlertTextContaining(sendCronFailureAlert, `Automation "${name}" skipped 1 times`);
       },
       {
         ...(owned
@@ -342,24 +334,15 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("threads failure alert mode/accountId and skips best-effort jobs", async () => {
-    await withAlerts(
+  it("threads failure alert mode/accountId and skips best-effort jobs", () =>
+    withAlerts(
       async ({ sendCronFailureAlert, addJob, runJob }) => {
-        const normalJob = await addJob("normal alert job", {
-          delivery: createTelegramDelivery(),
-        });
-        const bestEffortJob = await addJob("best effort alert job", {
-          delivery: {
-            ...createTelegramDelivery(),
-            bestEffort: true,
-          },
-        });
+        const delivery = { ...createTelegramDelivery(), bestEffort: true };
+        const normalJob = await addJob("normal alert job");
+        const bestEffortJob = await addJob("best effort alert job", { delivery });
         const explicitBestEffortJob = await addJob("explicit best effort alert job", {
-          delivery: {
-            ...createTelegramDelivery(),
-            bestEffort: true,
-          },
-          failureAlert: { after: 1, channel: "telegram", to: "19098680" },
+          delivery,
+          failureAlert: { after: 1, ...telegramRoute },
         });
 
         await runJob(normalJob, 1);
@@ -374,8 +357,7 @@ describe("CronService failure alerts", () => {
         await runJob(explicitBestEffortJob, 2);
         expectAlertFields(sendCronFailureAlert, {
           mode: "announce",
-          channel: "telegram",
-          to: "19098680",
+          ...telegramRoute,
         });
       },
       {
@@ -386,8 +368,7 @@ describe("CronService failure alerts", () => {
           accountId: "global-account",
         },
       },
-    );
-  });
+    ));
 
   it("adds provider login recovery to OpenAI OAuth refresh failures", () =>
     withAlerts(
@@ -399,18 +380,12 @@ describe("CronService failure alerts", () => {
         const alert = alertCallArg(sendCronFailureAlert);
         expect(alert.text).toContain("Cause: auth_permanent");
         expect(alert.text).toContain("Send `/login openai`");
+        const signIn = {
+          label: "Sign in",
+          action: { type: "command", command: "/login openai" },
+        };
         expect(alert.presentation).toEqual({
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Sign in",
-                  action: { type: "command", command: "/login openai" },
-                },
-              ],
-            },
-          ],
+          blocks: [{ type: "buttons", buttons: [signIn] }],
         });
       },
       {
@@ -441,12 +416,10 @@ describe("CronService failure alerts", () => {
     ],
   ] satisfies Array<[string, CronFailureNotificationDetail | undefined, string]>)(
     "renders safe %s detail in threshold alerts",
-    async (_name, detail, expected) => {
-      await withAlerts(
+    (_name, detail, expected) =>
+      withAlerts(
         async ({ sendCronFailureAlert, addJob, runJob }) => {
-          const job = await addJob("closed detail alert", {
-            payload: { kind: "agentTurn", message: "ping" },
-          });
+          const job = await addJob("closed detail alert");
 
           await runJob(job, 1);
           expect(alertCallArg(sendCronFailureAlert).text).toBe(
@@ -461,7 +434,6 @@ describe("CronService failure alerts", () => {
             failureNotificationDetail: detail,
           },
         },
-      );
-    },
+      ),
   );
 });

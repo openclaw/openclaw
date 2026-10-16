@@ -1,5 +1,4 @@
-// Exercise the scheduler's active marker against the real heartbeat busy guard.
-// Stubbing runHeartbeatOnce hides this cross-owner interaction.
+// Keep the real heartbeat: a stub hides scheduler/busy-guard interactions.
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
@@ -46,8 +45,7 @@ import type { CronJobCreate } from "./types.js";
 
 installHeartbeatRunnerTestRuntime();
 beforeAll(async () => {
-  // Dispatch lazily loads fast-abort handling even with an injected reply resolver.
-  // Load both graphs before this real-time scheduler fixture starts its watchdog.
+  // Load lazy dispatch before the real-time fixture starts its watchdog.
   await Promise.all([
     import("../auto-reply/dispatch.js"),
     import("../auto-reply/reply/abort.runtime.js"),
@@ -88,7 +86,13 @@ type MainCronOptions = {
   mixedExec?: boolean;
 };
 const reminder = "Reminder: Send the nightly report";
-const serviceDefaults = { cronEnabled: true, log: noopLogger };
+const serviceDefaults = () => ({
+  cronEnabled: true,
+  log: noopLogger,
+  runIsolatedAgentJob: vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
+    status: "ok",
+  })),
+});
 function systemJob(at: number, wakeMode: "now" | "next-heartbeat" = "now"): CronJobCreate {
   return {
     enabled: true,
@@ -165,24 +169,20 @@ async function runCase(
     });
   }
 
-  const runOnce = realHeartbeat(cfg, reply, sendTelegram);
-  const runReal: typeof runHeartbeatOnce = async (opts) => {
-    const outcome = await runOnce(opts);
+  const heartbeat = realHeartbeat(cfg, reply, sendTelegram);
+  const runOnce = vi.fn(async (opts: Parameters<typeof runHeartbeatOnce>[0]) => {
+    const outcome = await heartbeat(opts);
     if (options.mixedExec && reply.mock.calls.length >= 2) {
       followUpDone.resolve(outcome);
     }
     return outcome;
-  };
-
-  const runner = startHeartbeatRunner({ cfg, runOnce: runReal });
+  });
+  const runner = startHeartbeatRunner({ cfg, runOnce });
   const clock = createGatewaySchedulerClock(Date.now());
   const cron = new CronService({
-    ...serviceDefaults,
+    ...serviceDefaults(),
     scheduler: createTestGatewayScheduler(clock.clock),
     storePath: sandbox.cronPath,
-    runIsolatedAgentJob: vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
-      status: "ok",
-    })),
     enqueueSystemEvent: (text, opts) => {
       const agentId = opts?.agentId ?? "main";
       const sessionKey = opts?.sessionKey ?? resolveAgentMainSessionKey({ cfg, agentId });
@@ -219,10 +219,9 @@ async function runCase(
   let scheduledTick: Promise<void> | undefined;
 
   const runBody = async () => {
-    // Fault cases must unwind the same fixture owner as the normal scheduler cases.
     if (exercise) {
       await exercise({ cron, runner, reply });
-      return undefined;
+      return;
     }
     if (options.heartbeatPaused) {
       setHeartbeatsEnabled(false);
@@ -250,7 +249,6 @@ async function runCase(
     }
 
     const [terminal, followUp] = await withTestTimeout(
-      // Cron emits finished before asynchronous finalization releases its busy guard.
       Promise.all([finished.promise, options.mixedExec ? followUpDone.promise : undefined]),
       10_000,
       `${mode} cron run did not finish`,
@@ -311,13 +309,12 @@ async function runCase(
         Body: expect.stringContaining(reminder),
       });
       expect(cronReply.Body).not.toContain("Exec completed");
-      expect(sendTelegram).toHaveBeenCalledTimes(2);
       expect(sendTelegram.mock.calls.map(([to]) => to)).toEqual(["-100155462274", "-100155462274"]);
       expect(peekSystemEventEntries(mainKey).map((event) => event.text)).toEqual([
         "Reminder: Late arrival",
       ]);
       expect(cron.getJob(job.id)).toBeUndefined();
-      return undefined;
+      return { mainKey, sandbox, terminal };
     }
     expect(reply).toHaveBeenCalledTimes(1);
 
@@ -329,9 +326,6 @@ async function runCase(
     });
     expect(replyCtx?.Provider).toBeUndefined();
     expect(peekSystemEventEntries(mainKey)).toHaveLength(0);
-    if (options.deleteAfterRun) {
-      expect(cron.getJob(job.id)).toBeUndefined();
-    }
     return { mainKey, sandbox, terminal };
   };
   return runQaGatewayFixture(
@@ -358,26 +352,15 @@ describe("main cron with the real heartbeat runner", () => {
     };
     const getReply = vi.fn<MainCronFixture["reply"]>(async () => ({ text: "unexpected" }));
     const sendTelegram = vi.fn();
-    const attempts: Awaited<ReturnType<typeof runHeartbeatOnce>>[] = [];
-    const runOnce = realHeartbeat(cfg, getReply, sendTelegram);
-    const runner = startHeartbeatRunner({
-      cfg,
-      runOnce: async (opts) => {
-        const result = await runOnce(opts);
-        attempts.push(result);
-        return result;
-      },
-    });
-    const events: CronEvent[] = [];
+    const runOnce = vi.fn(realHeartbeat(cfg, getReply, sendTelegram));
+    const runner = startHeartbeatRunner({ cfg, runOnce });
+    let finishedCount = 0;
     const requested = createDeferred();
     const finished = createDeferred<CronEvent>();
     const deps: CronServiceDeps = {
-      ...serviceDefaults,
+      ...serviceDefaults(),
       scheduler: createTestGatewayScheduler("fake-timers"),
       storePath: sandbox.cronPath,
-      runIsolatedAgentJob: vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
-        status: "ok",
-      })),
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: queueHeartbeat,
       requestHeartbeatAndWait: (wake, lifecycle) => {
@@ -388,7 +371,7 @@ describe("main cron with the real heartbeat runner", () => {
       resolveHeartbeatTimeoutMs: () => 100,
       onEvent: (event) => {
         if (event.action === "finished") {
-          events.push(structuredClone(event));
+          finishedCount++;
           finished.resolve(event);
         }
       },
@@ -421,7 +404,11 @@ describe("main cron with the real heartbeat runner", () => {
         status: "skipped",
         error: "heartbeat skipped: requests-in-flight",
       });
-      expect(attempts).toEqual([{ status: "skipped", reason: "requests-in-flight" }]);
+      expect(runOnce).toHaveBeenCalledOnce();
+      await expect(runOnce.mock.results[0]?.value).resolves.toEqual({
+        status: "skipped",
+        reason: "requests-in-flight",
+      });
       const completed = cron.getJob(job.id)!;
       expect(completed.state.runningAtMs).toBeUndefined();
       expect(completed.state.consecutiveErrors).toBe(0);
@@ -431,16 +418,14 @@ describe("main cron with the real heartbeat runner", () => {
       cron.stop();
       cron = new CronService(deps);
       await cron.start();
-      const restored = cron.getJob(job.id)!;
-      expect(restored.state).toEqual(completed.state);
-      expect(events).toHaveLength(1);
+      expect(cron.getJob(job.id)?.state).toEqual(completed.state);
+      expect(finishedCount).toBe(1);
 
-      // A finished ambient poll leaves no retry or cron run to delay shutdown.
       foreground.resolve();
       await foregroundRun;
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(attempts).toHaveLength(1);
-      expect(events).toHaveLength(1);
+      expect(runOnce).toHaveBeenCalledOnce();
+      expect(finishedCount).toBe(1);
       expectNoCalls(getReply, sendTelegram, vi.mocked(deps.enqueueSystemEvent));
     } finally {
       foreground.resolve();
@@ -457,7 +442,7 @@ describe("main cron with the real heartbeat runner", () => {
     ["keeps forced disabled jobs disabled", "queued", { ...paused, disableBeforeRun: true }],
     ["preserves paused scheduled one-shots", "scheduled", paused],
     [
-      "drains mixed work, retaining late arrivals",
+      "coalesces cron/exec; retains late arrivals",
       "scheduled",
       { deleteAfterRun: true, mixedExec: true },
     ],
@@ -472,18 +457,17 @@ describe("main cron with the real heartbeat runner", () => {
     if (!result) {
       throw new Error("expected completed cron run");
     }
-    const sessionKey = result.mainKey;
+    const { mainKey: sessionKey, sandbox } = result;
     const db = openOpenClawAgentDatabase(
       toDatabaseOptions(
         resolveSqliteScope({
           agentId: "main",
           sessionKey,
-          storePath: result.sandbox.sessionPath,
+          storePath: sandbox.sessionPath,
         }),
       ),
     ).db;
 
-    expect(result.terminal.status).toBe("ok");
     const session = db.prepare("SELECT session_key FROM session_nodes WHERE session_key = ?");
     expect(session.get(sessionKey)).toBeUndefined();
     expect(session.get(`${sessionKey}:heartbeat`)).toEqual({
@@ -529,8 +513,7 @@ describe("main cron with the real heartbeat runner", () => {
         10_000,
         "real heartbeat did not reach the reply gate",
       );
-      expect(getActiveCronJobCount()).toBe(1);
-      expect(getQueueSize(CommandLane.Cron)).toBe(0);
+      expect([getActiveCronJobCount(), getQueueSize(CommandLane.Cron)]).toEqual([1, 0]);
       throw bodyError;
     }).catch((error: unknown) => error);
     const fixtureFailure = outcome.then((error) => {
@@ -544,8 +527,7 @@ describe("main cron with the real heartbeat runner", () => {
       const error = await outcome;
       expect(abortedDuringDrain).toBe(false);
       expect(error).toBe(bodyError);
-      expect(getActiveCronJobCount()).toBe(0);
-      expect(getQueueSize(CommandLane.Cron)).toBe(0);
+      expect([getActiveCronJobCount(), getQueueSize(CommandLane.Cron)]).toEqual([0, 0]);
       expect(stopHeartbeat).toHaveBeenCalledOnce();
     } finally {
       releaseReply.resolve();
