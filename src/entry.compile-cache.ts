@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { getCompileCacheDir } from "node:module";
 import path from "node:path";
 import process from "node:process";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveOpenClawCliInvocation } from "../cli-invocation.mjs";
 import {
   enableOpenClawCompileCache as enableInstallCompileCache,
@@ -124,7 +125,7 @@ export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
     onError: (error) =>
       writeError(
         `[openclaw] Failed to respawn CLI without compile cache: ${
-          error instanceof Error ? (error.stack ?? error.message) : String(error)
+          error instanceof Error ? formatErrorStackWithMessage(error) : String(error)
         }\n`,
       ),
   });
