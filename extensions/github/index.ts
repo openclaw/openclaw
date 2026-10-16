@@ -30,6 +30,7 @@ export default definePluginEntry({
           hosts: ["github.com"],
           pathPattern: reader.pathPattern,
           detailMethod: "github.detail",
+          progressive: true,
           imageMethod: "github.image",
           ...(reader.previewMethod ? { previewMethod: reader.previewMethod } : {}),
         },
@@ -57,6 +58,7 @@ export default definePluginEntry({
             pathPattern: reader.pathPattern,
             sessionScoped: true,
             detailMethod: "github.sessionDetail",
+            progressive: true,
             ...(reader.previewMethod ? { previewMethod: reader.previewMethod } : {}),
           },
         });
