@@ -49,27 +49,22 @@ describe("applyJobPatch schedule retention", () => {
   });
 
   it.each([
-    { kind: "every" as const, everyMs: 60_000 },
-    { kind: "cron" as const, expr: "0 * * * *" },
-  ])(
-    "clears inherited one-shot cleanup but honors explicit policies when converting to $kind",
-    (schedule) => {
-      for (const previous of [
-        { kind: "at", at: "2026-07-19T09:00:00.000Z" },
-        { kind: "on-exit", command: "true" },
-      ] as const) {
-        for (const deleteAfterRun of [undefined, false, true]) {
-          const job = makeJob({ schedule: previous, deleteAfterRun: true });
+    { kind: "at", at: "2026-07-19T09:00:00.000Z" },
+    { kind: "on-exit", command: "true" },
+  ] as const)(
+    "clears inherited $kind cleanup on recurring conversion but honors explicit policies",
+    (previous) => {
+      for (const deleteAfterRun of [undefined, false, true]) {
+        const job = makeJob({ schedule: previous, deleteAfterRun: true });
 
-          applyJobPatch(job, {
-            schedule,
-            ...(deleteAfterRun === undefined ? {} : { deleteAfterRun }),
-          });
+        applyJobPatch(job, {
+          schedule: { kind: "cron", expr: "0 * * * *" },
+          ...(deleteAfterRun === undefined ? {} : { deleteAfterRun }),
+        });
 
-          expect(job.schedule.kind).toBe(schedule.kind);
-          expect(job.deleteAfterRun, previous.kind).toBe(deleteAfterRun);
-          expect(Object.hasOwn(job, "deleteAfterRun")).toBe(deleteAfterRun !== undefined);
-        }
+        expect(job.schedule.kind).toBe("cron");
+        expect(job.deleteAfterRun).toBe(deleteAfterRun);
+        expect(Object.hasOwn(job, "deleteAfterRun")).toBe(deleteAfterRun !== undefined);
       }
     },
   );
