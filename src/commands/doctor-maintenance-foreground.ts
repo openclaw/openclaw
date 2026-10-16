@@ -17,11 +17,12 @@ const DOCTOR_MAINTENANCE_WAIT_PROGRESS_INTERVAL_MS = 30_000;
 
 /**
  * The time, on this process's `performance.now()` clock, when update Doctor stops
- * waiting for other OpenClaw processes. Published drivers start the step timeout
- * when they spawn Doctor and pass neither its length nor its start, so this assumes
- * the default step timeout from process start. It keeps twice this update's
- * rehearsal Doctor time, and at least the floor, for Doctor's own work. Every wait
- * in one Doctor process ends at this deadline, so earlier waits shorten later ones.
+ * waiting for other OpenClaw processes. Published drivers bound activation Doctor
+ * only by an operator `--timeout`, counted from its spawn and not passed on, so
+ * Doctor stays within the default step allowance from its own start. It keeps
+ * twice this update's rehearsal Doctor time, and at least the floor, for its own
+ * work. Every wait in one Doctor process ends at this deadline, so earlier waits
+ * shorten later ones.
  */
 export async function resolveDoctorMaintenanceWaitDeadlineMs(
   env: NodeJS.ProcessEnv,

@@ -1125,11 +1125,12 @@ on and how long it will wait, repeats progress every 30 seconds, and continues
 once ownership is released. The wait holds no OpenClaw lock, so the other process
 can finish.
 
-The wait must leave Doctor time to finish inside the update step timeout.
-Installed updaters start that timeout when they launch Doctor but don't pass it on,
-so Doctor assumes the default 30 minutes from its own start (automatic updates
-allow 45 minutes). It reserves twice the
-time this update's migration rehearsal (`candidate-doctor` in the update run) took,
+The wait leaves Doctor time to finish within the default 30-minute update step
+allowance, counted from Doctor's own start. Installed updaters run activation
+Doctor without a step timeout unless the update was started with `--timeout`, and
+they don't pass that value to Doctor, so Doctor applies the default instead. It
+reserves twice the time this update's migration rehearsal (`candidate-doctor` in
+the update run) took,
 and at least 10 minutes (about twice the slowest measured update Doctor, 258 s on
 1 CPU with 10 MB/s disk), and waits only until the rest is used. By default that
 is up to 20 minutes, less the time Doctor already spent. All of Doctor's waits for
