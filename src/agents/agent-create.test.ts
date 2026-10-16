@@ -337,9 +337,7 @@ describe("createAgent", () => {
         writeOptions: expect.objectContaining({ allowedAgentRosterRemovals: ["main"] }),
       }),
     );
-    expect(mocks.persisted).toMatchObject({
-      agents: { entries: { robby: expect.objectContaining({ workspace: "/tmp/robby" }) } },
-    });
+    expect(mocks.persisted).toHaveProperty("agents.entries.robby.workspace", "/tmp/robby");
     expect(
       (mocks.persisted.agents as { entries?: Record<string, unknown> }).entries,
     ).not.toHaveProperty("main");
@@ -361,16 +359,13 @@ describe("createAgent", () => {
       model: "openai/parameter",
     });
 
-    expect(mocks.persisted).toMatchObject({
-      agents: {
-        entries: {
-          researcher: expect.objectContaining({
-            model: "openai/staged",
-            workspace: "/normalized/work",
-          }),
-        },
-      },
-    });
+    expect(mocks.persisted).toHaveProperty(
+      "agents.entries.researcher",
+      expect.objectContaining({
+        model: "openai/staged",
+        workspace: "/normalized/work",
+      }),
+    );
   });
 
   it("provisions the injected main roster only through a bootstrap entry", async () => {
@@ -385,9 +380,7 @@ describe("createAgent", () => {
       }),
     ).resolves.toMatchObject({ status: "existing", agentId: "main" });
     expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
-    expect(mocks.persisted).toMatchObject({
-      agents: { entries: { main: expect.objectContaining({ workspace: "/tmp/main-work" }) } },
-    });
+    expect(mocks.persisted).toHaveProperty("agents.entries.main.workspace", "/tmp/main-work");
   });
 
   it("does not materialize a minimal main entry from a persisted snapshot", async () => {

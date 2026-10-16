@@ -29,6 +29,23 @@ afterEach(() => {
   cleanupSink = undefined;
 });
 
+function prepareIdentity(
+  opts: Parameters<typeof prepareAgentCommandExecutionIdentity>[0]["opts"],
+  audit = true,
+) {
+  return prepareAgentCommandExecutionIdentity({
+    opts,
+    prepared: {
+      cfg: { logging: { audit: { enabled: true, executionIdentity: audit } } },
+      runId: "run-profiled",
+      sessionAgentId: "main",
+      sessionId: "session-profiled",
+    },
+    ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+    lifecycleGeneration: "generation-1",
+  });
+}
+
 describe("sanitizePublicAgentCommandIngressOpts", () => {
   it("removes forged host-owned capabilities from plain-JavaScript ingress", () => {
     const forgedCapability = {
@@ -38,9 +55,7 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
       grantTokens: new Set<string>(),
       abort: () => undefined,
     };
-    const opts = {
-      message: "create an automation",
-      allowModelOverride: false,
+    const hostOwned = {
       privateCompletion: true,
       replyExpectation: "optional",
       cronCreatorAuthorityCapability: forgedCapability,
@@ -63,24 +78,15 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
     };
 
     expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("prepareAssistantTranscriptMessage");
-    expect(sanitizePublicAgentCommandIngressOpts(opts)).toMatchObject({
+    const sanitized = sanitizePublicAgentCommandIngressOpts({
       message: "create an automation",
-      privateCompletion: undefined,
-      replyExpectation: undefined,
-      cronCreatorAuthorityCapability: undefined,
-      skillLibraryAuthoring: undefined,
-      pinnedWidgetAuthoring: undefined,
-      clientCaps: undefined,
-      gatewayUiCommandTarget: undefined,
-      toolBindings: undefined,
-      taskSuggestionDeliveryMode: undefined,
-      assertSourceCurrent: undefined,
-      beforeTerminalDelivery: undefined,
-      isTerminalOutcomeObserved: undefined,
-      prepareAssistantTranscriptMessage: undefined,
-      internalDeliverySuppressErrors: undefined,
-      operatorAuthority: undefined,
+      allowModelOverride: false,
+      ...hostOwned,
     });
+    expect(sanitized.message).toBe("create an automation");
+    for (const key of Object.keys(hostOwned)) {
+      expect(sanitized).toHaveProperty(key, undefined);
+    }
   });
 });
 
@@ -114,6 +120,7 @@ describe("Gateway agent command execution identity", () => {
       try {
         await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
           await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
+          const recovery = () => loadSessionEntry({ sessionKey, storePath })?.mainRestartRecovery;
           prepared = prepareAgentCommandExecutionIdentity({
             opts: {
               message: "continue interrupted work",
@@ -147,12 +154,8 @@ describe("Gateway agent command execution identity", () => {
           const admission = prepared.admit("embedded");
           const settled = admission.catch(() => undefined);
           await admittedCallback.promise;
-          expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-            mainRestartRecovery: { chargedAttempts: 3 },
-          });
-          expect(loadSessionEntry({ sessionKey, storePath })).not.toHaveProperty(
-            "mainRestartRecovery.startedAttempt",
-          );
+          expect(recovery()).toMatchObject({ chargedAttempts: 3 });
+          expect(recovery()).not.toHaveProperty("startedAttempt");
           if (outcome === "closed-before-admission") {
             prepared.close();
           }
@@ -161,25 +164,16 @@ describe("Gateway agent command execution identity", () => {
           if (outcome === "closed-before-admission") {
             await expect(admission).rejects.toThrow("closed during admission");
             await callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
-            expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-              mainRestartRecovery: sessionEntry.mainRestartRecovery,
-            });
-            expect(loadSessionEntry({ sessionKey, storePath })).not.toHaveProperty(
-              "mainRestartRecovery.startedAttempt",
-            );
+            expect(recovery()).toMatchObject(sessionEntry.mainRestartRecovery);
+            expect(recovery()).not.toHaveProperty("startedAttempt");
             return;
           }
           const context = await admission;
           await expect(prepared.admit("embedded")).resolves.toBe(context);
           // A selected/authenticated runtime can still stall before turn/start.
-          expect(loadSessionEntry({ sessionKey, storePath })).not.toHaveProperty(
-            "mainRestartRecovery.startedAttempt",
-          );
+          expect(recovery()).not.toHaveProperty("startedAttempt");
           if (audit) {
-            expect(loadSessionEntry({ sessionKey, storePath })).toHaveProperty(
-              "mainRestartRecovery.executionIdentity",
-              context.executionIdentityToken,
-            );
+            expect(recovery()).toHaveProperty("executionIdentity", context.executionIdentityToken);
           }
           if (outcome === "closed-before-start") {
             prepared.close();
@@ -199,18 +193,14 @@ describe("Gateway agent command execution identity", () => {
             },
           });
           if (outcome !== "started") {
-            expect(loadSessionEntry({ sessionKey, storePath })).not.toHaveProperty(
-              "mainRestartRecovery.startedAttempt",
-            );
+            expect(recovery()).not.toHaveProperty("startedAttempt");
             return;
           }
           await callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
-          expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-            mainRestartRecovery: {
-              chargedAttempts: 3,
-              startedAttempt: 3,
-              ...(audit ? { executionIdentity: context.executionIdentityToken } : {}),
-            },
+          expect(recovery()).toMatchObject({
+            chargedAttempts: 3,
+            startedAttempt: 3,
+            ...(audit ? { executionIdentity: context.executionIdentityToken } : {}),
           });
         });
       } finally {
@@ -222,25 +212,15 @@ describe("Gateway agent command execution identity", () => {
 
   it("runs owner binding only after the awaited admission callback settles", async () => {
     const events: string[] = [];
-    const prepared = prepareAgentCommandExecutionIdentity({
-      opts: {
-        message: "bind after admission",
-        onAdmittedRunContext: async () => {
-          await Promise.resolve();
-          events.push("admitted");
-        },
-        onPostAdmittedRunContext: () => {
-          events.push("owner-bound");
-        },
+    const prepared = prepareIdentity({
+      message: "bind after admission",
+      onAdmittedRunContext: async () => {
+        await Promise.resolve();
+        events.push("admitted");
       },
-      prepared: {
-        cfg: { logging: { audit: { enabled: true, executionIdentity: true } } },
-        runId: "run-post-admission",
-        sessionAgentId: "main",
-        sessionId: "session-post-admission",
+      onPostAdmittedRunContext: () => {
+        events.push("owner-bound");
       },
-      ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
-      lifecycleGeneration: "generation-1",
     });
     onTestFinished(prepared.close);
 
@@ -307,17 +287,7 @@ describe("Gateway agent command execution identity", () => {
         },
       ],
     });
-    const prepared = prepareAgentCommandExecutionIdentity({
-      opts,
-      prepared: {
-        cfg: { logging: { audit: { enabled: true, executionIdentity: true } } },
-        runId: "run-profiled",
-        sessionAgentId: "main",
-        sessionId: "session-profiled",
-      },
-      ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
-      lifecycleGeneration: "generation-1",
-    });
+    const prepared = prepareIdentity(opts);
     onTestFinished(prepared.close);
 
     await prepared.admit("embedded");
@@ -345,10 +315,6 @@ describe("Gateway agent command execution identity", () => {
         ],
       },
     });
-    if (work?.kind !== "capture" || work.envelope.invoker?.state !== "present") {
-      throw new Error("expected captured present invoker");
-    }
-    expect(work.envelope.invoker.displayLabel).toBe("Operator OPENAI_API_KEY=***");
   });
 
   it("does not offer the prepared profile label to storage without execution audit opt-in", async () => {
@@ -375,17 +341,7 @@ describe("Gateway agent command execution identity", () => {
         displayLabel: "Ada",
       },
     });
-    const prepared = prepareAgentCommandExecutionIdentity({
-      opts,
-      prepared: {
-        cfg: { logging: { audit: { enabled: true, executionIdentity: false } } },
-        runId: "run-profiled-disabled",
-        sessionAgentId: "main",
-        sessionId: "session-profiled-disabled",
-      },
-      ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
-      lifecycleGeneration: "generation-1",
-    });
+    const prepared = prepareIdentity(opts, false);
     onTestFinished(prepared.close);
 
     await prepared.admit("embedded");

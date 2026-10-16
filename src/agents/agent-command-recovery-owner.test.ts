@@ -67,6 +67,14 @@ describe("agent command restart recovery ownership", () => {
     });
   }
 
+  function interruptedRecovery(): Partial<SessionEntry> {
+    return {
+      status: "interrupted",
+      abortedLastRun: true,
+      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+    };
+  }
+
   function runningRecovery(lifecycleGeneration: string): Partial<SessionEntry> {
     return {
       updatedAt: 200,
@@ -95,11 +103,7 @@ describe("agent command restart recovery ownership", () => {
     {
       name: "interruption appears during preparation",
       before: {},
-      duringPreparation: {
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
-      },
+      duringPreparation: interruptedRecovery(),
     },
     {
       name: "an admitted recovery is still running",
@@ -112,20 +116,12 @@ describe("agent command restart recovery ownership", () => {
     {
       name: "freshness rollover still has an interrupted predecessor",
       target: { isNewSession: true, previousSessionId: "session-1", sessionId: "session-2" },
-      before: {
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
-      },
+      before: interruptedRecovery(),
     },
     {
       name: "an explicit replacement still has an interrupted predecessor",
       target: { isNewSession: true, previousSessionId: "session-1", sessionId: "fresh-session" },
-      before: {
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
-      },
+      before: interruptedRecovery(),
       explicitSession: true,
     },
     {
@@ -145,11 +141,7 @@ describe("agent command restart recovery ownership", () => {
     {
       name: "a fresh key acquires an interruption during preparation",
       target: { isNewSession: true, sessionId: "fresh-session" },
-      duringPreparation: {
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
-      },
+      duringPreparation: interruptedRecovery(),
     },
   ])("rejects standalone work when $name", async (scenario) => {
     const target = { ...createTarget(), ...scenario.target };
@@ -187,9 +179,7 @@ describe("agent command restart recovery ownership", () => {
     const staleEntry: SessionEntry = {
       sessionId: base.sessionId,
       updatedAt: 100,
-      status: "interrupted",
-      abortedLastRun: true,
-      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+      ...interruptedRecovery(),
     };
     const target = {
       ...base,
@@ -257,9 +247,7 @@ describe("agent command restart recovery ownership", () => {
     const interruptedEntry: SessionEntry = {
       sessionId: base.sessionId,
       updatedAt: 100,
-      status: "interrupted",
-      abortedLastRun: true,
-      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+      ...interruptedRecovery(),
     };
     const target = { ...base, sessionEntry: { ...interruptedEntry } };
     await write(target, interruptedEntry);
@@ -332,11 +320,7 @@ describe("agent command restart recovery ownership", () => {
       name: "cleared interruption",
       mode: "reject_uncoordinated",
       result: "ran",
-      before: {
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
-      },
+      before: interruptedRecovery(),
       duringPreparation: { updatedAt: 200 },
     },
     {
@@ -693,11 +677,7 @@ describe("agent command restart recovery ownership", () => {
     "binds a transferred recovery lease to its %s",
     async (binding) => {
       const base = createTarget();
-      await write(base, {
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
-      });
+      await write(base, interruptedRecovery());
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const claim = await claimMainSessionRecoveryOwner({
         lifecycleGeneration,
