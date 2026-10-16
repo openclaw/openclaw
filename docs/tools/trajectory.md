@@ -88,6 +88,10 @@ Runtime events include:
 - `trace.artifacts`
 - `session.ended`
 
+Native tool results include `success` only for a settled outcome. A tool that is
+still running or has an unknown outcome omits `success`; it is not recorded as a
+successful completion.
+
 Transcript events are reconstructed from the active session branch: user
 messages, assistant messages, tool calls, tool results, compactions, model
 changes, labels, and custom session entries.
@@ -183,6 +187,11 @@ The exporter also bounds input size:
 - runtime events per export: 200,000
 - total exported events: 250,000
 - individual runtime event lines are truncated above 256 KiB
+
+Runtime capture preserves structured results within its field limits, including
+explicit truncation markers. If a tool result exceeds the event size limit,
+capture keeps its tool identity and outcome while dropping oversized payload
+fields.
 
 The source byte limits are checked before parsing events. SQLite sources use
 UTF-8 JSONL size, including separators between rows, regardless of the database
