@@ -197,6 +197,11 @@ support does not bypass this guard. All-SQLite and the existing uniform
 PostgreSQL configuration keep their current behavior and existing restrictions.
 Fixed-local safety stores and the currently SQLite-only agent family do not
 count as an engine mixture. Config-only archive backups remain available for recovery.
+Updates also refuse any explicit `database.families` map until family-aware
+candidate admission is available: older targets cannot read that config shape.
+For a homogeneous installation, make `database.engine` match the effective engine
+and remove the now-redundant family overrides before updating, without changing
+any store's effective engine.
 Do not change overrides just to bypass a refusal: configuration changes do not
 port stored data.
 

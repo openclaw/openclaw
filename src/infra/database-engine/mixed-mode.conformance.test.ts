@@ -22,6 +22,7 @@ import type {
   MixedModeWorkerInput,
   MixedModeWorkerResult,
 } from "./mixed-mode.conformance.test-support.js";
+import { withDatabasePortConnection } from "./port-provider.js";
 
 type WorkboardStore = {
   ready(): Promise<void>;
@@ -192,6 +193,25 @@ it("boots the unchanged SQLite owners, captures only SQLite statements, and reop
 });
 
 describe.skipIf(!connection)("mixed-mode boot conformance", () => {
+  it("uses homogeneous overrides for lifecycle connections", async () => {
+    const result = await withDatabasePortConnection(
+      {
+        database: {
+          engine: "sqlite",
+          families: {
+            state: { engine: "postgres" },
+            workboard: { engine: "postgres" },
+            logbook: { engine: "postgres" },
+            "team-reports": { engine: "postgres" },
+          },
+          postgres: { connection },
+        },
+      },
+      async (client) => await client.query<{ value: number }>("SELECT 42 AS value"),
+    );
+    expect(result.rows).toEqual([{ value: 42 }]);
+  });
+
   it("boots fresh PostgreSQL state with real SQLite agent and Workboard owners", async () => {
     const result = await runProof(tempDirs.make("mixed-mode-state-"), "state-postgres");
     expect(result).toMatchObject({

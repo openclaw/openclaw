@@ -15,6 +15,11 @@ export async function assertUpdateDatabaseEngineContexts(
   for (const { config } of contexts) {
     try {
       assertHomogeneousDatabaseEngines(config, "update");
+      if (config.database?.families) {
+        throw new Error(
+          "Update with database.families overrides is not supported yet; use a matching database.engine default without family overrides, or wait for family-aware update support. Preserve the effective engines when changing configuration.",
+        );
+      }
     } catch (error) {
       if (error instanceof Error) {
         throw new UpdatePreMutationError("database-engine-preflight", error.message);

@@ -95,20 +95,51 @@ it("checks every context before accepting a PostgreSQL-capable candidate", async
   ).rejects.toThrow(/update for mixed-engine installs is not supported yet/);
 });
 
+it.each([
+  { engine: "sqlite", families: {} },
+  { engine: "sqlite", families: { agent: { engine: "sqlite" } } },
+  {
+    engine: "sqlite",
+    families: {
+      state: { engine: "postgres" },
+      workboard: { engine: "postgres" },
+      logbook: { engine: "postgres" },
+      "team-reports": { engine: "postgres" },
+    },
+  },
+  {
+    engine: "postgres",
+    families: {
+      state: { engine: "sqlite" },
+      workboard: { engine: "sqlite" },
+      logbook: { engine: "sqlite" },
+      "team-reports": { engine: "sqlite" },
+    },
+  },
+] satisfies NonNullable<OpenClawConfig["database"]>[])(
+  "refuses family-config updates until targets understand the config shape (%j)",
+  async (database) => {
+    const { file, context } = await store("sqlite");
+    const before = await fs.readFile(file);
+    const activate = vi.fn();
+    await expect(
+      assertUpdateDatabaseEngineContexts(
+        [{ ...context, config: { ...context.config, database } }],
+        ["sqlite", "postgres"],
+      ).then(activate),
+    ).rejects.toThrow(/Update with database\.families overrides.*matching database\.engine/);
+    expect(activate).not.toHaveBeenCalled();
+    expect(await fs.readFile(file)).toEqual(before);
+  },
+);
+
 it("protects selected PostgreSQL families before any anchor has been created", async () => {
   const { context } = await store("sqlite");
   const postgres = {
     ...context,
     config: {
       ...context.config,
-      database: {
-        families: {
-          state: { engine: "postgres" },
-          workboard: { engine: "postgres" },
-          logbook: { engine: "postgres" },
-          "team-reports": { engine: "postgres" },
-        },
-      },
+      database: { engine: "postgres" },
     } satisfies OpenClawConfig,
   };
   await expect(assertUpdateDatabaseEngineContexts([postgres], ["sqlite"])).rejects.toThrow(
