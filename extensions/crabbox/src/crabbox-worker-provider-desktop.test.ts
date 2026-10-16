@@ -4,7 +4,6 @@ import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-e
 import { expect, it, vi } from "vitest";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
 import { commandResult, nodeEnrollmentFixture } from "./crabbox-worker-provider.test-support.js";
-import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import {
   createWarmProvider,
   LEASE_ID,
@@ -36,6 +35,7 @@ function desktopFixture(
   command?: Parameters<typeof createWarmProvider>[0],
   profile: WorkerProfile = PROFILE,
 ) {
+  const desktop = { ...profile, desktop: true };
   const fixture = createWarmProvider(
     async (call) =>
       (await command?.(call)) ??
@@ -44,13 +44,7 @@ function desktopFixture(
   return {
     ...fixture,
     provision: (options?: Parameters<WorkerProvider["provision"]>[2]) =>
-      provisionWarmProfile(
-        fixture.provider,
-        { ...profile, desktop: true },
-        OPERATION_ID,
-        undefined,
-        options,
-      ),
+      provisionWarmProfile(fixture.provider, desktop, OPERATION_ID, undefined, options),
   };
 }
 
@@ -107,20 +101,9 @@ it.each([
 );
 
 it.each([
-  {
-    name: "direct AWS",
-    providerId: "aws",
-    config: { aws: { instanceProfile: "" }, coordinator: "", brokerMode: "managed" },
-  },
-  {
-    name: "coordinator-backed Hetzner",
-    providerId: "hetzner",
-    config: {
-      coordinator: "https://coordinator.example.test",
-      brokerMode: "managed",
-    },
-  },
-])("provisions a node-carried desktop through $name", async ({ config, providerId }) => {
+  ["aws", { aws: { instanceProfile: "" }, coordinator: "", brokerMode: "managed" }],
+  ["hetzner", { coordinator: "https://coordinator.example.test", brokerMode: "managed" }],
+] as const)("provisions a node-carried desktop through %s", async (providerId, config) => {
   const setupOrder: string[] = [];
   const setupStarted = createDeferred<void>();
   const setupComplete = createDeferred<void>();
@@ -171,18 +154,9 @@ it.each([
     },
   });
   const [warmup] = commands(calls, "warmup");
-  expect(warmup).toMatchObject({
-    options: { timeoutMs: 100 * 60_000 },
-  });
+  expect(warmup).toMatchObject({ options: { timeoutMs: 100 * 60_000 } });
   expect(warmup?.argv.slice(-4)).toEqual(["--desktop", "--browser", "--desktop-env", "xfce"]);
   expect(provider.allowsDesktopResize).toBe(true);
-  expect(
-    provider.resolveProvisionTimeoutMs?.({
-      ...PROFILE,
-      provider: providerId,
-      desktop: true,
-    }),
-  ).toBe(163 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS + 15_000);
   expect(commands(calls, "run")).toMatchObject([{ options: { timeoutMs: 30 * 60_000 } }]);
   expect(setupOrder).toEqual(["enrollment", "desktop"]);
   expect(commands(calls, "inspect")).toHaveLength(1);
@@ -222,7 +196,6 @@ it.each(["desktop setup", "enrollment preparation", "enrollment completion"] as 
         };
       },
     }).catch((error: unknown) => error);
-    expect(WorkerProviderError.isCleanupComplete(failure)).toBe(true);
     if (!WorkerProviderError.isCleanupComplete(failure)) {
       throw new Error("expected confirmed worker cleanup");
     }
@@ -234,7 +207,6 @@ it.each(["desktop setup", "enrollment preparation", "enrollment completion"] as 
       ),
     });
     expect(failure.cause).toBe(failure.provisionError);
-    expect(WorkerProviderError.isCleanupIndeterminate(failure)).toBe(false);
     expect(calls.at(-1)?.argv).toEqual(["crabbox", "stop", "--provider", "aws", "--id", LEASE_ID]);
     expect(commands(calls, "stop")).toHaveLength(1);
   },

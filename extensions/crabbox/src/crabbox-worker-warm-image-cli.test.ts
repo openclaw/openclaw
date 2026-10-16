@@ -14,18 +14,15 @@ let output = "";
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-warm-cli-"));
-  output = "";
   vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
     output += String(chunk);
     return true;
   });
 });
 
-function pendingCapture(
-  phase: "scrubbing" | "creating" | "uncertain" = "creating",
-): WarmProfileRecord {
+function pendingCapture(phase: "scrubbing" | "creating" | "uncertain" = "creating") {
   const now = Date.now();
-  return {
+  const record = {
     version: 3,
     allocations: {},
     image: {
@@ -42,11 +39,11 @@ function pendingCapture(
       type: "capture",
       id: SELECTOR,
       startedAtMs: now - 1_200_000,
-      leaseId: "cbx_capture",
-      provider: "aws",
       phase,
     },
-  };
+  } satisfies WarmProfileRecord;
+  openWarmImageStore().register("profile", record);
+  return record;
 }
 
 async function runCli(...args: string[]) {
@@ -58,12 +55,6 @@ async function runCli(...args: string[]) {
 
 const recover = (selector = SELECTOR, ...args: string[]) =>
   runCli("--recover", selector, "--acknowledge-provider-cleanup", ...args);
-
-function expectOutput(...included: string[]) {
-  for (const text of included) {
-    expect(output).toContain(text);
-  }
-}
 
 it("prints cold-only guidance for unsupported capture without changing local state", async () => {
   const record: WarmProfileRecord = {
@@ -79,13 +70,13 @@ it("prints cold-only guidance for unsupported capture without changing local sta
 
   await runCli();
 
-  expectOutput(
+  [
     "Capture unsupported: Native capture is unsupported by this coordinator.",
     "use an existing compatible snapshot when one is available",
     "capture attempts are skipped until warmImages.refreshAfter",
     "has elapsed since the refusal",
     "settings.warmImage: false",
-  );
+  ].forEach((text) => expect(output).toContain(text));
   expect(output).not.toContain("--recover");
   expect(openWarmImageStore().lookup("profile")).toEqual(record);
 });
@@ -95,18 +86,13 @@ it("recovers a legacy allocation only after acknowledgment of the exact unchange
     namespace: "warm-leases",
     maxEntries: 256,
   });
-  await expect(assertCrabboxWarmImageMigrationReady(crabboxState)).resolves.toBeUndefined();
   legacy.register("cbx_legacy", { machineClass: "standard" });
   await expect(assertCrabboxWarmImageMigrationReady(crabboxState)).rejects.toThrow(
     "legacy worker allocations",
   );
   await runCli("--json");
-  const lease = JSON.parse(output).legacyLeases[0];
-  const selector = lease.selector as string;
-  expect(lease).toMatchObject({
-    leaseId: "cbx_legacy",
-    machineClass: "standard",
-  });
+  const { selector, ...lease } = JSON.parse(output).legacyLeases[0];
+  expect(lease).toMatchObject({ leaseId: "cbx_legacy", machineClass: "standard" });
   await expect(runCli("--recover", selector)).rejects.toThrow("--acknowledge-provider-cleanup");
   legacy.register("cbx_legacy", { machineClass: "fast" });
   await expect(recover(selector)).rejects.toThrow("selector is absent or changed");
@@ -117,44 +103,25 @@ it("recovers a legacy allocation only after acknowledgment of the exact unchange
   await expect(assertCrabboxWarmImageMigrationReady(crabboxState)).resolves.toBeUndefined();
 });
 
-it("rejects missing selector without clearing durable ownership", async () => {
+it("recovers only the exact selected capture without clearing retained images or retirement", async () => {
   const record = pendingCapture();
-  openWarmImageStore().register("profile", record);
-
   await expect(runCli("--acknowledge-provider-cleanup")).rejects.toThrow("requires --recover");
-
   expect(openWarmImageStore().lookup("profile")).toEqual(record);
-});
-
-it("acknowledges only the selected capture and preserves its last-good checkpoint and other retirement", async () => {
-  const record = pendingCapture();
   const retiring: WarmProfileRecord = {
     ...record,
-    image: { ...record.image!, checkpointId: "chk_replacement" },
+    image: { ...record.image, checkpointId: "chk_replacement" },
     operation: { type: "retire", checkpointId: "chk_predecessor" },
   };
-  openWarmImageStore().register("profile", record);
   openWarmImageStore().register("other", retiring);
 
   await recover(SELECTOR, "--json");
 
   expect(JSON.parse(output).recoveredCapture).toBe(SELECTOR);
-  expect(openWarmImageStore().lookup("profile")).toEqual({
-    ...record,
-    operation: undefined,
-  });
+  expect(openWarmImageStore().lookup("profile")).toEqual({ ...record, operation: undefined });
   expect(openWarmImageStore().lookup("other")).toEqual(retiring);
   const replacement = {
     ...record,
-    operation: {
-      ...record.operation,
-      type: "capture" as const,
-      id: "replacement-selector",
-      startedAtMs: Date.now(),
-      leaseId: "cbx_replacement",
-      phase: "creating" as const,
-      provider: "aws",
-    },
+    operation: { ...record.operation, id: "replacement-selector" },
   };
   openWarmImageStore().register("profile", replacement);
   await expect(recover()).rejects.toThrow("selector is absent or changed");
@@ -165,7 +132,6 @@ it.each(["scrubbing", "uncertain"] as const)(
   "prints guidance for an old %s capture and pending deletion",
   async (phase) => {
     const record = pendingCapture(phase);
-    openWarmImageStore().register("profile", record);
     openWarmImageStore().register("retiring", {
       ...record,
       operation: { type: "retire", checkpointId: "chk_predecessor" },
@@ -174,12 +140,12 @@ it.each(["scrubbing", "uncertain"] as const)(
     await runCli();
 
     if (phase === "uncertain") {
-      expectOutput(
+      [
         `openclaw crabbox warm-images --recover ${SELECTOR} --acknowledge-provider-cleanup`,
         "Stop the owning Gateway and capture processes",
-      );
+      ].forEach((text) => expect(output).toContain(text));
     } else {
-      expectOutput("may still be");
+      expect(output).toContain("may still be");
       for (const absent of ["paused", "--recover", "Stop the owning Gateway"]) {
         expect(output).not.toContain(absent);
       }

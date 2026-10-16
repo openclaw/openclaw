@@ -72,8 +72,7 @@ export function checkpointResult(
     id: checkpointId,
     kind: "aws-ebs-snapshot",
     leaseId,
-    workdir: "/workspace",
-    native: { imageId: "snap_test", state: nativeState },
+    native: { state: nativeState },
   });
 }
 
@@ -116,16 +115,6 @@ export function createWarmProvider(
           ...lease(),
           ready: true,
           providerMetadata: { instanceProfileAttached: false },
-          labels: {
-            created_at: String(Math.floor(Date.now() / 1_000)),
-            ttl_secs: "14400",
-          },
-          maxLifetime: "4h",
-          leasePolicy: {
-            runtimeExtension: true,
-            maxTTLSeconds: 14400,
-            extension: "allow",
-          },
         });
       }
       if (argv[1] === "heartbeat") {
@@ -193,6 +182,8 @@ export function createProjectOptions(
   preparation?: NonNullable<NonNullable<ProvisionOptions["project"]>["preparation"]>,
 ) {
   let enrollmentStarted = false;
+  const signal = controller.signal;
+  const assertCurrent = () => signal.throwIfAborted();
   const observe = ({ argv }: CommandCall) => {
     if (argv[1] === "run" && argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")) {
       events.push(enrollmentStarted ? "enrollment-install" : "runtime-install");
@@ -203,7 +194,7 @@ export function createProjectOptions(
     return undefined;
   };
   const options = {
-    assertCurrent: () => controller.signal.throwIfAborted(),
+    assertCurrent,
     nodeRuntimeIdentity: {
       ...NODE_RUNTIME_IDENTITY,
       workerBundleSha256: createWorkerArchiveFixture().sha256,
@@ -212,10 +203,10 @@ export function createProjectOptions(
       key: PROJECT_KEY,
       baseCommit: BASE_COMMIT,
       ...(preparation ? { preparation } : {}),
-      signal: controller.signal,
-      assertCurrent: () => controller.signal.throwIfAborted(),
+      signal,
+      assertCurrent,
       prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
-        await transport.runScript("project-checkout", controller.signal);
+        await transport.runScript("project-checkout", signal);
         events.push("project-prepared");
         return { seedKey: PROJECT_KEY, cacheHit: false };
       }),
@@ -225,7 +216,7 @@ export function createProjectOptions(
       return {
         nodeBootstrap: createNodeBootstrapFixture(),
         workerBundle: createWorkerArchiveFixture(),
-        signal: controller.signal,
+        signal,
       };
     }),
     beginNodeEnrollment: vi.fn(async () => {
@@ -238,7 +229,7 @@ export function createProjectOptions(
           async () => "project-node",
         ),
         setupId: "project-setup",
-        signal: controller.signal,
+        signal,
       };
     }),
   } satisfies ProvisionOptions;

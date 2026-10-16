@@ -86,10 +86,7 @@ it.each([
         }
       : {}),
   })
-    .then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    )
+    .catch((error: unknown) => error)
     .finally(settled);
   await started.promise;
   const commandCount = calls.length;
@@ -103,7 +100,7 @@ it.each([
     closed.resolve();
     await operation;
   }
-  expect(await operation).toEqual({ error: reason });
+  expect(await operation).toBe(reason);
   expect(calls).toHaveLength(commandCount);
   expect(warn).not.toHaveBeenCalled();
   await provider.destroy({ leaseId: LEASE_ID, profile: { ...profile, warmImage: false } });
