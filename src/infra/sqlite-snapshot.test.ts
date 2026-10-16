@@ -47,17 +47,6 @@ import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
 const tempDirs: string[] = [];
 
-async function createTempDir(): Promise<string> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sqlite-snapshot-"));
-  tempDirs.push(tempDir);
-  if (process.platform === "win32") {
-    const privateTempDir = path.join(tempDir, "private");
-    await createPrivateSqliteDirectory(privateTempDir);
-    return privateTempDir;
-  }
-  return tempDir;
-}
-
 function isDirectoryOpen(flags: string | number | undefined): boolean {
   return (
     flags === "r" || (typeof flags === "number" && (flags & fsSync.constants.O_DIRECTORY) !== 0)
@@ -139,14 +128,12 @@ function createHotRollbackJournal(sqlitePath: string): void {
       encoding: "utf8",
     },
   );
-  if (crashed.signal !== "SIGKILL") {
-    throw new Error(
-      `hot rollback writer did not exit with SIGKILL: code=${String(crashed.status)} stderr=${crashed.stderr}`,
-    );
-  }
-  if (!fsSync.existsSync(`${sqlitePath}-journal`)) {
-    throw new Error("hot rollback writer did not leave a journal");
-  }
+  expect(crashed.signal, `hot rollback writer: ${crashed.status} ${crashed.stderr}`).toBe(
+    "SIGKILL",
+  );
+  expect(fsSync.existsSync(`${sqlitePath}-journal`), "hot rollback writer left a journal").toBe(
+    true,
+  );
 }
 
 function appendSuperJournalPointer(journalPath: string, superJournalPath: string): void {
@@ -169,7 +156,12 @@ let targetPath: string;
 let tempDir: string;
 
 beforeEach(async () => {
-  tempDir = await createTempDir();
+  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sqlite-snapshot-"));
+  tempDirs.push(tempDir);
+  if (process.platform === "win32") {
+    tempDir = path.join(tempDir, "private");
+    await createPrivateSqliteDirectory(tempDir);
+  }
   sourcePath = path.join(tempDir, "source.sqlite");
   targetPath = path.join(tempDir, "snapshot.sqlite");
   sqlite = requireNodeSqlite();
@@ -178,14 +170,15 @@ beforeEach(async () => {
 
 type SnapshotOptions = Parameters<typeof createVerifiedSqliteSnapshot>[0];
 
-async function expectSnapshotSuccess(options: SnapshotOptions): Promise<void> {
-  const receipt = await createVerifiedSqliteSnapshot(options);
-  const published = await fs.readFile(options.targetPath);
+async function expectSnapshotSuccess(options: Partial<SnapshotOptions> = {}) {
+  const receipt = await snapshot(options);
+  const published = await fs.readFile(options.targetPath ?? targetPath);
   expect(receipt).toEqual({
-    path: options.targetPath,
+    path: options.targetPath ?? targetPath,
     userVersion: 0,
     ...snapshotContent(published),
   });
+  return published;
 }
 
 function snapshot(options: Partial<SnapshotOptions> = {}) {
@@ -200,6 +193,15 @@ async function expectSnapshotFailureWithoutTarget(
   await expect(fs.access(options.targetPath ?? targetPath)).rejects.toMatchObject({
     code: "ENOENT",
   });
+}
+
+async function expectPreservedTarget(
+  pattern: RegExp,
+  options: Partial<SnapshotOptions> = {},
+  content = "racer",
+) {
+  await expect(snapshot(options)).rejects.toThrow(pattern);
+  await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(content);
 }
 
 function execSource(sql: string) {
@@ -263,7 +265,7 @@ describe("createVerifiedSqliteSnapshot", () => {
   );
 
   it.runIf(process.platform === "win32")(
-    "snapshots when its private staging path exceeds MAX_PATH",
+    "snapshots when private staging exceeds MAX_PATH",
     async () => {
       let targetDirectory = tempDir;
       while (targetDirectory.length < 205) {
@@ -317,13 +319,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     source.prepare("INSERT INTO records (value) VALUES (?)").run(deletedValue);
     source.prepare("DELETE FROM records WHERE value = ?").run(deletedValue);
 
-    const result = await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
-    const published = await fs.readFile(targetPath);
-    expect(result).toEqual({
-      path: targetPath,
-      userVersion: 0,
-      ...snapshotContent(published),
-    });
+    const published = await expectSnapshotSuccess();
     expect(published.includes(deletedValue)).toBe(false);
 
     expect(query("SELECT value FROM records")).toEqual([{ value: "survivor" }]);
@@ -333,7 +329,7 @@ describe("createVerifiedSqliteSnapshot", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "snapshots committed state from a hot rollback journal without recovering the source",
+    "recovers hot journals without modifying source",
     async () => {
       createHotRollbackJournal(sourcePath);
       const sourceBefore = await fs.readFile(sourcePath);
@@ -355,7 +351,7 @@ describe("createVerifiedSqliteSnapshot", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "rechecks for a hot rollback journal after the direct source open fails",
+    "rechecks hot journal after source-open failure",
     async () => {
       createHotRollbackJournal(sourcePath);
       const canonicalJournalPath = `${fsSync.realpathSync.native(sourcePath)}-journal`;
@@ -380,7 +376,7 @@ describe("createVerifiedSqliteSnapshot", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "refuses private recovery when a hot journal depends on a super-journal",
+    "refuses hot journal requiring a super-journal",
     async () => {
       const superJournalPath = path.join(tempDir, "source-mj000000900");
       createHotRollbackJournal(sourcePath);
@@ -490,7 +486,7 @@ describe("createVerifiedSqliteSnapshot", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "acquires an isolated snapshot through a source file symlink",
+    "acquires isolated snapshots through a source symlink",
     async () => {
       execSource("CREATE TABLE records(value TEXT); INSERT INTO records VALUES ('preserved');");
       const linkedSource = path.join(tempDir, "linked.sqlite");
@@ -510,20 +506,15 @@ describe("createVerifiedSqliteSnapshot", () => {
 
   it("rejects an existing target without modifying it", async () => {
     await fs.writeFile(targetPath, "keep");
-
-    await expect(snapshot()).rejects.toThrow(/target already exists/u);
-    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("keep");
+    await expectPreservedTarget(/target already exists/u, {}, "keep");
   });
 
   it("preserves a target created while the snapshot is being prepared", async () => {
-    await expect(
-      snapshot({
-        transform: async () => {
-          await fs.writeFile(targetPath, "racer");
-        },
-      }),
-    ).rejects.toThrow(/EEXIST|already exists/iu);
-    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("racer");
+    await expectPreservedTarget(/EEXIST|already exists/iu, {
+      transform: async () => {
+        await fs.writeFile(targetPath, "racer");
+      },
+    });
   });
 
   it("rejects staged bytes changed after validation", async () => {
@@ -568,16 +559,13 @@ describe("createVerifiedSqliteSnapshot", () => {
   );
 
   it("preserves a target replaced by the caller after publication", async () => {
-    await expect(
-      snapshot({
-        afterPublish: (guard) => {
-          fsSync.unlinkSync(targetPath);
-          fsSync.writeFileSync(targetPath, "racer");
-          guard.assertTargetUnchanged();
-        },
-      }),
-    ).rejects.toThrow(/snapshot file changed|hash mismatch|size mismatch/u);
-    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("racer");
+    await expectPreservedTarget(/snapshot file changed|hash mismatch|size mismatch/u, {
+      afterPublish: (guard) => {
+        fsSync.unlinkSync(targetPath);
+        fsSync.writeFileSync(targetPath, "racer");
+        guard.assertTargetUnchanged();
+      },
+    });
   });
 
   it.each(["native", "numeric-collision", "windows-zero", "staging-transition"] as const)(
@@ -642,12 +630,11 @@ describe("createVerifiedSqliteSnapshot", () => {
         },
       });
 
-      await expect(snapshot()).rejects.toThrow(
+      await expectPreservedTarget(
         /target changed during publication|staging path changed|snapshot file changed/u,
       );
       expect(replaced).toBe(true);
       expect(stagingReplaced).toBe(identityObservation === "staging-transition");
-      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("racer");
     },
   );
 
@@ -779,7 +766,7 @@ describe("createVerifiedSqliteSnapshot", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "removes its published target when directory sync is unsupported",
+    "removes target when directory sync is unsupported",
     async () => {
       durabilityTestState.syncOutcome = { status: "unsupported", code: "ENOTSUP" };
 
@@ -790,7 +777,7 @@ describe("createVerifiedSqliteSnapshot", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "rejects a transient publication directory replacement during sync",
+    "rejects a replaced publication directory during sync",
     async () => {
       const displacedPath = `${tempDir}.displaced`;
       const replacementPath = `${tempDir}.replacement`;

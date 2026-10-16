@@ -287,7 +287,7 @@ describe("schema-header native reader lifetime", () => {
       };
       const controller = new AbortController();
       const cancellation = new Error("header inspection cancelled");
-      let settled = false;
+      const settled = vi.fn();
       await using schemaReader = createAgentSchemaInspectionWorker();
       const operation = schemaReader.inspect(
         {
@@ -298,10 +298,7 @@ describe("schema-header native reader lifetime", () => {
         },
         controller.signal,
       );
-      const markSettled = () => {
-        settled = true;
-      };
-      void operation.then(markSettled, markSettled);
+      void operation.then(settled, settled);
       const waitForPhase = (phase: string) => {
         const assertPhase = (error: unknown) => {
           if (!fs.existsSync(marker(phase))) {
@@ -326,7 +323,7 @@ describe("schema-header native reader lifetime", () => {
         );
         release();
         await waitForPhase("close");
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
         if (outcome === "cancel") {
           controller.abort(cancellation);
           await expect(operation).rejects.toBe(cancellation);
@@ -334,7 +331,7 @@ describe("schema-header native reader lifetime", () => {
           release();
           if (outcome === "close-failure") {
             await waitForPhase("failed-close");
-            expect(settled).toBe(false);
+            expect(settled).not.toHaveBeenCalled();
             release();
             await expect(operation).rejects.toThrow("native close failure");
           } else if (outcome === "read-failure") {

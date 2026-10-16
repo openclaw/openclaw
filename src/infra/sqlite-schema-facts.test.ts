@@ -55,6 +55,14 @@ function observeReads() {
 describe("admitted SQLite schema facts", () => {
   const { tempDirs, openDatabase, databases } = useSqliteSchemaTestFixture();
   const databaseFile = (label: string) => path.join(tempDirs.make(label), "state.sqlite");
+  function openFile(schema?: string, admitted = true, wal = false) {
+    const filename = databaseFile("openclaw-schema-");
+    const database = openDatabase(schema, admitted, filename);
+    if (wal) {
+      database.exec("PRAGMA journal_mode=WAL");
+    }
+    return { filename, database };
+  }
 
   it("keeps read receipts stable for mutation words while tracking callback writes", () => {
     const database = openDatabase();
@@ -229,8 +237,7 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("publishes the final migration catalog without rechecking it on the next open", () => {
-    const filename = databaseFile("openclaw-schema-migration-publication-");
-    const database = openDatabase(undefined, true, filename);
+    const { filename, database } = openFile();
     runSqliteImmediateTransactionSync(database, () => {
       database.exec("ALTER TABLE original ADD COLUMN first_added TEXT");
       expect(getAdmittedSqliteSchemaFacts(database)?.tableSql.get("original")).toContain(
@@ -245,9 +252,7 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("refreshes writer admission after BEGIN despite an enclosing read operation", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-writer-"), "agent.sqlite");
-    const database = openDatabase(AGENT_SCHEMA, true, filename);
-    database.exec("PRAGMA journal_mode=WAL");
+    const { filename, database } = openFile(AGENT_SCHEMA, true, true);
     assertCanonicalSessionValidationSchema(database);
     const peer = openNodeSqliteDatabase(filename);
     databases.push(peer);
@@ -302,8 +307,7 @@ describe("admitted SQLite schema facts", () => {
   );
 
   it("derives owner columns from admitted sibling schema publications without table-info reads", () => {
-    const filename = databaseFile("openclaw-schema-adoption-");
-    const reader = openDatabase("CREATE TABLE session_nodes (id INTEGER)", true, filename);
+    const { filename, database: reader } = openFile("CREATE TABLE session_nodes (id INTEGER)");
     using observation = observeReads();
     expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
     const writer = openNodeSqliteDatabase(filename);
@@ -325,9 +329,7 @@ describe("admitted SQLite schema facts", () => {
   it.each(["transaction", "implicit snapshot"])(
     "refreshes foreign row commits while trusting admitted format through an active %s",
     (pin) => {
-      const filename = databaseFile("openclaw-schema-foreign-");
-      const reader = openDatabase(undefined, true, filename);
-      reader.exec("PRAGMA journal_mode=WAL");
+      const { filename, database: reader } = openFile(undefined, true, true);
       // An external writer changes rows without publishing process-owned schema facts.
       const writer = new DatabaseSync(filename);
       databases.push(writer);
@@ -375,8 +377,7 @@ describe("admitted SQLite schema facts", () => {
   );
 
   it("ends nested read scopes on exceptions and before async continuations", async () => {
-    const filename = databaseFile("openclaw-schema-read-scope-");
-    const reader = openDatabase(undefined, false, filename);
+    const { database: reader } = openFile(undefined, false);
     const revision = () => getSqliteReadOperationRevision(reader);
     using admission = observeReads();
     expect(() =>
@@ -396,8 +397,7 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("invalidates warmed row revisions on sibling writes without querying data_version", () => {
-    const filename = databaseFile("openclaw-schema-write-receipt-");
-    const reader = openDatabase(undefined, true, filename);
+    const { filename, database: reader } = openFile();
     const writer = openDatabase("", true, filename);
     using observation = observeReads();
     const revision = () =>
@@ -457,8 +457,7 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("reuses rows only within their explicit snapshot and observes the next committed rows", () => {
-    const filename = databaseFile("openclaw-row-snapshot-");
-    const reader = openDatabase(
+    const { filename, database: reader } = openFile(
       `
       PRAGMA journal_mode=WAL;
       CREATE TABLE session_participants (
@@ -467,8 +466,6 @@ describe("admitted SQLite schema facts", () => {
       );
       INSERT INTO session_participants VALUES ('session', '{"type":"profile"}', 'first', 1, 1, 1);
     `,
-      true,
-      filename,
     );
     const writer = openDatabase("", true, filename);
     const read = () =>
@@ -511,9 +508,7 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("publishes local DDL to sibling handles while preserving their active snapshots", () => {
-    const filename = databaseFile("openclaw-schema-siblings-");
-    const writer = openDatabase(undefined, true, filename);
-    writer.exec("PRAGMA journal_mode=WAL");
+    const { filename, database: writer } = openFile(undefined, true, true);
     const reader = openDatabase("", true, filename);
     expect(tableExists(reader, "committed")).toBe(false);
     writer.exec("BEGIN; CREATE TABLE committed (id)");
@@ -569,9 +564,7 @@ describe("admitted SQLite schema facts", () => {
   ] as const)(
     "keeps a sibling's catalog after a failed WAL upgrade: %s, implicit pin=%s, admitted=%s, SQL=%s",
     (method, implicitSnapshot, admittedBeforeBegin, rollback) => {
-      const filename = databaseFile("openclaw-schema-busy-snapshot-");
-      const stale = openDatabase(undefined, admittedBeforeBegin, filename);
-      stale.exec("PRAGMA journal_mode=WAL");
+      const { filename, database: stale } = openFile(undefined, admittedBeforeBegin, true);
       const writer = openDatabase("", true, filename);
       const original = getAdmittedSqliteSchemaFacts(stale);
       let committed: ReturnType<typeof getAdmittedSqliteSchemaFacts>;
@@ -636,8 +629,7 @@ describe("admitted SQLite schema facts", () => {
   );
 
   it("discards rolled-back staged catalog facts before transaction observers unwind", () => {
-    const filename = databaseFile("openclaw-schema-rollback-publication-");
-    const database = openDatabase(undefined, true, filename);
+    const { filename, database } = openFile();
     const committed = getAdmittedSqliteSchemaFacts(database);
     const generation = getSqliteDatabaseSchemaRevision(database);
     const refusal = new Error("synthetic transaction refusal");
