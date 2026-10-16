@@ -71,12 +71,15 @@ function hold(
   kind: "lifecycle" | "mutation",
   target: { scope: string; identities: string[] },
   trace?: DiagnosticTraceContext,
+  operation: "patch" | "archive" | "delete" = "patch",
+  onEnter?: () => void,
 ) {
   const entered = createDeferred();
   const release = createDeferred();
   const params = {
     ...target,
     run: async () => {
+      onEnter?.();
       entered.resolve();
       await release.promise;
     },
@@ -88,9 +91,21 @@ function hold(
           assertAllowed: params.run,
           revalidateAllowed: () => {},
         }).then((lease) => lease.release())
-      : runExclusiveSessionLifecycleMutation("patch", params),
+      : runExclusiveSessionLifecycleMutation(operation, params),
   );
   return { entered: entered.promise, release: release.resolve, promise };
+}
+
+async function expectRecords(message: string, fields: Record<string, unknown>[]) {
+  expect(await records(message)).toEqual(fields.map((field) => expect.objectContaining(field)));
+}
+function expectPrivate(
+  rows: Record<string, unknown>[],
+  target: { scope: string; identities: string[] },
+) {
+  const serialized = JSON.stringify(rows);
+  expect(serialized).not.toContain(target.scope);
+  expect(serialized).not.toContain(target.identities[0]);
 }
 
 beforeEach(() => {
@@ -123,32 +138,14 @@ afterEach(async () => {
 
 it("reports the current holder after turnover and preserves the waiter's trace and FIFO order", async () => {
   const target = { scope: "private-store-path", identities: ["private-session-key"] };
-  const firstStarted = createDeferred();
-  const secondStarted = createDeferred();
-  const releaseFirst = createDeferred();
-  const releaseSecond = createDeferred();
   const order: string[] = [];
-  const first = runWithDiagnosticTraceContext(traces.first, () =>
-    runExclusiveSessionLifecycleMutation("archive", {
-      ...target,
-      run: async () => {
-        order.push("first");
-        firstStarted.resolve();
-        await releaseFirst.promise;
-      },
-    }),
-  );
-  await firstStarted.promise;
-  const second = runWithDiagnosticTraceContext(traces.second, () =>
-    runExclusiveSessionLifecycleMutation("delete", {
-      ...target,
-      run: async () => {
-        order.push("second");
-        secondStarted.resolve();
-        await releaseSecond.promise;
-      },
-    }),
-  );
+  const first = hold("mutation", target, traces.first, "archive", () => {
+    order.push("first");
+  });
+  await first.entered;
+  const second = hold("mutation", target, traces.second, "delete", () => {
+    order.push("second");
+  });
   const waiter = runWithDiagnosticTraceContext(traces.waiter, () =>
     runExclusiveSessionLifecycleMutation("patch", {
       ...target,
@@ -159,8 +156,8 @@ it("reports the current holder after turnover and preserves the waiter's trace a
   );
   try {
     await advance(500);
-    releaseFirst.resolve();
-    await secondStarted.promise;
+    first.release();
+    await second.entered;
     await advance(500);
     const waiting = await records("session lifecycle queue waiting");
     expect(waiting).toHaveLength(1);
@@ -181,30 +178,25 @@ it("reports the current holder after turnover and preserves the waiter's trace a
     expect(waiting[0]?.identityHash).toMatch(/^[0-9a-f]{64}$/);
     expect(waiting[0]?.sessionScopeHash).toBe(waiting[0]?.identityHash);
     expect(waiting[0]?.holderSessionScopeHash).toBe(waiting[0]?.sessionScopeHash);
-    expect(JSON.stringify(waiting)).not.toContain(target.scope);
-    expect(JSON.stringify(waiting)).not.toContain(target.identities[0]);
+    expectPrivate(waiting, target);
     expect(order).toEqual(["first", "second"]);
   } finally {
-    releaseFirst.resolve();
-    releaseSecond.resolve();
-    await Promise.allSettled([first, second, waiter]);
+    first.release();
+    second.release();
+    await Promise.allSettled([first.promise, second.promise, waiter]);
   }
   expect(order).toEqual(["first", "second", "waiter"]);
   const completed = await records("slow session lifecycle operation");
-  expect(completed).toEqual([
-    expect.objectContaining({
-      mutationKind: "delete",
-      sessionScopeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
-      identityCount: 1,
-    }),
-    expect.objectContaining({
-      mutationKind: "patch",
-      sessionScopeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
-      identityCount: 1,
-    }),
-  ]);
-  expect(JSON.stringify(completed)).not.toContain(target.scope);
-  expect(JSON.stringify(completed)).not.toContain(target.identities[0]);
+  expect(completed).toEqual(
+    ["delete", "patch"].map((mutationKind) =>
+      expect.objectContaining({
+        mutationKind,
+        sessionScopeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        identityCount: 1,
+      }),
+    ),
+  );
+  expectPrivate(completed, target);
 });
 
 it("distinguishes mutation and lifecycle holders of the same normalized identity", async () => {
@@ -330,12 +322,12 @@ it("measures prepare and finalize separately while successors wait for real fina
   const waiter = hold("mutation", target, traces.waiter);
   try {
     await advance(1_000);
-    expect(await records("session lifecycle queue waiting")).toEqual([
-      expect.objectContaining({
+    await expectRecords("session lifecycle queue waiting", [
+      {
         operationTraceId: traces.waiter.traceId,
         holderTraceId: traces.first.traceId,
         holderPhase: "finalize",
-      }),
+      },
     ]);
   } finally {
     releasePrepare.resolve();
@@ -381,13 +373,13 @@ it("retains a partially acquired holder after caller cancellation until its call
   const waiter = hold("mutation", { scope, identities: ["a"] }, traces.waiter);
   try {
     await advance(1_000);
-    expect(await records("session lifecycle queue waiting")).toEqual([
-      expect.objectContaining({
+    await expectRecords("session lifecycle queue waiting", [
+      {
         operationTraceId: traces.waiter.traceId,
         holderTraceId: traces.second.traceId,
         holderPhase: "activation",
         holderSignalAborted: true,
-      }),
+      },
     ]);
     expect(cancelledRun).not.toHaveBeenCalled();
   } finally {
@@ -475,8 +467,7 @@ it("bounds holder, timer and log state without exposing private identities or in
     expect(waiting.every((row) => row.operationTraceId === undefined)).toBe(true);
     expect(new Set(waiting.map((row) => row.identityHash)).size).toBe(1);
     expect(waiting[0]?.identityHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(JSON.stringify(waiting)).not.toContain(target.scope);
-    expect(JSON.stringify(waiting)).not.toContain(target.identities[0]);
+    expectPrivate(waiting, target);
     expect(
       waiting.some(
         (row) => typeof row.omittedObservations === "number" && row.omittedObservations > 0,
@@ -528,12 +519,12 @@ it("shares live holder observations across separately loaded module graphs", asy
     );
     await advance(1_000);
     await freshLogging.flushLogger();
-    expect(await records("session lifecycle queue waiting")).toEqual([
-      expect.objectContaining({
+    await expectRecords("session lifecycle queue waiting", [
+      {
         operationTraceId: traces.waiter.traceId,
         holderTraceId: traces.first.traceId,
         holderObserved: true,
-      }),
+      },
     ]);
     expect(waiterRan).not.toHaveBeenCalled();
   } finally {

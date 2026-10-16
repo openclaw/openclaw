@@ -21,6 +21,28 @@ import {
   startSessionWorkAdmissionInterruption,
 } from "./session-lifecycle-admission.js";
 
+function gate() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  return {
+    entered: entered.promise,
+    release: release.resolve,
+    wait: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  };
+}
+function admissionOutcome(pending: ReturnType<typeof beginSessionWorkAdmission>) {
+  return pending.then(
+    (lease) => {
+      lease.release();
+      return "incorrectly admitted";
+    },
+    (error: unknown) => error,
+  );
+}
+
 it("notifies only the released scope when acquired identity protection shrinks", async () => {
   const scope = "release-observer.sqlite";
   const listener = vi.fn();
@@ -319,19 +341,15 @@ it.for(["caller abort", "Stop"])(
       assertAllowed: () => {},
     });
     const validate = vi.fn();
-    const pending = beginSessionWorkAdmission({
-      scope,
-      identities,
-      owner,
-      serializeOwner: true,
-      signal: AbortSignal.any([controller.signal, signal]),
-      assertAllowed: validate,
-    }).then(
-      (lease) => {
-        lease.release();
-        return "incorrectly admitted";
-      },
-      (error: unknown) => error,
+    const pending = admissionOutcome(
+      beginSessionWorkAdmission({
+        scope,
+        identities,
+        owner,
+        serializeOwner: true,
+        signal: AbortSignal.any([controller.signal, signal]),
+        assertAllowed: validate,
+      }),
     );
     try {
       const independent = await beginSessionWorkAdmission({
@@ -363,26 +381,20 @@ it.for(["caller abort", "Stop"])(
 it("rejects arrivals during awaited cleanup and its final microtask, then reopens only after release", async () => {
   const scope = "hostile-await.sqlite";
   const identities = ["agent:main:fence", "fence-session"];
-  const entered = createDeferred();
-  const release = createDeferred();
+  const barrier = gate();
   const reason = createAgentRunDirectAbortError();
   const onInterrupt = vi.fn();
   let lateResult: unknown;
   const late = () =>
-    beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {}, onInterrupt }).then(
-      (lease) => {
-        lease.release();
-        return "incorrectly admitted";
-      },
-      (error: unknown) => error,
+    admissionOutcome(
+      beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {}, onInterrupt }),
     );
   const stop = runExclusiveSessionLifecycleMutation("drain", {
     scope,
     identities,
     prepare: async (owner) => {
       owner.closeWorkAdmissions(reason);
-      entered.resolve();
-      await release.promise;
+      await barrier.wait();
     },
     run: async () => {},
     finalize: async () => {
@@ -390,7 +402,7 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
       lateResult = await late();
     },
   });
-  await entered.promise;
+  await barrier.entered;
   try {
     const whileAwaiting = await late();
     expect(whileAwaiting).toBe(reason);
@@ -401,7 +413,7 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
       assertAllowed: () => {},
     });
     other.release();
-    release.resolve();
+    barrier.release();
     await stop;
     expect(lateResult).toBe(reason);
     expect(onInterrupt).toHaveBeenCalledTimes(2);
@@ -414,7 +426,7 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
     fresh.release();
     expect(onInterrupt).toHaveBeenCalledTimes(2);
   } finally {
-    release.resolve();
+    barrier.release();
     await stop;
   }
 });
@@ -423,34 +435,26 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
   const scope = "non-chat-pending.sqlite";
   const resolveGatewayContext = () => undefined;
   const identities = ["agent:main:pending", "pending-session"] as const;
-  const entered = createDeferred();
-  const release = createDeferred();
+  const barrier = gate();
   const interrupted = vi.fn();
   let validated = false;
   const blocker = runExclusiveSessionLifecycleMutation("patch", {
     scope,
     identities,
-    prepare: async () => {
-      entered.resolve();
-      await release.promise;
-    },
+    prepare: barrier.wait,
     run: async () => {},
   });
-  await entered.promise;
-  const pending = beginSessionWorkAdmission({
-    scope,
-    identities,
-    onInterrupt: interrupted,
-    resolveGatewayContext,
-    assertAllowed: () => {
-      validated = true;
-    },
-  }).then(
-    (lease) => {
-      lease.release();
-      return "incorrectly admitted";
-    },
-    (error: unknown) => error,
+  await barrier.entered;
+  const pending = admissionOutcome(
+    beginSessionWorkAdmission({
+      scope,
+      identities,
+      onInterrupt: interrupted,
+      resolveGatewayContext,
+      assertAllowed: () => {
+        validated = true;
+      },
+    }),
   );
   try {
     expect(isSessionWorkAdmissionActive(scope, identities)).toBe(false);
@@ -477,7 +481,7 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
     expect(interrupted).toHaveBeenCalledWith(reason);
     expect(validated).toBe(false);
   } finally {
-    release.resolve();
+    barrier.release();
     await blocker;
     await pending;
   }
@@ -486,21 +490,19 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
 it("ordinary compaction still queues work and acquired-release queries do not deadlock it", async () => {
   const scope = "compaction.sqlite";
   const identities = ["compaction-session"];
-  const entered = createDeferred();
-  const release = createDeferred();
+  const barrier = gate();
   let validated = false;
   const compaction = runExclusiveSessionLifecycleMutation("compact", {
     scope,
     identities,
     kind: "compaction",
     prepare: async () => {
-      entered.resolve();
-      await release.promise;
+      await barrier.wait();
       await getSessionWorkAdmissionRelease({ scope, identities });
     },
     run: async () => {},
   });
-  await entered.promise;
+  await barrier.entered;
   const pending = beginSessionWorkAdmission({
     scope,
     identities,
@@ -510,13 +512,13 @@ it("ordinary compaction still queues work and acquired-release queries do not de
   });
   try {
     expect(validated).toBe(false);
-    release.resolve();
+    barrier.release();
     await compaction;
     const lease = await pending;
     expect(validated).toBe(true);
     lease.release();
   } finally {
-    release.resolve();
+    barrier.release();
     await compaction;
     (await pending).release();
   }
@@ -525,19 +527,15 @@ it("ordinary compaction still queues work and acquired-release queries do not de
 it("single-use identity iterators still wait for the exact lifecycle fence", async () => {
   const scope = "generator.sqlite";
   const identities = ["generator-session"];
-  const entered = createDeferred();
-  const release = createDeferred();
+  const barrier = gate();
   let validated = false;
   const mutation = runExclusiveSessionLifecycleMutation("patch", {
     scope,
     identities,
-    prepare: async () => {
-      entered.resolve();
-      await release.promise;
-    },
+    prepare: barrier.wait,
     run: async () => {},
   });
-  await entered.promise;
+  await barrier.entered;
   const admission = beginSessionWorkAdmission({
     scope,
     identities: (function* () {
@@ -555,13 +553,13 @@ it("single-use identity iterators still wait for the exact lifecycle fence", asy
     });
     unrelated.release();
     expect(validated).toBe(false);
-    release.resolve();
+    barrier.release();
     await mutation;
     const lease = await admission;
     expect(validated).toBe(true);
     lease.release();
   } finally {
-    release.resolve();
+    barrier.release();
     await mutation;
     (await admission).release();
   }
@@ -570,41 +568,33 @@ it("single-use identity iterators still wait for the exact lifecycle fence", asy
 it("an initial validator finishing after pending cancellation cannot enter the writer", async () => {
   const scope = "initial-validator.sqlite";
   const identities = ["initial-validator-session"];
-  const entered = createDeferred();
-  const release = createDeferred();
+  const barrier = gate();
   const writer = vi.fn();
   const released = vi.fn();
   const unsubscribe = observeSessionWorkAdmissionReleases(scope, released);
   const reason = createAgentRunDirectAbortError();
-  const pending = beginSessionWorkAdmission({
-    scope,
-    identities,
-    assertAllowed: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-    revalidateAllowed: writer,
-  }).then(
-    (lease) => {
-      lease.release();
-      return "incorrectly admitted";
-    },
-    (error: unknown) => error,
+  const pending = admissionOutcome(
+    beginSessionWorkAdmission({
+      scope,
+      identities,
+      assertAllowed: barrier.wait,
+      revalidateAllowed: writer,
+    }),
   );
-  await entered.promise;
+  await barrier.entered;
   try {
     expect(
       await interruptSessionWorkAdmissions({ scope, identities, reason, timeoutMs: 1000 }),
     ).toBe(true);
     expect(await pending).toBe(reason);
     expect(released).not.toHaveBeenCalled();
-    release.resolve();
+    barrier.release();
     // A later mutation must wait for the validator's existing identity lock to finish.
     await runExclusiveSessionLifecycleMutation("patch", { scope, identities, run: async () => {} });
     expect(writer).not.toHaveBeenCalled();
   } finally {
     unsubscribe();
-    release.resolve();
+    barrier.release();
     await pending;
   }
 });

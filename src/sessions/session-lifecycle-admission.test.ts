@@ -23,6 +23,27 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "./session-lifecycle-admission.js";
 
+type Target = { scope: string; identities: (string | undefined)[] };
+function holdMutation(
+  target: Target | { targets: Target[] },
+  options: { operation?: "patch" | "compact"; kind?: "compaction"; prepare?: boolean } = {},
+) {
+  const started = createDeferred();
+  const release = createDeferred();
+  const wait = async () => {
+    started.resolve();
+    await release.promise;
+  };
+  const mutation = runExclusiveSessionLifecycleMutation(options.operation ?? "patch", {
+    ...target,
+    kind: options.kind,
+    run: options.prepare ? async () => {} : wait,
+    ...(options.prepare ? { prepare: wait } : {}),
+  });
+  return { started: started.promise, release: release.resolve, mutation };
+}
+const childTarget = { scope: "store-a", identities: ["agent:main:child", "session-1"] };
+
 it("validates default admission once after earlier store writes", async () => {
   const scope = "store-default-validation-order";
   const entered = createDeferred();
@@ -159,9 +180,7 @@ it("releases lifecycle state when finalization throws", async () => {
 });
 
 it("counts a cross-store lifecycle mutation once and fences every target", async () => {
-  const mutationStarted = createDeferred();
-  const releaseMutation = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation("patch", {
+  const held = holdMutation({
     targets: [
       {
         scope: "store-cross-count-b",
@@ -176,12 +195,9 @@ it("counts a cross-store lifecycle mutation once and fences every target", async
         identities: ["session-cross-count-a", undefined],
       },
     ],
-    run: async () => {
-      mutationStarted.resolve();
-      await releaseMutation.promise;
-    },
   });
-  await mutationStarted.promise;
+  const { mutation } = held;
+  await held.started;
 
   try {
     expect(getActiveSessionLifecycleMutationCount()).toBe(1);
@@ -193,7 +209,7 @@ it("counts a cross-store lifecycle mutation once and fences every target", async
       false,
     );
   } finally {
-    releaseMutation.resolve();
+    held.release();
     await mutation;
   }
 
@@ -303,16 +319,11 @@ it("cancels an opposite-direction cross-store mutation before activation", async
     scope: "store-cross-cancel-b",
     identities: ["agent:work:main", "session-cross-cancel-b"],
   };
-  const mutationStarted = createDeferred();
-  const releaseMutation = createDeferred();
-  const first = runExclusiveSessionLifecycleMutation("patch", {
+  const held = holdMutation({
     targets: [main, work],
-    run: async () => {
-      mutationStarted.resolve();
-      await releaseMutation.promise;
-    },
   });
-  await mutationStarted.promise;
+  const first = held.mutation;
+  await held.started;
 
   const controller = new AbortController();
   const abortError = new Error("cancel queued cross-store lifecycle mutation");
@@ -329,7 +340,7 @@ it("cancels an opposite-direction cross-store mutation before activation", async
   try {
     await expect(cancelled).rejects.toBe(abortError);
   } finally {
-    releaseMutation.resolve();
+    held.release();
     await first;
   }
 
@@ -339,17 +350,12 @@ it("cancels an opposite-direction cross-store mutation before activation", async
 
 it("rejects an admission that resumes after suspension closes the async gap", async () => {
   resetGatewayWorkAdmission();
-  const mutationStarted = createDeferred();
-  const releaseMutation = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation("patch", {
+  const held = holdMutation({
     scope: "store-suspend-race",
     identities: ["session-suspend-race", "backing-suspend-race"],
-    run: async () => {
-      mutationStarted.resolve();
-      await releaseMutation.promise;
-    },
   });
-  await mutationStarted.promise;
+  const mutation = held.mutation;
+  await held.started;
   expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0);
 
   const admission = beginSessionWorkAdmission({
@@ -359,7 +365,7 @@ it("rejects an admission that resumes after suspension closes the async gap", as
   });
   const suspension = tryBeginGatewaySuspendAdmission(() => {});
   expect(suspension?.commit()).toBe(true);
-  releaseMutation.resolve();
+  held.release();
   await mutation;
   expect(getActiveSessionLifecycleMutationCount()).toBe(0);
 
@@ -507,16 +513,8 @@ it("admits an independent session while revalidating a conflicting writer's auth
 });
 
 it("serializes lifecycle mutation and work admission across identity aliases", async () => {
-  const mutationStarted = createDeferred();
-  const releaseMutation = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation("patch", {
-    scope: "store-a",
-    identities: ["agent:main:child", "session-1"],
-    run: async () => {
-      mutationStarted.resolve();
-      await releaseMutation.promise;
-    },
-  });
+  const held = holdMutation(childTarget);
+  const mutation = held.mutation;
   let admitted = false;
   const admission = beginSessionWorkAdmission({
     scope: "store-a",
@@ -526,16 +524,16 @@ it("serializes lifecycle mutation and work admission across identity aliases", a
     },
   });
   try {
-    await mutationStarted.promise;
+    await held.started;
     expect(admitted).toBe(false);
 
-    releaseMutation.resolve();
+    held.release();
     await mutation;
     await admission;
     expect(admitted).toBe(true);
     expect(isSessionWorkAdmissionActive("store-a", ["agent:main:child", "session-1"])).toBe(true);
   } finally {
-    releaseMutation.resolve();
+    held.release();
     await mutation;
     (await admission).release();
   }
@@ -543,18 +541,15 @@ it("serializes lifecycle mutation and work admission across identity aliases", a
 });
 
 it("tracks the active lifecycle mutation kind across identity aliases", async () => {
-  const mutationStarted = createDeferred();
-  const releaseMutation = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation("compact", {
-    scope: "store-kind",
-    identities: ["agent:main:child", "session-kind"],
-    kind: "compaction",
-    run: async () => {
-      mutationStarted.resolve();
-      await releaseMutation.promise;
+  const held = holdMutation(
+    {
+      scope: "store-kind",
+      identities: ["agent:main:child", "session-kind"],
     },
-  });
-  await mutationStarted.promise;
+    { operation: "compact", kind: "compaction" },
+  );
+  const mutation = held.mutation;
+  await held.started;
 
   expect(
     hasOnlySessionLifecycleMutationKindActive("store-kind", ["session-kind"], "compaction"),
@@ -563,7 +558,7 @@ it("tracks the active lifecycle mutation kind across identity aliases", async ()
     hasOnlySessionLifecycleMutationKindActive("store-other", ["session-kind"], "compaction"),
   ).toBe(false);
 
-  releaseMutation.resolve();
+  held.release();
   await mutation;
   expect(
     hasOnlySessionLifecycleMutationKindActive("store-kind", ["session-kind"], "compaction"),
@@ -595,18 +590,9 @@ it("keeps identical session keys isolated by store", async () => {
 });
 
 it("cancels work admission waiting behind a lifecycle mutation", async () => {
-  const mutationPrepared = createDeferred();
-  const releaseMutation = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation("patch", {
-    scope: "store-a",
-    identities: ["agent:main:child", "session-1"],
-    prepare: async () => {
-      mutationPrepared.resolve();
-      await releaseMutation.promise;
-    },
-    run: async () => {},
-  });
-  await mutationPrepared.promise;
+  const held = holdMutation(childTarget, { prepare: true });
+  const { mutation } = held;
+  await held.started;
 
   const controller = new AbortController();
   const abortError = new Error("reset interrupted admission");
@@ -619,42 +605,31 @@ it("cancels work admission waiting behind a lifecycle mutation", async () => {
   controller.abort(abortError);
 
   await expect(admission).rejects.toBe(abortError);
-  releaseMutation.resolve();
+  held.release();
   await mutation;
 });
 
 it("preserves the initiating admission across a queued lifecycle mutation", async () => {
   let selfInterrupted = false;
   const admission = await beginSessionWorkAdmission({
-    scope: "store-a",
-    identities: ["agent:main:child", "session-1"],
+    ...childTarget,
     assertAllowed: () => {},
     onInterrupt: () => {
       selfInterrupted = true;
     },
   });
-  const firstStarted = createDeferred();
-  const releaseFirst = createDeferred();
-  const first = runExclusiveSessionLifecycleMutation("patch", {
-    scope: "store-a",
-    identities: ["agent:main:child", "session-1"],
-    run: async () => {
-      firstStarted.resolve();
-      await releaseFirst.promise;
-    },
-  });
-  await firstStarted.promise;
+  const held = holdMutation(childTarget);
+  const first = held.mutation;
+  await held.started;
 
   let initiatingAdmissionExcluded = false;
   const queued = admission.run(
     async () =>
       await runExclusiveSessionLifecycleMutation("drain", {
-        scope: "store-a",
-        identities: ["agent:main:child", "session-1"],
+        ...childTarget,
         prepare: async () => {
           initiatingAdmissionExcluded = await interruptSessionWorkAdmissions({
-            scope: "store-a",
-            identities: ["agent:main:child", "session-1"],
+            ...childTarget,
             timeoutMs: 1,
           });
         },
@@ -663,13 +638,13 @@ it("preserves the initiating admission across a queued lifecycle mutation", asyn
   );
 
   try {
-    releaseFirst.resolve();
+    held.release();
     await first;
     await queued;
     expect(initiatingAdmissionExcluded).toBe(true);
     expect(selfInterrupted).toBe(false);
   } finally {
-    releaseFirst.resolve();
+    held.release();
     admission.release();
     await Promise.allSettled([first, queued]);
   }
@@ -677,8 +652,7 @@ it("preserves the initiating admission across a queued lifecycle mutation", asyn
 
 it("bounds interruption waits for non-cooperative work", async () => {
   const admissionLease = await beginSessionWorkAdmission({
-    scope: "store-a",
-    identities: ["agent:main:child", "session-1"],
+    ...childTarget,
     assertAllowed: () => {},
     onInterrupt: () => {},
   });

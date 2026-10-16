@@ -71,6 +71,51 @@ import * as notices from "./session-state-notices.js";
 import { upsertSessionUpstreamLink } from "./session-upstream-links.js";
 import { readSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
 
+type Database = ReturnType<typeof createDatabaseOptions>;
+const watch = (database: Database, targetSessionKey = child) =>
+  registerSessionStateWatch({ watcherSessionKey: nestedWatcher, targetSessionKey }, database);
+const drain = (sessionKey: string) =>
+  drainFormattedSystemEvents({
+    cfg: {},
+    agentId: "main",
+    sessionKey,
+    isMainSession: false,
+    isNewSession: false,
+  });
+const watcherStore = (database: Database) =>
+  resolvePhysicalSessionStorePath({ sessionKey: nestedWatcher, env: database.env });
+async function record(database: Database, overrides: Parameters<typeof eventInput>[0] = {}) {
+  return expectDefined(
+    await recordSessionStateEventAsync(eventInput(overrides), database),
+    "seeded event",
+  );
+}
+function expectCursor(
+  database: Database,
+  values: [number, number, number],
+  key = nestedWatcher,
+  target = child,
+) {
+  const [last_seen_sequence, notified_sequence, material_sequence] = values;
+  expect(readCursor(database, key, target)).toEqual({
+    last_seen_sequence,
+    notified_sequence,
+    material_sequence,
+  });
+}
+function holdWorker(database: Database) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const blocking = runOpenClawStateWorkerOperation(
+    captureOpenClawStateWorkerContext(database),
+    async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  );
+  return { entered, release, blocking };
+}
+
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
 });
@@ -89,15 +134,7 @@ it("keeps queued signal cleanup on its captured store and removes newly committe
   await seedChild(database);
   const lateTarget = "agent:main:late-target";
   const { db } = openOpenClawStateDatabase(database);
-  const entered = createDeferred();
-  const release = createDeferred();
-  const blocking = runOpenClawStateWorkerOperation(
-    captureOpenClawStateWorkerContext(database),
-    async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  );
+  const { entered, release, blocking } = holdWorker(database);
   let resetting: Promise<void> | undefined;
   let deleting: Promise<void> | undefined;
   const read = prepareAmbientGroupWatchTargetsRead(watcher, database);
@@ -363,42 +400,20 @@ it.each([
   "preserves consumed notice custody across $handoff while acknowledgment waits",
   async ({ replaced }) => {
     const database = createDatabaseOptions();
-    const originalStore = resolvePhysicalSessionStorePath({
-      sessionKey: nestedWatcher,
-      env: database.env,
-    });
+    const originalStore = watcherStore(database);
     let currentStore = originalStore;
     publishSystemEventStoreResolver(() => currentStore);
-    expect(
-      await registerSessionStateWatch(
-        { watcherSessionKey: nestedWatcher, targetSessionKey: child },
-        database,
-      ),
-    ).toBe(true);
+    expect(await watch(database)).toBe(true);
     await recordSessionStateEventAsync(eventInput({ watcherSessionKeys: [] }), database);
     const before = replaced ? readCursor(database, nestedWatcher) : undefined;
     if (!replaced) {
       enqueueSystemEvent("ordinary queued event", { sessionKey: nestedWatcher });
     }
-    const entered = createDeferred();
-    const release = createDeferred();
-    const blocking = runOpenClawStateWorkerOperation(
-      captureOpenClawStateWorkerContext(database),
-      async () => {
-        entered.resolve();
-        await release.promise;
-      },
-    );
+    const { entered, release, blocking } = holdWorker(database);
     let draining: Promise<string | undefined> | undefined;
     try {
       await entered.promise;
-      draining = drainFormattedSystemEvents({
-        cfg: {},
-        agentId: "main",
-        sessionKey: nestedWatcher,
-        isMainSession: false,
-        isNewSession: false,
-      });
+      draining = drain(nestedWatcher);
       expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(0);
       if (replaced) {
         currentStore = `${originalStore}.replacement`;
@@ -483,10 +498,7 @@ it("rechecks acknowledged, rebound, and advanced cursors after sweep discovery",
     { sessionKey: nestedWatcher, env: database.env },
     { sessionId: "sweep-watcher", updatedAt: 1 },
   );
-  const storePath = resolvePhysicalSessionStorePath({
-    sessionKey: nestedWatcher,
-    env: database.env,
-  });
+  const storePath = watcherStore(database);
   publishSystemEventStoreResolver(() => storePath);
   const acked = `${child}-acked`;
   const rebound = `${child}-rebound`;
@@ -542,21 +554,9 @@ it("rechecks acknowledged, rebound, and advanced cursors after sweep discovery",
     release.resolve();
     await sweeping;
 
-    expect(readCursor(database, nestedWatcher, acked)).toEqual({
-      last_seen_sequence: 3,
-      notified_sequence: 3,
-      material_sequence: 3,
-    });
-    expect(readCursor(database, nestedWatcher, rebound)).toEqual({
-      last_seen_sequence: 5,
-      notified_sequence: 11,
-      material_sequence: 13,
-    });
-    expect(readCursor(database, nestedWatcher, advanced)).toEqual({
-      last_seen_sequence: 1,
-      notified_sequence: 7,
-      material_sequence: 7,
-    });
+    expectCursor(database, [3, 3, 3], nestedWatcher, acked);
+    expectCursor(database, [5, 11, 13], nestedWatcher, rebound);
+    expectCursor(database, [1, 7, 7], nestedWatcher, advanced);
     const queued = peekSystemEventEntries(nestedWatcher);
     expect(queued).toHaveLength(1);
     expect(queued[0]?.text).toContain(`Session "${advanced}" changed`);
@@ -573,34 +573,24 @@ it("reads session state and commits watch registration and acknowledgment withou
   const group = "agent:main:telegram:group:worker-boundary";
   const events = await Promise.all(
     Array.from({ length: 201 }, async (_, index) =>
-      expectDefined(
-        await recordSessionStateEventAsync(
-          eventInput({
-            sessionKey: "global",
-            watcherSessionKeys: [],
-            summary: `main event ${index}`,
-          }),
-          database,
-        ),
-        "seeded main event",
-      ),
+      record(database, {
+        sessionKey: "global",
+        watcherSessionKeys: [],
+        summary: `main event ${index}`,
+      }),
     ),
   );
   const mainHead = expectDefined(events.at(-1), "main head");
-  const opsHead = expectDefined(
-    await recordSessionStateEventAsync(
-      eventInput({ sessionKey: "global", agentId: "ops", watcherSessionKeys: [] }),
-      database,
-    ),
-    "seeded ops event",
-  );
-  const constructorHead = expectDefined(
-    await recordSessionStateEventAsync(
-      eventInput({ sessionKey: "global", agentId: "constructor", watcherSessionKeys: [] }),
-      database,
-    ),
-    "seeded constructor-agent event",
-  );
+  const opsHead = await record(database, {
+    sessionKey: "global",
+    agentId: "ops",
+    watcherSessionKeys: [],
+  });
+  const constructorHead = await record(database, {
+    sessionKey: "global",
+    agentId: "constructor",
+    watcherSessionKeys: [],
+  });
   const sql = observeMainThreadSql();
   const measure = async <T>(label: string, operation: () => T | Promise<T>): Promise<T> => {
     sql.clear();
@@ -645,22 +635,9 @@ it("reads session state and commits watch registration and acknowledgment withou
     expect(page.truncated).toBe(true);
     expect(page.historyGap).toBe(false);
 
-    expect(
-      await measure("explicit watch registration", () =>
-        registerSessionStateWatch(
-          { watcherSessionKey: nestedWatcher, targetSessionKey: child },
-          database,
-        ),
-      ),
-    ).toBe(true);
-    const frozen = expectDefined(
-      await recordSessionStateEventAsync(eventInput({ watcherSessionKeys: [] }), database),
-      "frozen child notification",
-    );
-    const interleaved = expectDefined(
-      await recordSessionStateEventAsync(eventInput({ watcherSessionKeys: [] }), database),
-      "interleaved child event",
-    );
+    expect(await measure("explicit watch registration", () => watch(database))).toBe(true);
+    const frozen = await record(database, { watcherSessionKeys: [] });
+    const interleaved = await record(database, { watcherSessionKeys: [] });
     const watcherStorePath = peekSystemEventEntries(nestedWatcher)[0]?.sessionStorePath ?? null;
     await measure("explicit watch acknowledgment", () =>
       acknowledgeSessionStateNotices(
@@ -669,11 +646,7 @@ it("reads session state and commits watch registration and acknowledgment withou
         database,
       ),
     );
-    expect(readCursor(database, nestedWatcher)).toEqual({
-      last_seen_sequence: frozen.sequence,
-      notified_sequence: interleaved.sequence,
-      material_sequence: interleaved.sequence,
-    });
+    expectCursor(database, [frozen.sequence, interleaved.sequence, interleaved.sequence]);
 
     for (const label of ["initial group watch", "existing group watch"]) {
       expect(
@@ -682,37 +655,18 @@ it("reads session state and commits watch registration and acknowledgment withou
         ),
       ).toBe(true);
     }
-    const groupFrozen = expectDefined(
-      await recordSessionStateEventAsync(
-        eventInput({ sessionKey: group, watcherSessionKeys: [] }),
-        database,
-      ),
-      "frozen group notification",
-    );
-    const groupInterleaved = expectDefined(
-      await recordSessionStateEventAsync(
-        eventInput({ sessionKey: group, watcherSessionKeys: [] }),
-        database,
-      ),
-      "interleaved group event",
-    );
+    const groupFrozen = await record(database, { sessionKey: group, watcherSessionKeys: [] });
+    const groupInterleaved = await record(database, { sessionKey: group, watcherSessionKeys: [] });
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
-    expect(
-      await measure("system-event drain acknowledgment", () =>
-        drainFormattedSystemEvents({
-          cfg: {},
-          agentId: "main",
-          sessionKey: watcher,
-          isMainSession: false,
-          isNewSession: false,
-        }),
-      ),
-    ).toContain(`Session "${group}" changed`);
-    expect(readCursor(database, watcher, group)).toEqual({
-      last_seen_sequence: groupFrozen.sequence,
-      notified_sequence: groupInterleaved.sequence,
-      material_sequence: groupInterleaved.sequence,
-    });
+    expect(await measure("system-event drain acknowledgment", () => drain(watcher))).toContain(
+      `Session "${group}" changed`,
+    );
+    expectCursor(
+      database,
+      [groupFrozen.sequence, groupInterleaved.sequence, groupInterleaved.sequence],
+      watcher,
+      group,
+    );
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
     expect(peekSystemEventEntries(watcher)[0]?.text).toContain(
       `changesSince ${groupFrozen.sequence}`,
@@ -728,20 +682,9 @@ it("reconstructs a committed followup when acknowledgment publication is lost", 
     { sessionKey: nestedWatcher, env: database.env },
     { sessionId: "retained-watcher", updatedAt: Date.now() },
   );
-  expect(
-    await registerSessionStateWatch(
-      { watcherSessionKey: nestedWatcher, targetSessionKey: child },
-      database,
-    ),
-  ).toBe(true);
-  const frozen = expectDefined(
-    await recordSessionStateEventAsync(eventInput({ watcherSessionKeys: [] }), database),
-    "frozen notice",
-  );
-  const newer = expectDefined(
-    await recordSessionStateEventAsync(eventInput({ watcherSessionKeys: [] }), database),
-    "newer notice",
-  );
+  expect(await watch(database)).toBe(true);
+  const frozen = await record(database, { watcherSessionKeys: [] });
+  const newer = await record(database, { watcherSessionKeys: [] });
   const originalNotice = expectDefined(peekSystemEventEntries(nestedWatcher)[0], "original notice");
   resetSystemEventsForTest();
   const publish = vi.fn(() => {
@@ -755,28 +698,17 @@ it("reconstructs a committed followup when acknowledgment publication is lost", 
   );
   expect(publish).toHaveBeenCalledOnce();
   expect(peekSystemEventEntries(nestedWatcher)).toEqual([]);
-  expect(readCursor(database, nestedWatcher)).toEqual({
-    last_seen_sequence: frozen.sequence,
-    notified_sequence: newer.sequence,
-    material_sequence: newer.sequence,
-  });
+  expectCursor(database, [frozen.sequence, newer.sequence, newer.sequence]);
   await sweepSessionStateWatchNotices(database);
   expect(peekSystemEventEntries(nestedWatcher).map(({ text }) => text)).toEqual([
     expect.stringContaining(`changesSince ${frozen.sequence}`),
   ]);
-  expect(readCursor(database, nestedWatcher)).toEqual({
-    last_seen_sequence: frozen.sequence,
-    notified_sequence: newer.sequence,
-    material_sequence: newer.sequence,
-  });
+  expectCursor(database, [frozen.sequence, newer.sequence, newer.sequence]);
 });
 
 it("rolls back watch writes when the system-event store changes at transaction or commit admission", async () => {
   const database = createDatabaseOptions();
-  const originalStore = resolvePhysicalSessionStorePath({
-    sessionKey: nestedWatcher,
-    env: database.env,
-  });
+  const originalStore = watcherStore(database);
   let currentStore = originalStore;
   publishSystemEventStoreResolver(() => currentStore);
   for (const operation of ["register", "acknowledge", "spawn"] as const) {
@@ -784,12 +716,7 @@ it("rolls back watch writes when the system-event store changes at transaction o
       currentStore = originalStore;
       const targetSessionKey = `${child}-${operation}-${stage}`;
       if (operation === "acknowledge") {
-        expect(
-          await registerSessionStateWatch(
-            { watcherSessionKey: nestedWatcher, targetSessionKey },
-            database,
-          ),
-        ).toBe(true);
+        expect(await watch(database, targetSessionKey)).toBe(true);
         for (let index = 0; index < 2; index++) {
           await recordSessionStateEventAsync(
             eventInput({ sessionKey: targetSessionKey, watcherSessionKeys: [] }),
@@ -809,12 +736,7 @@ it("rolls back watch writes when the system-event store changes at transaction o
       });
       try {
         if (operation === "register") {
-          expect(
-            await registerSessionStateWatch(
-              { watcherSessionKey: nestedWatcher, targetSessionKey },
-              database,
-            ),
-          ).toBe(false);
+          expect(await watch(database, targetSessionKey)).toBe(false);
         } else if (operation === "spawn") {
           await recordSubagentSpawned({
             childSessionKey: targetSessionKey,
@@ -844,10 +766,7 @@ it("rolls back watch writes when the system-event store changes at transaction o
 it("refuses a replaced owner before invoking its cold store discovery at commit", async () => {
   const database = createDatabaseOptions();
   openOpenClawStateDatabase(database);
-  const originalStore = resolvePhysicalSessionStorePath({
-    sessionKey: nestedWatcher,
-    env: database.env,
-  });
+  const originalStore = watcherStore(database);
   publishSystemEventStoreResolver(() => originalStore);
   const replacementDiscovery = vi.fn(() => {
     throw new Error("A retired admission must not invoke replacement store discovery");
@@ -861,12 +780,7 @@ it("refuses a replaced owner before invoking its cold store discovery at commit"
     admit(request, grant);
   });
   try {
-    expect(
-      await registerSessionStateWatch(
-        { watcherSessionKey: nestedWatcher, targetSessionKey: child },
-        database,
-      ),
-    ).toBe(false);
+    expect(await watch(database)).toBe(false);
     expect(witnessed).toBe(true);
     expect(replacementDiscovery).not.toHaveBeenCalled();
     expect(readCursor(database, nestedWatcher)).toBeUndefined();
