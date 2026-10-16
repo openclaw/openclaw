@@ -4,7 +4,7 @@ import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "./approval-h
 import type { ChannelApprovalNativeRuntimeAdapter } from "./approval-handler-runtime-types.js";
 import {
   createChannelApprovalNativeRuntimeAdapter,
-  createChannelApprovalHandlerFromCapability,
+  createChannelApprovalHandlerFromCapability as createHandler,
   createLazyChannelApprovalNativeRuntimeAdapter,
 } from "./approval-handler-runtime.js";
 import {
@@ -15,9 +15,7 @@ import type { NormalizedApprovalRequest } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
-type ApprovalCapability = NonNullable<
-  Parameters<typeof createChannelApprovalHandlerFromCapability>[0]["capability"]
->;
+type ApprovalCapability = NonNullable<Parameters<typeof createHandler>[0]["capability"]>;
 type ApprovalNativeAdapter = NonNullable<ApprovalCapability["native"]>;
 
 const TEST_HANDLER_PARAMS = {
@@ -93,10 +91,8 @@ async function createTestApprovalHandler(
   });
 }
 
-async function requireHandler(
-  params: Parameters<typeof createChannelApprovalHandlerFromCapability>[0],
-) {
-  const runtime = await createChannelApprovalHandlerFromCapability(params);
+async function requireHandler(params: Parameters<typeof createHandler>[0]) {
+  const runtime = await createHandler(params);
   if (runtime === null) {
     throw new Error("Expected approval handler runtime");
   }
@@ -128,21 +124,10 @@ function gatedResult<T>(result: T) {
   return { entered, gate, callback };
 }
 
-async function stopDuring(
-  runtime: Awaited<ReturnType<typeof requireHandler>>,
-  request: NormalizedApprovalRequest<ExecApprovalRequest>,
-  pending: ReturnType<typeof gatedResult>,
-  label: string,
-) {
-  const inflight = runtime.handleRequested(request);
-  await withTestTimeout(pending.entered.promise, 1_000, label);
-  await runtime.stop();
-  pending.gate.resolve();
-  await inflight;
-}
-
-function firstCallArg(mock: ReturnType<typeof vi.fn>): unknown {
-  return mock.mock.calls[0]?.[0];
+function firstCallArg(mock: ReturnType<typeof vi.fn>) {
+  return mock.mock.calls[0]?.[0] as
+    | { entry?: unknown; binding?: unknown; request?: unknown; approvalKind?: string }
+    | undefined;
 }
 
 describe("createChannelApprovalHandlerFromCapability", () => {
@@ -174,7 +159,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
 
   it("returns null when the capability does not expose a native runtime", async () => {
     await expect(
-      createChannelApprovalHandlerFromCapability({
+      createHandler({
         capability: {},
         ...TEST_HANDLER_PARAMS,
       }),
@@ -183,7 +168,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
 
   it("keeps an older channel runtime from sending cards under scoped plugin reviewer policy", async () => {
     const deliverPending = vi.fn().mockResolvedValue({ messageId: "1" });
-    const runtime = await createChannelApprovalHandlerFromCapability({
+    const runtime = await createHandler({
       capability: makeNativeApprovalCapability({ eventKinds: ["plugin"], deliverPending }),
       ...TEST_HANDLER_PARAMS,
       channel: "slack",
@@ -323,67 +308,53 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     await approvalRuntime.stop();
   });
 
-  it("continues finalization cleanup after one resolved entry unbind failure", async () => {
-    const unbindPending = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("unbind failed"))
-      .mockResolvedValueOnce(undefined);
-    const buildResolvedResult = vi.fn().mockResolvedValue({ kind: "leave" });
-    const approvalRuntime = await createTestApprovalHandler({
-      preferredSurface: "both",
-      supportsApproverDmSurface: true,
-      resolveApproverDmTargets: vi.fn().mockResolvedValue([{ to: "approver-dm" }]),
-      buildResolvedResult,
-      prepareTarget: vi.fn().mockImplementation(async ({ plannedTarget }) => ({
-        dedupeKey: String(plannedTarget.target.to),
-        target: { to: plannedTarget.target.to },
-      })),
-      deliverPending: makeSequentialPendingDeliveryMock(),
-      bindPending: makeSequentialPendingBindingMock(),
-      unbindPending,
-    });
+  it.each(["resolved", "stop"] as const)(
+    "continues %s cleanup after an unbind failure",
+    async (phase) => {
+      const unbindPending = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("unbind failed"))
+        .mockResolvedValueOnce(undefined);
+      const buildResolvedResult = vi.fn().mockResolvedValue({ kind: "leave" });
+      const approvalRuntime = await createTestApprovalHandler({
+        ...(phase === "resolved"
+          ? {
+              preferredSurface: "both" as const,
+              supportsApproverDmSurface: true,
+              resolveApproverDmTargets: vi.fn().mockResolvedValue([{ to: "approver-dm" }]),
+              buildResolvedResult,
+              prepareTarget: vi.fn().mockImplementation(async ({ plannedTarget }) => ({
+                dedupeKey: String(plannedTarget.target.to),
+                target: { to: plannedTarget.target.to },
+              })),
+            }
+          : {}),
+        deliverPending: makeSequentialPendingDeliveryMock(),
+        bindPending: makeSequentialPendingBindingMock(),
+        unbindPending,
+      });
 
-    const request = makeExecApprovalRequest("exec:2");
-
-    await approvalRuntime.handleRequested(request);
-    await expect(
-      approvalRuntime.handleResolved({
-        id: "exec:2",
-        decision: "approved",
-        resolvedBy: "operator",
-      } as never),
-    ).resolves.toBeUndefined();
-
-    expect(unbindPending).toHaveBeenCalledTimes(2);
-    expect(buildResolvedResult).toHaveBeenCalledTimes(1);
-    const resolvedPayload = firstCallArg(buildResolvedResult) as { entry?: unknown } | undefined;
-    expect(resolvedPayload?.entry).toEqual({ messageId: "2" });
-  });
-
-  it("continues stop-time unbind cleanup when one binding throws", async () => {
-    const unbindPending = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("unbind failed"))
-      .mockResolvedValueOnce(undefined);
-    const approvalRuntime = await createTestApprovalHandler({
-      deliverPending: makeSequentialPendingDeliveryMock(),
-      bindPending: makeSequentialPendingBindingMock(),
-      unbindPending,
-    });
-
-    const request = makeExecApprovalRequest("exec:stop-1");
-
-    await approvalRuntime.handleRequested(request);
-    await approvalRuntime.handleRequested({
-      ...request,
-      id: "exec:stop-2",
-    });
-
-    await expect(approvalRuntime.stop()).resolves.toBeUndefined();
-    expect(unbindPending).toHaveBeenCalledTimes(2);
-    await expect(approvalRuntime.stop()).resolves.toBeUndefined();
-    expect(unbindPending).toHaveBeenCalledTimes(2);
-  });
+      const request = makeExecApprovalRequest(phase === "resolved" ? "exec:2" : "exec:stop-1");
+      await approvalRuntime.handleRequested(request);
+      if (phase === "resolved") {
+        await expect(
+          approvalRuntime.handleResolved({
+            id: "exec:2",
+            decision: "approved",
+            resolvedBy: "operator",
+          } as never),
+        ).resolves.toBeUndefined();
+        expect(buildResolvedResult).toHaveBeenCalledTimes(1);
+        expect(firstCallArg(buildResolvedResult)?.entry).toEqual({ messageId: "2" });
+      } else {
+        await approvalRuntime.handleRequested({ ...request, id: "exec:stop-2" });
+        await expect(approvalRuntime.stop()).resolves.toBeUndefined();
+        expect(unbindPending).toHaveBeenCalledTimes(2);
+        await expect(approvalRuntime.stop()).resolves.toBeUndefined();
+      }
+      expect(unbindPending).toHaveBeenCalledTimes(2);
+    },
+  );
 });
 
 describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
@@ -480,85 +451,50 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
-  it("unbinds in-flight wrapped entry when stop() fires between bindPending and activeEntries.set", async () => {
-    const binding = gatedResult({ bindingId: "bound-in-flight" });
-    const deliverPending = vi.fn().mockResolvedValue({ messageId: "in-flight" });
-    const unbindPending = vi.fn();
-
-    const approvalRuntime = await createTestApprovalHandler({
-      deliverPending,
-      bindPending: binding.callback,
-      unbindPending,
-    });
-    const request = makeExecApprovalRequest("exec:in-flight");
-
-    await stopDuring(approvalRuntime, request, binding, "in-flight approval binding did not start");
-
-    expect(unbindPending).toHaveBeenCalledTimes(1);
-    const unbind = firstCallArg(unbindPending) as
-      | { entry?: unknown; binding?: unknown; request?: unknown }
-      | undefined;
-    expect(unbind?.entry).toEqual({ messageId: "in-flight" });
-    expect(unbind?.binding).toEqual({ bindingId: "bound-in-flight" });
-    expect(unbind?.request).toBe(request);
-  });
-
-  it("invokes cancelDelivered when stop() fires between deliverPending and bindPending", async () => {
-    const deliveredEntry = { messageId: "pre-bind" };
-    const delivery = gatedResult(deliveredEntry);
-    const bindPending = vi.fn().mockResolvedValue({ bindingId: "should-not-bind" });
+  it.each([
+    { id: "in-flight", phase: "bind", label: "in-flight approval binding" },
+    { id: "pre-bind", phase: "deliver", label: "pre-bind approval delivery" },
+    { id: "post-bind-null", phase: "bind", label: "null approval binding" },
+  ])("cleans up $id when stop interrupts $phase", async ({ id, phase, label }) => {
+    const entry = { messageId: id };
+    const bound = id === "in-flight";
+    const pending = gatedResult(
+      phase === "deliver" ? entry : bound ? { bindingId: "bound-in-flight" } : null,
+    );
+    const bindPending =
+      phase === "bind"
+        ? pending.callback
+        : vi.fn().mockResolvedValue({ bindingId: "should-not-bind" });
     const unbindPending = vi.fn();
     const cancelDelivered = vi.fn();
-
-    const approvalRuntime = await createTestApprovalHandler({
-      deliverPending: delivery.callback,
+    const runtime = await createTestApprovalHandler({
+      deliverPending: phase === "deliver" ? pending.callback : vi.fn().mockResolvedValue(entry),
       bindPending,
       unbindPending,
-      cancelDelivered,
+      ...(bound ? {} : { cancelDelivered }),
     });
-    const request = makeExecApprovalRequest("exec:pre-bind");
-
-    await stopDuring(
-      approvalRuntime,
-      request,
-      delivery,
-      "pre-bind approval delivery did not start",
-    );
-
-    expect(bindPending).not.toHaveBeenCalled();
-    expect(unbindPending).not.toHaveBeenCalled();
-    expect(cancelDelivered).toHaveBeenCalledTimes(1);
-    const cancel = firstCallArg(cancelDelivered) as
-      | { entry?: unknown; request?: unknown; approvalKind?: string }
-      | undefined;
-    expect(cancel?.entry).toBe(deliveredEntry);
-    expect(cancel?.request).toBe(request);
-    expect(cancel?.approvalKind).toBe("exec");
-  });
-
-  it("invokes cancelDelivered when stop() fires after bindPending returned null", async () => {
-    const binding = gatedResult(null);
-    const deliveredEntry = { messageId: "post-bind-null" };
-    const deliverPending = vi.fn().mockResolvedValue(deliveredEntry);
-    const unbindPending = vi.fn();
-    const cancelDelivered = vi.fn();
-
-    const approvalRuntime = await createTestApprovalHandler({
-      deliverPending,
-      bindPending: binding.callback,
-      unbindPending,
-      cancelDelivered,
-    });
-    const request = makeExecApprovalRequest("exec:post-bind-null");
-
-    await stopDuring(approvalRuntime, request, binding, "null approval binding did not start");
-
-    expect(unbindPending).not.toHaveBeenCalled();
-    expect(cancelDelivered).toHaveBeenCalledTimes(1);
-    const cancel = firstCallArg(cancelDelivered) as
-      | { entry?: unknown; request?: unknown }
-      | undefined;
-    expect(cancel?.entry).toBe(deliveredEntry);
-    expect(cancel?.request).toBe(request);
+    const request = makeExecApprovalRequest(`exec:${id}`);
+    const inflight = runtime.handleRequested(request);
+    await withTestTimeout(pending.entered.promise, 1_000, `${label} did not start`);
+    await runtime.stop();
+    pending.gate.resolve();
+    await inflight;
+    if (bound) {
+      expect(unbindPending).toHaveBeenCalledTimes(1);
+      const unbind = firstCallArg(unbindPending);
+      expect(unbind?.entry).toEqual({ messageId: "in-flight" });
+      expect(unbind?.binding).toEqual({ bindingId: "bound-in-flight" });
+      expect(unbind?.request).toBe(request);
+    } else {
+      expect(unbindPending).not.toHaveBeenCalled();
+      expect(cancelDelivered).toHaveBeenCalledTimes(1);
+      const cancel = firstCallArg(cancelDelivered);
+      expect(cancel?.entry).toBe(entry);
+      expect(cancel?.request).toBe(request);
+      if (phase === "deliver") {
+        expect(bindPending).not.toHaveBeenCalled();
+        expect(cancel?.approvalKind).toBe("exec");
+      }
+    }
   });
 });

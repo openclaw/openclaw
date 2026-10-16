@@ -15,8 +15,8 @@ import { createApprovalNativeRuntimeAdapterStubs } from "./approval-handler.test
 import { createApprovalNativeRouteCoordinator } from "./approval-native-route-coordinator.js";
 import { ExecApprovalChannelRuntimeTerminalStartError } from "./exec-approval-channel-runtime.js";
 
-const { createChannelApprovalHandlerFromCapability } = vi.hoisted(() => ({
-  createChannelApprovalHandlerFromCapability: vi.fn(),
+const { handlerFactory } = vi.hoisted(() => ({
+  handlerFactory: vi.fn(),
 }));
 
 vi.mock("./approval-handler-runtime.js", async () => {
@@ -25,7 +25,7 @@ vi.mock("./approval-handler-runtime.js", async () => {
   );
   return {
     ...actual,
-    createChannelApprovalHandlerFromCapability,
+    createChannelApprovalHandlerFromCapability: handlerFactory,
   };
 });
 
@@ -35,7 +35,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
   let channelRuntime: ReturnType<typeof createRuntimeChannel>;
 
   beforeEach(() => {
-    createChannelApprovalHandlerFromCapability.mockReset();
+    handlerFactory.mockReset();
     clock = createGatewaySchedulerClock();
     scheduler = createTestGatewayScheduler(clock.clock);
     channelRuntime = createRuntimeChannel();
@@ -54,12 +54,6 @@ describe("startChannelApprovalHandlerBootstrap", () => {
   const createLogger = () => ({
     error: vi.fn(),
     warn: vi.fn(),
-    info: vi.fn(),
-    debug: vi.fn(),
-    child: vi.fn(),
-    isEnabled: vi.fn().mockReturnValue(true),
-    isVerboseEnabled: vi.fn().mockReturnValue(false),
-    verbose: vi.fn(),
   });
 
   const createApprovalPlugin = () =>
@@ -103,7 +97,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
 
   const startFailingHandler = async (handler: ReturnType<typeof makeHandler>) => {
     const { logger, failed } = loggedFailure();
-    createChannelApprovalHandlerFromCapability.mockResolvedValue(handler);
+    handlerFactory.mockResolvedValue(handler);
     const cleanup = await startTestBootstrap(logger);
     const lease = registerApprovalContext();
     await failed.promise;
@@ -112,14 +106,14 @@ describe("startChannelApprovalHandlerBootstrap", () => {
 
   it("starts immediately when the runtime context was already registered", async () => {
     const { start, stop } = makeHandler();
-    createChannelApprovalHandlerFromCapability.mockResolvedValue({ start, stop });
+    handlerFactory.mockResolvedValue({ start, stop });
 
     const lease = registerApprovalContext();
 
     const cleanup = await startTestBootstrap();
     await flushTransitions();
 
-    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(1);
+    expect(handlerFactory).toHaveBeenCalledTimes(1);
     expect(start).toHaveBeenCalledTimes(1);
 
     await cleanup();
@@ -131,9 +125,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     const actual = await vi.importActual<typeof import("./approval-handler-runtime.js")>(
       "./approval-handler-runtime.js",
     );
-    createChannelApprovalHandlerFromCapability.mockImplementation(
-      actual.createChannelApprovalHandlerFromCapability,
-    );
+    handlerFactory.mockImplementation(actual.createChannelApprovalHandlerFromCapability);
     const subscribed = createDeferred<GatewayApprovalEventSubscriber>();
     const delivered = createDeferred();
     const deliveries: Array<{ to: string; approvalId: string }> = [];
@@ -220,7 +212,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     });
     try {
       await flushTransitions();
-      expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledOnce();
+      expect(handlerFactory).toHaveBeenCalledOnce();
       const subscriber = await subscribed.promise;
       const request = {
         approvalKind: "exec" as const,
@@ -245,7 +237,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
   });
 
   it("does not block bootstrap return on an existing runtime context", async () => {
-    createChannelApprovalHandlerFromCapability.mockReturnValue(new Promise(() => {}));
+    handlerFactory.mockReturnValue(new Promise(() => {}));
     registerApprovalContext();
 
     const cleanup = await startTestBootstrap();
@@ -253,11 +245,9 @@ describe("startChannelApprovalHandlerBootstrap", () => {
   });
 
   it("does not start a handler after the runtime context is unregistered mid-boot", async () => {
-    const { promise: runtimePromise, resolve: resolveRuntime } = createDeferred<{
-      start: ReturnType<typeof vi.fn>;
-      stop: ReturnType<typeof vi.fn>;
-    }>();
-    createChannelApprovalHandlerFromCapability.mockReturnValue(runtimePromise);
+    const { promise: runtimePromise, resolve: resolveRuntime } =
+      createDeferred<ReturnType<typeof makeHandler>>();
+    handlerFactory.mockReturnValue(runtimePromise);
 
     const cleanup = await startTestBootstrap();
 
@@ -279,9 +269,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
   it("restarts the shared approval handler when the runtime context is replaced", async () => {
     const first = makeHandler();
     const second = makeHandler();
-    createChannelApprovalHandlerFromCapability
-      .mockResolvedValueOnce(first)
-      .mockResolvedValueOnce(second);
+    handlerFactory.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
 
     const cleanup = await startTestBootstrap();
 
@@ -291,7 +279,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     const secondLease = registerApprovalContext({ ok: "second" });
     await flushTransitions();
 
-    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(2);
+    expect(handlerFactory).toHaveBeenCalledTimes(2);
     expect(first.start).toHaveBeenCalledTimes(1);
     expect(first.stop).toHaveBeenCalledTimes(1);
     expect(second.start).toHaveBeenCalledTimes(1);
@@ -305,51 +293,45 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await cleanup();
   });
 
-  it("defers retryable gateway readiness startup failures without terminal error logs", async () => {
-    const readinessError = new Error("gateway event loop readiness timeout");
-    const start = vi.fn().mockRejectedValueOnce(readinessError).mockResolvedValueOnce(undefined);
-    const { stop } = makeHandler();
-    const { logger, failed } = loggedFailure("warn");
-    createChannelApprovalHandlerFromCapability
-      .mockResolvedValueOnce({ start, stop })
-      .mockResolvedValueOnce({ start, stop });
+  it.each(["retryable", "terminal"] as const)("handles %s startup failures", async (kind) => {
+    const terminal = kind === "terminal";
+    const error = terminal
+      ? new ExecApprovalChannelRuntimeTerminalStartError({
+          code: 1008,
+          reason: "pairing required",
+          detailCode: "PAIRING_REQUIRED",
+        })
+      : new Error("gateway event loop readiness timeout");
+    const start = terminal
+      ? vi.fn().mockRejectedValue(error)
+      : vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(undefined);
+    const handler = { start, stop: makeHandler().stop };
+    const { logger, failed } = loggedFailure(terminal ? "error" : "warn");
+    if (terminal) {
+      handlerFactory.mockResolvedValue(handler);
+    } else {
+      handlerFactory.mockResolvedValueOnce(handler).mockResolvedValueOnce(handler);
+    }
     const cleanup = await startTestBootstrap(logger);
     registerApprovalContext();
     await failed.promise;
-
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(logger.error).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledOnce();
-    expect(logger.warn).toHaveBeenCalledWith(
-      "native approval handler deferred until gateway readiness recovers: gateway readiness unavailable before approval handler start",
-    );
-
-    await clock.advanceBy(1_000);
-
-    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(2);
-    expect(start).toHaveBeenCalledTimes(2);
-
-    await cleanup();
-  });
-
-  it("does not retry terminal native approval startup failures", async () => {
-    const terminalError = new ExecApprovalChannelRuntimeTerminalStartError({
-      code: 1008,
-      reason: "pairing required",
-      detailCode: "PAIRING_REQUIRED",
-    });
-    const start = vi.fn().mockRejectedValue(terminalError);
-    const { stop } = makeHandler();
-    const { logger, cleanup } = await startFailingHandler({ start, stop });
-    await clock.advanceBy(3_000);
-
-    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(1);
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(logger.error).toHaveBeenCalledWith(
-      `native approval handler disabled: ${String(terminalError)}`,
-    );
-
+    if (!terminal) {
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledOnce();
+      expect(logger.warn).toHaveBeenCalledWith(
+        "native approval handler deferred until gateway readiness recovers: gateway readiness unavailable before approval handler start",
+      );
+    }
+    await clock.advanceBy(terminal ? 3_000 : 1_000);
+    expect(handlerFactory).toHaveBeenCalledTimes(terminal ? 1 : 2);
+    expect(start).toHaveBeenCalledTimes(terminal ? 1 : 2);
+    if (terminal) {
+      expect(handler.stop).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        `native approval handler disabled: ${String(error)}`,
+      );
+    }
     await cleanup();
   });
 
@@ -365,7 +347,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     }
     await clock.advanceBy(1_000);
 
-    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(1);
+    expect(handlerFactory).toHaveBeenCalledTimes(1);
     expect(scheduler.nextWakeAtMs).toBeNull();
     await cleanup();
     lease.dispose();
@@ -374,16 +356,11 @@ describe("startChannelApprovalHandlerBootstrap", () => {
   it("joins an in-flight retry on scheduler shutdown without starting its retired handler", async () => {
     const { logger, failed } = loggedFailure();
     const retryStarted = createDeferred();
-    const runtime = createDeferred<{
-      start: ReturnType<typeof vi.fn>;
-      stop: ReturnType<typeof vi.fn>;
-    }>();
-    createChannelApprovalHandlerFromCapability
-      .mockRejectedValueOnce(new Error("boom"))
-      .mockImplementationOnce(() => {
-        retryStarted.resolve();
-        return runtime.promise;
-      });
+    const runtime = createDeferred<ReturnType<typeof makeHandler>>();
+    handlerFactory.mockRejectedValueOnce(new Error("boom")).mockImplementationOnce(() => {
+      retryStarted.resolve();
+      return runtime.promise;
+    });
 
     const cleanup = await startTestBootstrap(logger);
     const lease = registerApprovalContext();
@@ -414,7 +391,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     first.start.mockReset().mockRejectedValueOnce(new Error("boom"));
     const second = makeHandler();
     const { logger, failed } = loggedFailure();
-    createChannelApprovalHandlerFromCapability
+    handlerFactory
       .mockResolvedValueOnce(first)
       .mockResolvedValueOnce(second)
       .mockResolvedValueOnce(second);

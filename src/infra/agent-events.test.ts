@@ -233,8 +233,7 @@ test("drops stale explicit-generation events before shared listeners", () => {
   expect(
     emit("run", "lifecycle", { phase: "start", startedAt: 1_000 }, { lifecycleGeneration }),
   ).toBe(true);
-  expect(seen).toHaveLength(1);
-  expect(seen[0]).toMatchObject({ seq: 1, data: { phase: "start" } });
+  expect(seen).toMatchObject([{ seq: 1, data: { phase: "start" } }]);
 });
 
 test("rejects inherited stale ownership and cannot reclaim the admitted replacement", () => {
@@ -266,8 +265,7 @@ test("rejects inherited stale ownership and cannot reclaim the admitted replacem
   withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
     emit("run", "tool", { name: "current" }),
   );
-  expect(seen).toHaveLength(1);
-  expect(seen[0]).toMatchObject({ seq: 1, stream: "tool" });
+  expect(seen).toMatchObject([{ seq: 1, stream: "tool" }]);
 });
 
 test("shares operations across nested fallbacks but not separate admissions", async () => {
@@ -312,8 +310,7 @@ test("rejects lifecycle starts without a finite producer timestamp", () => {
   emit("missing", "lifecycle", { phase: "start" });
   emit("invalid", "lifecycle", { phase: "start", startedAt: Number.NaN });
   emit("valid", "lifecycle", { phase: "start", startedAt: 1_234 });
-  expect(seen).toHaveLength(1);
-  expect(seen[0]).toMatchObject({ runId: "valid", data: { phase: "start", startedAt: 1_234 } });
+  expect(seen).toMatchObject([{ runId: "valid", data: { phase: "start", startedAt: 1_234 } }]);
 });
 
 test("stamps each overlapping run's own start onto its terminal event", () => {
@@ -344,10 +341,13 @@ test("does not invent or replace producer-owned lifecycle start timestamps", () 
 });
 
 test("keeps hidden routing private while preserving lifecycle persistence identity", () => {
-  registerAgentRunContext("run", {
+  const privateRouting = {
     mainSessionRestartRecovery: true,
     projectSessionLifecycle: false,
     projectSessionMessages: false,
+  };
+  registerAgentRunContext("run", {
+    ...privateRouting,
     sessionKey: "main",
     isControlUiVisible: false,
   });
@@ -356,44 +356,27 @@ test("keeps hidden routing private while preserving lifecycle persistence identi
   const data = { text: "private" };
   const assistantSource: AgentAssistantSourceReceipt = {};
   const assistantProjection = { itemId: "item", text: "display", replace: false };
-  emitAgentEventWithAssistantSourceIfCurrent(
-    { runId: "run", stream: "assistant", data, sessionKey: "main" },
-    assistantSource,
-    assistantProjection,
-  );
-  const native = {
-    runId: "run",
-    stream: "assistant",
-    data,
-    sessionKey: "main",
-    assistantSource,
-    assistantProjection,
-  };
+  const source = { runId: "run", stream: "assistant", data, sessionKey: "main" };
+  emitAgentEventWithAssistantSourceIfCurrent(source, assistantSource, assistantProjection);
+  const native = { ...source, assistantSource, assistantProjection };
   emitAgentEventIfCurrent(native);
   emit("run", "lifecycle", { phase: "start", startedAt: 1_234 }, { sessionKey: "main" });
   emit("run", "lifecycle", { phase: "error" });
   expect(received.map((event) => event.sessionKey)).toEqual([undefined, undefined, "main", "main"]);
   expect(received[0]?.assistantSource).toBe(assistantSource);
   expect(received[0]?.assistantProjection).toBe(assistantProjection);
-  expect({ ...received[0] }).not.toHaveProperty("assistantSource");
-  expect({ ...received[0] }).not.toHaveProperty("assistantProjection");
   expect(received[1]?.assistantSource).toBeUndefined();
   expect(received[1]?.assistantProjection).toBeUndefined();
-  expect({ ...received[1] }).not.toHaveProperty("assistantSource");
-  expect({ ...received[1] }).not.toHaveProperty("assistantProjection");
+  for (const key of ["assistantSource", "assistantProjection"]) {
+    expect({ ...received[0] }).not.toHaveProperty(key);
+    expect({ ...received[1] }).not.toHaveProperty(key);
+  }
   const event = received[2]!;
   expect(event).toMatchObject({
+    ...privateRouting,
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    projectSessionLifecycle: false,
-    projectSessionMessages: false,
-    mainSessionRestartRecovery: true,
   });
-  expect(Object.keys(event)).not.toContain("lifecycleGeneration");
-  for (const key of [
-    "projectSessionLifecycle",
-    "projectSessionMessages",
-    "mainSessionRestartRecovery",
-  ]) {
+  for (const key of ["lifecycleGeneration", ...Object.keys(privateRouting)]) {
     expect(Object.keys(event)).not.toContain(key);
   }
 });
