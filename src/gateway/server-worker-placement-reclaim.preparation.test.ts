@@ -30,6 +30,27 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 import { prepareSessionWorkerPlacementStop } from "./worker-environments/session-placement-lifecycle.js";
 
 const roots: string[] = [];
+function waitFor(gate: Promise<unknown>, operation: Promise<unknown>) {
+  return Promise.race([
+    gate,
+    operation.then((result): never => {
+      throw result;
+    }),
+  ]);
+}
+
+function source(placement: {
+  generation: number;
+  environmentId: string;
+  activeOwnerEpoch: number;
+}) {
+  return {
+    generation: placement.generation,
+    environmentId: placement.environmentId,
+    ownerEpoch: placement.activeOwnerEpoch,
+  };
+}
+
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
@@ -46,18 +67,14 @@ async function cancellationLoadFixture(
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   const placements = createWorkerSessionPlacementStore({ database });
   const storePath = path.join(root, "sessions.sqlite");
-  const cfg = { session: { store: storePath } };
-  setRuntimeConfigSnapshot(cfg);
+  setRuntimeConfigSnapshot({ session: { store: storePath } });
   const entry = {
     sessionId: REQUEST.sessionId,
     lifecycleRevision: "original",
     worktree: { id: "task-worktree", branch: "test", repoRoot: root },
     updatedAt: Date.now(),
   };
-  await replaceSessionEntry(
-    { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
-    entry,
-  );
+  await replaceSessionEntry({ ...REQUEST, storePath }, entry);
   const runtime = {
     managedWorktrees: {
       findLiveByOwner: async () => ({
@@ -115,9 +132,7 @@ async function cancellationLoadFixture(
   });
   const harness = await createHarness(database, placements, {
     workspacePath: root,
-    runReclaimPreparation: barriers.runReclaimPreparation,
-    runReclaimBarrier: barriers.runReclaimBarrier,
-    runFailedReclaimBarrier: barriers.runFailedReclaimBarrier,
+    ...barriers,
     ...options,
   });
   const coordinated = coordinateWorkerPlacementDispatch(
@@ -178,21 +193,11 @@ it.each(["same-owner", "replacement", "incarnation", "authorization"] as const)(
       return f.harness.ready;
     });
     const dispatch = f.coordinated.dispatch(REQUEST).catch((error: unknown) => error);
-    await Promise.race([
-      provisioning.promise,
-      dispatch.then((result) => {
-        throw result;
-      }),
-    ]);
+    await waitFor(provisioning.promise, dispatch);
     const first = f.coordinated.reclaim(REQUEST).catch((error: unknown) => error);
     let second: Promise<unknown> | undefined;
     try {
-      await Promise.race([
-        firstLoading.promise,
-        first.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(firstLoading.promise, first);
       const initial = f.placements.get(REQUEST.sessionId);
       expect(initial?.state).toBe("provisioning");
       provisioned.resolve();
@@ -212,12 +217,7 @@ it.each(["same-owner", "replacement", "incarnation", "authorization"] as const)(
           }
         })
         .catch((error: unknown) => error);
-      await Promise.race([
-        secondLoading.promise,
-        second.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(secondLoading.promise, second);
       if (change === "replacement") {
         await f.placements.startDrain({
           sessionId: active.sessionId,
@@ -300,12 +300,7 @@ it.each(["missing", "local", "reclaimed"] as const)(
       .reclaim(REQUEST, undefined, () => prepared.resolve())
       .catch((error: unknown) => error);
     try {
-      await Promise.race([
-        prepared.promise,
-        second.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(prepared.promise, second);
       release.resolve();
       const results = await Promise.all([first, second]);
       expect(controller.signal.aborted).toBe(false);
@@ -366,40 +361,21 @@ it.each([false, true])(
       .move(
         {
           ...REQUEST,
-          source: {
-            generation: active.generation,
-            environmentId: active.environmentId,
-            ownerEpoch: active.activeOwnerEpoch,
-          },
+          source: source(active),
           target: { kind: "gateway" },
           ...(abandonSource ? { abandonSource: true as const } : {}),
         },
         (placement) => transitions.push(placement.state),
       )
       .catch((error: unknown) => error);
-    await Promise.race([
-      entering.promise,
-      moving.then((result) => {
-        throw result;
-      }),
-    ]);
+    await waitFor(entering.promise, moving);
     f.armCancellation();
     const stopping = f.coordinated.reclaim(REQUEST).catch((error: unknown) => error);
     try {
-      await Promise.race([
-        f.loading.promise,
-        stopping.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(f.loading.promise, stopping);
       expect(f.placements.get(REQUEST.sessionId)?.state).toBe("active");
       begin.resolve();
-      await Promise.race([
-        begun.promise,
-        moving.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(begun.promise, moving);
       expect(f.placements.get(REQUEST.sessionId)?.state).toBe("draining");
       expect(transitions).toEqual(["draining"]);
       f.loaded.resolve();
@@ -458,12 +434,7 @@ it.each(
     const first = f.coordinated.reclaim(REQUEST).catch((error: unknown) => error);
     await f.waitForCancellationStart(first);
     if (phase === "active") {
-      await Promise.race([
-        entered.promise,
-        first.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(entered.promise, first);
     }
     f.armCancellation();
     let secondSettled = false;
@@ -474,12 +445,7 @@ it.each(
         secondSettled = true;
       });
     try {
-      await Promise.race([
-        f.loading.promise,
-        second.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(f.loading.promise, second);
       if (change === "cleanup") {
         f.loaded.resolve();
         await f.waitForCancellationStart(second);
@@ -587,12 +553,7 @@ it.each([
       })
       .catch((error: unknown) => error);
     try {
-      await Promise.race([
-        loading.promise,
-        stopping.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(loading.promise, stopping);
       expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
       expect(dispatchSignal?.aborted).toBe(false);
       provisioned.resolve();
@@ -691,11 +652,7 @@ it.each([
       .move(
         {
           ...REQUEST,
-          source: {
-            generation: active.generation,
-            environmentId: active.environmentId,
-            ownerEpoch: active.activeOwnerEpoch,
-          },
+          source: source(active),
           target:
             targetKind === "profile"
               ? { kind: "profile", profileId: "destination-profile" }
@@ -731,12 +688,7 @@ it.each([
       },
     );
     try {
-      await Promise.race([
-        f.loading.promise,
-        stopping.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(f.loading.promise, stopping);
       reconciled.resolve();
       await Promise.race([
         cleaning.promise,
@@ -803,11 +755,7 @@ it.each(["transaction", "commit"] as const)(
       .run("device:device-1", active.environmentId);
     const begun = await f.placements.beginPlacementMove({
       sessionId: active.sessionId,
-      source: {
-        generation: active.generation,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
+      source: source(active),
       target: { kind: "gateway" },
       abandonSource: true,
     });
