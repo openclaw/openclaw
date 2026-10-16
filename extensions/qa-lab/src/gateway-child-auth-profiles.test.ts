@@ -34,14 +34,6 @@ function readAuthProfileStore(stateDir: string, agentId: string) {
   return readQaAuthProfiles(path.join(stateDir, "agents", agentId, "agent"));
 }
 
-function requireAuthProfile<T>(profiles: Record<string, T> | undefined, id: string): T {
-  const profile = profiles?.[id];
-  if (!profile) {
-    throw new Error(`expected auth profile ${id}`);
-  }
-  return profile;
-}
-
 describe("QA Gateway auth profile staging", () => {
   it("stages a live Anthropic setup-token profile for isolated QA workers", async () => {
     const stateDir = await tempDirs.makeTempDir("qa-setup-token-state-");
@@ -55,14 +47,13 @@ describe("QA Gateway auth profile staging", () => {
       },
     });
 
-    const configProfile = requireAuthProfile(cfg.auth?.profiles, "anthropic:qa-setup-token");
-    expect(configProfile.provider).toBe("anthropic");
-    expect(configProfile.mode).toBe("token");
-    const storeProfile = requireAuthProfile(
-      (await readAuthProfileStore(stateDir, "main")).profiles,
-      "anthropic:qa-setup-token",
-    );
-    expect(storeProfile).toMatchObject({ type: "token", provider: "anthropic", token });
+    expect(cfg.auth?.profiles?.["anthropic:qa-setup-token"]).toMatchObject({
+      provider: "anthropic",
+      mode: "token",
+    });
+    expect(
+      (await readAuthProfileStore(stateDir, "main")).profiles["anthropic:qa-setup-token"],
+    ).toMatchObject({ type: "token", provider: "anthropic", token });
   });
 
   it.each([
@@ -81,7 +72,7 @@ describe("QA Gateway auth profile staging", () => {
       providerIds: ["openai"],
       env,
     });
-    expect(requireAuthProfile(cfg.auth?.profiles, "qa-live-openai-env")).toMatchObject({
+    expect(cfg.auth?.profiles?.["qa-live-openai-env"]).toMatchObject({
       provider: "openai",
       mode: "api_key",
       displayName: "QA live openai env credential",
@@ -91,7 +82,7 @@ describe("QA Gateway auth profile staging", () => {
     );
     for (const agentId of ["main", "qa"]) {
       const profiles = (await readAuthProfileStore(stateDir, agentId)).profiles;
-      expect(requireAuthProfile(profiles, "qa-live-openai-env")).toMatchObject({
+      expect(profiles["qa-live-openai-env"]).toMatchObject({
         type: "api_key",
         provider: "openai",
         key: "qa-live-key",
@@ -190,19 +181,19 @@ describe("QA Gateway auth profile staging", () => {
       providers: ["openai"],
     });
 
-    const openaiConfigProfile = requireAuthProfile(cfg.auth?.profiles, "qa-mock-openai");
-    expect(openaiConfigProfile.provider).toBe("openai");
-    expect(openaiConfigProfile.mode).toBe("api_key");
-    // Anthropic should NOT be staged when the caller restricts providers.
+    expect(cfg.auth?.profiles?.["qa-mock-openai"]).toMatchObject({
+      provider: "openai",
+      mode: "api_key",
+    });
     expect(cfg.auth?.profiles?.["qa-mock-anthropic"]).toBeUndefined();
 
     const qaStore = await readAuthProfileStore(stateDir, "qa");
-    const openaiStoreProfile = requireAuthProfile(qaStore.profiles, "qa-mock-openai");
-    expect(openaiStoreProfile.provider).toBe("openai");
-    expect(openaiStoreProfile.type).toBe("api_key");
+    expect(qaStore.profiles["qa-mock-openai"]).toMatchObject({
+      provider: "openai",
+      type: "api_key",
+    });
     expect(qaStore.profiles["qa-mock-anthropic"]).toBeUndefined();
 
-    // The main agent's canonical database should not exist because it was not requested.
     await expect(
       lstat(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite")),
     ).rejects.toThrow(/ENOENT/);
