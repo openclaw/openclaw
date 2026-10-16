@@ -1,3 +1,4 @@
+import type { LegacyPluginManifestSkip } from "../commands/doctor-plugin-manifests.js";
 import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
@@ -199,11 +200,15 @@ export function resolveInitialDoctorHealthContributions(params: {
           const {
             collectLegacyPluginManifestContractMigrations,
             legacyPluginManifestContractMigrationToHealthFinding,
+            legacyPluginManifestSkipToHealthFinding,
           } = await import("../commands/doctor-plugin-manifests.js");
-          return collectLegacyPluginManifestContractMigrations({
+          const skipped: LegacyPluginManifestSkip[] = [];
+          const migrations = collectLegacyPluginManifestContractMigrations({
             config: ctx.cfg,
             env: process.env,
+            onSkippedManifest: (skip) => skipped.push(skip),
           }).map(legacyPluginManifestContractMigrationToHealthFinding);
+          return [...migrations, ...skipped.map(legacyPluginManifestSkipToHealthFinding)];
         },
       },
       run: runLegacyPluginManifestHealth,
