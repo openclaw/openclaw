@@ -92,10 +92,7 @@ const observed = (identity: { version: string; buildId?: string }, versionMatch:
   runningBuildId: identity.buildId,
   versionMatch,
 });
-const recovered = (identity: {
-  version: string;
-  buildId: string;
-}): UpdateRunRecord["verification"] => ({
+const recovered = (identity: typeof previous): UpdateRunRecord["verification"] => ({
   ...observed(identity, true),
   recovery: {
     serviceRestartSafe: true,
@@ -104,6 +101,14 @@ const recovered = (identity: {
     service: "healthy" as const,
   },
 });
+const intendedBuildUnverified = "the intended build for 2026.9.7 is unverified";
+const targetUnknown = "the update target is unknown";
+const retainedCandidate = {
+  before: oldPrevious,
+  after: candidate,
+  verification: { ...observed(oldPrevious, false), rollbackOutcome: failedRollback },
+};
+const rolledBack = { before: previous, after: previous, server: previous };
 
 describe("status update ledger evidence", () => {
   it.each<{
@@ -171,16 +176,13 @@ describe("status update ledger evidence", () => {
     },
     {
       name: "same-version rollback with successful recovery verification",
-      before: previous,
-      after: previous,
+      ...rolledBack,
       verification: recovered(previous),
-      server: previous,
-      detail: "the intended build for 2026.9.7 is unverified",
+      detail: intendedBuildUnverified,
     },
     {
       name: "same-version rollback with a file restoration receipt",
-      before: previous,
-      after: previous,
+      ...rolledBack,
       verification: {
         ...observed(previous, true),
         rollbackOutcome: {
@@ -188,8 +190,7 @@ describe("status update ledger evidence", () => {
           reason: "Previous package and configuration restored",
         },
       },
-      server: previous,
-      detail: "the intended build for 2026.9.7 is unverified",
+      detail: intendedBuildUnverified,
     },
     {
       name: "distinct target version after package rollback",
@@ -201,24 +202,14 @@ describe("status update ledger evidence", () => {
     },
     {
       name: "retained candidate build mismatch after failed rollback",
-      before: oldPrevious,
-      after: candidate,
-      verification: {
-        ...observed(oldPrevious, false),
-        rollbackOutcome: failedRollback,
-      },
+      ...retainedCandidate,
       server: { version: "2026.9.7", buildId: "other" },
       detail:
         "Gateway is still serving 2026.9.7 (build other); the update to 2026.9.7 (build candidate) did not complete — run `openclaw update`.",
     },
     {
       name: "matching retained candidate build after failed rollback",
-      before: oldPrevious,
-      after: candidate,
-      verification: {
-        ...observed(oldPrevious, false),
-        rollbackOutcome: failedRollback,
-      },
+      ...retainedCandidate,
       server: candidate,
       historical: true,
     },
@@ -231,16 +222,14 @@ describe("status update ledger evidence", () => {
         rollbackOutcome: failedRollback,
       },
       server: rejected,
-      detail: "the intended build for 2026.9.7 is unverified",
+      detail: intendedBuildUnverified,
     },
     {
       name: "rollback observation without an independent target",
       target: {},
-      before: previous,
-      after: previous,
+      ...rolledBack,
       verification: recovered(previous),
-      server: previous,
-      detail: "the update target is unknown",
+      detail: targetUnknown,
     },
     {
       name: "matching version and build",
@@ -318,6 +307,11 @@ describe("status update ledger evidence", () => {
     sha: "37ea9f110bad",
     buildId: "2026.9.4-37ea9f110bad",
   };
+  const newerServer = { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" };
+  const unknownTargetDetail =
+    "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.";
+  const unknownBuildDetail =
+    "Gateway is serving 2026.10.1 (build 2026.10.1-3745fd3c29a4); the update target is unknown — run `openclaw update`.";
   it.each<{
     name: string;
     healthy?: boolean;
@@ -325,13 +319,12 @@ describe("status update ledger evidence", () => {
     before?: UpdateRunRecord["before"];
     after?: UpdateRunRecord["after"];
     verification?: UpdateRunRecord["verification"];
-    server: { version: string; buildId: string };
+    server?: { version: string; buildId: string };
     history?: string;
     detail?: string;
   }>([
     {
       name: "a newer Gateway after recovery matched the old serving version",
-      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
       history:
         "Last update run failed (preflight-no-good-commit) — Gateway is now serving 2026.10.1; recorded serving identity was 2026.9.4.",
     },
@@ -345,19 +338,18 @@ describe("status update ledger evidence", () => {
       name: "a Gateway already behind the installed package when the update failed",
       before: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
       verification: { versionMatch: false },
-      server: { version: "2026.9.4", buildId: "2026.9.4-37ea9f110bad" },
+      server: preflightStart,
       detail:
         "Gateway is serving 2026.9.4 (build 2026.9.4-37ea9f110bad); the update target is unknown — run `openclaw update`.",
     },
     {
       name: "the Gateway still serving the starting build",
-      server: { version: "2026.9.4", buildId: "2026.9.4-37ea9f110bad" },
+      server: preflightStart,
       detail: "Gateway is serving 2026.9.4; the update target is unknown — run `openclaw update`.",
     },
     {
       name: "an unhealthy Gateway on a newer version",
       healthy: false,
-      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
     },
     {
       name: "no recorded serving identity",
@@ -366,47 +358,38 @@ describe("status update ledger evidence", () => {
         runningBuildId: undefined,
         versionMatch: undefined,
       },
-      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
-      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+      detail: unknownTargetDetail,
     },
     {
       name: "a recorded stopped Gateway",
       verification: { serviceRunning: false },
-      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
-      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+      detail: unknownTargetDetail,
     },
     {
       // Git admission records the selected SHA before refusing its unreadable metadata.
       name: "an explicit SHA whose version was never read",
       runTarget: { kind: "git", channel: "dev", sha: "fcdb9321abcd" },
-      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
-      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+      detail: unknownTargetDetail,
     },
     {
       name: "an explicit tag",
       runTarget: { kind: "git", tag: "v2026.9.7" },
-      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
-      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+      detail: unknownTargetDetail,
     },
     {
       name: "a recorded post-update SHA without a target version",
       after: { sha: "fcdb9321abcd" },
-      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
-      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+      detail: unknownTargetDetail,
     },
     {
       name: "a recorded post-update build without a target version",
       after: { buildId: "candidate" },
-      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
-      detail:
-        "Gateway is serving 2026.10.1 (build 2026.10.1-3745fd3c29a4); the update target is unknown — run `openclaw update`.",
+      detail: unknownBuildDetail,
     },
     {
       name: "a targetless rollback with no post-update identity",
       verification: { rollbackOutcome: failedRollback },
-      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
-      detail:
-        "Gateway is serving 2026.10.1 (build 2026.10.1-3745fd3c29a4); the update target is unknown — run `openclaw update`.",
+      detail: unknownBuildDetail,
     },
   ])(
     "reports a preflight failure with $name",
@@ -416,7 +399,7 @@ describe("status update ledger evidence", () => {
       before = preflightStart,
       after,
       verification,
-      server,
+      server = newerServer,
       history,
       detail,
     }) => {

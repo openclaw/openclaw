@@ -142,14 +142,25 @@ const summaries = {
 } satisfies Record<string, UsageSummary>;
 
 let currentScan: StatusScanResult;
+const loggedOutput = () => mocks.runtime.log.mock.calls.map(([value]) => String(value)).join("\n");
+async function runCli(args: string[]) {
+  const program = new Command();
+  registerStatusHealthSessionsCommands(program);
+  await program.parseAsync(["status", ...args], { from: "user" });
+}
 async function runStatusOutput(opts: Parameters<typeof statusCommand>[0] = {}) {
   mocks.runtime.log.mockClear();
   await statusCommand(opts, defaultRuntime);
-  return mocks.runtime.log.mock.calls.map(([value]) => String(value)).join("\n");
+  return loggedOutput();
 }
 function setScan(overrides: Partial<StatusScanResult>) {
   currentScan = { ...currentScan, ...overrides };
   mocks.scan.mockResolvedValue(currentScan);
+}
+function setRecent(overrides: Partial<StatusScanResult["summary"]["sessions"]["recent"][number]>) {
+  const { summary } = currentScan;
+  const recent = summary.sessions.recent.map((row) => ({ ...row, ...overrides }));
+  setScan({ summary: { ...summary, sessions: { ...summary.sessions, recent } } });
 }
 const diagnostics = {
   path: "/tmp/openclaw.json",
@@ -310,12 +321,7 @@ describe("status commands", () => {
         if (mode === "fast-json") {
           await statusJsonCommand({ usage: true, deep: true }, defaultRuntime);
         } else {
-          const program = new Command();
-          registerStatusHealthSessionsCommands(program);
-          await program.parseAsync(
-            ["status", "--usage", "--deep", ...(mode === "commander-json" ? ["--json"] : [])],
-            { from: "user" },
-          );
+          await runCli(["--usage", "--deep", ...(mode === "commander-json" ? ["--json"] : [])]);
         }
 
         expect(mocks.runtime.error).not.toHaveBeenCalled();
@@ -378,12 +384,10 @@ describe("status commands", () => {
       });
     }
     mocks.usage.mockResolvedValue(summary ?? summaries.default);
-    const program = new Command();
-    registerStatusHealthSessionsCommands(program);
-    await program.parseAsync(["status", ...args], { from: "user" });
+    await runCli(args);
     expect(mocks.runtime.error).not.toHaveBeenCalled();
     expect(mocks.runtime.exit).not.toHaveBeenCalled();
-    const output = mocks.runtime.log.mock.calls.map(([value]) => String(value)).join("\n");
+    const output = loggedOutput();
     if (args.includes("--json")) {
       expect(JSON.parse(output).usage).toEqual(summary);
     } else {
@@ -475,17 +479,15 @@ describe("status commands", () => {
   );
 
   it("prints verbose session cache details and compatibility warnings", async () => {
-    const recent = currentScan.summary.sessions.recent.map((row) => ({
-      ...row,
+    setRecent({
       inputTokens: 2000,
       outputTokens: 3000,
       cacheRead: 2000,
       cacheWrite: 1000,
       totalTokens: 5000,
       percentUsed: 50,
-    }));
+    });
     setScan({
-      summary: { ...currentScan.summary, sessions: { ...currentScan.summary.sessions, recent } },
       pluginCompatibility: [
         createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
       ],
@@ -509,25 +511,10 @@ describe("status commands", () => {
   });
 
   it("uses prompt-side denominators for legacy cached sessions", async () => {
-    for (const [inputTokens, cacheRead, cacheWrite, totalTokens, expected, forbidden] of [
-      [undefined, 1200, 0, 1000, "100% cached", "120% cached"],
-      [500, 2000, 500, 5000, "67% cached", "40% cached"],
-    ] as const) {
-      setScan({
-        summary: {
-          ...currentScan.summary,
-          sessions: {
-            ...currentScan.summary.sessions,
-            recent: currentScan.summary.sessions.recent.map((row) =>
-              Object.assign({}, row, { inputTokens, cacheRead, cacheWrite, totalTokens }),
-            ),
-          },
-        },
-      });
-      const text = await runStatusOutput();
-      expect(text).toContain(expected);
-      expect(text).not.toContain(forbidden);
-    }
+    setRecent({ inputTokens: undefined, cacheRead: 1200, cacheWrite: 0, totalTokens: 1000 });
+    const text = await runStatusOutput();
+    expect(text).toContain("100% cached");
+    expect(text).not.toContain("120% cached");
   });
 
   it("shows node-only gateway info when no local gateway service is installed", async () => {

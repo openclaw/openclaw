@@ -26,12 +26,14 @@ import {
 
 const tempDirs: string[] = [];
 const resolveGatewayProbeSnapshot = (
-  params: Omit<Parameters<typeof resolveGatewayProbeSnapshotOwner>[0], "configPath" | "env">,
+  params: Partial<Parameters<typeof resolveGatewayProbeSnapshotOwner>[0]> = {},
 ) =>
   resolveGatewayProbeSnapshotOwner({
-    ...params,
+    cfg: {},
+    opts: createStatusGatewayProbeBudget(),
     configPath: "/tmp/openclaw.json",
     env: process.env,
+    ...params,
   });
 
 afterEach(() => {
@@ -117,26 +119,21 @@ describe("resolveGatewayProbeSnapshot", () => {
       gatewayMode: "remote",
       remoteUrlMissing: true,
     });
-    const result = await resolveGatewayProbeSnapshot({
-      cfg: {},
-      opts: createStatusGatewayProbeBudget(),
-    });
+    const result = await resolveGatewayProbeSnapshot();
 
     expect(mocks.resolveGatewayProbeAuthResolution).not.toHaveBeenCalled();
     expect(mocks.probeGateway).not.toHaveBeenCalled();
-    expect(result.remoteUrlMissing).toBe(true);
-    expect(result.gatewayMode).toBe("remote");
-    expect(result.gatewayProbe).toBeNull();
-    expect(result.gatewayReachable).toBe(false);
+    expect(result).toMatchObject({
+      remoteUrlMissing: true,
+      gatewayMode: "remote",
+      gatewayProbe: null,
+      gatewayReachable: false,
+    });
   });
 
   it("waits through a 22-second cold start before probing the selected Gateway", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     try {
-      mocks.resolveGatewayProbeTarget.mockReturnValue({
-        gatewayMode: "local",
-        remoteUrlMissing: false,
-      });
       const startedAt = Date.now();
       mocks.waitForGatewayDiagnosticReadiness.mockImplementation(async () => {
         await new Promise((resolve) => {
@@ -149,10 +146,7 @@ describe("resolveGatewayProbeSnapshot", () => {
         ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
         ok: Date.now() - startedAt >= 22_000,
       }));
-      const pending = resolveGatewayProbeSnapshot({
-        cfg: {},
-        opts: createStatusGatewayProbeBudget(),
-      });
+      const pending = resolveGatewayProbeSnapshot();
       await vi.advanceTimersByTimeAsync(22_000);
       const result = await pending;
 
@@ -181,10 +175,6 @@ describe("resolveGatewayProbeSnapshot", () => {
   ])(
     "preserves $waitOutcome without another probe budget",
     async ({ waitOutcome, startupPhase, error }) => {
-      mocks.resolveGatewayProbeTarget.mockReturnValue({
-        gatewayMode: "local",
-        remoteUrlMissing: false,
-      });
       mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({ auth: {}, warning: undefined });
       mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
         healthy: false,
@@ -193,10 +183,7 @@ describe("resolveGatewayProbeSnapshot", () => {
         startupPhase,
         probeError: error,
       });
-      const result = await resolveGatewayProbeSnapshot({
-        cfg: {},
-        opts: createStatusGatewayProbeBudget(),
-      });
+      const result = await resolveGatewayProbeSnapshot();
 
       expect(result.gatewayProbe).toMatchObject({ ok: false, error });
       expect(result.gatewayProbe?.startupPhase).toBe(startupPhase);
@@ -209,28 +196,18 @@ describe("resolveGatewayProbeSnapshot", () => {
   it.each(["plugin-errors", "probe-failed"])(
     "does not claim current local health from %s",
     async (observation) => {
-      mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue(
-        observation === "remote"
-          ? undefined
-          : {
-              healthy: observation !== "channel-errors",
-              waitOutcome: observation === "channel-errors" ? "channel-errors" : "healthy",
-              ...(observation === "plugin-errors"
-                ? { activatedPluginErrors: ["fixture plugin failed"] }
-                : {}),
-              ...(observation === "channel-errors"
-                ? { channelProbeErrors: ["fixture channel failed"] }
-                : {}),
-            },
-      );
+      mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
+        healthy: true,
+        waitOutcome: "healthy",
+        ...(observation === "plugin-errors"
+          ? { activatedPluginErrors: ["fixture plugin failed"] }
+          : {}),
+      });
       mocks.probeGateway.mockResolvedValue({
         ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
         ok: observation !== "probe-failed",
       });
-      const result = await resolveGatewayProbeSnapshot({
-        cfg: {},
-        opts: createStatusGatewayProbeBudget(),
-      });
+      const result = await resolveGatewayProbeSnapshot();
       expect(result.localGatewayHealthy).toBe(false);
     },
   );
@@ -253,10 +230,7 @@ describe("resolveGatewayProbeSnapshot", () => {
       },
     });
 
-    const result = await resolveGatewayProbeSnapshot({
-      cfg: {},
-      opts: createStatusGatewayProbeBudget(),
-    });
+    const result = await resolveGatewayProbeSnapshot();
 
     expect(result.gatewayReachable).toBe(true);
     expect(result.gatewayProbe?.error).toBe("missing scope: operator.read; warn");
@@ -269,18 +243,20 @@ describe("resolveGatewayProbeSnapshot", () => {
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
     const result = await resolveGatewayProbeSnapshot({
-      cfg: {},
       opts: createStatusGatewayProbeBudget(8000),
     });
 
     const gatewayCall = readGatewayCall();
+    expect(gatewayCall).toMatchObject({
+      config: {},
+      method: "status",
+      token: "tok",
+      password: "pw",
+      timeoutMs: 2000,
+      mode: "backend",
+      clientName: "gateway-client",
+    });
     expect(gatewayCall.config).toEqual({});
-    expect(gatewayCall.method).toBe("status");
-    expect(gatewayCall.token).toBe("tok");
-    expect(gatewayCall.password).toBe("pw");
-    expect(gatewayCall.timeoutMs).toBe(2000);
-    expect(gatewayCall.mode).toBe("backend");
-    expect(gatewayCall.clientName).toBe("gateway-client");
     expect(gatewayCall).not.toHaveProperty("deviceIdentity");
     expect(result.gatewayReachable).toBe(true);
     expect(result.gatewayProbe?.ok).toBe(true);
@@ -300,10 +276,7 @@ describe("resolveGatewayProbeSnapshot", () => {
       createUnreachableGatewayProbe("ws://localhost.:18789", "timeout"),
     );
 
-    const result = await resolveGatewayProbeSnapshot({
-      cfg: {},
-      opts: createStatusGatewayProbeBudget(),
-    });
+    const result = await resolveGatewayProbeSnapshot();
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(result.gatewayProbe?.ok).toBe(false);
@@ -439,10 +412,7 @@ describe("resolveGatewayProbeSnapshot", () => {
     });
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
-    const result = await resolveGatewayProbeSnapshot({
-      cfg: {},
-      opts: createStatusGatewayProbeBudget(),
-    });
+    const result = await resolveGatewayProbeSnapshot();
 
     const gatewayCall = readGatewayCall();
     expect(gatewayCall.token).toBeUndefined();
@@ -463,7 +433,6 @@ describe("resolveGatewayProbeSnapshot", () => {
 
     const result = await resolveGatewayProbeSnapshot({
       cfg: { gateway: { mode: "remote", remote: { url: "wss://gateway.example/ws" } } },
-      opts: createStatusGatewayProbeBudget(),
     });
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
@@ -494,6 +463,17 @@ function memoryManager<
   };
 }
 
+function memorySnapshot(params: Partial<Parameters<typeof resolveSharedMemoryStatusSnapshot>[0]>) {
+  return resolveSharedMemoryStatusSnapshot({
+    cfg: {},
+    agentStatus: { defaultId: "main" },
+    memoryPlugin: { enabled: true, slot: "memory-core" },
+    resolveMemoryConfig: vi.fn(() => null),
+    getMemorySearchManager: vi.fn(),
+    ...params,
+  });
+}
+
 describe("resolveSharedMemoryStatusSnapshot", () => {
   it("reports native provider health instead of returning a silent null", async () => {
     const close = vi.fn().mockResolvedValue(undefined);
@@ -504,11 +484,9 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     });
     const getMemorySearchManager = vi.fn();
 
-    const result = await resolveSharedMemoryStatusSnapshot({
+    const result = await memorySnapshot({
       cfg: { plugins: { slots: { memory: "records" } } },
-      agentStatus: { defaultId: "main" },
       memoryPlugin: { enabled: true, slot: "records" },
-      resolveMemoryConfig: vi.fn(() => null),
       getMemorySearchManager,
       isMemoryProviderNative: () => true,
       getMemoryProvider,
@@ -535,11 +513,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     const getMemorySearchManager = vi.fn();
 
     await expect(
-      resolveSharedMemoryStatusSnapshot({
-        cfg: {},
-        agentStatus: { defaultId: "main" },
-        memoryPlugin: { enabled: true, slot: "memory-core" },
-        resolveMemoryConfig: vi.fn(() => null),
+      memorySnapshot({
         getMemorySearchManager,
         isMemoryProviderNative,
         requireDefaultDatabasePath: () => null,
@@ -554,7 +528,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     const getMemorySearchManager = vi.fn();
 
     await expect(
-      resolveSharedMemoryStatusSnapshot({
+      memorySnapshot({
         cfg: {
           agents: {
             ownership: "explicit",
@@ -562,7 +536,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
           },
         },
         agentStatus: { defaultId: null },
-        memoryPlugin: { enabled: true, slot: "memory-core" },
         resolveMemoryConfig,
         getMemorySearchManager,
       }),
@@ -588,10 +561,8 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     }));
     const getMemorySearchManager = vi.fn(async () => ({ manager }));
 
-    const result = await resolveSharedMemoryStatusSnapshot({
+    const result = await memorySnapshot({
       cfg,
-      agentStatus: { defaultId: "main" },
-      memoryPlugin: { enabled: true, slot: "memory-core" },
       resolveMemoryConfig,
       getMemorySearchManager,
       requireDefaultDatabasePath: () =>
@@ -606,28 +577,26 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
   });
 
   it("asks custom memory-slot runtimes for status without requiring built-in memorySearch", async () => {
-    const manager = memoryManager({
+    const status = {
       backend: "builtin" as const,
       provider: "memory-lancedb-pro",
       files: 66,
       chunks: 128,
       vector: { enabled: true, available: true },
       fts: { enabled: true, available: true },
-    });
+    };
+    const manager = memoryManager(status);
     const resolveMemoryConfig = vi.fn(() => null);
     const getMemorySearchManager = vi.fn(async () => ({ manager }));
     const requireDefaultDatabasePath = vi.fn(
       () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
     );
 
-    const result = await resolveSharedMemoryStatusSnapshot({
+    const result = await memorySnapshot({
       cfg: {
-        plugins: {
-          slots: { memory: "memory-lancedb-pro" },
-        },
+        plugins: { slots: { memory: "memory-lancedb-pro" } },
         memory: { search: { enabled: false } },
       },
-      agentStatus: { defaultId: "main" },
       memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
       resolveMemoryConfig,
       getMemorySearchManager,
@@ -647,25 +616,14 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(manager.probeVectorAvailability).not.toHaveBeenCalled();
     expect(manager.status).toHaveBeenCalled();
     expect(manager.close).toHaveBeenCalled();
-    expect(result).toEqual({
-      agentId: "main",
-      backend: "builtin",
-      provider: "memory-lancedb-pro",
-      files: 66,
-      chunks: 128,
-      vector: { enabled: true, available: true },
-      fts: { enabled: true, available: true },
-    });
+    expect(result).toEqual({ agentId: "main", ...status });
   });
 
   it("keeps default memory-core on the cold-start store shortcut", async () => {
     const resolveMemoryConfig = vi.fn(() => null);
     const getMemorySearchManager = vi.fn(async () => ({ manager: null }));
 
-    const result = await resolveSharedMemoryStatusSnapshot({
-      cfg: {},
-      agentStatus: { defaultId: "main" },
-      memoryPlugin: { enabled: true, slot: "memory-core" },
+    const result = await memorySnapshot({
       resolveMemoryConfig,
       getMemorySearchManager,
       requireDefaultDatabasePath: () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
@@ -714,10 +672,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     });
     const getMemorySearchManager = vi.fn(async () => ({ manager }));
 
-    const result = await resolveSharedMemoryStatusSnapshot({
-      cfg: {},
-      agentStatus: { defaultId: "main" },
-      memoryPlugin: { enabled: true, slot: "memory-core" },
+    const result = await memorySnapshot({
       resolveMemoryConfig: vi.fn(() => ({ store: { databasePath } })),
       getMemorySearchManager,
       requireDefaultDatabasePath: () => databasePath,

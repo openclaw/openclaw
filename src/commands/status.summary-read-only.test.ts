@@ -18,7 +18,7 @@ import {
 import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-accessor.sqlite-summary.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { spyOnSessionStoreSummaries } from "../config/sessions/session-store-summary.test-support.js";
-import type { SessionAcpMeta } from "../config/sessions/types.js";
+import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -37,6 +37,26 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { formatStatusSummary } from "../tui/tui-status-summary.js";
+
+const readStatusSummary = (config: OpenClawConfig, includeSensitive = true) =>
+  getStatusSummary({ config, includeSensitive, includeChannelSummary: false });
+
+async function closeAgentStores(root?: string) {
+  await closeOpenClawAgentDatabasesAsync(root);
+  closeOpenClawAgentDatabasesForTest(root);
+}
+
+function seedSession(
+  storePath: string,
+  agentId: string,
+  name: string,
+  entry: Partial<SessionEntry>,
+) {
+  replaceSessionEntrySync(
+    { agentId, storePath, sessionKey: `agent:${agentId}:${name}` },
+    { sessionId: `${agentId}-${name}`, updatedAt: 1, ...entry },
+  );
+}
 
 describe("getStatusSummary read-only session access", () => {
   const previousRegistry = getActivePluginRegistry();
@@ -68,8 +88,7 @@ describe("getStatusSummary read-only session access", () => {
 
   afterEach(async () => {
     cliBackendsTesting.resetDepsForTest();
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
+    await closeAgentStores();
     await closeStateDatabaseForTest();
   });
 
@@ -127,13 +146,8 @@ describe("getStatusSummary read-only session access", () => {
   });
 
   it("does not create the heartbeat session database while checking its route", async () => {
-    const tempDir = tempDirs.make();
-    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-
-    const summary = await getStatusSummary({
-      includeChannelSummary: false,
-      config: { session: { store: databasePath } },
-    });
+    const databasePath = path.join(tempDirs.make(), "openclaw-agent.sqlite");
+    const summary = await readStatusSummary({ session: { store: databasePath } });
 
     expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(true);
     expect(fs.existsSync(databasePath)).toBe(false);
@@ -143,17 +157,12 @@ describe("getStatusSummary read-only session access", () => {
     "resolves the configured owner DM without writing session state for target %s",
     async (target) => {
       registerTelegramFixture();
-      const tempDir = tempDirs.make();
-      const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-
-      const summary = await getStatusSummary({
-        includeChannelSummary: false,
-        config: {
-          ...(target ? { agents: { defaults: { heartbeat: { target } } } } : {}),
-          commands: { ownerAllowFrom: ["telegram:123"] },
-          channels: { telegram: { allowFrom: ["123"] } },
-          session: { store: databasePath },
-        },
+      const databasePath = path.join(tempDirs.make(), "openclaw-agent.sqlite");
+      const summary = await readStatusSummary({
+        ...(target ? { agents: { defaults: { heartbeat: { target } } } } : {}),
+        commands: { ownerAllowFrom: ["telegram:123"] },
+        channels: { telegram: { allowFrom: ["123"] } },
+        session: { store: databasePath },
       });
 
       expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(false);
@@ -183,8 +192,7 @@ describe("getStatusSummary read-only session access", () => {
             { sessionId: `${agentId}-session`, updatedAt: agentId === "main" ? 10 : 20 },
           );
         }
-        await closeOpenClawAgentDatabasesAsync(tempDir);
-        closeOpenClawAgentDatabasesForTest(tempDir);
+        await closeAgentStores(tempDir);
 
         const expectedPaths = ["main", "ops"].map(
           (agentId) => resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path,
@@ -193,7 +201,7 @@ describe("getStatusSummary read-only session access", () => {
         const { calls: readSummary, restore: restoreSummary } = spyOnSessionStoreSummaries();
         const now = vi.spyOn(Date, "now").mockReturnValue(100);
         try {
-          const summary = await getStatusSummary({ includeChannelSummary: false, config });
+          const summary = await readStatusSummary(config);
 
           expect(summary.sessions.count).toBe(2);
           expect(summary.sessions.paths).toEqual(uniquePaths);
@@ -231,8 +239,7 @@ describe("getStatusSummary read-only session access", () => {
           now.mockRestore();
         }
       } finally {
-        await closeOpenClawAgentDatabasesAsync(tempDir);
-        closeOpenClawAgentDatabasesForTest(tempDir);
+        await closeAgentStores(tempDir);
         await closeStateDatabaseForTest();
       }
     },
@@ -249,12 +256,11 @@ describe("getStatusSummary read-only session access", () => {
           { agentId: "main", sessionKey: "agent:main:main", storePath },
           { sessionId: "prepared-config", updatedAt: 10 },
         );
-        await closeOpenClawAgentDatabasesAsync(state.root);
-        closeOpenClawAgentDatabasesForTest(state.root);
+        await closeAgentStores(state.root);
         clearRuntimeConfigSnapshot();
         const readFileSync = vi.spyOn(fs, "readFileSync");
         try {
-          await getStatusSummary({ includeChannelSummary: false, config });
+          await readStatusSummary(config);
           expect(
             readFileSync.mock.calls.filter(([file]) => file === state.configPath),
           ).toHaveLength(0);
@@ -275,14 +281,11 @@ describe("getStatusSummary read-only session access", () => {
       await state.writeConfig(config);
       const storePath = resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env });
       for (let index = 1; index <= 12; index += 1) {
-        replaceSessionEntrySync(
-          { agentId: "main", storePath, sessionKey: `agent:main:scan-${index}` },
-          {
-            sessionId: `scan-${index}`,
-            updatedAt: index,
-            skillsSnapshot: { prompt: "private fixture", skills: [] },
-          },
-        );
+        seedSession(storePath, "main", `scan-${index}`, {
+          sessionId: `scan-${index}`,
+          updatedAt: index,
+          skillsSnapshot: { prompt: "private fixture", skills: [] },
+        });
       }
       const { calls: readSummary, restore: restoreSummary } = spyOnSessionStoreSummaries();
       try {
@@ -379,14 +382,9 @@ describe("getStatusSummary read-only session access", () => {
           totalTokensVersion: 1,
         },
       );
-      await closeOpenClawAgentDatabasesAsync(state.root);
-      closeOpenClawAgentDatabasesForTest(state.root);
-
-      const summary = await getStatusSummary({ includeChannelSummary: false, config });
-      const session = summary.sessions.recent[0];
-
-      expect(session?.contextTokens).toBe(272_000);
-      expect(session?.percentUsed).toBe(44);
+      await closeAgentStores(state.root);
+      const summary = await readStatusSummary(config);
+      expect(summary.sessions.recent[0]).toMatchObject({ contextTokens: 272_000, percentUsed: 44 });
     });
   });
 
@@ -408,17 +406,9 @@ describe("getStatusSummary read-only session access", () => {
           ["ops", "history", true],
           ["retired", "history", true],
         ] as const) {
-          replaceSessionEntrySync(
-            { agentId, storePath, sessionKey: `agent:${agentId}:${name}` },
-            {
-              sessionId: `${agentId}-${name}`,
-              updatedAt: 1,
-              ...(archived ? { archivedAt: 2 } : {}),
-            },
-          );
+          seedSession(storePath, agentId, name, archived ? { archivedAt: 2 } : {});
         }
-        await closeOpenClawAgentDatabasesAsync(state.root);
-        closeOpenClawAgentDatabasesForTest(state.root);
+        await closeAgentStores(state.root);
 
         const stored = readSessionStoreSummaryReadOnly(
           { agentId: "main", storePath },
@@ -428,7 +418,7 @@ describe("getStatusSummary read-only session access", () => {
         expect(stored.recent.filter(({ entry }) => entry.archivedAt !== undefined)).toHaveLength(
           allArchived ? 4 : 3,
         );
-        const summary = await getStatusSummary({ config, includeChannelSummary: false });
+        const summary = await readStatusSummary(config);
         expect(summary.sessions.count).toBe(4);
         expect(summary.sessions.paths).toEqual([storePath]);
         expect(summary.sessions.byAgent.map(({ agentId, count }) => [agentId, count])).toEqual([
@@ -456,24 +446,21 @@ describe("getStatusSummary read-only session access", () => {
         env: state.env,
       });
       for (let index = 1; index <= 24; index += 1) {
-        replaceSessionEntrySync(
-          { agentId: "main", storePath, sessionKey: `agent:main:history-${index}` },
-          {
-            sessionId: `status-history-${index}`,
-            updatedAt: index,
-            pluginExtensions: {
-              fixture: { history: Array.from({ length: 64 }, () => "x".repeat(128)) },
-            },
+        seedSession(storePath, "main", `history-${index}`, {
+          sessionId: `status-history-${index}`,
+          updatedAt: index,
+          pluginExtensions: {
+            fixture: { history: Array.from({ length: 64 }, () => "x".repeat(128)) },
           },
-        );
+        });
       }
-      await getStatusSummary({ config, includeChannelSummary: false });
+      await readStatusSummary(config);
       const clone = vi.spyOn(globalThis, "structuredClone");
       const parse = vi.spyOn(JSON, "parse");
       const parsedSessionPayloads = () =>
         parse.mock.calls.filter(([json]) => json.includes('"sessionId":"status-history-'));
       try {
-        const summary = await getStatusSummary({ config, includeChannelSummary: false });
+        const summary = await readStatusSummary(config);
 
         expect(parsedSessionPayloads()).toHaveLength(0);
         expect(summary.sessions.count).toBe(24);
@@ -489,11 +476,7 @@ describe("getStatusSummary read-only session access", () => {
         ).toHaveLength(0);
 
         parse.mockClear();
-        const hidden = await getStatusSummary({
-          config,
-          includeChannelSummary: false,
-          includeSensitive: false,
-        });
+        const hidden = await readStatusSummary(config, false);
         expect(hidden.sessions.count).toBe(24);
         expect(parsedSessionPayloads()).toHaveLength(0);
       } finally {
