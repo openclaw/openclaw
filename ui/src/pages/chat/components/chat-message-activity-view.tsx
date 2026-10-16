@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
-import { type ToolCallGroup, groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
+import { createMemo, Show } from "solid-js";
+import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
@@ -19,81 +19,15 @@ import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
 import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
+import { descendantCards } from "./chat-message-activity-operation.tsx";
+import type { ActivityOperationProps } from "./chat-message-bubble-options.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
-import {
-  BrowserTabPreviews,
-  ChatToolCard,
-  syncToolDisclosureOverflow,
-} from "./chat-tool-cards.solid.tsx";
+import { BrowserTabPreviews, syncToolDisclosureOverflow } from "./chat-tool-cards.solid.tsx";
 import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
 import {
   ChatToolOutcomeSummary,
   ChatToolReviewOutcome,
 } from "./chat-tool-outcome-summary.solid.tsx";
-
-type ToolContexts = ReadonlyMap<ToolCard, { messageKey: string; disclosureId: string }>;
-
-function descendantCards(group: ToolCallGroup<ToolCard>) {
-  const cards: ToolCard[] = [];
-  const pending = [...group.children];
-  for (const child of pending) {
-    cards.push(child.card);
-    pending.push(...child.children);
-  }
-  return cards;
-}
-
-export type ActivityOperationProps = {
-  group: ToolCallGroup<ToolCard>;
-  options: NativeMessageGroupOptions;
-  contexts: ToolContexts;
-};
-
-export function ActivityOperation(props: ActivityOperationProps) {
-  const context = () => props.contexts.get(props.group.card)!;
-  const expanded = () => props.options.isToolExpanded?.(context().disclosureId) ?? false;
-  return (
-    <ChatToolCard
-      card={props.group.card}
-      options={{
-        ...props.options,
-        messageKey: context().messageKey,
-        expanded: expanded(),
-        onToggleExpanded: () =>
-          props.options.onToggleToolExpanded?.(context().disclosureId, expanded()),
-        activityCards: [props.group.card, ...descendantCards(props.group)],
-      }}
-      hasChildren={props.group.children.length > 0}
-    >
-      <ActivityOperationChildren
-        groups={props.group.children}
-        options={props.options}
-        contexts={props.contexts}
-        expanded={expanded()}
-      />
-    </ChatToolCard>
-  );
-}
-
-function ActivityOperationChildren(props: {
-  groups: ToolCallGroup<ToolCard>[];
-  options: NativeMessageGroupOptions;
-  contexts: ToolContexts;
-  expanded: boolean;
-}) {
-  return (
-    <Show when={props.expanded}>
-      <For
-        each={props.groups}
-        keyed={(group) => group.card.callId ?? props.contexts.get(group.card)!.disclosureId}
-      >
-        {(group) => (
-          <ActivityOperation group={group()} options={props.options} contexts={props.contexts} />
-        )}
-      </For>
-    </Show>
-  );
-}
 
 function prepareActivityGroup(
   groups: readonly MessageGroupData[],

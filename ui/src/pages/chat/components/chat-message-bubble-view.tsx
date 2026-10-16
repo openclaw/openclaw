@@ -20,15 +20,18 @@ import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
-import { usePanePresentation } from "../chat-pane-embedded-view.tsx";
+import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import "../../../components/person-reference.ts";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
 import { ChatPermissionCard } from "./chat-divider.tsx";
-import { ActivityOperation, type ActivityOperationProps } from "./chat-message-activity-view.tsx";
+import { ActivityOperation } from "./chat-message-activity-operation.tsx";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
-import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
+import type {
+  ActivityOperationProps,
+  GroupedMessageOptions,
+} from "./chat-message-bubble-options.ts";
 import {
   prepareGroupedMessage,
   type GroupedMessagePresentation,
