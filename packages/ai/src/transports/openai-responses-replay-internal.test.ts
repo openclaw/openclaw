@@ -4,27 +4,21 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CompactionReplayRejection } from "../provider-options.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
-import { createModel } from "./openai-responses-prompt-observer.test-support.js";
+import { createModel, sseResponse } from "./openai-responses-prompt-observer.test-support.js";
 import { createResponsesStreamWithRecovery } from "./openai-responses-replay-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "./openai-transport-shared.js";
 import { withProviderResponseHook } from "./transport-stream-shared.js";
-
 const model = createModel({
   id: "gpt-5.6-luna",
-  name: "Responses retry lifecycle",
   baseUrl: "https://responses.example.test/v1",
-  contextWindow: 128_000,
-  maxTokens: 4_096,
 });
-
 it.each(["streamed", "HTTP"])(
   "Responses recovery closes prior streams before retry (%s)",
   async (secondFailure) => {
     const order: string[] = [];
     let firstResponse: Response | undefined;
     const controller = new AbortController();
-    const cleanupStarted = createDeferred();
-    const releaseCleanup = createDeferred();
+    const [cleanupStarted, releaseCleanup] = [createDeferred(), createDeferred()];
     let consuming: Promise<void> | undefined;
     let attempt = 0;
     const client = new OpenAI({
@@ -42,20 +36,14 @@ it.each(["streamed", "HTTP"])(
         if (attempt === 2 && secondFailure === "HTTP") {
           return Response.json({ error }, { status: 400 });
         }
-        const response = {
-          id: `resp_${attempt}`,
-          output: [],
-        };
+        const response = { id: `resp_${attempt}`, output: [] };
         const events = [
           { type: "response.created", response: { ...response, status: "in_progress" } },
           attempt === 3
             ? { type: "response.completed", response: { ...response, status: "completed" } }
             : { type: "response.failed", response: { ...response, status: "failed", error } },
         ];
-        const body = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
-        const httpResponse = new Response(body, {
-          headers: { "content-type": "text/event-stream", "x-request-id": `req_${attempt}` },
-        });
+        const httpResponse = sseResponse(events, { "x-request-id": `req_${attempt}` });
         firstResponse ??= httpResponse;
         return httpResponse;
       },
@@ -65,23 +53,25 @@ it.each(["streamed", "HTTP"])(
       order.push(`create:${++attempt}`);
       return send(body, options);
     });
+    const reasoning = { type: "reasoning" as const, id: "rs_prior", summary: [] };
+    const encrypted = { ...reasoning, encrypted_content: "reasoning-data" };
+    const checkpoint = {
+      type: "compaction" as const,
+      id: "cmp_prior",
+      encrypted_content: "compaction-data",
+    };
+    const after = { role: "user" as const, content: "After checkpoint" };
+    const before = { role: "user" as const, content: "Before checkpoint" };
     const request: OpenAIResponsesRequestParams = {
       model: model.id,
       stream: true,
-      input: [
-        { type: "reasoning", id: "rs_prior", encrypted_content: "reasoning-data", summary: [] },
-        { type: "compaction", id: "cmp_prior", encrypted_content: "compaction-data" },
-        { role: "user", content: "After checkpoint" },
-      ],
+      input: structuredClone([encrypted, checkpoint, after]),
     };
     const buildFullHistoryRequest = vi.fn((): OpenAIResponsesRequestParams => ({
       ...request,
-      input: [{ role: "user", content: "Before checkpoint" }, ...request.input],
+      input: [structuredClone(before), ...request.input],
     }));
-    const onCompactionRejected = vi.fn((_checkpoint: CompactionReplayRejection) => {
-      order.push("commit");
-    });
-
+    const rejected = vi.fn((_item: CompactionReplayRejection) => void order.push("commit"));
     try {
       const result = await createResponsesStreamWithRecovery({
         client,
@@ -90,7 +80,7 @@ it.each(["streamed", "HTTP"])(
         model,
         canRetryStream: () => true,
         buildFullHistoryRequest,
-        onCompactionRejected,
+        onCompactionRejected: rejected,
         async *wrapStream({ stream, response }) {
           try {
             yield* withProviderResponseHook({
@@ -100,9 +90,7 @@ it.each(["streamed", "HTTP"])(
               hook: createOpenAIProviderAcceptanceHook(
                 {
                   signal: controller.signal,
-                  onResponse: ({ headers }) => {
-                    order.push(`hook:${headers["x-request-id"]}`);
-                  },
+                  onResponse: ({ headers }) => void order.push(`hook:${headers["x-request-id"]}`),
                 },
                 response,
                 model,
@@ -119,7 +107,6 @@ it.each(["streamed", "HTTP"])(
         },
       });
       expect(order).toEqual(["create:1"]);
-
       const events: unknown[] = [];
       consuming = (async () => {
         for await (const event of result.stream) {
@@ -128,11 +115,9 @@ it.each(["streamed", "HTTP"])(
       })();
       await Promise.race([cleanupStarted.promise, consuming]);
       await setImmediate();
-      expect(create.mock.calls.length).toBe(1);
       expect(order).toEqual(["create:1", "hook:req_1", "cleanup:req_1"]);
       releaseCleanup.resolve();
       await consuming;
-
       expect(events).toMatchObject([
         { type: "response.created", response: { id: "resp_1" } },
         ...(secondFailure === "streamed"
@@ -153,20 +138,13 @@ it.each(["streamed", "HTTP"])(
         "hook:req_3",
         "close:req_3",
       ]);
-      expect(create).toHaveBeenCalledTimes(3);
       expect(create.mock.calls[0]?.[0]).toBe(request);
-      expect(create.mock.calls[1]?.[0].input).toEqual([
-        { type: "reasoning", id: "rs_prior", summary: [] },
-        { type: "compaction", id: "cmp_prior", encrypted_content: "compaction-data" },
-        { role: "user", content: "After checkpoint" },
-      ]);
-      expect(create.mock.calls[2]?.[0].input).toEqual([
-        { role: "user", content: "Before checkpoint" },
-        { type: "reasoning", id: "rs_prior", summary: [] },
-        { role: "user", content: "After checkpoint" },
+      expect(create.mock.calls.slice(1).map(([body]) => body.input)).toEqual([
+        [reasoning, checkpoint, after],
+        [before, reasoning, after],
       ]);
       expect(buildFullHistoryRequest).toHaveBeenCalledOnce();
-      expect(onCompactionRejected).toHaveBeenCalledExactlyOnceWith({
+      expect(rejected).toHaveBeenCalledExactlyOnceWith({
         id: "cmp_prior",
         data: "compaction-data",
       });

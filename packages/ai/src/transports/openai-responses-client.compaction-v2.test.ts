@@ -8,11 +8,9 @@ import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-clien
 import { requestPreparedOpenAIResponsesCompaction } from "./openai-responses-compact-request.js";
 import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
-
 const initialHost = getAiTransportHost();
 const model = fixtures.createModel({
   id: "gpt-5.4",
-  name: "Synthetic ChatGPT",
   api: "openai-chatgpt-responses",
   baseUrl: "https://chatgpt.com/backend-api/codex",
 });
@@ -26,13 +24,7 @@ const options = {
 };
 const context = {
   systemPrompt: "Stable instructions",
-  tools: [
-    {
-      name: "lookup",
-      description: "Read a record",
-      parameters: Type.Object({ key: Type.String() }),
-    },
-  ],
+  tools: [{ name: "lookup", description: "Read", parameters: Type.Object({ key: Type.String() }) }],
   messages: [
     { role: "user", content: "remember copper", timestamp: 1 },
     { role: "user", content: "runtime context", runtimeContext: { retained: true }, timestamp: 2 },
@@ -49,9 +41,7 @@ const completed = (status = "completed") =>
     usage: {
       input_tokens: 1000,
       output_tokens: 10,
-      total_tokens: 1010,
       input_tokens_details: { cached_tokens: 900 },
-      output_tokens_details: { reasoning_tokens: 0 },
     },
   });
 const failed = (status: "failed" | "incomplete", extra: object) => ({
@@ -68,11 +58,10 @@ beforeEach(() => {
   afterFetch = undefined;
   transport = createOpenAIResponsesTransportStreamFn();
   const captureFetch: typeof fetch = async (input, init) => {
-    const headers = new Headers(init?.headers);
     requests.push({
       url: input instanceof Request ? input.url : input.toString(),
       body: await fixtures.requestBody(init),
-      headers,
+      headers: new Headers(init?.headers),
     });
     afterFetch?.();
     return fixtures.sseResponse(events);
@@ -86,7 +75,6 @@ afterEach(() => {
 });
 const compact = (input: Context = context, extra = {}) =>
   requestPreparedOpenAIResponsesCompaction(transport, model, input, { ...options, ...extra }, "v2");
-
 describe.each([
   ["managed", () => createOpenAIResponsesTransportStreamFn()],
   [
@@ -110,8 +98,7 @@ describe.each([
         Object.assign({}, payload, { prompt_cache_key: "hook-cache" }),
     };
     events = [completed()];
-    const normalStream = await transport(model, context, hooked);
-    expect((await normalStream.result()).stopReason).toBe("stop");
+    expect((await (await transport(model, context, hooked)).result()).stopReason).toBe("stop");
     events = [checkpoint(), completed()];
     const result = await compact(context, hooked);
     const [normal, v2] = requests;
@@ -189,7 +176,6 @@ describe.each([
       first.output,
     );
     events = [checkpoint("second"), completed()];
-    // Exercise serialized restart state rather than the live checkpoint object.
     const serializedOwner = JSON.stringify(owner);
     const second = await compact({
       ...context,
@@ -207,27 +193,24 @@ describe.each([
     expect(JSON.stringify(requests[1]?.body)).toContain("remember copper");
   });
 });
-
-describe("managed V2 retained window and item validation", () => {
-  it("bounds retained multilingual input without reviving older users", async () => {
-    const result = await compact({
-      ...context,
-      messages: [
-        { role: "user", content: "oldest", timestamp: 1 },
-        { role: "user", content: "中".repeat(64_001), timestamp: 2 },
-      ],
-    });
-    expect(result.output).toHaveLength(2);
-    expect(JSON.stringify(result.output)).not.toContain("oldest");
-    expect(result.output[0]).toMatchObject({
-      content: [{ type: "input_text", text: "中".repeat(64_000) }],
-    });
+it("bounds retained multilingual input without reviving older users", async () => {
+  const result = await compact({
+    ...context,
+    messages: [
+      { role: "user", content: "oldest", timestamp: 1 },
+      { role: "user", content: "中".repeat(64_001), timestamp: 2 },
+    ],
   });
-  it.each<[string, unknown[]]>([
-    ["duplicate item", [checkpoint(), checkpoint(), completed()]],
-    ["empty item", [checkpoint(""), completed()]],
-  ])("rejects %s without adopting its checkpoint", async (_name, sequence) => {
-    events = sequence;
-    await expect(compact()).rejects.toThrow();
+  expect(result.output).toHaveLength(2);
+  expect(JSON.stringify(result.output)).not.toContain("oldest");
+  expect(result.output[0]).toMatchObject({
+    content: [{ type: "input_text", text: "中".repeat(64_000) }],
   });
+});
+it.each<[string, unknown[]]>([
+  ["duplicate item", [checkpoint(), checkpoint(), completed()]],
+  ["empty item", [checkpoint(""), completed()]],
+])("rejects %s without adopting its checkpoint", async (_name, sequence) => {
+  events = sequence;
+  await expect(compact()).rejects.toThrow();
 });

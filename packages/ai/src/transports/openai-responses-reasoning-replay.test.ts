@@ -18,17 +18,11 @@ const thinking = (item: object) => ({
 const createAssistant = (content: AssistantMessage["content"]) =>
   fixtures.createAssistant(model, content);
 
+const converter = (convert: typeof convertResponsesMessages) => (context: Context) =>
+  convert(model, context, new Set(["openai"]), replayIdentity);
 const responseConverters = [
-  {
-    name: "transport-owned",
-    convert: (context: Context) =>
-      convertResponsesMessages(model, context, new Set(["openai"]), replayIdentity),
-  },
-  {
-    name: "provider-owned",
-    convert: (context: Context) =>
-      convertProviderResponsesMessages(model, context, new Set(["openai"]), replayIdentity),
-  },
+  { name: "transport-owned", convert: converter(convertResponsesMessages) },
+  { name: "provider-owned", convert: converter(convertProviderResponsesMessages) },
 ] as const;
 
 describe("OpenAI Responses reasoning replay", () => {

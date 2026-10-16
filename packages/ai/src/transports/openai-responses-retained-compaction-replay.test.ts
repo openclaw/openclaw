@@ -64,10 +64,10 @@ describe("Responses retained-user compaction replay", () => {
         fixtures.userMessage("user absorbed by older checkpoint", 0),
         createAssistant("older checkpoint owner", compactionState("openai-responses-compaction")),
         fixtures.userMessage("first retained user", 1),
-        createAssistant("discarded fixtures.createAssistant"),
+        createAssistant("discarded assistant"),
         fixtures.userMessage("second retained user", 2),
         createAssistant(
-          "fixtures.createAssistant content absorbed by compaction",
+          "assistant content absorbed by compaction",
           compactionState("openai-responses-retained-compaction"),
         ),
         fixtures.userMessage("new user after compaction", 3),
@@ -133,19 +133,13 @@ describe("Responses retained-user compaction replay", () => {
       compactedWindow: { output: JSON.stringify(output) },
     });
     const next = convert({ messages: [saved] });
-    expect(next).toHaveLength(5);
-    expect(next[1]).not.toHaveProperty("id");
-    expect(next[3]).not.toHaveProperty("id");
-    for (const [index, text] of [
-      [1, "first answer"],
-      [3, "second answer"],
-    ] as const) {
-      expect(next[index]).toMatchObject({
-        role: "fixtures.createAssistant",
-        content: [{ type: "output_text", text, annotations: [] }],
-      });
-    }
-    expect(next[4]).toEqual(output[4]);
+    expect(next).toStrictEqual([
+      output[0],
+      fixtures.outputMessage("first answer"),
+      output[2],
+      fixtures.outputMessage("second answer"),
+      item,
+    ]);
     expect(isOpenAIResponsesCompactionOutput(next, model)).toBe(true);
   });
 
@@ -311,8 +305,7 @@ describe("Responses retained-user compaction replay", () => {
       COMPACTION_WINDOW_MAX_BYTES,
     );
     expect(Buffer.byteLength(JSON.stringify(replay))).toBeGreaterThan(COMPACTION_WINDOW_MAX_BYTES);
-    const accepted = readOpenAIResponsesCompactionWindow(replay, model) !== undefined;
-    expect(accepted).toBe(false);
+    expect(readOpenAIResponsesCompactionWindow(replay, model)).toBeUndefined();
     expect(() =>
       buildOpenAIResponsesCompactionReplayPlan(
         [

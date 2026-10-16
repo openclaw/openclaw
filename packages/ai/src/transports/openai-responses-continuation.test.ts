@@ -5,19 +5,25 @@ import { cleanupSessionResources } from "../session-resources.js";
 import {
   claimOpenAIResponsesHttpContinuation,
   recordResponsesContinuationState,
-  resolveResponsesContinuationRequest,
+  resolveResponsesContinuationRequest as resolve,
   type ResponsesContinuationRequest,
   type ResponsesContinuationState,
 } from "./openai-responses-continuation.js";
 import { inputMessage as userInput } from "./openai-responses-prompt-observer.test-support.js";
-import { normalizeOpenAIResponsesFunctionCallId } from "./openai-responses-tool-call-id-shape.js";
+import { normalizeOpenAIResponsesFunctionCallId as normalizeCallId } from "./openai-responses-tool-call-id-shape.js";
 
+type Input = NonNullable<ResponsesContinuationRequest["input"]>;
+type Output = ResponsesContinuationState["lastResponseItems"];
 const firstUser = userInput("first");
 const secondUser = userInput("second");
 const unsafeNumber = '{"n":9007199254740992}';
 const unsafeString = '{"n":"9007199254740992"}';
 const nestedNumber = '{"b":{"n":9007199254740993,"a":true},"a":[1]}';
 const nestedString = '{"b":{"n":"9007199254740993","a":true},"a":[1]}';
+const nestedWhitespace = '{ "b": {"n":9007199254740993,"a":true},"a":[1] }';
+const reorderedString = '{"a":[1],"b":{"a":true,"n":"9007199254740993"}}';
+const chatCallId = "chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb";
+const replayedChatCallId = "call_chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb_f_3b92d47627";
 const assistantOutput = {
   id: "msg_1",
   type: "message",
@@ -42,17 +48,20 @@ const assistantOutput = {
   ],
 } satisfies ResponsesContinuationState["lastResponseItems"][number];
 
-function continuationState(): ResponsesContinuationState {
+function continuationState(
+  lastResponseItems: Output = [assistantOutput],
+  input: Input = [firstUser],
+): ResponsesContinuationState {
   return {
     lastRequest: {
       model: "gpt-5.6-luna",
       store: true,
       max_output_tokens: undefined,
       metadata: { stable: "yes", openclaw_turn_id: "turn-1", openclaw_turn_attempt: "1" },
-      input: [firstUser] as never,
+      input,
     },
     lastResponseId: "resp_1",
-    lastResponseItems: [assistantOutput],
+    lastResponseItems,
   };
 }
 
@@ -106,33 +115,35 @@ function toolOutput(callId: string, output = "recorded") {
   return { type: "function_call_output" as const, call_id: callId, output };
 }
 
-function commitBaseline(owner: ReturnType<typeof claim>, id: string) {
+function commitBaseline(owner: ReturnType<typeof claim>, id: string, text?: string) {
   const { lastRequest, lastResponseItems } = continuationState();
-  owner?.commit(lastRequest, { id, output: lastResponseItems });
+  const output =
+    text === undefined
+      ? lastResponseItems
+      : [
+          {
+            ...assistantOutput,
+            content: [{ type: "output_text" as const, text, annotations: [], logprobs: [] }],
+          },
+        ];
+  owner?.commit(lastRequest, { id, output });
 }
 
-function replayRequest(
-  state: ResponsesContinuationState,
-  input: NonNullable<ResponsesContinuationRequest["input"]>,
-): ResponsesContinuationRequest {
-  return { ...state.lastRequest, input };
+function replayRequest(state: ResponsesContinuationState, ...input: Input) {
+  return { ...state.lastRequest, input: [firstUser, ...input] };
 }
-function historyState(
-  input: NonNullable<ResponsesContinuationRequest["input"]>,
-  lastResponseItems: ResponsesContinuationState["lastResponseItems"],
-  fields: ResponsesContinuationRequest = { model: "gpt-5.6-luna", store: true },
-): ResponsesContinuationState {
-  return {
-    lastRequest: { ...fields, input },
-    lastResponseId: "resp_1",
-    lastResponseItems,
-  };
+
+function previousResponseId(sessionId = "session-1", text = "answer") {
+  const next = claim({ sessionId, request: nextRequest("final_answer", text) });
+  const id = next?.request.previous_response_id;
+  next?.release();
+  return id;
 }
 function record(
   previous: ResponsesContinuationState | undefined,
-  input: NonNullable<ResponsesContinuationRequest["input"]>,
+  input: Input,
   id: string,
-  output: ResponsesContinuationState["lastResponseItems"],
+  output: Output,
   continued = false,
 ) {
   return recordResponsesContinuationState(previous, { input }, { id, output }, continued);
@@ -142,7 +153,7 @@ function expectHistoryChanged(
   state: ResponsesContinuationState,
   request: ResponsesContinuationRequest,
 ) {
-  expect(resolveResponsesContinuationRequest(state, request)).toEqual({
+  expect(resolve(state, request)).toEqual({
     continuationStatus: "history_changed",
     request,
   });
@@ -155,18 +166,16 @@ afterEach(() => {
 
 describe("OpenAI Responses continuation", () => {
   it("matches JSON wire semantics and provider-only assistant replay metadata", () => {
-    const continued = resolveResponsesContinuationRequest(continuationState(), nextRequest());
+    const continued = resolve(continuationState(), nextRequest());
     expect(continued).toMatchObject({
       continuationStatus: "continued",
       request: { previous_response_id: "resp_1", input: [secondUser] },
     });
-
-    expect(
-      resolveResponsesContinuationRequest(continuationState(), nextRequest("commentary"))
-        .continuationStatus,
-    ).toBe("history_changed");
+    expect(resolve(continuationState(), nextRequest("commentary")).continuationStatus).toBe(
+      "history_changed",
+    );
     const explicit = { ...nextRequest(), previous_response_id: "resp_explicit" };
-    expect(resolveResponsesContinuationRequest(continuationState(), explicit)).toEqual({
+    expect(resolve(continuationState(), explicit)).toEqual({
       request: explicit,
       continuationStatus: "explicit_previous_response_id",
     });
@@ -185,16 +194,12 @@ describe("OpenAI Responses continuation", () => {
       toolCall("call_1", { name: "lookup" }),
       toolOutput("call_1", "lookup result"),
     ];
-    const nextTurn = [secondUser, carrier("second turn metadata")] satisfies NonNullable<
-      ResponsesContinuationRequest["input"]
-    >;
-    const request = replayRequest(state, [
-      ...(state.lastRequest.input ?? []),
-      assistantOutput,
-      ...nextTurn,
-    ]);
-
-    expect(resolveResponsesContinuationRequest(state, request)).toMatchObject({
+    const nextTurn = [secondUser, carrier("second turn metadata")] satisfies Input;
+    const request = {
+      ...state.lastRequest,
+      input: [...(state.lastRequest.input ?? []), assistantOutput, ...nextTurn],
+    };
+    expect(resolve(state, request)).toMatchObject({
       continuationStatus: "continued",
       request: { previous_response_id: "resp_1", input: nextTurn },
     });
@@ -214,28 +219,17 @@ describe("OpenAI Responses continuation", () => {
     const current = tools("write");
     const request = { ...nextRequest(), ...current };
     const before = structuredClone({ state, request });
-
-    const resolved = resolveResponsesContinuationRequest(state, request);
-
-    expect(resolved.continuationStatus).toBe("continued");
-    expect(resolved.request).toMatchObject({ ...current, previous_response_id: "resp_1" });
-    expect(resolved.request.input).toHaveLength(1);
+    const resolved = resolve(state, request);
+    expect(resolved).toMatchObject({
+      continuationStatus: "continued",
+      request: { ...current, previous_response_id: "resp_1", input: [secondUser] },
+    });
     expect({ state, request }).toEqual(before);
   });
 
   it.each([
-    [
-      "nested whitespace",
-      '{ "b": {"n":9007199254740993,"a":true},"a":[1] }',
-      nestedString,
-      "continued",
-    ],
-    [
-      "reordered keys",
-      nestedNumber,
-      '{"a":[1],"b":{"a":true,"n":"9007199254740993"}}',
-      "history_changed",
-    ],
+    ["nested whitespace", nestedWhitespace, nestedString, "continued"],
+    ["reordered keys", nestedNumber, reorderedString, "history_changed"],
     ["binary64 collision", unsafeNumber, '{"n":9007199254740993}', "history_changed"],
     ["unsafe string to integer", unsafeString, unsafeNumber, "history_changed"],
     ["unchanged incomplete JSON", '{"n":', '{"n":', "continued"],
@@ -245,22 +239,17 @@ describe("OpenAI Responses continuation", () => {
   ] as const)(
     "compares admitted provider tool arguments: %s",
     (_name, rawArguments, replayedArguments, expectedStatus) => {
-      const state = continuationState();
       const call = toolCall("call_1", {
         id: "fc_1",
         status: "completed" as const,
         name: "record_value",
         arguments: rawArguments,
       });
-      state.lastResponseItems = [call];
+      const state = continuationState([call]);
       const output = toolOutput("call_1");
-      const request = replayRequest(state, [
-        ...(state.lastRequest.input ?? []),
-        { ...call, arguments: replayedArguments },
-        output,
-      ]);
+      const request = replayRequest(state, { ...call, arguments: replayedArguments }, output);
       const before = structuredClone({ state, request });
-      const resolved = resolveResponsesContinuationRequest(state, request);
+      const resolved = resolve(state, request);
       expect(resolved.continuationStatus).toBe(expectedStatus);
       if (expectedStatus === "continued") {
         expect(resolved.request).toMatchObject({ previous_response_id: "resp_1", input: [output] });
@@ -280,13 +269,14 @@ describe("OpenAI Responses continuation", () => {
     const output = toolOutput("sent_call");
     state.lastRequest.input = [...(state.lastRequest.input ?? []), call, output];
     const request = nextRequest();
-    const [user, ...next] = request.input ?? [];
-    if (!user) {
-      throw new Error("Expected the fixture's first user message");
-    }
-    request.input = [user, { ...call, arguments: current }, output, ...next];
+    request.input = [
+      firstUser,
+      { ...call, arguments: current },
+      output,
+      ...(request.input ?? []).slice(1),
+    ];
     const before = structuredClone({ state, request });
-    const resolved = resolveResponsesContinuationRequest(state, request);
+    const resolved = resolve(state, request);
     expect(resolved.continuationStatus).toBe(expectedStatus);
     if (expectedStatus === "history_changed") {
       expect(resolved.request).toBe(request);
@@ -295,20 +285,14 @@ describe("OpenAI Responses continuation", () => {
   });
 
   it.each([
-    [
-      "paired reshape",
-      "chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb",
-      "fc_1",
-      "call_chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb_f_3b92d47627",
-      true,
-    ],
+    ["paired reshape", chatCallId, "fc_1", replayedChatCallId, true],
     ["unchanged pair", "functions.gateway:0", "fc_tmp_kegospxl46", "functions.gateway:0", true],
     ["omitted item ID", "functions.gateway:0", "fc_tmp_kegospxl46", "functions.gateway:0", false],
     [
       "bare reshape",
       "functions.gateway:0",
       "fc_tmp_kegospxl46",
-      normalizeOpenAIResponsesFunctionCallId("functions.gateway:0"),
+      normalizeCallId("functions.gateway:0"),
       false,
     ],
   ] as const)(
@@ -319,8 +303,7 @@ describe("OpenAI Responses continuation", () => {
         status: "completed",
         arguments: '{"command":"echo hi"}',
       });
-      const state = continuationState();
-      state.lastResponseItems = [{ type: "reasoning" }, call] as never;
+      const state = continuationState([{ type: "reasoning" }, call] as never);
       const { id: _id, ...bareCall } = call;
       const request: ResponsesContinuationRequest = {
         ...state.lastRequest,
@@ -331,8 +314,7 @@ describe("OpenAI Responses continuation", () => {
           toolOutput(replayId, "hi\n"),
         ] as never,
       };
-      // The provider pairs against its cached raw ID, never the client-local replay shape.
-      expect(resolveResponsesContinuationRequest(state, request)).toMatchObject({
+      expect(resolve(state, request)).toMatchObject({
         continuationStatus: "continued",
         request: { previous_response_id: "resp_1", input: [toolOutput(rawId, "hi\n")] },
       });
@@ -341,7 +323,7 @@ describe("OpenAI Responses continuation", () => {
 
   it.each([
     ["id", "fc_output_changed", "history_changed"],
-    ["call_id", normalizeOpenAIResponsesFunctionCallId("functions.gateway:0"), "continued"],
+    ["call_id", normalizeCallId("functions.gateway:0"), "continued"],
   ] as const)("compares prior output %s independently of its item ID", (field, value, expected) => {
     const output = { ...toolOutput("functions.gateway:0"), id: "fc_output_1", status: "completed" };
     const state = continuationState();
@@ -352,7 +334,7 @@ describe("OpenAI Responses continuation", () => {
       { ...output, [field]: value },
       ...(request.input ?? []).slice(1),
     ] as never;
-    expect(resolveResponsesContinuationRequest(state, request).continuationStatus).toBe(expected);
+    expect(resolve(state, request).continuationStatus).toBe(expected);
   });
 
   it.each([
@@ -375,38 +357,28 @@ describe("OpenAI Responses continuation", () => {
       } else {
         state.lastResponseItems = [call];
       }
-      const request = replayRequest(state, [
-        firstUser,
+      const request = replayRequest(
+        state,
         { ...call, call_id: replayId },
         toolOutput(outputId),
         ...(earlier ? [assistantOutput, secondUser] : []),
-      ]);
+      );
       expectHistoryChanged(state, request);
     },
   );
   it("rejects a changed earlier tool result when IDs share a replay shape", () => {
-    const canonicalCallId = normalizeOpenAIResponsesFunctionCallId(" x");
-    const firstCall = toolCall(canonicalCallId, { name: "first" });
-    const secondCall = toolCall(" x", { name: "second" });
+    const canonicalCallId = normalizeCallId(" x");
+    const first = toolCall(canonicalCallId, { name: "first" });
+    const second = toolCall(" x", { name: "second" });
     const originalOutput = toolOutput(canonicalCallId);
-    const state = historyState(
-      [firstUser, firstCall, secondCall, originalOutput],
-      [assistantOutput],
-    );
-    const request = replayRequest(state, [
-      firstUser,
-      firstCall,
-      secondCall,
-      { ...originalOutput, call_id: " x" },
-      assistantOutput,
-      secondUser,
-    ]);
-
+    const state = continuationState(undefined, [firstUser, first, second, originalOutput]);
+    const changed = { ...originalOutput, call_id: " x" };
+    const request = replayRequest(state, first, second, changed, assistantOutput, secondUser);
     expectHistoryChanged(state, request);
   });
 
   it("retains pending calls when a result matches a colliding replay shape", () => {
-    const canonicalCallId = normalizeOpenAIResponsesFunctionCallId(" x");
+    const canonicalCallId = normalizeCallId(" x");
     const calls = [toolCall(" x", { name: "async" }), toolCall(canonicalCallId, { name: "sync" })];
     const first = record(undefined, [firstUser, ...calls], "resp_1", calls);
     const second = record(
@@ -416,22 +388,24 @@ describe("OpenAI Responses continuation", () => {
       [assistantOutput],
       true,
     );
-
     expect(second.pendingToolCalls).toEqual([{ callId: " x" }, { callId: canonicalCallId }]);
   });
 
   it("does not let an older result resolve a newer call that reuses its ID", () => {
     const reusedCall = toolCall("call_reused", { name: "lookup" });
     const oldInput = [firstUser, reusedCall, toolOutput("call_reused", "old result")];
-    const previous = historyState(oldInput, [reusedCall], {});
+    const previous = {
+      lastRequest: { input: oldInput },
+      lastResponseId: "resp_1",
+      lastResponseItems: [reusedCall],
+    };
     const current = record(previous, [...oldInput, reusedCall], "resp_2", [assistantOutput], true);
-
     expect(current.pendingToolCalls).toEqual([{ callId: "call_reused" }]);
   });
 
   it("rebuilds pending call IDs from a full-history fallback", () => {
     const rawCall = toolCall(" x", { name: "async" });
-    const replayedCallId = normalizeOpenAIResponsesFunctionCallId(rawCall.call_id);
+    const replayedCallId = normalizeCallId(rawCall.call_id);
     const previous = record(undefined, [firstUser], "resp_1", [rawCall]);
     const fallback = record(
       previous,
@@ -440,7 +414,6 @@ describe("OpenAI Responses continuation", () => {
       [assistantOutput],
       false,
     );
-
     expect(fallback.pendingToolCalls).toEqual([{ callId: replayedCallId }]);
   });
 
@@ -448,18 +421,13 @@ describe("OpenAI Responses continuation", () => {
     const rawCall = toolCall(" x", { name: "async" });
     const replayedCall = {
       ...rawCall,
-      call_id: normalizeOpenAIResponsesFunctionCallId(rawCall.call_id),
+      call_id: normalizeCallId(rawCall.call_id),
     };
-    const firstRequest: ResponsesContinuationRequest = {
-      model: "gpt-5.6-luna",
-      store: true,
-      input: [firstUser] as never,
-    };
+    const firstRequest = continuationState().lastRequest;
     claim({ request: firstRequest })?.commit(firstRequest, {
       id: "resp_1",
       output: [rawCall] as never,
     });
-
     const secondRequest: ResponsesContinuationRequest = {
       ...firstRequest,
       input: [firstUser, replayedCall] as never,
@@ -467,7 +435,6 @@ describe("OpenAI Responses continuation", () => {
     const second = claim({ request: secondRequest });
     expect(second?.request.previous_response_id).toBe("resp_1");
     second?.commit(secondRequest, { id: "resp_2", output: [assistantOutput] }, "resp_1");
-
     const toolResult = toolOutput(replayedCall.call_id, "lookup result");
     const third = claim({
       request: {
@@ -485,26 +452,23 @@ describe("OpenAI Responses continuation", () => {
       toolCall(" x", { id: "fc_1", name: "first" }),
       toolCall("x", { id: "fc_2", name: "second" }),
     ];
-    const bareReplayCallId = normalizeOpenAIResponsesFunctionCallId(" x");
-    const state = historyState([firstUser], cachedCalls);
-    const request = replayRequest(state, [
-      firstUser,
+    const bareReplayCallId = normalizeCallId(" x");
+    const state = continuationState(cachedCalls);
+    const request = replayRequest(
+      state,
       toolCall(bareReplayCallId, { name: "first" }),
       toolCall(bareReplayCallId, { name: "second" }),
       toolOutput(bareReplayCallId),
-    ]);
-
+    );
     expectHistoryChanged(state, request);
   });
 
   it("ignores turn correlation headers but isolates explicit authorization", () => {
     const first = claim({ turn: "1" });
     commitBaseline(first, "resp_1");
-
     const sameTenant = claim({ turn: "2", request: nextRequest() });
     expect(sameTenant?.request.previous_response_id).toBe("resp_1");
     sameTenant?.commit(nextRequest(), { id: "resp_2", output: [] }, "resp_1");
-
     const rotated = claim({ turn: "3", authorization: "Bearer tenant-b", request: nextRequest() });
     expect(rotated?.request.previous_response_id).toBeUndefined();
     rotated?.release();
@@ -513,7 +477,6 @@ describe("OpenAI Responses continuation", () => {
   it("grants one claim and prevents a concurrent non-owner from overwriting it", () => {
     const owner = claim({});
     expect(claim({})).toBeUndefined();
-
     commitBaseline(owner, "resp_owner");
     expect(claim({ request: nextRequest() })?.request.previous_response_id).toBe("resp_owner");
   });
@@ -522,10 +485,7 @@ describe("OpenAI Responses continuation", () => {
     const stale = claim({});
     cleanupSessionResources("session-1");
     commitBaseline(stale, "resp_stale");
-
-    const next = claim({ request: nextRequest() });
-    expect(next?.request.previous_response_id).toBeUndefined();
-    next?.release();
+    expect(previousResponseId()).toBeUndefined();
   });
 
   it("keeps matching-session and all-session cleanup inside one runtime owner", () => {
@@ -535,26 +495,18 @@ describe("OpenAI Responses continuation", () => {
       runWithAiTransportHost(owner, () => {
         commitBaseline(claim({ sessionId }), responseId);
       });
-    const previousResponseId = (owner: typeof firstHost, sessionId: string) =>
-      runWithAiTransportHost(owner, () => {
-        const claimed = claim({ sessionId, request: nextRequest() });
-        const responseId = claimed?.request.previous_response_id;
-        claimed?.release();
-        return responseId;
-      });
-
+    const previous = (owner: typeof firstHost, sessionId: string) =>
+      runWithAiTransportHost(owner, () => previousResponseId(sessionId));
     commit(firstHost, "shared", "first-shared");
     commit(firstHost, "other", "first-other");
     commit(secondHost, "shared", "second-shared");
     commit(secondHost, "other", "second-other");
-
     cleanupSessionResources("shared", firstHost);
-    expect(previousResponseId(firstHost, "shared")).toBeUndefined();
-    expect(previousResponseId(secondHost, "shared")).toBe("second-shared");
-
+    expect(previous(firstHost, "shared")).toBeUndefined();
+    expect(previous(secondHost, "shared")).toBe("second-shared");
     cleanupSessionResources(undefined, firstHost);
-    expect(previousResponseId(firstHost, "other")).toBeUndefined();
-    expect(previousResponseId(secondHost, "other")).toBe("second-other");
+    expect(previous(firstHost, "other")).toBeUndefined();
+    expect(previous(secondHost, "other")).toBe("second-other");
   });
 
   it("keeps preparation exclusive and preserves a cleanup-time replacement after failure", () => {
@@ -577,33 +529,15 @@ describe("OpenAI Responses continuation", () => {
     expect(replacement).toBeDefined();
     expect(claim({})).toBeUndefined();
     commitBaseline(replacement, "resp_replacement");
-    const next = claim({ request: nextRequest() });
-    expect(next?.request.previous_response_id).toBe("resp_replacement");
-    next?.release();
+    expect(previousResponseId()).toBe("resp_replacement");
   });
 });
 
 describe("OpenAI Responses continuation cache bounds", () => {
-  // Exercise the production count and serialized-byte limits without exporting test-only seams.
   const capacity = 1000;
   const byteBudget = 64 * 1024 * 1024;
-  const responseItems = (text: string) => [
-    {
-      ...assistantOutput,
-      content: [{ type: "output_text" as const, text, annotations: [], logprobs: [] }],
-    },
-  ];
   function commit(sessionId: string, responseId: string, text = "answer") {
-    claim({ sessionId })?.commit(continuationState().lastRequest, {
-      id: responseId,
-      output: responseItems(text),
-    });
-  }
-  function previousResponseId(sessionId: string, text = "answer") {
-    const next = claim({ sessionId, request: nextRequest("final_answer", text) });
-    const id = next?.request.previous_response_id;
-    next?.release();
-    return id;
+    commitBaseline(claim({ sessionId }), responseId, text);
   }
 
   it.each([

@@ -96,16 +96,12 @@ function customEndpointModel(baseUrl: string): Model<"openai-responses"> {
   );
 }
 
-function toolResult(toolCall: { id: string; name: string }, text: string, timestamp: number) {
-  return makeTextToolResult(toolCall.id, toolCall.name, text, false, timestamp);
-}
-
 async function run(
   model: Model<"openai-responses">,
-  context: Context,
+  messages: Context["messages"],
   sessionId: string,
 ): Promise<AssistantMessage> {
-  const stream = await createOpenAIResponsesTransportStreamFn()(model, context, {
+  const stream = await createOpenAIResponsesTransportStreamFn()(model, { messages, tools: [] }, {
     apiKey: "test-key",
     sessionId,
     transport: "sse",
@@ -130,7 +126,7 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
     const model = customEndpointModel(baseUrl);
     const sessionId = "real-sse-noncanonical-id";
     const firstUser = fixtures.userMessage("call the gateway tool", 1);
-    const callTurn = await run(model, { messages: [firstUser], tools: [] }, sessionId);
+    const callTurn = await run(model, [firstUser], sessionId);
 
     const toolCall = callTurn.content.find((block) => block.type === "toolCall");
     assert(toolCall, "Expected a completed tool call");
@@ -142,9 +138,12 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
     expect(reshapedId.endsWith(`|${RAW_ITEM_ID}`)).toBe(true);
     const reshapedToolCall = { ...callTurn, content: [{ ...toolCall, id: reshapedId }] };
 
-    const toolResultMsg = toolResult({ id: reshapedId, name: "gateway" }, "recorded", 2);
-    const round1Messages: Context["messages"] = [firstUser, reshapedToolCall, toolResultMsg];
-    const afterToolResult = await run(model, { messages: round1Messages, tools: [] }, sessionId);
+    const toolResultMsg = makeTextToolResult(reshapedId, "gateway", "recorded", false, 2);
+    const afterToolResult = await run(
+      model,
+      [firstUser, reshapedToolCall, toolResultMsg],
+      sessionId,
+    );
     expect(afterToolResult.stopReason).toBe("stop");
 
     expect(server.requests).toHaveLength(2);
@@ -164,7 +163,7 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
     const model = customEndpointModel(baseUrl);
     const sessionId = "real-sse-ambiguous-noncanonical-ids";
     const firstUser = fixtures.userMessage("call both tools", 1);
-    const callTurn = await run(model, { messages: [firstUser], tools: [] }, sessionId);
+    const callTurn = await run(model, [firstUser], sessionId);
     const toolCalls = callTurn.content.filter((block) => block.type === "toolCall");
 
     expect(toolCalls).toHaveLength(2);
@@ -173,14 +172,14 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
     );
     expect(replayedToolCalls[0]?.id).toBe(replayedToolCalls[1]?.id);
     const toolResults = replayedToolCalls.map((call, index) =>
-      toolResult(call, `result ${index + 1}`, index + 2),
+      makeTextToolResult(call.id, call.name, `result ${index + 1}`, false, index + 2),
     );
     const messages: Context["messages"] = [
       firstUser,
       { ...callTurn, content: replayedToolCalls },
       ...toolResults,
     ];
-    const afterToolResults = await run(model, { messages, tools: [] }, sessionId);
+    const afterToolResults = await run(model, messages, sessionId);
 
     expect(afterToolResults.stopReason).toBe("stop");
     expect(server.requests).toHaveLength(2);
