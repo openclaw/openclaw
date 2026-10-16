@@ -6,6 +6,7 @@ import {
   createMemo,
   createRoot,
   createSignal,
+  flush,
   getOwner,
   onCleanup,
   onSettled,
@@ -97,6 +98,8 @@ export type MenuProps = {
   items: readonly MenuEntry[];
   /** Materialize content on first open, then retain it across closes. Stable for this mount. */
   lazy?: boolean;
+  /** Prepare a closed menu in idle slices after its page content has settled. */
+  prewarm?: boolean;
   trigger?: JSX.Element;
   children?: JSX.Element;
   class?: JSX.HTMLAttributes<HTMLDivElement>["class"];
@@ -175,6 +178,19 @@ export function Menu(props: BranchProps): JSX.Element {
   const owner = getOwner();
   const lazy = untrack(() => props.lazy);
   let disposeBody: (() => void) | undefined;
+  let cancelPrewarm: (() => void) | undefined;
+  let renderedCount = 0;
+  let extendBody: ((count: number) => void) | undefined;
+  const prewarmEnabled = createMemo(() => props.prewarm === true && !props.disabled);
+  createEffect(prewarmEnabled, (enabled) => {
+    if (enabled && lazy && renderedCount !== Infinity) {
+      let frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(schedulePrewarm);
+      });
+      cancelPrewarm = () => cancelAnimationFrame(frame);
+    }
+    return () => cancelPrewarm?.();
+  });
   onCleanup(() => disposeBody?.());
   const overlay = createOverlay(identity.id, identity.parent, {
     exclusiveGroup: "menu",
@@ -455,6 +471,7 @@ export function Menu(props: BranchProps): JSX.Element {
                         id={`${identity.id}-${item().id}`}
                         label={item().label}
                         lazy={lazy}
+                        prewarm={props.prewarm}
                         items={childEntries()}
                         trigger={
                           item().trigger ?? (
@@ -503,22 +520,51 @@ export function Menu(props: BranchProps): JSX.Element {
       }}
     </For>
   );
-  const body = () => (
+  const body = (count: () => number = () => Infinity) => (
     <>
       {props.children}
-      {renderEntries(() => props.items)}
+      {renderEntries(() => (count() === Infinity ? props.items : props.items.slice(0, count())))}
     </>
   );
-  const materializeBody = () => {
+  function materializeBody(count = Infinity) {
+    cancelPrewarm?.();
+    cancelPrewarm = undefined;
+    renderedCount = count;
     if (lazy && !disposeBody) {
       runWithOwner(owner, () => {
         disposeBody = createRoot((dispose) => {
-          insert(surface, body());
+          const [limit, setLimit] = createSignal(count);
+          extendBody = setLimit;
+          insert(surface, body(limit));
           return dispose;
         });
       });
+    } else if (extendBody) {
+      extendBody(count);
+      // Native opening/focus must see the complete menu before showPopover.
+      if (count === Infinity) {
+        flush();
+      }
     }
-  };
+  }
+  function schedulePrewarm() {
+    const slice = () => {
+      materializeBody(renderedCount + 8);
+      if (renderedCount < untrack(() => props.items.length)) {
+        schedulePrewarm();
+      } else {
+        renderedCount = Infinity;
+        extendBody?.(Infinity);
+      }
+    };
+    if (typeof requestIdleCallback === "function") {
+      const idle = requestIdleCallback(slice, { timeout: 3000 });
+      cancelPrewarm = () => cancelIdleCallback(idle);
+    } else {
+      const timer = setTimeout(slice, 50);
+      cancelPrewarm = () => clearTimeout(timer);
+    }
+  }
   return (
     <div class={props.class} dir={direction()}>
       <button
