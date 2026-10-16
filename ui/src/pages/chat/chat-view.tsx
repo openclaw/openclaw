@@ -33,15 +33,17 @@ import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-co
 import { ChatComposer } from "./components/chat-composer.tsx";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
-import { renderChatSelectionAnnotations } from "./components/chat-selection-annotations.ts";
-import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
-import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
+import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
+import { ChatSessionSuggestions } from "./components/chat-session-suggestions.solid.tsx";
+import { ChatSwarmProgress } from "./components/chat-swarm-progress.solid.tsx";
 import { ChatTaskSuggestionTray } from "./components/chat-task-suggestions.tsx";
 import {
-  renderTranscriptSearch,
+  getTranscriptState,
+  closeTranscriptSearch,
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
+import { TranscriptSearch } from "./components/chat-transcript-search.tsx";
 import "../../components/resizable-divider.ts";
 export type { ChatProps } from "./chat-view-frame.ts";
 
@@ -129,20 +131,17 @@ function ChatFooterContent(input: ChatViewInput) {
           publication={input.props.githubPublication}
         />
       </Show>
-      <LitContent
-        value={renderChatSessionSuggestions({
-          suggestions: input.props.sessionSuggestions ?? [],
-          role: input.props.sessionSuggestionRole,
-          busyIds: input.props.sessionSuggestionBusyIds ?? new Set(),
-          archived: input.props.sessionSuggestionsArchived === true,
-          canResolve: input.props.canResolveSessionSuggestions === true,
-          onResolve: (suggestion, resolution) =>
-            input.props.onResolveSessionSuggestion?.(suggestion, resolution),
-        })}
+      <ChatSessionSuggestions
+        suggestions={input.props.sessionSuggestions ?? []}
+        role={input.props.sessionSuggestionRole}
+        busyIds={input.props.sessionSuggestionBusyIds ?? new Set()}
+        archived={input.props.sessionSuggestionsArchived === true}
+        canResolve={input.props.canResolveSessionSuggestions === true}
+        onResolve={(suggestion, resolution) =>
+          input.props.onResolveSessionSuggestion?.(suggestion, resolution)
+        }
       />
-      <Show when={input.props.swarm}>
-        <LitContent value={renderChatSwarmProgress(input.props.swarm!)} />
-      </Show>
+      <Show when={input.props.swarm}>{(swarm) => <ChatSwarmProgress {...swarm()} />}</Show>
       <Show when={input.application}>
         <openclaw-plugin-contributions
           prop:kind="composer"
@@ -199,9 +198,7 @@ function ChatComposerCompanion(input: ChatViewInput) {
         }
       />
       <Show when={!input.props.suggestionComposer}>
-        <LitContent
-          value={renderChatSelectionAnnotations({ ...input.props, disabled: !input.props.canSend })}
-        />
+        <ChatSelectionAnnotations {...input.props} disabled={!input.props.canSend} />
       </Show>
       <Show when={input.props.composerRecovery}>
         {(recovery) => {
@@ -387,8 +384,16 @@ function ChatContent(input: { props: ChatProps }) {
                     prop:presented={presented()}
                   />
                 </Show>
-                <LitContent
-                  value={renderTranscriptSearch(input.props.paneId, frame().requestUpdate)}
+                <TranscriptSearch
+                  revision={frame()}
+                  state={getTranscriptState(input.props.paneId)}
+                  requestUpdate={frame().requestUpdate}
+                  onClose={() =>
+                    closeTranscriptSearch(
+                      getTranscriptState(input.props.paneId),
+                      frame().requestUpdate,
+                    )
+                  }
                 />
                 <div class="chat-main__conversation-frame">
                   <div

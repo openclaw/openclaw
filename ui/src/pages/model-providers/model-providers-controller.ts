@@ -174,7 +174,7 @@ export function createModelProviders(
         void refresh("replacement");
       }
     },
-    onPageActivation: () => refreshPolicy.request("focus"),
+    onPageActivation: () => void refreshPolicy.request("focus"),
   });
   const installedAgents = createInstalledAgents({
     gateway,

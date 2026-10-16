@@ -11,7 +11,6 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectsForGateway, type ProjectCatalog } from "../../lib/projects.ts";
-import type { ControllerHost } from "../../lib/subscriptions-controller.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-state.ts";
@@ -32,6 +31,7 @@ type DraftProjectSelection =
 
 type DraftPlaceBrowserCallbacks = {
   requestUpdate: () => void;
+  updateComplete: () => Promise<unknown>;
   pickerIdPrefix?: string;
   onProjectMissing: () => void;
   onSelectProject: (projectId: string) => void;
@@ -67,7 +67,6 @@ export class DraftPlaceBrowser {
   private projectSearchFailure: unknown;
 
   constructor(
-    private readonly host: Pick<ControllerHost, "addController" | "updateComplete">,
     private readonly gateway: DraftGatewayState,
     private readonly read: () => DraftPlaceBrowserSnapshot,
     private readonly callbacks: DraftPlaceBrowserCallbacks,
@@ -104,17 +103,14 @@ export class DraftPlaceBrowser {
           .catch(() => undefined);
       },
     );
-    // Draft lifetime can outlive the DOM during an instant-thread handoff.
-    // The page's disposeDraft owns disconnect; queued updates must not revive it.
-    host.addController({
-      hostUpdate: () => {
-        this.bindProjectCatalog();
-        const args = this.projectSearchInput();
-        if (!args.every((arg, index) => Object.is(arg, this.projectSearchArgs[index]))) {
-          this.searchProjects(args);
-        }
-      },
-    });
+  }
+
+  synchronize() {
+    this.bindProjectCatalog();
+    const args = this.projectSearchInput();
+    if (!args.every((arg, index) => Object.is(arg, this.projectSearchArgs[index]))) {
+      this.searchProjects(args);
+    }
   }
 
   private projectSearchInput() {
@@ -534,7 +530,7 @@ export class DraftPlaceBrowser {
   private focusProjectView(selector: string) {
     const requestId = ++this.focusRequestId;
     const origin = this.callbacks.activeElement();
-    void this.host.updateComplete.then(() => {
+    void this.callbacks.updateComplete().then(() => {
       if (requestId !== this.focusRequestId || this.openPopoverValue !== "project") {
         return;
       }

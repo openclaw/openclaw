@@ -2488,7 +2488,6 @@ src/state/user-profile-authority.ts
 src/state/user-profile-events.ts
 src/utils/normalize-secret-input.ts
 packages/gateway-protocol/src/schema/approval-id.ts
-packages/memory-host-sdk/src/host/openclaw-runtime-session-visibility.ts
 src/agents/delivery-evidence-values.ts
 src/agents/embedded-agent-runner/message-visibility.ts
 src/auto-reply/reply-payload.ts

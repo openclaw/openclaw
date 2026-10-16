@@ -6,7 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type * as ComposerDictationModule from "../chat/composer-dictation.ts";
-import { NewSessionComposerTextareaController } from "./composer-controller.ts";
+import { createNewSessionComposerTextarea } from "./composer-controller.ts";
 import { NewSessionDictationView, NewSessionDictationStatus } from "./composer-dictation-view.tsx";
 
 const dictationHarness = vi.hoisted(() => ({
@@ -225,7 +225,7 @@ describe("NewSessionDictationControl", () => {
   });
 
   it("does not submit a replacement route after finishing the previous draft's dictation", async () => {
-    const textarea = new NewSessionComposerTextareaController();
+    const textarea = createNewSessionComposerTextarea();
     const client = createTestGatewayClient(async () => ({}));
     const onSubmit = vi.fn();
     const control = new NewSessionDictationControl({

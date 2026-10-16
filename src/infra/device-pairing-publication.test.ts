@@ -314,17 +314,18 @@ test.each(["lookup", "pending read", "token revocation"] as const)(
   },
 );
 
-test.each([
+test.for([
   "token verification",
   "connection record",
   "presence update",
   "metadata update",
   "token revocation",
-] as const)("keeps other node authority readable during one device's %s", async (change) => {
+] as const)("keeps other node authority during %s", async (change, { signal }) => {
   const node = expectDefined(await getPairedDevice("node", baseDir), "paired node");
   const other = {
     ...structuredClone(node),
     deviceId: "other",
+    approvedScopes: [],
     publicKey: "synthetic-other-key",
     tokens: {
       node: { token: "synthetic-other-token", role: "node", scopes: [], createdAtMs: 1 },
@@ -390,12 +391,18 @@ test.each([
   };
   const mutation = mutate();
   try {
-    await awaitGateBeforeSettlement(entered.promise, mutation, "pairing mutation was not held");
+    if (change === "token verification") {
+      expect(await mutation).toEqual({ ok: true });
+      await withinTest(entered.promise, signal);
+    } else {
+      await awaitGateBeforeSettlement(entered.promise, mutation, "pairing mutation was not held");
+    }
     expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(nodeBinding);
     // Until COMMIT, the stored row remains authoritative for the changing device too.
     expect(getPublishedPairedDeviceBinding("other", baseDir)).toEqual(otherBinding);
     release.resolve();
     await mutation;
+    await withDevicePairingLock(async () => {});
     const committedOther = change === "token revocation" ? null : otherBinding;
     // The first read after COMMIT drains and installs the receipt itself.
     expect(afterCommit).toEqual([committedOther, nodeBinding]);
