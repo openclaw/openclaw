@@ -19,6 +19,12 @@ const IDENTITY = {
   targetSha: "2".repeat(40),
 };
 const PACKAGE_VERSION = "2026.8.1-beta.3";
+const POLICY_INCLUDE =
+  '#!/bin/bash\nsource "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install-policy.sh"\n';
+type FixtureOptions = { symlinkInstaller?: boolean; symlinkPackage?: boolean };
+const write = (dir: string, name: string, content: string) =>
+  fs.writeFileSync(path.join(dir, name), content);
+const read = (dir: string, name: string) => fs.readFileSync(path.join(dir, name), "utf8");
 
 function sha256(filePath: string): string {
   return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
@@ -31,7 +37,7 @@ function createTarball(archivePath: string, sourceDir: string, entries: string[]
   });
 }
 
-function createFixture(options: { symlinkInstaller?: boolean; symlinkPackage?: boolean } = {}) {
+function createFixture(options: FixtureOptions = {}) {
   const root = tempDirs.make("install-smoke-candidate-payload-");
   const scriptsDir = path.join(root, "candidate-root/scripts");
   const packageRoot = path.join(root, "package-root");
@@ -42,32 +48,33 @@ function createFixture(options: { symlinkInstaller?: boolean; symlinkPackage?: b
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  fs.writeFileSync(path.join(scriptsDir, "install-target.sh"), "#!/bin/sh\necho install\n");
+  write(scriptsDir, "install-target.sh", "#!/bin/sh\necho install\n");
   if (options.symlinkInstaller) {
     fs.symlinkSync("install-target.sh", path.join(scriptsDir, "install.sh"));
   } else {
-    fs.writeFileSync(path.join(scriptsDir, "install.sh"), "#!/bin/sh\necho install\n");
+    write(scriptsDir, "install.sh", "#!/bin/sh\necho install\n");
   }
-  fs.writeFileSync(path.join(scriptsDir, "install-cli.sh"), "#!/bin/sh\necho cli\n");
+  write(scriptsDir, "install-cli.sh", "#!/bin/sh\necho cli\n");
   const archivePath = path.join(root, "candidate.tar.gz");
   createTarball(archivePath, root, ["candidate-root"]);
 
-  fs.writeFileSync(
-    path.join(packageContents, "package.json"),
+  write(
+    packageContents,
+    "package.json",
     `${JSON.stringify({ name: "openclaw", version: PACKAGE_VERSION })}\n`,
   );
-  fs.writeFileSync(path.join(packageContents, "index.js"), "console.log('openclaw');\n");
+  write(packageContents, "index.js", "console.log('openclaw');\n");
   const packagePath = path.join(packageDir, "candidate.tgz");
   createTarball(packagePath, packageRoot, ["package"]);
   if (options.symlinkPackage) {
     fs.unlinkSync(packagePath);
     fs.symlinkSync(path.join(root, "candidate.tar.gz"), packagePath);
   }
-  return { archivePath, packageDir, packagePath, packageContents, payloadDir, root };
+  return { archivePath, packageDir, packagePath, packageContents, payloadDir, root, scriptsDir };
 }
 
-async function sealFixture(options: { symlinkInstaller?: boolean; symlinkPackage?: boolean } = {}) {
-  const fixture = createFixture(options);
+async function sealFixture() {
+  const fixture = createFixture();
   const manifest = await seal(fixture);
   const manifestPath = path.join(fixture.payloadDir, "install-smoke-candidate-payload.json");
   return { ...fixture, manifest, manifestPath, manifestSha256: sha256(manifestPath) };
@@ -99,18 +106,14 @@ function verify(
 describe("install smoke candidate payload", () => {
   it("inlines archived policy without executing candidate code or reading mutable sources", async () => {
     const fixture = createFixture();
-    const scripts = path.join(fixture.root, "candidate-root/scripts");
     const marker = path.join(fixture.root, "executed");
-    fs.writeFileSync(
-      path.join(scripts, "install.sh"),
-      '#!/bin/bash\nsource "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install-policy.sh"\necho install\n',
-    );
-    fs.writeFileSync(path.join(scripts, "install-policy.sh"), `touch '${marker}'\n`);
+    write(fixture.scriptsDir, "install.sh", `${POLICY_INCLUDE}echo install\n`);
+    write(fixture.scriptsDir, "install-policy.sh", `touch '${marker}'\n`);
     createTarball(fixture.archivePath, fixture.root, ["candidate-root"]);
-    fs.writeFileSync(path.join(scripts, "install-policy.sh"), "mutable source must not be used\n");
+    write(fixture.scriptsDir, "install-policy.sh", "mutable source must not be used\n");
     await seal(fixture);
     expect(fs.existsSync(marker)).toBe(false);
-    expect(fs.readFileSync(path.join(fixture.payloadDir, "install.sh"), "utf8")).toBe(
+    expect(read(fixture.payloadDir, "install.sh")).toBe(
       `#!/bin/bash\ntouch '${marker}'\necho install\n`,
     );
   });
@@ -132,9 +135,7 @@ describe("install smoke candidate payload", () => {
       { name: "install.sh", role: "installer" },
       { name: "install-cli.sh", role: "cli-installer" },
     ]);
-    expect(
-      JSON.parse(fs.readFileSync(path.join(fixture.payloadDir, "candidate-pack.json"), "utf8")),
-    ).toEqual([
+    expect(JSON.parse(read(fixture.payloadDir, "candidate-pack.json"))).toEqual([
       {
         entryCount: 2,
         filename: "candidate.tgz",
@@ -146,66 +147,48 @@ describe("install smoke candidate payload", () => {
         version: PACKAGE_VERSION,
       },
     ]);
-    expect(fs.readFileSync(path.join(fixture.payloadDir, "install.sh"), "utf8")).toContain(
-      "echo install",
-    );
+    expect(read(fixture.payloadDir, "install.sh")).toContain("echo install");
   });
 
   it("rejects a policy include backed by an archive symlink", async () => {
     const fixture = createFixture();
-    const scripts = path.join(fixture.root, "candidate-root/scripts");
-    fs.writeFileSync(
-      path.join(scripts, "install.sh"),
-      '#!/bin/bash\nsource "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install-policy.sh"\n',
-    );
-    fs.symlinkSync("install-target.sh", path.join(scripts, "install-policy.sh"));
+    write(fixture.scriptsDir, "install.sh", POLICY_INCLUDE);
+    fs.symlinkSync("install-target.sh", path.join(fixture.scriptsDir, "install-policy.sh"));
     createTarball(fixture.archivePath, fixture.root, ["candidate-root"]);
     await expect(seal(fixture)).rejects.toThrow("scripts/install-policy.sh must be a regular file");
   });
 
-  it("rejects tampering with the final payload file after sealing", async () => {
-    const fixture = await sealFixture();
-    fs.writeFileSync(path.join(fixture.payloadDir, "install-cli.sh"), "tampered\n");
-    await expect(verify(fixture)).rejects.toThrow(
-      "candidate payload digest does not match for install-cli.sh",
-    );
-  });
-
-  it("rejects manifest tampering before trusting its file inventory", async () => {
-    const fixture = await sealFixture();
-    fs.writeFileSync(fixture.manifestPath, "{}\n");
-
-    await expect(verify(fixture)).rejects.toThrow(
+  it.each([
+    ["install-cli.sh", "tampered\n", "candidate payload digest does not match for install-cli.sh"],
+    [
+      "install-smoke-candidate-payload.json",
+      "{}\n",
       "candidate payload manifest digest does not match producer output",
-    );
+    ],
+    ["extra", "unexpected\n", "candidate payload contains missing or unexpected files"],
+  ] as const)("rejects tampering with %s after sealing", async (name, content, error) => {
+    const fixture = await sealFixture();
+    write(fixture.payloadDir, name, content);
+    await expect(verify(fixture)).rejects.toThrow(error);
   });
 
-  it("rejects tuple drift and unexpected artifact files", async () => {
-    const tupleFixture = await sealFixture();
-    await expect(verify(tupleFixture, { targetSha: "3".repeat(40) })).rejects.toThrow(
+  it.each([
+    [
+      { targetSha: "3".repeat(40) },
       "candidate payload manifest targetSha does not match the expected tuple",
-    );
-
-    await expect(
-      verify(tupleFixture, { expectedSourceArchiveSha256: "4".repeat(64) }),
-    ).rejects.toThrow("candidate payload source archive digest does not match producer output");
-
-    const extraFixture = await sealFixture();
-    fs.writeFileSync(path.join(extraFixture.payloadDir, "extra"), "unexpected\n");
-    await expect(verify(extraFixture)).rejects.toThrow(
-      "candidate payload contains missing or unexpected files",
-    );
+    ],
+    [
+      { expectedSourceArchiveSha256: "4".repeat(64) },
+      "candidate payload source archive digest does not match producer output",
+    ],
+  ] as const)("rejects tuple drift %j", async (overrides, error) => {
+    await expect(verify(await sealFixture(), overrides)).rejects.toThrow(error);
   });
 
-  it("rejects symlinked candidate inputs before sealing", async () => {
-    const installerFixture = createFixture({ symlinkInstaller: true });
-    await expect(seal(installerFixture)).rejects.toThrow(
-      "scripts/install.sh must be a regular file",
-    );
-
-    const packageFixture = createFixture({ symlinkPackage: true });
-    await expect(seal(packageFixture)).rejects.toThrow(
-      "candidate package tarball must be a regular file",
-    );
+  it.each([
+    [{ symlinkInstaller: true }, "scripts/install.sh must be a regular file"],
+    [{ symlinkPackage: true }, "candidate package tarball must be a regular file"],
+  ] as const)("rejects symlinked candidate inputs %j before sealing", async (options, error) => {
+    await expect(seal(createFixture(options))).rejects.toThrow(error);
   });
 });
