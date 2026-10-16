@@ -171,7 +171,7 @@ function expectRecords(
   expectRows(database, `SELECT ${columns} FROM ${from}`, ...parameters).toEqual(expected);
 }
 
-function openNativeDatabase(pathname: string, options?: { readOnly?: boolean }): DatabaseSync {
+function openNativeDatabase(pathname: string, options: { readOnly?: boolean } = {}): DatabaseSync {
   const { DatabaseSync } = requireNodeSqlite();
   return new DatabaseSync(pathname, options);
 }
