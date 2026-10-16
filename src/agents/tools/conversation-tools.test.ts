@@ -34,30 +34,26 @@ const sent = {
 };
 
 function mockGateway() {
-  return vi.spyOn(gateway, "callAgentToolGatewayRequest").mockImplementation(async (input) =>
-    input.method === "conversations.list"
-      ? {
-          conversations: [conversation],
-        }
-      : input.method === "conversations.send"
-        ? {
-            status: "sent" as const,
-            ...sent,
-            queueId: "queue-1",
-          }
-        : {
-            status: "replied" as const,
-            ...sent,
-            correlationPersisted: true,
-            reply: {
-              conversationRef: conversation.conversationRef,
-              messageId: "reef-inbound-1",
-              replyToId: "reef-outbound-1",
-              text: "peer acknowledged",
-              timestamp: 300,
-            },
-          },
-  );
+  return vi.spyOn(gateway, "callAgentToolGatewayRequest").mockImplementation(async ({ method }) => {
+    if (method === "conversations.list") {
+      return { conversations: [conversation] };
+    }
+    if (method === "conversations.send") {
+      return { status: "sent" as const, ...sent, queueId: "queue-1" };
+    }
+    return {
+      status: "replied" as const,
+      ...sent,
+      correlationPersisted: true,
+      reply: {
+        conversationRef: conversation.conversationRef,
+        messageId: "reef-inbound-1",
+        replyToId: "reef-outbound-1",
+        text: "peer acknowledged",
+        timestamp: 300,
+      },
+    };
+  });
 }
 
 describe("conversation tools", () => {
@@ -67,15 +63,13 @@ describe("conversation tools", () => {
     const list = createConversationsListTool({ agentId: "main" });
     const send = createConversationsSendTool({ agentId: "main" });
     const turn = createConversationsTurnTool({ agentId: "main" });
-    const listResult = await list.execute("list-contract", {});
-    const sendResult = await send.execute("send-contract", message);
-    const turnResult = await turn.execute("turn-contract", message);
-    for (const [tool, schema, result] of [
-      [list, ConversationListResultSchema, listResult],
-      [send, ConversationSendResultSchema, sendResult],
-      [turn, ConversationTurnResultSchema, turnResult],
+    for (const [tool, schema, params] of [
+      [list, ConversationListResultSchema, {}],
+      [send, ConversationSendResultSchema, message],
+      [turn, ConversationTurnResultSchema, message],
     ] as const) {
       expect(tool.outputSchema).toBe(schema);
+      const result = await tool.execute(`${tool.name}-contract`, params);
       expect(Value.Check(schema, result.details)).toBe(true);
     }
     expect(compactToolOutputHint(list.outputSchema)).toBe(
@@ -95,7 +89,6 @@ describe("conversation tools", () => {
       channel: "reef",
       query: "@peer-agent",
     });
-
     expect(callGateway).toHaveBeenCalledWith({
       method: "conversations.list",
       params: { agentId: "main", channel: "reef", query: "@peer-agent", limit: 50 },
@@ -196,7 +189,6 @@ describe("conversation tools", () => {
     });
     await tool.execute("turn-call", { ...message, timeoutSeconds: 12 });
     await tool.execute("turn-call", { ...message, timeoutSeconds: 12 });
-
     const first = callGateway.mock.calls[0]![0];
     const second = callGateway.mock.calls[1]![0];
     expect(first.params).toMatchObject({ turnId: expect.stringMatching(/^convop_[a-f0-9]{32}$/u) });
@@ -219,7 +211,6 @@ describe("conversation tools", () => {
         message: "hello",
       }),
     ).rejects.toThrow("Invalid conversationRef");
-
     for (const createTool of [
       createConversationsListTool,
       createConversationsSendTool,
