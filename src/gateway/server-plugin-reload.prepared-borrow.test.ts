@@ -799,7 +799,9 @@ describe("published Gateway plugin services", () => {
           assert(record);
           const gatewayInstance = getPluginInstance(record);
           assert(gatewayInstance);
-          const retainedBeforeRun = gatewayInstance.retainedWorkCount;
+          // Publication starts a background provider catalog refresh that also retains this
+          // borrowed instance. Settle it so the counts below measure only the run lease.
+          await gatewayInstance.waitForRetainedWork(new AbortController().signal);
           runLease = await withPluginRuntimeRegistryScope(registryOwner.registry, () =>
             acquireAgentRunPreparedModelRuntime(
               {
@@ -829,10 +831,10 @@ describe("published Gateway plugin services", () => {
             ],
             details: {},
           });
-          expect(gatewayInstance.retainedWorkCount).toBeGreaterThan(retainedBeforeRun);
+          expect(gatewayInstance.retainedWorkCount).toBeGreaterThan(0);
           await runLease[Symbol.asyncDispose]();
           runLease = undefined;
-          expect(gatewayInstance.retainedWorkCount).toBe(retainedBeforeRun);
+          expect(gatewayInstance.retainedWorkCount).toBe(0);
         } finally {
           await runLease?.[Symbol.asyncDispose]();
           await closePreparedModelRuntimeSnapshots();
