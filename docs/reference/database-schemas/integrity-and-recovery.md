@@ -133,9 +133,9 @@ or validate seals. No database schema change is required for this seal format.
 
 After an agent schema migration, the schema owner registers the database while
 its verified connection is still open. Later opens in the same Doctor process
-can reuse that admission instead of repeating its full integrity scan. The
-pre-migration integrity check, recovery backups, and restart seal requirements
-remain unchanged.
+can reuse that admission instead of repeating its full integrity scan. Migration
+integrity coverage follows the policy below; recovery backups and restart seal
+requirements remain unchanged.
 
 | When                                                   | Check                                                                                                                                                                                      |
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

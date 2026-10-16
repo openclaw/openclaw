@@ -345,7 +345,10 @@ export function withSqliteForeignKeysDisabled<T>(db: DatabaseSync, fn: () => T):
 export function migrateSqliteSchemaToStrictInTransaction(
   db: DatabaseSync,
   schemaSql: string,
-  options: Pick<SqliteStrictMigrationOptions, "databaseLabel" | "expectedSchema"> = {},
+  options: Pick<
+    SqliteStrictMigrationOptions,
+    "databaseLabel" | "expectedSchema" | "integrityCheck"
+  > = {},
 ): SqliteStrictMigrationResult {
   if (!db.isTransaction) {
     throw new Error("SQLite STRICT schema migration requires an active transaction");

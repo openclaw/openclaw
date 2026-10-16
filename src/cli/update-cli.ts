@@ -220,6 +220,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           drainTimeout: opts.drainTimeout,
           yes: Boolean(opts.yes),
           acceptCapabilities: Boolean(opts.acceptCapabilities),
+          fullIntegrityCheck: Boolean(opts.fullIntegrityCheck),
           admission: opts.admission,
         });
       } catch (err) {

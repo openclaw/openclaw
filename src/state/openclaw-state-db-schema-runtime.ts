@@ -151,15 +151,16 @@ export function ensureOpenClawStateRuntimeSchema(
         }
 
         openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
-        assertSqliteIntegrity(
-          db,
-          pathname,
-          resolveSchemaMigrationIntegrityCheck({
-            kind: "state",
-            foundVersion: previousVersion,
-            supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-          }),
-        );
+        const migrationIntegrity = resolveSchemaMigrationIntegrityCheck({
+          kind: "state",
+          foundVersion: previousVersion,
+          supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+        });
+        if (migrationIntegrity.check === "quick") {
+          assertSqliteIntegrity(db, pathname, migrationIntegrity);
+        } else {
+          assertStateDatabaseIntegrityOnce(db, pathname);
+        }
         const boundedChanges = migrateBoundedStateSchema(db, previousVersion);
         if (boundedChanges) {
           writeCurrentStateSchemaMetadata(db, now);

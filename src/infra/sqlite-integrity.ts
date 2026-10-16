@@ -9,6 +9,7 @@ import {
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
+import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
@@ -205,9 +206,8 @@ export function assertSqliteIntegrity(
   const integrityCheck = runSqliteCheck(database, databaseLabel, check);
   if (check === "quick_check" && options.tables?.length) {
     const existing = new Set(
-      database
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table'")
-        .all()
+      readSqliteSchemaObjects(database)
+        .filter((row) => row.type === "table")
         .map((row) => row.name),
     );
     for (const table of options.tables) {
