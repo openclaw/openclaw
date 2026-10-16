@@ -571,6 +571,38 @@ it("omits an identity without failing the preparation when its reader walk fails
   }
 });
 
+it("omits a carried stamp when a reload recomputation fails to re-verify it", async () => {
+  const f = await fixture();
+  try {
+    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
+    if (!workspaceSkill) {
+      throw new Error("missing workspace skill fixture");
+    }
+    recordSkillFileHost(workspaceSkill, "workspace");
+    // The watcher observed a reload, and the entry carries the previous
+    // bundle's stamp; the recomputing tree walk fails once (transient
+    // transport). The refresh cannot re-verify the carried stamp against
+    // the reloaded bundle, so the entry omits its identity instead of
+    // describing the previous bundle.
+    f.skillResources.readSkillFiles.mockImplementationOnce(() =>
+      Promise.reject(new Error("reader transport failed")),
+    );
+    registerActiveTracingBridge();
+    const stamped = await stampDiscoveredSkillBundleIdentities(
+      [{ ...workspaceSkill, bundleFingerprint: "fp-previous-bundle" }],
+      f.gateway,
+      { recompute: true },
+    );
+    const entry = stamped.find((skill) => skill.name === workspaceSkill.name);
+    if (!entry) {
+      throw new Error("missing stamped workspace entry");
+    }
+    expect(entry.bundleFingerprint).toBeUndefined();
+  } finally {
+    f.release();
+  }
+});
+
 it("walks discovered bundles concurrently and coalesces same-directory siblings", async () => {
   const f = await fixture();
   try {

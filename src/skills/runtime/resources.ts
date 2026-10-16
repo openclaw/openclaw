@@ -269,7 +269,17 @@ export async function stampDiscoveredSkillBundleIdentities(
         });
       }
       const fingerprint = await identity;
-      return fingerprint === undefined || skill.bundleFingerprint === fingerprint
+      if (fingerprint === undefined) {
+        // A refresh after the resource version advanced cannot re-verify a
+        // carried stamp: the watcher already observed the change, so an
+        // identity that cannot be recomputed omits rather than describe the
+        // previous bundle. The failed lookup is never pinned; a later
+        // intake retries at the same version.
+        return restamp && skill.bundleFingerprint
+          ? { ...skill, bundleFingerprint: undefined }
+          : skill;
+      }
+      return skill.bundleFingerprint === fingerprint
         ? skill
         : { ...skill, bundleFingerprint: fingerprint };
     }),
