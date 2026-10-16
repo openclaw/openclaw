@@ -53,10 +53,12 @@ export async function runSetupWizard(
   opts: OnboardOptions,
   runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
+  signal?: AbortSignal,
 ) {
   await runWizardWithPromptNavigation(
     prompter,
-    async (navigationPrompter) => await runSetupWizardOnce(opts, runtimeInput, navigationPrompter),
+    async (navigationPrompter) =>
+      await runSetupWizardOnce(opts, runtimeInput, navigationPrompter, signal),
   );
 }
 
@@ -64,6 +66,7 @@ async function runSetupWizardOnce(
   initialOpts: OnboardOptions,
   runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
+  signal?: AbortSignal,
 ) {
   let opts = initialOpts;
   const runtime = runtimeInput ?? defaultRuntime;
@@ -519,6 +522,7 @@ async function runSetupWizardOnce(
       runtime,
       pendingAgent: firstAgent && { ...firstAgent, workspaceDir },
       preserveExistingModelSelection: keepExistingModelConfig,
+      ...(signal ? { signal } : {}),
     });
     nextConfig = stagedModelAuth.config;
   }

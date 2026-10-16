@@ -739,3 +739,35 @@ describe("wizard step serialization", () => {
     await cancelWizardSessions(context.wizardSessions);
   });
 });
+
+describe("wizard cancellation signal", () => {
+  it("aborts the setup runner signal when the session is cancelled", async () => {
+    const release = createDeferred();
+    let received: AbortSignal | undefined;
+    const wizardRunner: SetupWizardRunner = async (_opts, _runtime, prompter, signal) => {
+      received = signal;
+      await prompter.note("ready");
+      await release.promise;
+    };
+    const context = createWizardContext(wizardRunner);
+    const start = await invokeWizard("wizard.start", { mode: "local" }, context);
+    expect(start).toMatchObject({ done: false, status: "running" });
+
+    const cancellationSignal = received;
+    expect(
+      cancellationSignal,
+      "wizard.start must hand the setup runner the session cancellation signal",
+    ).toBeDefined();
+    for (const session of context.wizardSessions.values()) {
+      session.cancel();
+    }
+    expect(cancellationSignal?.aborted).toBe(true);
+
+    release.resolve();
+    await Promise.all(
+      [...context.wizardSessions.values()].map((session) =>
+        whenAdmittedWizardSessionSettled(session),
+      ),
+    );
+  });
+});
