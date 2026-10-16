@@ -1,9 +1,10 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readTransportDiagnosticLabel } from "../utils/provider-error.js";
 import { resolveModelPayloadDebugMode } from "./model-transport-debug.js";
 import { RESPONSE_FAILED_NO_DETAILS_MESSAGE } from "./openai-responses-contracts.js";
 import { log } from "./openai-transport-shared.js";
-import { readTransportDiagnosticLabel, redactIdentifier, sha256Hex } from "./transport-utils.js";
+import { redactIdentifier, sha256Hex } from "./transport-utils.js";
 
 function stringifyUnknown(value: unknown): string {
   if (typeof value === "string") {

@@ -22,6 +22,7 @@ describe("OpenAI Responses payload debug summary", () => {
       vi.stubEnv("OPENCLAW_DEBUG_MODEL_PAYLOAD", mode);
       const privateText = "synthetic private prompt and tool result";
       const summary = summarizeResponsesPayload({
+        apiKey: privateText,
         instructions: privateText,
         input: [
           { type: "message", role: "user", content: privateText },
