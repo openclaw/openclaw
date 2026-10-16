@@ -47,6 +47,23 @@ describe("Telegram physical send acceptance over HTTP", () => {
   let bot: typeof fixture.bot;
   let mediaDir: string;
   let photoPath: string;
+  const requestOptions = () => ({ cfg, api: bot.api });
+  const fieldValues = (key: string) => requests.map(({ fields }) => fields[key]);
+  const expectMethods = (...methods: string[]) =>
+    expect(requests.map(({ method }) => method)).toEqual(methods);
+  const configWith = <const T extends object>(overrides: T) => ({
+    channels: { telegram: { ...cfg.channels.telegram, ...overrides } },
+  });
+  const photoOptions = () => ({
+    ...requestOptions(),
+    mediaUrl: photoPath,
+    mediaLocalRoots: [mediaDir],
+  });
+  const holdRequest = () => {
+    const held = { arrived: createDeferred<void>(), release: createDeferred<void>() };
+    fixture.requestHold = held;
+    return held;
+  };
   beforeEach(() => {
     ({ bot, mediaDir, photoPath } = fixture);
   });
@@ -54,10 +71,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
   it("preserves literal code spacing in captions sent over HTTP", async () => {
     await sendMessageTelegram("123", "````\n```\n• literal bullet\n3. literal number\n````", {
-      cfg,
-      api: bot.api,
-      mediaUrl: photoPath,
-      mediaLocalRoots: [mediaDir],
+      ...photoOptions(),
     });
 
     expect(requests).toHaveLength(1);
@@ -76,8 +90,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
         apiThrottler({ global: { maxConcurrent: 1 }, out: { maxConcurrent: 1 } }),
       );
       const queuedCfg = configForToken(token);
-      const held = { arrived: createDeferred<void>(), release: createDeferred<void>() };
-      fixture.requestHold = held;
+      const held = holdRequest();
       const blocker = sendMessageTelegram("123", "queue blocker", { cfg: queuedCfg });
       await held.arrived.promise;
       const checkedBeforeQueue = createDeferred<void>();
@@ -99,7 +112,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
       );
       try {
         await checkedBeforeQueue.promise;
-        expect(requests.map(({ fields }) => fields.text)).toEqual(["queue blocker"]);
+        expect(fieldValues("text")).toEqual(["queue blocker"]);
         authorityActive = state !== "closed";
         if (state === "aborted") {
           controller.abort();
@@ -108,15 +121,12 @@ describe("Telegram physical send acceptance over HTTP", () => {
         await blocker;
         if (state === "active") {
           await expect(outcome).resolves.toMatchObject({ result: { messageId: "2" } });
-          expect(requests.map(({ fields }) => fields.text)).toEqual([
-            "queue blocker",
-            "queued message",
-          ]);
+          expect(fieldValues("text")).toEqual(["queue blocker", "queued message"]);
         } else {
           await expect(outcome).resolves.toMatchObject({
             error: state === "closed" ? revoked : { name: "AbortError" },
           });
-          expect(requests.map(({ fields }) => fields.text)).toEqual(["queue blocker"]);
+          expect(fieldValues("text")).toEqual(["queue blocker"]);
         }
       } finally {
         held.release.resolve();
@@ -187,8 +197,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
         return pending;
       };
     });
-    const held = { arrived: createDeferred<void>(), release: createDeferred<void>() };
-    fixture.requestHold = held;
+    const held = holdRequest();
     const revoked = new Error("Pin authority revoked while queued");
     let authorityActive = true;
     let authorizedChecks = 0;
@@ -207,7 +216,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     try {
       await held.arrived.promise;
       await queued.promise;
-      expect(requests.map(({ fields }) => fields.message_id)).toEqual([101]);
+      expect(fieldValues("message_id")).toEqual([101]);
       authorityActive = false;
       held.release.resolve();
       await blocker;
@@ -261,7 +270,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      expect(requests.map(({ fields }) => fields.message_id)).toEqual([201]);
+      expect(fieldValues("message_id")).toEqual([201]);
       authorityActive = false;
       await expect(outcome).resolves.toEqual({ error: revoked });
       expect(requests.map(({ method, fields }) => [method, fields.message_id])).toEqual([
@@ -274,8 +283,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
   it("settles an accepted delivery pin after its authority is revoked", async () => {
     const token = "123456:telegram-pin-accepted";
-    const held = { arrived: createDeferred<void>(), release: createDeferred<void>() };
-    fixture.requestHold = held;
+    const held = holdRequest();
     let authorityActive = true;
     let authorityChecks = 0;
     const outcome = pinThroughAdapter(token, 301, () => {
@@ -310,8 +318,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     async ({ failure, revoke }) => {
       // Each control needs a fresh transport with an available fallback path.
       resetTelegramClientOptionsCacheForTests();
-      const held = { arrived: createDeferred<void>(), release: createDeferred<void>() };
-      fixture.requestHold = held;
+      const held = holdRequest();
       rejections.push(
         failure === "misdirected"
           ? { error_code: 421, description: "Misdirected Request" }
@@ -366,13 +373,10 @@ describe("Telegram physical send acceptance over HTTP", () => {
       expect(requests).toHaveLength(rich ? 2 : 3);
       expect(requests[0]?.fields.reply_parameters).toMatchObject({ message_id: 7, quote: "quote" });
       if (rich) {
-        expect(requests.map(({ method }) => method)).toEqual([
-          "sendRichMessage",
-          "sendRichMessage",
-        ]);
+        expectMethods("sendRichMessage", "sendRichMessage");
         expect(requests[1]?.fields.reply_parameters).toMatchObject({ message_id: 7 });
         expect(requests[1]?.fields.reply_parameters).not.toHaveProperty("quote");
-        expect(requests.map(({ fields }) => fields.reply_markup)).toEqual([
+        expect(fieldValues("reply_markup")).toEqual([
           { inline_keyboard: buttons },
           { inline_keyboard: buttons },
         ]);
@@ -415,12 +419,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     "preserves %s media follow-up ordering and keyboard placement",
     async (entry) => {
       await sendThrough(entry, "A".repeat(9000), async () => {}, photoPath);
-      expect(requests.map(({ method }) => method)).toEqual([
-        "sendPhoto",
-        "sendMessage",
-        "sendMessage",
-        "sendMessage",
-      ]);
+      expectMethods("sendPhoto", "sendMessage", "sendMessage", "sendMessage");
       expect(requests[0]?.fields.caption).toBeUndefined();
       expect(requests.slice(1).map(({ fields }) => String(fields.text).length)).toEqual([
         4000, 4000, 1000,
@@ -437,17 +436,15 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
     await sendThrough("direct", `${"A".repeat(4000)}${"B".repeat(4000)}`, async () => {});
 
-    expect(requests.map(({ fields }) => fields.text)).toEqual(
-      ["A", "A", "B"].map((text) => text.repeat(4000)),
-    );
-    expect(requests.map(({ fields }) => fields.parse_mode)).toEqual(["HTML", undefined, "HTML"]);
+    expect(fieldValues("text")).toEqual(["A", "A", "B"].map((text) => text.repeat(4000)));
+    expect(fieldValues("parse_mode")).toEqual(["HTML", undefined, "HTML"]);
   });
 
   it("preserves accepted media after photo rejection falls back to a document", async () => {
     rejections.push("Bad Request: PHOTO_INVALID_DIMENSIONS");
     const result = await sendThrough("public", "caption", recordDispatch, photoPath);
-    expect(requests.map(({ method }) => method)).toEqual(["sendPhoto", "sendDocument"]);
-    expect(requests.map(({ fields }) => fields.caption)).toEqual(["caption", "caption"]);
+    expectMethods("sendPhoto", "sendDocument");
+    expect(fieldValues("caption")).toEqual(["caption", "caption"]);
     expect(events).toEqual(["dispatch", "http", "dispatch", "http"]);
     expect(result).toMatchObject({ messageId: "2" });
   });
@@ -458,8 +455,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     let observedError: unknown;
     try {
       await sendMessageTelegram("123", `${"A".repeat(4000)}${"B".repeat(4000)}tail`, {
-        cfg,
-        api: bot.api,
+        ...requestOptions(),
         textMode: "html",
         onDeliveryResult: (delivery) => {
           observedIds.push(delivery.messageId);
@@ -568,7 +564,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
               ...(required && revoke ? { sentBeforeError: true } : {}),
             });
           }
-          expect(requests.map(({ method }) => method)).toEqual(["sendMessage", "pinChatMessage"]);
+          expectMethods("sendMessage", "pinChatMessage");
           expect(requests[0]?.fields).toMatchObject({ chat_id: "-1001", message_thread_id: 77 });
           expect(requests[1]?.fields).toMatchObject({
             chat_id: "-1001",
@@ -601,7 +597,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     expect(fixture.endpoints).toEqual(
       ["getChat", "sendMessage"].map((method) => `/bot${cfg.channels.telegram.botToken}/${method}`),
     );
-    expect(requests.map(({ fields }) => fields.chat_id)).toEqual(["@fixture", "-100123"]);
+    expect(fieldValues("chat_id")).toEqual(["@fixture", "-100123"]);
   });
 
   it("resolves topic-qualified mutations to the base chat while preserving reaction variants", async () => {
@@ -647,19 +643,18 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
   it("reports a benign MESSAGE_DELETE_FORBIDDEN refusal without retrying", async () => {
     rejections.push("Bad Request: MESSAGE_DELETE_FORBIDDEN");
-    const deleting = deleteMessageTelegram("123", 321, { cfg, api: bot.api });
+    const deleting = deleteMessageTelegram("123", 321, requestOptions());
     await expect(deleting).resolves.toMatchObject({
       ok: false,
       warning: expect.stringContaining("MESSAGE_DELETE_FORBIDDEN"),
     });
-    expect(requests.map(({ method }) => method)).toEqual(["deleteMessage"]);
+    expectMethods("deleteMessage");
   });
 
   it("preserves captured forum-topic authority after awaited target preparation", async () => {
     let platformCurrent = true;
     const options = {
-      cfg,
-      api: bot.api,
+      ...requestOptions(),
       assertPlatformSendAuthorized: () => {
         if (!platformCurrent) {
           throw new Error("Platform request authority revoked");
@@ -681,16 +676,12 @@ describe("Telegram physical send acceptance over HTTP", () => {
   });
 
   it("validates forum names by code points rather than UTF-16 length", async () => {
-    const opts = { cfg, api: bot.api };
+    const opts = requestOptions();
     const name = "😀".repeat(128);
     await createForumTopicTelegram("telegram:group:-100123:topic:77", name, opts);
     await editForumTopicTelegram("-100123", 77, { ...opts, name, iconCustomEmojiId: " 123 " });
     await sendTypingTelegram("-100123:topic:77", opts);
-    expect(requests.map(({ method }) => method)).toEqual([
-      "createForumTopic",
-      "editForumTopic",
-      "sendChatAction",
-    ]);
+    expectMethods("createForumTopic", "editForumTopic", "sendChatAction");
     expect(requests[0]!.fields).toEqual({ chat_id: "-100123", name });
     expect(requests[1]!.fields).toEqual({
       chat_id: "-100123",
@@ -729,7 +720,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
       options: Array.from({ length: 12 }, (_, index) => `Option ${index}`),
     };
     for (const durationSeconds of [5, 604800]) {
-      await sendPollTelegram("123", { ...poll, durationSeconds }, { cfg, api: bot.api });
+      await sendPollTelegram("123", { ...poll, durationSeconds }, requestOptions());
     }
     expect(
       requests.map(({ fields }) => [fields.question, fields.options, fields.open_period]),
@@ -743,7 +734,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
       { durationHours: 1 },
     ]) {
       await expect(
-        sendPollTelegram("123", { ...poll, ...invalid }, { cfg, api: bot.api }),
+        sendPollTelegram("123", { ...poll, ...invalid }, requestOptions()),
       ).rejects.toThrow(/duration/);
     }
     expect(requests).toHaveLength(2);
@@ -763,14 +754,13 @@ describe("Telegram physical send acceptance over HTTP", () => {
       fixture.responseFor = (method) =>
         method === "getChat" ? { id: 123, type: "private" } : undefined;
       await sendMessageTelegram("@fixture", "Delivered regardless of writeback permission", {
-        cfg,
-        api: bot.api,
+        ...requestOptions(),
         gatewayClientScopes,
       });
       expect(read).toHaveBeenCalledTimes(
         gatewayClientScopes === undefined || gatewayClientScopes.includes("operator.admin") ? 1 : 0,
       );
-      expect(requests.map(({ method }) => method)).toEqual(["getChat", "sendMessage"]);
+      expectMethods("getChat", "sendMessage");
     },
   );
 
@@ -778,10 +768,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     const info = vi.spyOn(sendLogger, "info");
     const text = "private outbound payload";
     await sendMessageTelegram("123:topic:77", text, {
-      cfg,
-      api: bot.api,
-      mediaUrl: photoPath,
-      mediaLocalRoots: [mediaDir],
+      ...photoOptions(),
     });
     const logs = info.mock.calls.map(([message]) => message).join("\n");
     expect(logs).not.toContain(text);
@@ -790,8 +777,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
   it("encodes interactive destinations without leaking invalid or competing actions", async () => {
     await sendMessageTelegram("123", "Choose", {
-      cfg,
-      api: bot.api,
+      ...requestOptions(),
       buttons: [
         [
           { text: "Open", callback_data: "ignored", url: "https://example.com", style: "primary" },
@@ -811,8 +797,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
       ],
     });
     await sendStickerTelegram("123", " file-id ", {
-      cfg,
-      api: bot.api,
+      ...requestOptions(),
       replyToMessageId: Number.NaN,
     });
     expect(requests[1]).toEqual({
@@ -829,10 +814,10 @@ describe("Telegram physical send acceptance over HTTP", () => {
     const sending = sendPollTelegram(
       "123",
       { question: "Ready?", options: ["Yes", "No"] },
-      { cfg, api: bot.api },
+      requestOptions(),
     );
     await expect(sending).rejects.toThrow(/returned no message_id/);
-    expect(requests.map(({ method }) => method)).toEqual(["sendPoll"]);
+    expectMethods("sendPoll");
   });
 
   describe("edit recovery", () => {
@@ -859,38 +844,24 @@ describe("Telegram physical send acceptance over HTTP", () => {
     it("keeps a markup-heavy caption edit within the limit after an HTML rejection", async () => {
       rejections.push("Bad Request: can't parse entities");
       await editMessageTelegram("123", 321, `**${"x".repeat(1024)}**`, {
-        cfg,
-        api: bot.api,
+        ...requestOptions(),
         editMode: "caption",
       });
-      expect(requests.map(({ method }) => method)).toEqual([
-        "editMessageCaption",
-        "editMessageCaption",
-      ]);
-      expect(requests.map(({ fields }) => fields.caption)).toEqual([
-        `<b>${"x".repeat(1024)}</b>`,
-        "x".repeat(1024),
-      ]);
+      expectMethods("editMessageCaption", "editMessageCaption");
+      expect(fieldValues("caption")).toEqual([`<b>${"x".repeat(1024)}</b>`, "x".repeat(1024)]);
       expect(requests[1]?.fields.parse_mode).toBeUndefined();
     });
 
     it("edits the existing caption when Telegram reports no text to edit", async () => {
       rejections.push("Bad Request: there is no text in the message to edit");
       await editMessageTelegram("123", 321, "<b>visible</b>", {
-        cfg: {
-          channels: {
-            telegram: { ...cfg.channels.telegram, richMessages: false, linkPreview: false },
-          },
-        },
+        cfg: configWith({ richMessages: false, linkPreview: false }),
         api: bot.api,
         textMode: "html",
         editMode: "auto",
         buttons: [],
       });
-      expect(requests.map(({ method }) => method)).toEqual([
-        "editMessageText",
-        "editMessageCaption",
-      ]);
+      expectMethods("editMessageText", "editMessageCaption");
       expect(requests.map(({ fields }) => fields.text ?? fields.caption)).toEqual([
         "<b>visible</b>",
         "<b>visible</b>",
@@ -912,10 +883,10 @@ describe("Telegram physical send acceptance over HTTP", () => {
       const text = tokens.map((token) => `${list ? "- " : ""}${token}`).join(list ? "\n" : "\n\n");
       rejections.push("Bad Request: RICH_MESSAGE_BLOCKS_TOO_MANY");
       await editMessageTelegram("123", 321, text, {
-        cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } },
+        cfg: configWith({ richMessages: true }),
         api: bot.api,
       });
-      expect(requests.map(({ method }) => method)).toEqual(["editMessageText", "editMessageText"]);
+      expectMethods("editMessageText", "editMessageText");
       expect(JSON.stringify(requests.at(-1)!.fields).match(/P\d{3}/g)).toEqual(tokens);
       expect(requests.every(({ fields }) => fields.reply_markup === undefined)).toBe(true);
     });
@@ -925,29 +896,24 @@ describe("Telegram physical send acceptance over HTTP", () => {
       async (linkPreview) => {
         rejections.push("Bad Request: RICH_MESSAGE_URL_INVALID");
         await editMessageTelegram("123", 321, "**Read** https://example.com", {
-          cfg: {
-            channels: {
-              telegram: {
-                ...cfg.channels.telegram,
-                richMessages: true,
-                linkPreview: true,
-                accounts: { worker: { linkPreview: false } },
-              },
-            },
-          },
+          cfg: configWith({
+            richMessages: true,
+            linkPreview: true,
+            accounts: { worker: { linkPreview: false } },
+          }),
           accountId: "worker",
           token: cfg.channels.telegram.botToken,
           api: bot.api,
           linkPreview,
         });
-        expect(requests.map(({ fields }) => fields.link_preview_options)).toEqual(
+        expect(fieldValues("link_preview_options")).toEqual(
           Array(2).fill(linkPreview === true ? undefined : { is_disabled: true }),
         );
       },
     );
 
     it("keeps styled HTML link labels on rich edit fallback and rejects oversized replacement atomically", async () => {
-      const richCfg = { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } };
+      const richCfg = configWith({ richMessages: true });
       rejections.push("Bad Request: RICH_MESSAGE_URL_INVALID");
       await editMessageTelegram(
         "123",
@@ -978,16 +944,11 @@ describe("Telegram physical send acceptance over HTTP", () => {
     await sendTextMediaPayload({
       channel: "telegram",
       ctx: {
-        cfg: {
-          channels: {
-            telegram: {
-              ...fixture.cfg.channels.telegram,
-              richMessages: false,
-              textChunkLimit: 512,
-              streaming: { chunkMode: "length" },
-            },
-          },
-        },
+        cfg: configWith({
+          richMessages: false,
+          textChunkLimit: 512,
+          streaming: { chunkMode: "length" },
+        }),
         to: "123",
         text: "",
         payload: { text: `    ${first}\n\n    ${second}` },

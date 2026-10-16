@@ -11,6 +11,22 @@ import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 import { planTelegramTextDeliveryPages } from "./telegram-text-delivery.js";
 
+const paragraph = (text: RichText): InputRichBlock => ({ type: "paragraph", text });
+const mention = (id: number): RichText => ({
+  type: "text_mention",
+  text: "Sam",
+  user: { id, is_bot: false, first_name: "" },
+});
+const firstText = (blocks: InputRichBlock[]): RichText =>
+  blocks[0]?.type === "paragraph" ? blocks[0].text : "";
+const pagesFor = (text: string, maxChars = 32_768) =>
+  planTelegramTextDeliveryPages({ text, maxChars, richMessages: true });
+function expectDepthBudget(pages: ReturnType<typeof planTelegramTextDeliveryPages>) {
+  for (const page of pages) {
+    expect(measureInputRichBlocks(page.richMessage?.blocks ?? []).nesting).toBeLessThanOrEqual(15);
+  }
+}
+
 function tableMarkdown(columns: number): string {
   return [
     `| ${Array.from({ length: columns }, (_, index) => `H${index + 1}`).join(" | ")} |`,
@@ -58,11 +74,11 @@ describe("markdownToTelegramRichBlocks", () => {
         type: "list",
         items: [
           {
-            blocks: [{ type: "paragraph", text: "todo" }],
+            blocks: [paragraph("todo")],
             has_checkbox: true,
           },
           {
-            blocks: [{ type: "paragraph", text: "done" }],
+            blocks: [paragraph("done")],
             has_checkbox: true,
             is_checked: true,
           },
@@ -82,7 +98,7 @@ describe("markdownToTelegramRichBlocks", () => {
     const rendered = markdownToTelegramRichBlocks(
       "[Nova_Core.md](file:///home/x/workspace/Nova_Core.md)",
     );
-    expect(rendered.blocks).toEqual([{ type: "paragraph", text: "Nova_Core.md" }]);
+    expect(rendered.blocks).toEqual([paragraph("Nova_Core.md")]);
     expect(rendered.plainText).toBe("Nova_Core.md");
   });
 
@@ -98,7 +114,7 @@ describe("markdownToTelegramRichBlocks", () => {
 
   it("handles overlapping bold and autolink", () => {
     const { blocks } = markdownToTelegramRichBlocks("**start https://example.com** end");
-    const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
+    const text = firstText(blocks);
     expect(hasStyle(text, "bold")).toBe(true);
     expect(collectLinkTargets(text)).toEqual([]);
   });
@@ -111,7 +127,7 @@ describe("markdownToTelegramRichBlocks", () => {
           skipEntityDetection: true,
         },
       );
-      const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
+      const text = firstText(blocks);
       expect(collectLinkTargets(text)).toEqual(["https://example.vercel.app/spa/"]);
       expect(plainText).toBe("Ruteoversikten: https://example.vercel.app/spa/");
     });
@@ -123,14 +139,14 @@ describe("markdownToTelegramRichBlocks", () => {
           skipEntityDetection: true,
         },
       );
-      const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
+      const text = firstText(blocks);
       expect(collectLinkTargets(text)).toEqual([]);
       expect(plainText).toBe("see https://example.com/flow?a=1&b=2");
     });
 
     it("leaves bare URLs to Telegram detection when detection is not skipped", () => {
       const { blocks } = markdownToTelegramRichBlocks("https://example.com/spa");
-      const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
+      const text = firstText(blocks);
       expect(collectLinkTargets(text)).toEqual([]);
     });
 
@@ -138,7 +154,7 @@ describe("markdownToTelegramRichBlocks", () => {
       const { blocks } = markdownToTelegramRichBlocks("note: README.md", {
         skipEntityDetection: true,
       });
-      const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
+      const text = firstText(blocks);
       expect(collectLinkTargets(text)).toEqual([]);
       expect(hasStyle(text, "code")).toBe(false);
     });
@@ -149,34 +165,20 @@ describe("markdownToTelegramRichBlocks", () => {
       "&lt;b&gt;**literal**&lt;/b&gt; ![<i>alt</i>](https://example.com/image.png) <b[r](https://example.com/qa)>tail",
     );
     expect(result.blocks).toEqual([
-      {
-        type: "paragraph",
-        text: [
-          "<b>",
-          { type: "bold", text: "literal" },
-          "</b> <i>alt</i> <b",
-          { type: "url", url: "https://example.com/qa", text: "r" },
-          ">tail",
-        ],
-      },
+      paragraph([
+        "<b>",
+        { type: "bold", text: "literal" },
+        "</b> <i>alt</i> <b",
+        { type: "url", url: "https://example.com/qa", text: "r" },
+        ">tail",
+      ]),
     ]);
     expect(result.plainText).toBe("<b>literal</b> <i>alt</i> <br>tail");
   });
 
   it("emits tg://user ID links as text mentions (Markdown link)", () => {
     expect(markdownToTelegramRichBlocks("Hi [Sam](tg://user?id=123456789)!").blocks).toEqual([
-      {
-        type: "paragraph",
-        text: [
-          "Hi ",
-          {
-            type: "text_mention",
-            text: "Sam",
-            user: { id: 123456789, is_bot: false, first_name: "" },
-          },
-          "!",
-        ],
-      },
+      paragraph(["Hi ", mention(123456789), "!"]),
     ]);
   });
 
@@ -189,23 +191,14 @@ describe("markdownToTelegramRichBlocks", () => {
       {
         type: "details",
         summary: "More",
-        blocks: [
-          {
-            type: "paragraph",
-            text: {
-              type: "text_mention",
-              text: "Sam",
-              user: { id: 42, is_bot: false, first_name: "" },
-            },
-          },
-        ],
+        blocks: [paragraph(mention(42))],
       },
     ]);
   });
 
   it("preserves opaque construct syntax provenance", () => {
     expect(markdownToTelegramRichBlocks("<!A &amp; <b>literal</b>>").blocks).toEqual([
-      { type: "paragraph", text: "<!A &amp; <b>literal</b>>" },
+      paragraph("<!A &amp; <b>literal</b>>"),
     ]);
   });
 
@@ -214,13 +207,12 @@ describe("markdownToTelegramRichBlocks", () => {
       '<a href="https://example.com">\nuser[Thu] trailing</a>',
     );
     expect(blocks).toEqual([
-      {
-        type: "paragraph",
-        text: expect.arrayContaining([
+      paragraph(
+        expect.arrayContaining([
           { type: "code", text: "user[Thu]" },
           { type: "url", url: "https://example.com", text: " trailing" },
         ]),
-      },
+      ),
     ]);
     expect(plainText).toBe("\nuser[Thu] trailing");
   });
@@ -233,7 +225,7 @@ describe("markdownToTelegramRichBlocks", () => {
     ]) {
       const markdown = `${prefix ? `\`${prefix}\`` : ""}[\`foo\`](https://example.com)${suffix ? `\`${suffix}\`` : ""}`;
       const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
-      const text = blocks[0]?.type === "paragraph" ? blocks[0].text : "";
+      const text = firstText(blocks);
       expect(collectLinkTargets(text), markdown).toEqual(["https://example.com"]);
       expect(hasStyle(text, "code"), markdown).toBe(true);
       expect(plainText).toBe(`${prefix}foo${suffix}`);
@@ -242,7 +234,7 @@ describe("markdownToTelegramRichBlocks", () => {
 
   it("preserves independently authored bold inside merged adjacent code spans", () => {
     const { blocks, plainText } = markdownToTelegramRichBlocks("`a`**`b`**`c`");
-    const text = blocks[0]?.type === "paragraph" ? blocks[0].text : "";
+    const text = firstText(blocks);
     expect(hasStyle(text, "code")).toBe(true);
     expect(hasStyle(text, "bold")).toBe(true);
     expect(plainText).toBe("abc");
@@ -251,18 +243,15 @@ describe("markdownToTelegramRichBlocks", () => {
   it("preserves crossing inline ranges in [A ||B](https://example.com) C|| D", () => {
     const result = markdownToTelegramRichBlocks("[A ||B](https://example.com) C|| D");
     expect(result.blocks).toEqual([
-      {
-        type: "paragraph",
-        text: [
-          {
-            type: "url",
-            url: "https://example.com",
-            text: ["A ", { type: "spoiler", text: "B" }],
-          },
-          { type: "spoiler", text: " C" },
-          " D",
-        ],
-      },
+      paragraph([
+        {
+          type: "url",
+          url: "https://example.com",
+          text: ["A ", { type: "spoiler", text: "B" }],
+        },
+        { type: "spoiler", text: " C" },
+        " D",
+      ]),
     ]);
     expect(result.plainText).toBe("A B C D");
   });
@@ -298,13 +287,13 @@ describe("markdownToTelegramRichBlocks", () => {
     const plain = inputRichBlocksToPlainText(blocks);
     expect(plain).toContain("scripts/yougile.py");
     expect(plain).toContain("config");
-    const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
+    const text = firstText(blocks);
     expect(collectLinkTargets(text)).toEqual([]);
   });
 
   it("preserves authored file-style links while wrapping bare file refs as code", () => {
     const { blocks } = markdownToTelegramRichBlocks("README.md [README.md](https://README.md)");
-    const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
+    const text = firstText(blocks);
     expect(collectLinkTargets(text)).toEqual(["https://README.md"]);
     expect(hasStyle(text, "code")).toBe(true);
   });
@@ -336,10 +325,7 @@ describe("splitTelegramRichBlocks", () => {
   it("splits oversized blockquotes and tables at inner boundaries", () => {
     const quote: InputRichBlock = {
       type: "blockquote",
-      blocks: [
-        { type: "paragraph", text: "q".repeat(50) },
-        { type: "paragraph", text: "r".repeat(50) },
-      ],
+      blocks: [paragraph("q".repeat(50)), paragraph("r".repeat(50))],
     };
     const table: InputRichBlock = {
       type: "table",
@@ -357,10 +343,7 @@ describe("splitTelegramRichBlocks", () => {
   });
 
   it("enforces recursive block limits for details children", () => {
-    const children: InputRichBlock[] = Array.from({ length: 6 }, (_, index) => ({
-      type: "paragraph",
-      text: `entry ${index}`,
-    }));
+    const children = Array.from({ length: 6 }, (_, index) => paragraph(`entry ${index}`));
     const block: InputRichBlock = { type: "details", blocks: children, summary: "Summary" };
 
     const chunks = splitTelegramRichBlocks([block], { blockLimit: 5 });
@@ -419,7 +402,7 @@ describe("rich message plan wiring", () => {
       '<video src="https://example.com/a.mp4"></video>' +
       '<audio src="https://example.com/a.mp3"></audio>' +
       "</details>".repeat(61);
-    const pages = planTelegramTextDeliveryPages({ text, maxChars: 32_768, richMessages: true });
+    const pages = pagesFor(text);
     const delivered = pages.map((page) => page.plainText).join("");
     expect(delivered).toContain("https://example.com/a.jpg");
     expect(delivered).toContain("https://example.com/a.mp4");
@@ -430,7 +413,7 @@ describe("rich message plan wiring", () => {
     const depth = 5000;
     const text =
       "<details><summary>s</summary>".repeat(depth) + "leaf" + "</details>".repeat(depth);
-    const pages = planTelegramTextDeliveryPages({ text, maxChars: 32_768, richMessages: true });
+    const pages = pagesFor(text);
     expect(
       pages
         .map((page) => page.plainText)
@@ -438,16 +421,12 @@ describe("rich message plan wiring", () => {
         .replace(/\s/g, ""),
     ).toBe("s".repeat(depth) + "leaf");
     expect(pages[0]?.richMessage?.blocks[0]?.type).toBe("details");
-    for (const page of pages) {
-      expect(measureInputRichBlocks(page.richMessage?.blocks ?? []).nesting).toBeLessThanOrEqual(
-        15,
-      );
-    }
+    expectDepthBudget(pages);
   });
 
   it("bounds caller-supplied blocks and inline arrays before planning delivery", () => {
     let text: RichText = "leaf";
-    let block: InputRichBlock = { type: "paragraph", text: "body" };
+    let block: InputRichBlock = paragraph("body");
     for (let depth = 0; depth < 5000; depth += 1) {
       text = [{ type: "bold", text }];
       block = { type: "details", summary: "s", blocks: [block] };
@@ -456,7 +435,7 @@ describe("rich message plan wiring", () => {
       text: "",
       maxChars: 32_768,
       richMessages: true,
-      richMessage: { blocks: [{ type: "paragraph", text }, block] },
+      richMessage: { blocks: [paragraph(text), block] },
     });
     expect(
       pages
@@ -464,11 +443,7 @@ describe("rich message plan wiring", () => {
         .join("")
         .replace(/\s/g, ""),
     ).toBe("leaf" + "s".repeat(5000) + "body");
-    for (const page of pages) {
-      expect(measureInputRichBlocks(page.richMessage?.blocks ?? []).nesting).toBeLessThanOrEqual(
-        15,
-      );
-    }
+    expectDepthBudget(pages);
   });
 
   it("preserves ordinary ordered lists across recursive block chunks", () => {
@@ -476,7 +451,7 @@ describe("rich message plan wiring", () => {
       "\n",
     );
 
-    const chunks = planTelegramTextDeliveryPages({ text, maxChars: 32_768, richMessages: true });
+    const chunks = pagesFor(text);
     const lists = chunks
       .flatMap((chunk) => chunk.richMessage?.blocks ?? [])
       .filter((block) => block.type === "list");
@@ -497,21 +472,16 @@ describe("rich message plan wiring", () => {
     // An email anywhere disables linkification for the whole render, so chunks
     // without the email would otherwise expose unprotected file refs (README.md)
     // to Telegram's server-side entity detection.
-    const chunks = planTelegramTextDeliveryPages({
-      text: `see README.md for details\n\n${"filler ".repeat(20)}\n\nping owner@example.com`,
-      maxChars: 80,
-      richMessages: true,
-    });
+    const chunks = pagesFor(
+      `see README.md for details\n\n${"filler ".repeat(20)}\n\nping owner@example.com`,
+      80,
+    );
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.richMessage?.skip_entity_detection === true)).toBe(true);
   });
 
   it("sends readable source text when markdown projects to zero blocks", () => {
-    const chunks = planTelegramTextDeliveryPages({
-      text: "[ref]: https://example.com",
-      maxChars: 32_768,
-      richMessages: true,
-    });
+    const chunks = pagesFor("[ref]: https://example.com");
     expect(chunks).toHaveLength(1);
     expect(chunks[0]?.plainText).toContain("example.com");
   });
@@ -522,10 +492,7 @@ describe("rich message plan wiring", () => {
       maxChars: 20,
       richMessages: true,
       richMessage: {
-        blocks: [
-          { type: "paragraph", text: "README.md" },
-          { type: "paragraph", text: "owner@example.com" },
-        ],
+        blocks: [paragraph("README.md"), paragraph("owner@example.com")],
       },
       degradationReasons: ["list-limit"],
     });

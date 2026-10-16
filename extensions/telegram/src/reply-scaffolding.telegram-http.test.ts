@@ -1,5 +1,3 @@
-import { createServer, type Server } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
 import { Api } from "grammy";
 import { buildHistoryContext } from "openclaw/plugin-sdk/reply-history";
 import {
@@ -7,72 +5,19 @@ import {
   dispatchInboundMessage,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 import { sendMessageTelegram } from "./send.js";
+import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 
 describe("reply scaffolding through final preparation and Telegram HTTP", () => {
-  let server: Server;
-  let apiRoot: string;
+  const fixture = useTelegramHttpFixture();
   let messageSequence = 0;
-  const sockets = new Set<Socket>();
-  const delivered: string[] = [];
-
-  beforeAll(async () => {
-    server = createServer((request, response) => {
-      let body = "";
-      request.on("data", (chunk: Buffer) => {
-        body += chunk.toString("utf8");
-      });
-      request.on("end", () => {
-        const fields = request.headers["content-type"]?.includes("application/json")
-          ? (JSON.parse(body) as Record<string, unknown>)
-          : Object.fromEntries(new URLSearchParams(body));
-        if (request.url?.endsWith("/sendMessage") || request.url?.endsWith("/editMessageText")) {
-          const text = typeof fields.text === "string" ? fields.text : "";
-          delivered.push(text);
-          response.setHeader("content-type", "application/json");
-          response.end(
-            JSON.stringify({
-              ok: true,
-              result: {
-                message_id:
-                  typeof fields.message_id === "number" ? fields.message_id : delivered.length,
-                date: 1_700_000_000,
-                chat: { id: 123, type: "private" },
-                text,
-              },
-            }),
-          );
-          return;
-        }
-        response.statusCode = 404;
-        response.end(JSON.stringify({ ok: false, description: "Unexpected Telegram API call" }));
-      });
-    });
-    server.on("connection", (socket) => {
-      sockets.add(socket);
-      socket.on("close", () => sockets.delete(socket));
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  });
-
-  afterEach(() => {
-    delivered.length = 0;
-  });
-
-  afterAll(async () => {
-    for (const socket of sockets) {
-      socket.destroy();
-    }
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  });
+  const delivered = () =>
+    fixture.requests
+      .filter(({ method }) => method === "sendMessage" || method === "editMessageText")
+      .map(({ fields }) => (typeof fields.text === "string" ? fields.text : ""));
 
   async function prepareAndDispatch(
     payload: ReplyPayload,
@@ -80,11 +25,7 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     reasoningSnapshots: readonly string[] = [],
   ) {
     const errors: unknown[] = [];
-    const cfg = {
-      channels: {
-        telegram: { botToken: "123456:telegram-plugin-http-fixture", apiRoot },
-      },
-    };
+    const { cfg } = fixture;
     const dispatcher = createReplyDispatcher({
       deliver: async (prepared) => {
         await sendMessageTelegram("123", prepared.text ?? "", { cfg });
@@ -95,7 +36,7 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     });
     const preview = reasoningSnapshots.length
       ? createTelegramDraftStream({
-          api: new Api(cfg.channels.telegram.botToken, { apiRoot }),
+          api: new Api(cfg.channels.telegram.botToken, { apiRoot: cfg.channels.telegram.apiRoot }),
           chatId: 123,
           renderText: (text) => ({ text, markdownSource: { text } }),
         })
@@ -160,7 +101,7 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
         );
       }
       await prepareAndDispatch({ text: "Visible answer." }, "Show status.", snapshots);
-      expect(delivered).toEqual(
+      expect(delivered()).toEqual(
         visible
           ? [
               "🧠 <i>Checking files.</i>",
@@ -191,7 +132,7 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
       conversationContext,
     );
 
-    expect(delivered).toEqual(["Visible answer."]);
+    expect(delivered()).toEqual(["Visible answer."]);
   });
 
   it("preserves literal fenced scaffolding examples that do not copy the private prompt", async () => {
@@ -213,10 +154,10 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
 
     await prepareAndDispatch({ text: literal }, conversationContext);
 
-    expect(delivered).toHaveLength(1);
-    expect(delivered[0]).toContain("[Chat messages since your last reply - for context]");
-    expect(delivered[0]).toContain("[Current message - respond to this]");
-    expect(delivered[0]).toContain("Example: this is a public placeholder message.");
+    expect(delivered()).toHaveLength(1);
+    expect(delivered()[0]).toContain("[Chat messages since your last reply - for context]");
+    expect(delivered()[0]).toContain("[Current message - respond to this]");
+    expect(delivered()[0]).toContain("Example: this is a public placeholder message.");
   });
 
   it("never delivers the internal runtime-context envelope in Telegram HTTP text", async () => {
@@ -235,9 +176,9 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
 
     await prepareAndDispatch({ text: leaked });
 
-    expect(delivered).toEqual(["Visible answer."]);
-    expect(delivered.join("\n")).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
-    expect(delivered.join("\n")).not.toContain("Keep internal details private.");
+    expect(delivered()).toEqual(["Visible answer."]);
+    expect(delivered().join("\n")).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(delivered().join("\n")).not.toContain("Keep internal details private.");
   });
 
   it("removes a copied prompt when the source and model normalize line endings differently", async () => {
@@ -252,7 +193,7 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
       conversationContext,
     );
 
-    expect(delivered).toEqual(["Visible answer."]);
+    expect(delivered()).toEqual(["Visible answer."]);
   });
 
   it("never delivers a copied prompt disguised with same-line wrappers", async () => {
@@ -266,11 +207,11 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
       conversationContext,
     );
 
-    expect(delivered).toHaveLength(1);
-    expect(delivered[0]).toContain("Visible prefix:");
-    expect(delivered[0]).toContain("visible suffix.");
-    expect(delivered[0]).not.toContain("private history");
-    expect(delivered[0]).not.toContain("private inbound paragraph");
+    expect(delivered()).toHaveLength(1);
+    expect(delivered()[0]).toContain("Visible prefix:");
+    expect(delivered()[0]).toContain("visible suffix.");
+    expect(delivered()[0]).not.toContain("private history");
+    expect(delivered()[0]).not.toContain("private inbound paragraph");
   });
 
   it("never delivers an exact private prompt hidden inside a Markdown code fence", async () => {
@@ -284,9 +225,9 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
       conversationContext,
     );
 
-    expect(delivered).toHaveLength(1);
-    expect(delivered[0]).toContain("Visible answer.");
-    expect(delivered[0]).not.toContain("private history");
-    expect(delivered[0]).not.toContain("private inbound paragraph");
+    expect(delivered()).toHaveLength(1);
+    expect(delivered()[0]).toContain("Visible answer.");
+    expect(delivered()[0]).not.toContain("private history");
+    expect(delivered()[0]).not.toContain("private inbound paragraph");
   });
 });
