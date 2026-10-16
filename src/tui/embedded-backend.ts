@@ -47,6 +47,7 @@ import {
   DEFAULT_QUEUE_DROP,
 } from "../auto-reply/reply/queue/state.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
+import { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import {
   captureRuntimeConfigAsyncReader,
@@ -94,7 +95,7 @@ import {
 } from "../gateway/session-utils.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
-import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
+import { type AgentEventRuntimePayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
   clearEmbeddedPluginApprovalBroker,
@@ -248,6 +249,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unsubscribeQuestions = undefined;
     const maintenancePromises: Promise<void>[] = [];
     for (const run of this.runs.values()) {
+      run.textUpdates?.stop();
       if (run.finishing || run.lifecycleEnded) {
         if (run.promise) {
           maintenancePromises.push(run.promise);
@@ -453,10 +455,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionAgentId,
     });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
-    const max = Math.min(
-      CHAT_HISTORY_MAX_ENTRIES,
-      typeof opts.limit === "number" ? opts.limit : 200,
-    );
+    const max = Math.min(CHAT_HISTORY_MAX_ENTRIES, opts.limit ?? 200);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars();
     const historyPage = await readChatHistoryPage({
@@ -1013,6 +1012,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
+  private flushChatDelta(runId: string, run: LocalRunState) {
+    if (run.textUpdates?.takePending()) {
+      this.emitChatDelta(runId, run);
+    }
+  }
+
   private emitChatTerminal(
     runId: string,
     run: LocalRunState,
@@ -1024,6 +1029,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (run.terminalState === "final" || run.terminalState === terminalState) {
       return;
     }
+    this.flushChatDelta(runId, run);
+    run.textUpdates?.stop();
     run.terminalState = terminalState;
     if (terminalState === "final") {
       run.markQueuedRunReady();
@@ -1110,7 +1117,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
-  private handleAgentEvent(evt: AgentEventPayload) {
+  private handleAgentEvent(evt: AgentEventRuntimePayload) {
     const run = this.runs.get(evt.runId);
     if (!run) {
       return;
@@ -1123,6 +1130,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
 
     if (evt.stream !== "assistant") {
+      this.flushChatDelta(evt.runId, run);
       this.ensureRunRegistered(evt.runId, run);
     }
 
@@ -1137,13 +1145,25 @@ export class EmbeddedTuiBackend implements TuiBackend {
       run.toolErrorSummary = readToolValidationErrorSummary(evt.data.toolErrorSummary);
     }
 
-    const assistantLiveChatInput =
-      evt.stream === "assistant" ? resolveAssistantTextInput(evt.data) : undefined;
+    const assistantLiveChatInput = evt.assistantProjection
+      ? resolveAssistantTextInput({
+          ...evt.assistantProjection,
+          managedMediaUrls: evt.data.managedMediaUrls,
+        })
+      : evt.stream === "assistant"
+        ? resolveAssistantTextInput(evt.data)
+        : undefined;
     if (
       assistantLiveChatInput &&
       !run.question &&
       !shouldSuppressAssistantEventForLiveChat(evt.data)
     ) {
+      if (
+        assistantLiveChatInput.text !== undefined ||
+        assistantLiveChatInput.itemId !== run.assistantScope?.itemId
+      ) {
+        this.flushChatDelta(evt.runId, run);
+      }
       for (const url of assistantLiveChatInput.managedMediaUrls ?? []) {
         run.managedMediaUrls.add(url);
       }
@@ -1154,7 +1174,23 @@ export class EmbeddedTuiBackend implements TuiBackend {
       );
       run.assistantScope = snapshot.scope;
       run.buffer = capLiveAssistantText(snapshot);
-      this.emitChatDelta(evt.runId, run);
+      if (
+        (snapshot.appendedText !== undefined || run.lastBroadcastText === undefined) &&
+        !assistantLiveChatInput.replace
+      ) {
+        // Materialize snapshots at presentation cadence, before the TUI parses full messages.
+        run.textUpdates ??= createDraftStreamLoop<boolean>({
+          throttleMs: 75,
+          coalesceInFlight: true,
+          emptyValue: false,
+          isEmpty: (pending) => !pending,
+          isStopped: () => this.scheduler.signal.aborted || run.terminalState === "final",
+          sendOrEditStreamMessage: async () => this.emitChatDelta(evt.runId, run),
+        });
+        run.textUpdates.update(true);
+      } else {
+        this.emitChatDelta(evt.runId, run);
+      }
       return;
     }
 
@@ -1318,6 +1354,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         outcome ? { terminalOutcome: outcome } : {},
       );
     } finally {
+      run.textUpdates?.stop();
       run.markQueuedRunReady();
       this.runs.delete(runId);
     }

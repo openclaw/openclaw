@@ -236,6 +236,10 @@ export async function runCopilotExecution(context: {
     | Awaited<ReturnType<typeof createToolBridge>>["promptToolPolicy"]
     | undefined;
   try {
+    if (!settledToolFinalization && effectiveCwd && !sandbox?.enabled) {
+      // The native owner resolved this local cwd; prepare before any tools or inference.
+      input.hostCapabilities?.prepareContinuationRetryCount?.({ cwd: effectiveCwd });
+    }
     params.abortSignal?.addEventListener("abort", abortActiveSession, { once: true });
     if (params.abortSignal?.aborted) {
       abortActiveSession();

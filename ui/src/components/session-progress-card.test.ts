@@ -383,7 +383,7 @@ describe("renderSessionProgressCard", () => {
     };
     render({ card: completed, placement: "composer", onDismiss: () => undefined }, container);
 
-    expect(container.querySelector(".session-progress-card__dismiss")).not.toBeNull();
+    expect(container.querySelector(".session-progress-card__options")).not.toBeNull();
     expect(container.querySelector(".session-progress-card__chevron svg")).not.toBeNull();
   });
 
@@ -411,7 +411,7 @@ describe("renderSessionProgressCard", () => {
         ?.querySelector(".session-progress-card__heading-actions")
         ?.textContent?.replaceAll(/\s+/gu, " ")
         .trim(),
-    ).toBe("Updated 2m ago · 2 of 3");
+    ).toBe("Step 2 of 3 · Updated 2m ago");
     expect(card?.querySelector("progress")).toBeNull();
     expect(card?.querySelectorAll(".session-progress-card__step")).toHaveLength(3);
   });

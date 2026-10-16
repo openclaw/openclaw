@@ -99,7 +99,7 @@ function createScheduler(jobs: CronJob[]) {
       input: {
         storeKey,
         channelName,
-        snapshot: { version: 1, config: { cronEnabled: false, defaultAgentId: "main" } },
+        snapshot: { config: { cronEnabled: false, defaultAgentId: "main" } },
         nowMs: NOW,
         monotonicMs: 0,
       },
@@ -115,7 +115,7 @@ function createScheduler(jobs: CronJob[]) {
           input: {
             storeKey,
             channelName,
-            snapshot: { version: 2, config: { cronEnabled: true, defaultAgentId: "main" } },
+            snapshot: { config: { cronEnabled: true, defaultAgentId: "main" } },
             nowMs: NOW,
             monotonicMs: 0,
           },

@@ -344,12 +344,12 @@ export type MediaRequestOverrides = Pick<AudioTranscriptionRequest, "prompt" | "
 
 /** Formats a compact operator-facing summary of a media-understanding decision. */
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
-  const attachments = Array.isArray(decision.attachments) ? decision.attachments : [];
+  const { attachments } = decision;
   const total = attachments.length;
-  const success = attachments.filter((entry) => entry?.chosen?.outcome === "success").length;
-  const chosen = attachments.find((entry) => entry?.chosen)?.chosen;
-  const provider = typeof chosen?.provider === "string" ? chosen.provider.trim() : undefined;
-  const model = typeof chosen?.model === "string" ? chosen.model.trim() : undefined;
+  const success = attachments.filter((entry) => entry.chosen?.outcome === "success").length;
+  const chosen = attachments.find((entry) => entry.chosen)?.chosen;
+  const provider = chosen?.provider?.trim();
+  const model = chosen?.model?.trim();
   const modelLabel = provider
     ? model && model !== provider
       ? `${provider}/${model}`
@@ -373,14 +373,12 @@ export function findDecisionReason(
   decision: MediaUnderstandingDecision,
   outcome?: MediaUnderstandingModelDecision["outcome"],
 ): string | undefined {
-  const attachments = Array.isArray(decision.attachments) ? decision.attachments : [];
-  for (const attachment of attachments) {
-    const attempts = Array.isArray(attachment?.attempts) ? attachment.attempts : [];
-    for (const attempt of attempts) {
+  for (const attachment of decision.attachments) {
+    for (const attempt of attachment.attempts) {
       if (outcome && attempt.outcome !== outcome) {
         continue;
       }
-      if (typeof attempt.reason !== "string" || attempt.reason.trim().length === 0) {
+      if (!attempt.reason?.trim()) {
         continue;
       }
       return attempt.reason;
@@ -391,7 +389,7 @@ export function findDecisionReason(
 
 /** Trims provider/runtime error prefixes into a stable human-readable reason. */
 export function normalizeDecisionReason(reason?: string): string | undefined {
-  const trimmed = typeof reason === "string" ? reason.trim() : "";
+  const trimmed = reason?.trim();
   if (!trimmed) {
     return undefined;
   }

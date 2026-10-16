@@ -3,7 +3,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT, readPanelHostedTabs } from "../panel-hosted-tabs.ts";
 import type { BrowserPanelTab } from "./browser-client.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
 import "./browser-panel.ts";
 
 const favicon = "data:image/png;base64,eA==";
@@ -33,7 +33,7 @@ describe("Browser panel hosted tabs", () => {
     panel.tabsInHeader = tabsInHeader;
     mountSolid(() => panel);
     await panel.updateComplete;
-    const controller = (panel as unknown as { browserPanelController: BrowserPanelController })
+    const controller = (panel as unknown as { browserPanelController: BrowserPanel })
       .browserPanelController;
     const tabs: BrowserPanelTab[] = [
       {

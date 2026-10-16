@@ -8,8 +8,8 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
+import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
 import {
   publishTranscriptScroll,
   subscribeTranscriptScroll,
@@ -112,7 +112,7 @@ describe("conversation position rail scroll rendering", () => {
     const container = host.transcriptRoot;
     const performUpdate = vi.spyOn(host, "performUpdate");
     const recordViewport = vi.spyOn(TranscriptEndAnchor.prototype, "recordViewport");
-    const transcript = new ChatTranscriptController(host, () => "rail-notification", {
+    const transcript = createTranscriptTestOwner(host, () => "rail-notification", {
       canFollowEnd: () => false,
     });
     const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({

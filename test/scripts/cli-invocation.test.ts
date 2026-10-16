@@ -6,6 +6,7 @@ import {
   readStandaloneRuntimeManifest,
   readStandaloneRuntimeManifestForRoot,
   resolveOpenClawCliInvocation,
+  resolveOpenClawCliRespawn,
 } from "../../cli-invocation.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -112,4 +113,47 @@ it("uses a renamed standalone artifact's manifest for service invocation and run
   );
   fs.writeFileSync(path.join(root, "manifest.json"), "{");
   expect(() => readStandaloneRuntimeManifest(executable)).toThrow("Invalid standalone");
+});
+
+it("keeps loose parent-bound respawn bytes identical to the former runner prefix", () => {
+  const env = { KEEP: "unchanged" };
+  const invocation = resolveOpenClawCliRespawn({
+    execPath: "/synthetic/node",
+    entryPath: "/synthetic/openclaw.mjs",
+    execArgv: ["--no-warnings", "--import", "synthetic-loader"],
+    args: ["doctor", "--fix"],
+    env,
+  });
+  // Fixed bytes protect the self-removing preload, ordering, and inherited flags.
+  const source = `
+  globalThis[Symbol.for("openclaw.cliRespawnParent")] = { pid: process.ppid };
+  process.execArgv = process.execArgv.filter((arg, index, args) =>
+    arg !== import.meta.url && !(arg === "--import" && args[index + 1] === import.meta.url));
+`;
+  expect(invocation).toEqual({
+    command: "/synthetic/node",
+    args: [
+      "--import",
+      `data:text/javascript,${encodeURIComponent(source)}`,
+      "--no-warnings",
+      "--import",
+      "synthetic-loader",
+      "/synthetic/openclaw.mjs",
+      "doctor",
+      "--fix",
+    ],
+    env,
+  });
+  expect(invocation.env).toBe(env);
+});
+
+it("keeps runtime-flag construction out of CLI spawn transports", () => {
+  // These transports accept already-resolved invocations. Adding a runtime
+  // prefix here bypasses the standalone/loose decision at the invocation owner.
+  for (const file of ["node-runtime-recovery.mjs", "src/process/respawn-child-runner.ts"]) {
+    const source = fs.readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
+    expect(source, file).not.toMatch(
+      /CLI_PARENT_BOUND_PRELOAD|["']--(?:import|require|loader)(?:=|["'])/,
+    );
+  }
 });

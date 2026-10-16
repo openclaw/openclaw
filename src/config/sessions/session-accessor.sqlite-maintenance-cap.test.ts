@@ -17,17 +17,31 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type { SessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
-import { applySessionEntryMaintenance } from "./session-accessor.sqlite-maintenance.js";
+import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import {
   createSessionMaintenanceKickStore,
   observeSessionMaintenancePlanningWorker,
-  observeNextPeriodicMaintenance,
 } from "./session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:age-kick";
+
+function observeMaintenanceCompletion(databasePath: string) {
+  const completed = createDeferred();
+  const release = maintenance.releaseSessionEntryMaintenanceExecution;
+  const observer = vi
+    .spyOn(maintenance, "releaseSessionEntryMaintenanceExecution")
+    .mockImplementation((pathname, owner) => {
+      release(pathname, owner);
+      if (pathname === databasePath && owner.release) {
+        void owner.release.then(completed.resolve, completed.reject);
+      }
+    });
+  return (signal: AbortSignal) =>
+    withinTest(completed.promise, signal).finally(() => observer.mockRestore());
+}
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
@@ -85,7 +99,7 @@ it.for(["automatic", "inline", "protected"] as const)(
       plans.push(
         runOpenClawAgentWriteTransaction(
           (database) =>
-            applySessionEntryMaintenance(database, {
+            maintenance.applySessionEntryMaintenance(database, {
               activeSessionKey: sessionKey,
               archiveDirectory: request.archiveDirectory,
               forceMaintenance: true,
@@ -101,9 +115,9 @@ it.for(["automatic", "inline", "protected"] as const)(
         ),
       );
     } else {
-      const scheduled = observeNextPeriodicMaintenance();
+      const completed = observeMaintenanceCompletion(storePath);
       kickSessionEntryMaintenanceAfterWrite(request);
-      await scheduled(signal);
+      await completed(signal);
     }
     // The first automatic batch leaves 116 entries, below high-water 125 but above cap 100.
     expect(plans.filter((plan) => plan.capArchived > 0).map((plan) => plan.capArchived)).toEqual(
@@ -161,9 +175,9 @@ it.for(["victim", "remaining"] as const)(
       },
     });
     try {
-      const scheduled = observeNextPeriodicMaintenance();
+      const completed = observeMaintenanceCompletion(storePath);
       kickSessionEntryMaintenanceAfterWrite(request);
-      await scheduled(signal);
+      await completed(signal);
       expect(plans.filter((plan) => plan.capArchived > 0).map((plan) => plan.capArchived)).toEqual(
         protection === "remaining" ? [64] : [64, 16],
       );

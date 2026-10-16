@@ -144,7 +144,7 @@ export function captureSidebarSnapshotModel(
     peopleSortMode: host.people.sortMode,
     peopleStatusFilter: host.people.statusFilter,
     peoplePresenceFilter: host.people.presenceFilter,
-    offlineUsers: (host.people.directory?.result?.profiles ?? [])
+    offlineUsers: (host.peopleView?.directory()?.result?.profiles ?? [])
       .filter((profile) => !profile.mergedInto)
       .map(profilePresenceViewer),
     ownerId: host.sessionOwnerFilterId,

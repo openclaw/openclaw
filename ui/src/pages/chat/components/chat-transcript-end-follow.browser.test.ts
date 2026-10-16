@@ -4,13 +4,13 @@ import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { TranscriptTestHost } from "../test-helpers/chat-transcript-native.tsx";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 class EndFollowFixture extends TranscriptTestHost {
   followEnabled = true;
-  readonly transcript = new ChatTranscriptController(this, () => "end-follow-browser", {
+  readonly transcript = createTranscriptTestOwner(this, () => "end-follow-browser", {
     canFollowEnd: () => this.followEnabled,
   });
   viewportHeight = 400;

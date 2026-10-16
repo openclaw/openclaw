@@ -193,8 +193,8 @@ export class NewSessionPageOwner {
       onMessage: (message) => this.setMessageFromUser(message),
       onError: (message) => this.submission.setError(message),
       onSubmit: () => void this.submission.submit(),
-      onChange: this.changed,
     });
+    this.dictation.subscribe(this.changed);
   }
 
   focusComposer(): void {

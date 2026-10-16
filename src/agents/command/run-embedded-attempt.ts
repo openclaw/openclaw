@@ -564,6 +564,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 params.onLifecycleGenerationChanged(nextLifecycleGeneration);
               },
               onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
+              onAttemptStart: attemptLifecycleCallbacks.onAttemptStart,
+              onAttemptTerminalReplaced: attemptLifecycleCallbacks.onAttemptTerminalReplaced,
               deferTerminalLifecycle: true,
               deferredLifecycle,
             });

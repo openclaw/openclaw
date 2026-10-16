@@ -278,6 +278,9 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     reload: async () => undefined,
     refresh: async () => undefined,
     registrations: () => [],
+    loadSettingsView: async () => {
+      throw new Error("This chat fixture does not load Settings presentations.");
+    },
     selectReplacement: vi.fn(),
     selectedReplacement: (surface) =>
       surface === "tool-result" && selected

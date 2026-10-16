@@ -1,30 +1,123 @@
 /* @vitest-environment jsdom */
 
-import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
-import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { render } from "@solidjs/web";
+import type {
+  ControlUiComponentHandle,
+  ControlUiSettingsComponents,
+  ControlUiSettingsContext,
+  ControlUiSettingsSnapshot,
+  DoctorMemoryStatusPayload,
+} from "openclaw/plugin-sdk/control-ui";
+import { flush, untrack } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-// The hero derives its lobster from lobsterPetSeed, which mixes in a random
-// per-load salt, so the palette (and with it sprite geometry like the sleeping
-// eye peek) varies per test process. Pin a canonical look so pose assertions
-// stay deterministic.
-vi.mock("../../components/lobster-pet-look.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../components/lobster-pet-look.ts")>();
-  const { LOBSTER_PET_PALETTES } = await import("../../components/lobster-pet-palettes.ts");
-  return {
-    ...actual,
-    createLobsterPetLook: () =>
-      actual.canonicalLobsterLook(
-        expectDefined(LOBSTER_PET_PALETTES[0], "canonical lobster palette"),
-      ),
-  };
+const disposers: (() => void)[] = [];
+afterEach(() => {
+  for (const dispose of disposers.splice(0)) {
+    dispose();
+  }
 });
+const waitForSolid = (assertion: () => void) =>
+  vi.waitFor(() => {
+    flush();
+    assertion();
+  });
+const formatRelativeTimestamp = String;
+function mountSolid(view: Parameters<typeof render>[0]) {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const dispose = render(view, container);
+  disposers.push(() => {
+    dispose();
+    container.remove();
+  });
+  return { container };
+}
+// SDK component doubles expose content and callbacks, not host styling or artwork.
+function createTestComponents(): ControlUiSettingsComponents {
+  function mount<P>(
+    container: HTMLElement,
+    initial: P,
+    draw: (props: P) => HTMLElement,
+  ): ControlUiComponentHandle<P> {
+    const update = (props: P) => container.replaceChildren(draw(props));
+    update(initial);
+    return { update, dispose: () => container.replaceChildren() };
+  }
+  const text = (tag: string, ...content: (string | number | HTMLElement | undefined)[]) => {
+    const element = document.createElement(tag);
+    for (const child of content) {
+      if (child !== undefined) {
+        element.append(typeof child === "number" ? String(child) : child);
+      }
+    }
+    return element;
+  };
+  return {
+    mountSection: (container, props) =>
+      mount(container, props, (next) => text("section", text("h3", next.title), next.content)),
+    mountRow: (container, props) =>
+      mount(container, props, (next) => {
+        const row = text("div", next.title, next.description, next.control);
+        row.className = "settings-row";
+        return row;
+      }),
+    mountStatus: (container, props) => mount(container, props, (next) => text("span", next.label)),
+    mountValue: (container, props) => mount(container, props, (next) => text("span", next.value)),
+    mountNavigation: (container, props) =>
+      mount(container, props, (next) => {
+        const button = text("button", next.title);
+        button.addEventListener("click", next.onClick);
+        return button;
+      }),
+    mountLobster: (container, props) =>
+      mount(container, props, (next) => {
+        const pet = text("span");
+        pet.dataset.testLobster = "";
+        pet.dataset.reading = String(next.reading === true);
+        pet.dataset.sleeping = String(next.sleeping === true);
+        return pet;
+      }),
+  };
+}
 
-import { MemoryOverview, type MemoryOverviewStatus } from "./memory-overview.tsx";
+import type { MemoryOverviewStatus } from "./controller.ts";
+import { settingsViews } from "./index.tsx";
+import { createMemoryOverview } from "./overview.tsx";
 
-type MemoryOverviewProps = Parameters<typeof MemoryOverview>[0];
+type ViewProps = Parameters<ReturnType<typeof createMemoryOverview>>[0];
+type MemoryOverviewProps = Omit<ViewProps, "engineSelection"> & {
+  engineSelection: { kind: "default" | "pinned" | "off"; pluginId?: string };
+};
+function MemoryOverview(props: MemoryOverviewProps) {
+  const signal = new AbortController().signal;
+  const snapshot: ControlUiSettingsSnapshot = untrack(() => ({
+    agentId: props.agentId,
+    agentsLoading: false,
+    agentsError: null,
+    engine: {
+      kind: props.engineSelection.kind,
+      id: props.engineSelection.pluginId ?? null,
+      availability: "enabled",
+    },
+    connected: true,
+    connectionEpoch: 1,
+    routeIntent: "overview",
+    locale: "en",
+  }));
+  const context: ControlUiSettingsContext = {
+    props: snapshot,
+    signal,
+    components: createTestComponents(),
+    formatRelativeTimestamp,
+    request: vi.fn(),
+    navigate: vi.fn(),
+    refreshAgents: vi.fn(),
+    formatError: String,
+  };
+  const View = createMemoryOverview(context, () => snapshot);
+  return <View {...props} engineSelection={snapshot.engine} />;
+}
 
 function fixturePayload(): DoctorMemoryStatusPayload {
   const phaseBase = {
@@ -118,7 +211,7 @@ describe("MemoryOverview", () => {
 
     expect(container.textContent).toContain("Memory is awake");
     expect(container.textContent).toContain("memory-core · hybrid search");
-    expect(container.querySelector(".lob-reading-book")).not.toBeNull();
+    expect(container.querySelector('[data-reading="true"]')).not.toBeNull();
     expect(container.textContent).toContain("Sleep schedule");
     expect(container.textContent).toContain("Europe/Vienna");
     expect(container.textContent).toContain("Promoted today");
@@ -133,7 +226,7 @@ describe("MemoryOverview", () => {
     expect(container.textContent).toContain("Memory needs attention");
     expect(container.textContent).toContain("gateway request failed");
     expect(container.textContent).toContain("Retry");
-    expect(container.querySelector(".lob-reading-book")).toBeNull();
+    expect(container.querySelector('[data-reading="true"]')).toBeNull();
   });
 
   it("renders the dimmed sleeping hero when the engine is off", () => {
@@ -142,8 +235,8 @@ describe("MemoryOverview", () => {
     expect(container.textContent).toContain("Memory is hibernating");
     expect(container.textContent).toContain("Open Settings");
     expect(container.querySelector(".memory-overview__hero--sleeping")).not.toBeNull();
-    expect(container.querySelector(".lobster-pet__svg")).not.toBeNull();
-    expect(container.querySelector(".lob-reading-book")).toBeNull();
+    expect(container.querySelector("[data-test-lobster]")).not.toBeNull();
+    expect(container.querySelector('[data-reading="true"]')).toBeNull();
   });
 
   it("hibernates a disabled pinned engine and points to Settings", () => {
@@ -156,7 +249,7 @@ describe("MemoryOverview", () => {
     expect(container.textContent).toContain("Memory is hibernating");
     expect(container.textContent).toContain("selected memory engine is disabled");
     expect(container.textContent).toContain("Open Settings");
-    expect(container.querySelector(".lob-reading-book")).toBeNull();
+    expect(container.querySelector('[data-reading="true"]')).toBeNull();
     expect(container.textContent).not.toContain("Engine health");
     expect(container.textContent).not.toContain("Sleep schedule");
   });
@@ -245,4 +338,43 @@ describe("MemoryOverview", () => {
     shortcut?.click();
     expect(onNavigate).toHaveBeenCalledWith("memories");
   });
+});
+
+it("clears a roster error in the mounted plugin without issuing a Doctor request", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const signal = new AbortController().signal;
+  const props: ControlUiSettingsSnapshot = {
+    agentId: null,
+    agentsLoading: false,
+    agentsError: "roster failed",
+    engine: { kind: "default", id: "memory-core", availability: "enabled" },
+    connected: true,
+    connectionEpoch: 1,
+    routeIntent: "overview",
+    locale: "en",
+  };
+  const request = vi.fn();
+  const context: ControlUiSettingsContext = {
+    signal,
+    props,
+    components: createTestComponents(),
+    request,
+    navigate: vi.fn(),
+    refreshAgents: vi.fn(),
+    formatError: String,
+    formatRelativeTimestamp,
+  };
+  const view = settingsViews[0]!.mount(container, context);
+  try {
+    await waitForSolid(() => expect(container.textContent).toContain("roster failed"));
+    view.update({ ...props, agentsError: null, agentsLoading: true });
+    await waitForSolid(() => expect(container.textContent).not.toContain("roster failed"));
+    view.update({ ...props, agentsError: null });
+    await waitForSolid(() => expect(container.textContent).not.toContain("roster failed"));
+    expect(request).not.toHaveBeenCalled();
+  } finally {
+    view.dispose();
+    container.remove();
+  }
 });

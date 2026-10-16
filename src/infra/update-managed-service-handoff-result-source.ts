@@ -1,7 +1,10 @@
+import { MANAGED_HANDOFF_PG_RESULT_SOURCE } from "./update-managed-service-handoff-pg-result-source.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "./update-managed-service-handoff-runtime-assets.js";
 
 // Terminal recording runs inside the sealed helper with its captured lifecycle owners.
-export const MANAGED_HANDOFF_RESULT_SOURCE = String.raw`
+export const MANAGED_HANDOFF_RESULT_SOURCE =
+  MANAGED_HANDOFF_PG_RESULT_SOURCE +
+  String.raw`
 let triageFailure;
 let runLedger;
 let runOutcome;

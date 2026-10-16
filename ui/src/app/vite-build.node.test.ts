@@ -346,7 +346,10 @@ describe("Control UI Vite build", () => {
       if (!message.includes("Control UI precompression")) {
         return;
       }
-      const emitted = fsSync.readdirSync(path.join(outDir, "assets"));
+      const emitted = fsSync.readdirSync(path.join(outDir, "assets"), {
+        encoding: "utf8",
+        recursive: true,
+      });
       activity.push({
         message,
         elapsed: clockMs,
@@ -366,7 +369,7 @@ describe("Control UI Vite build", () => {
           for (let index = 0; index < 4; index++) {
             this.emitFile({
               type: "asset",
-              fileName: `assets/extra-${index}.txt`,
+              fileName: `assets/nested/extra-${index}.txt`,
               source: "fixture",
             });
           }
@@ -376,7 +379,10 @@ describe("Control UI Vite build", () => {
 
     await build(config);
 
-    const emitted = await fs.readdir(path.join(outDir, "assets"));
+    const emitted = await fs.readdir(path.join(outDir, "assets"), {
+      encoding: "utf8",
+      recursive: true,
+    });
     const completed = emitted.filter((name) => name.endsWith(".gz")).length;
     expect(completed).toBeGreaterThan(4);
     expect(

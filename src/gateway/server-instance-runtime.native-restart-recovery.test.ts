@@ -9,6 +9,7 @@ import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-loc
 import { markStartupOrphanedMainSessionsForRecovery } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { mainSessionRecoveryLog } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -36,6 +37,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import type { createAgentTurnService } from "./agent-turn/agent-turn-service.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -220,6 +222,7 @@ describe("cold restart recovery of native operator input", () => {
         getMethodRegistry: () => createRequestGatewayMethodRegistry(),
         isDispatchAvailable: () => true,
       });
+      let turnRegistration: ReturnType<typeof registerChatAbortController> | undefined;
       startTurn.mockImplementation(async ({ principal, assertAdmissionCurrent, io }) => {
         const authority = expectDefined(
           principal?.internal?.operatorRunAuthority,
@@ -233,6 +236,21 @@ describe("cold restart recovery of native operator input", () => {
         }
         assertAdmissionCurrent?.();
         authority.assertCurrent();
+        // The service replacement must publish the preparation owner that the
+        // real turn service registers before constructing or invoking tools.
+        turnRegistration = registerChatAbortController({
+          chatAbortControllers: context.chatAbortControllers,
+          agentId: "main",
+          runId: fixture.target.recoveryRunId,
+          sessionKey: SESSION,
+          sessionId: SESSION_ID,
+          kind: "agent",
+          timeoutMs: resolveAgentTimeoutMs({ cfg: config }),
+        });
+        if (!turnRegistration.registered) {
+          throw new Error("expected a registered recovery run");
+        }
+        io.emitStartOwner?.(fixture.target.recoveryRunId, turnRegistration.entry);
         const client = createSyntheticPluginRuntimeClient({
           operatorRoleActor: { kind: "operator", profileId: authority.profileId },
           operatorRunAuthority: authority,
@@ -346,6 +364,7 @@ describe("cold restart recovery of native operator input", () => {
           expect(jobs).toHaveLength(1);
         }
       } finally {
+        turnRegistration?.cleanup();
         runtime.close();
         cron.stop();
         await cron.waitForIdle();
