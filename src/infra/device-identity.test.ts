@@ -1,6 +1,6 @@
-// Covers SQLite device identity creation, migration boundaries, and crypto helpers.
 import { spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -57,33 +57,41 @@ function writeRetiredIdentity(filePath: string): void {
   fs.writeFileSync(filePath, `${JSON.stringify(swiftIdentity)}\n`);
 }
 
-function waitForChild(child: ChildProcess): Promise<DeviceIdentity> {
+function makePemIdentity() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  return {
+    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }),
+    privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }),
+  };
+}
+
+async function openFixtureDatabase(filePath: string) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const { DatabaseSync } = await import("node:sqlite");
+  return new DatabaseSync(filePath);
+}
+
+async function waitForChild(child: ChildProcess): Promise<DeviceIdentity> {
   let stdout = "";
   let stderr = "";
   child.stdout?.on("data", (chunk) => (stdout += String(chunk)));
   child.stderr?.on("data", (chunk) => (stderr += String(chunk)));
-  return new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
-      if (code !== 0) {
-        reject(new Error(`identity worker failed (${String(code ?? signal)}): ${stderr}`));
-        return;
-      }
-      const resultLine = stdout.trim().split("\n").at(-1);
-      if (!resultLine) {
-        reject(new Error("identity worker produced no result"));
-        return;
-      }
-      resolve(JSON.parse(resultLine) as DeviceIdentity);
-    });
-  });
+  const [code, signal] = await once(child, "close");
+  if (code !== 0) {
+    throw new Error(`identity worker failed (${String(code ?? signal)}): ${stderr}`);
+  }
+  const resultLine = stdout.trim().split("\n").at(-1);
+  if (!resultLine) {
+    throw new Error("identity worker produced no result");
+  }
+  return JSON.parse(resultLine) as DeviceIdentity;
 }
 
 function spawnIdentityWorker(
   moduleUrl: URL,
   workerSource: string,
   rootDir: string,
-  env: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv = {},
   ipc = false,
 ) {
   return spawn(
@@ -98,7 +106,8 @@ function spawnIdentityWorker(
       env: {
         ...process.env,
         OPENCLAW_IDENTITY_DATABASE_PATH: path.join(rootDir, "state", "openclaw.sqlite"),
-        OPENCLAW_IDENTITY_STATE_DIR: rootDir,
+        OPENCLAW_STATE_DIR: rootDir,
+        OPENCLAW_IDENTITY_MODULE: moduleUrl.href,
         ...env,
       },
       stdio: ipc ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
@@ -109,17 +118,13 @@ function spawnIdentityWorker(
 async function runConcurrentIdentityLoads(rootDir: string): Promise<DeviceIdentity[]> {
   const moduleUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.deviceIdentity);
   const workerSource = `
-    const { loadOrCreateDeviceIdentity, loadDeviceIdentityIfPresent } = await import(process.env.OPENCLAW_IDENTITY_MODULE);
-    if (process.env.OPENCLAW_IDENTITY_READ_ONLY === "1") {
-      const { default: childProcess } = await import("node:child_process");
-      const { syncBuiltinESMExports } = await import("node:module");
-      childProcess.spawnSync = () => { throw new Error("synthetic subprocess capacity exhausted"); };
-      syncBuiltinESMExports();
-    }
+    const { loadDeviceIdentityIfPresent } = await import(process.env.OPENCLAW_IDENTITY_MODULE);
+    const { default: childProcess } = await import("node:child_process");
+    const { syncBuiltinESMExports } = await import("node:module");
+    childProcess.spawnSync = () => { throw new Error("synthetic subprocess capacity exhausted"); };
+    syncBuiltinESMExports();
     process.once("message", () => {
-      const load = process.env.OPENCLAW_IDENTITY_READ_ONLY === "1" ? loadDeviceIdentityIfPresent : loadOrCreateDeviceIdentity;
-      const identity = load({
-        env: { ...process.env, OPENCLAW_STATE_DIR: process.env.OPENCLAW_IDENTITY_STATE_DIR },
+      const identity = loadDeviceIdentityIfPresent({
         path: process.env.OPENCLAW_IDENTITY_DATABASE_PATH,
       });
       console.log(JSON.stringify(identity));
@@ -128,13 +133,7 @@ async function runConcurrentIdentityLoads(rootDir: string): Promise<DeviceIdenti
     process.send("ready");
   `;
   const workers = Array.from({ length: 20 }, () => {
-    const child = spawnIdentityWorker(
-      moduleUrl,
-      workerSource,
-      rootDir,
-      { OPENCLAW_IDENTITY_MODULE: moduleUrl.href, OPENCLAW_IDENTITY_READ_ONLY: "1" },
-      true,
-    );
+    const child = spawnIdentityWorker(moduleUrl, workerSource, rootDir, {}, true);
     const outcome = waitForChild(child);
     const ready = new Promise<void>((resolve, reject) => {
       child.once("message", () => resolve());
@@ -159,12 +158,7 @@ async function runConcurrentIdentityLoads(rootDir: string): Promise<DeviceIdenti
   }
 }
 
-async function startPausedBootstrapCreator(rootDir: string): Promise<{
-  committedPath: string;
-  continuePath: string;
-  outcome: Promise<DeviceIdentity>;
-  child: ChildProcess;
-}> {
+async function startPausedBootstrapCreator(rootDir: string) {
   const readyPath = path.join(rootDir, "bootstrap-ready");
   const committedPath = path.join(rootDir, "bootstrap-committed");
   const continuePath = path.join(rootDir, "bootstrap-continue");
@@ -174,9 +168,8 @@ async function startPausedBootstrapCreator(rootDir: string): Promise<{
     import path from "node:path";
     import { DatabaseSync } from "node:sqlite";
     const { generateStoredDeviceIdentity, insertStoredDeviceIdentityIfAbsent } =
-      await import(process.env.OPENCLAW_IDENTITY_STORE_MODULE);
+      await import(process.env.OPENCLAW_IDENTITY_MODULE);
     const options = {
-      env: { ...process.env, OPENCLAW_STATE_DIR: process.env.OPENCLAW_IDENTITY_STATE_DIR },
       path: process.env.OPENCLAW_IDENTITY_DATABASE_PATH,
     };
     fs.mkdirSync(path.dirname(options.path), { recursive: true });
@@ -189,17 +182,13 @@ async function startPausedBootstrapCreator(rootDir: string): Promise<{
     }
     const stored = insertStoredDeviceIdentityIfAbsent(generateStoredDeviceIdentity(), options);
     fs.writeFileSync(process.env.OPENCLAW_IDENTITY_COMMITTED_PATH, "committed");
-    console.log(JSON.stringify({
-      deviceId: stored.deviceId,
-      publicKeyPem: stored.publicKeyPem,
-      privateKeyPem: stored.privateKeyPem,
-    }));
+    const { deviceId, publicKeyPem, privateKeyPem } = stored;
+    console.log(JSON.stringify({ deviceId, publicKeyPem, privateKeyPem }));
   `;
   const child = spawnIdentityWorker(storeModuleUrl, workerSource, rootDir, {
     OPENCLAW_IDENTITY_COMMITTED_PATH: committedPath,
     OPENCLAW_IDENTITY_CONTINUE_PATH: continuePath,
     OPENCLAW_IDENTITY_READY_PATH: readyPath,
-    OPENCLAW_IDENTITY_STORE_MODULE: storeModuleUrl.href,
   });
   const outcome = waitForChild(child);
   const deadline = Date.now() + 15_000;
@@ -240,8 +229,7 @@ describe("device identity SQLite store", () => {
     const entries = fs.readdirSync(rootDir);
 
     expect(loadDeviceIdentityIfPresent(options)).toBeNull();
-    expect(fs.existsSync(options.path!)).toBe(false);
-    expect(fs.existsSync(path.dirname(options.path!))).toBe(false);
+    expect([options.path, path.dirname(options.path)].map(fs.existsSync)).toEqual([false, false]);
     expect(fs.readdirSync(rootDir)).toEqual(entries);
   });
 
@@ -294,12 +282,12 @@ describe("device identity SQLite store", () => {
       });
 
       expect(
-        withArtifactPreservingStateReads(() => loadDeviceIdentityIfPresent(storeOptions(rootDir))),
+        withArtifactPreservingStateReads(() => loadDeviceIdentityIfPresent(options)),
       ).toBeNull();
       expect(committedDuringRead).toBe(true);
 
       const committed = await creator.outcome;
-      expect(loadDeviceIdentityIfPresent(storeOptions(rootDir))).toEqual(committed);
+      expect(loadDeviceIdentityIfPresent(options)).toEqual(committed);
     } finally {
       if (creator.child.exitCode === null && creator.child.signalCode === null) {
         fs.writeFileSync(creator.continuePath, "continue");
@@ -310,9 +298,7 @@ describe("device identity SQLite store", () => {
   }, 30_000);
 
   it("does not classify a partial schema as an identity bootstrap miss", async () => {
-    fs.mkdirSync(path.dirname(options.path!), { recursive: true });
-    const sqlite = await import("node:sqlite");
-    const database = new sqlite.DatabaseSync(options.path!);
+    const database = await openFixtureDatabase(options.path);
     database.exec("CREATE TABLE unrelated_state (id INTEGER PRIMARY KEY) STRICT;");
     database.close();
 
@@ -324,27 +310,17 @@ describe("device identity SQLite store", () => {
     if (!expected) {
       throw new Error("Swift identity fixture must normalize");
     }
-    fs.mkdirSync(path.dirname(options.path!), { recursive: true });
-    const sqlite = await import("node:sqlite");
-    const database = new sqlite.DatabaseSync(options.path!);
+    const database = await openFixtureDatabase(options.path);
     database.exec(`
         CREATE TABLE device_identities (
-          identity_key TEXT NOT NULL PRIMARY KEY,
-          device_id TEXT NOT NULL,
-          public_key_pem TEXT NOT NULL,
-          private_key_pem TEXT NOT NULL,
-          created_at_ms INTEGER NOT NULL,
-          updated_at_ms INTEGER NOT NULL
+          identity_key TEXT NOT NULL PRIMARY KEY, device_id TEXT NOT NULL,
+          public_key_pem TEXT NOT NULL, private_key_pem TEXT NOT NULL,
+          created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL
         ) STRICT;
-        CREATE INDEX idx_device_identities_device
-          ON device_identities(device_id, updated_at_ms DESC);
+        CREATE INDEX idx_device_identities_device ON device_identities(device_id, updated_at_ms DESC);
       `);
     database
-      .prepare(`
-          INSERT INTO device_identities (
-            identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
-          ) VALUES (?, ?, ?, ?, ?, ?)
-        `)
+      .prepare("INSERT INTO device_identities VALUES (?, ?, ?, ?, ?, ?)")
       .run(
         "primary",
         expected.deviceId,
@@ -355,13 +331,11 @@ describe("device identity SQLite store", () => {
       );
     database.close();
 
-    expect(loadOrCreateDeviceIdentity(options)).toEqual({
-      deviceId: expected.deviceId,
-      publicKeyPem: expected.publicKeyPem,
-      privateKeyPem: expected.privateKeyPem,
-    });
+    const { createdAtMs: _createdAtMs, ...identity } = expected;
+    expect(loadOrCreateDeviceIdentity(options)).toEqual(identity);
     closeOpenClawStateDatabaseForTest();
-    const verified = new sqlite.DatabaseSync(options.path!, { readOnly: true });
+    const { DatabaseSync } = await import("node:sqlite");
+    const verified = new DatabaseSync(options.path, { readOnly: true });
     expect(verified.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
@@ -393,11 +367,9 @@ describe("device identity SQLite store", () => {
     const writer = new DatabaseSync(options.path!);
     writer.exec("BEGIN IMMEDIATE");
     try {
-      const identities = await runConcurrentIdentityLoads(rootDir);
-      expect(identities).toHaveLength(20);
-      for (const loaded of identities) {
-        expect(loaded).toEqual(identity);
-      }
+      expect(await runConcurrentIdentityLoads(rootDir)).toEqual(
+        Array.from({ length: 20 }, () => identity),
+      );
     } finally {
       writer.exec("ROLLBACK");
       writer.close();
@@ -420,8 +392,7 @@ describe("device identity SQLite store", () => {
     loadOrCreateDeviceIdentity(options);
     closeOpenClawStateDatabaseForTest();
 
-    const sqlite = await import("node:sqlite");
-    const database = new sqlite.DatabaseSync(options.path!);
+    const database = await openFixtureDatabase(options.path);
     database
       .prepare("UPDATE device_identities SET device_id = ? WHERE identity_key = ?")
       .run("corrupt-device-id", "primary");
@@ -435,8 +406,7 @@ describe("device identity SQLite store", () => {
     "blocks SQLite access while legacy %s may exist",
     async (legacyName) => {
       const legacyPath = path.join(rootDir, "identity", legacyName);
-      fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
-      fs.writeFileSync(legacyPath, "{}\n");
+      writeRetiredIdentity(legacyPath);
 
       expect(() => loadDeviceIdentityIfPresent(options)).toThrow(/doctor --fix/);
       expect(() => loadOrCreateDeviceIdentity(options)).toThrow(/doctor --fix/);
@@ -448,8 +418,7 @@ describe("device identity SQLite store", () => {
     ["arbitrary", (directory: string) => path.join(directory, "identity-state.sqlite")],
   ])("derives the legacy root from an explicit %s database path", async (_label, dbPath) => {
     const legacyPath = path.join(rootDir, "identity", "device.json");
-    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
-    fs.writeFileSync(legacyPath, "{}\n");
+    writeRetiredIdentity(legacyPath);
 
     expect(() => loadOrCreateDeviceIdentity({ path: dbPath(rootDir) })).toThrow(/doctor --fix/);
   });
@@ -457,22 +426,16 @@ describe("device identity SQLite store", () => {
 
 describe("legacy device identity normalization", () => {
   it("normalizes valid Node PEM material and derives its canonical device id", () => {
-    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
-    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
-    const normalized = normalizeLegacyDeviceIdentity({
+    const legacy = {
       version: 1,
       deviceId: "stale-device-id",
-      publicKeyPem,
-      privateKeyPem,
+      ...makePemIdentity(),
       createdAtMs: 1_700_000_000_000,
-    });
-
-    expect(normalized).toMatchObject({
-      deviceId: deriveDeviceIdFromPublicKey(publicKeyPem),
-      publicKeyPem,
-      privateKeyPem,
-      createdAtMs: 1_700_000_000_000,
+    };
+    const { version: _version, ...expected } = legacy;
+    expect(normalizeLegacyDeviceIdentity(legacy)).toMatchObject({
+      ...expected,
+      deviceId: deriveDeviceIdFromPublicKey(legacy.publicKeyPem),
     });
   });
 
@@ -515,23 +478,20 @@ describe("legacy device identity normalization", () => {
 
 describe("device identity crypto helpers", () => {
   it("preserves existing public-key wire normalization", () => {
-    const { publicKey } = crypto.generateKeyPairSync("ed25519");
-    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
+    const { publicKeyPem } = makePemIdentity();
     const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
     const standardBase64 = `${publicKeyRaw.replaceAll("-", "+").replaceAll("_", "/")}=`;
 
-    expect(normalizeDevicePublicKeyBase64Url(publicKeyPem)).toBe(publicKeyRaw);
-    expect(normalizeDevicePublicKeyBase64Url(standardBase64)).toBe(publicKeyRaw);
-    expect(normalizeDevicePublicKeyBase64Url(`${standardBase64}=`)).toBe(publicKeyRaw);
+    expect(
+      [publicKeyPem, standardBase64, `${standardBase64}=`].map(normalizeDevicePublicKeyBase64Url),
+    ).toEqual([publicKeyRaw, publicKeyRaw, publicKeyRaw]);
     expect(deriveDeviceIdFromPublicKey(publicKeyRaw)).toBe(
       deriveDeviceIdFromPublicKey(publicKeyPem),
     );
   });
 
   it("signs payloads that verify against PEM and raw public key forms", () => {
-    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
-    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
+    const { publicKeyPem, privateKeyPem } = makePemIdentity();
     const payload = JSON.stringify({ action: "system.run", ts: 1234 });
     const signature = signDevicePayload(privateKeyPem, payload);
     const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);

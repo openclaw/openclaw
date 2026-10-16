@@ -1,22 +1,23 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement as awaitGate } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
+import { StateDatabaseReadAdmissionInvalidatedError as RetiredContextError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { approveDevicePairing } from "./device-pairing-approval.js";
 import {
-  redeemDevicePairingJoinCode,
-  registerDevicePairingJoinCode,
+  redeemDevicePairingJoinCode as redeem,
+  registerDevicePairingJoinCode as register,
 } from "./device-pairing-join-code.js";
+import { approveNodePairing, requestNodePairing } from "./device-pairing-node.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
-import { persistDevicePairingStoreState } from "./device-pairing-store.js";
-import { listDevicePairing } from "./device-pairing.js";
+import { listDevicePairing, requestDevicePairing } from "./device-pairing.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
@@ -41,7 +42,7 @@ function captureContext(directory = baseDir) {
 }
 
 function mint(context = captureContext(), assertCurrent?: () => void) {
-  return registerDevicePairingJoinCode({
+  return register({
     payload,
     expiresAtMs: Date.now() + 60_000,
     context,
@@ -50,15 +51,13 @@ function mint(context = captureContext(), assertCurrent?: () => void) {
 }
 
 function storedCodes() {
-  const exists = database.db
+  const { db } = database;
+  return db
     .prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'device_pairing_join_codes'",
     )
-    .get();
-  return exists
-    ? database.db
-        .prepare("SELECT shortcode FROM device_pairing_join_codes ORDER BY shortcode")
-        .all()
+    .get()
+    ? db.prepare("SELECT shortcode FROM device_pairing_join_codes ORDER BY shortcode").all()
     : [];
 }
 
@@ -95,48 +94,30 @@ test.each([
         throw refused;
       }
     };
-    try {
-      const pending = shortcode
-        ? redeemDevicePairingJoinCode({ shortcode, context, assertCurrent })
-        : mint(context, assertCurrent);
-      await expect(pending).rejects.toBe(refused);
-      expect(currentStage).toBe(refusedStage);
-      expect(storedCodes()).toEqual(before);
-    } finally {
-      observer.mockRestore();
-    }
+    const pending = shortcode
+      ? redeem({ shortcode, context, assertCurrent })
+      : mint(context, assertCurrent);
+    await expect(pending).rejects.toBe(refused);
+    expect(currentStage).toBe(refusedStage);
+    expect(storedCodes()).toEqual(before);
+    observer.mockRestore();
     // The first case rolls back lazy schema creation; retry must admit it again.
     const liveCode = shortcode ?? (await mint(context));
-    await expect(redeemDevicePairingJoinCode({ shortcode: liveCode, context })).resolves.toEqual(
-      payload,
-    );
+    await expect(redeem({ shortcode: liveCode, context })).resolves.toEqual(payload);
   },
 );
 
 test("keeps the captured store and paired-node authority while a join waits", async () => {
-  persistDevicePairingStoreState(
-    {
-      pendingById: {},
-      pairedByDeviceId: {
-        node: {
-          deviceId: "node",
-          publicKey: "synthetic-node-key",
-          roles: ["node"],
-          tokens: {
-            node: { token: "synthetic-node-token", role: "node", scopes: [], createdAtMs: 1 },
-          },
-          nodeSurface: { createdAtMs: 1, approvedAtMs: 1 },
-          createdAtMs: 1,
-          approvedAtMs: 1,
-        },
-      },
-    },
+  const { request } = await requestDevicePairing(
+    { deviceId: "node", publicKey: "synthetic-node-key", role: "node", scopes: [] },
     baseDir,
-    "both",
   );
+  await approveDevicePairing(request.requestId, baseDir);
+  const node = await requestNodePairing({ nodeId: "node" }, baseDir);
+  await approveNodePairing(node.request.requestId, { callerScopes: ["operator.admin"] }, baseDir);
   await listDevicePairing(baseDir);
   const binding = getPublishedPairedDeviceBinding("node", baseDir);
-  expect(binding).not.toBeNull();
+  expect(binding).toMatchObject({ identity: expect.any(String), generation: expect.any(String) });
   const context = captureContext();
   const entered = createDeferredCore();
   const release = createDeferredCore();
@@ -152,16 +133,12 @@ test("keeps the captured store and paired-node authority while a join waits", as
   const otherRoot = tempDirs.make("join-code-other-root-");
   await withEnvAsync({ OPENCLAW_STATE_DIR: otherRoot }, async () => {
     try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        registration,
-        "Join registration did not enter",
-      );
+      await awaitGate(entered.promise, registration, "Join registration did not enter");
       expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
       release.resolve();
       const shortcode = await registration;
       expect(storedCodes()).toContainEqual({ shortcode });
-      await expect(redeemDevicePairingJoinCode({ shortcode, context })).resolves.toEqual(payload);
+      await expect(redeem({ shortcode, context })).resolves.toEqual(payload);
       expect(existsSync(path.join(otherRoot, "state", "openclaw.sqlite"))).toBe(false);
       expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
     } finally {
@@ -184,7 +161,7 @@ test("never replays a burned code or recovers its payload after an unknown resul
     }
     return result;
   });
-  await expect(redeemDevicePairingJoinCode({ shortcode, context })).rejects.toBe(unknown);
+  await expect(redeem({ shortcode, context })).rejects.toBe(unknown);
   expect(burns).toBe(1);
   expect(storedCodes()).not.toContainEqual({ shortcode });
 });
@@ -195,9 +172,7 @@ test.each(["register", "redeem"] as const)(
     const context = captureContext();
     const expiresAtMs = Date.now() + 60_000;
     const shortcode =
-      operation === "redeem"
-        ? await registerDevicePairingJoinCode({ payload, expiresAtMs, context })
-        : undefined;
+      operation === "redeem" ? await register({ payload, expiresAtMs, context }) : undefined;
     probe.command(
       stateWorker,
       async (command, executeOptions, scope) => {
@@ -208,12 +183,12 @@ test.each(["register", "redeem"] as const)(
       { once: true },
     );
     if (shortcode) {
-      await expect(redeemDevicePairingJoinCode({ shortcode, context })).resolves.toBeNull();
+      await expect(redeem({ shortcode, context })).resolves.toBeNull();
       expect(storedCodes()).not.toContainEqual({ shortcode });
     } else {
-      await expect(
-        registerDevicePairingJoinCode({ payload, expiresAtMs, context }),
-      ).rejects.toThrow("Device pairing join code requires a future expiry.");
+      await expect(register({ payload, expiresAtMs, context })).rejects.toThrow(
+        "Device pairing join code requires a future expiry.",
+      );
     }
   },
 );
@@ -240,23 +215,21 @@ test("database close joins accepted burn delivery and refuses its retired contex
     },
     { once: true },
   );
-  const redemption = redeemDevicePairingJoinCode({ shortcode, context });
+  const redemption = redeem({ shortcode, context });
   let closing: Promise<boolean> | undefined;
   try {
-    await awaitGateBeforeSettlement(committed.promise, redemption, "Burn did not commit");
+    await awaitGate(committed.promise, redemption, "Burn did not commit");
     closing = closeOpenClawStateDatabaseByPathAsync(closingDatabase.path).then((result) => {
       order.push("closed");
       return result;
     });
-    expect(() => context.admission.assertCurrent()).toThrow(
-      StateDatabaseReadAdmissionInvalidatedError,
-    );
+    expect(() => context.admission.assertCurrent()).toThrow(RetiredContextError);
     expect(closingDatabase.db.isOpen).toBe(true);
     release.resolve();
     await expect(redemption).resolves.toEqual(payload);
     await closing;
     expect(order).toEqual(["delivered", "closed"]);
-    await expect(mint(context)).rejects.toBeInstanceOf(StateDatabaseReadAdmissionInvalidatedError);
+    await expect(mint(context)).rejects.toBeInstanceOf(RetiredContextError);
     expect(closingDatabase.db.isOpen).toBe(false);
   } finally {
     release.resolve();
