@@ -35,6 +35,7 @@ const result = (rows: GatewaySessionRow[], ts = 3): SessionsListResult => ({
   owners: [owner, otherOwner],
 });
 const other = makeRow("agent:main:other-owner", { owner: { actor: otherOwner } });
+const rowKeys = (rows: GatewaySessionRow[] | undefined) => rows?.map((row) => row.key);
 
 it.each([
   "introduced-read",
@@ -69,65 +70,63 @@ it.each([
     spawnedBy: parentKey,
     label: metadata ? undefined : "Previous child",
   });
+  const identity = { key, sessionId: child.sessionId };
   const initialRows = introduced ? [parent] : [parent, child];
   let filtered = result(initialRows);
   const primary = result([parent, other]);
   const children = deferred<SessionsListResult>();
   let query = deferred<SessionsListResult>();
   const markRead = deferred<SessionsPatchResult>();
-  let childReads = 0,
-    heldReads = 0,
-    patchReads = 0;
+  const reads = { children: 0, held: 0, patch: 0 };
   let hold = false;
   let refresh: Promise<void> | undefined;
   let readOperation: Promise<SessionsPatchResult | null> | undefined;
   const { sidebar, provider, sessions, harness, data } = await mountRoster(async (method, raw) => {
     const params = asOptionalRecord(raw);
     if (method === "sessions.patch") {
-      patchReads += 1;
+      reads.patch += 1;
       return markRead.promise;
     }
-    if (method === "sessions.list") {
-      if (params?.spawnedBy === parentKey) {
-        childReads += 1;
-        return children.promise;
-      }
-      if (params?.ownerId === owner.id) {
-        if (hold) {
-          heldReads += 1;
-          return query.promise;
-        }
-        return filtered;
-      }
+    if (method !== "sessions.list") {
+      return method === "sessions.describe" ? { session: child } : {};
+    }
+    if (params?.spawnedBy === parentKey) {
+      reads.children += 1;
+      return children.promise;
+    }
+    if (params?.ownerId !== owner.id) {
       return primary;
     }
-    return method === "sessions.describe" ? { session: child } : {};
+    if (!hold) {
+      return filtered;
+    }
+    reads.held += 1;
+    return query.promise;
   });
   const canonical = () => findRow(sessions.state.result, key);
   const selected = () => rowElement(sidebar, key);
   const text = () => selected()?.textContent?.replace(/\s+/g, " ").trim();
-  const keys = () => data.sessionsResult?.sessions.map((row) => row.key);
+  const keys = () => rowKeys(data.sessionsResult?.sessions);
   const done = () => sidebar.querySelector(`[data-session-key="${key}"] [aria-label="Done"]`);
   try {
     await activateSessionMenuValue(sidebar, "owner:ada");
     await waitForFast(() => {
       expect(sidebar.sessionOwnerFilterId).toBe(owner.id);
       expect(data.sessionsLoading).toBe(false);
-      expect(keys()).toEqual(initialRows.map((row) => row.key));
+      expect(keys()).toEqual(rowKeys(initialRows));
     });
     // Finish the initial filter request before opening the held successor read.
     await data.refreshSidebarSessions();
 
     hold = true;
     refresh = data.refreshSidebarSessions();
-    await waitForFast(() => expect(heldReads).toBe(1));
+    await waitForFast(() => expect(reads.held).toBe(1));
 
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = key;
     await waitForFast(() =>
       expect(canonical()).toMatchObject({
-        key,
-        sessionId: child.sessionId,
+        ...identity,
         ...(metadata ? {} : { label: child.label }),
       }),
     );
@@ -147,7 +146,7 @@ it.each([
     };
     filtered = result(introduced ? [parent] : [parent, refreshed]);
     if (introduced) {
-      await waitForFast(() => expect(childReads).toBe(1));
+      await waitForFast(() => expect(reads.children).toBe(1));
       children.resolve(result([refreshed]));
       await waitForFast(() => expect(canonical()?.label).toBe("Current child"));
       if (terminal) {
@@ -165,8 +164,7 @@ it.each([
         });
       } else if (mode === "introduced-event") {
         harness.publishEvent("sessions.changed", {
-          key,
-          sessionId: child.sessionId,
+          ...identity,
           updatedAt: 5,
           hasActiveRun: true,
           status: "running",
@@ -188,7 +186,7 @@ it.each([
         query = deferred<SessionsListResult>();
         hold = true;
         refresh = data.refreshSidebarSessions();
-        await waitForFast(() => expect(heldReads).toBe(2));
+        await waitForFast(() => expect(reads.held).toBe(2));
       }
       if (mode === "introduced-read") {
         readOperation = sessions.patch(
@@ -196,13 +194,12 @@ it.each([
           { unread: false },
           { agentId: "main", expectedMarkedUnreadAt: null },
         );
-        await waitForFast(() => expect(patchReads).toBe(1));
+        await waitForFast(() => expect(reads.patch).toBe(1));
         expect(canonical()?.unread).toBe(false);
       } else if (mode === "introduced-local" || newer) {
         sessions.patchRowLocal(key, { thinkingLevel: "high" });
         expect(canonical()?.thinkingLevel).toBe("high");
       }
-      hold = false;
       filtered = result([
         parent,
         {
@@ -211,22 +208,21 @@ it.each([
           label: newer ? "Newer query child" : "Late introduced child",
         },
       ]);
-      query.resolve(filtered);
-      await refresh;
-      await settleLitElement(sidebar);
+    }
+    hold = false;
+    query.resolve(filtered);
+    await refresh;
+    await settleLitElement(sidebar);
+    if (introduced) {
       expect(keys()).toEqual([parentKey, key]);
       expect(text()).toContain(newer ? "Newer query child" : "Current child");
       expect(rowElement(sidebar, other.key)).toBeNull();
       return;
     }
 
-    hold = false;
-    query.resolve(filtered);
-    await refresh;
-    await settleLitElement(sidebar);
     expect(selected()?.textContent).toContain("Current child");
 
-    await waitForFast(() => expect(childReads).toBe(1));
+    await waitForFast(() => expect(reads.children).toBe(1));
 
     filtered = result([
       parent,
@@ -242,8 +238,7 @@ it.each([
     expect(selected()?.textContent).toContain(latestTitle);
     if (mode === "deletion") {
       harness.publishEvent("sessions.changed", {
-        key,
-        sessionId: child.sessionId,
+        ...identity,
         agentId: "main",
         reason: "delete",
       });
@@ -259,15 +254,12 @@ it.each([
 
     await settleLitElement(sidebar);
     if (metadata) {
-      const current = canonical();
-      expect(current).toMatchObject({
+      expect(canonical()).toMatchObject({
         sessionId: child.sessionId,
         updatedAt: 5,
         ...latest,
       });
-      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual(
-        before?.sessions.map((row) => row.key),
-      );
+      expect(rowKeys(sessions.state.result?.sessions)).toEqual(rowKeys(before?.sessions));
       expect(sessions.state.result?.sessions.filter((row) => row.key !== key)).toEqual(
         before?.sessions.filter((row) => row.key !== key),
       );
@@ -283,7 +275,7 @@ it.each([
     expect(done()).not.toBeNull();
 
     await waitForFast(() => expect(selected()?.textContent).toContain(latestTitle));
-    expect(keys()).toEqual(initialRows.map((row) => row.key));
+    expect(keys()).toEqual(rowKeys(initialRows));
     expect(rowElement(sidebar, other.key)).toBeNull();
 
     filtered = result([parent]);
@@ -329,10 +321,9 @@ it("retains an untimed selected descriptor after cached ancestry completes", asy
   const request = vi.fn(async (method, params) => {
     if (method === "sessions.list") {
       const query = params as { spawnedBy?: string; ownerId?: string };
-      if (query.spawnedBy === parentKey) {
-        return childRead.promise;
-      }
-      return result(query.ownerId ? filteredRows : [parent, other], 5);
+      return query.spawnedBy === parentKey
+        ? childRead.promise
+        : result(query.ownerId ? filteredRows : [parent, other], 5);
     }
     if (method === "sessions.describe") {
       expect(params).toEqual({ key: rootKey });
@@ -359,7 +350,7 @@ it("retains an untimed selected descriptor after cached ancestry completes", asy
     await waitForFast(() => expect(findRow(sessions.state.result, key)?.label).toBe(current.label));
     filteredRows = [parent];
     await data.refreshSidebarSessions();
-    expect(data.sessionsResult?.sessions.map((row) => row.key)).toEqual([parentKey]);
+    expect(rowKeys(data.sessionsResult?.sessions)).toEqual([parentKey]);
     rootRead.resolve({ session: ancestor });
     await lineage;
     await settleLitElement(sidebar);

@@ -32,6 +32,23 @@ const mainAgents: AgentsListResult = {
   scope: "per-sender",
   agents: [{ id: "main" }],
 };
+const ada = human("ada", "Ada");
+const bob = human("bob", "Bob");
+type Params = NonNullable<ReturnType<typeof asOptionalRecord>>;
+function lineageRequest(
+  list: (params: Params) => unknown,
+  describe: (params: Params) => unknown,
+  subscribe?: () => unknown,
+) {
+  return vi.fn(async (method: string, raw?: unknown) => {
+    const handler =
+      method === "sessions.list" ? list : method === "sessions.describe" ? describe : null;
+    if (handler) {
+      return handler(asOptionalRecord(raw) ?? {});
+    }
+    return method === "sessions.subscribe" && subscribe ? subscribe() : {};
+  });
+}
 function mainRow(
   key: string,
   sessionId: string,
@@ -56,26 +73,26 @@ function sessionTree(sidebar: SidebarLifecycleState, selected: string) {
       ?.click();
     await sidebar.updateComplete;
   };
-  return { row, parent, expand };
+  const reveal = async (key: string) => {
+    await waitForFast(() => expect(row(key)).not.toBeNull());
+    await expand(key);
+    await waitForFast(() => expect(parent()).toBe(key));
+  };
+  return { row, parent, expand, reveal };
 }
 
 it("hides a selected active main child in Archived after fresh lineage completes", async () => {
   const mainKey = "agent:main:main";
   const selected = mainRow("agent:main:selected-active", "selected-active", 10, {
-    label: "Selected active session",
     spawnedBy: mainKey,
   });
   const parent = mainRow(mainKey, "main-parent", 10, {
     childSessions: [selected.key],
   });
   const initialParent = deferred<{ session: GatewaySessionRow }>();
-  const request = vi.fn(async (method, raw) => {
-    const params = raw && typeof raw === "object" ? raw : {};
-    if (method === "sessions.list") {
-      return sessionsResult("archived" in params && params.archived === true ? [] : [selected], 10);
-    }
-    if (method === "sessions.describe") {
-      const key = "key" in params ? params.key : undefined;
+  const request = lineageRequest(
+    (params) => sessionsResult(params.archived === true ? [] : [selected], 10),
+    ({ key }) => {
       if (key === selected.key) {
         return { session: selected };
       }
@@ -83,11 +100,14 @@ it("hides a selected active main child in Archived after fresh lineage completes
         return initialParent.promise;
       }
       throw new Error(`Unexpected describe key: ${String(key)}`);
-    }
-    return {};
-  });
+    },
+  );
   const { sidebar, provider, sessions, data } = await mountRoster(request, mainAgents);
   const row = () => rowElement(sidebar, selected.key);
+  const describes = (key: string) =>
+    request.mock.calls.filter(
+      ([method, params]) => method === "sessions.describe" && asOptionalRecord(params)?.key === key,
+    );
   try {
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = selected.key;
@@ -108,27 +128,18 @@ it("hides a selected active main child in Archived after fresh lineage completes
     initialParent.resolve({ session: parent });
     await waitForFast(() => expect(data.activeSessionLineageRoot?.key).toBe(mainKey));
     await sidebar.updateComplete;
-    expect(
-      request.mock.calls.filter(
-        ([method, params]) => method === "sessions.describe" && params?.key === mainKey,
-      ),
-    ).toHaveLength(1);
-    expect(sidebar.sessionKey).toBe(selected.key);
-    expect(sidebar.activeRouteId).toBe("chat");
+    expect(describes(mainKey)).toHaveLength(1);
+    expect(sidebar).toMatchObject({ sessionKey: selected.key, activeRouteId: "chat" });
     expect(data.activeSessionLineageSelectedRow?.key).toBe(selected.key);
     expect(data.sessionsResult?.sessions).toEqual([]);
     expect(row()).toBeNull();
 
-    const describes = () =>
-      request.mock.calls.filter(
-        ([method, params]) => method === "sessions.describe" && params?.key === selected.key,
-      );
-    const settledDescribes = describes().length;
+    const settledDescribes = describes(selected.key).length;
     await sessions.refresh({ agentId: "main", force: true });
     await sidebar.updateComplete;
     await data.loadActiveSessionLineage(selected.key);
     await sidebar.updateComplete;
-    expect(describes()).toHaveLength(settledDescribes);
+    expect(describes(selected.key)).toHaveLength(settledDescribes);
     expect(data.activeSessionLineageSelectedRow?.key).toBe(selected.key);
     expect(data.sessionsResult?.sessions).toEqual([]);
     expect(row()).toBeNull();
@@ -234,14 +245,11 @@ it.each(["pending incarnation", "known parent"] as const)(
   async (kind) => {
     vi.useFakeTimers();
     const pendingIncarnation = kind === "pending incarnation";
-    const changesParent = kind === "known parent";
     const knownParent = kind === "known parent";
     const key = "agent:main:ordinary-child";
     const p1 = "agent:main:original-parent";
     const p2 = "agent:main:successor-parent";
-    const expectedParent = changesParent ? p2 : p1;
-    const ada = human("ada", "Ada");
-    const bob = human("bob", "Bob");
+    const expectedParent = knownParent ? p2 : p1;
     const child = mainRow(key, "original-child", 10, {
       parentSessionKey: p1,
       label: "Original selected conversation",
@@ -272,14 +280,10 @@ it.each(["pending incarnation", "known parent"] as const)(
       ...sessionsResult(knownParent ? [current, newParent] : [current], changed ? 30 : 10),
       owners: [ada, bob],
     });
-    const request = vi.fn(async (method: string, raw?: unknown) => {
-      const params = asOptionalRecord(raw);
-      if (method === "sessions.subscribe") {
-        return { subscribed: true, list: result() };
-      }
-      if (method === "sessions.list") {
+    const request = lineageRequest(
+      (params) => {
         if (params?.spawnedBy === p1) {
-          return sessionsResult(changed && changesParent ? [] : [current], 30);
+          return sessionsResult(changed && knownParent ? [] : [current], 30);
         }
         if (params?.spawnedBy === p2) {
           return sessionsResult([current], 30);
@@ -293,8 +297,8 @@ it.each(["pending incarnation", "known parent"] as const)(
           return primary.promise;
         }
         return result();
-      }
-      if (method === "sessions.describe") {
+      },
+      (params) => {
         if (params?.key === key) {
           return { session: current };
         }
@@ -309,15 +313,15 @@ it.each(["pending incarnation", "known parent"] as const)(
           return { session: newParent };
         }
         throw new Error(`Unexpected describe key: ${String(params?.key)}`);
-      }
-      return {};
-    });
+      },
+      () => ({ subscribed: true, list: result() }),
+    );
     const { sidebar, provider, sessions, harness, data } = await mountRoster(
       request,
       mainAgents,
       ada,
     );
-    const { row, parent: parentOfSelected, expand } = sessionTree(sidebar, key);
+    const { row, parent: parentOfSelected, expand, reveal } = sessionTree(sidebar, key);
     let originalLineage: Promise<void> | undefined;
     try {
       // Status filtering owns a separate managed query without requiring involvement membership.
@@ -335,9 +339,7 @@ it.each(["pending incarnation", "known parent"] as const)(
       originalLineage = data.loadActiveSessionLineage(key);
       if (!pendingIncarnation) {
         await originalLineage;
-        await waitForFast(() => expect(row(p1)).not.toBeNull());
-        await expand(p1);
-        await waitForFast(() => expect(parentOfSelected()).toBe(p1));
+        await reveal(p1);
       }
       const originalRevision = sessions.canonicalListRevision;
       const originalManagedReads = managedReads;
@@ -375,18 +377,20 @@ it.each(["pending incarnation", "known parent"] as const)(
       await data.loadActiveSessionLineage(key);
       await sidebar.updateComplete;
       await expand(expectedParent);
-      const beforePrimary = {
-        selectedSessionId: sidebar.findSidebarSessionByKey(key)?.sessionId,
-        selectedText: row(key)?.textContent?.replace(/\s+/g, " ").trim(),
-        parentOfSelected: parentOfSelected(),
-        originalParentVisible: row(p1) !== null,
-        successorParentVisible: row(p2) !== null,
-        parentReads,
-        successorDescribeReads: request.mock.calls.filter(
-          ([method, params]) =>
-            method === "sessions.describe" && asOptionalRecord(params)?.key === p2,
-        ).length,
-      };
+      expect(sidebar.findSidebarSessionByKey(key)?.sessionId).toBe(current.sessionId);
+      expect(row(key)?.textContent?.replace(/\s+/g, " ").trim()).toContain(current.label);
+      expect(parentOfSelected()).toBe(expectedParent);
+      expect(parentReads).toBe(pendingIncarnation ? 2 : 1);
+      expect(row(p2) !== null).toBe(knownParent);
+      if (knownParent) {
+        expect(row(p1)).toBeNull();
+        expect(
+          request.mock.calls.filter(
+            ([method, params]) =>
+              method === "sessions.describe" && asOptionalRecord(params)?.key === p2,
+          ),
+        ).toHaveLength(0);
+      }
       if (pendingIncarnation) {
         oldParentRead.resolve({ session: oldParent });
         await originalLineage;
@@ -399,18 +403,7 @@ it.each(["pending incarnation", "known parent"] as const)(
       await waitForFast(() =>
         expect(sessions.canonicalListRevision).toBeGreaterThan(originalRevision),
       );
-      await waitForFast(() => expect(row(expectedParent)).not.toBeNull());
-      await expand(expectedParent);
-      await waitForFast(() => expect(parentOfSelected()).toBe(expectedParent));
-      expect(beforePrimary.selectedSessionId).toBe(current.sessionId);
-      expect(beforePrimary.selectedText).toContain("Current selected conversation");
-      expect(beforePrimary.parentOfSelected).toBe(expectedParent);
-      expect(beforePrimary.parentReads).toBe(pendingIncarnation ? 2 : 1);
-      expect(beforePrimary.successorParentVisible).toBe(changesParent);
-      if (changesParent) {
-        expect(beforePrimary.originalParentVisible).toBe(false);
-        expect(beforePrimary.successorDescribeReads).toBe(knownParent ? 0 : 1);
-      }
+      await reveal(expectedParent);
     } finally {
       primaryReleased = true;
       primary.resolve(result());
@@ -431,8 +424,6 @@ it.each(["status-filtered omitted", "unfiltered metadata"] as const)(
     const p2 = "agent:main:event-new-parent";
     const expectedParent = filtered ? p2 : p1;
     const initialAt = Date.now() - 100;
-    const ada = human("ada", "Ada");
-    const bob = human("bob", "Bob");
     const child = mainRow(key, "event-child", initialAt, {
       spawnedBy: p1,
       parentSessionKey: p1,
@@ -462,12 +453,8 @@ it.each(["status-filtered omitted", "unfiltered metadata"] as const)(
       owners: [ada, bob],
     });
     const primaryRows = () => (!filtered || recovery ? [parent, current] : [parent]);
-    const request = vi.fn(async (method: string, raw?: unknown) => {
-      const params = asOptionalRecord(raw);
-      if (method === "sessions.subscribe") {
-        return { subscribed: true, list: result(primaryRows()) };
-      }
-      if (method === "sessions.list") {
+    const request = lineageRequest(
+      (params) => {
         if (params?.spawnedBy === p1) {
           controllerChildReads += 1;
           return result([current]);
@@ -487,8 +474,8 @@ it.each(["status-filtered omitted", "unfiltered metadata"] as const)(
           throw new Error("Synthetic primary refresh failure");
         }
         return result(primaryRows());
-      }
-      if (method === "sessions.describe") {
+      },
+      (params) => {
         if (params?.key === key) {
           return { session: current };
         }
@@ -500,15 +487,15 @@ it.each(["status-filtered omitted", "unfiltered metadata"] as const)(
           return { session: newParent };
         }
         throw new Error(`Unexpected describe key: ${String(params?.key)}`);
-      }
-      return {};
-    });
+      },
+      () => ({ subscribed: true, list: result(primaryRows()) }),
+    );
     const { sidebar, provider, sessions, harness, data } = await mountRoster(
       request,
       mainAgents,
       ada,
     );
-    const { row, parent: directParent, expand } = sessionTree(sidebar, key);
+    const { row, parent: directParent, expand, reveal } = sessionTree(sidebar, key);
     try {
       if (filtered) {
         // Status filtering owns a separate managed query without requiring involvement membership.
@@ -603,9 +590,7 @@ it.each(["status-filtered omitted", "unfiltered metadata"] as const)(
         expect(data.sessionsResult?.sessions.map((entry) => entry.key)).toEqual([p1]);
       }
       await waitForFast(() => expect(row(key)?.textContent).toContain(current.label));
-      await waitForFast(() => expect(row(expectedParent)).not.toBeNull());
-      await expand(expectedParent);
-      await waitForFast(() => expect(directParent()).toBe(expectedParent));
+      await reveal(expectedParent);
       expect(newParentReads).toBe(filtered ? 1 : 0);
       failedLists = false;
       recovery = true;
@@ -629,9 +614,7 @@ it.each(["status-filtered omitted", "unfiltered metadata"] as const)(
 
 it("resolves the routed child's former global ancestor over a foreign cached row", async () => {
   const agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
+    ...mainAgents,
     agents: [{ id: "main" }, { id: "work" }, { id: "research" }],
   } satisfies AgentsListResult;
   const parent: GatewaySessionRow = {

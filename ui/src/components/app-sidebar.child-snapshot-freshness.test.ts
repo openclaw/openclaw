@@ -14,6 +14,7 @@ import {
   createGatewayHarness,
   createSessionsHarness,
   mountSidebar,
+  type SidebarLifecycleState,
 } from "../test-helpers/app-sidebar.ts";
 import {
   createTestGatewayClient,
@@ -33,6 +34,7 @@ import "./app-sidebar.tsx";
 
 const parentKey = "agent:main:parent";
 const childKey = "agent:worker:child";
+const childQuery = childSessionListQuery(parentKey);
 const parentRow = { key: parentKey, kind: "direct" as const, childSessions: [childKey] };
 const child = {
   key: childKey,
@@ -65,6 +67,13 @@ function childRequest(
 
 async function mountChildren(...args: Parameters<typeof childRequest>) {
   return mountRoster(childRequest(...args));
+}
+
+function expandCollapsed(sidebar: SidebarLifecycleState) {
+  const toggle = childToggle(sidebar)!;
+  if (toggle.getAttribute("aria-expanded") !== "true") {
+    toggle.click();
+  }
 }
 
 async function mountParent() {
@@ -127,9 +136,7 @@ it("hydrates a connection replacement while an old child page is pending", async
     childToggle(sidebar)!.click();
     oldLoad = data.loadChildSessions(parentKey);
     await waitForFast(() =>
-      expect(sessions.listSnapshot(childSessionListQuery(parentKey)).result?.sessions).toHaveLength(
-        100,
-      ),
+      expect(sessions.listSnapshot(childQuery).result?.sessions).toHaveLength(100),
     );
     const replacement = { ...children[0]!, label: "Replacement child", updatedAt: 30 };
     const newRequest = childRequest({ ...parent, childSessions: [replacement.key] }, () =>
@@ -139,10 +146,7 @@ it("hydrates a connection replacement while an old child page is pending", async
     // A different connection identity intentionally resets manual expansion.
     await waitForFast(() => expect(childToggle(sidebar)).not.toBeNull());
     await sidebar.updateComplete;
-    const replacementToggle = childToggle(sidebar)!;
-    if (replacementToggle.getAttribute("aria-expanded") !== "true") {
-      replacementToggle.click();
-    }
+    expandCollapsed(sidebar);
     await waitForFast(() => expect(sidebar.textContent).toContain("Replacement child"));
     expect(data.loadingChildSessionKeys.has(parentKey)).toBe(false);
     tail.resolve(tailResult);
@@ -189,10 +193,7 @@ it("keeps a selected child query across unrelated publications", async () => {
   sidebar.activeRouteId = "chat";
   sidebar.sessionKey = queryChildKey;
   await sidebar.updateComplete;
-  const toggle = childToggle(sidebar)!;
-  if (toggle.getAttribute("aria-expanded") !== "true") {
-    toggle.click();
-  }
+  expandCollapsed(sidebar);
   await waitForFast(() => expect(sidebar.textContent).toContain("Original child"));
   expect(childList).toHaveBeenCalledTimes(1);
   // The newer child list already covers the initial selected descriptor.
@@ -290,20 +291,34 @@ it("keeps loaded children visible while a child event revalidates them", async (
   expect(rowElement(sidebar, sibling.key)).toBeNull();
 });
 
-it("retries a synchronously failed retained shared query", async () => {
-  const { harness, sidebar, expand, retry } = await mountParent();
-
-  harness.list.mockRejectedValueOnce(new Error("Shared child failure"));
-  const shared = harness.sessions.observeList(childSessionListQuery(parentKey), () => {});
-  onTestFinished(() => shared.dispose());
-  await expect(shared.refresh()).rejects.toThrow("Shared child failure");
-  expand();
-  await waitForFast(() => expect(sidebar.textContent).toContain("Shared child failure"));
-  vi.useFakeTimers();
-  expect(harness.list).toHaveBeenCalledTimes(1);
-  await retry();
-  expect(harness.list).toHaveBeenCalledTimes(2);
-});
+it.each(["shared rejection", "incomplete window"] as const)(
+  "keeps a failed child query dormant until explicit retry (%s)",
+  async (failure) => {
+    const { harness, sidebar, publishChildChanged, expand, retry } = await mountParent();
+    const sharedFailure = failure === "shared rejection";
+    const message = sharedFailure ? "Shared child failure" : "kept changing";
+    if (sharedFailure) {
+      harness.list.mockRejectedValueOnce(new Error(message));
+      const shared = harness.sessions.observeList(childQuery, () => {});
+      onTestFinished(() => shared.dispose());
+      await expect(shared.refresh()).rejects.toThrow(message);
+    } else {
+      harness.list.mockResolvedValue({ ...result([child]), totalCount: 2, hasMore: false });
+    }
+    expand();
+    await waitForFast(() => expect(sidebar.textContent).toContain(message));
+    vi.useFakeTimers();
+    const reads = sharedFailure ? 1 : 4;
+    expect(harness.list).toHaveBeenCalledTimes(reads);
+    if (!sharedFailure) {
+      await publishChildChanged();
+      expect(harness.list).toHaveBeenCalledTimes(reads);
+      expect(sidebar.textContent).toContain(message);
+    }
+    await retry();
+    expect(harness.list).toHaveBeenCalledTimes(reads + 1);
+  },
+);
 
 it("keeps a complete child window healthy while deletion is pending and after confirmation", async () => {
   const removed = { ...child, sessionId: "removed-child" };
@@ -344,44 +359,28 @@ it("keeps a complete child window healthy while deletion is pending and after co
     expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2);
     removal = sessions.delete(removed.key, { expectedSessionId: removed.sessionId });
     childList.mockClear();
-    await sessions.refreshList(childSessionListQuery(parentKey));
-    await data.loadChildSessions(parentKey);
-    await sidebar.updateComplete;
-    expect(childList).toHaveBeenCalledOnce();
-    expect(data.childSessionErrorsByParent.has(parentKey)).toBe(false);
-    expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
-    expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(1);
-    expect(sidebar.textContent).toContain(kept.label);
-
-    children = [kept];
-    deletion.resolve({ ok: true, deleted: true });
-    await removal;
-    await sessions.refreshList(childSessionListQuery(parentKey));
-    await data.loadChildSessions(parentKey);
-    await sidebar.updateComplete;
-    expect(data.childSessionErrorsByParent.has(parentKey)).toBe(false);
-    expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
-    expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(1);
+    for (const confirmed of [false, true]) {
+      if (confirmed) {
+        children = [kept];
+        deletion.resolve({ ok: true, deleted: true });
+        await removal;
+      }
+      await sessions.refreshList(childQuery);
+      await data.loadChildSessions(parentKey);
+      await sidebar.updateComplete;
+      if (!confirmed) {
+        expect(childList).toHaveBeenCalledOnce();
+      }
+      expect(data.childSessionErrorsByParent.has(parentKey)).toBe(false);
+      expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(1);
+      expect(sidebar.textContent).toContain(kept.label);
+    }
   } finally {
     deletion.resolve({ ok: true, deleted: false });
     await removal;
     disposeRoster({ provider, sessions });
   }
-});
-
-it("keeps incomplete child windows dormant until explicit retry", async () => {
-  const { harness, sidebar, publishChildChanged, expand, retry } = await mountParent();
-
-  harness.list.mockResolvedValue({ ...result([child]), totalCount: 2, hasMore: false });
-  expand();
-  await waitForFast(() => expect(sidebar.textContent).toContain("kept changing"));
-  expect(harness.list).toHaveBeenCalledTimes(4);
-  vi.useFakeTimers();
-  await publishChildChanged();
-  expect(harness.list).toHaveBeenCalledTimes(4);
-  expect(sidebar.textContent).toContain("kept changing");
-  await retry();
-  expect(harness.list).toHaveBeenCalledTimes(5);
 });
 
 it("retains a queued child refresh failure until explicit retry", async () => {

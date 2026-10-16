@@ -3,7 +3,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import type { AgentsListResult, GatewaySessionRow } from "../api/types.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { SessionRowObservation } from "../lib/sessions/index.ts";
 import type { SessionPatch, SessionPatchResult } from "../lib/sessions/patch.ts";
@@ -77,16 +77,27 @@ it.each(["after describe", "while pinning and reading", "after a successor list"
       activeRunIds: [],
       lastRunId: "work-run",
     };
-    const workList = deferred<SessionsListResult>();
-    const recoveryList = deferred<SessionsListResult>();
-    const workDescribe = deferred<{ session: GatewaySessionRow }>();
-    const slowDescribe = deferred<{ session: GatewaySessionRow }>();
-    const pinReply = deferred<SessionPatchResult>();
-    const readReply = deferred<SessionPatchResult>();
-    const unpinReply = deferred<SessionPatchResult>();
+    let currentWork = work;
+    const cleanups: Array<() => Promise<unknown>> = [];
+    const pending = <T>(fallback: () => T) => {
+      const reply = deferred<T>();
+      cleanups.push(() => {
+        reply.resolve(fallback());
+        return reply.promise;
+      });
+      return reply;
+    };
+    const list = () => sessionsResult([currentWork], 500);
+    const describe = () => ({ session: currentWork });
+    const workDescribe = pending(describe);
+    const workList = pending(list);
+    const recoveryList = pending(list);
+    const slowDescribe = pending(describe);
+    const pinReply = pending(acknowledgment);
+    const readReply = pending(acknowledgment);
+    const unpinReply = pending(acknowledgment);
     let workListRequests = 0;
     let describeRequests = 0;
-    let currentWork = work;
     const request = vi.fn(async (method: string, params?: unknown) => {
       switch (method) {
         case "sessions.subscribe":
@@ -321,16 +332,13 @@ it.each(["after describe", "while pinning and reading", "after a successor list"
         assertMainUnchanged();
         return;
       }
-      currentWork = updated;
-      publishWork(updated);
-      await settleLitElement(sidebar);
-      assertAlias(updated);
-      assertMainUnchanged();
-      currentWork = completed;
-      publishWork(completed, true);
-      await settleLitElement(sidebar);
-      assertAlias(completed);
-      assertMainUnchanged();
+      for (const row of [updated, completed]) {
+        currentWork = row;
+        publishWork(row, row === completed);
+        await settleLitElement(sidebar);
+        assertAlias(row);
+        assertMainUnchanged();
+      }
 
       recovery = sessions.refresh({ agentId: "work", force: true });
       recoveryList.resolve(sessionsResult([completed], 500));
@@ -348,23 +356,11 @@ it.each(["after describe", "while pinning and reading", "after a successor list"
       provider.remove();
       observation?.dispose();
       sessions.dispose();
-      workDescribe.resolve({ session: currentWork });
-      workList.resolve(sessionsResult([currentWork], 500));
-      recoveryList.resolve(sessionsResult([currentWork], 500));
-      slowDescribe.resolve({ session: currentWork });
-      for (const reply of [pinReply, readReply, unpinReply]) {
-        reply.resolve(acknowledgment());
-      }
       await Promise.allSettled([
-        workDescribe.promise,
-        workList.promise,
-        recoveryList.promise,
+        ...cleanups.map((cleanup) => cleanup()),
         recovery,
         action,
         slowResponse,
-        pinReply.promise,
-        readReply.promise,
-        unpinReply.promise,
       ]);
       await vi.dynamicImportSettled();
       await sidebar.updateComplete;
