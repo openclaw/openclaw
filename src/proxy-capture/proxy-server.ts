@@ -12,11 +12,11 @@ import { URL } from "node:url";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { ensureDebugProxyCa } from "./ca.js";
 import { createDebugProxyChildCaptureReceiver } from "./child-server.js";
-import type { DebugProxyCliStore } from "./cli-contract.js";
 import type { DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders } from "./header-redaction.js";
 import { reportCapturePersistenceFailure } from "./runtime-owner.js";
 import { acquireDebugProxyCaptureStoreAsync } from "./store.async.js";
+import type { DebugProxyCliStore } from "./store.types.js";
 import type { CaptureEventRecord } from "./types.js";
 
 const DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE =

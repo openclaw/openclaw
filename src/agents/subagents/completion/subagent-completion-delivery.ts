@@ -43,7 +43,7 @@ export async function admitCorrelatedSubagentSessionDelivery(params: {
   payload: Extract<QueuedSessionDeliveryPayload, { kind: "agentTurn" }>;
   queueContext: OpenClawStateWorkerContext;
 }): Promise<{ id: string; claimed: boolean; status: DeliveryQueueStoredStatus }> {
-  const payload = structuredClone(params.payload);
+  const payload = params.payload;
   const runId = params.runId;
   const context = params.queueContext;
   const expected = subagentRuns.get(runId);

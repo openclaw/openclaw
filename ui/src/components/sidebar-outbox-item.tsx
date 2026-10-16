@@ -18,6 +18,7 @@ export function renderSidebarOutboxItem(params: {
   context: ApplicationContext;
   onNavigate: ApplicationContext["navigate"];
 }) {
+  // Keep the mounted row and Gateway authority for retained click handlers.
   const captured = untrack(() => ({ entry: params.entry, context: params.context }));
   const context = captured.context;
   const connectionRevision = context.gateway.connectionRevision;
@@ -69,13 +70,20 @@ export function renderSidebarOutboxItem(params: {
   });
   return (
     <article
-      class={`sidebar-issues-panel__details sidebar-issues-panel__details--${params.entry.severity}`}
+      class={[
+        "sidebar-issues-panel__details",
+        `sidebar-issues-panel__details--${params.entry.severity}`,
+      ]}
       data-attention-kind="outbox"
       data-outbox-id={params.entry.id}
     >
       <div class="sidebar-issues-panel__summary sidebar-outbox-row">
         <span
-          class={`sidebar-issues-panel__icon sidebar-outbox-row__icon sidebar-outbox-row__icon--${params.entry.severity}`}
+          class={[
+            "sidebar-issues-panel__icon",
+            "sidebar-outbox-row__icon",
+            `sidebar-outbox-row__icon--${params.entry.severity}`,
+          ]}
           aria-hidden="true"
         >
           <Icon name="alertTriangle" />

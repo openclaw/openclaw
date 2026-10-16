@@ -70,7 +70,7 @@ export function SessionsPageContent(props: { page: SessionsPageOwner }) {
 }
 
 export function SessionsPage(props: { routeData?: SessionsRouteData }) {
-  // Initial route options belong to this mounted page; later options use the effect.
+  // The mount seeds the sessions owner; later route receipts retarget its Gateway queries.
   const page = createSessionsPage(
     useApplication(),
     untrack(() => props.routeData),

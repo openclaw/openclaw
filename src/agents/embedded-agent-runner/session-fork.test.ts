@@ -478,6 +478,42 @@ describe("prepared session fork provider boundary", () => {
     },
   );
 
+  it("preserves opaque publication details across isolated forks", async () => {
+    const values: { byte: number; blob: string | undefined }[] = [];
+    const replay = transport([], []);
+    const parent = wrapStreamFnWithSessionFork(async (requestModel, requestContext, options) => {
+      const details = requestContext.messages.find(
+        (message) => message.role === "toolResult",
+      )?.details;
+      if (isRecord(details) && details.bytes instanceof Uint8Array) {
+        values.push({
+          byte: details.bytes[0]!,
+          blob: details.blob instanceof Blob ? await details.blob.text() : undefined,
+        });
+        new Uint8Array(details.bytes.buffer).fill(99);
+      }
+      return replay(requestModel, requestContext, options);
+    }, identity);
+    await (await parent(model, context, {})).result();
+    const bytes = new Uint8Array([7]);
+    recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+      role: "toolResult",
+      toolCallId: "lookup",
+      toolName: "lookup",
+      content: [{ type: "text", text: "Result" }],
+      details: { bytes, blob: new Blob(["Opaque result"]) },
+      isError: false,
+      timestamp: 3,
+    });
+    bytes[0] = 42;
+    await expect(fork()).resolves.toBe("Answer");
+    await expect(fork()).resolves.toBe("Answer");
+    expect(values).toEqual([
+      { byte: 7, blob: "Opaque result" },
+      { byte: 7, blob: "Opaque result" },
+    ]);
+  });
+
   it.each([
     ["openai-responses", false],
     ["openai-responses", true],

@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import pMap from "p-map";
+import { PRECOMPUTED_SUBCOMMAND_HELP_NAMES as PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS } from "../src/cli/precomputed-help-commands.js";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import { resolveCliStartupRootHelpBundleIdentity } from "./lib/cli-startup-root-help-bundle.js";
@@ -29,14 +30,6 @@ const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
 // Cold CLI boots compete for the same module graph, so CPU count is not a safe
 // proxy for module-loading throughput on a disk-contended host.
 const COMMAND_HELP_RENDER_CONCURRENCY = 2;
-const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = [
-  "config",
-  "doctor",
-  "gateway",
-  "models",
-  "plugins",
-  "sessions",
-] as const;
 const CORE_CHANNEL_ORDER = [
   "telegram",
   "whatsapp",
@@ -47,7 +40,10 @@ const CORE_CHANNEL_ORDER = [
   "signal",
   "imessage",
 ] as const;
-const generatorSignature = createHash("sha1").update(readFileSync(scriptPath)).digest("hex");
+const generatorSignature = createHash("sha1")
+  .update(readFileSync(scriptPath))
+  .update(JSON.stringify(PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS))
+  .digest("hex");
 
 type ExtensionChannelEntry = {
   id: string;

@@ -338,6 +338,26 @@ describe("model catalog display cache", () => {
     expect(modelCatalogCache.get(client)?.entries.size).toBeLessThanOrEqual(64);
   });
 
+  it("reads again after an invalidation instead of joining the earlier request", async () => {
+    const earlier = createDeferred<ModelCatalogResult>();
+    const later = createDeferred<ModelCatalogResult>();
+    const request = createGatewayRequestMock()
+      .mockReturnValueOnce(earlier.promise)
+      .mockReturnValueOnce(later.promise);
+    const client = createTestGatewayClient(request);
+    const scope = { agentId: "main" };
+    const before = loadModelCatalog(client, scope);
+    invalidateModelCatalogCache(client);
+    const after = loadModelCatalog(client, scope);
+    earlier.resolve({ models: [prepared] });
+    expect(await before).toEqual({ models: [prepared] });
+    expect(peekModelCatalog(client, scope)).toBeUndefined();
+    later.resolve({ models: [published] });
+    expect(await after).toEqual({ models: [published] });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(peekModelCatalog(client, scope)?.models).toEqual([published]);
+  });
+
   it("rejects an already retired request before transport or cached publication", async () => {
     const request = createGatewayRequestMock();
     const controller = new AbortController();

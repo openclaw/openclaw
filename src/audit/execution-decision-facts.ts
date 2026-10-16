@@ -230,10 +230,6 @@ export function recordExecutionDecisionFactInDatabase(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = decisionDb(db);
-      // The context is the authoritative tuple owner; reread it inside the commit section.
-      if (!hasExactExecutionContext(db, receipt)) {
-        throw new Error("execution decision fact requires an exact retained execution context");
-      }
       const existing = executeSqliteQueryTakeFirstSync(
         db,
         kysely

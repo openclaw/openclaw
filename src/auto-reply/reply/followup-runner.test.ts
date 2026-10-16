@@ -539,9 +539,13 @@ describe("createFollowupRunner", () => {
     const queued = createQueuedRun({ deliveryCorrelations: [{ begin: () => endCorrelation }] });
     state.admit.mockResolvedValue({ kind: "deferred", reason: "active-run" });
 
-    await expect(
-      createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(queued),
-    ).rejects.toBeInstanceOf(FollowupRunDeferredError);
+    const pending = createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
+      queued,
+    );
+    await expect(pending).rejects.toBeInstanceOf(FollowupRunDeferredError);
+    await expect(pending).rejects.toThrow(
+      "Follow-up reply lane is still active (Follow-up reply lane is still active (active-run))",
+    );
 
     expect(state.completeLifecycle).not.toHaveBeenCalled();
     expect(typing.markRunComplete).toHaveBeenCalledOnce();

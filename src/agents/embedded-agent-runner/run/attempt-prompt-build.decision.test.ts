@@ -201,8 +201,8 @@ async function fixture(
       runtimeModel: testModel.id,
       systemPromptText: "System",
       hasBaselineTools: policy.hasBaselineTools,
-      applyPromptBuildToolsAllow: (allow, decisionIsCurrent) =>
-        policy.apply(allow, decisionIsCurrent).callableToolNames,
+      applyPromptBuildToolsAllow: (allow, pruneForDecision) =>
+        policy.apply(allow, pruneForDecision).callableToolNames,
       setActiveSessionSystemPrompt: () => {},
       setLeasedSteering: () => {},
     });
@@ -229,11 +229,6 @@ async function fixture(
       onSteeringAcknowledged: () => {},
       assertHostActive: assembly.assertHostActive,
       persistToolResultProjections,
-      preparePrimaryModelRequest: () =>
-        policy.prepareForDispatch(async () => () => ({
-          tools: session.agent.state.tools.slice(),
-          systemPrompt: session.agent.state.systemPrompt,
-        })),
       promptActiveSession: (prompt, options) => session.prompt(prompt, options),
     });
   };
@@ -333,14 +328,13 @@ describe("prompt assembly with registered Decision runtime", () => {
     },
   );
   it.each(["structured", "search", "code"] as const)(
-    "keeps admitted opt-out results but withdraws model changes at final %s dispatch",
+    "keeps the admitted Decision result for final %s dispatch",
     async (mode) => {
       for (const change of ["opt-out", "model-change"] as const) {
         register();
         const cfg = config();
         setRuntimeConfigSnapshot(cfg);
         const f = await fixture(cfg, mode);
-        const baseline = f.session.agent.state.tools.map((t) => t.name);
         const assembly = await f.assemble();
         expect(f.session.getActiveToolNames()).toEqual(["message"]);
         const entered = createDeferredCore();
@@ -365,18 +359,14 @@ describe("prompt assembly with registered Decision runtime", () => {
         setRuntimeConfigSnapshot(next);
         barrier.resolve();
         await pending;
-        const expected = change === "opt-out" ? ["message"] : baseline;
+        const expected = ["message"];
         expect(captured).toEqual([expected]);
         expect(f.session.getActiveToolNames()).toEqual(expected);
-        expect(f.policy.current.callableToolNames.includes("inspect_file")).toBe(
-          change === "model-change",
-        );
+        expect(f.policy.current.callableToolNames).not.toContain("inspect_file");
         expect(f.policy.current.callableToolNames).not.toContain("denied");
         expect(f.policy.current.tools.map((t) => t.name)).toContain("message");
         if (f.catalogRef) {
-          expect(f.catalogRef.current?.entries.map((e) => e.name)).toEqual(
-            change === "opt-out" ? [] : ["decision_evaluate", "inspect_file"],
-          );
+          expect(f.catalogRef.current?.entries).toEqual([]);
         }
       }
     },
