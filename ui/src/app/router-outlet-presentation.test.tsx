@@ -1,23 +1,29 @@
-// @vitest-environment node
+/* @vitest-environment jsdom */
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createRouter, definePage, type RouteLocation } from "@openclaw/uirouter";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { JSX } from "@solidjs/web";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
-import { RouterOutletController, selectRenderedRouteMatch } from "./router-outlet-controller.ts";
+import type { SolidRouteProps } from "../app-route-types.ts";
+import {
+  disposeRouterOutlets,
+  mountRouterOutlet,
+  settleRouterOutlet,
+} from "./router-outlet.test-support.tsx";
 
 type RouteId = "first" | "second";
 type TestContext = { label: string };
-type TestModule = { render: (data: TestData | undefined) => unknown };
+type TestModule = { renderSolid: (props: SolidRouteProps<TestData>) => JSX.Element };
 type TestData = { label: string };
 
 function location(pathname: string): RouteLocation {
   return { pathname, search: "", hash: "" };
 }
-
 function module(label: string): TestModule {
-  return { render: () => label };
+  return {
+    renderSolid: (props) => <section data-route={label}>{props.data?.label ?? "pending"}</section>,
+  };
 }
-
 async function flushPromises(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -25,11 +31,12 @@ async function flushPromises(): Promise<void> {
 }
 
 afterEach(() => {
+  disposeRouterOutlets();
   vi.useRealTimers();
 });
 
-describe("RouterOutletController pending presentation", () => {
-  it("carries the last settled match through a cold and module-loaded navigation", async () => {
+describe("router outlet pending presentation", () => {
+  it("keeps the previous page through a cold navigation and updates the loaded destination", async () => {
     vi.useFakeTimers();
     const secondModule = createDeferredCore<TestModule>();
     const secondData = createDeferredCore<TestData>();
@@ -49,47 +56,33 @@ describe("RouterOutletController pending presentation", () => {
         }),
       ],
     });
-    const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
-      vi.fn(),
-    );
-    controller.setInputs({ router });
-    controller.connect();
+    onTestFinished(() => router.stop());
+    const outlet = mountRouterOutlet({ router });
     await router.navigate("first", { label: "test" });
-    expect(controller.snapshot.settled).toBe(controller.snapshot.active);
-    expect(controller.snapshot.settled?.routeId).toBe("first");
-
+    await settleRouterOutlet(outlet);
+    const firstPage = outlet.querySelector('[data-route="first"]');
     const navigation = router.navigate("second", { label: "test" });
-    expect(
-      selectRenderedRouteMatch(controller.snapshot.active, controller.snapshot.pending)?.routeId,
-    ).toBe("first");
-    expect(controller.snapshot.settled?.routeId).toBe("first");
+    expect(outlet.presentationSettled).toBe(false);
+    await settleRouterOutlet(outlet);
+    expect(outlet.querySelector('[data-route="first"]')).toBe(firstPage);
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(controller.snapshot.showPending).toBe(false);
-
+    expect(outlet.querySelector('[role="status"]')).toBeNull();
     secondModule.resolve(module("second"));
     await flushPromises();
-    expect(
-      selectRenderedRouteMatch(controller.snapshot.active, controller.snapshot.pending)?.routeId,
-    ).toBe("second");
-    expect(controller.snapshot.active?.data).toBeUndefined();
-    expect(controller.snapshot.active?.status).toBe("pending");
-    expect(controller.snapshot.settled?.routeId).toBe("first");
-
+    await settleRouterOutlet(outlet);
+    expect(outlet.querySelector('[data-route="second"]')?.textContent).toBe("pending");
     secondData.resolve({ label: "second" });
     await navigation;
-    expect(controller.snapshot.active?.routeId).toBe("second");
-    expect(controller.snapshot.settled).toBe(controller.snapshot.active);
-
+    await settleRouterOutlet(outlet);
+    expect(outlet.querySelector('[data-route="second"]')?.textContent).toBe("second");
     const replacement = createRouter<RouteId, TestContext, TestModule, TestData>({ routes: [] });
-    controller.setInputs({ router: replacement });
-    expect(controller.snapshot.status).toBe("idle");
-    expect(controller.snapshot.settled).toBeUndefined();
-    controller.disconnect();
-    router.stop();
-    replacement.stop();
+    onTestFinished(() => replacement.stop());
+    outlet.setInputs({ router: replacement });
+    await settleRouterOutlet(outlet);
+    expect(outlet.querySelector("section")).toBeNull();
   });
 
-  it("restarts a canceled pending delay after reconnect", async () => {
+  it("cancels the pending delay on disposal and starts a full delay for a new owner", async () => {
     vi.useFakeTimers();
     const routeModule = createDeferredCore<TestModule>();
     const routeData = createDeferredCore<TestData>();
@@ -103,35 +96,31 @@ describe("RouterOutletController pending presentation", () => {
         }),
       ],
     });
-    const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
-      vi.fn(),
-    );
-    controller.setInputs({ router });
-    controller.connect();
+    onTestFinished(() => router.stop());
+    let outlet = mountRouterOutlet({ router });
     const navigation = router.navigate("first", { label: "test" });
-
     await vi.advanceTimersByTimeAsync(500);
-    controller.disconnect();
+    outlet.dispose();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(controller.snapshot.showPending).toBe(false);
-
-    controller.connect();
+    outlet = mountRouterOutlet({ router });
     await vi.advanceTimersByTimeAsync(999);
-    expect(controller.snapshot.showPending).toBe(false);
+    await settleRouterOutlet(outlet);
+    expect(outlet.querySelector('[role="status"]')).toBeNull();
     await vi.advanceTimersByTimeAsync(1);
-    expect(controller.snapshot.showPending).toBe(true);
-
+    await settleRouterOutlet(outlet);
+    expect(outlet.querySelector('[role="status"]')).not.toBeNull();
     routeModule.resolve(module("first"));
     routeData.resolve({ label: "loaded" });
     await navigation;
-    controller.disconnect();
-    router.stop();
+    await settleRouterOutlet(outlet);
+    expect(outlet.querySelector('[data-route="first"]')?.textContent).toBe("loaded");
+    expect(outlet.querySelector('[role="status"]')).toBeNull();
   });
 });
 
-describe("RouterOutletController not-found boundary", () => {
+describe("router outlet not-found recovery", () => {
   function createTestRouter() {
-    return createRouter<RouteId, TestContext, TestModule, TestData>({
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
         definePage({
           id: "first",
@@ -141,47 +130,50 @@ describe("RouterOutletController not-found boundary", () => {
         }),
       ],
     });
+    onTestFinished(() => router.stop());
+    return router;
   }
 
   it("notifies once for an unmatched location", async () => {
     const router = createTestRouter();
     const onNotFound = vi.fn();
-    const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
-      vi.fn(),
-    );
-    controller.setInputs({ router, onNotFound });
-    controller.connect();
-
+    const outlet = mountRouterOutlet({ router, onNotFound });
     await router.navigateLocation(location("/missing"), { label: "test" });
     await flushPromises();
     expect(onNotFound).toHaveBeenCalledTimes(1);
-
-    controller.setInputs({ router, onNotFound });
+    outlet.setInputs({ onNotFound });
     await flushPromises();
     expect(onNotFound).toHaveBeenCalledTimes(1);
-    controller.disconnect();
-    router.stop();
   });
 
-  it("suppresses a queued fallback after the router recovers", async () => {
+  it("suppresses queued recovery after a new navigation", async () => {
     const router = createTestRouter();
     const onNotFound = vi.fn();
-    const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
-      vi.fn(),
-    );
-    controller.setInputs({ router, onNotFound });
-    controller.connect();
-
+    const outlet = mountRouterOutlet({ router, onNotFound });
     const missing = router.navigateLocation(location("/missing"), { label: "test" });
     const recovery = router.navigate("first", { label: "test" });
     await Promise.all([missing, recovery]);
-    await flushPromises();
+    await settleRouterOutlet(outlet);
     expect(onNotFound).not.toHaveBeenCalled();
-    controller.disconnect();
-    router.stop();
+    expect(outlet.querySelector('[data-route="first"]')?.textContent).toBe("first");
   });
 
-  it("keeps a navigation started by an earlier not-found subscriber", async () => {
+  it("settles a replacement source with the same not-found presentation", async () => {
+    const first = createTestRouter();
+    const second = createTestRouter();
+    await first.navigateLocation(location("/missing"), { label: "test" });
+    await second.navigateLocation(location("/missing"), { label: "test" });
+    const onNotFound = vi.fn();
+    const outlet = mountRouterOutlet({ router: first, onNotFound });
+    await settleRouterOutlet(outlet);
+    expect(outlet.presentationSettled).toBe(true);
+    outlet.setInputs({ router: second });
+    await settleRouterOutlet(outlet);
+    expect(outlet.presentationSettled).toBe(true);
+    expect(onNotFound).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves navigation started by an earlier not-found subscriber", async () => {
     const secondModule = createDeferredCore<TestModule>();
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
@@ -201,6 +193,7 @@ describe("RouterOutletController not-found boundary", () => {
         }),
       ],
     });
+    onTestFinished(() => router.stop());
     let recovery: Promise<void> | undefined;
     let redirected = false;
     const unsubscribe = router.subscribe((state) => {
@@ -209,82 +202,60 @@ describe("RouterOutletController not-found boundary", () => {
         recovery = router.navigate("second", { label: "test" });
       }
     });
+    onTestFinished(() => {
+      unsubscribe();
+    });
     const onNotFound = vi.fn();
-    const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
-      vi.fn(),
-    );
-    controller.setInputs({ router, onNotFound });
-    controller.connect();
+    const outlet = mountRouterOutlet({ router, onNotFound });
     try {
       await expect(router.navigate("first", { label: "test" })).rejects.toMatchObject({
         type: "notFound",
       });
       await flushPromises();
-
       expect(router.getState().status).toBe("loading");
       expect(onNotFound).not.toHaveBeenCalled();
-      expect(controller.snapshot.pending?.routeId).toBe("second");
     } finally {
       secondModule.resolve(module("second"));
       await recovery;
-      unsubscribe();
-      controller.disconnect();
-      router.stop();
     }
+    await settleRouterOutlet(outlet);
+    expect(outlet.querySelector('[data-route="second"]')?.textContent).toBe("second");
   });
 
-  it("cancels the queued fallback on disconnect and re-evaluates it on reconnect", async () => {
+  it("cancels queued recovery on disposal and evaluates it for the next owner", async () => {
     const router = createTestRouter();
     const onNotFound = vi.fn();
-    const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
-      vi.fn(),
-    );
-    controller.setInputs({ router, onNotFound });
-    controller.connect();
-
+    let outlet = mountRouterOutlet({ router, onNotFound });
     const missing = router.navigateLocation(location("/missing"), { label: "test" });
-    controller.disconnect();
+    outlet.dispose();
     await missing;
     await flushPromises();
     expect(onNotFound).not.toHaveBeenCalled();
-
-    controller.connect();
-    await flushPromises();
+    outlet = mountRouterOutlet({ router, onNotFound });
+    await settleRouterOutlet(outlet);
     expect(onNotFound).toHaveBeenCalledTimes(1);
-    controller.disconnect();
-    router.stop();
   });
 
-  it("retries a declined fallback once recovery becomes ready", async () => {
+  it("retries a declined recovery once readiness changes", async () => {
     const router = createTestRouter();
     const onNotFound = vi.fn(() => false);
-    const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
-      vi.fn(),
-    );
-    controller.setInputs({ router, onNotFound, notFoundRecoveryReady: false });
-    controller.connect();
-
+    const outlet = mountRouterOutlet({ router, onNotFound, notFoundRecoveryReady: false });
     await router.navigateLocation(location("/missing"), { label: "test" });
     await flushPromises();
     expect(onNotFound).toHaveBeenCalledTimes(1);
-
-    controller.setInputs({ router, onNotFound, notFoundRecoveryReady: false });
+    outlet.setInputs({ notFoundRecoveryReady: false });
     await flushPromises();
     expect(onNotFound).toHaveBeenCalledTimes(1);
-
-    controller.setInputs({ router, onNotFound, notFoundRecoveryReady: true });
+    outlet.setInputs({ notFoundRecoveryReady: true });
     await flushPromises();
     expect(onNotFound).toHaveBeenCalledTimes(2);
-
-    controller.setInputs({ router, onNotFound, notFoundRecoveryReady: true });
+    outlet.setInputs({ notFoundRecoveryReady: true });
     await flushPromises();
     expect(onNotFound).toHaveBeenCalledTimes(2);
-    controller.disconnect();
-    router.stop();
   });
 });
 
-describe("RouterOutletController agent startup", () => {
+describe("router outlet agent startup", () => {
   it.each(["navigation", "disconnect", "offline", "context"] as const)(
     "retires startup retries on %s without reviving the old route",
     async (boundary) => {
@@ -314,29 +285,29 @@ describe("RouterOutletController agent startup", () => {
           }),
         ],
       });
-      const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
-        vi.fn(),
-      );
+      onTestFinished(() => router.stop());
       const retryContext = { label: "test" };
-      controller.setInputs({ router, retryContext });
-      controller.connect();
+      const outlet = mountRouterOutlet({ router, retryContext });
       await router.navigate("first", retryContext).catch(() => undefined);
-      expect(controller.snapshot.startupPending).toBe(true);
+      await settleRouterOutlet(outlet);
+      expect(outlet.querySelector(".agent-startup-state")).not.toBeNull();
       await vi.advanceTimersByTimeAsync(499);
       expect(read).toHaveBeenCalledTimes(1);
       if (boundary === "navigation") {
         await router.navigate("second", retryContext);
       } else if (boundary === "disconnect") {
-        controller.disconnect();
+        outlet.dispose();
       } else if (boundary === "offline") {
-        controller.setInputs({ router, retryContext, retryEnabled: false });
+        outlet.setInputs({ retryEnabled: false });
       } else {
-        controller.setInputs({ router });
+        outlet.setInputs({ retryContext: undefined });
       }
       await vi.advanceTimersByTimeAsync(180_000);
       expect(read).toHaveBeenCalledTimes(1);
-      controller.disconnect();
-      router.stop();
+      if (boundary === "navigation") {
+        await settleRouterOutlet(outlet);
+        expect(outlet.querySelector('[data-route="second"]')?.textContent).toBe("ready");
+      }
     },
   );
 });

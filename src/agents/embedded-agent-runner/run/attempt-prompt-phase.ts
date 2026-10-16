@@ -111,7 +111,9 @@ export async function runEmbeddedAttemptPromptPhase(
   const withTranscriptWrite = <T>(write: () => Promise<T>) =>
     withOwnedTranscriptWrite(() => withSessionManagerAppend(sessionManager, write));
   const observeForegroundRequests = (
-    onRequest: NonNullable<PreparedStreamRuntime["cache"]["onModelRequest"]>,
+    onRequest: (
+      ...args: Parameters<NonNullable<PreparedStreamRuntime["cache"]["onModelRequest"]>>
+    ) => void,
   ) => {
     const streamFn = activeSession.agent.streamFn;
     activeSession.agent.streamFn = (model, context, options) => {

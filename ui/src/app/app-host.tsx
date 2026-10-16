@@ -92,7 +92,7 @@ export class ShellOwner
   readiness: ControlUiReadiness | undefined;
   onboarding = false;
   private readonly cleanups: Array<() => void> = [];
-  readonly shellLayout = new ShellLayoutOwner(() => this.invalidate());
+  readonly shellLayout = new ShellLayoutOwner();
   readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
@@ -254,7 +254,7 @@ export class ShellOwner
   get isConnected() {
     return this.element.isConnected;
   }
-  // Temporary callback ABI used by unported lazy-element and layout owners.
+  // Temporary callback ABI used by unported lazy-element and chrome owners.
   readonly requestUpdate = () => this.invalidate();
 
   replaceRuntime(runtime: ApplicationRuntime): void {

@@ -2893,6 +2893,7 @@ export const en: TranslationMap & {
       preparingCloudEnvironment: "Preparing cloud environment…",
       savingSnapshot: "Saving snapshot…",
       preparingContext: "Preparing this turn…",
+      waitingForTurn: "Waiting for turn to start…",
       memoryFlushing: "Saving conversation memory…",
       startingModel: "Waiting for a response",
       waitingForLocalModel: "Waiting for the local model to respond",
