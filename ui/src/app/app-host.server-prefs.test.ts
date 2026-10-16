@@ -97,6 +97,7 @@ async function loadPreferenceRealm(scope: string) {
   return {
     prefs,
     settings,
+    server: fixtures.createProfilePrefsServer,
     read: () => settings.loadSettings(scope).sidebarEntries,
     apply: (config = {}) =>
       reconcile.applyServerUiPrefs(config, { scope, profileId: "profile-a", onApplied: vi.fn() }),
@@ -141,34 +142,22 @@ describe("profile preference ACK publication across browser realms", () => {
       const pendingKey = `openclaw.control.serverPrefs.pending.v1:${scope}:profile:profile-a`;
       const lastSeenKey = `openclaw.control.serverPrefs.v1:${scope}:profile:profile-a`;
       const lastSeenPins = () => JSON.parse(localStorage.getItem(lastSeenKey)!).railShortcuts;
-      const server: Record<string, unknown> = { [pinsKey]: ["route:usage"] };
+      const a = await loadPreferenceRealm(scope);
+      const serverFixture = a.server({ "profile-a": { [pinsKey]: ["route:usage"] } }, scope);
+      const server = serverFixture.profiles["profile-a"]!;
       const aCommitted = createDeferred();
       const aReply = createDeferred<unknown>();
-      const requestFor = (holdReply: boolean) =>
-        vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
-          if (method === "users.prefs.get") {
-            return { status: "ok", entries: structuredClone(server) };
-          }
-          if (method !== "users.prefs.set") {
-            throw new Error("Unexpected request: " + method);
-          }
-          const mutation = params as {
-            entries: Record<string, unknown>;
-            expectedEntries: Record<string, unknown>;
-          };
-          for (const [key, value] of Object.entries(mutation.expectedEntries)) {
-            if (JSON.stringify(server[key] ?? null) !== JSON.stringify(value)) {
-              return { status: "conflict" };
-            }
-          }
-          Object.assign(server, structuredClone(mutation.entries));
-          if (holdReply) {
+      const requestFor = (holdReply: boolean) => {
+        const { request } = serverFixture.connect("profile-a");
+        return vi.fn(async (method: string, params?: unknown) => {
+          const result = await request(method, params);
+          if (holdReply && method === "users.prefs.set") {
             aCommitted.resolve();
-            return aReply.promise;
+            await aReply.promise;
           }
-          return { status: "ok" };
+          return result;
         });
-      const a = await loadPreferenceRealm(scope);
+      };
       const aRequest = requestFor(true);
       const aWriter = a.writer(aRequest);
       let b: Awaited<ReturnType<typeof loadPreferenceRealm>> | undefined;

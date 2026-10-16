@@ -8,9 +8,7 @@ function publisher<T>(initial: T) {
   let value = initial;
   const listeners = new Set<(next: T) => void>();
   return {
-    get value() {
-      return value;
-    },
+    read: () => value,
     subscribe(listener: (next: T) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -26,21 +24,19 @@ function publisher<T>(initial: T) {
 
 function createGateway(assistantAgentId: string | null = "Main") {
   const snapshot = publisher({ assistantAgentId });
-  let gatewayUrl = "ws://gateway-a.test";
+  const connection = { gatewayUrl: "ws://gateway-a.test" };
   return {
     gateway: {
-      get connection() {
-        return { gatewayUrl };
-      },
+      connection,
       get snapshot() {
-        return snapshot.value;
+        return snapshot.read();
       },
       subscribe: snapshot.subscribe,
     },
     publish: snapshot.publish,
     switchGateway(url: string) {
-      gatewayUrl = url;
-      snapshot.publish(snapshot.value);
+      connection.gatewayUrl = url;
+      snapshot.publish(snapshot.read());
     },
   };
 }
@@ -50,7 +46,7 @@ function createRoster() {
   return {
     roster: {
       get state() {
-        return state.value;
+        return state.read();
       },
       subscribe: state.subscribe,
     },

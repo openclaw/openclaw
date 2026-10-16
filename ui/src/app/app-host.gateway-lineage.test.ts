@@ -8,6 +8,7 @@ import type {
   GatewayHelloOk,
 } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
+import type { LoginGateElement } from "../components/login-gate.ts";
 import { captureChatOutboxAdmission, storageTargetForComposer } from "../lib/chat/outbox-store.ts";
 import "../components/login-gate.ts";
 import {
@@ -41,6 +42,7 @@ import { mountOpenClawApp } from "./app-root.tsx";
 import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
+import { GATEWAY_STORE_TEST_HELLO as HELLO } from "./gateway-store.test-support.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
 
@@ -50,12 +52,6 @@ vi.mock("./app-host.tsx", () => ({
 }));
 
 const mountedSurfaces: Array<() => void> = [];
-
-const HELLO: GatewayHelloOk = {
-  type: "hello-ok",
-  protocol: 1,
-  auth: { role: "operator", scopes: [] },
-};
 
 function createGatewayHarness() {
   vi.stubGlobal("localStorage", createStorageMock());
@@ -79,19 +75,14 @@ function createGatewayHarness() {
         client.recoveryScopeReady = false;
       }),
       request: createGatewayRequestMock(async (method: string) => {
-        if (method === "sessions.list") {
-          return sessionsResult([], 1);
-        }
-        if (method === "chat.startup" || method === "chat.history") {
-          return { messages: [] };
-        }
-        if (method === "chat.metadata") {
-          return { models: [], commands: [] };
-        }
-        if (method === "sessions.branches.list") {
-          return { branches: [] };
-        }
-        return {};
+        const replies: Record<string, unknown> = {
+          "sessions.list": sessionsResult([], 1),
+          "chat.startup": { messages: [] },
+          "chat.history": { messages: [] },
+          "chat.metadata": { models: [], commands: [] },
+          "sessions.branches.list": { branches: [] },
+        };
+        return replies[method] ?? {};
       }),
     };
     clients.push(client);
@@ -377,16 +368,11 @@ describe("Control UI Gateway target lineage", () => {
     gateway.connect({ token: "old-token", password: "old-password" });
     close();
     const { container } = await createGatewaySurface(gateway);
-    const loginGate = container.querySelector("openclaw-login-gate") as unknown as {
-      props: {
-        onGatewayUrlChange: (value: string) => void;
-        onConnect: () => void;
-      };
-    };
+    const login = container.querySelector<LoginGateElement>("openclaw-login-gate")!;
 
-    loginGate.props.onGatewayUrlChange("wss://other-gateway.example.test");
+    login.props!.onGatewayUrlChange("wss://other-gateway.example.test");
     await settleRootContent();
-    loginGate.props.onConnect();
+    login.props!.onConnect();
 
     expect([clients[1]?.opts.token, clients[1]?.opts.password]).toEqual([undefined, undefined]);
   });
@@ -396,11 +382,9 @@ describe("Control UI Gateway target lineage", () => {
     gateway.start();
     close(0, "manual connection required");
     const { container, draw } = await createGatewaySurface(gateway);
-    const loginGate = container.querySelector("openclaw-login-gate") as unknown as {
-      props: { onConnect: () => void };
-    };
+    const login = container.querySelector<LoginGateElement>("openclaw-login-gate")!;
 
-    loginGate.props.onConnect();
+    login.props!.onConnect();
     starting(1);
     await draw();
 
