@@ -64,24 +64,25 @@ export function normalizeCronRunTimestamps(record: CronRunRecord): CronRunRecord
   return { ...record, createdAt, startedAt, endedAt, lastEventAt };
 }
 
+/** Detail members the maintenance planner reads: `storeKey` groups rows, `kind` partitions retention. */
+const CRON_RUN_PLANNING_DETAIL_KEYS = ["storeKey", "kind"];
+
 /** Reads only Cron facts from the admitted released table, without restoring Tasks. */
 export function readCronRunRecordsInDatabase(
   db: EngineConnection,
   jobId?: string,
   runId?: string,
   options?: {
-    /** Detail members to read; omit to read the whole retained payload. */
-    detailKeys?: readonly string[];
-    /** Read `terminal_summary`; a sweep that only writes it back may skip the column. */
-    terminalSummary?: boolean;
+    /**
+     * Read only the facts maintenance plans on: identities, lifecycle, and the `storeKey`/`kind`
+     * detail members that group and partition retention. Payloads stay in SQLite.
+     */
+    planningOnly?: boolean;
+    /** Restrict the read to these task ids. */
     taskIds?: readonly string[];
   },
 ): CronRunRecord[] {
-  // A maintenance sweep decides on identities and lifecycle facts, then loads the retained payloads
-  // only for the runs it will reconcile. Projecting the decision members keeps the row shape and the
-  // decode below unchanged while leaving a whole history unmaterialized.
-  const terminalSummary = options?.terminalSummary !== false;
-  const detailKeys = options?.detailKeys;
+  const planningOnly = options?.planningOnly === true;
   let select = query(db)
     .selectFrom("task_runs")
     .select((eb) => [
@@ -101,11 +102,19 @@ export function readCronRunRecordsInDatabase(
       "notify_policy",
       "terminal_outcome",
       "error",
-      terminalSummary ? "terminal_summary" : sql<string | null>`NULL`.as("terminal_summary"),
-      detailKeys === undefined
-        ? "detail_json"
-        : sql<string | null>`CASE WHEN ${jsonValid(db, eb.ref("detail_json"))}
-            THEN ${jsonPickObject(db, eb.ref("detail_json"), detailKeys)} END`.as("detail_json"),
+      planningOnly
+        ? /* kysely-allow-raw: Planning never reads the summary; keep the decoded row shape. */ sql<
+            string | null
+          >`NULL`.as("terminal_summary")
+        : "terminal_summary",
+      planningOnly
+        ? /* kysely-allow-raw: Portable CASE bounds large JSON before it crosses the driver. */ sql<
+            string | null
+          >`CASE WHEN ${jsonValid(db, eb.ref("detail_json"))}
+            THEN ${jsonPickObject(db, eb.ref("detail_json"), CRON_RUN_PLANNING_DETAIL_KEYS)} END`.as(
+            "detail_json",
+          )
+        : "detail_json",
     ])
     .where("runtime", "=", "cron")
     .orderBy("created_at", "asc")
@@ -116,7 +125,7 @@ export function readCronRunRecordsInDatabase(
   if (runId !== undefined) {
     select = select.where("run_id", "=", runId);
   }
-  if (options?.taskIds !== undefined && options.taskIds.length > 0) {
+  if (options?.taskIds !== undefined) {
     select = select.where("task_id", "in", [...options.taskIds]);
   }
   return executeSqliteQuerySync(db, select).rows.map((row) => {
@@ -352,13 +361,6 @@ function pruneCronRunHistoryInDatabase(
 }
 
 /** Plan synchronous maintenance on the serialized writer before opening a write transaction. */
-/**
- * Detail members the history planner reads while deciding what to retain or reconcile: the store
- * key groups rows, and `kind` partitions per-job retention. Everything else in `detail_json` is
- * only written back, so a sweep may read it after planning instead of materializing it up front.
- */
-export const CRON_RUN_MAINTENANCE_DETAIL_KEYS = ["storeKey", "kind"] as const;
-
 export function planCronRunHistoryMaintenance(
   records: readonly CronRunRecord[],
   now: number,

@@ -1,5 +1,5 @@
-import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
@@ -8,13 +8,12 @@ import type { CronJobPolicyContext } from "../service/state.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
 import {
   applyCronRunHistoryMaintenanceInDatabase,
-  CRON_RUN_MAINTENANCE_DETAIL_KEYS,
   planCronRunHistoryMaintenance,
   readCronRunRecordsInDatabase,
 } from "./run-history.kernel.js";
+import type { CronRunRecord } from "./run-history.types.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
-import type { CronRunRecord } from "./run-history.types.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import {
   loadCronRuntimeAuthorities,
@@ -31,11 +30,10 @@ export function maintainCronRunHistoryInWorker(
   database: OpenClawStateDatabase,
   input: { snapshot: CronRuntimeMutationContracts["cron.maintainHistory"]["snapshot"] },
 ): CronRuntimeWorkerOperations["cron.maintainHistory"]["output"] {
-  // Identities and lifecycle facts decide this sweep. The retained payloads are loaded below for
-  // the runs it will reconcile, so a large history is never materialized whole.
+  // Planning facts decide this sweep; retained payloads load below only for runs it reconciles,
+  // so a large history is never materialized whole in the heap-limited worker.
   const records = readCronRunRecordsInDatabase(database.db, undefined, undefined, {
-    detailKeys: CRON_RUN_MAINTENANCE_DETAIL_KEYS,
-    terminalSummary: false,
+    planningOnly: true,
   });
   const jobIds = [
     ...new Set(
@@ -82,48 +80,41 @@ export function maintainCronRunHistoryInWorker(
 }
 
 /**
- * Plans the sweep once from identities, then loads the retained payloads only for the runs it will
- * reconcile. The planner reads a reconciled row's `summary`/`detail` and those of its recovery
- * candidate, so rows sharing a job and run load together; an active row without a run identity is
- * loaded by task id, which is also the only payload the planner can read for it.
+ * Reconciliation copies the reconciled row's own payload, or that of its recovery candidate, which
+ * shares the row's exact job and run identity. Load full payloads for exactly those rows, by task
+ * id, and replan on them; every other row keeps its planning projection.
  */
 function withReconciliationPayloads(
   db: EngineConnection,
   records: readonly CronRunRecord[],
   nowMs: number,
   protectedJobs: ReadonlySet<string>,
-): CronRunRecord[] {
+): readonly CronRunRecord[] {
   const draft = planCronRunHistoryMaintenance(records, nowMs, protectedJobs);
   if (draft.reconciliations.length === 0) {
-    return [...records];
+    return records;
   }
-  const runs = new Map<string, { jobId: string; runId: string }>();
-  const unkeyedTaskIds: string[] = [];
-  for (const row of draft.reconciliations) {
-    const jobId = row.jobId?.trim();
-    const runId = row.runId?.trim();
-    if (jobId && runId) {
-      runs.set(`${jobId}\u0000${runId}`, { jobId, runId });
-    } else {
-      unkeyedTaskIds.push(row.id);
-    }
-  }
+  const runKey = (row: CronRunRecord) => JSON.stringify([row.jobId, row.runId]);
+  const reconciledRuns = new Set(
+    draft.reconciliations.flatMap((row) =>
+      row.jobId?.trim() && row.runId?.trim() ? [runKey(row)] : [],
+    ),
+  );
+  const reconciledIds = new Set(draft.reconciliations.map((row) => row.id));
+  const taskIds = records.flatMap((row) =>
+    reconciledIds.has(row.id) || reconciledRuns.has(runKey(row)) ? [row.id] : [],
+  );
   const payloads = new Map<string, CronRunRecord>();
-  for (const { jobId, runId } of runs.values()) {
-    for (const row of readCronRunRecordsInDatabase(db, jobId, runId)) {
-      payloads.set(row.id, row);
-    }
-  }
-  if (unkeyedTaskIds.length > 0) {
+  for (let offset = 0; offset < taskIds.length; offset += 500) {
     for (const row of readCronRunRecordsInDatabase(db, undefined, undefined, {
-      taskIds: unkeyedTaskIds,
+      taskIds: taskIds.slice(offset, offset + 500),
     })) {
       payloads.set(row.id, row);
     }
   }
   return records.map((row) => {
-    const filled = payloads.get(row.id);
-    return filled === undefined ? row : { ...row, summary: filled.summary, detail: filled.detail };
+    const full = payloads.get(row.id);
+    return full === undefined ? row : { ...row, summary: full.summary, detail: full.detail };
   });
 }
 
