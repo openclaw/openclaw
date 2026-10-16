@@ -434,7 +434,7 @@ export function BrowserPanelChrome(
           })
         : undefined;
     observer?.observe(viewport);
-    // Remote scrolling must cancel local scrolling before the event bubbles.
+    // SAFETY: Native wheel events are WheelEvents; cancel local scrolling before they bubble.
     const handleWheel = (event: Event) => controller.handleWheel(event as WheelEvent);
     const stopWheel = listen(viewport, "wheel", handleWheel, { passive: false });
     return () => {
