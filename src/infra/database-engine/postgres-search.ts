@@ -1,12 +1,12 @@
 import { sql, type RawBuilder } from "kysely";
 import type { PostgresSqlConnection } from "../sql-connection.js";
+import type { SearchSchema, StoreSearchCapabilities } from "./contract.js";
 import {
   assertPostgresSearchAdmitted,
   rebuildPostgresSearch,
   searchConfig,
 } from "./postgres-search-schema.js";
 import { bindPostgresVector } from "./postgres-vector.js";
-import type { SearchSchema, StoreSearchCapabilities } from "./search.js";
 import type { TextIndex, TextQuery } from "./text-contract.js";
 
 function tsquery(query: TextQuery): RawBuilder<unknown> {

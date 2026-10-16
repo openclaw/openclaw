@@ -4,7 +4,7 @@ import {
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../sqlite-database-admission.js";
-import type { SearchSchema } from "./search.js";
+import type { SearchSchema } from "./contract.js";
 
 export const pgSearchName = (name: string) => `"${name.replaceAll('"', '""')}"`;
 export const searchConfig = "openclaw_simple_unaccent";

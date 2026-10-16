@@ -8,7 +8,12 @@ import {
   runSqliteImmediateTransactionSync,
   runSqliteReadSnapshotSync,
 } from "../sqlite-transaction.js";
-import type { DatabaseEngineAdapter, DatabaseErrorKind } from "./contract.js";
+import type {
+  DatabaseEngineAdapter,
+  DatabaseErrorKind,
+  SearchSchema,
+  SearchStore,
+} from "./contract.js";
 import { observeConnection } from "./observation.js";
 import { POSTGRES_LOCK_TIMEOUT_MS, POSTGRES_STATEMENT_TIMEOUT_MS } from "./policy.js";
 import {
@@ -17,7 +22,7 @@ import {
   readPostgresSchema,
   verifyPostgresSchema,
 } from "./postgres-schema.js";
-import { bindStoreSearch, type SearchSchema, type SearchStore } from "./search.js";
+import { bindStoreSearch } from "./search.js";
 import type { DatabaseEngineInput } from "./types.js";
 
 function classifyError(error: unknown): DatabaseErrorKind {

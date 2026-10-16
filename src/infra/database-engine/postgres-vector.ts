@@ -2,8 +2,8 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sql } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import type { PostgresSqlConnection } from "../sql-connection.js";
+import type { SearchSchema } from "./contract.js";
 import { pgSearchName } from "./postgres-search-schema.js";
-import type { SearchSchema } from "./search.js";
 import { matchesVectorRow, type VectorCapability, type VectorIndex } from "./vector-contract.js";
 
 export function bindPostgresVector(
