@@ -2,6 +2,8 @@ import {
   GatewayDispatchEvents,
   type APIInteraction,
   type APIMessage,
+  type GatewayMessageCreateDispatchData,
+  type GatewayThreadCreateDispatchData,
   type APIReaction,
   type APIUnavailableGuild,
   type APIVoiceState,
@@ -46,12 +48,13 @@ export type ListenerDataByEvent = {
   [GatewayDispatchEvents.Ready]: unknown;
   [GatewayDispatchEvents.GuildCreate]: GatewayGuildCreateDispatchData | APIUnavailableGuild;
   [GatewayDispatchEvents.GuildDelete]: GatewayGuildDeleteDispatchData;
-  [GatewayDispatchEvents.MessageCreate]: APIMessage;
+  [GatewayDispatchEvents.MessageCreate]: GatewayMessageCreateDispatchData;
   [GatewayDispatchEvents.InteractionCreate]: APIInteraction;
   [GatewayDispatchEvents.MessageReactionAdd]: DiscordReactionDispatchData;
   [GatewayDispatchEvents.MessageReactionRemove]: DiscordReactionDispatchData;
   [GatewayDispatchEvents.PresenceUpdate]: GatewayPresenceUpdateDispatchData;
   [GatewayDispatchEvents.VoiceStateUpdate]: APIVoiceState;
+  [GatewayDispatchEvents.ThreadCreate]: GatewayThreadCreateDispatchData;
   [GatewayDispatchEvents.ThreadUpdate]: GatewayThreadUpdateDispatchData;
   [GatewayDispatchEvents.ThreadDelete]: GatewayThreadDeleteDispatchData;
 };

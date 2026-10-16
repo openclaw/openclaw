@@ -73,6 +73,7 @@ title: "Configuration — community chat channels"
         },
       },
       maxLinesPerMessage: 17,
+      thread: { autoName: false },
       threadBindings: {
         enabled: true,
         idleHours: 24,
@@ -124,6 +125,8 @@ title: "Configuration — community chat channels"
 - `channels.discord.mentionAliases` maps stable outbound `@handle` text to Discord user IDs before sending, so known teammates can be mentioned by their configured IDs even when the transient directory cache is empty. Per-account overrides live under `channels.discord.accounts.<accountId>.mentionAliases`.
 - `maxLinesPerMessage` (default `17`) splits tall messages even when under 2000 chars.
 - `channels.discord.suppressEmbeds` defaults to `true`, so outbound URLs do not expand into Discord link previews unless disabled. Explicit `embeds` payloads still send normally; per-message tool calls can override with `suppressEmbeds`.
+- `channels.discord.thread.autoName` opts newly created threads into AI auto-naming after a message threshold. It accepts a boolean or nonnegative integer: `false` (default) or `0` disables it, `true` uses five messages, and a positive integer sets the threshold. `channels.discord.accounts.<accountId>.thread.autoName` overrides the channel-wide value. Requires `intents.guildMembers: true` for the selected account and **Server Members Intent** in the Discord Developer Portal; otherwise naming is skipped. See [AI auto-naming](/channels/discord/threads-and-sessions#ai-auto-naming) for model processing, eligibility, and attempt limits.
+- Changing `thread.autoName` or `enabled` at the Discord channel or account scope uses the existing Discord channel restart. Before downgrading to a release without `autoName`, remove the key from the channel and every account; setting it to `false` still fails that release's strict config validation.
 - `channels.discord.threadBindings` controls Discord thread-bound routing:
   - `enabled`: Discord override for thread-bound session spawning, delivery, and routing; manage bindings with `/session unbind`, `/agents`, `/session idle`, and `/session max-age`
   - `idleHours`: Discord override for inactivity auto-unbind in hours (`0` disables)

@@ -1,4 +1,4 @@
-import type { APIInteraction } from "discord-api-types/v10";
+import { GatewayIntentBits, type APIInteraction } from "discord-api-types/v10";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { DiscordCommandDeployer } from "./command-deploy.js";
 import type { DiscordCommand } from "./commands.js";
@@ -104,6 +104,28 @@ export class Client {
 
   async fetchMember(guildId: string, userId: string): Promise<GuildMember> {
     return await this.entityCache.fetchMember(guildId, userId);
+  }
+
+  retainMemberAuthority(guildId: string, userIds: string[]) {
+    const gateway = this.getPlugin("gateway");
+    const assertGatewayCurrent = () => {
+      if (
+        !gateway?.isConnected ||
+        this.getPlugin("gateway") !== gateway ||
+        !((gateway.options.intents ?? 0) & GatewayIntentBits.GuildMembers)
+      ) {
+        throw new Error("Discord member authority requires a connected GuildMembers subscription");
+      }
+    };
+    assertGatewayCurrent();
+    const members = this.entityCache.retainMemberAuthority(guildId, userIds);
+    return {
+      assertCurrent: () => {
+        assertGatewayCurrent();
+        members.assertCurrent();
+      },
+      dispose: members.dispose,
+    };
   }
 
   async fetchGuildEmojis<T>(guildId: string, fetcher: () => Promise<T>): Promise<T> {

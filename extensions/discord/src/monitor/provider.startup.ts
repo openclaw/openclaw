@@ -40,11 +40,19 @@ import {
 } from "./listeners.js";
 import type { DiscordLivePolicyReader } from "./live-policy.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
+import { resolveDiscordThreadAutoNameThreshold } from "./thread-auto-name.config.js";
+import { DiscordThreadAutoNamer } from "./thread-auto-name.js";
+import {
+  DiscordAutoNameMessageCreateListener,
+  DiscordAutoNameThreadCreateListener,
+  DiscordAutoNameThreadDeleteListener,
+  DiscordAutoNameThreadUpdateListener,
+} from "./thread-auto-name.listeners.js";
 
 type DiscordAutoPresenceController = ReturnType<typeof createDiscordAutoPresenceController>;
 type DiscordListenerConfig = {
   dangerouslyAllowNameMatching?: boolean;
-  intents?: { presence?: boolean };
+  intents?: { presence?: boolean; guildMembers?: boolean };
 };
 type CreateClientFn = (
   options: ConstructorParameters<typeof Client>[0],
@@ -227,6 +235,43 @@ export function registerDiscordMonitorListeners(params: {
     new DiscordThreadDeleteListener(params.cfg, params.accountId, params.logger),
   );
 
+  let autoNamer: DiscordThreadAutoNamer | undefined;
+  if (params.botUserId && resolveDiscordThreadAutoNameThreshold(params.cfg, params.accountId) > 0) {
+    if (!params.discordConfig.intents?.guildMembers) {
+      params.runtime.log?.(
+        "discord: thread auto-name requires intents.guildMembers and the Server Members Intent in the Discord Developer Portal",
+      );
+    } else {
+      try {
+        const namer = new DiscordThreadAutoNamer({
+          cfg: params.cfg,
+          readPolicy: params.readPolicy,
+          accountId: params.accountId,
+          botUserId: params.botUserId,
+        });
+        autoNamer = namer;
+        registerDiscordListener(
+          params.client.listeners,
+          new DiscordAutoNameThreadCreateListener(namer),
+        );
+        registerDiscordListener(
+          params.client.listeners,
+          new DiscordAutoNameMessageCreateListener(namer),
+        );
+        registerDiscordListener(
+          params.client.listeners,
+          new DiscordAutoNameThreadUpdateListener(namer),
+        );
+        registerDiscordListener(
+          params.client.listeners,
+          new DiscordAutoNameThreadDeleteListener(namer),
+        );
+      } catch {
+        // A missing optional state store must not prevent Discord startup.
+      }
+    }
+  }
+
   let presenceListener: DiscordPresenceListener | undefined;
   if (params.discordConfig.intents?.presence) {
     presenceListener = new DiscordPresenceListener(listenerOptions);
@@ -239,6 +284,7 @@ export function registerDiscordMonitorListeners(params: {
     params.runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
   }
   return async () => {
+    autoNamer?.stop();
     const introductionsStopped = guildJoinListener.stop();
     try {
       await presenceListener?.stop();

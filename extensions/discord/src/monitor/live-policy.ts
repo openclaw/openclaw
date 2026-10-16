@@ -16,6 +16,8 @@ import { resolveDiscordRestFetch } from "./rest-fetch.js";
 type ResolvedAllowlist = Awaited<ReturnType<typeof resolveDiscordAllowlistConfig>>;
 export type DiscordLivePolicy = {
   isCurrent: () => boolean;
+  /** Paid naming retains its complete model/routing configuration snapshot. */
+  isConfigCurrent: () => boolean;
   accountId: string;
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
@@ -118,6 +120,7 @@ export function createDiscordLivePolicyReader(params: {
       });
       cachedConfig = cfg;
       cachedPolicy = {
+        isConfigCurrent: () => cfg === readConfig(),
         isCurrent: () => {
           if (params.abortSignal?.aborted || useInitialPolicy !== initialPolicyActive) {
             return false;

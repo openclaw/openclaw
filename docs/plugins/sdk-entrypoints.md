@@ -327,6 +327,16 @@ Use the plugin approval timeout independently of the agent-run timeout. Authenti
 Control UI reviewers can inspect `detail`, while channel messages retain
 the bounded description. Oversized detail is rejected by the existing request schema.
 
+## Bundled conversation binding preparation
+
+The bundled runtime's `prepareSessionBindingInspections` from
+`openclaw/plugin-sdk/conversation-binding-runtime` awaits a binding
+selection for channel/account/conversation references. Its `inspect()` method
+rechecks the selected owner and returns records in input order. Retain that
+inspection through awaited preparation and call it before external effects;
+binding replacement, retirement, and expiry invalidate the selection. Call
+`dispose()` when the operation finishes.
+
 ## Session persistence
 
 `agent-sessions` exposes awaited SessionManager mutations and versioned extension

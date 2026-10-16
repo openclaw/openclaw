@@ -5,10 +5,16 @@ import { processDiscordMessage } from "./message-handler.process.js";
 
 installDiscordIngressTestRuntime();
 import { ComponentType, MessageReferenceType } from "discord-api-types/v10";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as discordMessagesApi from "../internal/api.messages.js";
 import { ChannelType, MessageType } from "../internal/discord.js";
+import { createDiscordLivePolicyReader } from "./live-policy.js";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 const fetchPluralKitMessageInfoMock = vi.hoisted(() => vi.fn());
@@ -243,6 +249,88 @@ describe("preflightDiscordMessage", () => {
     handleDiscordDmCommandDecisionMock.mockReset();
     handleDiscordDmCommandDecisionMock.mockResolvedValue(undefined);
   });
+
+  it.each([
+    {
+      setting: "thread.inheritParent",
+      change: { thread: { inheritParent: false } },
+      admitted: true,
+    },
+    { setting: "thread.autoName", change: { thread: { autoName: false } }, admitted: true },
+    { setting: "actions.channels", change: { actions: { channels: false } }, admitted: true },
+    { setting: "enabled", change: { enabled: false }, admitted: true },
+    { setting: "groupPolicy", change: { groupPolicy: "disabled" }, admitted: false },
+  ] as const)(
+    "preserves deferred restart semantics for an in-flight ordinary message during $setting edits",
+    async ({ setting, change, admitted }) => {
+      const channelId = `policy-${setting}`;
+      const guildId = "guild-policy";
+      const cfg: OpenClawConfig = {
+        ...DEFAULT_PREFLIGHT_CFG,
+        channels: {
+          discord: {
+            token: "synthetic-token",
+            enabled: true,
+            groupPolicy: "open",
+            thread: { inheritParent: true, autoName: 2 },
+            actions: { channels: true },
+            guilds: { [guildId]: { requireMention: false } },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      onTestFinished(() => clearRuntimeConfigSnapshot());
+      const readPolicy = createDiscordLivePolicyReader({
+        cfg,
+        accountId: "default",
+        resolvedAllowlist: { guildEntries: cfg.channels?.discord?.guilds, allowFrom: [] },
+      });
+      const policy = await readPolicy();
+      const message = createDiscordMessage({
+        id: `message-${setting}`,
+        channelId,
+        content: "Plan the release",
+        author: ALICE,
+      });
+      const lookupEntered = createDeferred<void>();
+      const releaseLookup = createDeferred<void>();
+      const client = createGuildTextClient(channelId);
+      const fetchChannel = client.fetchChannel.bind(client);
+      client.fetchChannel = async (id) => {
+        lookupEntered.resolve();
+        await releaseLookup.promise;
+        return fetchChannel(id);
+      };
+      const pending = preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg,
+          discordConfig: cfg.channels?.discord,
+          data: createGuildEvent({ channelId, guildId, author: message.author, message }),
+          client,
+        }),
+        ...policy,
+        isPolicyCurrent: policy.isCurrent,
+      });
+      await lookupEntered.promise;
+      const updated: OpenClawConfig = {
+        ...cfg,
+        channels: { discord: { ...cfg.channels?.discord, ...change } },
+      };
+      try {
+        setRuntimeConfigSnapshot(updated, updated);
+      } finally {
+        releaseLookup.resolve();
+      }
+      const result = await pending;
+      if (!admitted) {
+        expect(result).toBeNull();
+        return;
+      }
+      expect(expectPreflightResult(result).message.id).toBe(message.id);
+      expect(result?.isPolicyCurrent?.()).toBe(true);
+      expect(policy.isConfigCurrent()).toBe(false);
+    },
+  );
 
   it("admits embed-only messages when their text appears after a textless first embed", async () => {
     const channelId = "dm-channel-multiple-embeds";

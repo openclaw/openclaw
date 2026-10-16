@@ -218,6 +218,8 @@ export type DiscordSlashCommandConfig = {
 export type DiscordThreadConfig = {
   /** If true, Discord thread sessions inherit the parent channel transcript. Default: false. */
   inheritParent?: boolean;
+  /** Rename a new thread after this many user/agent messages. true uses 5; 0/false disables. */
+  autoName?: number | boolean;
 };
 
 export type DiscordAutoPresenceConfig = {

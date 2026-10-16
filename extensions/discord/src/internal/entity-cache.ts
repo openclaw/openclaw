@@ -13,7 +13,10 @@ const DEFAULT_REST_CACHE_TTL_MS = 30_000;
 const DEFAULT_MAX_ENTRIES = 5_000;
 const DEFAULT_SWEEP_INTERVAL_MS = 30_000;
 
-const CACHE_KIND_BY_EVENT = new Map<string, "channel" | "guild" | "guild-emojis" | "member">([
+const INVALIDATION_KIND_BY_EVENT = new Map<
+  string,
+  "channel" | "guild" | "guild-emojis" | "member" | "session" | "guild-members" | "removed-guild"
+>([
   [GatewayDispatchEvents.ChannelUpdate, "channel"],
   [GatewayDispatchEvents.ChannelDelete, "channel"],
   [GatewayDispatchEvents.ThreadUpdate, "channel"],
@@ -23,11 +26,17 @@ const CACHE_KIND_BY_EVENT = new Map<string, "channel" | "guild" | "guild-emojis"
   [GatewayDispatchEvents.GuildMemberAdd, "member"],
   [GatewayDispatchEvents.GuildMemberRemove, "member"],
   [GatewayDispatchEvents.GuildMemberUpdate, "member"],
+  [GatewayDispatchEvents.Ready, "session"],
+  [GatewayDispatchEvents.Resumed, "session"],
+  [GatewayDispatchEvents.GuildDelete, "removed-guild"],
+  [GatewayDispatchEvents.GuildRoleUpdate, "guild-members"],
+  [GatewayDispatchEvents.GuildRoleDelete, "guild-members"],
 ]);
 
 export class DiscordEntityCache {
   private readonly entries = new Map<string, CacheEntry<unknown>>();
   private lastSweepAt = 0;
+  private readonly memberAuthorities = new Set<{ guildId: string; userIds: Set<string> }>();
 
   constructor(private readonly client: StructureClient) {}
 
@@ -67,15 +76,49 @@ export class DiscordEntityCache {
     return await this.fetchCached(`guild-emojis:${guildId}`, fetcher);
   }
 
+  /** Retain fresh REST membership facts only while their native event authority is live. */
+  retainMemberAuthority(guildId: string, userIds: string[]) {
+    const authority = { guildId, userIds: new Set(userIds) };
+    this.memberAuthorities.add(authority);
+    return {
+      assertCurrent: () => {
+        if (!this.memberAuthorities.has(authority)) {
+          throw new Error("Discord member authority is no longer current");
+        }
+      },
+      dispose: () => {
+        this.memberAuthorities.delete(authority);
+      },
+    };
+  }
+
   invalidateForGatewayEvent(type: string, data: unknown): void {
-    const kind = CACHE_KIND_BY_EVENT.get(type);
+    const kind = INVALIDATION_KIND_BY_EVENT.get(type);
     if (!kind) {
       return;
     }
+    if (kind === "session") {
+      this.memberAuthorities.clear();
+      return;
+    }
     const raw = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+    const user = raw.user && typeof raw.user === "object" ? (raw.user as { id?: unknown }) : {};
+    if (kind === "member" || kind === "removed-guild" || kind === "guild-members") {
+      const guildId = kind === "removed-guild" ? raw.id : raw.guild_id;
+      for (const authority of this.memberAuthorities) {
+        if (
+          authority.guildId === guildId &&
+          (kind !== "member" || (typeof user.id === "string" && authority.userIds.has(user.id)))
+        ) {
+          this.memberAuthorities.delete(authority);
+        }
+      }
+    }
+    if (kind === "guild-members" || kind === "removed-guild") {
+      return;
+    }
     if (kind === "member") {
       const guildId = raw.guild_id;
-      const user = raw.user && typeof raw.user === "object" ? (raw.user as { id?: unknown }) : {};
       if (typeof guildId === "string" && typeof user.id === "string") {
         this.entries.delete(`member:${guildId}:${user.id}`);
         this.entries.delete(`user:${user.id}`);

@@ -31,6 +31,7 @@ const cfg: OpenClawConfig = {
 };
 const policy: DiscordLivePolicy = {
   isCurrent: () => true,
+  isConfigCurrent: () => true,
   accountId: "default",
   cfg,
   discordConfig: { dmPolicy: "allowlist", allowFrom: ["123456789"] },

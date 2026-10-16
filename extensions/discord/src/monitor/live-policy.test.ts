@@ -32,6 +32,59 @@ beforeEach(() => {
 afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("Discord live account policy", () => {
+  it.each(["default", "work"])(
+    "retains access policy while invalidating the naming snapshot for %s startup edits",
+    async (accountId) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            token: "synthetic-token",
+            enabled: true,
+            actions: { channels: true },
+            thread: { autoName: 5 },
+            ...(accountId === "work"
+              ? {
+                  accounts: {
+                    work: {
+                      enabled: true,
+                      actions: { channels: true },
+                      thread: { autoName: 5 },
+                    },
+                  },
+                }
+              : {}),
+          },
+        },
+      };
+      publish(cfg);
+      const read = createDiscordLivePolicyReader({ cfg, accountId });
+      const previous = await read();
+      for (const change of [
+        { enabled: false },
+        { actions: { channels: false } },
+        { thread: { autoName: false } },
+        { thread: { autoName: 10 } },
+      ] as const) {
+        const discord = cfg.channels!.discord!;
+        const updated: OpenClawConfig = {
+          channels: {
+            discord:
+              accountId === "default"
+                ? { ...discord, ...change }
+                : { ...discord, accounts: { work: { ...discord.accounts!.work, ...change } } },
+          },
+        };
+        publish(updated);
+        expect(previous.isCurrent()).toBe(true);
+        expect(previous.isConfigCurrent()).toBe(false);
+        const current = await read();
+        expect(current.isCurrent()).toBe(true);
+        expect(current.isConfigCurrent()).toBe(true);
+        expect(current.cfg).toBe(updated);
+      }
+    },
+  );
+
   it("keeps the admitted runtime owner across startup and allowlist resolution", async () => {
     const cfg = config(["startup-name"]);
     publish(cfg);

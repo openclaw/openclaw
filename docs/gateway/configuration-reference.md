@@ -54,6 +54,8 @@ Dedicated deep references:
 
 Per-channel config keys live in [Configuration - channels](/gateway/config-channels): `channels.*` for Slack, Discord, Telegram, WhatsApp, Matrix, iMessage, and other channel plugins (auth, access control, multi-account, mention gating).
 
+For Discord, `channels.discord.thread.autoName` controls AI auto-naming of new threads after `N` user/agent messages. It defaults to `false`; `true` means five messages, positive integers set `N`, and `0` or `false` disables it. Set `channels.discord.accounts.<id>.thread.autoName` to override the threshold for one account. See [Discord threads and sessions](/channels/discord/threads-and-sessions#ai-auto-naming).
+
 ## Agent defaults, multi-agent, sessions, and messages
 
 See [Configuration - agents](/gateway/config-agents) for:
