@@ -577,10 +577,10 @@ async function completeEmbeddedRun(
   // A length stop delivers partial text, so it is labeled instead of dropped. (#76477)
   const isMissingReplyNotice =
     input.incompleteTurnText?.startsWith(MISSING_REPLY_NOTICE_TEXT) === true;
+  const suppressErrorNotice =
+    isMissingReplyNotice && !shouldDeliverMissingReplyNotice(input.runParams);
   const suppressMissingReplyNotice =
-    isMissingReplyNotice &&
-    (input.incompleteTurnFallbackSafe === true ||
-      !shouldDeliverMissingReplyNotice(input.runParams));
+    isMissingReplyNotice && (input.incompleteTurnFallbackSafe === true || suppressErrorNotice);
   const incompleteText =
     input.terminalToolPresentation && input.incompleteTurnText !== undefined
       ? input.terminalToolPresentation.concat("\n\n", input.incompleteTurnText)
@@ -649,6 +649,7 @@ async function completeEmbeddedRun(
         agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
         terminalReply,
         terminalReplyExpectation: resolveReplyExpectation(input.runParams),
+        ...(suppressErrorNotice ? { suppressErrorNotice } : {}),
         ...(error
           ? { error }
           : {

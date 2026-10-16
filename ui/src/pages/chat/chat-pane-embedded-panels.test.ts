@@ -10,8 +10,8 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
 import * as videoPosters from "../../lib/media/video-poster.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import { emptyLegacyContent, solidContent } from "../../lit/solid-content.tsx";
 import {
   createReviewFixture as createUnboundReviewFixture,

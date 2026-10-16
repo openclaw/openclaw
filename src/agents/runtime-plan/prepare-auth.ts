@@ -26,6 +26,7 @@ import {
   resolveProfilesUnavailableReason,
 } from "../auth-profiles/usage-state.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../failover/error.js";
 import { resolveProviderDirectAuthPlanningEvidence } from "../model-auth-env.js";
 import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import {
@@ -99,6 +100,7 @@ function createAuthProfileCooldownError(
     {
       reason,
       status: resolveFailoverStatus(reason),
+      code: AUTH_PROFILE_COOLDOWN_ERROR_CODE,
       provider: params.provider,
       model: params.modelId,
       profileId,

@@ -17,6 +17,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.
 import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
+import { createSidebarScroll } from "./sidebar-context-controller.ts";
 
 export { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 
@@ -50,6 +51,7 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const context = useApplication();
   const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(props, context, host);
   owner.bindInputs(props, context);
+  const scroll = createSidebarScroll(owner);
   const projection = projectSource(owner, {
     read: (current) => current,
     subscribe: (current, notify) => current.subscribe(notify),
@@ -114,15 +116,20 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       />
     </Show>
   );
-  const content = hostView.renderSidebar(Sessions);
+  const content = hostView.renderSidebar(Sessions, scroll);
   createEffect(
     () => {
       projection.revision();
       // Props remain on the bridge's live object; source changes refresh its subscriptions.
       Object.values(props);
       owner.prepareRender();
+      scroll.capture();
     },
-    () => untrack(() => owner.commitRender()),
+    () =>
+      untrack(() => {
+        owner.commitRender();
+        scroll.restore();
+      }),
   );
   onSettled(() => {
     sidebarOwners.set(host, owner);
