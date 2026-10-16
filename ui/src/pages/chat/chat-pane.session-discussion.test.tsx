@@ -33,7 +33,12 @@ type DiscussionTestPane = TestChatPane & {
 
 const SESSION_KEY = "agent:main:current";
 
-function createDiscussionPanelHarness(container: HTMLElement, savedSlot = false) {
+function createDiscussionPanelHarness(
+  fixture: ReturnType<typeof createDiscussionPane>,
+  savedSlot = false,
+) {
+  const { pane, state } = fixture;
+  const container = document.body.appendChild(document.createElement("div"));
   const [frame, setFrame] = createSignal<{
     config: SessionDiscussionPanelConfig | null;
     sourceGeneration: number;
@@ -57,23 +62,32 @@ function createDiscussionPanelHarness(container: HTMLElement, savedSlot = false)
     { container },
   );
   return {
-    async render(config: SessionDiscussionPanelConfig | null, sourceGeneration: number) {
-      setFrame({ config, sourceGeneration });
+    container,
+    async render() {
+      setFrame({
+        config: pane.buildSessionDiscussionPanel(state, SESSION_KEY),
+        sourceGeneration: pane.connectionGeneration,
+      });
       flush();
       await container.querySelector("openclaw-session-discussion")?.updateComplete;
     },
-    unmount: view.unmount,
+    unmount() {
+      view.unmount();
+      container.remove();
+    },
   };
 }
 
-function createDiscussionPane(params: {
-  info: SessionDiscussionInfo | Promise<SessionDiscussionInfo>;
-  detailOpen?: boolean;
-  scopes?: string[];
-}) {
+function createDiscussionPane(
+  params: {
+    info?: SessionDiscussionInfo | Promise<SessionDiscussionInfo>;
+    detailOpen?: boolean;
+    scopes?: string[];
+  } = {},
+) {
   const request = vi.fn().mockImplementation(async (method: string) => {
     if (method === "session.discussion.info") {
-      return await params.info;
+      return await (params.info ?? { state: "open", embedUrl: "https://clack.example/embed/c1" });
     }
     throw new Error(`unexpected method ${method}`);
   });
@@ -96,7 +110,6 @@ function createDiscussionPane(params: {
 describe("chat pane session discussion", () => {
   it("does not probe an advertised discussion method without its read scope", async () => {
     const { pane, request } = createDiscussionPane({
-      info: { state: "open", embedUrl: "https://clack.example/embed/c1" },
       scopes: ["operator.sessions.read", "operator.sessions.write"],
     });
     await pane.probeSessionDiscussion(SESSION_KEY);
@@ -128,25 +141,15 @@ describe("chat pane session discussion", () => {
   });
 
   it("does not reload discussion info when the pane renders unchanged config twice", async () => {
-    const { pane, state, request } = createDiscussionPane({
-      info: { state: "open", embedUrl: "https://clack.example/embed/c1" },
-    });
-    const container = document.createElement("div");
-    document.body.append(container);
-    const view = createDiscussionPanelHarness(container);
-
-    const renderPanel = async () => {
-      const config = pane.buildSessionDiscussionPanel(state, SESSION_KEY)!;
-      await view.render(config, pane.connectionGeneration);
-    };
-
-    await renderPanel();
+    const fixture = createDiscussionPane();
+    const { request } = fixture;
+    const view = createDiscussionPanelHarness(fixture);
+    await view.render();
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-    await renderPanel();
+    await view.render();
     expect(request).toHaveBeenCalledTimes(1);
 
     view.unmount();
-    container.remove();
   });
 
   it("uses the header action to open and close the discussion slot", async () => {
@@ -155,14 +158,12 @@ describe("chat pane session discussion", () => {
     });
     await pane.probeSessionDiscussion(SESSION_KEY);
     let action = pane.resolveSessionDiscussionAction();
-    expect(action?.label).toBe("Show discussion");
-    expect(action?.active).toBe(false);
+    expect(action).toMatchObject({ label: "Show discussion", active: false });
     action?.onToggle();
     expect(updateSidebarLayout).toHaveBeenCalledTimes(1);
 
     action = pane.resolveSessionDiscussionAction();
-    expect(action?.label).toBe("Hide discussion");
-    expect(action?.active).toBe(true);
+    expect(action).toMatchObject({ label: "Hide discussion", active: true });
     action?.onToggle();
     expect(state.sidebarLayout.columns[0]?.panels).toEqual([]);
     expect(state.sidebarLayout.open).toBe(false);
@@ -184,7 +185,6 @@ describe("chat pane session discussion", () => {
 
   it("opens as a collapsed tab when two columns cannot fit side by side", async () => {
     const { pane, state } = createDiscussionPane({
-      info: { state: "open", embedUrl: "https://clack.example/embed/c1" },
       detailOpen: true,
     });
     pane.paneWidth = 700;
@@ -197,9 +197,7 @@ describe("chat pane session discussion", () => {
   });
 
   it("ignores a stale none callback after switching sessions", async () => {
-    const { pane, state } = createDiscussionPane({
-      info: { state: "open", embedUrl: "https://clack.example/embed/c1" },
-    });
+    const { pane, state } = createDiscussionPane();
     await pane.probeSessionDiscussion(SESSION_KEY);
     const stalePanel = pane.buildSessionDiscussionPanel(state, SESSION_KEY);
     state.sessionKey = "agent:main:other";
@@ -225,50 +223,41 @@ describe("chat pane session discussion", () => {
 
   it("does not load a saved visible Discussion tab after reconnect without operator.read", async () => {
     const openUrl = "https://clack.example/channels/previous";
-    const { pane, state, request } = createDiscussionPane({
-      info: { state: "open", openUrl },
-    });
+    const fixture = createDiscussionPane({ info: { state: "open", openUrl } });
+    const { pane, state, request } = fixture;
     const initialHello = pane.context.gateway.snapshot.hello!;
     state.sidebarLayout = openSlot({ columns: [] }, "discussion");
-    const container = document.createElement("div");
-    document.body.append(container);
-    const view = createDiscussionPanelHarness(container, true);
-
-    const renderSavedTab = async () => {
-      const config = pane.buildSessionDiscussionPanel(state, SESSION_KEY);
-      await view.render(config, pane.connectionGeneration);
+    const view = createDiscussionPanelHarness(fixture, true);
+    const { container } = view;
+    const disconnect = () =>
+      pane.applyGatewaySnapshot({
+        ...pane.context.gateway.snapshot,
+        phase: "reconnecting",
+        hello: null,
+      });
+    const connect = (scopes: string[]) => {
+      // The fixture supplies only Discussion RPCs; chat startup is already settled.
+      pane.connectedClient = state.client;
+      pane.applyGatewaySnapshot({
+        ...pane.context.gateway.snapshot,
+        phase: "connected",
+        hello: { ...initialHello, auth: { role: "operator", scopes } },
+      });
     };
     const discussionRequests = () =>
       request.mock.calls.filter(([method]) => method === "session.discussion.info");
 
     const previousConfig = pane.buildSessionDiscussionPanel(state, SESSION_KEY)!;
-    await renderSavedTab();
+    await view.render();
     await vi.waitFor(() => expect(discussionRequests()).toHaveLength(1));
     await vi.waitFor(() =>
       expect(container.querySelector<HTMLAnchorElement>("a.session-link")?.href).toBe(openUrl),
     );
 
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      phase: "reconnecting",
-      hello: null,
-    });
-    await renderSavedTab();
-    // The fixture only supplies Discussion RPCs; unrelated chat startup is already settled.
-    pane.connectedClient = state.client;
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      phase: "connected",
-      hello: {
-        ...initialHello,
-        auth: {
-          role: "operator",
-          scopes: ["operator.sessions.read", "operator.sessions.write"],
-        },
-        features: { methods: ["session.discussion.info", "session.discussion.open"] },
-      },
-    });
-    await renderSavedTab();
+    disconnect();
+    await view.render();
+    connect(["operator.sessions.read", "operator.sessions.write"]);
+    await view.render();
     await expect(previousConfig.loadInfo(SESSION_KEY)).rejects.toThrow();
 
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");
@@ -279,28 +268,14 @@ describe("chat pane session discussion", () => {
     expect(container.querySelector(".callout.danger")).toBeNull();
     expect(pane.resolveSessionDiscussionAction()).toBeNull();
 
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      phase: "reconnecting",
-      hello: null,
-    });
-    pane.connectedClient = state.client;
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      phase: "connected",
-      hello: {
-        ...initialHello,
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["session.discussion.info", "session.discussion.open"] },
-      },
-    });
-    await renderSavedTab();
+    disconnect();
+    connect(["operator.read"]);
+    await view.render();
     await vi.waitFor(() => expect(discussionRequests()).toHaveLength(2));
     await vi.waitFor(() =>
       expect(container.querySelector<HTMLAnchorElement>("a.session-link")?.href).toBe(openUrl),
     );
 
     view.unmount();
-    container.remove();
   });
 });
