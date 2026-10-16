@@ -207,7 +207,6 @@ extensions/discord/src/actions/runtime.presence.ts	1
 extensions/discord/src/actions/runtime.shared.ts	1
 extensions/discord/src/activities/discord-api.ts	1
 extensions/discord/src/activities/register.ts	1
-extensions/discord/src/activities/store.ts	1
 extensions/discord/src/api.ts	3
 extensions/discord/src/approval-handler.runtime.ts	2
 extensions/discord/src/audit-core.ts	2
