@@ -14,7 +14,6 @@ import {
   transferMcpLoopbackClientGrant,
 } from "../../gateway/mcp-grant-store.js";
 import type {
-  CliBackendExecuteContext,
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "../../plugins/cli-backend.types.js";
@@ -67,9 +66,7 @@ async function decideNativeTool(
 
 async function startInjection(
   context: PreparedCliRunContext,
-  queueMessage: Parameters<
-    NonNullable<CliBackendExecuteContext["registerMessageInjection"]>
-  >[0]["queueMessage"],
+  onMessage: (text: string) => void = () => {},
 ) {
   let handle: ReplyBackendHandle | undefined;
   context.params.replyOperation = {
@@ -82,12 +79,23 @@ async function startInjection(
   let signal: AbortSignal | undefined;
   const run = runPlugin(context, async function* (execution) {
     signal = execution.abortSignal;
-    execution.registerMessageInjection?.({ isAvailable: () => true, queueMessage });
+    execution.registerMessageInjection?.({
+      isAvailable: () => true,
+      queueMessage: async (text, withCurrent) => {
+        await withCurrent(() => onMessage(text));
+      },
+    });
     await finish.promise;
     yield SUCCESS_RESULT;
   });
   await vi.waitFor(() => expect(handle?.messageInjectionV2?.isAvailable()).toBe(true));
-  return { injection: handle!.messageInjectionV2!, finish, run, signal };
+  const injection = handle!.messageInjectionV2!;
+  const queue = (
+    text: string,
+    options?: Parameters<typeof injection.queueMessage>[1],
+    assertCurrent = () => {},
+  ) => injection.queueMessage(text, options, assertCurrent, "run");
+  return { injection, queue, finish, run, signal };
 }
 
 function installBeforeToolCallHook(
@@ -344,7 +352,6 @@ describe("plugin-owned CLI native tool policy", () => {
       file_path: "/tmp/private.txt",
       path: "/tmp/allowed.txt",
     });
-
     expect(decision).toMatchObject({
       behavior: "deny",
       message: expect.stringContaining("conflicting"),
@@ -368,7 +375,6 @@ describe("plugin-owned CLI native tool policy", () => {
       old_string: "before",
       new_string: "after",
     });
-
     expect(decision).toMatchObject({
       behavior: "deny",
       message: expect.stringContaining("native edit"),
@@ -451,37 +457,26 @@ describe("CLI MCP capture authority", () => {
       admittedRunContext: context.params.admittedRunContext,
       abortSignal: source.signal,
     });
+    const owner = { token: grant.token, runtimeOwnerToken };
     context.preparedBackend.mcpClientGrantCapture = {
       transportToken: grant.token,
-      adoptProcessToken: (targetToken) => {
-        transferMcpLoopbackClientGrant({
+      adoptProcessToken: (targetToken) =>
+        void transferMcpLoopbackClientGrant({
           sourceToken: grant.token,
           targetToken,
           runtimeOwnerToken,
-        });
-      },
+        }),
       revokeProcessToken: () => {
         revokeMcpLoopbackClientGrant(grant.token);
       },
-      activate: (captureKey, assertCurrent) => {
-        activateMcpLoopbackClientGrantCapture({
-          token: grant.token,
-          runtimeOwnerToken,
-          captureKey,
-          assertCurrent,
-        });
-      },
-      deactivate: (captureKey) => {
-        deactivateMcpLoopbackClientGrantCapture({
-          token: grant.token,
-          runtimeOwnerToken,
-          captureKey,
-        });
-      },
+      activate: (captureKey, assertCurrent) =>
+        void activateMcpLoopbackClientGrantCapture({ ...owner, captureKey, assertCurrent }),
+      deactivate: (captureKey) =>
+        void deactivateMcpLoopbackClientGrantCapture({ ...owner, captureKey }),
     };
     const tracking = createCliToolTracking(context);
     const captureKey = `capture-${context.params.runId}`;
-    const capture = { token: grant.token, runtimeOwnerToken, captureKey };
+    const capture = { ...owner, captureKey };
     const streamStarted = createDeferred();
     const streamClosing = createDeferred();
     const releaseCleanup = createDeferred();
@@ -550,23 +545,16 @@ describe("plugin-owned CLI same-turn input", () => {
   it("exposes plugin same-turn input to the reply run only while its turn is active", async () => {
     const { context } = await createExecution();
     const queued: string[] = [];
-    const { injection, finish, run } = await startInjection(context, async (text, withCurrent) => {
-      await withCurrent(() => {
-        queued.push(text);
-      });
+    const { injection, queue, finish, run } = await startInjection(context, (text) => {
+      queued.push(text);
     });
 
     await expect(
-      injection.queueMessage(
-        "revoked",
-        undefined,
-        () => {
-          throw new Error("source revoked");
-        },
-        "run",
-      ),
+      queue("revoked", undefined, () => {
+        throw new Error("source revoked");
+      }),
     ).rejects.toThrow("source revoked");
-    await injection.queueMessage("steer", undefined, () => {}, "run");
+    await queue("steer");
     finish.resolve();
     await run;
 
@@ -577,13 +565,11 @@ describe("plugin-owned CLI same-turn input", () => {
   it("records steered input in the session transcript only after the plugin started it", async () => {
     const { context } = await createExecution();
     const order: string[] = [];
-    const { injection, finish, run } = await startInjection(context, async (text, withCurrent) => {
-      await withCurrent(() => {
-        if (text === "refused") {
-          throw new Error("native refused");
-        }
-        order.push(`started:${text}`);
-      });
+    const { queue, finish, run } = await startInjection(context, (text) => {
+      if (text === "refused") {
+        throw new Error("native refused");
+      }
+      order.push(`started:${text}`);
     });
     const recorder = (label: string, persist: () => Promise<unknown>) => ({
       hasPersisted: vi.fn(() => false),
@@ -605,32 +591,25 @@ describe("plugin-owned CLI same-turn input", () => {
         userTurnTranscriptRecorder: value,
         onQueueAccepted: () => order.push(`accepted:${label}`),
         onQueueSettled: () => order.push(`settled:${label}`),
-      }) as unknown as Parameters<typeof injection.queueMessage>[1];
+      }) as unknown as Parameters<typeof queue>[1];
 
-    await injection.queueMessage("steer", optionsFor(accepted, "steer"), () => {}, "run");
-    await expect(
-      injection.queueMessage("refused", optionsFor(refused, "refused"), () => {}, "run"),
-    ).rejects.toThrow("native refused");
+    await queue("steer", optionsFor(accepted, "steer"));
+    await expect(queue("refused", optionsFor(refused, "refused"))).rejects.toThrow(
+      "native refused",
+    );
     // The input already reached the model: a transcript failure must not become a
     // replay, but it must not pass for a committed one either.
-    await expect(
-      injection.queueMessage("failing", optionsFor(failing, "failing"), () => {}, "run"),
-    ).resolves.toMatchObject({
+    await expect(queue("failing", optionsFor(failing, "failing"))).resolves.toMatchObject({
       transcriptCommit: "unconfirmed",
       errorMessage: expect.stringContaining("transcript store unavailable"),
     });
     for (const callback of ["onQueueAccepted", "onQueueSettled"] as const) {
       await expect(
-        injection.queueMessage(
-          callback,
-          {
-            [callback]: () => {
-              throw new Error("observer failed");
-            },
+        queue(callback, {
+          [callback]: () => {
+            throw new Error("observer failed");
           },
-          () => {},
-          "run",
-        ),
+        }),
       ).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
     }
     finish.resolve();
@@ -655,12 +634,7 @@ describe("plugin-owned CLI same-turn input", () => {
 
   it("retains native acceptance when the transcript target cannot be resolved", async () => {
     const { context } = await createExecution();
-    const { injection, finish, run, signal } = await startInjection(
-      context,
-      async (_text, withCurrent) => {
-        await withCurrent(() => {});
-      },
-    );
+    const { queue, finish, run, signal } = await startInjection(context);
     // No receipt does not establish rejection: source resolution can return no target.
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: "unconfirmed" },
@@ -668,12 +642,7 @@ describe("plugin-owned CLI same-turn input", () => {
     });
 
     await expect(
-      injection.queueMessage(
-        "unconfirmed",
-        { userTurnTranscriptRecorder: recorder },
-        () => {},
-        "run",
-      ),
+      queue("unconfirmed", { userTurnTranscriptRecorder: recorder }),
     ).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
     expect(signal?.aborted).toBe(false);
     finish.resolve();
