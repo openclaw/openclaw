@@ -14,6 +14,8 @@ describe("shared/model-param-b", () => {
     [{ id: "model-70b", parameterCount: 4_000_000_000 }, true],
     [{ id: "llama4-maverick-17b-128e" }, false],
     [{ id: "llama4-maverick-17b-128e", name: "Llama 4 Maverick 400B" }, false],
+    [{ id: "custom-a3b" }, false],
+    [{ id: "custom", name: "A3B" }, false],
     [{ id: "qwen3-30b-a3b" }, true],
     [{ id: "qwen3-235b-a22b" }, false],
     [{ id: "model", name: "Unknown size" }, false],
@@ -38,6 +40,8 @@ describe("shared/model-param-b", () => {
     "llama4-maverick-17b-128e",
     "llama4-scout-17b-16e-instruct",
     "Llama 4 Maverick 17B 128E",
+    "custom-a3b",
+    "Custom A3B",
   ])("does not infer total parameters from an active-size expert tag: %s", (id) => {
     expect(inferParamBFromIdOrName(id)).toBeNull();
   });
@@ -45,6 +49,8 @@ describe("shared/model-param-b", () => {
   it("preserves total parameter counts when active counts are also present", () => {
     expect(inferParamBFromIdOrName("qwen3-30b-a3b")).toBe(30);
     expect(inferParamBFromIdOrName("qwen3-235b-a22b")).toBe(235);
+    expect(inferParamBFromIdOrName("custom-a3b Total 70B")).toBe(70);
+    expect(inferParamBFromIdOrName("Total 70B custom-a3b")).toBe(70);
   });
 
   it.each([
