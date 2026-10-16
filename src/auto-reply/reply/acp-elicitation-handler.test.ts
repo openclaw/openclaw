@@ -29,21 +29,17 @@ function formRequest(
   } as AcpElicitationRequest;
 }
 
-function urlRequest(overrides: Partial<Record<string, unknown>> = {}): AcpElicitationRequest {
-  return {
-    mode: "url",
-    sessionId: "acp-session",
-    toolCallId: "tool-call",
-    message: "Authenticate",
-    elicitationId: "login-1",
-    url: "https://example.com/login",
-    ...overrides,
-  } as AcpElicitationRequest;
-}
+const urlRequest: AcpElicitationRequest = {
+  mode: "url",
+  sessionId: "acp-session",
+  toolCallId: "tool-call",
+  message: "Authenticate",
+  elicitationId: "login-1",
+  url: "https://example.com/login",
+};
 
 function createFixture() {
   const delivered: string[] = [];
-  let active = true;
   const handler = createAcpElicitationHandler({
     sourceSessionKey: "agent:main:source",
     targetSessionKey: "agent:codex:acp:target",
@@ -58,14 +54,15 @@ function createFixture() {
         return true;
       }),
     },
-    isActive: () => active,
+    isActive: () => true,
   });
   return {
     delivered,
-    handler,
-    deactivate: () => {
-      active = false;
-    },
+    handler: (
+      request: AcpElicitationRequest,
+      requestId: Parameters<typeof handler>[1]["requestId"],
+      signal = new AbortController().signal,
+    ) => handler(request, { requestId, signal }),
   };
 }
 
@@ -122,10 +119,7 @@ describe("ACP elicitation delivery", () => {
     ) as AcpElicitationRequest;
     const { delivered, handler } = createFixture();
 
-    const response = await handler(request, {
-      requestId: "accessor",
-      signal: new AbortController().signal,
-    });
+    const response = await handler(request, "accessor");
 
     expect(response.action).toBe("decline");
     expect(reads).toBe(0);
@@ -136,10 +130,7 @@ describe("ACP elicitation delivery", () => {
     const requests = answerGateway((questions) => ({ [questions[0]!.questionId]: ["Continue"] }));
     const { handler } = createFixture();
 
-    await handler(urlRequest(), {
-      requestId: 1,
-      signal: new AbortController().signal,
-    });
+    await handler(urlRequest, 1);
     await handler(
       {
         mode: "url",
@@ -148,7 +139,7 @@ describe("ACP elicitation delivery", () => {
         elicitationId: "login-2",
         url: "https://example.com/login",
       },
-      { requestId: 2, signal: new AbortController().signal },
+      2,
     );
 
     expect(requests).toHaveLength(2);
@@ -186,7 +177,7 @@ describe("ACP elicitation delivery", () => {
     );
     const controller = new AbortController();
     const { handler } = createFixture();
-    const response = handler(urlRequest(), { requestId: "abort", signal: controller.signal });
+    const response = handler(urlRequest, "abort", controller.signal);
     await vi.waitFor(() => expect(registered).toBe(true));
 
     controller.abort();
@@ -208,7 +199,7 @@ describe("ACP elicitation delivery", () => {
         },
         ["token"],
       ),
-      { requestId: "secret", signal: new AbortController().signal },
+      "secret",
     );
     await vi.waitFor(() => expect(delivered.join("\n")).toContain("may show your reply"));
 
@@ -237,10 +228,7 @@ describe("ACP elicitation delivery", () => {
     });
     const { delivered, handler } = createFixture();
     const controller = new AbortController();
-    const response = handler(formRequest({}), {
-      requestId: "empty-form",
-      signal: controller.signal,
-    });
+    const response = handler(formRequest({}), "empty-form", controller.signal);
     const settled = vi.fn();
     void response.then(settled);
     try {
@@ -248,10 +236,7 @@ describe("ACP elicitation delivery", () => {
       expect(requests).toHaveLength(1);
       expect(settled).not.toHaveBeenCalled();
       submitAnswer();
-      await expect(response).resolves.toEqual({
-        action: "accept",
-        content: {},
-      });
+      await expect(response).resolves.toEqual({ action: "accept", content: {} });
     } finally {
       controller.abort();
       submitAnswer();
