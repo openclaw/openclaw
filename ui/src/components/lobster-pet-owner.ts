@@ -27,7 +27,7 @@ type ResidentTimer =
   | "vigilTimer";
 
 /** Synchronous animation owner; Solid only observes committed scene snapshots. */
-export class LobsterPetController {
+export class LobsterPetOwner {
   seed = 0;
   mode: contract.LobsterPetMode = "idle";
 
@@ -135,15 +135,14 @@ export class LobsterPetController {
   private restartPending = false;
 
   private active = false;
+  private readonly listeners = new Set<() => void>();
 
   constructor(
     private readonly host: HTMLElement,
-    private notify: () => void,
     private readonly disableVisits: () => void,
   ) {}
 
-  connect(notify: () => void) {
-    this.notify = notify;
+  connect() {
     this.look = null;
     this.active = true;
     this.geometry.connect();
@@ -164,7 +163,17 @@ export class LobsterPetController {
     this.geometry.dispose();
     this.traffic.dispose();
     this.interactions.dispose();
-    this.notify = () => {};
+  }
+
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private publish() {
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
 
   update(props: contract.LobsterPetProps) {
@@ -178,7 +187,7 @@ export class LobsterPetController {
     Object.assign(this, props);
     this.reconcile(changed);
     if (this.active) {
-      this.notify();
+      this.publish();
     }
   }
 
@@ -187,7 +196,7 @@ export class LobsterPetController {
       return;
     }
     this.reconcile(new Map());
-    this.notify();
+    this.publish();
   }
 
   private wantsVisible(): boolean {
@@ -634,7 +643,7 @@ export class LobsterPetController {
     this.applyMove(this.geometry.planHop(this.anchor, this.spotPct));
   }
 
-  scene(): LobsterPetSceneProps | null {
+  private scene(): LobsterPetSceneProps | null {
     const look = this.look;
     if (!look) {
       return null;
@@ -695,8 +704,8 @@ export class LobsterPetController {
     };
   }
 
-  menuPosition() {
-    return this.dismissMenuPosition;
+  snapshot() {
+    return { scene: this.scene(), menuPosition: this.dismissMenuPosition };
   }
 
   closeMenu() {

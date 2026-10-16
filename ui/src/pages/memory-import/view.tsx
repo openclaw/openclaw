@@ -123,7 +123,10 @@ function Collection(props: {
                 </span>
                 <code title={item().source ?? artifactLabel(item())}>{artifactLabel(item())}</code>
                 <span
-                  class={`memory-import__file-status memory-import__file-status--${item().status}`}
+                  class={[
+                    "memory-import__file-status",
+                    `memory-import__file-status--${item().status}`,
+                  ]}
                 >
                   {item().status === "planned"
                     ? t("memoryImport.ready")

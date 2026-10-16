@@ -1,4 +1,4 @@
-import { createEffect, createMemo, onCleanup, untrack, type Accessor } from "solid-js";
+import { createEffect, createMemo, onCleanup, type Accessor } from "solid-js";
 import { retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 
@@ -44,7 +44,7 @@ function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
   let image: HTMLImageElement;
   let release: (() => void) | undefined;
   const state = (value: "pending" | "loaded" | "failed") => {
-    const frame = image.closest(untrack(() => input().fallbackSelector));
+    const frame = image.closest(input().fallbackSelector);
     if (frame) {
       setIdentityAvatarState(frame, value);
     }
@@ -76,26 +76,24 @@ function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
         }
       }
       // Refs run before their wrapper is inserted; cached decodes emit no event.
-      queueMicrotask(() =>
-        untrack(() => {
-          if (
-            active &&
-            url &&
-            image.getAttribute("src") === url &&
-            image.complete &&
-            image.naturalWidth > 0
-          ) {
-            load();
-          }
-        }),
-      );
+      queueMicrotask(() => {
+        if (
+          active &&
+          url &&
+          image.getAttribute("src") === url &&
+          image.complete &&
+          image.naturalWidth > 0
+        ) {
+          load();
+        }
+      });
     };
     if (typeof result === "string" || result === null) {
       apply(result);
     } else {
       image.removeAttribute("src");
       state("pending");
-      void result.then((url) => untrack(() => apply(url)));
+      void result.then(apply);
     }
     return () => {
       active = false;

@@ -41,9 +41,11 @@ import {
   createUpdateDatabaseBackupInProcess,
 } from "../update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
+import { createUpdateRun } from "../update-run-ledger.js";
 import { loadDatabasePortDescriptor } from "./port-provider-descriptor.js";
 import { materializeDatabasePort, type PortDescriptor } from "./port.worker.js";
 import { expectedPostgresCatalog } from "./postgres-catalog.js";
+import { statePortProvider } from "./state-port.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
@@ -226,6 +228,7 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
         }
         {
           openOpenClawStateDatabase({ env: state.env });
+          createUpdateRun({ trigger: "cli" }, { env: state.env });
           await closeOpenClawStateDatabaseAsync();
           {
             const sharedPath = state.statePath("state", "openclaw.sqlite");
@@ -259,6 +262,33 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
               }),
             );
             expect(capture()).toEqual(before);
+          }
+          const sharedPath = state.statePath("state", "openclaw.sqlite");
+          const sharedStoreId = randomUUID();
+          const sharedNamespace = `backup_state_${sharedStoreId.replaceAll("-", "")}`;
+          namespaces.add(sharedNamespace);
+          {
+            using source = openNodeSqliteDatabase(sharedPath, {
+              readOnly: true,
+              readBigInts: true,
+            });
+            await materializeDatabasePort({
+              source: { engine: "sqlite", db: source },
+              destination: { engine: "postgres", db: client, namespace: sharedNamespace },
+              descriptor: await statePortProvider.loadDescriptor(),
+              storeId: sharedStoreId,
+              assertCurrent() {},
+            });
+          }
+          await fs.rename(sharedPath, state.path("source-state.sqlite"));
+          {
+            using anchor = openNodeSqliteDatabase(sharedPath);
+            anchor.exec(
+              "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
+            );
+            anchor
+              .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
+              .run(sharedStoreId, sharedNamespace);
           }
           const input = {
             backupRoot: state.path("candidate"),
@@ -321,6 +351,9 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
             assertCurrent() {},
           });
           expect(displaced).toContain(`PostgreSQL namespace ${namespace}`);
+          const restoredShared = readBackupEngine(sharedPath);
+          assert(restoredShared.engine === "postgres");
+          namespaces.add(restoredShared.namespace);
           const restored = readBackupEngine(anchorPath);
           assert(restored.engine === "postgres");
           namespaces.add(restored.namespace);

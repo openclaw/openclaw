@@ -1,5 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
+import { prepareModelPromptProjection } from "../../sessions/user-turn-transcript.message.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionTranscriptWriteScope } from "./session-accessor.sqlite-contract.js";
 import {
   captureLifecycleDatabaseScope,
@@ -32,15 +34,23 @@ import {
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
 
-/** Prepare callback output outside SQLite; the existing worker owns selection and commit. */
-async function rewritePreparedTranscriptMessage<T>(params: {
-  scope: SessionTranscriptWriteScope;
-  readSource?: SessionEntryReadSource;
-  target: SessionMessageRewriteSelection["target"];
-  expectedEntry?: SessionMessageRewriteSelection["expectedEntry"];
-  prepare(message: unknown): T | undefined;
-  assertCurrent?: () => void;
-}): Promise<{ generation: string; messageId: string; message: T } | null> {
+type MessageRewriteResult<T> = {
+  generation: string;
+  messageId: string;
+  message: T;
+  unchanged?: true;
+};
+
+/** Closed projections run in the worker; arbitrary callbacks prepare on the host. */
+async function rewritePreparedTranscriptMessage<T>(
+  params: {
+    scope: SessionTranscriptWriteScope;
+    readSource?: SessionEntryReadSource;
+    target: SessionMessageRewriteSelection["target"];
+    expectedEntry?: SessionMessageRewriteSelection["expectedEntry"];
+    assertCurrent?: () => void;
+  } & ({ prepare(message: unknown): T | undefined } | { modelPromptProjection: string }),
+): Promise<MessageRewriteResult<T> | null> {
   const requested = params.readSource
     ? { ...params.scope, agentId: params.readSource.agentId, storePath: params.readSource.path }
     : params.scope;
@@ -74,16 +84,27 @@ async function rewritePreparedTranscriptMessage<T>(params: {
         if (!expected) {
           return { result: null };
         }
-        const message = params.prepare(expected.event.message);
+        const message =
+          "prepare" in params
+            ? params.prepare(expected.event.message)
+            : prepareModelPromptProjection(expected.event.message, params.modelPromptProjection);
         const committed = readSessionActorStorageResult(
           await memory.actor.storage.mutate(
-            { type: "session.rewrite.commit", input: { ...input, expected, message } },
+            {
+              type: "session.rewrite.commit",
+              input: {
+                ...input,
+                expected,
+                message,
+                returnUnchanged: "modelPromptProjection" in params,
+              },
+            },
             memory.authority,
           ),
         );
         return {
-          // SAFETY: This invocation's typed preparer is the only source of the replacement message.
-          result: committed.result as { generation: string; messageId: string; message: T } | null,
+          // SAFETY: The typed preparer or closed projection owns the replacement message.
+          result: committed.result as MessageRewriteResult<T> | null,
         };
       },
     );
@@ -103,7 +124,7 @@ async function rewritePreparedTranscriptMessage<T>(params: {
   });
   return await runSessionEntryWorkerOperation<
     SessionMessageRewriteCommitted,
-    { generation: string; messageId: string; message: T } | null
+    MessageRewriteResult<T> | null
   >({
     database,
     agentId: scope.agentId,
@@ -124,6 +145,14 @@ async function rewritePreparedTranscriptMessage<T>(params: {
           })
         : undefined,
     async run(worker, commit) {
+      if ("modelPromptProjection" in params) {
+        return commit(() =>
+          executeSessionMessageRewriteOperation(worker, database.agentId, {
+            type: "session.messageRewrite.modelPrompt",
+            input: { ...selection, modelPromptProjection: params.modelPromptProjection },
+          }),
+        );
+      }
       const expected = await executeSessionMessageRewriteOperation(worker, database.agentId, {
         type: "session.messageRewrite.prepare",
         input: selection,
@@ -142,9 +171,22 @@ async function rewritePreparedTranscriptMessage<T>(params: {
       );
     },
     onCommitted: ({ result }) => {
-      // SAFETY: This command returns the message produced by this invocation's typed preparer.
-      return result as { generation: string; messageId: string; message: T } | null;
+      // SAFETY: The typed preparer or closed projection owns the replacement message.
+      return result as MessageRewriteResult<T> | null;
     },
+  });
+}
+
+export function capturePreparedTranscriptModelPromptProjection(
+  anchor: TranscriptEntryAnchor,
+  text: string,
+  assertCurrent: () => void,
+) {
+  return rewritePreparedTranscriptMessage<PersistedUserTurnMessage>({
+    scope: anchor,
+    target: { kind: "anchor", anchor, active: "sequence" },
+    modelPromptProjection: text,
+    assertCurrent,
   });
 }
 

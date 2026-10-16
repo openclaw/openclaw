@@ -63,6 +63,8 @@ export type StoreSchema = {
   }[];
   postgresFragments?: readonly PostgresSchemaFragment[];
   search?: SearchSchema;
+  /** Persisted, owner-registered derived search definitions. */
+  searchExtensions?: Record<string, SearchSchema>;
 };
 export type AdmittedStore = {
   anchor: DatabaseSync;

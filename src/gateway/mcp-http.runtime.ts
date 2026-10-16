@@ -464,7 +464,7 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
       requireExplicitMessageTarget: context.requireExplicitMessageTarget === true,
       nodeExecAllowed: context.nodeExecAllowed === true,
       delegationCapability:
-        context.delegationCapability === "report_only" ? "report_only" : undefined,
+        context.delegationCapability === "full" ? undefined : context.delegationCapability,
     },
     admittedRunInstance: params.admittedRunContext?.operationalRunInstance,
     defaultMediatedToolNames: params.defaultMediatedToolNames,

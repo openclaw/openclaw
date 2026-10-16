@@ -64,25 +64,22 @@ interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
 }
 
 /** Coordinates remote tab snapshots and their owned page images and input metrics. */
-export class BrowserPanelSnapshotController {
-  constructor(private readonly controller: BrowserPanelSnapshotHost) {}
-
-  scheduleRefresh(epoch: number, current: () => boolean): void {
-    const controller = this.controller;
+export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost) {
+  function scheduleRefresh(epoch: number, current: () => boolean): void {
     controller.pendingInput.scheduleRefresh(
       ACTION_REFRESH_DELAY_MS,
       () => {
         if (current() && controller.activeTargetId) {
-          void this.capture(controller.activeTargetId, epoch);
+          void capture(controller.activeTargetId, epoch);
         }
       },
       () => !controller.operations.hasPendingCapture,
     );
   }
 
-  async listTabs(client: BrowserRequestClient) {
+  async function listTabs(client: BrowserRequestClient) {
     const snapshot = await listBrowserTabs(client);
-    const fixed = this.controller.host.fixedTab;
+    const fixed = controller.host.fixedTab;
     if (!fixed) {
       return snapshot;
     }
@@ -95,14 +92,13 @@ export class BrowserPanelSnapshotController {
     return { ...snapshot, tabs };
   }
 
-  async refreshTabs(
+  async function refreshTabs(
     client: BrowserRequestClient,
     current: () => boolean,
   ): Promise<BrowserPanelSnapshotOutcome> {
-    const controller = this.controller;
     const invocation = controller.operations.beginSnapshot(client);
     try {
-      const snapshot = await this.listTabs(client);
+      const snapshot = await listTabs(client);
       if (
         current() &&
         controller.operations.acceptSnapshot(
@@ -130,35 +126,35 @@ export class BrowserPanelSnapshotController {
     }
   }
 
-  async capture(targetId: string, epoch = this.controller.operations.epoch): Promise<void> {
-    const client = this.controller.operations.captureClient();
+  async function capture(targetId: string, epoch = controller.operations.epoch): Promise<void> {
+    const client = controller.operations.captureClient();
     if (
-      this.controller.native.activeTab ||
+      controller.native.activeTab ||
       !client ||
-      !this.controller.operations.isLive(epoch, client) ||
-      this.controller.activeTargetId !== targetId ||
-      this.controller.mode !== "interact"
+      !controller.operations.isLive(epoch, client) ||
+      controller.activeTargetId !== targetId ||
+      controller.mode !== "interact"
     ) {
       return;
     }
-    if (this.controller.clearUnavailableView() || this.controller.stream.ownsView(targetId)) {
+    if (controller.clearUnavailableView() || controller.stream.ownsView(targetId)) {
       return;
     }
-    const current = this.controller.operations.beginCapture(
+    const current = controller.operations.beginCapture(
       client,
       targetId,
-      () => this.controller.activeTargetId,
+      () => controller.activeTargetId,
       epoch,
     );
     if (!current) {
       return;
     }
-    this.controller.setState("loading", true);
-    const stream = this.controller.stream;
+    controller.setState("loading", true);
+    const stream = controller.stream;
     let captureRevision = stream.frameRevision;
     const captureCurrent = () =>
       current() &&
-      this.controller.mode === "interact" &&
+      controller.mode === "interact" &&
       captureRevision === stream.frameRevision &&
       !stream.ownsView(targetId);
     try {
@@ -170,8 +166,8 @@ export class BrowserPanelSnapshotController {
         return;
       }
       captureRevision = stream.frameRevision;
-      const route = this.controller.operations.route;
-      const host = this.controller.host;
+      const route = controller.operations.route;
+      const host = controller.host;
       const shot = await captureBrowserScreenshot(client, targetId);
       if (!captureCurrent()) {
         return;
@@ -186,9 +182,9 @@ export class BrowserPanelSnapshotController {
         readBrowserPanelOwnedMetrics(
           client,
           targetId,
-          this.controller.evaluateUnavailable,
+          controller.evaluateUnavailable,
           captureCurrent,
-          () => this.controller.setState("evaluateUnavailable", true),
+          () => controller.setState("evaluateUnavailable", true),
         ),
       ]);
       if (!captureCurrent()) {
@@ -213,42 +209,43 @@ export class BrowserPanelSnapshotController {
       };
       // Tab snapshots can lag history and in-page navigation. Keep the stable
       // identity aligned with the document this capture owns.
-      this.controller.setState(
+      controller.setState(
         "tabs",
-        this.controller.operations.capturedTabs(this.controller.tabs, targetId, metrics, view.url),
+        controller.operations.capturedTabs(controller.tabs, targetId, metrics, view.url),
       );
-      this.controller.setState("view", view);
+      controller.setState("view", view);
       stream.releaseReplacedView();
       if (view.url) {
-        this.controller.syncUrlDraft(view.url);
+        controller.syncUrlDraft(view.url);
       }
     } catch (error) {
       if (captureCurrent()) {
         // A capture denial describes the selected tab; a denied navigation
         // describes the destination and must keep the valid source screenshot.
         if (isBrowserNavigationBlockedError(error)) {
-          this.controller.setState(
+          controller.setState(
             "tabs",
-            this.controller.tabs.map((tab) =>
+            controller.tabs.map((tab) =>
               tab.id === targetId
                 ? { ...tab, url: "", urlUnavailableReason: "navigation_blocked" }
                 : tab,
             ),
           );
-          if (!this.controller.clearUnavailableView()) {
-            this.controller.reportError(error);
+          if (!controller.clearUnavailableView()) {
+            controller.reportError(error);
           }
         } else {
-          this.controller.reportError(error);
+          controller.reportError(error);
         }
       }
     } finally {
       if (current()) {
-        this.controller.operations.completeCapture();
-        this.controller.setState("loading", false);
+        controller.operations.completeCapture();
+        controller.setState("loading", false);
       }
     }
   }
+  return { scheduleRefresh, listTabs, refreshTabs, capture };
 }
 
 /** A stale gateway must not disable evaluation on the replacement browser. */

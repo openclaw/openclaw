@@ -258,7 +258,10 @@ If restart cancellation finishes a collected run before that record commits,
 shutdown retains its recovery custody unless the session or run owner changes.
 Backend-owned restart aborts retain the same custody even when the caller's
 abort signal stays open and lifecycle persistence finishes after reply cleanup.
-Skipped sessions are logged with a reason, including when other sessions recover.
+Startup discovery excludes archived sessions, recovery tombstones, and rows without
+recovery obligations before preparing targets. Completed sessions with pending
+recovery obligations still settle. Other skipped candidates are logged with a
+reason, including when other sessions recover.
 Three attempts that fail to start a backend turn exhaust the recovery budget.
 Once a real backend turn starts,
 the budget refreshes, so a later Gateway restart does not consume the old allowance.
@@ -298,6 +301,10 @@ This also covers parent turns started by subagent completion or pause notices.
 An interrupted parent continues independently of later child completions, and a
 retry of the same notice joins that recovery instead of starting the turn again.
 Parents still waiting after yielding to children remain owned by their child batch.
+Startup waits for subagent Gateway bindings and completion authority restoration
+before attempting to resume these parent turns. Historical child records without
+the original authorization evidence still need a fresh authenticated continuation;
+another restart cannot recreate that evidence.
 
 If a delegated turn's sender authority cannot be reconstructed, automatic recovery
 stops with a recorded reason and a visible notice in the transcript or original

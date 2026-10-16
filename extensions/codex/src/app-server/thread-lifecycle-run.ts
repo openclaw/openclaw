@@ -247,7 +247,9 @@ export async function startOrResumeThread(
       });
       stageBindingReplacement("rotating a stale thread binding");
     };
-    const transientDelegationRestriction = params.params.delegationCapability === "report_only";
+    const transientDelegationRestriction =
+      params.params.delegationCapability === "report_only" ||
+      params.params.delegationCapability === "host_only";
     const persistentWebSearchRestriction =
       params.webSearchAllowed === false && params.persistentWebSearchAllowed === false;
     const transientNativeToolRestriction = isTransientCodexRestrictedTurn(

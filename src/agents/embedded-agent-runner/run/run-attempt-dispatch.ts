@@ -8,7 +8,7 @@ import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-requ
 import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
-import { resolveDelegationCapability } from "../../delegation-capability.js";
+import { prepareDelegationCapability } from "../../delegation-capability.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
@@ -323,6 +323,15 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     };
     skillReferencePaths = prepared.skillUsagePaths;
   }
+  const delegationCapability = await prepareDelegationCapability({
+    fallbackActive,
+    run: params,
+    sessionKey: resolvedSessionKey,
+    sessionId,
+    modelProvider: provider,
+    modelId,
+  });
+  assertActiveRun();
   // Resolve after the last fallible preparation so the attempt's finally owns the leases.
   const { memoryAudience, release: releaseMemoryAudience } =
     await resolveEmbeddedAttemptMemoryAudience({
@@ -490,12 +499,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     requestedModelId,
     fallbackActive,
     fallbackReason,
-    delegationCapability: resolveDelegationCapability({
-      fallbackActive,
-      inputProvenance: params.inputProvenance,
-      disableTools: params.disableTools,
-      toolsAllow: params.toolsAllow,
-    }),
+    delegationCapability,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     agentHarnessId: runtime.agentHarness.id,
     agentHarnessRuntimeOverride: runtime.agentHarness.id,

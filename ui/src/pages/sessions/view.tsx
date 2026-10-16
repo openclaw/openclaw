@@ -24,7 +24,6 @@ import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { getAgentIdentity, SessionRows, sessionsTableColumnCount } from "./session-row.tsx";
 import {
   categoryDropHandlers,
-  clearSessionsSearch,
   handleSessionsSearchKeydown,
   SessionsAdvancedFilters,
 } from "./sessions-filters.tsx";
@@ -58,13 +57,7 @@ function renderSessionsHeadingFacts(
                 ·
               </span>
             ) : undefined}
-            <span
-              class={
-                active
-                  ? "sessions-heading-fact sessions-heading-fact--active"
-                  : "sessions-heading-fact"
-              }
-            >
+            <span class={["sessions-heading-fact", { "sessions-heading-fact--active": active }]}>
               <strong>{value}</strong> {label}
             </span>
           </>
@@ -241,6 +234,7 @@ function SortHeader(
 }
 
 function SessionsTable(props: SessionsProps) {
+  let searchInput!: HTMLInputElement;
   const rawRows = createMemo(() => props.result?.sessions ?? []);
   const searchQuery = createMemo(() => props.searchQuery);
   const pageSizeValue = createMemo(() => String(props.pageSize));
@@ -317,6 +311,7 @@ function SessionsTable(props: SessionsProps) {
         <div class="data-table-search sessions-toolbar__search">
           <Icon name="search" />
           <input
+            ref={(element) => (searchInput = element)}
             type="text"
             aria-label={t("sessionsView.searchPlaceholder")}
             placeholder={t("sessionsView.searchPlaceholder")}
@@ -331,7 +326,10 @@ function SessionsTable(props: SessionsProps) {
             title={t("sessionsView.clearSearch")}
             hidden={!props.searchQuery}
             disabled={!props.searchQuery}
-            onClick={(event: MouseEvent) => clearSessionsSearch(event, props.onSearchChange)}
+            onClick={() => {
+              searchInput.focus({ preventScroll: true });
+              props.onSearchChange("");
+            }}
           >
             <Icon name="x" />
           </button>
