@@ -7,6 +7,7 @@ import {
   createManagerIndexFixture,
   memoryIndexFixtureWriter,
 } from "./manager-index.test-support.js";
+import { observeDatabaseReads } from "./manager-read-observation.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const benchmark = process.env.OPENCLAW_MEMORY_RETRIEVAL_BENCH === "1";
@@ -53,71 +54,6 @@ function seedCorpus(db: DatabaseSync, chunks: number): void {
     DROP TABLE retrieval_fixture;`);
 }
 
-function observeMainThreadSql(db: DatabaseSync) {
-  let milliseconds = 0;
-  let statements = 0;
-  const sql: string[] = [];
-  const timed = <T>(run: () => T): T => {
-    const started = performance.now();
-    try {
-      return run();
-    } finally {
-      milliseconds += performance.now() - started;
-    }
-  };
-  const prepare = db.prepare.bind(db);
-  const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((query) => {
-    sql.push(query);
-    const statement = timed(() => prepare(query));
-    return new Proxy(statement, {
-      get(target, key) {
-        const value: unknown = Reflect.get(target, key, target);
-        if (typeof value !== "function") {
-          return value;
-        }
-        return (...args: unknown[]) => {
-          if (key === "iterate") {
-            statements += 1;
-            const iterator: ReturnType<typeof statement.iterate> = timed(() =>
-              Reflect.apply(value, target, args),
-            );
-            return {
-              [Symbol.iterator]() {
-                return this;
-              },
-              next: () => timed(() => iterator.next()),
-              return: () => timed(() => iterator.return?.() ?? { done: true, value: undefined }),
-            };
-          }
-          if (key !== "all" && key !== "get" && key !== "run") {
-            return Reflect.apply(value, target, args);
-          }
-          statements += 1;
-          return timed(() => Reflect.apply(value, target, args));
-        };
-      },
-    });
-  });
-  const exec = db.exec.bind(db);
-  const execSpy = vi.spyOn(db, "exec").mockImplementation((query) => {
-    statements += 1;
-    sql.push(query);
-    return timed(() => exec(query));
-  });
-  return {
-    read: () => ({ milliseconds, statements, sql }),
-    reset: () => {
-      milliseconds = 0;
-      statements = 0;
-      sql.length = 0;
-    },
-    restore: () => {
-      prepareSpy.mockRestore();
-      execSpy.mockRestore();
-    },
-  };
-}
-
 function sampleStats(samples: number[]) {
   samples.sort((a, b) => a - b);
   return {
@@ -161,7 +97,7 @@ it("offloads ranked retrieval and session-only metadata together", async () => {
     { name: "triggers", run: () => manager.listTriggerCandidates(projectOptions) },
     { name: "projects", run: () => manager.listCuratedProjectCandidates(projectOptions) },
   ];
-  const observer = observeMainThreadSql(db);
+  const observer = observeDatabaseReads(db);
   const golden: Record<string, unknown> = {};
   try {
     for (const operation of operations) {

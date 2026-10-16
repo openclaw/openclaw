@@ -9,45 +9,14 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createManagerIndexFixture,
   memoryIndexFixtureWriter,
 } from "./manager-index.test-support.js";
+import { observeDatabaseReads } from "./manager-read-observation.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
-
-function observeReads(database: DatabaseSync) {
-  const reads: Array<{ sql: string; rows: number }> = [];
-  const prepare = database.prepare.bind(database);
-  const spy = vi.spyOn(database, "prepare").mockImplementation((sql) => {
-    const statement = prepare(sql);
-    const get = statement.get.bind(statement);
-    const all = statement.all.bind(statement);
-    const iterate = statement.iterate.bind(statement);
-    vi.spyOn(statement, "get").mockImplementation((...bindings) => {
-      const row = get(...bindings);
-      reads.push({ sql, rows: row ? 1 : 0 });
-      return row;
-    });
-    vi.spyOn(statement, "all").mockImplementation((...bindings) => {
-      const rows = all(...bindings);
-      reads.push({ sql, rows: rows.length });
-      return rows;
-    });
-    vi.spyOn(statement, "iterate").mockImplementation(function* (...bindings) {
-      const read = { sql, rows: 0 };
-      reads.push(read);
-      for (const row of iterate(...bindings)) {
-        read.rows += 1;
-        yield row;
-      }
-      return undefined;
-    });
-    return statement;
-  });
-  return { reads, restore: () => spy.mockRestore() };
-}
 
 describe("memory manager reads", () => {
   const fixture = createManagerIndexFixture({
@@ -61,8 +30,6 @@ describe("memory manager reads", () => {
       sessionId,
       messages: [{ role: "user", timestamp: Date.now(), content, senderIsOwner }],
     });
-  const sync = (manager: Awaited<ReturnType<typeof fixture.getFreshManager>>) =>
-    manager.sync({ reason: "cli", force: true });
 
   it("reports source eligibility before the index exists", async () => {
     const diagnostic = await fixture.getFreshManager(
@@ -82,7 +49,7 @@ describe("memory manager reads", () => {
       await seedSession(sessionId, `${sessionId} violet memory.`);
     }
     const manager = await fixture.getFreshManager(sessionConfig(), "cli");
-    await sync(manager);
+    await manager.sync({ reason: "cli", force: true });
     await expect(
       deleteSessionEntry({
         agentId: "main",
@@ -107,12 +74,8 @@ describe("memory manager reads", () => {
     );
     expect(archive?.artifactKind).toBe("archive-artifact");
     const database = Reflect.get(manager, "db") as DatabaseSync;
-    const databasePath = database.location();
-    if (!databasePath) {
-      throw new Error("Expected the fixture's file-backed memory index");
-    }
     {
-      using writer = new DatabaseSync(databasePath);
+      const writer = memoryIndexFixtureWriter(manager);
       writer.exec("BEGIN IMMEDIATE");
       const insert = writer.prepare(
         "INSERT INTO memory_index_sources(path, source, hash, mtime, size) VALUES(?, ?, 'retained', 1, 2)",
@@ -135,7 +98,7 @@ describe("memory manager reads", () => {
       `sessions/main/${activeId}`,
       `sessions/main/${archivedId}`,
     ]);
-    const observation = observeReads(database);
+    const observation = observeDatabaseReads(database);
     try {
       await manager.sync({
         reason: "targeted-read-budget",
@@ -151,13 +114,11 @@ describe("memory manager reads", () => {
       before.filter((row) => row.source !== "sessions" || !stalePaths.has(String(row.path))),
     );
     expect(after.filter((row) => archivePaths.has(String(row.path)))).toHaveLength(2);
-    expect(await manager.search("violet", { lexicalOnly: true, minScore: 0 })).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: sessionPathForSessionIdentity("main", activeId),
-          snippet: expect.stringContaining(`${activeId} violet memory.`),
-        }),
-      ]),
+    expect(await manager.search("violet", { lexicalOnly: true, minScore: 0 })).toContainEqual(
+      expect.objectContaining({
+        path: sessionPathForSessionIdentity("main", activeId),
+        snippet: expect.stringContaining(`${activeId} violet memory.`),
+      }),
     );
     const sourceReads = observation.reads.filter(({ sql }) =>
       /\bmemory_index_sources\b/i.test(sql),
@@ -211,7 +172,7 @@ describe("memory manager reads", () => {
   it("reuses diagnostic cache totals", async () => {
     const cfg = fixture.createConfig({ provider: "none", cacheEnabled: true });
     const manager = await fixture.getFreshManager(cfg, "cli");
-    await sync(manager);
+    await manager.sync({ reason: "cli", force: true });
     memoryIndexFixtureWriter(manager)
       .prepare(`INSERT INTO memory_embedding_cache
       (provider, model, provider_key, hash, embedding, dims, updated_at)
@@ -221,7 +182,7 @@ describe("memory manager reads", () => {
     expect(ordinary.storage).toBeUndefined();
     expect(ordinary.cache?.entries).toBe(1);
     const diagnostic = await fixture.getFreshManager(cfg, "status", true);
-    const diagnosticReads = observeReads(Reflect.get(diagnostic, "db") as DatabaseSync);
+    const diagnosticReads = observeDatabaseReads(Reflect.get(diagnostic, "db") as DatabaseSync);
     try {
       expect(diagnostic.status()).toMatchObject({
         cache: { entries: 1 },
