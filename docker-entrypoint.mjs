@@ -1,5 +1,6 @@
 // Image activation owns unattended retained-volume repair; ordinary CLI startup only admits state.
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -69,6 +70,38 @@ function gatewayInvocation(program) {
   return options && !options.commandOptions.includes("--reset") ? options : undefined;
 }
 
+// Doctor reads this fact to skip a repeated full pre-repair capture; repairs still run.
+const ACTIVATION_REPEAT_ENV = "OPENCLAW_IMAGE_ACTIVATION_REPEAT";
+
+// A container keeps its image, environment, and mounts across stop/start, and its
+// writable layer survives them. A marker there records that this container already
+// completed Doctor activation, whose first run retained the pre-repair originals.
+// A new image or recreated container starts without it and captures again.
+function activationMarker(rootOptions) {
+  const key = createHash("sha256")
+    .update(JSON.stringify([root, rootOptions]))
+    .digest("hex")
+    .slice(0, 32);
+  return path.join(os.tmpdir(), `openclaw-image-activation-${process.getuid?.() ?? "user"}-${key}`);
+}
+
+function activationCompleted(marker) {
+  try {
+    const stat = fs.lstatSync(marker);
+    return stat.isFile() && (process.getuid === undefined || stat.uid === process.getuid());
+  } catch {
+    return false;
+  }
+}
+
+function recordActivationCompleted(marker) {
+  try {
+    fs.writeFileSync(marker, "", { flag: "wx", mode: 0o600 });
+  } catch {
+    // Best effort: without the marker the next start retains another capture.
+  }
+}
+
 async function activate() {
   const program = command[0] && executable(command[0]);
   if (!program) {
@@ -90,6 +123,12 @@ async function activate() {
       process.on(signal, listener);
       listeners.set(signal, listener);
     }
+    const marker = activationMarker(invocation.rootOptions);
+    const env = { ...process.env };
+    delete env[ACTIVATION_REPEAT_ENV];
+    if (activationCompleted(marker)) {
+      env[ACTIVATION_REPEAT_ENV] = "1";
+    }
     try {
       child = spawn(
         process.execPath,
@@ -100,7 +139,7 @@ async function activate() {
           "--fix",
           "--non-interactive",
         ],
-        { stdio: "inherit", env: process.env },
+        { stdio: "inherit", env },
       );
       /** @type {Error | undefined} */
       let failure;
@@ -118,6 +157,7 @@ async function activate() {
         process.exitCode = signal ? 128 + os.constants.signals[signal] : (outcome.code ?? 1);
         return;
       }
+      recordActivationCompleted(marker);
     } finally {
       for (const [signal, listener] of listeners) {
         process.off(signal, listener);

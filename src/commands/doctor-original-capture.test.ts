@@ -1,6 +1,8 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as ancestry from "../infra/restart-stale-pids.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
@@ -57,3 +59,23 @@ it.each(["ancestry-unverified", "missing-capture"] as const)(
     });
   },
 );
+
+it("skips the full capture when this container already completed image activation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const log = vi.fn();
+    await preserveDoctorOriginalState({
+      root: process.cwd(),
+      env: { ...state.env, OPENCLAW_IMAGE_ACTIVATION_REPEAT: "1" },
+      runtime: { log, error: vi.fn(), exit: vi.fn() },
+      signal: new AbortController().signal,
+      assertCurrent() {},
+    });
+
+    expect(fs.existsSync(resolveUpdateCaptureRoot(state.stateDir))).toBe(false);
+    expect(log.mock.calls).toEqual([
+      [
+        "This container already completed image activation; Doctor skipped a repeated full pre-repair capture. Repair-specific backups still apply.",
+      ],
+    ]);
+  });
+});

@@ -12,6 +12,8 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
 
+const IMAGE_ACTIVATION_REPEAT_ENV = "OPENCLAW_IMAGE_ACTIVATION_REPEAT";
+
 /** Preserve evidence before repair; neither a capture nor its lineage authorizes restoration. */
 export async function preserveDoctorOriginalState(params: {
   root: string | null;
@@ -62,6 +64,14 @@ export async function preserveDoctorOriginalState(params: {
         retained
           ? `Original update capture retained at ${retained.ref.manifestPath}.`
           : "Original update capture is unavailable. Doctor will repair current state without replacing the retained originals.",
+      );
+      return;
+    }
+    if (params.env[IMAGE_ACTIVATION_REPEAT_ENV] === "1") {
+      // docker-entrypoint.mjs sets this only after this container's earlier
+      // activation Doctor succeeded; that first run retained the originals.
+      params.runtime.log(
+        "This container already completed image activation; Doctor skipped a repeated full pre-repair capture. Repair-specific backups still apply.",
       );
       return;
     }
