@@ -473,13 +473,20 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     } else {
       retirementPublications.set(publication.key, new Set([publication]));
     }
+    // A newer row can already coexist with a specifically selected legacy task.
+    const initial =
+      latestSubagentRun(
+        getSubagentRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+      ) ?? entry;
     let active = true;
     const observe = (): SubagentRetirementObservation => {
       const successor = latestSubagentRun(
         getSubagentRunsForChildSession(entry.childSessionKey, entry.childAgentId),
         (candidate) =>
           !isSameSubagentRunOwner(candidate, entry) &&
-          (candidate.runId === entry.runId || compareSubagentRunGeneration(candidate, entry) > 0) &&
+          (candidate.runId === entry.runId ||
+            (compareSubagentRunGeneration(candidate, initial) >= 0 &&
+              !isSameSubagentRunOwner(candidate, initial))) &&
           isSuccessor(candidate),
       );
       if (!active || successor) {
@@ -531,11 +538,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         }
       },
       accept: (entry: SubagentRunRecord) => {
-        if (
-          !active ||
-          !matchesSubagentChildSessionOwner(entry, childSessionKey, childAgentId) ||
-          !isSameSubagentRunOwner(this.get(entry.runId), entry)
-        ) {
+        if (!active || !matchesSubagentChildSessionOwner(entry, childSessionKey, childAgentId)) {
           throw new Error("Subagent registration owner changed before publication");
         }
         accepted = entry;
