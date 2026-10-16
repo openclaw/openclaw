@@ -142,6 +142,16 @@ function onlyRecord(value: unknown) {
   return expectDefined(asOptionalRecord(rows[0]), "record");
 }
 
+function modelIds(result: Pick<ModelsListResult, "models">) {
+  return result.models.map(({ id }) => id).toSorted();
+}
+
+function expectHidden(value: unknown, ...fields: string[]) {
+  for (const field of fields) {
+    expect(value).not.toHaveProperty(field);
+  }
+}
+
 describe("operator model discovery at registered reads", () => {
   it.each([
     { policy: { allow: [] }, defaultModel: null, acceptsReset: false },
@@ -173,10 +183,7 @@ describe("operator model discovery at registered reads", () => {
       f.context.readPreparedGatewayModelCatalog = async () => ({ entries: catalog });
       await initializeSessionReadContext(f.context);
 
-      const models = await f.request("models.list", { agentId: "main" });
-      expect(models.mock.calls).toHaveLength(1);
-      expect(models.mock.calls[0]?.[0]).toBe(true);
-      expect(models.mock.calls[0]?.[1]).toMatchObject({
+      expect(response(await f.request("models.list", { agentId: "main" }))).toMatchObject({
         modelSelectionPolicy: { restricted: true, defaultModel: expected.defaultModel },
       });
       const reset = await f.request("sessions.patch", { key: scope.sessionKey, model: null });
@@ -214,13 +221,12 @@ describe("operator model discovery at registered reads", () => {
       prepareGatewayRecipientProfile(f.client);
       const read = async (method: "models.list" | "chat.metadata", view?: string) => {
         const respond = await f.request(method, { agentId: "main", ...(view ? { view } : {}) });
-        expect(respond.mock.calls).toHaveLength(1);
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        response(respond);
         return respond.mock.calls[0]?.[1] as ModelsListResult;
       };
       for (const view of ["default", "configured", "all", "provider-config"]) {
         const result = await read("models.list", view);
-        expect(result.models.map(({ id }) => id).toSorted()).toEqual(["fallback", "primary"]);
+        expect(modelIds(result)).toEqual(["fallback", "primary"]);
         expect(result.modelSelectionPolicy).toEqual({
           restricted: true,
           defaultModel: "example/primary",
@@ -229,10 +235,7 @@ describe("operator model discovery at registered reads", () => {
         expect(result.providerOutcomes).toEqual([{ provider: "example", status: "ready" }]);
         expect(result.refreshFailed).toBe(false);
       }
-      expect((await read("chat.metadata")).models.map(({ id }) => id).toSorted()).toEqual([
-        "fallback",
-        "primary",
-      ]);
+      expect(modelIds(await read("chat.metadata"))).toEqual(["fallback", "primary"]);
 
       const tentative = structuredClone(f.cfg);
       delete expectDefined(tentative.gateway?.roles?.definitions.visitor, "tentative role")
@@ -240,15 +243,9 @@ describe("operator model discovery at registered reads", () => {
       f.context.getRuntimeConfig = () => tentative;
       f.context.getCommittedRuntimeConfig = () => f.cfg;
       for (const view of ["default", "configured", "all", "provider-config"]) {
-        expect((await read("models.list", view)).models.map(({ id }) => id).toSorted()).toEqual([
-          "fallback",
-          "primary",
-        ]);
+        expect(modelIds(await read("models.list", view))).toEqual(["fallback", "primary"]);
       }
-      expect((await read("chat.metadata")).models.map(({ id }) => id).toSorted()).toEqual([
-        "fallback",
-        "primary",
-      ]);
+      expect(modelIds(await read("chat.metadata"))).toEqual(["fallback", "primary"]);
       f.context.getRuntimeConfig = () => f.cfg;
 
       f.role.modelPolicy = {
@@ -257,11 +254,7 @@ describe("operator model discovery at registered reads", () => {
         deny: ["example/restricted-*"],
       };
       const custom = await read("models.list", "configured");
-      expect(custom.models.map(({ id }) => id).toSorted()).toEqual([
-        "custom",
-        "fallback",
-        "primary",
-      ]);
+      expect(modelIds(custom)).toEqual(["custom", "fallback", "primary"]);
       expect(custom.models.find(({ id }) => id === "custom")?.alias).toBe("custom-choice");
 
       const presentation = expectDefined(
@@ -303,12 +296,7 @@ describe("operator model discovery at registered reads", () => {
       invalidateOperatorRolePolicy(f.person.id);
       f.client.connect.scopes = ["operator.admin", "operator.read", "operator.write"];
       const staff = await read("models.list", "all");
-      expect(staff.models.map(({ id }) => id).toSorted()).toEqual([
-        "custom",
-        "fallback",
-        "primary",
-        "restricted-model",
-      ]);
+      expect(modelIds(staff)).toEqual(["custom", "fallback", "primary", "restricted-model"]);
       expect(staff).not.toHaveProperty("modelSelectionPolicy");
       expect(staff).toMatchObject(diagnostics);
     });
@@ -390,10 +378,7 @@ describe("operator model discovery at registered reads", () => {
       await state.writeConfig(f.cfg);
       setRuntimeConfigSnapshot(f.cfg);
       const tentative = structuredClone(f.cfg);
-      const tentativeRole = expectDefined(
-        tentative.gateway?.roles?.definitions.visitor,
-        "tentative role",
-      );
+      const tentativeRole = expectDefined(tentative.gateway?.roles?.definitions.visitor, "role");
       delete tentativeRole.modelPolicy;
       f.context.getRuntimeConfig = () => tentative;
       f.context.getCommittedRuntimeConfig = () => f.cfg;
@@ -448,13 +433,10 @@ describe("operator model discovery at registered reads", () => {
           modelSelectionPolicy: { restricted: true, defaultModel: "example/fallback" },
         }),
       });
-      expect(startupPayload.sessionInfo).not.toHaveProperty("model");
-      expect(startupPayload.sessionInfo).not.toHaveProperty("modelProvider");
-      expect(startupPayload.sessionInfo).not.toHaveProperty("contextBudgetStatus");
+      expectHidden(startupPayload.sessionInfo, "model", "modelProvider", "contextBudgetStatus");
       const startupMessage = onlyRecord(startupPayload.messages);
       expect(startupMessage).toMatchObject({ role: "assistant", content });
-      expect(startupMessage).not.toHaveProperty("model");
-      expect(startupMessage).not.toHaveProperty("provider");
+      expectHidden(startupMessage, "model", "provider");
 
       // Roster reads also apply the model ceiling when the caller holds their registered read scope.
       f.role.scopes = [READ_SCOPE];
@@ -513,9 +495,7 @@ describe("operator model discovery at registered reads", () => {
               expect(row).toMatchObject({ modelProvider: "example", model: "restricted-model" });
               expect(row).toHaveProperty("contextBudgetStatus", budget);
             } else {
-              expect(row).not.toHaveProperty("model");
-              expect(row).not.toHaveProperty("modelProvider");
-              expect(row).not.toHaveProperty("contextBudgetStatus");
+              expectHidden(row, "model", "modelProvider", "contextBudgetStatus");
             }
           }
           if (
@@ -531,8 +511,7 @@ describe("operator model discovery at registered reads", () => {
             if (staff) {
               expect(message).toMatchObject({ provider: "example", model: "restricted-model" });
             } else {
-              expect(message).not.toHaveProperty("model");
-              expect(message).not.toHaveProperty("provider");
+              expectHidden(message, "model", "provider");
             }
           }
         }
