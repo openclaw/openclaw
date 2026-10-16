@@ -479,6 +479,8 @@ it.each(["returned", "cooperating"] as const)(
           resume.resolve();
           await Promise.allSettled([closing, descendant]);
           await (release ?? resources.release());
+          // Terminal native cleanup joins real Worker exits; fake timers only drive the grace.
+          vi.useRealTimers();
         }
         await expect(descendant).resolves.toBeUndefined();
         expect(fixture.state.afterCleanup).toEqual({ value: 42 });
