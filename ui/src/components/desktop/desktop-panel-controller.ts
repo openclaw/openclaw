@@ -32,7 +32,7 @@ import * as desktopAuth from "./desktop-panel-credentials.ts";
 import { desktopPanelLayout } from "./desktop-panel-layout.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import type { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
-import { DesktopSessionController } from "./desktop-session-controller.ts";
+import { DesktopSessionOwner } from "./desktop-session-owner.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
 registerDesktopEnglish();
@@ -94,8 +94,9 @@ export class DesktopPanelController extends SolidPanelController {
   private controlTakeoverRecoveryUsed = false;
   // Automatic resolution follows the session; an explicit choice owns its pop-out target.
   private sourceSelection: "pending" | "resolved" | "explicit" | "picker" = "pending";
-  private readonly sessionSource = new DesktopSessionController(
+  readonly sessionSource = new DesktopSessionOwner(
     this,
+    () => this.invalidate(),
     () => this.environmentId,
     (target) => {
       if (this.usesAutomaticSource) {
@@ -353,7 +354,6 @@ export class DesktopPanelController extends SolidPanelController {
       );
       if (selected && this.sourceSelection === "pending") {
         this.sourceSelection = "resolved";
-        this.invalidate();
         await this.connectEnvironment(selected.id, false);
       }
       return true;
@@ -414,7 +414,6 @@ export class DesktopPanelController extends SolidPanelController {
     this.returnToPicker(explicit ? "explicit" : this.sourceSelection);
     this.environmentId = environmentId;
     this.state = "connecting";
-    this.invalidate();
     const operationId = this.operationId;
     const inventoryLoaded = await this.refreshEnvironments(operationId, environmentId);
     if (operationId !== this.operationId) {

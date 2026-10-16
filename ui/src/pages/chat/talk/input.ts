@@ -1,5 +1,6 @@
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { t } from "../../../i18n/index.ts";
+import { UserFacingError } from "../../../lib/format-error.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 
 export type RealtimeTalkInputDevice = {
@@ -254,8 +255,9 @@ async function openRealtimeTalkMedia(
         ? new RealtimeTalkSelectedMicrophoneError()
         : new Error(t("chat.composer.selectedCameraUnavailable"));
     }
-    // oxlint-disable-next-line preserve-caught-error -- A DOMException cause appends its legacy code in the shared formatter.
-    throw new Error(realtimeTalkDeviceIssueMessage(deviceIssueFromError(error), kind));
+    throw new UserFacingError(realtimeTalkDeviceIssueMessage(deviceIssueFromError(error), kind), {
+      cause: error,
+    });
   }
   if (signal?.aborted) {
     acquisition.getTracks().forEach((track) => track.stop());

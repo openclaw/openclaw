@@ -57,7 +57,7 @@ import {
   toggleSidebarSessionSelection,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
-import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
+import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
 import {
   SidebarSessionProjection,
   type SidebarVisibleSections,
@@ -170,26 +170,23 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   abstract readonly navigationCatalog: SidebarNavigationCatalog;
-  readonly sessionPullRequests = new SessionPullRequestIndicatorsController(this, {
-    getConnected: () => this.connected,
-    getRows: () =>
-      mergeAdoptedSessionPullRequestRows({
-        rows: [
-          ...this.visibleSessionRowsInOrder(),
-          ...(this.groupedSessionSource?.agentIds.flatMap((agentId) => {
-            const home = this.visibleHomeSession(agentId);
-            return home ? [home] : [];
-          }) ?? []),
-        ],
-        adopted: adoptedCatalogSessionKeys(this.visibleSessionCatalogs()),
-        sessionsResult: this.groupedSessionSource?.result ?? this.sessionData.sessionsResult,
-        sessionResultsByAgent: this.sessionData.sessionResultsByAgent,
-        navigationState: this.getSessionNavigationState(),
-      }),
-    getSelectedAgentId: () => this.selectedAgentIdForSessions(),
-    getGateway: () => this.context?.gateway,
-    getSessions: () => this.context?.sessions,
-  });
+  sessionPullRequests!: SessionPullRequestIndicators;
+
+  readSessionPullRequestRows(): readonly SidebarRecentSession[] {
+    return mergeAdoptedSessionPullRequestRows({
+      rows: [
+        ...this.visibleSessionRowsInOrder(),
+        ...(this.groupedSessionSource?.agentIds.flatMap((agentId) => {
+          const home = this.visibleHomeSession(agentId);
+          return home ? [home] : [];
+        }) ?? []),
+      ],
+      adopted: adoptedCatalogSessionKeys(this.visibleSessionCatalogs()),
+      sessionsResult: this.groupedSessionSource?.result ?? this.sessionData.sessionsResult,
+      sessionResultsByAgent: this.sessionData.sessionResultsByAgent,
+      navigationState: this.getSessionNavigationState(),
+    });
+  }
 
   private readonly readSidebarSessionSortOptions = () => ({
     sortMode: this.effectiveSessionSortMode(),

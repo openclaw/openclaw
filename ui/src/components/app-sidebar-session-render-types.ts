@@ -20,7 +20,7 @@ import type {
   CatalogSessionMenuRequest,
   SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
-import type { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
+import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
 import type {
   SidebarSessionProjection,
   SidebarVisibleSections,
@@ -123,7 +123,7 @@ export interface SessionListHost {
     routeId: NavigationRouteId,
     options?: ApplicationNavigationOptions,
   ) => void;
-  readonly sessionPullRequests: Pick<SessionPullRequestIndicatorsController, "summary">;
+  readonly sessionPullRequests: Pick<SessionPullRequestIndicators, "summary">;
   mainSessionRow(): GatewaySessionRow | null;
   setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;

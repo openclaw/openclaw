@@ -175,6 +175,15 @@ hashes. Installed plugins keep their normal filesystem admission and loading
 rules and live in the configured state directory.
 
 Installed TypeScript plugins use the embedded Jiti loader and Babel transformer.
+On-demand plugin installs use the declared npm runtime in `runtime/npm/` through
+the standalone executable's Bun mode. This preserves npm registry authentication,
+configuration, lockfile integrity checks, and the installer's disabled lifecycle
+scripts without requiring a host Node, Bun, or npm installation. The manifest's
+`runtime.packageManager` records the npm version, entrypoint, file count, and bytes;
+the `packageManager` resource category includes its runtime dependencies and licenses.
+Documentation, source maps, and TypeScript declarations are excluded from this closure.
+Installed plugins resolve host SDK imports to the embedded image through the
+existing native plugin resolvers; host SDK JavaScript is not restored on disk.
 The builder captures constant conditional-export resolutions before compilation;
 these modules remain lazy and do not require JavaScript in the sidecar.
 
