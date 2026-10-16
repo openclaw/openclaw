@@ -1,16 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
+import { writeTree } from "./plugin-generation-capture.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const fixtureTempDirs: string[] = [];
 const fixtureRoot = makeTrackedTempDir("openclaw-plugin-graceful", fixtureTempDirs);
 let tempDirIndex = 0;
 const { loadOpenClawPlugins, clearPluginLoaderCache } = await import("./loader.test-fixtures.js");
+const validationState = { status: "error", failurePhase: "validation" } as const;
 
-afterAll(() => {
-  cleanupTrackedTempDirs(fixtureTempDirs);
-});
+afterAll(() => cleanupTrackedTempDirs(fixtureTempDirs));
 
 function writePlugin(
   id: string,
@@ -21,28 +21,14 @@ function writePlugin(
   } = {},
 ) {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
-  fs.mkdirSync(dir, { recursive: true });
   const filename = `${id}.cjs`;
-  const file = path.join(dir, filename);
-  fs.writeFileSync(
-    file,
-    params.body ?? `module.exports = { id: ${JSON.stringify(id)}, register() {} };`,
-    "utf-8",
-  );
-  const manifest = JSON.stringify({
-    id,
-    name: id,
-    version: "1.0.0",
-    main: filename,
-  });
   const configSchemaJson =
     params.configSchemaJson ?? JSON.stringify(params.configSchema ?? { type: "object" });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    `${manifest.slice(0, -1)},"configSchema":${configSchemaJson}}`,
-    "utf-8",
-  );
-  return { id, file, dir };
+  writeTree(dir, {
+    [filename]: params.body ?? `module.exports = { id: ${JSON.stringify(id)}, register() {} };`,
+    "openclaw.plugin.json": `{"id":${JSON.stringify(id)},"configSchema":${configSchemaJson}}`,
+  });
+  return { id, file: path.join(dir, filename) };
 }
 
 async function loadPlugins(
@@ -84,17 +70,16 @@ function requirePluginEntry(registry: Awaited<ReturnType<typeof loadPlugins>>, p
 
 it("records a malformed configSchema as a validation failure", async () => {
   const broken = writePlugin("unresolved-ref-plugin", {
-    configSchema: {
-      type: "object",
-      properties: { mode: { $ref: "#/$defs/Mode" } },
-    },
+    configSchema: { type: "object", properties: { mode: { $ref: "#/$defs/Mode" } } },
   });
 
   const registry = await loadPlugins([broken]);
 
   const failed = requirePluginEntry(registry, "unresolved-ref-plugin");
-  expect(failed).toMatchObject({ status: "error", failurePhase: "validation" });
-  expect(failed.error).toContain("invalid schema");
+  expect(failed).toMatchObject({
+    ...validationState,
+    error: expect.stringContaining("invalid schema"),
+  });
 });
 
 it("keeps loading siblings and retries validation when a schema cannot be serialized", async () => {
@@ -103,9 +88,7 @@ it("keeps loading siblings and retries validation when a schema cannot be serial
     '{"type":"object","properties":{"nested":'.repeat(3_000) +
     '{"type":"object"}' +
     "}}".repeat(3_000);
-  const broken = writePlugin("deep-schema-plugin", {
-    configSchemaJson: deep,
-  });
+  const broken = writePlugin("deep-schema-plugin", { configSchemaJson: deep });
   const healthy = writePlugin("shallow-schema-plugin");
 
   const brokenSource = fs.realpathSync(broken.file);
@@ -123,18 +106,12 @@ it("keeps loading siblings and retries validation when a schema cannot be serial
     const registry = await loadPlugins([broken, healthy]);
 
     expect(requirePluginEntry(registry, healthy.id).status).toBe("loaded");
-    expect(requirePluginEntry(registry, broken.id)).toMatchObject({
-      status: "error",
-      failurePhase: "validation",
-    });
+    expect(requirePluginEntry(registry, broken.id)).toMatchObject(validationState);
     const replacement = await loadPlugins([broken, healthy], undefined, registry);
     expect(requirePluginEntry(replacement, healthy.id)).toBe(
       requirePluginEntry(registry, healthy.id),
     );
-    expect(requirePluginEntry(replacement, broken.id)).toMatchObject({
-      status: "error",
-      failurePhase: "validation",
-    });
+    expect(requirePluginEntry(replacement, broken.id)).toMatchObject(validationState);
     expect(requirePluginEntry(replacement, broken.id)).not.toBe(
       requirePluginEntry(registry, broken.id),
     );

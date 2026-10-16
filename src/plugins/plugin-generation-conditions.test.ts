@@ -5,9 +5,9 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
-import { PluginInstance } from "./plugin-instance.js";
+import { writeTree as write } from "./plugin-generation-capture.test-support.js";
+import { loadPluginFixture } from "./plugin-generation-module.test-support.js";
+import type { PluginInstance } from "./plugin-instance.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const nativeRequire = createRequire(import.meta.url);
@@ -19,28 +19,15 @@ afterEach(async () => {
   }
 });
 
-function write(root: string, files: Record<string, string>) {
-  for (const [filename, source] of Object.entries(files)) {
-    const target = path.join(root, filename);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, source);
-  }
+function bodyModule(value: string) {
+  return {
+    "package.json": '{"exports":"./index.cjs"}',
+    "index.cjs": "exports.value = require('./body.cjs').value;",
+    "body.cjs": `exports.value = '${value}';`,
+  };
 }
 
-function load(rootDir: string, entry: string) {
-  const instance = new PluginInstance("generation-fixture");
-  instances.push(instance);
-  withPluginCache(createPluginCache(), () =>
-    bindPluginInstanceModuleLoader({
-      instance,
-      origin: "config",
-      source: path.join(rootDir, entry),
-      rootDir,
-      standalone: true,
-    }),
-  );
-  return instance.loadModule(path.join(rootDir, entry));
-}
+const load = (root: string, entry: string) => loadPluginFixture(root, entry, instances);
 
 it.each(
   ["#selected", "condition-owner/selected"].flatMap((specifier) =>
@@ -96,7 +83,7 @@ it.each(
       },
     };
     write(root, {
-      "package.json": JSON.stringify(manifest),
+      "package.json": manifest,
       [entry]:
         mode === "import"
           ? "export const read = async () => { const loaded = await import('#selected'); return [loaded.value, loaded.body]; };"
@@ -115,17 +102,14 @@ it.each(
     }
     const plugin = load(root, entry) as { read(): string[] | Promise<string[]> };
     write(root, {
-      "package.json": JSON.stringify({
-        ...manifest,
-        imports: { "#selected": "import-dependency" },
-      }),
+      "package.json": { ...manifest, imports: { "#selected": "import-dependency" } },
     });
     const selected = path.join(root, "node_modules", "sync-dependency");
     write(selected, {
-      "package.json": JSON.stringify({
+      "package.json": {
         [entryField]: "./replacement.mjs",
         dependencies: { "missing-later-dependency": "1.0.0" },
-      }),
+      },
       "original.mjs": "export const value = 'first demand'; export { body } from './body.mjs';",
       "body.mjs": "export const body = 'selected body';",
     });
@@ -244,7 +228,7 @@ it.each(["import", "require"])(
 
 type ComputedFixture = {
   name: string;
-  modes: string[];
+  modes?: string[];
   files: Record<string, string>;
   edits?: Record<string, string>;
   links?: Record<string, string>;
@@ -264,7 +248,6 @@ const computedFixtures: ComputedFixture[] = [
     const body = `${directory}/${path.dirname(filename)}/body.cjs`;
     return {
       name: `legacy ${main} to ${filename} entry selection`,
-      modes: ["import", "require"],
       legacy: true,
       files: {
         "package.json": '{"imports":{"#selected":"legacy-dependency"}}',
@@ -279,7 +262,6 @@ const computedFixtures: ComputedFixture[] = [
   }),
   {
     name: "tsconfig aliases",
-    modes: ["import", "require"],
     tsconfig: true,
     files: {
       "tsconfig.json": '{"compilerOptions":{"baseUrl":".","paths":{"@fixture/*":["./lib/*"]}}}',
@@ -307,7 +289,6 @@ const computedFixtures: ComputedFixture[] = [
   },
   {
     name: "wildcard trailer precedence",
-    modes: ["import", "require"],
     files: {
       "package.json": '{"imports":{"#selected/*":"./broad.cjs","#selected/*.js":"./specific.cjs"}}',
       "broad.cjs": "exports.value = 'broad';",
@@ -344,7 +325,11 @@ const computedFixtures: ComputedFixture[] = [
     reads: [["#selected", 42]],
   },
 ];
-it.each(computedFixtures.flatMap((fixture) => fixture.modes.map((mode) => ({ ...fixture, mode }))))(
+it.each(
+  computedFixtures.flatMap((fixture) =>
+    (fixture.modes ?? ["import", "require"]).map((mode) => Object.assign({ mode }, fixture)),
+  ),
+)(
   "preserves computed $name for $mode",
   async ({ mode, files, edits, links, tsconfig, legacy, prelude, reads }) => {
     if (tsconfig) {
@@ -387,7 +372,7 @@ it.each(
   async ({ mode, target }) => {
     const root = temp.make("plugin-native-builtin-alias-");
     write(root, {
-      "package.json": JSON.stringify({ imports: { "#builtin": target } }),
+      "package.json": { imports: { "#builtin": target } },
       ...(Array.isArray(target) ? { "fallback.cjs": "exports.Database = 'fallback';" } : {}),
       "index.cjs":
         mode === "import"
@@ -443,20 +428,11 @@ it("scopes observed package-map absences to the target selected by custom condit
     `import assert from 'node:assert/strict';
      import fs from 'node:fs';
      import path from 'node:path';
-     import { createPluginCache, withPluginCache } from ${JSON.stringify(moduleUrl("plugin-cache.ts"))};
-     import { bindPluginInstanceModuleLoader } from ${JSON.stringify(moduleUrl("plugin-instance-module-loader.ts"))};
-     import { PluginInstance } from ${JSON.stringify(moduleUrl("plugin-instance.ts"))};
+     import { loadPluginFixture } from ${JSON.stringify(moduleUrl("plugin-generation-module.test-support.ts"))};
      const values = [];
      for (const { root, entry } of ${JSON.stringify(roots)}) {
        const instances = [];
-       const load = () => {
-         const instance = new PluginInstance('custom-condition-fixture');
-         instances.push(instance);
-         withPluginCache(createPluginCache(), () => bindPluginInstanceModuleLoader({
-           instance, origin: 'config', source: entry, rootDir: root, standalone: true,
-         }));
-         return instance.loadModule(entry);
-       };
+       const load = () => loadPluginFixture(root, entry, instances);
        try {
          const plugin = load();
          fs.writeFileSync(path.join(root, 'missing.cjs'), 'exports.value = 84;');
@@ -521,11 +497,7 @@ it.each([
       export const read = () => require('#selected').value;
       export const load = async (name: string) => import(name);`,
   });
-  write(dependency, {
-    "package.json": '{"exports":"./index.cjs"}',
-    "index.cjs": "exports.value = require('./body.cjs').value;",
-    "body.cjs": "exports.value = 'before';",
-  });
+  write(dependency, bodyModule("before"));
   const plugin = load(root, "index.ts") as { read(): string };
   fs.writeFileSync(path.join(dependency, "body.cjs"), "exports.value = 'after';");
   expect(plugin.read()).toBe(expected);
@@ -542,21 +514,17 @@ it.each(["declared", "alias", "undeclared"])(
       "index.cjs": "exports.select = () => require('#outer');",
     });
     write(outer, {
-      "package.json": JSON.stringify({
+      "package.json": {
         exports: "./index.cjs",
         ...(kind === "declared"
           ? { dependencies: { "inner-dependency": "1.0.0" } }
           : kind === "alias"
             ? { imports: { "#inner": "inner-dependency" } }
             : {}),
-      }),
+      },
       "index.cjs": `exports.read = () => require(${JSON.stringify(kind === "alias" ? "#inner" : "inner-dependency")}).value;`,
     });
-    write(inner, {
-      "package.json": '{"exports":"./index.cjs"}',
-      "index.cjs": "exports.value = require('./body.cjs').value;",
-      "body.cjs": "exports.value = 'before-load';",
-    });
+    write(inner, bodyModule("before-load"));
     const body = path.join(inner, "body.cjs");
     const plugin = load(root, "index.cjs") as { select(): { read(): string } };
     fs.writeFileSync(body, "exports.value = 'before-selection';");

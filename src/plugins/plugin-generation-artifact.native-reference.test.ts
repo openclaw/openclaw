@@ -14,31 +14,19 @@ import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import {
+  captureResources,
+  createSdkHost,
+  expectBytes,
+  readText,
+  writeTree,
+  type Artifact,
+} from "./plugin-generation-capture.test-support.js";
+import {
   preparePluginNativeAdmissions,
   settlePluginNativeAdmissions,
 } from "./plugin-native-admission-state.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
-
-type Artifact = ReturnType<typeof capturePluginGenerationArtifact>;
-type Cache = ReturnType<typeof createPluginCache>;
-
-function captureInCache(cache: Cache, root: string) {
-  return withPluginCache(cache, () => capturePluginGenerationArtifact(root));
-}
-function expectBytes(filename: string, bytes: Buffer) {
-  expect(fs.readFileSync(filename).equals(bytes)).toBe(true);
-}
-function readText(filename: string) {
-  return fs.readFileSync(filename, "utf8");
-}
-
-function write(root: string, name: string, content: string) {
-  fs.writeFileSync(path.join(root, name), content);
-}
-function writeJson(root: string, name: string, value: unknown) {
-  write(root, name, JSON.stringify(value));
-}
 
 it("records a native host mismatch while preserving unrelated channel accounts", async () => {
   await withOpenClawTestState({ label: "native-host-load-failure" }, async (state) => {
@@ -53,15 +41,13 @@ it("records a native host mismatch while preserving unrelated channel accounts",
     });
     const healthy = state.path("healthy");
     fs.mkdirSync(healthy);
-    writeJson(healthy, "openclaw.plugin.json", {
-      id: "healthy",
-      channels: ["healthy-chat"],
-      configSchema: { type: "object" },
-    });
-    write(
-      healthy,
-      "index.js",
-      `export default { id: "healthy", register(api) {
+    writeTree(healthy, {
+      "openclaw.plugin.json": {
+        id: "healthy",
+        channels: ["healthy-chat"],
+        configSchema: { type: "object" },
+      },
+      "index.js": `export default { id: "healthy", register(api) {
         api.registerChannel({ plugin: {
           id: "healthy-chat",
           meta: { id: "healthy-chat", label: "Healthy", selectionLabel: "Healthy",
@@ -71,8 +57,9 @@ it("records a native host mismatch while preserving unrelated channel accounts",
             resolveAccount: (_, accountId) => ({ accountId }) }
         } });
       } };`,
-    );
-    const cache = createPluginCache();
+    });
+    await using resources = captureResources();
+    const cache = resources.cache();
     preparePluginNativeAdmissions(fixture.index, cache);
     const link = fs.linkSync;
     const fault = vi.spyOn(fs, "linkSync").mockImplementation((from, to) => {
@@ -122,7 +109,6 @@ it("records a native host mismatch while preserving unrelated channel accounts",
       expect(channel?.plugin.config.listAccountIds({})).toEqual(["primary", "secondary"]);
     } finally {
       fault.mockRestore();
-      await retirePluginCache(cache);
     }
   });
 });
@@ -131,9 +117,11 @@ it("validates overlapping hardlinked companion placements once per member, inclu
   await withOpenClawTestState({ label: "native-reference-verdict" }, async (state) => {
     const root = state.path("plugin");
     fs.mkdirSync(root);
-    write(root, "package.json", '{"name":"native-reference-fixture"}');
-    write(root, "index.cjs", "exports.value = 1;");
-    write(root, "helper.dat", "original companion");
+    writeTree(root, {
+      "package.json": '{"name":"native-reference-fixture"}',
+      "index.cjs": "exports.value = 1;",
+      "helper.dat": "original companion",
+    });
     fs.mkdirSync(path.join(root, "nested", "companion-sentinel"), { recursive: true });
     for (let index = 0; index < 33; index++) {
       const directory = index % 2 ? path.join(root, "nested") : root;
@@ -151,14 +139,10 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       paths.mock.calls.filter(
         ([filename]) => filename === path.join(directory, "nested", "companion-sentinel"),
       ).length;
-    const cache = createPluginCache();
-    const artifacts: Artifact[] = [];
+    await using resources = captureResources();
+    const cache = resources.cache();
     let recovery: ReturnType<Artifact["captureRecoverySource"]> | undefined;
-    const capture = () => {
-      const artifact = captureInCache(cache, root);
-      artifacts.push(artifact);
-      return artifact;
-    };
+    const capture = () => resources.capture(cache, root);
     try {
       const first = capture();
       expect.soft(walks(first.rootDir)).toBe(1);
@@ -188,7 +172,7 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       expect.soft(walks(recovery.rootDir)).toBe(1);
       expect(readText(path.join(recovery.rootDir, "helper.dat"))).toBe("original companion");
 
-      write(root, "helper.dat", "replacement companion");
+      writeTree(root, { "helper.dat": "replacement companion" });
       const replacement = capture();
       expect(replacement.sourceDigest).not.toBe(first.sourceDigest);
       expect(fs.statSync(replacement.resolve(path.join(root, "addon-0.node"))).ino).not.toBe(
@@ -197,7 +181,7 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       expect.soft(walks(replacement.rootDir)).toBe(1);
       expect(readText(path.join(replacement.rootDir, "helper.dat"))).toBe("replacement companion");
       expect(readText(path.join(first.rootDir, "helper.dat"))).toBe("original companion");
-      write(replacement.rootDir, "helper.dat", "damaged capture");
+      writeTree(replacement.rootDir, { "helper.dat": "damaged capture" });
       expect(() => replacement.linkHost(hosts[0]!)).toThrow(
         "Native plugin companions cannot be preserved",
       );
@@ -205,10 +189,6 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       paths.mockRestore();
       denial.mockRestore();
       await recovery?.disposeAsync();
-      for (const artifact of artifacts) {
-        await artifact.disposeAsync();
-      }
-      await retirePluginCache(cache);
     }
   });
 });
@@ -237,7 +217,7 @@ it.each([
       if (hoisted) {
         const dependency = path.join(path.dirname(fixture.installRoot), "native-fixture");
         fs.mkdirSync(dependency);
-        writeJson(dependency, "package.json", { name: "native-fixture", version: "1.0.0" });
+        writeTree(dependency, { "package.json": { name: "native-fixture", version: "1.0.0" } });
         nativeFilename = path.join(dependency, "fixture.bin");
         fs.renameSync(fixture.filename, nativeFilename);
         const manifestPath = path.join(fixture.root, "package.json");
@@ -247,21 +227,18 @@ it.each([
           JSON.stringify({ ...manifest, dependencies: { "native-fixture": "1.0.0" } }),
         );
       }
-      write(fixture.root, "child.cjs", "module.exports = require('openclaw/plugin-sdk/identity');");
-      const hosts = ["first", "second"].map((identity) => {
-        const host = state.path(`fallback-host-${identity}`);
-        fs.mkdirSync(host);
-        writeJson(host, "package.json", {
-          name: "openclaw",
-          exports: { "./plugin-sdk/identity": "./identity.cjs" },
-        });
-        write(host, "identity.cjs", `module.exports = ${JSON.stringify(identity)};`);
-        return host;
+      writeTree(fixture.root, {
+        "child.cjs": "module.exports = require('openclaw/plugin-sdk/identity');",
       });
-      writeJson(fixture.installRoot, "package.json", {
-        name: "fixture-package",
-        version: "1.0.0",
-        peerDependencies: { openclaw: "*" },
+      const hosts = ["first", "second"].map((id) =>
+        createSdkHost(state.path(`fallback-host-${id}`), id),
+      );
+      writeTree(fixture.installRoot, {
+        "package.json": {
+          name: "fixture-package",
+          version: "1.0.0",
+          peerDependencies: { openclaw: "*" },
+        },
       });
       await linkOpenClawPeerDependencies({
         installedDir: fixture.installRoot,
@@ -269,7 +246,8 @@ it.each([
         hostRoot: hosts[0],
         logger: {},
       });
-      const cache = createPluginCache();
+      await using resources = captureResources();
+      const cache = resources.cache();
       preparePluginNativeAdmissions(fixture.index, cache);
       const failure = Object.assign(new Error("fixture filesystem does not support hardlinks"), {
         code: "EXDEV",
@@ -285,7 +263,7 @@ it.each([
       let successor: Artifact | undefined;
       try {
         const capture = () => {
-          artifact = captureInCache(cache, fixture.root);
+          artifact = resources.capture(cache, fixture.root);
         };
         if (source === "archive") {
           expect(capture).toThrow(failure);
@@ -299,7 +277,7 @@ it.each([
           expect(fs.realpathSync(native)).toBe(nativeFilename);
           expectBytes(native, fixture.bytes);
           expect(require("./child.cjs")).toBe("first");
-          successor = captureInCache(cache, fixture.root);
+          successor = resources.capture(cache, fixture.root);
           const peer = path.join(
             hoisted ? path.dirname(nativeFilename) : fixture.installRoot,
             "node_modules",
@@ -319,8 +297,6 @@ it.each([
         }
       } finally {
         fault.mockRestore();
-        await successor?.disposeAsync();
-        await artifact?.disposeAsync();
         await retirePluginCache(cache);
       }
     });
@@ -333,30 +309,27 @@ it("keeps temporary native inspections from hardlinking rehearsal companions", a
     const companion = path.join(fixture.root, "versions.json");
     fs.writeFileSync(companion, '{"vips":"fixture"}');
     const before = fs.statSync(companion, { bigint: true });
-    const cache = createPluginCache();
-    let artifact: Artifact | undefined;
-    try {
-      artifact = withPluginCache(cache, () =>
+    await using resources = captureResources();
+    const cache = resources.cache();
+    const artifact = resources.keep(
+      withPluginCache(cache, () =>
         withPluginSourceCaptureStorage({ stateDir: state.stateDir, placement: "temporary" }, () => {
           preparePluginNativeAdmissions(fixture.index, cache);
           return capturePluginGenerationArtifact(fixture.root);
         }),
-      );
-      const captured = fs.realpathSync(artifact.resolve(companion));
-      expect(readText(captured)).toBe('{"vips":"fixture"}');
-      expect(fs.statSync(companion, { bigint: true })).toMatchObject({
-        dev: before.dev,
-        ino: before.ino,
-        nlink: 1n,
-        ctimeNs: before.ctimeNs,
-      });
-      expect(fs.statSync(captured, { bigint: true }).ino).not.toBe(before.ino);
-      fs.writeFileSync(captured, "private inspection change");
-      expect(readText(companion)).toBe('{"vips":"fixture"}');
-    } finally {
-      await artifact?.disposeAsync();
-      await retirePluginCache(cache);
-    }
+      ),
+    );
+    const captured = fs.realpathSync(artifact.resolve(companion));
+    expect(readText(captured)).toBe('{"vips":"fixture"}');
+    expect(fs.statSync(companion, { bigint: true })).toMatchObject({
+      dev: before.dev,
+      ino: before.ino,
+      nlink: 1n,
+      ctimeNs: before.ctimeNs,
+    });
+    expect(fs.statSync(captured, { bigint: true }).ino).not.toBe(before.ino);
+    fs.writeFileSync(captured, "private inspection change");
+    expect(readText(companion)).toBe('{"vips":"fixture"}');
   });
 });
 
@@ -428,10 +401,7 @@ it.each(["state root", "temporary placement", "publication root"] as const)(
           await retirePluginCache(cache);
           for (const stateDir of publicationRoots) {
             await closeOpenClawStateDatabaseByPathAsync(
-              resolveOpenClawStateSqlitePath({
-                ...state.env,
-                OPENCLAW_STATE_DIR: stateDir,
-              }),
+              resolveOpenClawStateSqlitePath({ ...state.env, OPENCLAW_STATE_DIR: stateDir }),
             );
           }
         }

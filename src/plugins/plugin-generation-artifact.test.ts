@@ -8,14 +8,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { gitRuntimeStagingPath } from "../infra/update-runtime-staging.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { writeTree } from "./plugin-generation-capture.test-support.js";
 import { inspectPluginSourceDependencies } from "./plugin-generation-source-inspection.js";
-
-function writeFile(root: string, name: string, content: string) {
-  fs.writeFileSync(path.join(root, name), content);
-}
-function writeJson(root: string, name: string, value: unknown) {
-  writeFile(root, name, JSON.stringify(value));
-}
 
 // Artifact tests evaluate captured bytes independently; managed Node execution has binder suites.
 function createArtifactLoader(artifact: ReturnType<typeof capturePluginGenerationArtifact>) {
@@ -45,10 +39,10 @@ afterEach(() => {
 
 it("keeps the plugin source identity independent of Git rollback retirement", () => {
   const source = temp.make("plugin-update-digest-");
-  writeFile(source, "index.cjs", "exports.value = 1;");
+  writeTree(source, { "index.cjs": "exports.value = 1;" });
   const staging = gitRuntimeStagingPath(path.join(source, "node_modules"));
   fs.mkdirSync(path.join(staging, "previous"), { recursive: true });
-  writeFile(staging, "previous/old.cjs", "exports.value = 0;");
+  writeTree(staging, { "previous/old.cjs": "exports.value = 0;" });
   const artifact = captureArtifact(source);
   fs.rmSync(staging, { recursive: true });
   const after = captureArtifact(source);
@@ -176,12 +170,14 @@ it("keeps authored absolute references on the native source graph", async () => 
   const source = sourceDirectory("plugin-absolute-inputs-");
   const dependency = path.join(source, "node_modules", "owned-dependency");
   fs.mkdirSync(dependency, { recursive: true });
-  writeJson(source, "package.json", {
-    name: "absolute-inputs",
-    type: "module",
-    dependencies: { "owned-dependency": "1.0.0" },
+  writeTree(source, {
+    "package.json": {
+      name: "absolute-inputs",
+      type: "module",
+      dependencies: { "owned-dependency": "1.0.0" },
+    },
   });
-  writeFile(dependency, "package.json", '{"name":"owned-dependency","main":"index.cjs"}');
+  writeTree(dependency, { "package.json": '{"name":"owned-dependency","main":"index.cjs"}' });
   const commonJs = path.join(source, "value.cjs");
   const esm = path.join(source, "value.mjs");
   const urlOnly = path.join(source, "url.mjs");
@@ -193,15 +189,13 @@ it("keeps authored absolute references on the native source graph", async () => 
   const absoluteEsm = process.platform === "win32" ? pathToFileURL(esm).href : esm;
   fs.writeFileSync(anchor, "module.exports = {};");
   // The anchor/dependency are separate inputs; local module ownership comes from literal imports.
-  writeFile(
-    source,
-    "common.cjs",
-    `
+  writeTree(source, {
+    "common.cjs": `
       exports.dependency = require('owned-dependency');
       exports.read = () => [require(${JSON.stringify(commonJs)}).value,
         require(${JSON.stringify(dependencyEntry)}).value];
     `,
-  );
+  });
   fs.writeFileSync(
     entry,
     `
@@ -293,14 +287,18 @@ it.each([
     extension = "mjs",
   ) => {
     const source = sourceDirectory("plugin-native-require-");
-    writeJson(source, "package.json", {
-      dependencies: { "already-bundled-missing-package": "1.0.0" },
+    writeTree(source, {
+      "package.json": {
+        dependencies: { "already-bundled-missing-package": "1.0.0" },
+      },
     });
     for (const name of ["owner-dependency", "label-dependency"]) {
       const dependency = path.join(source, "node_modules", name);
       fs.mkdirSync(dependency, { recursive: true });
-      writeFile(dependency, "package.json", '{"main":"index.cjs"}');
-      writeFile(dependency, "index.cjs", "exports.value = 'before';");
+      writeTree(dependency, {
+        "package.json": '{"main":"index.cjs"}',
+        "index.cjs": "exports.value = 'before';",
+      });
     }
     const entry = path.join(source, `entry.${extension}`);
     const currentRequire = `${factory}(import.meta.url)`;
@@ -310,9 +308,11 @@ it.each([
         : binding === "require"
           ? `${binding}(path.join(path.dirname(${binding}.resolve(${literal})), 'index.cjs'))`
           : `${binding}('owner-dependency')`;
-    writeFile(source, "private.txt", "unrelated");
-    writeFile(source, "other.cjs", "");
-    writeFile(source, "relative.cjs", 'exports.value = "relative-before";');
+    writeTree(source, {
+      "private.txt": "unrelated",
+      "other.cjs": "",
+      "relative.cjs": 'exports.value = "relative-before";',
+    });
     fs.writeFileSync(
       entry,
       `${imports}
@@ -338,8 +338,10 @@ it.each([
     expect(artifact.hasSource(path.join(source, "node_modules/label-dependency/index.cjs"))).toBe(
       false,
     );
-    writeFile(source, "node_modules/owner-dependency/index.cjs", "exports.value = 'after';");
-    writeFile(source, "relative.cjs", 'exports.value = "relative-after";');
+    writeTree(source, {
+      "node_modules/owner-dependency/index.cjs": "exports.value = 'after';",
+      "relative.cjs": 'exports.value = "relative-after";',
+    });
     const host = createArtifactLoader(artifact);
     const plugin = host(artifact.resolve(entry)) as { read(): string; readLocal?(): string };
     expect(plugin.read()).toBe("before");
@@ -356,48 +358,40 @@ it("retains selective package scopes and npm aliases without sweeping unused inp
   fs.mkdirSync(path.join(source, "node_modules", "unused-dependency"), { recursive: true });
   fs.mkdirSync(path.join(source, "nested"));
   fs.mkdirSync(path.join(source, "inside", "node_modules", "first-alias"), { recursive: true });
-  writeFile(
-    source,
-    "inside/node_modules/first-alias/package.json",
-    '{"name":"decoy","main":"index.cjs"}',
-  );
-  writeFile(source, "inside/node_modules/first-alias/index.cjs", 'exports.value = "wrong-scope";');
-  writeFile(source, "inside/use.mjs", "export { default as external } from '#first';");
+  writeTree(source, {
+    "inside/node_modules/first-alias/package.json": '{"name":"decoy","main":"index.cjs"}',
+    "inside/node_modules/first-alias/index.cjs": 'exports.value = "wrong-scope";',
+    "inside/use.mjs": "export { default as external } from '#first';",
+  });
   fs.mkdirSync(dependency);
-  writeJson(source, "package.json", {
-    name: "source-package",
-    type: "module",
-    exports: { "./self": "./self.mjs" },
-    imports: {
-      "#local": "./local.mjs",
-      "#conditional": { import: "./import.mjs", require: "./require.cjs" },
-      "#first": "first-alias",
-      "#second": "second-alias",
-      "#unused": "unused-dependency",
+  writeTree(source, {
+    "package.json": {
+      name: "source-package",
+      type: "module",
+      exports: { "./self": "./self.mjs" },
+      imports: {
+        "#local": "./local.mjs",
+        "#conditional": { import: "./import.mjs", require: "./require.cjs" },
+        "#first": "first-alias",
+        "#second": "second-alias",
+        "#unused": "unused-dependency",
+      },
+      dependencies: {
+        "first-alias": "npm:actual-package-name@1.0.0",
+        "second-alias": "npm:actual-package-name@1.0.0",
+        "unused-dependency": "1.0.0",
+        "absent-unused-declaration": "1.0.0",
+      },
     },
-    dependencies: {
-      "first-alias": "npm:actual-package-name@1.0.0",
-      "second-alias": "npm:actual-package-name@1.0.0",
-      "unused-dependency": "1.0.0",
-      "absent-unused-declaration": "1.0.0",
-    },
+    "nested/package.json": { type: "module", imports: { "#nested": "./value.mjs" } },
+    "node_modules/unused-dependency/package.json":
+      '{"name":"unused-dependency","main":"index.cjs"}',
+    "node_modules/unused-dependency/index.cjs": 'exports.value = "unused";',
+    "private.txt": "not a captured input",
   });
-  writeJson(source, "nested/package.json", {
-    type: "module",
-    imports: { "#nested": "./value.mjs" },
+  writeTree(dependency, {
+    "package.json": '{"name":"actual-package-name","version":"1.0.0","main":"index.cjs"}',
   });
-  writeFile(
-    source,
-    "node_modules/unused-dependency/package.json",
-    '{"name":"unused-dependency","main":"index.cjs"}',
-  );
-  writeFile(source, "node_modules/unused-dependency/index.cjs", 'exports.value = "unused";');
-  writeFile(source, "private.txt", "not a captured input");
-  writeFile(
-    dependency,
-    "package.json",
-    '{"name":"actual-package-name","version":"1.0.0","main":"index.cjs"}',
-  );
   for (const alias of ["first-alias", "second-alias"]) {
     const link = path.join(source, "node_modules", alias);
     fs.symlinkSync(path.relative(path.dirname(link), dependency), link, "junction");
@@ -413,7 +407,7 @@ it("retains selective package scopes and npm aliases without sweeping unused inp
     export const read = () => [local, imported, require('#conditional').value, self, nested,
       first.value, second.value, first === second, require('#first') === first, external === first];`,
   );
-  writeFile(source, "nested/use.mjs", "export { value } from '#nested';");
+  writeTree(source, { "nested/use.mjs": "export { value } from '#nested';" });
   const write = (version: string) => {
     for (const name of ["local", "import", "self"]) {
       fs.writeFileSync(
@@ -421,9 +415,11 @@ it("retains selective package scopes and npm aliases without sweeping unused inp
         `export const value = '${name}-${version}';`,
       );
     }
-    writeFile(source, "require.cjs", `exports.value = 'require-${version}';`);
-    writeFile(source, "nested/value.mjs", `export const value = 'nested-${version}';`);
-    writeFile(dependency, "index.cjs", `exports.value = 'dependency-${version}';`);
+    writeTree(source, {
+      "require.cjs": `exports.value = 'require-${version}';`,
+      "nested/value.mjs": `export const value = 'nested-${version}';`,
+    });
+    writeTree(dependency, { "index.cjs": `exports.value = 'dependency-${version}';` });
   };
   write("before");
   const artifact = captureArtifact(source, entry);
@@ -474,19 +470,13 @@ it.each([
       });
     }
     try {
-      writeFile(source, "unrelated.txt", "private workspace content");
+      writeTree(source, { "unrelated.txt": "private workspace content" });
       fs.mkdirSync(path.join(source, "unrelated"));
-      writeFile(source, "unrelated/private.txt", "private workspace content");
-      writeFile(
-        source,
-        "index.ts",
-        `import { Buffer as token } from 'node:buffer'; export { token };
+      writeTree(source, {
+        "unrelated/private.txt": "private workspace content",
+        "index.ts": `import { Buffer as token } from 'node:buffer'; export { token };
        export const description = './unrelated'; export const read = async () => (await import('./helper.js')).read();`,
-      );
-      writeFile(
-        source,
-        "helper.ts",
-        `import fs, { readFileSync } from 'node:fs';
+        "helper.ts": `import fs, { readFileSync } from 'node:fs';
        import { join, resolve } from 'node:path';
        import { URL as FileURL } from 'node:url';
        const unrelated = { resolve: (value: string) => value };
@@ -495,9 +485,9 @@ it.each([
          fs.readFileSync(new URL('./asset.txt', import.meta.url), 'utf8'),
          ${read},
        ];`,
-      );
-      writeFile(source, "asset.txt", "before");
-      writeFile(source, "schema.json", '{"version":"before"}');
+        "asset.txt": "before",
+        "schema.json": '{"version":"before"}',
+      });
       const entry = path.join(source, "index.ts");
       const captured = captureArtifact(source, entry);
       const token = Buffer;
@@ -507,9 +497,11 @@ it.each([
         token: unknown;
       };
       expect(plugin.token).toBe(token);
-      writeFile(source, "asset.txt", "after");
-      writeFile(source, "schema.json", '{"version":"after"}');
-      writeFile(source, "helper.ts", `export const read = () => 'changed helper';`);
+      writeTree(source, {
+        "asset.txt": "after",
+        "schema.json": '{"version":"after"}',
+        "helper.ts": `export const read = () => 'changed helper';`,
+      });
       await expect(plugin.read()).resolves.toEqual(["before", '{"version":"before"}']);
       expect(fs.readdirSync(captured.rootDir).toSorted()).toEqual([
         "asset.txt",
@@ -555,27 +547,19 @@ it("captures helpers, assets and npm packages with builtin names for each reload
   const source = path.join(fixture, "punycode");
   const dependency = path.join(source, "node_modules", "punycode");
   fs.mkdirSync(dependency, { recursive: true });
-  writeJson(source, "package.json", { dependencies: { punycode: "1.0.0" } });
-  writeJson(dependency, "package.json", {
-    name: "punycode",
-    exports: { "./fixture": "./value.js" },
+  writeTree(source, { "package.json": { dependencies: { punycode: "1.0.0" } } });
+  writeTree(dependency, {
+    "package.json": { name: "punycode", exports: { "./fixture": "./value.js" } },
   });
-  writeFile(
-    source,
-    "index.ts",
-    `import { value } from './helper.ts'; import { dependency } from 'punycode/fixture';
+  writeTree(source, {
+    "index.ts": `import { value } from './helper.ts'; import { dependency } from 'punycode/fixture';
      export const read = async () => [value, (await import('./lazy.js')).read(), dependency];`,
-  );
-  writeFile(source, "helper.js", `export const value = 'stale build';`);
-  writeFile(
-    source,
-    "lazy.ts",
-    `import fs from 'node:fs'; export const read = () => fs.readFileSync(new URL('./asset.txt', import.meta.url), 'utf8');`,
-  );
+    "helper.js": `export const value = 'stale build';`,
+    "lazy.ts": `import fs from 'node:fs'; export const read = () => fs.readFileSync(new URL('./asset.txt', import.meta.url), 'utf8');`,
+  });
   const load = (value: string) => {
-    writeFile(source, "helper.ts", `export const value = '${value}';`);
-    writeFile(source, "asset.txt", value);
-    writeFile(dependency, "value.js", `exports.dependency = '${value}';`);
+    writeTree(source, { "helper.ts": `export const value = '${value}';`, "asset.txt": value });
+    writeTree(dependency, { "value.js": `exports.dependency = '${value}';` });
     const artifact = captureArtifact(source);
     const host = createArtifactLoader(artifact);
     const plugin = host(artifact.resolve(path.join(source, "index.ts"))) as {

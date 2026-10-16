@@ -7,6 +7,7 @@ import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { observeFileIo } from "./plugin-generation-capture.test-support.js";
 import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 
@@ -45,6 +46,7 @@ function fixture(bytes: Buffer, basename = "fixture.bin") {
 }
 
 function interceptCopies(
+  filename: string,
   intercept: (
     options: Parameters<typeof fsSafeAdvanced.copyRootFileSync>[0],
     copyFile: typeof fsSafeAdvanced.copyRootFileSync,
@@ -55,9 +57,22 @@ function interceptCopies(
   vi.spyOn(fsSafeAdvanced, "createRootFileCopyBatchSync").mockImplementation(() => {
     const batch = createBatch();
     const copyFile = batch.copyFile.bind(batch);
-    return { ...batch, copyFile: (options) => copies(options, copyFile) };
+    return {
+      ...batch,
+      copyFile: (options) =>
+        options.source.absolutePath === filename ? copies(options, copyFile) : copyFile(options),
+    };
   });
   return copies;
+}
+
+function captureFailure(capture: () => unknown) {
+  try {
+    capture();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected capture to fail");
 }
 
 it.skipIf(process.platform === "win32")(
@@ -160,31 +175,11 @@ it.skipIf(process.platform !== "darwin")(
 it("captures and verifies a native artifact without whole-file Buffer reads", () => {
   const bytes = Buffer.alloc(2 * 1024 * 1024, "Z");
   const source = fixture(bytes);
-  const readFileSync = fs.readFileSync;
-  const readSync = fs.readSync;
-  let wholeFileReads = 0;
-  let streamedBytes = 0;
-  let largestBuffer = 0;
-  const chunks = vi.spyOn(fs, "readSync").mockImplementation((...args) => {
-    const length = Reflect.apply(readSync, fs, args);
-    if (fs.fstatSync(args[0]).size === bytes.length) {
-      streamedBytes += length;
-      if (Buffer.isBuffer(args[1])) {
-        largestBuffer = Math.max(largestBuffer, args[1].byteLength);
-      }
-    }
-    return length;
-  });
-  const reads = vi.spyOn(fs, "readFileSync").mockImplementation((filename, options) => {
-    const result = readFileSync(filename, options);
-    if (Buffer.isBuffer(result) && result.length >= bytes.length) {
-      wholeFileReads += 1;
-    }
-    return result;
-  });
-  const artifact = source.capture();
-  reads.mockRestore();
-  chunks.mockRestore();
+  const observer = observeFileIo(source.filename, false);
+  const { value: artifact, io } = observer.measure(() => source.capture());
+  observer.restore();
+  const { wholeFileReads, largestBuffer } = io;
+  const streamedBytes = io.originalBytes + io.capturedBytes;
 
   expect(wholeFileReads).toBe(0);
   expect(largestBuffer).toBeLessThanOrEqual(1024 * 1024);
@@ -230,11 +225,8 @@ it.each(["cold", "warm", "lazy"] as const)(
       };
       return { ...copied, close, [Symbol.dispose]: close };
     };
-    interceptCopies((options, copyRootFileSync) => {
+    interceptCopies(source.filename, (options, copyRootFileSync) => {
       const copied = copyRootFileSync(options);
-      if (options.source.absolutePath !== source.filename) {
-        return copied;
-      }
       return { ...copied, ...replaceAfterClose(copied, copied.path) };
     });
     vi.spyOn(fsSafeAdvanced, "createFileSync").mockImplementation((target, options) => {
@@ -263,85 +255,60 @@ it.each(["cold", "warm", "lazy"] as const)(
   },
 );
 
-it("refuses a source swapped after OpenClaw pins it without leaving a capture", () => {
-  const source = fixture(Buffer.alloc(64 * 1024 + 1, "P"), "fixture.js");
-  const admitted = fs.statSync(source.filename, { bigint: true });
-  let target: string | undefined;
-  let refused: unknown;
-  interceptCopies((options, copyRootFileSync) => {
-    if (options.source.absolutePath !== source.filename) {
-      return copyRootFileSync(options);
-    }
-    target = options.destination.absolutePath;
-    expect(options.expectedSourceIdentity).toEqual({ dev: admitted.dev, ino: admitted.ino });
-    fs.renameSync(source.filename, `${source.filename}.retained`);
-    fs.writeFileSync(source.filename, "replacement");
-    try {
-      return copyRootFileSync(options);
-    } catch (error) {
-      refused = error;
-      throw error;
-    }
-  });
-
-  expect(() => source.capture()).toThrow();
-  expect(refused).toMatchObject({ code: "path-mismatch" });
-  expect(target).toBeDefined();
-  expect(fs.existsSync(target!)).toBe(false);
-  expect(fs.readFileSync(`${source.filename}.retained`)).toEqual(source.bytes);
-  expect(fs.readFileSync(source.filename, "utf8")).toBe("replacement");
-});
-
-it("maps growth beyond the pinned size to the reload retry error with its cause", () => {
-  const source = fixture(Buffer.alloc(64 * 1024 + 1, "B"), "fixture.js");
-  let target: string | undefined;
-  interceptCopies((options, copyRootFileSync) => {
-    if (options.source.absolutePath === source.filename) {
+it.each(["replacement", "growth"] as const)(
+  "rejects source %s after pinning without leaving a capture",
+  (change) => {
+    const source = fixture(Buffer.alloc(64 * 1024 + 1, "P"), "fixture.js");
+    const admitted = fs.statSync(source.filename, { bigint: true });
+    let target: string | undefined;
+    let refused: unknown;
+    interceptCopies(source.filename, (options, copyRootFileSync) => {
       target = options.destination.absolutePath;
-      fs.appendFileSync(source.filename, " growth");
+      if (change === "replacement") {
+        expect(options.expectedSourceIdentity).toEqual({ dev: admitted.dev, ino: admitted.ino });
+        fs.renameSync(source.filename, `${source.filename}.retained`);
+        fs.writeFileSync(source.filename, "replacement");
+      } else {
+        fs.appendFileSync(source.filename, " growth");
+      }
+      try {
+        return copyRootFileSync(options);
+      } catch (error) {
+        refused = error;
+        throw error;
+      }
+    });
+    const failure = captureFailure(() => source.capture());
+    if (change === "replacement") {
+      expect(refused).toMatchObject({ code: "path-mismatch" });
+      expect(fs.readFileSync(`${source.filename}.retained`)).toEqual(source.bytes);
+      expect(fs.readFileSync(source.filename, "utf8")).toBe("replacement");
+    } else {
+      expect(failure).toMatchObject({
+        message: "Plugin source changed while preparing its reload; retry after the edit finishes.",
+        cause: { code: "too-large" },
+      });
     }
-    return copyRootFileSync(options);
-  });
+    expect(target).toBeDefined();
+    expect(fs.existsSync(target!)).toBe(false);
+  },
+);
 
-  let failure: unknown;
-  try {
-    source.capture();
-  } catch (error) {
-    failure = error;
-  }
-  expect(failure).toMatchObject({
-    message: "Plugin source changed while preparing its reload; retry after the edit finishes.",
-    cause: { code: "too-large" },
-  });
-  expect(target).toBeDefined();
-  expect(fs.existsSync(target!)).toBe(false);
-});
-
-it.each(["EIO", "EBADF"])("propagates fatal %s copy failures without retry", (code) => {
-  const source = fixture(Buffer.alloc(64 * 1024 + 1, "C"), "fixture.js");
-  const failure = new FsSafeError("helper-failed", "guarded synchronous file copy failed", {
-    cause: Object.assign(new Error("injected copy failure"), { code }),
-  });
-  const copies = interceptCopies((options, copyRootFileSync) => {
-    if (options.source.absolutePath === source.filename) {
-      throw failure;
-    }
-    return copyRootFileSync(options);
-  });
-
-  expect(() => source.capture()).toThrow(failure);
-  expect(
-    copies.mock.calls.filter(([options]) => options.source.absolutePath === source.filename),
-  ).toHaveLength(1);
-});
-
-it.each([false, true])(
-  "preserves disk-full diagnostics when capture cleanup fails: %s",
-  (cleanupFails) => {
+it.each([
+  ["EIO", false],
+  ["EBADF", false],
+  ["ENOSPC", false],
+  ["ENOSPC", true],
+] as const)(
+  "reports %s copy failures without retry (cleanup failure: %s)",
+  (code, cleanupFails) => {
     const source = fixture(Buffer.alloc(64 * 1024 + 1, "C"), "fixture.js");
-    const cause = Object.assign(new Error("capture filesystem is full"), { code: "ENOSPC" });
+    const full = code === "ENOSPC";
     const primary = new FsSafeError("helper-failed", "guarded synchronous file copy failed", {
-      cause,
+      cause: Object.assign(
+        new Error(full ? "capture filesystem is full" : "injected copy failure"),
+        { code },
+      ),
     });
     const failure = cleanupFails
       ? new FsSafeError(primary.code, primary.message, {
@@ -351,29 +318,30 @@ it.each([false, true])(
           ),
         })
       : primary;
-    const copies = interceptCopies((options, copyRootFileSync) => {
-      if (options.source.absolutePath === source.filename) {
-        throw failure;
+    const copies = interceptCopies(source.filename, () => {
+      throw failure;
+    });
+    if (!full) {
+      expect(() => source.capture()).toThrow(failure);
+    } else {
+      let reported: unknown;
+      try {
+        source.capture();
+      } catch (error) {
+        reported = error;
       }
-      return copyRootFileSync(options);
-    });
-
-    let reported: unknown;
-    try {
-      source.capture();
-    } catch (error) {
-      reported = error;
+      expect(reported).toMatchObject({
+        code: "ENOSPC",
+        message: expect.stringContaining("capture filesystem is full"),
+        cause: failure,
+      });
+      if (cleanupFails) {
+        expect(reported).toHaveProperty(
+          "message",
+          expect.stringContaining("capture cleanup failed"),
+        );
+      }
     }
-    expect(reported).toMatchObject({
-      code: "ENOSPC",
-      message: expect.stringContaining("capture filesystem is full"),
-      cause: failure,
-    });
-    if (cleanupFails) {
-      expect(reported).toHaveProperty("message", expect.stringContaining("capture cleanup failed"));
-    }
-    expect(
-      copies.mock.calls.filter(([options]) => options.source.absolutePath === source.filename),
-    ).toHaveLength(1);
+    expect(copies).toHaveBeenCalledOnce();
   },
 );
