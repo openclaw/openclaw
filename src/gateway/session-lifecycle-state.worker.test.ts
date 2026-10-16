@@ -1,12 +1,15 @@
+import "../config/sessions/session-entry-patch-delivery.test-support.js";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { createSessionCompoundWorkerFixture } from "../config/sessions/session-compound-worker.test-support.js";
-import { getSessionEntryPatchDelivery } from "../config/sessions/session-entry-patch-delivery.test-support.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
+
+const { getSessionEntryPatchDelivery } =
+  await import("../config/sessions/session-entry-patch-delivery.test-support.js");
 
 const routing = vi.hoisted(() => ({ load: vi.fn() }));
 // mock-isolation: Fix routing while lifecycle projection, worker commit, and failure appends stay real.

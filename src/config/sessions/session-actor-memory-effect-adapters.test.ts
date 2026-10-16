@@ -17,7 +17,7 @@ import {
   prepareSessionGenerationFacts,
 } from "./session-delivery-generation.js";
 import { acquireSessionInputActor } from "./session-input-actor.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -67,7 +67,7 @@ async function fixture() {
       authority,
     ),
   );
-  const patch = async (value: Partial<SessionEntry>) =>
+  const patch = async (value: Partial<InternalSessionEntry>) =>
     readSessionActorStorageResult(
       await actor.storage!.mutate(
         {
