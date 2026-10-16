@@ -1,14 +1,11 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
 import { buildCliSessionDriftNote } from "../agents/cli-session.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { applySessionHints } from "../auto-reply/reply/body.js";
 import { buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
 import { buildInterSessionPromptContext } from "../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { classifyClaudeCliHistoryLine } from "./cli-session-history.claude-activity.js";
 import {
@@ -23,22 +20,40 @@ import {
   withClaudeProjectsDir,
 } from "./cli-session-history.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const userTurn = (uuid: string, content: string) => ({
-  type: "user",
-  uuid,
-  message: { role: "user", content },
-});
-const assistantTurn = (uuid: string, text: string) => ({
+const blocks = (text: string) => [{ type: "text", text }];
+const assistantTurn = (text: string) => ({
   type: "assistant",
-  uuid,
-  message: { role: "assistant", model: "claude-sonnet-4-6", content: [{ type: "text", text }] },
+  message: { role: "assistant", content: blocks(text) },
 });
 const boundary = (content = "Conversation compacted") => ({
   type: "system",
   subtype: "compact_boundary",
   content,
 });
+const summary = (text: string) => ({ type: "summary", summary: text });
+const REQUESTER_HINT =
+  'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
+const frame = (json: string) =>
+  `Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n${json}\n\`\`\`\n\n`;
+const execPrompt = buildExecEventPrompt(["Exec completed (example, code 0) :: done"]);
+
+function merge(localMessages: unknown[], importedMessages: unknown[]) {
+  return mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+}
+
+function classify(line: string) {
+  return classifyClaudeCliHistoryLine({
+    line,
+    cliSessionId: "native-session",
+    sourceLineNumber: 1,
+  });
+}
+
+function expectVisible(message: ReturnType<typeof importUnmatched>, content: unknown) {
+  expect(message?.content).toEqual(content);
+  expect(message?.display).not.toBe(false);
+  expect(message?.provenance).toBeUndefined();
+}
 
 const internalInputs = [
   ["resume", buildCliSessionDriftNote(["system-prompt"])],
@@ -47,21 +62,19 @@ const internalInputs = [
     "<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>",
   ],
   ["compact-output", "<local-command-stdout>Compacted </local-command-stdout>"],
-  ["exec", buildExecEventPrompt(["Exec completed (example, code 0) :: done"])],
+  ["exec", execPrompt],
   [
     "exec-with-queued-system-event",
-    `System: [2026-10-06 14:35:17 GMT+8] Control UI reaction added: 👍 by Alice on msg m1 from assistant\n\n${buildExecEventPrompt(["Exec completed (example, code 0) :: done"])}`,
+    `System: [2026-10-06 14:35:17 GMT+8] Control UI reaction added: 👍 by Alice on msg m1 from assistant\n\n${execPrompt}`,
   ],
   [
     "exec-after-interrupted-run",
     applySessionHints({
-      baseBody: buildExecEventPrompt(["Exec completed (example, code 0) :: done"]),
+      baseBody: execPrompt,
       abortedLastRun: true,
     }),
   ],
 ] as const;
-// The display projection already rewrites or hides these even on canonical rows,
-// so only the imported copy is asserted.
 const RESTART_RECOVERY_OPENING = formatSystemTurnPrompt(
   "Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work.",
 );
@@ -77,42 +90,26 @@ function parseImportedUser(content: string | unknown[]) {
   });
 }
 
-/** Import one native row, merge it with no canonical match, then clean it as the reader does. */
 function importUnmatched(content: string | unknown[]) {
   const imported = parseImportedUser(content);
-  // The importer and the merge must both carry the original text.
   expect(imported?.content).toEqual(content);
-  const [merged] = mergeImportedChatHistoryMessages({
-    localMessages: [],
-    importedMessages: [imported],
-  });
+  const [merged] = merge([], [imported]);
   expect(merged).toMatchObject({ content });
   return cleanClaudeCliImportedUserDisplay(merged) as
     | { content?: unknown; display?: unknown; provenance?: unknown }
     | undefined;
 }
 
-// Native SDK rows do not retain the canonical input provenance. Exercise both
-// native encodings; real local turns must win even when quoting the exact envelope.
 describe("Claude imported internal inputs", () => {
   it.each(internalInputs)("hides %s copies without hiding real user messages", (_kind, text) => {
-    for (const content of [text, [{ type: "text", text }]]) {
+    for (const content of [text, blocks(text)]) {
       const imported = parseImportedUser(content);
       expect(projectChatDisplayMessages([imported])).toEqual([]);
-      expect(
-        classifyClaudeCliHistoryLine({
-          line: JSON.stringify(claudeUser(content)),
-          cliSessionId: "native-session",
-          sourceLineNumber: 1,
-        }).humanTurn,
-      ).toBe(false);
+      expect(classify(JSON.stringify(claudeUser(content))).humanTurn).toBe(false);
       const quoted = parseImportedUser(`Please explain this:\n${text}`);
       expect(projectChatDisplayMessages([quoted])).toHaveLength(1);
       const human = { role: "user", content, timestamp: 1 };
-      const merged = mergeImportedChatHistoryMessages({
-        localMessages: [human],
-        importedMessages: imported ? [{ ...imported, timestamp: 2 }] : [],
-      });
+      const merged = merge([human], imported ? [{ ...imported, timestamp: 2 }] : []);
       expect(projectChatDisplayMessages(merged)).toMatchObject([{ role: "user", content }]);
     }
   });
@@ -127,7 +124,7 @@ describe("Claude imported internal inputs", () => {
           sourceTool,
         }).text
       }\nRouted result.`;
-      for (const content of [text, [{ type: "text", text }]]) {
+      for (const content of [text, blocks(text)]) {
         const imported = parseImportedUser(content);
         expect(imported).toMatchObject({ role: "user", content });
         expect(imported?.display).not.toBe(false);
@@ -142,30 +139,20 @@ describe("Claude imported internal inputs", () => {
     ["legacy requester", "string"],
     ["legacy requester", "text-block"],
   ])("removes the %s decorator, not its real %s user turn", (decoration, encoding) => {
-    const hint =
-      'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
-    const body = decoration === "resume" ? "real question" : `${hint}\n\nreal question`;
+    const body = decoration === "resume" ? "real question" : `${REQUESTER_HINT}\n\nreal question`;
     const prefix =
       decoration === "resume"
         ? buildCliSessionDriftNote(["system-prompt", "prompt-tools"])
-        : 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"}}\n```\n\n' +
-          hint;
+        : frame('{"requester_profile":{"id":"owner"}}') + REQUESTER_HINT;
     const text = `${prefix}\n\n${body}`;
     const image = {
       type: "image",
       source: { type: "base64", media_type: "image/png", data: "aa" },
     };
-    const message = importUnmatched(encoding === "string" ? text : [{ type: "text", text }, image]);
-    expect(message?.content).toEqual(
-      encoding === "string" ? body : [{ type: "text", text: body }, image],
+    expectVisible(
+      importUnmatched(encoding === "string" ? text : [...blocks(text), image]),
+      encoding === "string" ? body : [...blocks(body), image],
     );
-    expect(message?.display).not.toBe(false);
-    expect(message?.provenance).toBeUndefined();
-    expect(
-      importUnmatched(
-        "OpenClaw resumed this CLI session after prompt content changed. This is a quote.",
-      )?.content,
-    ).toContain("This is a quote.");
   });
 
   it.each(internalWakeInputs)("marks imported %s prompts internal", (sourceTool, text) => {
@@ -177,38 +164,35 @@ describe("Claude imported internal inputs", () => {
   });
 
   it.each([
+    "OpenClaw resumed this CLI session after prompt content changed. This is a quote.",
     "[foo] [System] Please explain this tag.",
     "[System] Please explain this tag.",
     "[Tue 2026-09-22 16:00 GMT+8] [System] Please explain this tag.",
     "System: Please preserve this log\n\nExplain it",
-    'Explain this instruction: requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.',
-    'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available. Extra user text.\n\nExplain it',
-    'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"},"requester_profile_hint":"current"}\n```\n\nrequester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\nExplain it',
+    `Explain this instruction: ${REQUESTER_HINT}`,
+    `${REQUESTER_HINT} Extra user text.\n\nExplain it`,
+    `${frame('{"requester_profile":{"id":"owner"},"requester_profile_hint":"current"}')}${REQUESTER_HINT}\n\nExplain it`,
     "System: Please explain this log\n\n[System] This is the line I am asking about.",
     "Explain this log:\n```text\nlog\n```\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?",
-    'Explain this log:\nConversation info: ⟦openclaw:ctx⟧\n```json\n{"a":1}\n```\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?',
+    `Explain this log:\n${frame('{"a":1}')}System: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?`,
   ])("leaves the look-alike human message %j untouched", (text) => {
-    const message = importUnmatched(text);
-    expect(message).toMatchObject({ content: text });
-    expect(message?.display).not.toBe(false);
-    expect(message?.provenance).toBeUndefined();
+    expectVisible(importUnmatched(text), text);
   });
 
   it("preserves system-event evidence quoted in a later native text block", () => {
     const content = [
-      { type: "text", text: "Explain this log:\n" },
-      {
-        type: "text",
-        text: 'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?',
-      },
+      ...blocks("Explain this log:\n"),
+      ...blocks(
+        `${REQUESTER_HINT}\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?`,
+      ),
     ];
     expect(importUnmatched(content)).toMatchObject({ content });
   });
 
   it.each([
     "",
-    'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"a":1}\n```\n\n',
-    'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"history_count":2}\n```\n\n' +
+    frame('{"a":1}'),
+    frame('{"history_count":2}') +
       "Recent chat history: ⟦openclaw:ctx⟧\n" +
       "#123 2026-10-11 12:20:09 GMT+5:30 Alice: The conservatory has 137 benches.\n" +
       "#124 2026-10-11 12:20:20 GMT+5:30 Alice: /model anthropic/claude-haiku-4-5\n\n",
@@ -227,14 +211,10 @@ describe("Claude imported internal inputs", () => {
       ]) {
         const text = `${context}${events}${question}`;
         expect(importUnmatched(text)?.content).toBe(`${context}${question}`);
-        // The canonical row holds the turn without the queued events; the pair is one turn.
         const canonical = { role: "user", content: `${context}${question}`, timestamp: 1 };
-        expect(
-          mergeImportedChatHistoryMessages({
-            localMessages: [canonical],
-            importedMessages: [{ ...parseImportedUser(text), timestamp: 2 }],
-          }),
-        ).toMatchObject([canonical]);
+        expect(merge([canonical], [{ ...parseImportedUser(text), timestamp: 2 }])).toMatchObject([
+          canonical,
+        ]);
       }
     }
     const untouched = "real question\n\nSystem: quoted log line\n\nmore";
@@ -255,125 +235,114 @@ describe("Claude imported internal inputs", () => {
           .map((entry) => JSON.stringify(entry))
           .join("\n"),
       );
-      const messages = mergeImportedChatHistoryMessages({
-        localMessages: [],
-        importedMessages: await readMessages(),
-      });
+      const messages = merge([], await readMessages());
       expect(projectChatDisplayMessages(messages)).toMatchObject([
         { role: "user", content: "real question" },
       ]);
-      expect(projectChatDisplayMessages(messages)).toHaveLength(1);
     });
   });
 });
 
-describe("Claude history activity rows", () => {
-  it.each(["null", "not json"])("ignores non-record or malformed activity row %s", (line) => {
-    expect(
-      classifyClaudeCliHistoryLine({ line, cliSessionId: "activity", sourceLineNumber: 1 }),
-    ).toEqual({ humanTurn: false });
-  });
+it.each(["null", "not json"])("ignores non-record or malformed activity row %s", (line) => {
+  expect(classify(line)).toEqual({ humanTurn: false });
 });
 
 describe("readClaudeCliFallbackSeed", () => {
-  let homeDir: string;
-  let projectsDir: string;
-  const SESSION_ID = "fallback-seed-session";
-
-  beforeEach(async () => {
-    homeDir = path.join(tempDirs.make("openclaw-fallback-seed-"), "home");
-    projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
-    await fs.mkdir(projectsDir, { recursive: true });
-  });
-
-  function readFallbackSeed(cliSessionId = SESSION_ID) {
-    return readClaudeCliFallbackSeed({ cliSessionId, homeDir });
-  }
-
-  async function writeJsonl(lines: ReadonlyArray<unknown>): Promise<void> {
-    const file = path.join(projectsDir, `${SESSION_ID}.jsonl`);
-    await fs.writeFile(file, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`, "utf-8");
+  function readSeed(
+    lines: readonly unknown[] | undefined,
+    options: { fromHome?: boolean; cliSessionId?: string } = {},
+  ) {
+    return withClaudeProjectsDir(async ({ filePath, sessionId, homeDir }) => {
+      if (lines) {
+        await fs.writeFile(filePath, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+      } else {
+        await fs.rm(filePath);
+      }
+      return readClaudeCliFallbackSeed({
+        cliSessionId: options.cliSessionId ?? sessionId,
+        ...(options.fromHome ? {} : { homeDir }),
+      });
+    });
   }
 
   it.each(["missing", "empty", "path escape"])("returns no seed for %s", async (kind) => {
-    if (kind === "empty") {
-      await writeJsonl([{ ...userTurn("u-side", "sidechain user turn"), isSidechain: true }]);
-    }
     expect(
-      await readFallbackSeed(kind === "path escape" ? "../escape" : SESSION_ID),
+      await readSeed(
+        kind === "empty"
+          ? [{ ...claudeUser("sidechain user turn"), isSidechain: true }]
+          : undefined,
+        { cliSessionId: kind === "path escape" ? "../escape" : undefined },
+      ),
     ).toBeUndefined();
   });
 
   it("collects valid turns through the HOME-resolved session store despite null rows", async () => {
     const reseedPrompt = buildLegacyReseedPrompt();
-    await writeJsonl([
-      userTurn("u-reseed", reseedPrompt),
-      userTurn("u-1", "first user prompt"),
-      null,
-      assistantTurn("a-1", "first assistant reply"),
-      userTurn("u-2", "second user prompt"),
-    ]);
-    const seed = await withEnvAsync({ HOME: homeDir }, async () =>
-      readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID }),
-    );
-    expect(seed).toMatchObject({
-      recentTurns: [
-        { role: "user", content: reseedPrompt },
-        { role: "user", content: "first user prompt" },
-        { role: "assistant", content: [{ type: "text", text: "first assistant reply" }] },
-        { role: "user", content: "second user prompt" },
+    const seed = await readSeed(
+      [
+        claudeUser(reseedPrompt),
+        claudeUser("first user prompt"),
+        null,
+        assistantTurn("first assistant reply"),
+        claudeUser("second user prompt"),
       ],
-    });
+      { fromHome: true },
+    );
+    expect(seed?.recentTurns).toMatchObject([
+      { role: "user", content: reseedPrompt },
+      { role: "user", content: "first user prompt" },
+      { role: "assistant", content: blocks("first assistant reply") },
+      { role: "user", content: "second user prompt" },
+    ]);
     expect(seed?.summaryText).toBeUndefined();
   });
 
   it.each([
-    {
-      name: "latest explicit summary",
-      lines: [
-        userTurn("u-pre", "PRE-COMPACT user turn"),
-        assistantTurn("a-pre", "PRE-COMPACT assistant turn"),
-        { type: "summary", summary: "EARLY summary that should be superseded.", leafUuid: "a-pre" },
+    [
+      "latest explicit summary",
+      [
+        claudeUser("PRE-COMPACT user turn"),
+        assistantTurn("PRE-COMPACT assistant turn"),
+        summary("EARLY"),
         boundary(),
-        userTurn("u-mid", "mid-window turn"),
-        { type: "summary", summary: "LATER summary that must win.", leafUuid: "u-mid" },
+        claudeUser("mid-window turn"),
+        summary("LATER"),
         boundary(),
-        userTurn("u-tail", "tail turn"),
-        assistantTurn("a-tail", "tail reply"),
+        claudeUser("tail turn"),
+        assistantTurn("tail reply"),
       ],
-      expected: {
-        summaryText: "LATER summary that must win.",
+      {
+        summaryText: "LATER",
         recentTurns: [
           { role: "user", content: "tail turn" },
-          { role: "assistant", content: [{ type: "text", text: "tail reply" }] },
+          { role: "assistant", content: blocks("tail reply") },
         ],
       },
-    },
-    {
-      name: "boundary fallback after a compaction without a summary",
-      lines: [
-        { type: "summary", summary: "FIRST compact summary", leafUuid: "x" },
+    ],
+    [
+      "boundary fallback after a compaction without a summary",
+      [
+        summary("FIRST"),
         boundary("Conversation compacted (1)"),
-        userTurn("u-mid", "post-first-compact turn"),
+        claudeUser("post-first-compact turn"),
         boundary("Conversation compacted (2)"),
-        userTurn("u-tail", "post-second-compact turn"),
+        claudeUser("post-second-compact turn"),
       ],
-      expected: {
+      {
         summaryText: "Conversation compacted (2)",
         recentTurns: [{ role: "user", content: "post-second-compact turn" }],
       },
-    },
-    {
-      name: "trailing summary without a boundary",
-      lines: [
-        userTurn("u-1", "earlier turn"),
-        { type: "summary", summary: "trailing summary without boundary", leafUuid: "x" },
-        userTurn("u-2", "later turn"),
+    ],
+    [
+      "trailing summary without a boundary",
+      [
+        claudeUser("earlier turn"),
+        summary("trailing summary without boundary"),
+        claudeUser("later turn"),
       ],
-      expected: { summaryText: "trailing summary without boundary" },
-    },
-  ])("seeds from the $name", async ({ lines, expected }) => {
-    await writeJsonl(lines);
-    expect(await readFallbackSeed()).toMatchObject(expected);
+      { summaryText: "trailing summary without boundary" },
+    ],
+  ] as const)("seeds from the %s", async (_name, lines, expected) => {
+    expect(await readSeed(lines)).toMatchObject(expected);
   });
 });

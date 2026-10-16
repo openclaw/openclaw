@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
+import { text } from "node:stream/consumers";
 import { expect, it, vi } from "vitest";
 import type { AuditRunInspectResult } from "../../packages/gateway-protocol/src/schema/audit-run.js";
 import type { UsersSelfResult } from "../../packages/gateway-protocol/src/schema/users.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import type { AuditEventWriter } from "../audit/audit-event-writer.js";
@@ -18,37 +20,12 @@ async function startProvider(requests: string[], finalText: string) {
     createListener: () =>
       createServer((request, response) => {
         void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          }
-          requests.push(Buffer.concat(chunks).toString("utf8"));
-          const message = {
-            type: "message",
-            id: randomUUID(),
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: finalText, annotations: [] }],
-          };
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          for (const event of [
-            {
-              type: "response.output_item.added",
-              item: { ...message, status: "in_progress", content: [] },
-            },
-            { type: "response.output_item.done", item: message },
-            {
-              type: "response.completed",
-              response: {
-                id: randomUUID(),
-                status: "completed",
-                usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-              },
-            },
-          ]) {
-            response.write(`data: ${JSON.stringify(event)}\n\n`);
-          }
-          response.end("data: [DONE]\n\n");
+          requests.push(await text(request));
+          writeOpenAiResponsesText(response, {
+            text: finalText,
+            messageId: randomUUID(),
+            responseId: randomUUID(),
+          });
         })().catch((error: unknown) => response.writeHead(500).end(String(error)));
       }),
   });
@@ -57,8 +34,8 @@ async function startProvider(requests: string[], finalText: string) {
 it(
   "retains authenticated Control UI attach identity through chat.send execution and replay",
   { timeout: 90_000 },
-  async () => {
-    await withOpenClawTestState(
+  () =>
+    withOpenClawTestState(
       {
         label: "chat-send-attach-identity",
         env: {
@@ -154,13 +131,11 @@ it(
               status: "ok",
               terminalReply: { disposition: "visible", text: finalText },
             });
-            expect(requests).toHaveLength(1);
-            expect(requests[0]).toContain(params.message);
+            expect(requests).toEqual([expect.stringContaining(params.message)]);
             const historyParams = { sessionKey: created.key, limit: 20 };
-            const history = await client.request<{ messages: unknown[] }>(
-              "chat.history",
-              historyParams,
-            );
+            const readHistory = () =>
+              client.request<{ messages: unknown[] }>("chat.history", historyParams);
+            const history = await readHistory();
             expect(history.messages).toMatchObject([
               {
                 role: "user",
@@ -180,11 +155,7 @@ it(
               },
             ]);
             expect(await client.request("chat.send", params)).toMatchObject({ runId });
-            const replayHistory = await client.request<{ messages: unknown[] }>(
-              "chat.history",
-              historyParams,
-            );
-            expect(replayHistory.messages).toEqual(history.messages);
+            expect((await readHistory()).messages).toEqual(history.messages);
             expect(requests).toHaveLength(1);
             expect(writers).toHaveLength(1);
             // Turn completion does not drain diagnostic persistence. Keep the real
@@ -222,6 +193,5 @@ it(
           () => auditFactory.mockRestore(),
         );
       },
-    );
-  },
+    ),
 );
