@@ -101,15 +101,8 @@ function mockIngressQueue(openChannelIngressQueue: typeof createFeishuTestIngres
 }
 
 function startAccount(controller: AbortController, vcAutoJoin = false) {
-  const cfg = {
-    channels: {
-      feishu: {
-        accounts: {
-          test: { appId: "fixture-app", appSecret: "fixture-secret", vcAutoJoin },
-        },
-      },
-    },
-  };
+  const credentials = { appId: "fixture-app", appSecret: "fixture-secret", vcAutoJoin };
+  const cfg = { channels: { feishu: { accounts: { test: credentials } } } };
   return monitorSingleAccount({
     cfg,
     account: resolveFeishuAccount({ cfg, accountId: "test" }),
@@ -125,29 +118,26 @@ const nextTurn = () =>
     setImmediate(resolve);
   });
 
-function captureHandler(eventType: string) {
-  const ready = createDeferred<(event: unknown) => Promise<void>>();
+function monitorAccount(eventType?: string, vcAutoJoin = false) {
+  const controller = new AbortController();
+  const ready = createDeferred<(event: unknown) => Promise<unknown>>();
   mocks.register.mockImplementation(
-    (handlers: Record<string, (event: unknown) => Promise<void>>) => {
-      const handler = handlers[eventType];
-      if (!handler) {
-        throw new Error(`Handler was not registered: ${eventType}`);
+    (handlers: Record<string, (event: unknown) => Promise<unknown>>) => {
+      if (eventType) {
+        const handler = handlers[eventType];
+        if (!handler) {
+          throw new Error(`Handler was not registered: ${eventType}`);
+        }
+        ready.resolve(handler);
       }
-      ready.resolve(handler);
     },
   );
-  return ready;
-}
-
-function monitorAccount(
-  controller: AbortController,
-  vcAutoJoin = false,
-  onTransport?: (dispatcher: EventDispatcher) => void,
-) {
   const transportClosed = createDeferred<void>();
   mocks.transport.mockImplementation(
     async ({ eventDispatcher }: { eventDispatcher: EventDispatcher }) => {
-      onTransport?.(eventDispatcher);
+      if (!eventType) {
+        ready.resolve((event) => eventDispatcher.invoke(event));
+      }
       if (!controller.signal.aborted) {
         await new Promise<void>((resolve) => {
           controller.signal.addEventListener("abort", () => resolve(), { once: true });
@@ -160,8 +150,15 @@ function monitorAccount(
   const monitor = startAccount(controller, vcAutoJoin).finally(() => {
     stopped = true;
   });
+  void monitor.catch(ready.reject);
   return {
+    ready: ready.promise,
     monitor,
+    close: async (settle?: () => unknown) => {
+      controller.abort();
+      await settle?.();
+      await monitor;
+    },
     expectRunning: () => expect(stopped).toBe(false),
     expectStopping: async () => {
       controller.abort();
@@ -176,10 +173,8 @@ function monitorAccount(
 describe("Feishu account replay work ownership", () => {
   it.each(["message", "evicted-handler"] as const)(
     "joins %s settlement after transport ownership ends",
-    async (kind) => {
-      await withOpenClawTestState({ label: "feishu-deferred-commit" }, async (state) => {
-        const controller = new AbortController();
-        const ready = createDeferred<EventDispatcher>();
+    (kind) =>
+      withOpenClawTestState({ label: "feishu-deferred-commit" }, async ({ stateDir }) => {
         const deferred = createDeferred<FeishuIngressLifecycle>();
         const commit = gated(() => true);
         const evicted = createDeferred<boolean>();
@@ -189,7 +184,6 @@ describe("Feishu account replay work ownership", () => {
           release: vi.fn(),
         };
         mocks.claim.mockResolvedValue({ kind: "claimed", handle: claim });
-        mocks.createDispatcher.mockImplementation(() => new EventDispatcher({}));
         mocks.handleMessage.mockImplementation(async ({ turnAdoptionLifecycle }: MessageParams) => {
           if (!turnAdoptionLifecycle) {
             throw new Error("Missing registered message lifecycle");
@@ -204,7 +198,7 @@ describe("Feishu account replay work ownership", () => {
         const queueOptions = {
           channelId: "feishu",
           accountId: "test",
-          stateDir: state.stateDir,
+          stateDir,
         };
         const queue = createChannelIngressQueueForTests(queueOptions);
         mockIngressQueue(<T, TMetadata = unknown, TCompletedMetadata = unknown>() => {
@@ -217,16 +211,15 @@ describe("Feishu account replay work ownership", () => {
           );
           return ingressQueue;
         });
-        const { monitor, expectStopping } = monitorAccount(controller, false, ready.resolve);
-        void monitor.catch(ready.reject);
+        const { ready, close, expectStopping } = monitorAccount();
         let adoption: Promise<void> | undefined;
         try {
-          const dispatcher = await ready.promise;
+          const invoke = await ready;
           if (kind === "evicted-handler") {
             await queue.listPending();
             vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           }
-          await dispatcher.invoke({
+          await invoke({
             schema: "2.0",
             header: {
               event_id: "evt-deferred-commit",
@@ -261,9 +254,7 @@ describe("Feishu account replay work ownership", () => {
         } finally {
           vi.useRealTimers();
           commit.release();
-          controller.abort();
-          await adoption;
-          await monitor;
+          await close(() => adoption);
         }
         expect(claim.commit).toHaveBeenCalledOnce();
         if (kind === "evicted-handler") {
@@ -272,22 +263,20 @@ describe("Feishu account replay work ownership", () => {
           expect(claim.release).not.toHaveBeenCalled();
         }
         expect(mocks.stopBindings).toHaveBeenCalledOnce();
-      });
-    },
+      }),
   );
 
   it.each(["meeting", "card-broadcast"] as const)(
     "joins an accepted %s commit and rejects new events after shutdown",
-    async (kind) => {
-      await withOpenClawTestState({ label: `feishu-${kind}-commit` }, async (state) => {
-        const controller = new AbortController();
+    (kind) =>
+      withOpenClawTestState({ label: `feishu-${kind}-commit` }, async ({ stateDir }) => {
         const guard = createChannelReplayGuard<string>({
           dedupe: {
             ttlMs: 60_000,
             memoryMaxSize: 0,
             pluginId: "feishu",
             stateMaxEntries: 10,
-            env: { ...process.env, OPENCLAW_STATE_DIR: state.stateDir },
+            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
           },
           buildReplayKey: (key) => key,
         });
@@ -302,7 +291,6 @@ describe("Feishu account replay work ownership", () => {
           mocks.claim.mockResolvedValue(claimed);
         }
         const processingFinished = createDeferred<void>();
-        const broadcastDeferred = createDeferred<void>();
         let broadcastLane: FeishuIngressLifecycle | undefined;
         let broadcastAdoption: Promise<void> | undefined;
         vi.spyOn(claimed.handle, "commit").mockImplementation(commit.run);
@@ -317,7 +305,6 @@ describe("Feishu account replay work ownership", () => {
                 broadcastLane = broadcast.createLane().lifecycle;
                 broadcastLane.onDeferred();
                 await broadcast.onDispatchComplete();
-                broadcastDeferred.resolve();
                 return;
               }
               await turnAdoptionLifecycle?.onAdopted();
@@ -327,7 +314,6 @@ describe("Feishu account replay work ownership", () => {
           },
         );
         const eventType = kind === "meeting" ? "vc.bot.meeting_invited_v1" : "card.action.trigger";
-        const ready = captureHandler(eventType);
         const event =
           kind !== "meeting"
             ? {
@@ -339,20 +325,18 @@ describe("Feishu account replay work ownership", () => {
                     k: "quick",
                     a: "help",
                     q: "/help",
-                    c: {
-                      u: "fixture-user",
-                      h: `oc-${kind}-settlement`,
-                      e: Date.now() + 60_000,
-                    },
+                    c: { u: "fixture-user", h: "oc-card-broadcast", e: Date.now() + 60_000 },
                   }),
                 },
-                context: { chat_id: `oc-${kind}-settlement` },
+                context: { chat_id: "oc-card-broadcast" },
               }
             : meetingEvent("fixture-meeting");
-        const { monitor, expectStopping, expectRunning } = monitorAccount(controller, true);
-        void monitor.catch(ready.reject);
+        const { monitor, ready, close, expectStopping, expectRunning } = monitorAccount(
+          eventType,
+          true,
+        );
         try {
-          const handler = await ready.promise;
+          const handler = await ready;
           const acknowledgement = handler(event);
           await (kind !== "meeting" ? lookup.started : commit.started);
           await acknowledgement;
@@ -360,8 +344,8 @@ describe("Feishu account replay work ownership", () => {
           if (kind !== "meeting") {
             expect(mocks.handleMessage).not.toHaveBeenCalled();
             lookup.release();
-            await broadcastDeferred.promise;
             await processingFinished.promise;
+            await expect(mocks.handleMessage.mock.results[0].value).resolves.toBeUndefined();
             await nextTurn();
             expectRunning();
             broadcastAdoption = Promise.resolve(broadcastLane?.onAdopted());
@@ -378,17 +362,16 @@ describe("Feishu account replay work ownership", () => {
         } finally {
           lookup.release();
           commit.release();
-          controller.abort();
-          await processingFinished.promise;
-          if (broadcastLane && !broadcastAdoption) {
-            broadcastAdoption = Promise.resolve(broadcastLane.onAdopted());
-          }
-          await broadcastAdoption;
-          await monitor;
+          await close(async () => {
+            await processingFinished.promise;
+            if (broadcastLane && !broadcastAdoption) {
+              broadcastAdoption = Promise.resolve(broadcastLane.onAdopted());
+            }
+            await broadcastAdoption;
+          });
         }
         expect(mocks.stopBindings).toHaveBeenCalledOnce();
-      });
-    },
+      }),
   );
 
   it("does not start account resources after abort during dedupe warmup", async () => {
@@ -407,7 +390,6 @@ describe("Feishu account replay work ownership", () => {
   it.each(["menu", "meeting"] as const)(
     "joins detached %s claim before retiring the account",
     async (kind) => {
-      const controller = new AbortController();
       const reached = createDeferred<void>();
       const release = createDeferred<void>();
       const settled = createDeferred<void>();
@@ -426,13 +408,12 @@ describe("Feishu account replay work ownership", () => {
         await release.promise;
         return { kind: "claimed", handle: claim };
       });
-      const ready = captureHandler(
+      const { monitor, ready, close, expectStopping } = monitorAccount(
         kind === "meeting" ? "vc.bot.meeting_invited_v1" : "application.bot.menu_v6",
+        kind === "meeting",
       );
-      const { monitor, expectStopping } = monitorAccount(controller, kind === "meeting");
-      void monitor.catch(ready.reject);
       try {
-        const menu = await ready.promise;
+        const menu = await ready;
         const acknowledgement = menu(
           kind === "meeting"
             ? meetingEvent("fixture-pending-meeting")
@@ -454,8 +435,7 @@ describe("Feishu account replay work ownership", () => {
         expect(claim.commit).not.toHaveBeenCalled();
       } finally {
         release.resolve();
-        controller.abort();
-        await monitor;
+        await close();
         if (claimStarted) {
           await settled.promise;
         }

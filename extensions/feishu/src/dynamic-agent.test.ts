@@ -17,11 +17,11 @@ afterEach(async () => {
 });
 
 function createRuntime(
-  currentCfg?: OpenClawConfig,
+  currentCfg: OpenClawConfig,
   persistedCfg?: OpenClawConfig,
   mutationCfg?: OpenClawConfig,
 ) {
-  let runtimeCfg = structuredClone(currentCfg ?? ({} as OpenClawConfig));
+  let runtimeCfg = structuredClone(currentCfg);
   const commitConfig = vi.fn();
   const mutateConfigFile = vi.fn(
     async (params: {
@@ -34,13 +34,9 @@ function createRuntime(
       return { nextConfig: persistedCfg ?? runtimeCfg, result };
     },
   );
+  const config = { mutateConfigFile, current: vi.fn(() => runtimeCfg) };
   return {
-    runtime: {
-      config: {
-        mutateConfigFile,
-        current: vi.fn(() => runtimeCfg),
-      },
-    } as unknown as PluginRuntime,
+    runtime: { config } as unknown as PluginRuntime,
     commitConfig,
     mutateConfigFile,
   };
@@ -82,7 +78,7 @@ function existingAgent() {
   };
 }
 
-function binding(agentId: string, sender = "ou_sender", accountId?: string) {
+function binding(agentId: string, accountId?: string, sender = "ou_sender") {
   return {
     agentId,
     match: {
@@ -118,29 +114,20 @@ function createAgent(
 }
 
 describe("maybeCreateDynamicAgent", () => {
-  it("does not persist dynamic agents when config writes are disabled", async () => {
-    const cfg = createConfig({ configWrites: false });
-    const { runtime, mutateConfigFile } = createRuntime(cfg);
+  it.each(["config writes disabled", "ingress denied"])(
+    "creates no state with %s",
+    async (policy) => {
+      const cfg = createConfig(policy === "config writes disabled" ? { configWrites: false } : {});
+      const { runtime, mutateConfigFile } = createRuntime(cfg);
+      const result = await createAgent(cfg, runtime, {
+        canCreateForConfig: async () => policy !== "ingress denied",
+      });
 
-    const result = await createAgent(cfg, runtime);
-
-    expect(result).toEqual({ created: false, updatedCfg: cfg });
-    expect(mutateConfigFile).not.toHaveBeenCalled();
-    await expectNoDirectories();
-  });
-
-  it("does not create persistent state when current ingress denies the sender", async () => {
-    const cfg = createConfig();
-    const { runtime, mutateConfigFile } = createRuntime(cfg);
-
-    const result = await createAgent(cfg, runtime, {
-      canCreateForConfig: async () => false,
-    });
-
-    expect(result).toEqual({ created: false, updatedCfg: cfg });
-    expect(mutateConfigFile).not.toHaveBeenCalled();
-    await expectNoDirectories();
-  });
+      expect(result).toEqual({ created: false, updatedCfg: cfg });
+      expect(mutateConfigFile).not.toHaveBeenCalled();
+      await expectNoDirectories();
+    },
+  );
 
   it("rechecks current ingress inside the config mutation lock", async () => {
     const cfg = createConfig();
@@ -161,26 +148,41 @@ describe("maybeCreateDynamicAgent", () => {
     await expectNoDirectories();
   });
 
-  it("preserves a non-peer route added before the config mutation lock", async () => {
-    const cfg = createConfig();
-    const mutationCfg = {
-      ...cfg,
-      bindings: [
-        {
-          agentId: "main",
-          match: { channel: "feishu", accountId: "default" },
-        },
-      ],
-    } as OpenClawConfig;
-    const { runtime, commitConfig, mutateConfigFile } = createRuntime(cfg, undefined, mutationCfg);
+  it.each(["non-peer route", "dynamic agent limit"])(
+    "honors %s added before the mutation lock",
+    async (change) => {
+      const cfg = createConfig(
+        change === "dynamic agent limit"
+          ? { dynamicAgentCreation: { ...createDynamicConfig(), maxAgents: 1 } }
+          : {},
+      );
+      const mutationCfg: OpenClawConfig = {
+        ...cfg,
+        ...(change === "non-peer route"
+          ? {
+              bindings: [
+                {
+                  agentId: "main",
+                  match: { channel: "feishu", accountId: "default" },
+                },
+              ],
+            }
+          : { agents: createCanonicalAgentRoster({ "feishu-ou_existing": {}, unrelated: {} }) }),
+      };
+      const { runtime, commitConfig, mutateConfigFile } = createRuntime(
+        cfg,
+        undefined,
+        mutationCfg,
+      );
 
-    const result = await createAgent(cfg, runtime);
+      const result = await createAgent(cfg, runtime);
 
-    expect(result.created).toBe(false);
-    expect(result.updatedCfg).toEqual(mutationCfg);
-    expect(mutateConfigFile).toHaveBeenCalledTimes(1);
-    expect(commitConfig).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({ created: false, updatedCfg: mutationCfg });
+      expect(mutateConfigFile).toHaveBeenCalledTimes(1);
+      expect(commitConfig).not.toHaveBeenCalled();
+      await expectNoDirectories();
+    },
+  );
 
   it("scopes bindings to the normalized account id", async () => {
     const cfg = createConfig();
@@ -190,7 +192,7 @@ describe("maybeCreateDynamicAgent", () => {
 
     expect(result.created).toBe(true);
     expect(result.agentId).toMatch(/^feishu-ops-team-[a-f0-9]{32}$/);
-    expect(result.updatedCfg.bindings).toEqual([binding(result.agentId!, "ou_sender", "ops-team")]);
+    expect(result.updatedCfg.bindings).toEqual([binding(result.agentId!, "ops-team")]);
   });
 
   it("keeps named-account dynamic agent ids bounded and sender-unique", async () => {
@@ -247,34 +249,14 @@ describe("maybeCreateDynamicAgent", () => {
     expect(commitConfig).toHaveBeenCalledTimes(1);
     expect(result.updatedCfg.agents).toEqual(mutationCfg.agents);
     expect(result.updatedCfg.agents).not.toHaveProperty("list");
-    expect(result.updatedCfg.bindings).toEqual([
-      binding("feishu-ou_sender", "ou_sender", "default"),
-    ]);
-    await expectNoDirectories();
-  });
-
-  it("counts dynamic entries added before the cloned mutation roster reaches the lock", async () => {
-    const cfg = createConfig({
-      dynamicAgentCreation: { ...createDynamicConfig(), maxAgents: 1 },
-    });
-    const mutationCfg: OpenClawConfig = {
-      ...cfg,
-      agents: createCanonicalAgentRoster({ "feishu-ou_existing": {}, unrelated: {} }),
-    };
-    const { runtime, commitConfig, mutateConfigFile } = createRuntime(cfg, undefined, mutationCfg);
-
-    const result = await createAgent(cfg, runtime);
-
-    expect(result).toEqual({ created: false, updatedCfg: mutationCfg });
-    expect(mutateConfigFile).toHaveBeenCalledTimes(1);
-    expect(commitConfig).not.toHaveBeenCalled();
+    expect(result.updatedCfg.bindings).toEqual([binding("feishu-ou_sender", "default")]);
     await expectNoDirectories();
   });
 
   it("preserves concurrent runtime config when creating from a stale request snapshot", async () => {
     const currentCfg = {
       ...createConfig({}, { "feishu-ou_existing": existingAgent() }),
-      bindings: [binding("feishu-ou_existing", "ou_existing")],
+      bindings: [binding("feishu-ou_existing", undefined, "ou_existing")],
     } as OpenClawConfig;
     const { runtime, mutateConfigFile } = createRuntime(currentCfg);
 
@@ -298,21 +280,14 @@ describe("maybeCreateDynamicAgent", () => {
     expect(result.updatedCfg.agents).not.toHaveProperty("list");
     expect(result.updatedCfg.bindings).toEqual([
       ...currentCfg.bindings!,
-      binding("feishu-ou_sender", "ou_sender", "default"),
+      binding("feishu-ou_sender", "default"),
     ]);
   });
 
   it("returns refreshed runtime config instead of the persisted source config", async () => {
     const currentCfg = createConfig({ appSecret: "resolved-secret" });
-    const persistedCfg = {
-      ...createConfig(),
-      channels: {
-        feishu: {
-          appSecret: { source: "env", id: "FEISHU_APP_SECRET" },
-          dynamicAgentCreation: createDynamicConfig(),
-        },
-      },
-    } as OpenClawConfig;
+    const appSecret = { source: "env", id: "FEISHU_APP_SECRET" };
+    const persistedCfg: OpenClawConfig = { channels: { feishu: { appSecret } } };
     const { runtime } = createRuntime(currentCfg, persistedCfg);
 
     const result = await createAgent(currentCfg, runtime);

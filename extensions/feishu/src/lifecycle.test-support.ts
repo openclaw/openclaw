@@ -1,20 +1,9 @@
 import { vi, type Mock } from "vitest";
 import { feishuDedupeState } from "./dedup-state.js";
 
-type BoundConversation = {
-  bindingId: string;
-  targetSessionKey: string;
-};
+type BoundConversation = Record<"bindingId" | "targetSessionKey", string>;
 type UnknownCall = (...args: unknown[]) => unknown;
 type AsyncUnknownCall = (...args: unknown[]) => Promise<unknown>;
-type DispatchReplyCounts = {
-  final: number;
-  block?: number;
-  tool?: number;
-};
-type DispatchReplyContext = Record<string, unknown> & {
-  SessionKey?: string;
-};
 type DispatchReplyDispatcher = {
   sendFinalReply: (payload: { text: string }) => unknown;
   waitForIdle?: () => Promise<void>;
@@ -29,14 +18,12 @@ type FeishuReplyDispatcherMockValue = {
 };
 type CreateFeishuReplyDispatcher = (params?: unknown) => FeishuReplyDispatcherMockValue;
 type DispatchReplyFromConfig = (params: {
-  ctx: DispatchReplyContext;
+  ctx: Record<string, unknown> & { SessionKey?: string };
   dispatcher: DispatchReplyDispatcher;
   replyOptions?: {
-    turnAdoptionLifecycle?: {
-      onAdopted: () => void | Promise<void>;
-    };
+    turnAdoptionLifecycle?: { onAdopted: () => void | Promise<void> };
   };
-}) => Promise<{ queuedFinal: boolean; counts: DispatchReplyCounts }>;
+}) => Promise<{ queuedFinal: boolean; counts: { final: number; block?: number; tool?: number } }>;
 type WithReplyDispatcher = (params: {
   dispatcher?: DispatchReplyDispatcher;
   onSettled?: () => unknown;
@@ -57,15 +44,13 @@ const mocks = vi.hoisted(() => ({
   withReplyDispatcherMock: vi.fn<WithReplyDispatcher>(),
   getMessageFeishuMock: vi.fn<AsyncUnknownCall>(async () => null),
   listFeishuThreadMessagesMock: vi.fn<AsyncUnknownCall>(async () => []),
-  sendMessageFeishuMock: vi.fn<AsyncUnknownCall>(async () => ({
-    messageId: "om_sent",
-    chatId: "chat_default",
-  })),
-  sendCardFeishuMock: vi.fn<AsyncUnknownCall>(async () => ({
-    messageId: "om_card",
-    chatId: "chat_default",
-  })),
+  sendMessageFeishuMock: vi.fn<AsyncUnknownCall>(async () => sendResult("om_sent")),
+  sendCardFeishuMock: vi.fn<AsyncUnknownCall>(async () => sendResult("om_card")),
 }));
+
+function sendResult(messageId: string) {
+  return { messageId, chatId: "chat_default" };
+}
 
 export function getFeishuLifecycleTestMocks() {
   return mocks;
@@ -94,8 +79,8 @@ export function resetFeishuLifecycleTestMocks(): void {
   });
   mocks.getMessageFeishuMock.mockResolvedValue(null);
   mocks.listFeishuThreadMessagesMock.mockResolvedValue([]);
-  mocks.sendMessageFeishuMock.mockResolvedValue({ messageId: "om_sent", chatId: "chat_default" });
-  mocks.sendCardFeishuMock.mockResolvedValue({ messageId: "om_card", chatId: "chat_default" });
+  mocks.sendMessageFeishuMock.mockResolvedValue(sendResult("om_sent"));
+  mocks.sendCardFeishuMock.mockResolvedValue(sendResult("om_card"));
 }
 
 vi.mock("./client.js", () => ({
@@ -107,10 +92,7 @@ vi.mock("./client.js", () => ({
   createFeishuClient: vi.fn(() => {
     throw new Error("unexpected Feishu client call in lifecycle test");
   }),
-  createFeishuWSClient: vi.fn(async () => ({
-    close: vi.fn(),
-    start: vi.fn(),
-  })),
+  createFeishuWSClient: vi.fn(async () => ({ close: vi.fn(), start: vi.fn() })),
   createEventDispatcher: mocks.createEventDispatcherMock,
   getFeishuUserAgent: vi.fn(() => "openclaw-feishu-test"),
   pluginVersion: "test",
