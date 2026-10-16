@@ -166,6 +166,31 @@ const diagnostics = {
   path: "/tmp/openclaw.json",
   issues: [{ path: "gateway.port", message: "invalid" }],
 };
+const healthyGateway = { ok: true, channels: {}, agents: [], ts: 1, durationMs: 0 };
+const emptyAudit = { ts: 0, summary: { critical: 0, warn: 0, info: 0 }, findings: [] };
+function expectContains(text: string, expected: string[]) {
+  for (const value of expected) {
+    expect(text).toContain(value);
+  }
+}
+const approvalRequired = [
+  "Gateway pairing approval required.",
+  "Reason: device is not approved yet.",
+];
+const scopeUpgradeRequired = [
+  "Gateway scope upgrade approval required.",
+  "Reason: device is asking for more scopes than currently approved.",
+];
+function scopeUpgrade(requestId: string, remediationHint: string) {
+  return {
+    connectErrorDetails: {
+      code: "PAIRING_REQUIRED",
+      reason: "scope-upgrade",
+      requestId,
+      remediationHint,
+    },
+  };
+}
 
 describe("status commands", () => {
   beforeEach(() => {
@@ -178,17 +203,17 @@ describe("status commands", () => {
     mocks.audit.mockReset().mockResolvedValue({
       ts: 0,
       summary: { critical: 1, warn: 1, info: 1 },
-      findings: [
-        {
-          checkId: "critical",
-          severity: "critical",
-          title: "Critical",
-          detail: "Details\ncontinued",
-          remediation: "Repair",
-        },
-        { checkId: "warn", severity: "warn", title: "Warning", detail: "Details" },
-        { checkId: "info", severity: "info", title: "Info", detail: "Details" },
-      ],
+      findings: (["critical", "warn", "info"] as const).map((severity, i) =>
+        Object.assign(
+          {
+            checkId: severity,
+            severity,
+            title: ["Critical", "Warning", "Info"][i],
+            detail: severity === "critical" ? "Details\ncontinued" : "Details",
+          },
+          severity === "critical" ? { remediation: "Repair" } : {},
+        ),
+      ),
     });
     vi.spyOn(performance, "now").mockReturnValue(0);
     currentScan = structuredClone(
@@ -277,142 +302,119 @@ describe("status commands", () => {
     "shares the command deadline across remote usage and deep probes (%s)",
     async (mode) => {
       const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-      try {
-        mocks.audit.mockResolvedValue({
-          ts: 0,
-          summary: { critical: 0, warn: 0, info: 0 },
-          findings: [],
-        });
-        const scan = await mocks.scan(createStatusGatewayProbeBudget());
-        const remoteConfig: OpenClawConfig = {
-          ...config,
-          gateway: { mode: "remote", remote: { url: "wss://gateway.example.com" } },
-        };
-        mocks.scan.mockImplementation(async (opts) => ({
-          ...scan,
+      mocks.audit.mockResolvedValue(emptyAudit);
+      const scan = await mocks.scan(createStatusGatewayProbeBudget());
+      const remoteConfig: OpenClawConfig = {
+        ...config,
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example.com" } },
+      };
+      mocks.scan.mockImplementation(async (opts) => ({
+        ...scan,
+        cfg: remoteConfig,
+        sourceConfig: remoteConfig,
+        ...(await resolveGatewayProbeSnapshot({
           cfg: remoteConfig,
-          sourceConfig: remoteConfig,
-          ...(await resolveGatewayProbeSnapshot({
-            cfg: remoteConfig,
-            configPath: "/tmp/status-usage-fixture.json",
-            env: {},
-            opts,
-          })),
-        }));
-        mocks.probe.mockImplementation(async () => {
-          clock.mockReturnValue(22_000);
-          return {
-            ...createUnreachableGatewayProbe("wss://gateway.example.com", "fixture"),
-            ok: true,
-            error: null,
-          };
-        });
-        mocks.usage.mockImplementation(async () => {
-          clock.mockReturnValue(30_000);
-          return summaries.default;
-        });
-        mocks.callGateway.mockImplementation(async ({ method }) => {
-          if (method === "health") {
-            clock.mockReturnValue(35_000);
-            return { ok: true, channels: {}, agents: [], ts: 1, durationMs: 0 };
-          }
-          return null;
-        });
-        if (mode === "fast-json") {
-          await statusJsonCommand({ usage: true, deep: true }, defaultRuntime);
-        } else {
-          await runCli(["--usage", "--deep", ...(mode === "commander-json" ? ["--json"] : [])]);
+          configPath: "/tmp/status-usage-fixture.json",
+          env: {},
+          opts,
+        })),
+      }));
+      mocks.probe.mockImplementation(async () => {
+        clock.mockReturnValue(22_000);
+        return {
+          ...createUnreachableGatewayProbe("wss://gateway.example.com", "fixture"),
+          ok: true,
+          error: null,
+        };
+      });
+      mocks.usage.mockImplementation(async () => {
+        clock.mockReturnValue(30_000);
+        return summaries.default;
+      });
+      mocks.callGateway.mockImplementation(async ({ method }) => {
+        if (method === "health") {
+          clock.mockReturnValue(35_000);
+          return healthyGateway;
         }
-
-        expect(mocks.runtime.error).not.toHaveBeenCalled();
-        expect(mocks.probe).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
-        expect(mocks.usage).toHaveBeenCalledExactlyOnceWith({
-          config: remoteConfig,
-          timeoutMs: 38_000,
-          gatewayProbeDeadlineMs: 60_000,
-        });
-        expect(
-          mocks.callGateway.mock.calls.map(([input]) => [input.method, input.timeoutMs]),
-        ).toEqual([
-          ["health", 30_000],
-          ["last-heartbeat", 25_000],
-        ]);
-      } finally {
-        clock.mockRestore();
+        return null;
+      });
+      if (mode === "fast-json") {
+        await statusJsonCommand({ usage: true, deep: true }, defaultRuntime);
+      } else {
+        await runCli(["--usage", "--deep", ...(mode === "commander-json" ? ["--json"] : [])]);
       }
+
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+      expect(mocks.probe).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
+      expect(mocks.usage).toHaveBeenCalledExactlyOnceWith({
+        config: remoteConfig,
+        timeoutMs: 38_000,
+        gatewayProbeDeadlineMs: 60_000,
+      });
+      expect(
+        mocks.callGateway.mock.calls.map(([input]) => [input.method, input.timeoutMs]),
+      ).toEqual([
+        ["health", 30_000],
+        ["last-heartbeat", 25_000],
+      ]);
     },
   );
 
   it.each<{
-    name: string;
     args: string[];
     summary?: UsageSummary;
     agentId?: string;
     line?: string;
     timeoutMs?: number;
     elapsedMs?: number;
-  }>([
-    {
-      name: "full report explicit agent",
-      args: ["--all", "--usage", "--agent", "work"],
-      summary: summaries.work,
-      agentId: "work",
-      line: "Window: 40% left",
-    },
-    { name: "full report without usage", args: ["--all"], summary: undefined },
-    {
-      name: "JSON full report explicit agent",
-      args: ["--json", "--all", "--usage", "--agent", "work"],
-      summary: summaries.work,
-      agentId: "work",
-    },
-    {
-      name: "full report with the budget remaining after readiness",
-      args: ["--all", "--usage", "--timeout", "1234"],
-      summary: summaries.default,
-      line: "Window: 75% left",
-      timeoutMs: 1234,
-      elapsedMs: 234,
-    },
-  ])("$name", async ({ args, summary, agentId, line, timeoutMs = 60_000, elapsedMs = 0 }) => {
-    if (elapsedMs) {
-      const clock = vi.spyOn(performance, "now");
-      const scan = await mocks.scan(createStatusGatewayProbeBudget(timeoutMs));
-      mocks.scan.mockImplementation(async () => {
-        clock.mockReturnValue(elapsedMs);
-        return scan;
-      });
-    }
-    mocks.usage.mockResolvedValue(summary ?? summaries.default);
-    await runCli(args);
-    expect(mocks.runtime.error).not.toHaveBeenCalled();
-    expect(mocks.runtime.exit).not.toHaveBeenCalled();
-    const output = loggedOutput();
-    if (args.includes("--json")) {
-      expect(JSON.parse(output).usage).toEqual(summary);
-    } else {
-      expect(output).toContain("OpenClaw status");
-      expect(output).toContain("Diagnosis (read-only)");
-      if (line) {
-        expect(output).toContain(line);
-        for (const provider of summary?.providers ?? []) {
-          expect(output).toContain(provider.displayName);
-        }
-      } else {
-        expect(output).not.toContain("Usage:");
+  }>`
+    args                                                 | summary              | agentId      | line                  | timeoutMs    | elapsedMs
+    ${["--all", "--usage", "--agent", "work"]}           | ${summaries.work}    | ${"work"}    | ${"Window: 40% left"} | ${undefined} | ${undefined}
+    ${["--all"]}                                         | ${undefined}         | ${undefined} | ${undefined}          | ${undefined} | ${undefined}
+    ${["--json", "--all", "--usage", "--agent", "work"]} | ${summaries.work}    | ${"work"}    | ${undefined}          | ${undefined} | ${undefined}
+    ${["--all", "--usage", "--timeout", "1234"]}         | ${summaries.default} | ${undefined} | ${"Window: 75% left"} | ${1234}      | ${234}
+  `(
+    "routes full report $args",
+    async ({ args, summary, agentId, line, timeoutMs = 60_000, elapsedMs = 0 }) => {
+      if (elapsedMs) {
+        const clock = vi.spyOn(performance, "now");
+        const scan = await mocks.scan(createStatusGatewayProbeBudget(timeoutMs));
+        mocks.scan.mockImplementation(async () => {
+          clock.mockReturnValue(elapsedMs);
+          return scan;
+        });
       }
-    }
-    if (summary) {
-      expect(mocks.usage).toHaveBeenCalledExactlyOnceWith({
-        config,
-        timeoutMs: timeoutMs - elapsedMs,
-        gatewayProbeDeadlineMs: timeoutMs,
-        ...(agentId ? { agentId } : {}),
-      });
-    } else {
-      expect(mocks.usage).not.toHaveBeenCalled();
-    }
-  });
+      mocks.usage.mockResolvedValue(summary ?? summaries.default);
+      await runCli(args);
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+      expect(mocks.runtime.exit).not.toHaveBeenCalled();
+      const output = loggedOutput();
+      if (args.includes("--json")) {
+        expect(JSON.parse(output).usage).toEqual(summary);
+      } else {
+        expect(output).toContain("OpenClaw status");
+        expect(output).toContain("Diagnosis (read-only)");
+        if (line) {
+          expect(output).toContain(line);
+          for (const provider of summary?.providers ?? []) {
+            expect(output).toContain(provider.displayName);
+          }
+        } else {
+          expect(output).not.toContain("Usage:");
+        }
+      }
+      if (summary) {
+        expect(mocks.usage).toHaveBeenCalledExactlyOnceWith({
+          config,
+          timeoutMs: timeoutMs - elapsedMs,
+          gatewayProbeDeadlineMs: timeoutMs,
+          ...(agentId ? { agentId } : {}),
+        });
+      } else {
+        expect(mocks.usage).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("includes full JSON diagnostics only when requested", async () => {
     const warning = createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" });
@@ -447,15 +449,9 @@ describe("status commands", () => {
           diagnostics,
         );
       } else {
-        mocks.callGateway.mockResolvedValueOnce({
-          ok: true,
-          channels: {},
-          agents: [],
-          ts: 1,
-          durationMs: 0,
-        });
+        mocks.callGateway.mockResolvedValueOnce(healthyGateway);
         const text = await runStatusOutput({ deep: true });
-        for (const expected of [
+        expectContains(text, [
           "Critical",
           "Warning",
           "Fix: Repair",
@@ -463,9 +459,7 @@ describe("status commands", () => {
           "Config file is invalid: /tmp/openclaw.json",
           "gateway.port: invalid",
           "openclaw --profile isolated doctor --fix",
-        ]) {
-          expect(text).toContain(expected);
-        }
+        ]);
       }
       setScan({ configDiagnostics: null });
       if (mode === "JSON") {
@@ -493,7 +487,7 @@ describe("status commands", () => {
       ],
     });
     const text = await runStatusOutput({ verbose: true });
-    for (const token of [
+    expectContains(text, [
       "OpenClaw status",
       "WhatsApp",
       "signal-cli unreachable",
@@ -504,9 +498,7 @@ describe("status commands", () => {
       "read 2.0k",
       "legacy-plugin is hook-only",
       "Skipped in fast status",
-    ]) {
-      expect(text).toContain(token);
-    }
+    ]);
     expect(mocks.audit).not.toHaveBeenCalled();
   });
 
@@ -560,58 +552,17 @@ describe("status commands", () => {
     expect(wrapped).not.toContain("not running with that same wrapper");
   });
 
-  it.each([
-    {
-      name: "unsafe legacy request",
-      probe: { error: "pairing required (requestId: req-123;rm -rf /)" },
-      expected: ["Gateway pairing approval required.", "Reason: device is not approved yet."],
-    },
-    {
-      name: "request in close reason",
-      probe: {
-        error: "connect failed: pairing required",
-        close: { code: 1008, reason: "pairing required (requestId: req-close-456)" },
-      },
-      expected: [
-        "Gateway pairing approval required.",
-        "Reason: device is not approved yet.",
-        "Recovery: openclaw --profile isolated devices approve req-close-456",
-      ],
-    },
-    {
-      name: "structured request",
-      probe: {
-        connectErrorDetails: {
-          code: "PAIRING_REQUIRED",
-          reason: "scope-upgrade",
-          requestId: "req-structured-789",
-          remediationHint: "Review the requested scopes.",
-        },
-      },
-      expected: [
-        "Gateway scope upgrade approval required.",
-        "Reason: device is asking for more scopes than currently approved.",
-        "Hint: Review the requested scopes.",
-        "Recovery: openclaw --profile isolated devices approve req-structured-789",
-      ],
-    },
-    {
-      name: "unsafe structured request and terminal hint",
-      probe: {
-        connectErrorDetails: {
-          code: "PAIRING_REQUIRED",
-          reason: "scope-upgrade",
-          requestId: "req-structured-789;rm -rf /",
-          remediationHint: "\u001b[31mReview\nfirst\u001b[0m",
-        },
-      },
-      expected: [
-        "Gateway scope upgrade approval required.",
-        "Reason: device is asking for more scopes than currently approved.",
-        "Hint: Review\\nfirst",
-      ],
-    },
-  ])("prints safe pairing recovery from $name", async ({ probe, expected }) => {
+  it.each<{
+    name: string;
+    probe: Partial<NonNullable<StatusScanResult["gatewayProbe"]>>;
+    expected: string[];
+  }>`
+    name                                             | probe                                                                                                                          | expected
+    ${"unsafe legacy request"}                       | ${{ error: "pairing required (requestId: req-123;rm -rf /)" }}                                                                 | ${approvalRequired}
+    ${"request in close reason"}                     | ${{ error: "connect failed: pairing required", close: { code: 1008, reason: "pairing required (requestId: req-close-456)" } }} | ${[...approvalRequired, "Recovery: openclaw --profile isolated devices approve req-close-456"]}
+    ${"structured request"}                          | ${scopeUpgrade("req-structured-789", "Review the requested scopes.")}                                                          | ${[...scopeUpgradeRequired, "Hint: Review the requested scopes.", "Recovery: openclaw --profile isolated devices approve req-structured-789"]}
+    ${"unsafe structured request and terminal hint"} | ${scopeUpgrade("req-structured-789;rm -rf /", "\u001b[31mReview\nfirst\u001b[0m")}                                             | ${[...scopeUpgradeRequired, "Hint: Review\\nfirst"]}
+  `("prints safe pairing recovery from $name", async ({ probe, expected }) => {
     setScan({
       gatewayProbe: {
         ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),

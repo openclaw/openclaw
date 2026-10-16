@@ -2,7 +2,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { withEnvAsync } from "../test-utils/env.js";
+export { withEnvAsync as withTemporaryEnv } from "../test-utils/env.js";
 
 const unknownMock = () => vi.fn<(...args: unknown[]) => unknown>();
 type UnknownMock = ReturnType<typeof unknownMock>;
@@ -66,11 +66,7 @@ export async function loadStatusScanModuleForTest(
     vi.fn(() => ({ store: { databasePath: "/tmp/main.sqlite" } }));
 
   vi.doMock("../plugins/channel-plugin-ids.js", () => ({
-    hasConfiguredChannelsForReadOnlyScope: (params: {
-      config: OpenClawConfig;
-      env?: NodeJS.ProcessEnv;
-      includePersistedAuthState?: boolean;
-    }) => mocks.hasConfiguredChannelsForReadOnlyScope(params),
+    hasConfiguredChannelsForReadOnlyScope: mocks.hasConfiguredChannelsForReadOnlyScope,
     listConfiguredChannelIdsForReadOnlyScope: (params: {
       config: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
@@ -350,11 +346,4 @@ export function applyStatusScanDefaults(
   if (options.memoryManager) {
     mocks.getMemorySearchManager.mockResolvedValue(options.memoryManager);
   }
-}
-
-export async function withTemporaryEnv(
-  overrides: Record<string, string | undefined>,
-  run: () => Promise<void>,
-) {
-  await withEnvAsync(overrides, run);
 }

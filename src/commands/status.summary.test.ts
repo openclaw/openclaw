@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextTokensForModelFromCache } from "../agents/context-resolution.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
@@ -15,7 +15,19 @@ import {
   registerStatusSummaryWalCases,
 } from "./status.summary.test-support.js";
 
-const statusSummaryMocks = vi.hoisted(() => ({
+type SessionFixture = { sessionKey: string; entry: Record<string, unknown> };
+const modelRef = vi.hoisted(() => (provider = "openai", model = "gpt-5.5") => ({
+  provider,
+  model,
+}));
+const normalizeRef = vi.hoisted(
+  () =>
+    ({ provider, model }: { provider?: unknown; model?: unknown }) =>
+      typeof model === "string" && model.length > 0
+        ? modelRef(typeof provider === "string" && provider.length > 0 ? provider : "openai", model)
+        : null,
+);
+const mocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScopeAsync: vi.fn<
     typeof import("../plugins/channel-plugin-ids.js").hasConfiguredChannelsForReadOnlyScopeAsync
   >(async () => true),
@@ -24,10 +36,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
   getPreparedModelCatalogSnapshot:
     vi.fn<typeof import("../agents/prepared-model-catalog.js").getPreparedModelCatalogSnapshot>(),
   listSessionEntriesCore: vi.fn<
-    (scope?: { agentId?: string; storePath?: string }) => Array<{
-      sessionKey: string;
-      entry: Record<string, unknown>;
-    }>
+    (scope?: { agentId?: string; storePath?: string }) => SessionFixture[]
   >(() => []),
   withSessionEntriesFromStoresInWorker:
     vi.fn<
@@ -37,13 +46,12 @@ const statusSummaryMocks = vi.hoisted(() => ({
 
 // mock-isolation: Keep plugin discovery outside this status aggregation fixture.
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  hasConfiguredChannelsForReadOnlyScopeAsync:
-    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync,
+  hasConfiguredChannelsForReadOnlyScopeAsync: mocks.hasConfiguredChannelsForReadOnlyScopeAsync,
 }));
 
 // mock-isolation: Exercise catalog projection without preparing runtime owners or provider I/O.
 vi.mock("../agents/prepared-model-catalog.js", () => ({
-  getPreparedModelCatalogSnapshot: statusSummaryMocks.getPreparedModelCatalogSnapshot,
+  getPreparedModelCatalogSnapshot: mocks.getPreparedModelCatalogSnapshot,
 }));
 
 vi.mock("../status/summary.runtime.js", async (importOriginal) => {
@@ -53,29 +61,15 @@ vi.mock("../status/summary.runtime.js", async (importOriginal) => {
     statusSummaryRuntime: {
       ...actual.statusSummaryRuntime,
       classifySessionKey: vi.fn(() => "direct"),
-      resolveConfiguredStatusModelRef: vi.fn(() => ({
-        provider: "openai",
-        model: "gpt-5.5",
-      })),
-      resolveSessionModelRef: vi.fn(() => ({
-        provider: "openai",
-        model: "gpt-5.5",
-      })),
+      resolveConfiguredStatusModelRef: vi.fn(() => modelRef()),
+      resolveSessionModelRef: vi.fn(() => modelRef()),
       resolveSessionRuntime: vi.fn(() => ({ id: "openclaw", label: "OpenClaw Default" })),
       readSessionRuntimeMetadata: vi.fn(async (_cfg, candidates) => candidates.map(() => null)),
-      resolveStatusModelLookupRef: vi.fn(({ provider, model }) =>
-        typeof model === "string" && model.length > 0
-          ? {
-              provider: typeof provider === "string" && provider.length > 0 ? provider : "openai",
-              model,
-            }
-          : null,
-      ),
-      resolveStatusModelComparisonLabel: vi.fn(({ provider, model }) =>
-        typeof model === "string" && model.length > 0
-          ? `${typeof provider === "string" && provider.length > 0 ? provider : "openai"}/${model}`
-          : null,
-      ),
+      resolveStatusModelLookupRef: vi.fn(normalizeRef),
+      resolveStatusModelComparisonLabel: vi.fn((params) => {
+        const ref = normalizeRef(params);
+        return ref ? `${ref.provider}/${ref.model}` : null;
+      }),
       resolveAuthoredModelContextTokens: vi.fn(() => undefined),
       resolveContextTokensForModel: vi.fn(() => 200_000),
     },
@@ -96,9 +90,7 @@ vi.mock("../agents/embedded-agent-runner/model.static-catalog.js", () => ({
         : undefined,
     ),
   ),
-  createBundledProviderStaticCatalogContextResolver: vi.fn(
-    () => statusSummaryMocks.resolveProviderStaticModel,
-  ),
+  createBundledProviderStaticCatalogContextResolver: vi.fn(() => mocks.resolveProviderStaticModel),
 }));
 
 vi.mock("../config/io.js", async (importOriginal) => ({
@@ -124,15 +116,12 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", async () => {
   const { createSessionStoreSummaryReaderStub } =
     await import("../config/sessions/session-store-summary.test-support.js");
   return {
-    withSessionEntriesFromStoresInWorker: statusSummaryMocks.withSessionEntriesFromStoresInWorker,
+    withSessionEntriesFromStoresInWorker: mocks.withSessionEntriesFromStoresInWorker,
     withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub((scope, options) => {
-      const entries = statusSummaryMocks
+      const entries = mocks
         .listSessionEntriesCore(scope)
         .filter(({ sessionKey }) => sessionKey.startsWith("agent:"))
-        .map(({ sessionKey, entry }) => ({
-          sessionKey,
-          entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
-        }))
+        .map(normalizeEntry)
         .toSorted(
           (left, right) =>
             right.entry.updatedAt - left.entry.updatedAt ||
@@ -162,7 +151,7 @@ vi.mock("../gateway/agent-list.js", () => ({
 }));
 
 vi.mock("../infra/channel-summary.js", () => ({
-  buildChannelSummary: statusSummaryMocks.buildChannelSummary,
+  buildChannelSummary: mocks.buildChannelSummary,
 }));
 
 vi.mock("../infra/system-events.js", () => ({
@@ -182,13 +171,10 @@ vi.mock("../routing/session-key.js", async () => {
   };
 });
 
-vi.mock("../version.js", async () => {
-  const actual = await vi.importActual<typeof import("../version.js")>("../version.js");
-  return {
-    ...actual,
-    resolveRuntimeServiceVersion: vi.fn(() => "2026.3.8"),
-  };
-});
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  resolveRuntimeServiceVersion: vi.fn(() => "2026.3.8"),
+}));
 
 vi.mock("../status/link-channel.js", () => ({
   resolveLinkChannelContext: vi.fn(async () => undefined),
@@ -198,109 +184,113 @@ const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
 const { peekSystemEvents } = await import("../infra/system-events.js");
 const { resolveLinkChannelContext } = await import("../status/link-channel.js");
-let statusSummaryRuntime: typeof import("../status/summary.runtime.js").statusSummaryRuntime;
+const { statusSummaryRuntime: runtime } = await import("../status/summary.runtime.js");
+
+function normalizeEntry({ sessionKey, entry }: SessionFixture) {
+  return { sessionKey, entry: { sessionId: sessionKey, updatedAt: 0, ...entry } };
+}
+
+function setAgents(
+  ids = ["main"],
+  scope: "global" | "per-sender" = "per-sender",
+  mainKey = "main",
+) {
+  vi.mocked(listGatewayAgentsBasic).mockResolvedValue({
+    defaultId: ids[0]!,
+    mainKey,
+    scope,
+    agents: ids.map((id) => ({ id })),
+    ownership: ids.length > 1 ? "explicit" : "sole",
+    selectionRequired: ids.length > 1,
+  });
+}
+
+const routeEntry = () => ({
+  delivery: normalizeSessionDeliveryState({ context: { channel: "telegram", to: "123" } }),
+});
 
 function toSessionEntrySummaries(store: Record<string, Record<string, unknown>>) {
   return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
 }
 
 function setSession(entry: Record<string, unknown>) {
-  statusSummaryMocks.listSessionEntriesCore.mockReturnValue([
+  mocks.listSessionEntriesCore.mockReturnValue([
     { sessionKey: "agent:main:main", entry: { sessionId: "session-1", updatedAt: 100, ...entry } },
   ]);
 }
 
-describe("getStatusSummary", () => {
-  beforeAll(async () => {
-    ({ statusSummaryRuntime } = await import("../status/summary.runtime.js"));
+function globalSummary(
+  heartbeat: { every: string; target?: "last"; agentId?: string },
+  mainKey?: string,
+) {
+  return getStatusSummary({
+    config: {
+      agents: {
+        ownership: "explicit",
+        entries: { research: {}, ops: {} },
+        defaults: { heartbeat },
+      },
+      session: { scope: "global", mainKey },
+    },
+    includeSensitive: false,
+    includeChannelSummary: false,
   });
+}
 
+describe("getStatusSummary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
     setActiveDegradedPlugins([]);
     clearActiveCredentialDegradedOwner("account", "telegram:work");
     setActiveDegradedSecretOwners([]);
-    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockResolvedValue(true);
-    statusSummaryMocks.resolveProviderStaticModel.mockReset();
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
+    mocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockResolvedValue(true);
+    mocks.resolveProviderStaticModel.mockReset();
+    mocks.listSessionEntriesCore.mockReturnValue([]);
     vi.mocked(peekSystemEvents).mockReset().mockReturnValue([]);
-    statusSummaryMocks.withSessionEntriesFromStoresInWorker.mockImplementation(
-      async (inputs, consume) =>
-        consume(
-          inputs.map((input) => ({
-            database: { agentId: input.agentId, path: input.storePath, env: {} },
-            assertCurrent: () => {},
-            result: {
-              kind: "session-exact-entries",
-              lifecycleTimestamps: {},
-              entries: statusSummaryMocks
-                .listSessionEntriesCore(input)
-                .filter(({ sessionKey }) => input.sessionKeys?.includes(sessionKey))
-                .map(({ sessionKey, entry }) => ({
-                  sessionKey,
-                  entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
-                })),
-            },
-          })),
-        ),
+    mocks.withSessionEntriesFromStoresInWorker.mockImplementation(async (inputs, consume) =>
+      consume(
+        inputs.map((input) => ({
+          database: { agentId: input.agentId, path: input.storePath, env: {} },
+          assertCurrent: () => {},
+          result: {
+            kind: "session-exact-entries",
+            lifecycleTimestamps: {},
+            entries: mocks
+              .listSessionEntriesCore(input)
+              .filter(({ sessionKey }) => input.sessionKeys?.includes(sessionKey))
+              .map(normalizeEntry),
+          },
+        })),
+      ),
     );
-    vi.mocked(statusSummaryRuntime.resolveAuthoredModelContextTokens).mockReturnValue(undefined);
-    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
-      provider: "openai",
-      model: "gpt-5.5",
-    });
-    statusSummaryMocks.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
-    vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(200_000);
-    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
+    vi.mocked(runtime.resolveAuthoredModelContextTokens).mockReturnValue(undefined);
+    vi.mocked(runtime.resolveSessionModelRef).mockReturnValue(modelRef());
+    mocks.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
+    vi.mocked(runtime.resolveContextTokensForModel).mockReturnValue(200_000);
+    vi.mocked(runtime.resolveSessionRuntime).mockReturnValue({
       id: "openclaw",
       label: "OpenClaw Default",
     });
-    vi.mocked(listGatewayAgentsBasic).mockResolvedValue({
-      defaultId: "main",
-      ownership: "sole",
-      selectionRequired: false,
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }],
-    });
+    setAgents();
   });
 
   registerStatusSummarySessionRowCases({
     getStatusSummary: () => getStatusSummary(),
-    getStatusSummaryRuntime: () => statusSummaryRuntime,
+    getStatusSummaryRuntime: () => runtime,
     rejectProviderStaticModel: (error) =>
-      statusSummaryMocks.resolveProviderStaticModel.mockRejectedValueOnce(error),
+      mocks.resolveProviderStaticModel.mockRejectedValueOnce(error),
     setSessions: (store) =>
-      statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store)),
+      mocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store)),
   });
   registerStatusSummaryWalCases((options) => getStatusSummary(options));
 
   it("summarizes every configured agent's global pending events without an ambient owner", async () => {
     const scope = "global";
-    const agents = [{ id: "research" }, { id: "ops" }];
-    vi.mocked(listGatewayAgentsBasic).mockResolvedValue({
-      defaultId: "research",
-      mainKey: "inbox",
-      scope,
-      agents,
-      ownership: "explicit",
-      selectionRequired: true,
-    });
+    setAgents(["research", "ops"], scope, "inbox");
     vi.mocked(peekSystemEvents).mockImplementation((key) => [`pending: ${key}`]);
 
-    const summary = await getStatusSummary({
-      config: {
-        agents: {
-          ownership: "explicit",
-          entries: { research: {}, ops: {} },
-          defaults: { heartbeat: { agentId: "ops", every: "0m" } },
-        },
-        session: { scope, mainKey: "inbox" },
-      },
-      includeSensitive: false,
-      includeChannelSummary: false,
-    });
+    const summary = await globalSummary({ agentId: "ops", every: "0m" }, "inbox");
 
     expect(summary.sessions.byAgent.map((agent) => agent.agentId)).toEqual(["research", "ops"]);
     expect(summary.queuedSystemEvents).toEqual([
@@ -312,12 +302,10 @@ describe("getStatusSummary", () => {
   it.each([false, true])("reads the configured heartbeat route (empty=%s)", async (empty) => {
     const main = "agent:main:main";
     const configured = "agent:main:telegram:alerts";
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue([
+    mocks.listSessionEntriesCore.mockReturnValue([
       {
         sessionKey: empty ? main : configured,
-        entry: {
-          delivery: normalizeSessionDeliveryState({ context: { channel: "telegram", to: "123" } }),
-        },
+        entry: routeEntry(),
       },
       { sessionKey: empty ? configured : main, entry: {} },
     ]);
@@ -330,51 +318,20 @@ describe("getStatusSummary", () => {
   });
 
   it("keeps global heartbeat routes separate across agent stores", async () => {
-    // Distinct physical stores keep each agent's literal global row separate.
     vi.mocked(resolveSessionStorePathCore).mockImplementation(
       (_store, options) => `/tmp/${options?.agentId}/sessions.json`,
     );
-    vi.mocked(listGatewayAgentsBasic).mockResolvedValue({
-      defaultId: "research",
-      mainKey: "main",
-      scope: "global",
-      agents: [{ id: "research" }, { id: "ops" }],
-      ownership: "explicit",
-      selectionRequired: true,
-    });
-    statusSummaryMocks.listSessionEntriesCore.mockImplementation((scope) => [
+    setAgents(["research", "ops"], "global");
+    mocks.listSessionEntriesCore.mockImplementation((scope) => [
       {
         sessionKey: "global",
-        entry:
-          scope?.agentId === "research"
-            ? {
-                delivery: normalizeSessionDeliveryState({
-                  context: { channel: "telegram", to: "123" },
-                }),
-              }
-            : {},
+        entry: scope?.agentId === "research" ? routeEntry() : {},
       },
     ]);
 
-    const summary = await getStatusSummary({
-      config: {
-        agents: {
-          ownership: "explicit",
-          entries: { research: {}, ops: {} },
-          defaults: { heartbeat: { target: "last", every: "30m" } },
-        },
-        session: { scope: "global" },
-      },
-      includeSensitive: false,
-      includeChannelSummary: false,
-    });
+    const summary = await globalSummary({ target: "last", every: "30m" });
 
-    expect(
-      summary.heartbeat.agents.map(({ agentId, waitingForRoute }) => ({
-        agentId,
-        waitingForRoute,
-      })),
-    ).toEqual([
+    expect(summary.heartbeat.agents).toMatchObject([
       { agentId: "research", waitingForRoute: false },
       { agentId: "ops", waitingForRoute: true },
     ]);
@@ -386,7 +343,7 @@ describe("getStatusSummary", () => {
       includeChannelSummary: false,
     });
     expect(summary.heartbeat.agents[0]).toMatchObject({ enabled: false, waitingForRoute: false });
-    expect(statusSummaryMocks.withSessionEntriesFromStoresInWorker).not.toHaveBeenCalled();
+    expect(mocks.withSessionEntriesFromStoresInWorker).not.toHaveBeenCalled();
   });
 
   it("skips session model discovery and projection when sensitive output is disabled", async () => {
@@ -394,10 +351,10 @@ describe("getStatusSummary", () => {
 
     const summary = await getStatusSummary({ includeSensitive: false });
 
-    expect(statusSummaryMocks.getPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
-    expect(statusSummaryRuntime.resolveConfiguredStatusModelRef).not.toHaveBeenCalled();
-    expect(statusSummaryRuntime.resolveSessionRuntime).not.toHaveBeenCalled();
-    expect(statusSummaryMocks.resolveProviderStaticModel).not.toHaveBeenCalled();
+    expect(mocks.getPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
+    expect(runtime.resolveConfiguredStatusModelRef).not.toHaveBeenCalled();
+    expect(runtime.resolveSessionRuntime).not.toHaveBeenCalled();
+    expect(mocks.resolveProviderStaticModel).not.toHaveBeenCalled();
     expect(summary.sessions).toEqual({
       paths: [],
       count: 1,
@@ -448,19 +405,27 @@ describe("getStatusSummary", () => {
       [
         "discord",
         "unreadable-package-json",
-        "Could not read /private/plugins/discord/package.json: permission denied",
-        "/private/plugins/discord",
+        "Could not read /private/plugins/d/package.json: permission denied",
+        "Could not read <plugin-install>/package.json: permission denied",
+        "/private/plugins/d",
       ],
-      ["matrix", "missing-main-entry", "dist/index.js is missing", undefined],
+      [
+        "matrix",
+        "missing-main-entry",
+        "dist/index.js is missing",
+        "dist/index.js is missing",
+        undefined,
+      ],
       [
         "peer-plugin",
         "missing-openclaw-peer-link",
-        "/private/plugins/peer-plugin/node_modules/openclaw points to /private/other/openclaw instead of /private/host/openclaw",
-        "/private/plugins/peer-plugin",
+        "/private/plugins/p points to /private/host",
+        'Plugin declares peerDependency "openclaw", but its host peer link is missing or invalid.',
+        "/private/plugins/p",
       ],
     ] as const;
     setActiveDegradedPlugins(
-      plugins.map(([pluginId, reason, detail, installPath]) => ({
+      plugins.map(([pluginId, reason, detail, , installPath]) => ({
         pluginId,
         state: "configured-unavailable",
         diagnostic: { kind: "plugin-verification", reason, detail, installPath },
@@ -475,31 +440,21 @@ describe("getStatusSummary", () => {
         diagnostic.reason,
         diagnostic.detail,
       ]),
-    ).toEqual([
-      [
-        "discord",
-        "unreadable-package-json",
-        "Could not read <plugin-install>/package.json: permission denied",
-      ],
-      ["matrix", "missing-main-entry", "dist/index.js is missing"],
-      [
-        "peer-plugin",
-        "missing-openclaw-peer-link",
-        'Plugin declares peerDependency "openclaw", but its host peer link is missing or invalid.',
-      ],
-    ]);
+    ).toEqual(
+      plugins.map(([pluginId, reason, , expectedDetail]) => [pluginId, reason, expectedDetail]),
+    );
     expect(JSON.stringify(summary.degradedPlugins)).not.toContain("/private/plugins");
     expect(JSON.stringify(summary.degradedPlugins)).not.toContain("/private/host");
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
-    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockResolvedValue(false);
+    mocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockResolvedValue(false);
 
     const summary = await getStatusSummary();
 
     expect(summary.channelSummary).toStrictEqual([]);
     expect(summary.linkChannel).toBeUndefined();
-    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync).toHaveBeenCalledWith({
+    expect(mocks.hasConfiguredChannelsForReadOnlyScopeAsync).toHaveBeenCalledWith({
       config: {},
     });
     expect(buildChannelSummary).not.toHaveBeenCalled();
@@ -522,25 +477,20 @@ describe("getStatusSummary", () => {
   });
 
   it("uses context-only static metadata for nested provider-owned model refs", async () => {
-    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
-      provider: "google-gemini-cli",
-      model: "google/gemini-3.1-pro-preview",
-    });
-    statusSummaryMocks.resolveProviderStaticModel.mockResolvedValueOnce({
+    const ref = modelRef("google-gemini-cli", "google/gemini-3.1-pro-preview");
+    vi.mocked(runtime.resolveConfiguredStatusModelRef).mockReturnValue(ref);
+    mocks.resolveProviderStaticModel.mockResolvedValueOnce({
       contextWindow: 1_048_576,
     });
 
     await getStatusSummary();
 
-    expect(statusSummaryMocks.resolveProviderStaticModel).toHaveBeenCalledWith({
-      provider: "google-gemini-cli",
-      modelId: "google/gemini-3.1-pro-preview",
+    expect(mocks.resolveProviderStaticModel).toHaveBeenCalledWith({
+      provider: ref.provider,
+      modelId: ref.model,
     });
-    expect(
-      vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock.calls[0]?.[0],
-    ).toMatchObject({
-      provider: "google-gemini-cli",
-      model: "google/gemini-3.1-pro-preview",
+    expect(vi.mocked(runtime.resolveContextTokensForModel).mock.calls[0]?.[0]).toMatchObject({
+      ...ref,
       modelContextWindow: 1_048_576,
       allowAsyncLoad: false,
     });
@@ -549,14 +499,11 @@ describe("getStatusSummary", () => {
   it.each([32_768, undefined])(
     "uses admitted local capacity (%s) ahead of a previous model's window",
     async (capacity) => {
-      vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockImplementation(
+      vi.mocked(runtime.resolveContextTokensForModel).mockImplementation(
         resolveContextTokensForModelFromCache,
       );
-      vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
-        provider: "ollama",
-        model: "qwen3:4b",
-      });
-      statusSummaryMocks.getPreparedModelCatalogSnapshot.mockReturnValue({
+      vi.mocked(runtime.resolveSessionModelRef).mockReturnValue(modelRef("ollama", "qwen3:4b"));
+      mocks.getPreparedModelCatalogSnapshot.mockReturnValue({
         entries:
           capacity === undefined
             ? []
@@ -589,45 +536,35 @@ describe("getStatusSummary", () => {
   );
 
   it.each([
-    {
-      name: "pinned session",
-      entry: {
-        providerOverride: "deepseek",
-        modelOverride: "deepseek-v4-flash",
-        modelOverrideSource: "user",
-      },
-      reason: "session override",
-    },
-    {
-      name: "runtime-only snapshot",
-      entry: { modelProvider: "deepseek", model: "deepseek-v4-flash" },
-      reason: null,
-    },
-    {
-      name: "auto fallback",
-      entry: {
-        providerOverride: "deepseek",
-        modelOverride: "deepseek-v4-flash",
-        modelOverrideSource: "auto",
-        modelOverrideFallbackOriginProvider: "zhipu",
-        modelOverrideFallbackOriginModel: "glm-4.5-air",
-        modelProvider: "deepseek",
-        model: "deepseek-v4-flash",
-        agentHarnessId: "openclaw",
-        contextTokens: 128_000,
-        contextTokensSource: "runtime",
-      },
-      reason: "fallback selected",
-    },
-  ])("reports configured and selected models for $name", async ({ entry, reason }) => {
-    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
-      provider: "zhipu",
-      model: "glm-4.5-air",
-    });
-    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
-    });
+    ["pinned session", "user", "session override"],
+    ["runtime-only snapshot", undefined, null],
+    ["auto fallback", "auto", "fallback selected"],
+  ] as const)("reports configured and selected models for %s", async (_name, source, reason) => {
+    const selected = { modelProvider: "deepseek", model: "deepseek-v4-flash" };
+    const entry =
+      source === undefined
+        ? selected
+        : {
+            providerOverride: selected.modelProvider,
+            modelOverride: selected.model,
+            modelOverrideSource: source,
+            ...(source === "auto"
+              ? {
+                  ...selected,
+                  modelOverrideFallbackOriginProvider: "zhipu",
+                  modelOverrideFallbackOriginModel: "glm-4.5-air",
+                  agentHarnessId: "openclaw",
+                  contextTokens: 128_000,
+                  contextTokensSource: "runtime",
+                }
+              : {}),
+          };
+    vi.mocked(runtime.resolveConfiguredStatusModelRef).mockReturnValue(
+      modelRef("zhipu", "glm-4.5-air"),
+    );
+    vi.mocked(runtime.resolveSessionModelRef).mockReturnValue(
+      modelRef("deepseek", "deepseek-v4-flash"),
+    );
     setSession(entry);
     const summary = await getStatusSummary();
     expect(summary.sessions.recent[0]).toMatchObject({
@@ -635,63 +572,49 @@ describe("getStatusSummary", () => {
       selectedModel: "deepseek/deepseek-v4-flash",
       modelSelectionReason: reason,
     });
-    if (entry.contextTokens) {
+    if (source === "auto") {
       expect(summary.sessions.recent[0]?.contextTokens).toBe(128_000);
     }
   });
 
   it("does not mark provider-local model aliases as pinned mismatches", async () => {
-    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
-      provider: "anthropic",
-      model: "claude-opus-4-8",
-    });
-    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
-      provider: "anthropic",
-      model: "opus",
-    });
-    const normalizeRef = ({
+    const configured = modelRef("anthropic", "claude-opus-4-8");
+    vi.mocked(runtime.resolveConfiguredStatusModelRef).mockReturnValue(configured);
+    vi.mocked(runtime.resolveSessionModelRef).mockReturnValue(modelRef("anthropic", "opus"));
+    const normalizeAlias = ({
       provider,
       model,
-    }: Parameters<typeof statusSummaryRuntime.resolveStatusModelLookupRef>[0]) => {
+    }: Parameters<typeof runtime.resolveStatusModelLookupRef>[0]) => {
       if (provider === "anthropic" && model === "opus") {
-        return { provider: "anthropic", model: "claude-opus-4-8" };
+        return configured;
       }
-      return typeof model === "string" && model.length > 0
-        ? {
-            provider: typeof provider === "string" && provider.length > 0 ? provider : "openai",
-            model,
-          }
-        : null;
+      return normalizeRef({ provider, model });
     };
-    vi.mocked(statusSummaryRuntime.resolveStatusModelLookupRef).mockImplementation(normalizeRef);
-    vi.mocked(statusSummaryRuntime.resolveStatusModelComparisonLabel).mockImplementation(
-      (params) => {
-        const ref = normalizeRef(params);
-        return ref ? `${ref.provider}/${ref.model}` : null;
-      },
-    );
+    vi.mocked(runtime.resolveStatusModelLookupRef).mockImplementation(normalizeAlias);
+    vi.mocked(runtime.resolveStatusModelComparisonLabel).mockImplementation((params) => {
+      const ref = normalizeAlias(params);
+      return ref ? `${ref.provider}/${ref.model}` : null;
+    });
     setSession({ modelOverride: "opus", modelOverrideSource: "user" });
 
     const summary = await getStatusSummary();
 
-    expect(summary.sessions.recent[0]?.configuredModel).toBe("anthropic/claude-opus-4-8");
-    expect(summary.sessions.recent[0]?.selectedModel).toBe("anthropic/opus");
-    expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
-    expect(statusSummaryRuntime.resolveSessionRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "anthropic",
-        model: "claude-opus-4-8",
-      }),
-    );
+    expect(summary.sessions.recent[0]).toMatchObject({
+      configuredModel: "anthropic/claude-opus-4-8",
+      selectedModel: "anthropic/opus",
+      modelSelectionReason: null,
+    });
+    expect(runtime.resolveSessionRuntime).toHaveBeenCalledWith(expect.objectContaining(configured));
   });
 
   it("resolves aggregate selected models from each row's agent", async () => {
     const models: Record<string, string> = { ops: "ops", research: "research" };
-    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockImplementation(
-      ({ agentId }) => ({ provider: "openai", model: models[agentId ?? ""] ?? "global" }),
-    );
-    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockImplementation((model) => model);
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
+    vi.mocked(runtime.resolveConfiguredStatusModelRef).mockImplementation(({ agentId }) => ({
+      provider: "openai",
+      model: models[agentId ?? ""] ?? "global",
+    }));
+    vi.mocked(runtime.resolveSessionModelRef).mockImplementation((model) => model);
+    mocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:ops:main": { sessionId: "ops-session", updatedAt: 3 },
         "agent:research:main": { sessionId: "research-session", updatedAt: 2 },
@@ -706,10 +629,10 @@ describe("getStatusSummary", () => {
     expect(summary.sessions.count).toBe(3);
     expect(summary.sessions.byAgent[0]?.count).toBe(1);
     expect(summary.sessions.byAgent[0]?.recent.map(({ key }) => key)).toEqual(["agent:main:main"]);
-    expect(statusSummaryRuntime.readSessionRuntimeMetadata).toHaveBeenCalledOnce();
+    expect(runtime.readSessionRuntimeMetadata).toHaveBeenCalledOnce();
     expect(
       vi
-        .mocked(statusSummaryRuntime.readSessionRuntimeMetadata)
+        .mocked(runtime.readSessionRuntimeMetadata)
         .mock.calls[0]?.[1].map(({ sessionKey }) => sessionKey),
     ).toEqual(["agent:ops:main", "agent:research:main", "agent:main:main"]);
   });

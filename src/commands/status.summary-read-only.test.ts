@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { makeModel } from "../agents/embedded-agent-runner/model.test-harness.js";
 import { buildStatusCommandOverviewRows } from "../commands/status-overview-rows.ts";
 import { collectStatusLocalSnapshot } from "../commands/status.agent-local.js";
 import { createStatusCommandOverviewRowsParams } from "../commands/status.test-support.ts";
@@ -32,10 +32,11 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { formatStatusSummary } from "../tui/tui-status-summary.js";
 
 const readStatusSummary = (config: OpenClawConfig, includeSensitive = true) =>
@@ -60,7 +61,9 @@ function seedSession(
 
 describe("getStatusSummary read-only session access", () => {
   const previousRegistry = getActivePluginRegistry();
-  const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-status-session-stores-");
+  let state: OpenClawTestState;
+  const defaultStore = () =>
+    resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env });
 
   function registerTelegramFixture() {
     const telegram = createOutboundTestPlugin({
@@ -68,9 +71,7 @@ describe("getStatusSummary read-only session access", () => {
       outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
       messaging: {
         targetPrefixes: ["telegram"],
-        inferTargetChatType: ({ to }) => {
-          return /^(?:telegram:)?\d+$/.test(to) ? "direct" : undefined;
-        },
+        inferTargetChatType: ({ to }) => (/^(?:telegram:)?\d+$/.test(to) ? "direct" : undefined),
       },
     });
     telegram.config = {
@@ -82,14 +83,15 @@ describe("getStatusSummary read-only session access", () => {
     );
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ prefix: "openclaw-status-read-only-" });
     setActivePluginRegistry(createTestRegistry());
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     cliBackendsTesting.resetDepsForTest();
-    await closeAgentStores();
-    await closeStateDatabaseForTest();
+    await state.cleanup();
   });
 
   afterAll(() => {
@@ -99,73 +101,71 @@ describe("getStatusSummary read-only session access", () => {
   });
 
   it("refreshes batched status metadata after ACP updates and removal", async () => {
-    await withOpenClawTestState(
-      { scenario: "minimal", label: "status-acp-batch" },
-      async (state) => {
-        const cfg: OpenClawConfig = {
-          agents: { ownership: "explicit", entries: { main: {}, research: {} } },
-        };
-        await state.writeConfig(cfg);
-        setRuntimeConfigSnapshot(cfg);
-        const meta: SessionAcpMeta = {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "first",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 100,
-        };
-        const scopes = ["main", "research"].map((agentId) => ({
-          cfg,
-          agentId,
-          sessionKey: `agent:${agentId}:acp:status`,
-          skipMaintenance: true,
-        }));
-        const candidates = [];
-        for (const scope of scopes) {
-          const entry = expectDefined(
-            await upsertAcpSessionMeta({ ...scope, mutate: () => meta }),
-            "seeded ACP session",
-          );
-          candidates.push({ sessionKey: scope.sessionKey, entry });
-        }
-        const before = await statusSummaryRuntime.readSessionRuntimeMetadata(cfg, candidates);
-        expect(before.map((entry) => entry?.runtimeSessionName)).toEqual(["first", "first"]);
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+    };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const meta: SessionAcpMeta = {
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "first",
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: 100,
+    };
+    const scopes = ["main", "research"].map((agentId) => ({
+      cfg,
+      agentId,
+      sessionKey: `agent:${agentId}:acp:status`,
+      skipMaintenance: true,
+    }));
+    const candidates = [];
+    for (const scope of scopes) {
+      const entry = expectDefined(
+        await upsertAcpSessionMeta({ ...scope, mutate: () => meta }),
+        "seeded ACP session",
+      );
+      candidates.push({ sessionKey: scope.sessionKey, entry });
+    }
+    const before = await statusSummaryRuntime.readSessionRuntimeMetadata(cfg, candidates);
+    expect(before.map((entry) => entry?.runtimeSessionName)).toEqual(["first", "first"]);
 
-        await upsertAcpSessionMeta({
-          ...scopes[0]!,
-          mutate: () => ({ ...meta, runtimeSessionName: "updated" }),
-        });
-        await upsertAcpSessionMeta({ ...scopes[1]!, mutate: () => null });
+    await upsertAcpSessionMeta({
+      ...scopes[0]!,
+      mutate: () => ({ ...meta, runtimeSessionName: "updated" }),
+    });
+    await upsertAcpSessionMeta({ ...scopes[1]!, mutate: () => null });
 
-        const after = await statusSummaryRuntime.readSessionRuntimeMetadata(cfg, candidates);
-        expect(after.map((entry) => entry?.runtimeSessionName ?? null)).toEqual(["updated", null]);
-        expect(before.map((entry) => entry?.runtimeSessionName)).toEqual(["first", "first"]);
-      },
-    );
+    const after = await statusSummaryRuntime.readSessionRuntimeMetadata(cfg, candidates);
+    expect(after.map((entry) => entry?.runtimeSessionName ?? null)).toEqual(["updated", null]);
+    expect(before.map((entry) => entry?.runtimeSessionName)).toEqual(["first", "first"]);
   });
 
-  it("does not create the heartbeat session database while checking its route", async () => {
-    const databasePath = path.join(tempDirs.make(), "openclaw-agent.sqlite");
-    const summary = await readStatusSummary({ session: { store: databasePath } });
-
-    expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(true);
-    expect(fs.existsSync(databasePath)).toBe(false);
-  });
-
-  it.each([undefined, "owner"])(
-    "resolves the configured owner DM without writing session state for target %s",
-    async (target) => {
-      registerTelegramFixture();
-      const databasePath = path.join(tempDirs.make(), "openclaw-agent.sqlite");
+  it.each<{ ownerConfigured: boolean; target: "owner" | undefined; waitingForRoute: boolean }>`
+    ownerConfigured | target       | waitingForRoute
+    ${false}        | ${undefined} | ${true}
+    ${true}         | ${undefined} | ${false}
+    ${true}         | ${"owner"}   | ${false}
+  `(
+    "checks the owner route without writing sessions ($ownerConfigured, $target)",
+    async ({ ownerConfigured, target, waitingForRoute }) => {
+      if (ownerConfigured) {
+        registerTelegramFixture();
+      }
+      const databasePath = state.path("openclaw-agent.sqlite");
       const summary = await readStatusSummary({
         ...(target ? { agents: { defaults: { heartbeat: { target } } } } : {}),
-        commands: { ownerAllowFrom: ["telegram:123"] },
-        channels: { telegram: { allowFrom: ["123"] } },
+        ...(ownerConfigured
+          ? {
+              commands: { ownerAllowFrom: ["telegram:123"] },
+              channels: { telegram: { allowFrom: ["123"] } },
+            }
+          : {}),
         session: { store: databasePath },
       });
 
-      expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(false);
+      expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(waitingForRoute);
       expect(fs.existsSync(databasePath)).toBe(false);
     },
   );
@@ -173,8 +173,7 @@ describe("getStatusSummary read-only session access", () => {
   it.each(["sessions.json", "shared.sqlite"])(
     "reports each agent's activity and reads each physical session store once for %s",
     async (fileName) => {
-      const tempDir = tempDirs.make();
-      const storePath = path.join(tempDir, fileName);
+      const storePath = state.path(fileName);
       const config = {
         agents: {
           ownership: "explicit" as const,
@@ -184,140 +183,109 @@ describe("getStatusSummary read-only session access", () => {
         session: { store: storePath },
       };
 
-      try {
-        for (const agentId of ["main", "ops"]) {
-          const logicalPath = resolveSessionStorePathCore(config.session.store, { agentId });
-          await replaceSessionEntry(
-            { agentId, sessionKey: `agent:${agentId}:main`, storePath: logicalPath },
-            { sessionId: `${agentId}-session`, updatedAt: agentId === "main" ? 10 : 20 },
-          );
-        }
-        await closeAgentStores(tempDir);
-
-        const expectedPaths = ["main", "ops"].map(
-          (agentId) => resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path,
+      for (const agentId of ["main", "ops"]) {
+        const logicalPath = resolveSessionStorePathCore(config.session.store, { agentId });
+        await replaceSessionEntry(
+          { agentId, sessionKey: `agent:${agentId}:main`, storePath: logicalPath },
+          { sessionId: `${agentId}-session`, updatedAt: agentId === "main" ? 10 : 20 },
         );
-        const uniquePaths = [...new Set(expectedPaths)];
-        const { calls: readSummary, restore: restoreSummary } = spyOnSessionStoreSummaries();
-        const now = vi.spyOn(Date, "now").mockReturnValue(100);
-        try {
-          const summary = await readStatusSummary(config);
-
-          expect(summary.sessions.count).toBe(2);
-          expect(summary.sessions.paths).toEqual(uniquePaths);
-          expect(
-            summary.sessions.byAgent.map((agent) => [
-              agent.agentId,
-              agent.path,
-              agent.count,
-              agent.recent.map((session) => [session.agentId, session.key]),
-            ]),
-          ).toEqual([
-            ["main", expectedPaths[0], 1, [["main", "agent:main:main"]]],
-            ["ops", expectedPaths[1], 1, [["ops", "agent:ops:main"]]],
-          ]);
-          expect(readSummary).toHaveBeenCalledTimes(uniquePaths.length);
-
-          readSummary.mockClear();
-          const { agentStatus: local } = await collectStatusLocalSnapshot(config);
-          expect(local.totalSessions).toBe(2);
-          expect(
-            local.agents.map((agent) => [
-              agent.id,
-              agent.sessionsCount,
-              agent.lastUpdatedAt,
-              agent.lastActiveAgeMs,
-            ]),
-          ).toEqual([
-            ["main", 1, 10, 90],
-            ["ops", 1, 20, 80],
-          ]);
-          expect(readSummary).toHaveBeenCalledTimes(uniquePaths.length);
-          expect(uniquePaths.every((databasePath) => fs.existsSync(databasePath))).toBe(true);
-        } finally {
-          restoreSummary();
-          now.mockRestore();
-        }
-      } finally {
-        await closeAgentStores(tempDir);
-        await closeStateDatabaseForTest();
       }
+      await closeAgentStores(state.root);
+
+      const expectedPaths = ["main", "ops"].map(
+        (agentId) => resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path,
+      );
+      const uniquePaths = [...new Set(expectedPaths)];
+      const { calls: readSummary } = spyOnSessionStoreSummaries();
+      vi.spyOn(Date, "now").mockReturnValue(100);
+      const summary = await readStatusSummary(config);
+
+      expect(summary.sessions).toMatchObject({
+        count: 2,
+        paths: uniquePaths,
+        byAgent: ["main", "ops"].map((agentId, i) => ({
+          agentId,
+          path: expectedPaths[i],
+          count: 1,
+          recent: [{ agentId, key: `agent:${agentId}:main` }],
+        })),
+      });
+      expect(readSummary).toHaveBeenCalledTimes(uniquePaths.length);
+
+      readSummary.mockClear();
+      const { agentStatus: local } = await collectStatusLocalSnapshot(config);
+      expect(local).toMatchObject({
+        totalSessions: 2,
+        agents: ["main", "ops"].map((id, i) => ({
+          id,
+          sessionsCount: 1,
+          lastUpdatedAt: (i + 1) * 10,
+          lastActiveAgeMs: 90 - i * 10,
+        })),
+      });
+      expect(readSummary).toHaveBeenCalledTimes(uniquePaths.length);
+      expect(uniquePaths.every((databasePath) => fs.existsSync(databasePath))).toBe(true);
     },
   );
 
   it("does not reread ambient config while projecting prepared session runtime state", async () => {
-    await withOpenClawTestState(
-      { prefix: "openclaw-status-prepared-config-", layout: "split" },
-      async (state) => {
-        const storePath = state.path("sessions.json");
-        const config = { session: { store: storePath } };
-        await state.writeConfig({ session: {} });
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: "agent:main:main", storePath },
-          { sessionId: "prepared-config", updatedAt: 10 },
-        );
-        await closeAgentStores(state.root);
-        clearRuntimeConfigSnapshot();
-        const readFileSync = vi.spyOn(fs, "readFileSync");
-        try {
-          await readStatusSummary(config);
-          expect(
-            readFileSync.mock.calls.filter(([file]) => file === state.configPath),
-          ).toHaveLength(0);
-        } finally {
-          readFileSync.mockRestore();
-        }
-      },
+    await state.cleanup();
+    state = await createOpenClawTestState({ layout: "split" });
+    const storePath = state.path("sessions.json");
+    const config = { session: { store: storePath } };
+    await state.writeConfig({ session: {} });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:main", storePath },
+      { sessionId: "prepared-config", updatedAt: 10 },
     );
+    await closeAgentStores(state.root);
+    clearRuntimeConfigSnapshot();
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+    await readStatusSummary(config);
+    expect(readFileSync.mock.calls.filter(([file]) => file === state.configPath)).toHaveLength(0);
   });
 
   it("shares one local session snapshot across the complete status scan", async () => {
-    await withOpenClawTestState({ prefix: "openclaw-status-scan-snapshot-" }, async (state) => {
-      const config = {
-        agents: { defaults: { heartbeat: { every: "0m" } }, entries: { main: {} } },
-        gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:1", token: "fixture" } },
-        plugins: { enabled: false },
-      };
-      await state.writeConfig(config);
-      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env });
-      for (let index = 1; index <= 12; index += 1) {
-        seedSession(storePath, "main", `scan-${index}`, {
-          sessionId: `scan-${index}`,
-          updatedAt: index,
-          skillsSnapshot: { prompt: "private fixture", skills: [] },
-        });
-      }
-      const { calls: readSummary, restore: restoreSummary } = spyOnSessionStoreSummaries();
-      try {
-        const { scanStatus } = await import("../commands/status.scan.js");
-        const timeline = state.path("status-timeline.jsonl");
-        const scan = await withEnvAsync(
-          { OPENCLAW_DIAGNOSTICS: "timeline", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timeline },
-          () => scanStatus({ timeoutMs: 100, gatewayProbeDeadlineMs: performance.now() + 100 }),
-        );
-        expect(scan.agentStatus.totalSessions).toBe(12);
-        expect(scan.agentStatus.agents[0]?.lastUpdatedAt).toBe(12);
-        expect(scan.summary.sessions.count).toBe(12);
-        expect(scan.summary.sessions.recent.map(({ key }) => key)).toEqual(
-          Array.from({ length: 10 }, (_, index) => `agent:main:scan-${12 - index}`),
-        );
-        expect(readSummary).toHaveBeenCalledOnce();
-        expect(JSON.stringify(scan)).not.toContain("private fixture");
-        expect(scan).not.toHaveProperty("sessionStores");
-        (await import("../infra/diagnostics-timeline.js")).flushDiagnosticsTimeline();
-        const timings = fs.readFileSync(timeline, "utf8");
-        for (const stage of [
-          "status.config",
-          "status.gateway-probe",
-          "status.session-stores",
-          "status.summary",
-        ]) {
-          expect(timings).toContain(`"stage":"${stage}"`);
-        }
-      } finally {
-        restoreSummary();
-      }
-    });
+    const config = {
+      agents: { defaults: { heartbeat: { every: "0m" } }, entries: { main: {} } },
+      gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:1", token: "fixture" } },
+      plugins: { enabled: false },
+    };
+    await state.writeConfig(config);
+    const storePath = defaultStore();
+    for (let index = 1; index <= 12; index += 1) {
+      seedSession(storePath, "main", `scan-${index}`, {
+        sessionId: `scan-${index}`,
+        updatedAt: index,
+        skillsSnapshot: { prompt: "private fixture", skills: [] },
+      });
+    }
+    const { calls: readSummary } = spyOnSessionStoreSummaries();
+    const { scanStatus } = await import("../commands/status.scan.js");
+    const timeline = state.path("status-timeline.jsonl");
+    const scan = await withEnvAsync(
+      { OPENCLAW_DIAGNOSTICS: "timeline", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timeline },
+      () => scanStatus({ timeoutMs: 100, gatewayProbeDeadlineMs: performance.now() + 100 }),
+    );
+    expect(scan.agentStatus.totalSessions).toBe(12);
+    expect(scan.agentStatus.agents[0]?.lastUpdatedAt).toBe(12);
+    expect(scan.summary.sessions.count).toBe(12);
+    expect(scan.summary.sessions.recent.map(({ key }) => key)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `agent:main:scan-${12 - index}`),
+    );
+    expect(readSummary).toHaveBeenCalledOnce();
+    expect(JSON.stringify(scan)).not.toContain("private fixture");
+    expect(scan).not.toHaveProperty("sessionStores");
+    (await import("../infra/diagnostics-timeline.js")).flushDiagnosticsTimeline();
+    const timings = fs.readFileSync(timeline, "utf8");
+    for (const stage of [
+      "status.config",
+      "status.gateway-probe",
+      "status.session-stores",
+      "status.summary",
+    ]) {
+      expect(timings).toContain(`"stage":"${stage}"`);
+    }
   });
 
   it("keeps an authored context cap through a runtime provider alias", async () => {
@@ -339,150 +307,128 @@ describe("getStatusSummary read-only session access", () => {
       },
       resolveRuntimeCliBackends: () => [],
     });
-    await withOpenClawTestState({ prefix: "openclaw-status-runtime-alias-cap-" }, async (state) => {
-      const storePath = resolveSessionStorePathCore(undefined, {
-        agentId: "main",
-        env: state.env,
-      });
-      const config = {
-        agents: { defaults: { model: "anthropic/claude-opus-5" } },
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com",
-              models: [
-                {
-                  id: "claude-opus-5",
-                  name: "Claude Opus 5",
-                  reasoning: true,
-                  input: ["text" as const],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 1_000_000,
-                  contextTokens: 272_000,
-                  maxTokens: 8_192,
-                },
-              ],
-            },
+    const storePath = defaultStore();
+    const config = {
+      agents: { defaults: { model: "anthropic/claude-opus-5" } },
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [
+              {
+                ...makeModel("claude-opus-5"),
+                contextWindow: 1_000_000,
+                contextTokens: 272_000,
+              },
+            ],
           },
         },
-        session: { store: storePath },
-      };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:main", storePath },
-        {
-          sessionId: "runtime-alias-authored-cap",
-          updatedAt: 10,
-          modelProvider: "claude-cli",
-          model: "claude-opus-5",
-          agentHarnessId: "claude-cli",
-          contextTokens: 272_000,
-          contextTokensSource: "resolved",
-          totalTokens: 121_000,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
-        },
-      );
-      await closeAgentStores(state.root);
-      const summary = await readStatusSummary(config);
-      expect(summary.sessions.recent[0]).toMatchObject({ contextTokens: 272_000, percentUsed: 44 });
-    });
+      },
+      session: { store: storePath },
+    };
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:main", storePath },
+      {
+        sessionId: "runtime-alias-authored-cap",
+        updatedAt: 10,
+        modelProvider: "claude-cli",
+        model: "claude-opus-5",
+        agentHarnessId: "claude-cli",
+        contextTokens: 272_000,
+        contextTokensSource: "resolved",
+        totalTokens: 121_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+    );
+    await closeAgentStores(state.root);
+    const summary = await readStatusSummary(config);
+    expect(summary.sessions.recent[0]).toMatchObject({ contextTokens: 272_000, percentUsed: 44 });
   });
 
   it.each([false, true])(
     "labels archived and retired shared-store rows as stored (all archived: %s)",
     async (allArchived) => {
-      await withOpenClawTestState({ prefix: "openclaw-status-stored-count-" }, async (state) => {
-        const storePath = state.path("shared.sqlite");
-        const config = {
-          agents: {
-            defaults: { heartbeat: { every: "0m" } },
-            entries: { main: {}, ops: {} },
-          },
-          session: { store: storePath },
-        };
-        for (const [agentId, name, archived] of [
-          ["main", "current", allArchived],
-          ["main", "history", true],
-          ["ops", "history", true],
-          ["retired", "history", true],
-        ] as const) {
-          seedSession(storePath, agentId, name, archived ? { archivedAt: 2 } : {});
-        }
-        await closeAgentStores(state.root);
+      const storePath = state.path("shared.sqlite");
+      const config = {
+        agents: {
+          defaults: { heartbeat: { every: "0m" } },
+          entries: { main: {}, ops: {} },
+        },
+        session: { store: storePath },
+      };
+      for (const [agentId, name, archived] of [
+        ["main", "current", allArchived],
+        ["main", "history", true],
+        ["ops", "history", true],
+        ["retired", "history", true],
+      ] as const) {
+        seedSession(storePath, agentId, name, archived ? { archivedAt: 2 } : {});
+      }
+      await closeAgentStores(state.root);
 
-        const stored = readSessionStoreSummaryReadOnly(
-          { agentId: "main", storePath },
-          { agentIds: ["main", "ops"], recentLimit: 10 },
-        );
-        expect(stored.count).toBe(4);
-        expect(stored.recent.filter(({ entry }) => entry.archivedAt !== undefined)).toHaveLength(
-          allArchived ? 4 : 3,
-        );
-        const summary = await readStatusSummary(config);
-        expect(summary.sessions.count).toBe(4);
-        expect(summary.sessions.paths).toEqual([storePath]);
-        expect(summary.sessions.byAgent.map(({ agentId, count }) => [agentId, count])).toEqual([
-          ["main", 2],
-          ["ops", 1],
-        ]);
-        const rows = buildStatusCommandOverviewRows(
-          createStatusCommandOverviewRowsParams({ summary }),
-        );
-        expect(rows.find(({ Item }) => Item === "Sessions")?.Value).toMatch(/^4 stored · default /);
-        const tuiLines = formatStatusSummary(summary);
-        expect(tuiLines).toContain("Stored sessions: 4");
-        expect(tuiLines).not.toContain("Active sessions: 4");
-      });
+      const stored = readSessionStoreSummaryReadOnly(
+        { agentId: "main", storePath },
+        { agentIds: ["main", "ops"], recentLimit: 10 },
+      );
+      expect(stored.count).toBe(4);
+      expect(stored.recent.filter(({ entry }) => entry.archivedAt !== undefined)).toHaveLength(
+        allArchived ? 4 : 3,
+      );
+      const summary = await readStatusSummary(config);
+      expect(summary.sessions.count).toBe(4);
+      expect(summary.sessions.paths).toEqual([storePath]);
+      expect(summary.sessions.byAgent.map(({ agentId, count }) => [agentId, count])).toEqual([
+        ["main", 2],
+        ["ops", 1],
+      ]);
+      const rows = buildStatusCommandOverviewRows(
+        createStatusCommandOverviewRowsParams({ summary }),
+      );
+      expect(rows.find(({ Item }) => Item === "Sessions")?.Value).toMatch(/^4 stored · default /);
+      const tuiLines = formatStatusSummary(summary);
+      expect(tuiLines).toContain("Stored sessions: 4");
+      expect(tuiLines).not.toContain("Active sessions: 4");
     },
   );
 
   it("keeps session payload hydration off the status caller", async () => {
-    await withOpenClawTestState({ prefix: "openclaw-status-recent-window-" }, async (state) => {
-      const config = {
-        agents: { defaults: { heartbeat: { every: "0m" } }, entries: { main: {} } },
-      };
-      const storePath = resolveSessionStorePathCore(undefined, {
-        agentId: "main",
-        env: state.env,
+    const config = {
+      agents: { defaults: { heartbeat: { every: "0m" } }, entries: { main: {} } },
+    };
+    const storePath = defaultStore();
+    for (let index = 1; index <= 24; index += 1) {
+      seedSession(storePath, "main", `history-${index}`, {
+        sessionId: `status-history-${index}`,
+        updatedAt: index,
+        pluginExtensions: {
+          fixture: { history: Array.from({ length: 64 }, () => "x".repeat(128)) },
+        },
       });
-      for (let index = 1; index <= 24; index += 1) {
-        seedSession(storePath, "main", `history-${index}`, {
-          sessionId: `status-history-${index}`,
-          updatedAt: index,
-          pluginExtensions: {
-            fixture: { history: Array.from({ length: 64 }, () => "x".repeat(128)) },
-          },
-        });
-      }
-      await readStatusSummary(config);
-      const clone = vi.spyOn(globalThis, "structuredClone");
-      const parse = vi.spyOn(JSON, "parse");
-      const parsedSessionPayloads = () =>
-        parse.mock.calls.filter(([json]) => json.includes('"sessionId":"status-history-'));
-      try {
-        const summary = await readStatusSummary(config);
+    }
+    await readStatusSummary(config);
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const parse = vi.spyOn(JSON, "parse");
+    const parsedSessionPayloads = () =>
+      parse.mock.calls.filter(([json]) => json.includes('"sessionId":"status-history-'));
+    const summary = await readStatusSummary(config);
 
-        expect(parsedSessionPayloads()).toHaveLength(0);
-        expect(summary.sessions.count).toBe(24);
-        expect(summary.sessions.byAgent[0]?.count).toBe(24);
-        expect(summary.sessions.recent.map(({ key }) => key)).toEqual(
-          Array.from({ length: 10 }, (_, index) => `agent:main:history-${24 - index}`),
-        );
-        expect(
-          clone.mock.calls.filter(([value]) => {
-            const sessionId = (value as { sessionId?: unknown })?.sessionId;
-            return typeof sessionId === "string" && sessionId.startsWith("status-history-");
-          }),
-        ).toHaveLength(0);
+    expect(parsedSessionPayloads()).toHaveLength(0);
+    expect(summary.sessions.count).toBe(24);
+    expect(summary.sessions.byAgent[0]?.count).toBe(24);
+    expect(summary.sessions.recent.map(({ key }) => key)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `agent:main:history-${24 - index}`),
+    );
+    expect(
+      clone.mock.calls.filter(([value]) => {
+        const sessionId = (value as { sessionId?: unknown })?.sessionId;
+        return typeof sessionId === "string" && sessionId.startsWith("status-history-");
+      }),
+    ).toHaveLength(0);
 
-        parse.mockClear();
-        const hidden = await readStatusSummary(config, false);
-        expect(hidden.sessions.count).toBe(24);
-        expect(parsedSessionPayloads()).toHaveLength(0);
-      } finally {
-        parse.mockRestore();
-        clone.mockRestore();
-      }
-    });
+    parse.mockClear();
+    const hidden = await readStatusSummary(config, false);
+    expect(hidden.sessions.count).toBe(24);
+    expect(parsedSessionPayloads()).toHaveLength(0);
   });
 });
