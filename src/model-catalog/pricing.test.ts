@@ -300,6 +300,36 @@ describe("hosted model pricing", () => {
     expect(cli).toEqual(anthropic);
   });
 
+  it("never follows priceAs past the source provider's pricing exclusions", () => {
+    const rates = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 };
+    const contextFor = (
+      config: OpenClawConfig,
+      external: boolean,
+    ): Parameters<typeof resolveModelPricing>[0] => ({
+      config,
+      normalizeKey: (provider, model) => `${provider}/${model}`,
+      catalog: new Map([["anthropic/claude-opus-5-5", rates]]),
+      hosted: {},
+      upstream: {},
+      normalizedHosted: new Map(),
+      policies: new Map([
+        [
+          "claude-cli",
+          { external, authoritative: false, passthroughSources: [], priceAs: "anthropic" },
+        ],
+      ]),
+      fingerprint: "price-as-exclusions",
+    });
+    const key = "claude-cli/claude-opus-5-5";
+    const privateEndpoint: OpenClawConfig = {
+      models: { providers: { "claude-cli": { baseUrl: "http://127.0.0.1:8080/v1", models: [] } } },
+    };
+
+    expect(resolveModelPricing(contextFor({}, true), key)).toEqual(rates);
+    expect(resolveModelPricing(contextFor({}, false), key)).toBeUndefined();
+    expect(resolveModelPricing(contextFor(privateEndpoint, true), key)).toBeUndefined();
+  });
+
   it("keeps a priceAs provider's own price ahead of its target's", async () => {
     const { cli } = await resolveClaudeCliCost({
       "claude-cli/claude-opus-5-5": { input: 1, output: 2 },

@@ -331,35 +331,47 @@ export function resolveModelPricing(
   context: PricingContext,
   key: string,
 ): PricingValue | undefined {
-  const own = resolveProviderModelPricing(context, key);
+  const provider = key.slice(0, key.indexOf("/"));
+  if (hasPrivatePricingEndpoint(context, provider, key)) {
+    return undefined;
+  }
+  const own = resolveProviderModelPricing(context, provider, key);
   if (own) {
     return own;
   }
-  const provider = key.slice(0, key.indexOf("/"));
-  const priceAs = context.policies.get(provider)?.priceAs;
-  return priceAs && priceAs !== provider
-    ? resolveProviderModelPricing(
-        context,
-        context.normalizeKey(priceAs, key.slice(provider.length + 1)),
-      )
-    : undefined;
+  // The mapping inherits the source provider's exclusions: external:false stays unpriced.
+  const policy = context.policies.get(provider);
+  const priceAs = policy?.external === false ? undefined : policy?.priceAs;
+  if (!priceAs || priceAs === provider) {
+    return undefined;
+  }
+  const targetKey = context.normalizeKey(priceAs, key.slice(provider.length + 1));
+  return hasPrivatePricingEndpoint(context, priceAs, targetKey)
+    ? undefined
+    : resolveProviderModelPricing(context, priceAs, targetKey);
 }
 
-function resolveProviderModelPricing(
+/** Private or loopback endpoints never inherit published prices. */
+function hasPrivatePricingEndpoint(
   context: PricingContext,
+  provider: string,
   key: string,
-): PricingValue | undefined {
-  const provider = key.slice(0, key.indexOf("/"));
+): boolean {
   const providerConfig = context.config.models?.providers?.[provider];
   const configuredModel = providerConfig?.models?.find(
     (entry) => context.normalizeKey(provider, entry.id) === key,
   );
-  if (
+  return (
     isPrivateOrLoopbackUrl(configuredModel?.baseUrl) ||
     isPrivateOrLoopbackUrl(providerConfig?.baseUrl)
-  ) {
-    return undefined;
-  }
+  );
+}
+
+function resolveProviderModelPricing(
+  context: PricingContext,
+  provider: string,
+  key: string,
+): PricingValue | undefined {
   // Routing shortcuts inherit an estimate, never the price of a distinct variant.
   const baseModel = /^openrouter\/([^:]+):(?:nitro|floor)$/u.exec(key)?.[1];
   const pricingKeys = baseModel ? [key, `openrouter/${baseModel}`] : [key];
