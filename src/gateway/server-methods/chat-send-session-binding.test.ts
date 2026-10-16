@@ -470,7 +470,10 @@ it.each(
         client.connId = "reaction-source-client";
         const broadcast = vi.fn();
         const context = createBindingContext();
-        context.removeChatRun = (runId: string) => sources.get(runId)?.finished.resolve();
+        context.removeChatRun = (runId: string) => {
+          sources.get(runId)?.finished.resolve();
+          return undefined;
+        };
         context.broadcast = broadcast;
         type Source = {
           entered: ReturnType<typeof createDeferred<DispatchOptions>>;

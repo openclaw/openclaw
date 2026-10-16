@@ -4234,7 +4234,7 @@ ${step.run}`,
         (step: WorkflowStep) => step.name === "Test Watch RTC engine",
       );
       for (const phase of ["smoke", "tests", "release"]) {
-        const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+        const context: Parameters<typeof evaluateWorkflowCondition>[1] = {
           eventName: "workflow_dispatch",
           repository: "openclaw/openclaw",
           runAttempt: 1,
@@ -6084,7 +6084,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 function expectProcessExit<
   T extends { status: number | null; stdout: string | Buffer; stderr: string | Buffer },
 >(result: T, code = 0): T {
-  expect(result.status, `${result.stdout}${result.stderr}`).toBe(code);
+  expect(result.status, `${result.stdout.toString()}${result.stderr.toString()}`).toBe(code);
   return result;
 }
 
@@ -6733,7 +6733,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     ["linux-app-release.yml", "validate_release", "Checkout selected tag"],
     ["macos-release.yml", "validate_macos_release_request", "Checkout selected tag"],
     ["npm-placeholder-bootstrap.yml", "plan", "Checkout selected source"],
-  ]) {
+  ] as const) {
     const steps = readWorkflow(`.github/workflows/${file}`).jobs[job].steps as WorkflowStep[];
     const checkout = steps.findIndex(({ name }) => name === checkoutName);
     expect(steps[checkout - 1]).toEqual(pinned);
@@ -7069,7 +7069,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
       "sign_desktop.outputs.signed_desktop_artifact_id",
       "dist/input",
     ],
-  ]) {
+  ] as const) {
     expect(requiredWorkflowStep(linux.jobs.publish.steps, name).with).toEqual({
       "artifact-ids": `\${{ needs.${artifactId} }}`,
       path: destination,

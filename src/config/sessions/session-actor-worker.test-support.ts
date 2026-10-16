@@ -162,7 +162,7 @@ function createFixture() {
     get database() {
       return database;
     },
-    read(selected = target): SessionActorHotState {
+    read(selected: SessionActorTarget = target): SessionActorHotState {
       const value = execute({ type: "session.actor.read", input: { target: selected } });
       if ("kind" in value) {
         throw new Error("Actor read returned a mutation outcome");

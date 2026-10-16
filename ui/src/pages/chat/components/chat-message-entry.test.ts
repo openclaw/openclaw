@@ -35,8 +35,8 @@ function saved(
   return { role, content, timestamp, __openclaw };
 }
 
-function required<T extends Element = HTMLElement>(parent: ParentNode, selector: string) {
-  return expectDefined(parent.querySelector<T>(selector), selector);
+function required(parent: ParentNode, selector: string) {
+  return expectDefined(parent.querySelector<HTMLElement>(selector), selector);
 }
 
 function setupEntryTranscript(messages: unknown[] = []) {
@@ -223,7 +223,7 @@ describe("chat transcript entry lifecycle", () => {
       expect(entering(view.container)).toHaveLength(0);
       view.props.stream = prefix + "A new reply";
       view.update();
-      const reply = required<HTMLElement>(view.container, ".chat-bubble.streaming");
+      const reply = required(view.container, ".chat-bubble.streaming");
       const paragraph = required(reply, ".chat-text p");
       const row = expectDefined(reply.closest(".chat-virtual-row"), "causal run frame");
       expect(reply).not.toBe(earlierReply);
@@ -297,9 +297,12 @@ describe("chat transcript entry lifecycle", () => {
       view.props.stream = answer;
       view.update();
       await Promise.resolve();
-      const reply = required<HTMLElement>(view.container, ".chat-bubble.streaming");
+      const reply = required(view.container, ".chat-bubble.streaming");
       const paragraph = required(reply, ".chat-text p");
-      const expand = required<HTMLButtonElement>(reply, ".code-block-expand");
+      const expand = expectDefined(
+        reply.querySelector<HTMLButtonElement>(".code-block-expand"),
+        ".code-block-expand",
+      );
       expand.click();
       expect(expand.getAttribute("aria-expanded")).toBe("true");
       // The matching durable commentary retires only its keyed segment. The
@@ -318,7 +321,7 @@ describe("chat transcript entry lifecycle", () => {
       view.props.streamSegments = [];
       view.update();
       await Promise.resolve();
-      const retained = required<HTMLElement>(view.container, ".chat-bubble.streaming");
+      const retained = required(view.container, ".chat-bubble.streaming");
       expect(
         bubbles(view.container).filter((bubble) => bubble.dataset.messageText === commentary),
       ).toHaveLength(1);

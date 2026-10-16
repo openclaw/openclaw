@@ -25,12 +25,6 @@ import {
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
-const toolGroup = (text: string) =>
-  createMessageGroup(
-    createToolResultMessage("call-read", "read", text, { timestamp: 1000 }),
-    "tool",
-  );
-
 it.each([false, true])(
   "does not present a partial response group as complete usage (unavailable: %s)",
   (unavailable) => {
@@ -313,7 +307,12 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   // SAFETY: This grouped-renderer fixture consumes only the complete plugin capability.
   const context = { plugins } as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
-  const [group, setGroup] = createSignal(toolGroup("Original tool output"));
+  const [group, setGroup] = createSignal(
+    createMessageGroup(
+      createToolResultMessage("call-read", "read", "Original tool output", { timestamp: 1000 }),
+      "tool",
+    ),
+  );
   const [options, setOptions] = createSignal<NativeMessageGroupOptions>({
     sessionKey: "agent:main:fixture",
     agentId: "main",
@@ -323,10 +322,6 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     presented: true,
   });
   const [active, setActive] = createSignal(true);
-  const select = (replacement?: ControlUiReplacement) => {
-    selected = replacement;
-    listeners.forEach((listener) => listener());
-  };
   const view = mountSolid(
     () => (
       <ContentPresentation value={active}>
@@ -360,8 +355,10 @@ it("mounts only selected tool replacements and keeps their context, projection, 
         latest = value;
         const title = document.createElement("strong");
         title.textContent = "Selected tool renderer";
+        const draft = document.createElement("input");
+        draft.setAttribute("aria-label", "Plugin local draft");
         const projection = document.createElement("div");
-        container.append(title, projection);
+        container.append(title, draft, projection);
         const unmountDefault = value.mountDefault(projection);
         return {
           update(next) {
@@ -374,7 +371,10 @@ it("mounts only selected tool replacements and keeps their context, projection, 
         };
       },
     };
-    select(replacement);
+    selected = replacement;
+    for (const listener of listeners) {
+      listener();
+    }
     await waitForSolid(() =>
       expect(view.container.textContent).toContain("Selected tool renderer"),
     );
@@ -388,15 +388,40 @@ it("mounts only selected tool replacements and keeps their context, projection, 
       output: { text: "Original tool output" },
     });
     expect(latest?.presented).toBe(true);
-    setGroup(toolGroup("Updated tool output"));
+    setGroup(
+      createMessageGroup(
+        createToolResultMessage("call-read", "read", "Updated tool output", { timestamp: 1000 }),
+        "tool",
+      ),
+    );
     setOptions((previous) => ({ ...previous, presented: false }));
     await waitForSolid(() => {
       expect(latest?.props).toMatchObject({ output: { text: "Updated tool output" } });
       expect(latest?.presented).toBe(false);
       expect(view.container.textContent).toContain("Updated tool output");
     });
+    const mountedView = view.container.querySelector("openclaw-plugin-view");
+    const localDraft = view.getByLabelText<HTMLInputElement>("Plugin local draft");
+    localDraft.value = "Retained plugin draft";
     const mountedSignal = latest?.signal;
-    select();
+    setActive(false);
+    flush();
+    await Promise.resolve();
+    expect(view.container.querySelector("openclaw-plugin-view")).toBe(mountedView);
+    expect(mountedSignal?.aborted).toBe(false);
+    expect(dispose).not.toHaveBeenCalled();
+    setActive(true);
+    setOptions((previous) => ({ ...previous, presented: true }));
+    await waitForSolid(() => {
+      expect(latest?.signal).toBe(mountedSignal);
+      expect(latest?.presented).toBe(true);
+    });
+    expect(view.getByLabelText("Plugin local draft")).toBe(localDraft);
+    expect(localDraft.value).toBe("Retained plugin draft");
+    selected = undefined;
+    for (const listener of listeners) {
+      listener();
+    }
     await waitForSolid(() =>
       expect(view.container.querySelector("openclaw-plugin-view")).toBeNull(),
     );
@@ -405,8 +430,10 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     expect(dispose).toHaveBeenCalledOnce();
     expect(reportError).not.toHaveBeenCalled();
     // Replacing the application owner retires subscriptions from the parked tree.
-    setOptions((previous) => ({ ...previous, presented: true }));
-    select(replacement);
+    selected = replacement;
+    for (const listener of listeners) {
+      listener();
+    }
     setActive(false);
     flush();
     provider.setContext(nextContext);

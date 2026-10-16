@@ -18,32 +18,60 @@ import {
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.test-support.ts";
 
-// Structural render budgets are machine-independent; time/heap ceilings allow
-// loaded runners while catching quadratic work and retained stream buffers.
+// Durable runtime budgets for the chat streaming surface. Byte budgets
+// (scripts/check-control-ui-performance.mts) cannot see rendering work, so
+// these tests protect the landed streaming optimizations at the DOM boundary:
+// the animation-frame render queue (ui/src/pages/chat/chat-state-render.ts),
+// the bounded live tool stream (ui/src/pages/chat/tool-stream.ts), and the
+// transcript/heap cost of long sessions. Structural counts are exact and
+// machine-speed independent; wall-clock/heap ceilings carry several-fold
+// headroom so shared runners stay green while algorithmic regressions
+// (per-event renders, quadratic transcript work, retained stream buffers)
+// still violate them by an order of magnitude.
 const suite = createChatFlowE2eSuite();
 
 type ChatFlowSuite = ReturnType<typeof createChatFlowE2eSuite>;
 type ChatFlowPage = Parameters<Parameters<ChatFlowSuite["withPage"]>[1]>[0]["page"];
 
+// Each delta lands in its own message task. The animation-frame queue must
+// coalesce those invalidations and keep them off message tasks.
 const BURST_DELTA_COUNT = 240;
-// Observe the path, but reject a direct invalidation for every delta.
+// Sanity floor: the burst must invalidate the chat page host at least twice,
+// proving the probe observed the streaming path at all.
 const MIN_BURST_INVALIDATIONS = 2;
+// A direct update per delta produces at least 240 host invalidations. Keep the
+// burst below that count so frame scheduling alone cannot hide lost coalescing.
 const MAX_BURST_INVALIDATIONS = 180;
-// Allow rare poll-controller updates outside animation frames.
+// Minimum share of host invalidations that must execute inside an animation
+// frame callback. The queue guarantees this for every stream-driven update;
+// only rare timer-driven strays (poll controllers) fall outside frames.
 const FRAME_SCHEDULED_MIN_RATIO = 0.9;
+// Unrelated page timers can contribute one host update after the probe resets;
+// ordinary characters must not invalidate the pane themselves.
 const MAX_STEADY_COMPOSER_INVALIDATIONS = 1;
 
 // Shipped live-tool ceiling: ui/src/pages/chat/tool-stream.ts TOOL_STREAM_LIMIT.
 const TOOL_STREAM_LIMIT_CONTRACT = 50;
+// Realistic agent cadence: narration deltas separate complete tool lifecycles.
+// Calls stay above the shipped limit to prove eviction under sustained load.
 const TOOL_FLOOD_PAIR_COUNT = 60;
-// Span the 80ms projection throttle before the result's forced flush.
+// The lifecycle spans the 80ms projection throttle so start/update/input_delta
+// exercise its deferred flush before result forces the final projection.
 const TOOL_FLOOD_PHASE_INTERVAL_MS = 30;
-// Stay above startup's accepted sequence fence.
+// Gateway activity fencing drops any event whose seq is at or below the
+// newest seq already accepted, so flood events seed above every sequence the
+// mocked startup handshake has already delivered.
 const TOOL_FLOOD_SEQ_SEED = 1_000_000;
 
 const LONG_TRANSCRIPT_MESSAGE_COUNT = 400;
+// Wall ceiling with multi-x headroom over the measured baseline
+// (.artifacts/control-ui-e2e/stream-runtime-budgets/metrics.jsonl); sized to
+// tolerate loaded shared runners while still failing quadratic transcript work.
 const LONG_TRANSCRIPT_LOAD_CEILING_MS = 30_000;
 const RICH_TURN_CHUNK_COUNT = 150;
+// Post-GC resident JS heap after loading the long transcript and streaming the
+// rich turn. Headroom over the measured baseline retains transient parser and
+// renderer allocations; a leak that keeps streamed deltas alive breaks it.
 const STREAM_SESSION_HEAP_CEILING_BYTES = 96 * 1024 * 1024;
 
 const IDLE_WINDOW_MS = 4_000;
@@ -73,8 +101,6 @@ type ToolProjectionProbe = {
 };
 
 type ScopedWindow = Window & {
-  ocEmitChat: (text: string) => void;
-  ocEmitAgent: (seq: number, stream: "tool" | "item", data: unknown) => void;
   openclawRenderLifecycleTestHook?: typeof notifyRenderLifecycleForTest;
   ocStreamPerf?: StreamPerfProbe;
   ocIdleProbe?: { longTasks: number; longTaskMs: number };
@@ -239,30 +265,52 @@ async function readRenderProbe(page: ChatFlowPage): Promise<StreamPerfProbe> {
 // Socket-like message tasks avoid nested timers' 4ms clamp, which can spread a
 // burst across enough frames to falsely exhaust the budget. Split at a real
 // frame so the sanity floor observes two streaming batches.
-async function emitDeltaBurstInPage(page: ChatFlowPage, count: number): Promise<void> {
-  await page.evaluate((targetCount) => {
-    const scope = window as ScopedWindow;
-    scope.ocBurstDone = false;
-    let emitted = 0;
-    const channel = new MessageChannel();
-    const postNext = () => channel.port2.postMessage(null);
-    const emitNext = () => {
-      emitted += 1;
-      scope.ocEmitChat(` delta ${emitted} with **bold${emitted}** and \`code${emitted}\` tail`);
-      if (emitted === targetCount) {
-        channel.port1.close();
-        channel.port2.close();
-        scope.ocBurstDone = true;
-      } else if (emitted === Math.floor(targetCount / 2)) {
-        requestAnimationFrame(postNext);
-      } else {
-        postNext();
+async function emitDeltaBurstInPage(
+  page: ChatFlowPage,
+  runId: string,
+  count: number,
+): Promise<void> {
+  await page.evaluate(
+    ({ runId: targetRunId, count: targetCount }) => {
+      const gateway = (window as ScopedWindow).openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("mock gateway handle missing");
       }
-    };
-    channel.port1.addEventListener("message", emitNext);
-    channel.port1.start();
-    postNext();
-  }, count);
+      const scope = window as ScopedWindow;
+      scope.ocBurstDone = false;
+      let emitted = 0;
+      const channel = new MessageChannel();
+      const postNext = () => channel.port2.postMessage(null);
+      const emitNext = () => {
+        emitted += 1;
+        const chunk = ` delta ${emitted} with **bold${emitted}** and \`code${emitted}\` tail`;
+        gateway.emit("chat", {
+          deltaText: chunk,
+          message: {
+            content: [{ text: chunk, type: "text" }],
+            role: "assistant",
+            timestamp: Date.now(),
+          },
+          runId: targetRunId,
+          sessionKey: "main",
+          state: "delta",
+        });
+        if (emitted === targetCount) {
+          channel.port1.close();
+          channel.port2.close();
+          scope.ocBurstDone = true;
+        } else if (emitted === Math.floor(targetCount / 2)) {
+          requestAnimationFrame(postNext);
+        } else {
+          postNext();
+        }
+      };
+      channel.port1.addEventListener("message", emitNext);
+      channel.port1.start();
+      postNext();
+    },
+    { runId, count },
+  );
   await page.waitForFunction(() => (window as ScopedWindow).ocBurstDone === true, undefined, {
     timeout: 30_000,
     polling: 50,
@@ -279,31 +327,9 @@ async function openStreamingTurn(
   const sendRequest = await gateway.waitForRequest("chat.send");
   const params = requireRecord(sendRequest.params);
   const runId = requireString(params.idempotencyKey, "chat send idempotency key");
-  await page.evaluate((targetRunId) => {
-    const scope = window as ScopedWindow;
-    const emit = scope.openclawControlUiE2eGateway?.emit;
-    if (!emit) {
-      throw new Error("mock gateway handle missing");
-    }
-    scope.ocEmitChat = (text) =>
-      emit("chat", {
-        deltaText: text,
-        message: { content: [{ text, type: "text" }], role: "assistant", timestamp: Date.now() },
-        runId: targetRunId,
-        sessionKey: "main",
-        state: "delta",
-      });
-    scope.ocEmitAgent = (seq, stream, data) =>
-      emit("agent", {
-        data,
-        runId: targetRunId,
-        seq,
-        sessionKey: "main",
-        stream,
-        ts: Date.now(),
-      });
-  }, runId);
-  // Enter streaming state before resetting measurement counters.
+  // One visible warm-up delta puts the transcript into the live streaming
+  // state the burst and flood events attach to; it lands before any probe
+  // counters reset, so measured windows stay clean.
   await gateway.emitGatewayEvent("chat", {
     deltaText: " warmup",
     message: {
@@ -329,10 +355,14 @@ function toolFloodActivity(index: number, phase: "start" | "result") {
   });
 }
 
-async function probeDeferredToolProjection(page: ChatFlowPage): Promise<void> {
+async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): Promise<void> {
   await page.evaluate(
-    ({ seqSeed, activity }) => {
+    ({ runId: targetRunId, seqSeed, activity }) => {
       const scope = window as ScopedWindow;
+      const gateway = scope.openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("mock gateway handle missing");
+      }
       const probe: ToolProjectionProbe = {
         beforeThrottleCardCount: null,
         afterThrottleCardCount: null,
@@ -341,11 +371,36 @@ async function probeDeferredToolProjection(page: ChatFlowPage): Promise<void> {
       };
       scope.ocToolProjectionProbe = probe;
       let seq = seqSeed;
-      const emitToolPhase = (phase: string, data: Record<string, unknown>) =>
-        scope.ocEmitAgent(++seq, "tool", { name: "edit", phase, toolCallId: "call-1", ...data });
+      const emitToolPhase = (phase: string, data: Record<string, unknown>) => {
+        gateway.emit("agent", {
+          data: { name: "edit", phase, toolCallId: "call-1", ...data },
+          runId: targetRunId,
+          seq: ++seq,
+          sessionKey: "main",
+          stream: "tool",
+          ts: Date.now(),
+        });
+      };
       const cardSelector = '[data-message-id^="tool:assistant:call-1:"]';
-      scope.ocEmitChat(" working on step 1");
-      scope.ocEmitAgent(++seq, "item", activity);
+      gateway.emit("chat", {
+        deltaText: " working on step 1",
+        message: {
+          content: [{ text: " working on step 1", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId: targetRunId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      gateway.emit("agent", {
+        data: activity,
+        runId: targetRunId,
+        seq: ++seq,
+        sessionKey: "main",
+        stream: "item",
+        ts: Date.now(),
+      });
       emitToolPhase("start", { args: { path: "src/file-1.ts" } });
       setTimeout(() => emitToolPhase("update", { partialResult: "partial output 1" }), 10);
       setTimeout(() => emitToolPhase("input_delta", { diff: { added: 1, removed: 1 } }), 20);
@@ -367,7 +422,7 @@ async function probeDeferredToolProjection(page: ChatFlowPage): Promise<void> {
         });
       }, 120);
     },
-    { seqSeed: TOOL_FLOOD_SEQ_SEED, activity: toolFloodActivity(1, "start") },
+    { runId, seqSeed: TOOL_FLOOD_SEQ_SEED, activity: toolFloodActivity(1, "start") },
   );
   await page.waitForFunction(
     () => (window as ScopedWindow).ocToolProjectionProbe?.ready === true,
@@ -376,19 +431,36 @@ async function probeDeferredToolProjection(page: ChatFlowPage): Promise<void> {
   );
 }
 
-async function completeFirstToolLifecycle(page: ChatFlowPage): Promise<void> {
+async function completeFirstToolLifecycle(page: ChatFlowPage, runId: string): Promise<void> {
   await page.evaluate(
-    ({ seq, activity }) => {
-      const scope = window as ScopedWindow;
-      scope.ocEmitAgent(seq, "tool", {
-        name: "edit",
-        phase: "result",
-        result: "tool output 1",
-        toolCallId: "call-1",
+    ({ runId: targetRunId, seq, activity }) => {
+      const gateway = (window as ScopedWindow).openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("mock gateway handle missing");
+      }
+      gateway.emit("agent", {
+        data: {
+          name: "edit",
+          phase: "result",
+          result: "tool output 1",
+          toolCallId: "call-1",
+        },
+        runId: targetRunId,
+        seq,
+        sessionKey: "main",
+        stream: "tool",
+        ts: Date.now(),
       });
-      scope.ocEmitAgent(seq + 1, "item", activity);
+      gateway.emit("agent", {
+        data: activity,
+        runId: targetRunId,
+        seq: seq + 1,
+        sessionKey: "main",
+        stream: "item",
+        ts: Date.now(),
+      });
     },
-    { seq: TOOL_FLOOD_SEQ_SEED + 5, activity: toolFloodActivity(1, "result") },
+    { runId, seq: TOOL_FLOOD_SEQ_SEED + 5, activity: toolFloodActivity(1, "result") },
   );
   await page.evaluate(
     () =>
@@ -400,28 +472,59 @@ async function completeFirstToolLifecycle(page: ChatFlowPage): Promise<void> {
 
 async function emitRemainingToolLifecycleFlood(
   page: ChatFlowPage,
+  runId: string,
   pairCount: number,
 ): Promise<void> {
   // Gateway frames arrive as separate socket messages. Space each lifecycle
   // phase across timer ticks so the live stream exercises deferred projection,
   // not only the result path's forced flush.
   await page.evaluate(
-    ({ pairCount: targetPairCount, phaseIntervalMs, seqSeed, activities }) => {
+    ({ runId: targetRunId, pairCount: targetPairCount, phaseIntervalMs, seqSeed, activities }) => {
       const scope = window as ScopedWindow;
+      const gateway = scope.openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("mock gateway handle missing");
+      }
       scope.ocBurstDone = false;
       let emitted = 1;
       let seq = seqSeed + 6;
-      const emitToolPhase = (phase: string, data: Record<string, unknown>) =>
-        scope.ocEmitAgent(++seq, "tool", {
-          name: "edit",
-          phase,
-          toolCallId: `call-${emitted}`,
-          ...data,
+      const emitToolPhase = (phase: string, data: Record<string, unknown>) => {
+        gateway.emit("agent", {
+          data: {
+            name: "edit",
+            phase,
+            toolCallId: `call-${emitted}`,
+            ...data,
+          },
+          runId: targetRunId,
+          seq: ++seq,
+          sessionKey: "main",
+          stream: "tool",
+          ts: Date.now(),
         });
+      };
       const emitCall = () => {
         emitted += 1;
-        scope.ocEmitChat(` working on step ${emitted}`);
-        scope.ocEmitAgent(++seq, "item", activities[emitted - 2]!.start);
+        const chunk = ` working on step ${emitted}`;
+        gateway.emit("chat", {
+          deltaText: chunk,
+          message: {
+            content: [{ text: chunk, type: "text" }],
+            role: "assistant",
+            timestamp: Date.now(),
+          },
+          runId: targetRunId,
+          sessionKey: "main",
+          state: "delta",
+        });
+        gateway.emit("agent", {
+          data: activities[emitted - 2]!.start,
+          runId: targetRunId,
+          seq: ++seq,
+          sessionKey: "main",
+          stream: "item",
+          ts: Date.now(),
+        });
         emitToolPhase("start", { args: { path: `src/file-${emitted}.ts` } });
         setTimeout(() => {
           emitToolPhase("update", { partialResult: `partial output ${emitted}` });
@@ -429,7 +532,14 @@ async function emitRemainingToolLifecycleFlood(
             emitToolPhase("input_delta", { diff: { added: emitted, removed: 1 } });
             setTimeout(() => {
               emitToolPhase("result", { result: `tool output ${emitted}` });
-              scope.ocEmitAgent(++seq, "item", activities[emitted - 2]!.result);
+              gateway.emit("agent", {
+                data: activities[emitted - 2]!.result,
+                runId: targetRunId,
+                seq: ++seq,
+                sessionKey: "main",
+                stream: "item",
+                ts: Date.now(),
+              });
               if (emitted < targetPairCount) {
                 setTimeout(emitCall, phaseIntervalMs);
               } else {
@@ -442,6 +552,7 @@ async function emitRemainingToolLifecycleFlood(
       setTimeout(emitCall, phaseIntervalMs);
     },
     {
+      runId,
       pairCount,
       phaseIntervalMs: TOOL_FLOOD_PHASE_INTERVAL_MS,
       seqSeed: TOOL_FLOOD_SEQ_SEED,
@@ -479,7 +590,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, { deferredMethods: ["sessions.describe"] });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      await openStreamingTurn(page, gateway, "burst coalescing probe");
+      const runId = await openStreamingTurn(page, gateway, "burst coalescing probe");
 
       // Release the startup fact read after Send so it observes the running turn,
       // then join its publication before measuring stream invalidations.
@@ -522,7 +633,7 @@ suite.define(() => {
       await installRenderProbe(page);
       await resetRenderProbe(page);
 
-      await emitDeltaBurstInPage(page, BURST_DELTA_COUNT);
+      await emitDeltaBurstInPage(page, runId, BURST_DELTA_COUNT);
       await expect
         .poll(() =>
           page.evaluate(
@@ -571,9 +682,9 @@ suite.define(() => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      await openStreamingTurn(page, gateway, "tool flood probe");
+      const runId = await openStreamingTurn(page, gateway, "tool flood probe");
 
-      await probeDeferredToolProjection(page);
+      await probeDeferredToolProjection(page, runId);
       const projection = await page.evaluate(() => (window as ScopedWindow).ocToolProjectionProbe!);
       expect(projection.beforeThrottleCardCount).toBe(0);
       expect(projection.afterThrottleCardCount).toBe(1);
@@ -581,12 +692,12 @@ suite.define(() => {
       expect(projection.afterThrottleText).toContain("+1");
       expect(projection.afterThrottleText).toContain("-1");
 
-      await completeFirstToolLifecycle(page);
+      await completeFirstToolLifecycle(page, runId);
       const firstCard = page.locator('[data-message-id^="tool:assistant:call-1:"]');
       expect(await firstCard.count()).toBe(1);
       expect(await firstCard.textContent()).toContain("Edited");
 
-      await emitRemainingToolLifecycleFlood(page, TOOL_FLOOD_PAIR_COUNT);
+      await emitRemainingToolLifecycleFlood(page, runId, TOOL_FLOOD_PAIR_COUNT);
       // Uninterrupted narration no longer separates tool cards. Expand the
       // real grouped activity before counting its retained invocation rows.
       const firstRetainedCall = TOOL_FLOOD_PAIR_COUNT - TOOL_STREAM_LIMIT_CONTRACT + 1;
@@ -630,7 +741,7 @@ suite.define(() => {
       expect(loadMs).toBeLessThanOrEqual(LONG_TRANSCRIPT_LOAD_CEILING_MS);
 
       const runId = await openStreamingTurn(page, gateway, "rich streaming turn");
-      await emitDeltaBurstInPage(page, RICH_TURN_CHUNK_COUNT);
+      await emitDeltaBurstInPage(page, runId, RICH_TURN_CHUNK_COUNT);
       await gateway.emitChatFinal({ runId, text: "rich turn finalized" });
       await page.locator(".chat-thread-inner").getByText("rich turn finalized").waitFor();
 

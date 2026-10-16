@@ -252,7 +252,9 @@ describe("CI check failure collection", () => {
     const condition = ciStep(job, name).if;
     expect(condition).toContain("!cancelled()");
     expect(condition).toContain(`steps.${prerequisite}.outcome == 'success'`);
-    expect(ciWorkflow.jobs[job]!.steps.some((item) => item.id === prerequisite)).toBe(true);
+    expect(ciWorkflow.jobs[job]!.steps.some((item: WorkflowStep) => item.id === prerequisite)).toBe(
+      true,
+    );
   });
 
   it.each([

@@ -16,19 +16,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function element<T extends HTMLElement = HTMLElement>(
-  selector: string,
-  root: ParentNode = document,
-) {
-  const result = root.querySelector<T>(selector);
+function element(selector: string, root: ParentNode = document) {
+  const result = root.querySelector<HTMLElement>(selector);
   expect(result).toBeInstanceOf(HTMLElement);
   return result!;
 }
 
 function button(selector: string, root: ParentNode = document) {
-  const result = element<HTMLButtonElement>(selector, root);
+  const result = root.querySelector<HTMLButtonElement>(selector);
   expect(result).toBeInstanceOf(HTMLButtonElement);
-  return result;
+  return result!;
 }
 
 function fixture() {
@@ -120,7 +117,7 @@ it("clamps the confirmation inside shifted visual viewports", () => {
 
 it("exposes dialog semantics and keeps keyboard focus inside the confirmation", () => {
   const popover = fixture().open();
-  const check = element<HTMLInputElement>(".chat-confirm-popover__check", popover);
+  const check = element(".chat-confirm-popover__check", popover);
   expect(check).toBeInstanceOf(HTMLInputElement);
   const cancel = button(".chat-confirm-popover__cancel", popover);
   const confirm = button(".chat-confirm-popover__yes", popover);

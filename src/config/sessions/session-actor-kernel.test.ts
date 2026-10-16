@@ -64,10 +64,10 @@ function kernelFixture() {
     options,
     target,
     write,
-    inState<T>(state: SessionActorStoredState, run: () => T) {
+    inState: <T>(state: SessionActorStoredState, run: () => T) => {
       return write(() => withSessionActorTransactionState(database, state, run));
     },
-    hydrate() {
+    hydrate: () => {
       return hydrateSessionActorState(database, target, { epoch: "window", sequence: 0 }, "");
     },
   };

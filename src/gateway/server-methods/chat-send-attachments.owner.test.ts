@@ -53,7 +53,7 @@ it.each(["off", "all"] as const)(
           },
         });
         expect(respond.mock.calls).toEqual([]);
-        assert(result.ok === true, "attachment preparation failed");
+        assert(result.ok, "attachment preparation failed");
         const media = result.value.mediaPathOffloads[0]!;
         expect(media.fileName).toBe(fileName);
         const file = path.resolve(media.workspaceDir!, media.path!);
@@ -162,7 +162,7 @@ it("stages managed session follow-ups in their projection and rejects unrelated 
         continue;
       }
       expect(respond.mock.calls).toEqual([]);
-      assert(result.ok === true, "managed attachment preparation failed");
+      assert(result.ok, "managed attachment preparation failed");
       const media = result.value.mediaPathOffloads[0]!;
       const projection = await readLocalWorkspaceProjection(worktree.id);
       expect(projection?.session_key).toBe(sessionKey);
@@ -237,7 +237,7 @@ it.each([
         );
         return;
       }
-      assert(prepared.ok === true, "attachment preparation failed");
+      assert(prepared.ok, "attachment preparation failed");
       const source = prepared.value.offloadedRefs[0]!.path;
       const media = prepared.value.mediaPathOffloads[0]!;
       expect(await fs.readFile(source, "utf8")).toBe("original upload");
@@ -396,7 +396,7 @@ it.each([
 
       if (outcome === "fallback") {
         const result = await preparing;
-        assert(result.ok === true, "ordinary managed-PDF fallback failed");
+        assert(result.ok, "ordinary managed-PDF fallback failed");
         expect(result.value.mediaPathOffloads).toEqual([
           {
             path: inboundPath,

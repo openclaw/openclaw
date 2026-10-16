@@ -73,7 +73,7 @@ it.each(["existing", "admitted new"] as const)(
         },
         context: {},
       });
-      assert(result.ok === true, "private skill attachment preparation failed");
+      assert(result.ok, "private skill attachment preparation failed");
       expect(mocks.resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
           librarySelections: [selection],

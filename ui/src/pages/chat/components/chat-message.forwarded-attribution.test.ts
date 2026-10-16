@@ -23,10 +23,8 @@ import { projectTranscriptChain, projectTranscriptIndex } from "./chat-transcrip
 
 let container: HTMLDivElement;
 let view: ReturnType<typeof createMessageGroupHarness>;
-const query = <T extends Element = HTMLElement>(selector: string) =>
-  container.querySelector<T>(selector);
-const required = <T extends Element = HTMLElement>(selector: string) =>
-  expectDefined(query<T>(selector), selector);
+const query = (selector: string) => container.querySelector<HTMLElement>(selector);
+const required = (selector: string) => expectDefined(query(selector), selector);
 const text = (selector: string) => query(selector)?.textContent;
 const sessionKey = "agent:research:report";
 const agentOptions = {
@@ -133,7 +131,7 @@ describe("forwarded message attribution", () => {
       container.addEventListener("keydown", (event) =>
         opened(markdownFileLinkFromKeyboardEvent(event)),
       );
-      const link = required<HTMLAnchorElement>("a.markdown-file-link");
+      const link = required("a.markdown-file-link");
       if (key === "click") {
         link.click();
       } else {
@@ -233,7 +231,7 @@ describe("forwarded message attribution", () => {
     );
     const opened = vi.fn();
     container.addEventListener("click", (event) => opened(markdownFileLinkFromEvent(event)));
-    const link = required<HTMLAnchorElement>('a[data-file-path="reports/index.html"]');
+    const link = required('a[data-file-path="reports/index.html"]');
     link.click();
     expect(opened).toHaveBeenCalledExactlyOnceWith({
       path: "reports/index.html",
@@ -280,7 +278,7 @@ describe("forwarded message attribution", () => {
       await titler.decorate(sourceLink, true);
       expect(sourceLink.textContent).toBe("Main session");
       renderTestMessageGroup(group);
-      const retained = query<HTMLAnchorElement>(".chat-group--forwarded .chat-reply-attribution a");
+      const retained = query(".chat-group--forwarded .chat-reply-attribution a");
       expect(retained?.textContent).toBe("Main session");
       expect(retained?.hasAttribute("title")).toBe(false);
     },
@@ -344,7 +342,10 @@ describe("forwarded message attribution", () => {
         basePath,
       });
 
-      const chip = required<HTMLAnchorElement>("a.markdown-session-link");
+      const chip = expectDefined(
+        container.querySelector<HTMLAnchorElement>("a.markdown-session-link"),
+        "a.markdown-session-link",
+      );
       expect(chip).toBeInstanceOf(HTMLAnchorElement);
       expect(chip.textContent?.trim()).toBe(chipText);
       expect(chip.querySelector(":scope > .session-label")?.textContent).toBe(chipText);
