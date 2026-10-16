@@ -15,7 +15,7 @@ import {
   resolvePhysicalSessionStorePath,
 } from "../config/sessions/session-store-path.js";
 import { getLastHeartbeatEvent } from "../infra/heartbeat-events.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";

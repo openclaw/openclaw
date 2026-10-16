@@ -190,6 +190,43 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     ).toEqual([true, undefined]);
   });
 
+  it.each([
+    { parts: ["First part.", "Second part.\nNO_REPLY"], expected: "First part.\nSecond part." },
+    {
+      type: "input_text",
+      parts: ["First part.", "Second part.\nNO_REPLY"],
+      expected: "First part.\nSecond part.",
+    },
+    {
+      type: "output_text",
+      parts: ["First part.", "Second part.\nNO_REPLY"],
+      expected: "First part.\nSecond part.",
+    },
+    { parts: ["First part.", "Second part.\nNO_", "REPLY"], expected: "First part.\nSecond part." },
+    { parts: ["```text\nNO_REPLY", "```\nNO_REPLY"], expected: "```text\nNO_REPLY\n```" },
+  ])(
+    "preserves earlier segment source and boundaries after trailing cleanup: $type $parts",
+    ({ parts, expected, type = "text" }) => {
+      const earlier = makeAgentAssistantMessage({
+        content: parts.map((text) => ({ type, text })) as AssistantMessage["content"],
+      });
+      const current = makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Final answer." }],
+      });
+      const payloads = buildPayloads({
+        assistantTexts: [parts.join("\n"), "Final answer."],
+        answerSegments: [
+          { textEnd: 1, messageEnd: 1, finalMessageStart: 1, lastAssistant: earlier },
+        ],
+        lastAssistant: current,
+        currentAssistant: current,
+        assistantMessageIndex: 2,
+      });
+      expect(payloads.map((payload) => payload.text)).toEqual([expected, "Final answer."]);
+      expect(earlier.content).toEqual(parts.map((text) => ({ type, text })));
+    },
+  );
+
   it("does not append a presentation failure after confirmed automatic source completion", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAgentAssistantMessage({

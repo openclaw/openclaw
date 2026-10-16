@@ -8,16 +8,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 
-const profileIds = vi.hoisted(() => [
-  "profile-ada",
-  "profile-bob",
-  "profile-carol",
-  "profile-dana",
-  "profile-erin",
-  "profile:channel:opaque",
-  "shared-id",
-]);
-const extraProfileIds = vi.hoisted(() => new Set<string>());
 const getUserProfileDisplay = vi.hoisted(() =>
   vi.fn((profileId: string) => {
     const displayNames: Record<string, string> = {
@@ -45,20 +35,13 @@ const getUserProfileDisplay = vi.hoisted(() =>
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
   getResidentUserProfileDisplay: getUserProfileDisplay,
-  captureResidentUserProfileDisplaySnapshot: () => ({
-    revision: 0,
-    displays: new Map(
-      [...profileIds, ...extraProfileIds].map((id) => [id, getUserProfileDisplay(id)]),
-    ),
-  }),
 }));
 
 import { listSessionFixture } from "./session-list.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
-  getUserProfileDisplay.mockReset();
-  extraProfileIds.clear();
+  getUserProfileDisplay.mockClear();
 });
 
 it.each([true, false])(
@@ -543,7 +526,6 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
 it.each(["spawn"] as const)(
   "associates a required %s creator without inventing profile contributions or promoting unqualified creators",
   async (via) => {
-    extraProfileIds.add("former").add("current");
     getUserProfileDisplay.mockImplementation((id) => ({
       id: id === "former" ? "current" : id,
       displayName: "Current",
@@ -655,10 +637,6 @@ it.each(["spawn"] as const)(
 );
 
 it("returns a canonical selected person and orders merged owners without borrowing remote identities", async () => {
-  extraProfileIds.add("former").add("current");
-  for (let index = 0; index < 65; index++) {
-    extraProfileIds.add(`person-${index}`);
-  }
   getUserProfileDisplay.mockImplementation((id) => ({
     id: id === "former" ? "current" : id,
     displayName: id,

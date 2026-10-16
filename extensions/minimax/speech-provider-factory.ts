@@ -38,9 +38,9 @@ type MinimaxTtsProviderOverrides = Partial<
 >;
 
 function resolveConfiguredPortalTtsBaseUrl(cfg: OpenClawConfig | undefined): string | undefined {
-  const providers = asOptionalRecord(asOptionalRecord(cfg?.models)?.providers);
-  const portalProvider = asOptionalRecord(providers?.[MINIMAX_PORTAL_PROVIDER_ID]);
-  const portalBaseUrl = trimToUndefined(portalProvider?.baseUrl);
+  const portalBaseUrl = trimToUndefined(
+    cfg?.models?.providers?.[MINIMAX_PORTAL_PROVIDER_ID]?.baseUrl,
+  );
   return portalBaseUrl ? normalizeMinimaxTtsBaseUrl(portalBaseUrl) : undefined;
 }
 

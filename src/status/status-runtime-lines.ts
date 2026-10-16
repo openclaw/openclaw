@@ -27,9 +27,8 @@ export async function appendSessionCostLine(
   if (!sessionId) {
     return usageLine;
   }
-  let sessionFile: string;
   try {
-    sessionFile = formatSqliteSessionFileMarker({
+    const sessionFile = formatSqliteSessionFileMarker({
       sessionId,
       agentId,
       storePath: await preparePhysicalSessionStorePath(
@@ -37,13 +36,9 @@ export async function appendSessionCostLine(
         cfg,
       ),
     });
-  } catch {
-    return usageLine;
-  }
-  const now = Date.now();
-  const date = new Date(now);
-  const startMs = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  try {
+    const now = Date.now();
+    const date = new Date(now);
+    const startMs = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
     const loaded = await withTimeout(
       loadSessionCostSummariesFromCache({
         sessions: [{ sessionId, sessionFile }],

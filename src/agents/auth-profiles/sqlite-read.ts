@@ -3,7 +3,7 @@ import { isMainThread, MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
-import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
+import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
 import { runSqliteReadOnlyWorker } from "../../infra/sqlite-readonly-worker.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
@@ -85,7 +85,7 @@ export function prepareAgentAuthProfileRowsRead(options: {
   const databasePath = path.resolve(options.databasePath);
   const agentId = options.agentId;
   const env = cloneEnvWithPlatformSemantics(options.env);
-  const postgres = getDatabaseEngineSelection()?.input !== undefined;
+  const postgres = getDatabaseEngineInput("agent") !== undefined;
   const captured: Result<OpenClawStateWorkerContext, unknown> = (() => {
     try {
       return {

@@ -4,15 +4,24 @@ import type { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input
 import { promptCustomApiConfig } from "./onboard-custom.js";
 
 const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
+const discoveryFetch = vi.hoisted(() => vi.fn());
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/fetch-guard.js")>()),
+  fetchWithSsrFGuard: discoveryFetch,
+}));
 vi.mock("../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/manifest-contract-eligibility.js")>()),
   loadManifestMetadataSnapshot,
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: () => ({ plugins: [] }),
-}));
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => {
+  const { createEmptyPluginMetadataSnapshot } =
+    await import("../plugins/plugin-metadata-empty.test-support.js");
+  return {
+    ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
+    getCurrentPluginMetadataSnapshot: () => createEmptyPluginMetadataSnapshot(),
+  };
+});
 
 vi.mock("../plugins/provider-auth-input.js", () => ({
   ensureApiKeyFromEnvOrPrompt: vi.fn(
@@ -93,6 +102,11 @@ async function runPromptCustomApi(
 
 describe("promptCustomApiConfig", () => {
   beforeEach(() => {
+    discoveryFetch.mockReset();
+    discoveryFetch.mockImplementation(async () => ({
+      response: Response.json({ data: [] }),
+      release: async () => {},
+    }));
     loadManifestMetadataSnapshot.mockReset();
     loadManifestMetadataSnapshot.mockReturnValue({ plugins: [] });
   });
@@ -186,7 +200,7 @@ describe("promptCustomApiConfig", () => {
     expect(result.config.models?.providers?.custom?.auth).toBeUndefined();
   });
 
-  it("prepares deferred setup without a provider request or a selected default", async () => {
+  it("prepares deferred setup without an inference request or a selected default", async () => {
     const prompter = createTestPrompter({
       text: ["https://provider.example/v1", "fixture-key", "fixture-model", "custom", ""],
       select: ["plaintext", "openai-responses"],
@@ -207,6 +221,110 @@ describe("promptCustomApiConfig", () => {
     });
     expect(result.config.agents?.defaults?.model).toBeUndefined();
     expect(config).toEqual({});
+  });
+
+  it("selects an advertised model during deferred custom setup", async () => {
+    discoveryFetch.mockImplementation(async () => ({
+      response: Response.json({ data: [{ id: "local-small" }, { id: "local-large" }] }),
+      release: async () => {},
+    }));
+    const prompter = createTestPrompter({
+      text: ["http://localhost:1234/v1", "fixture-key", "custom", ""],
+      select: ["plaintext", "openai", "local-large"],
+    });
+
+    const result = await runPromptCustomApi(prompter, {}, undefined, {
+      verification: "deferred",
+    });
+
+    expect(result.modelId).toBe("local-large");
+    expect(result.config.models?.providers?.custom?.models.map((model) => model.id)).toEqual([
+      "local-large",
+    ]);
+    expect(prompter.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: [
+          { value: "local-small", label: "local-small" },
+          { value: "local-large", label: "local-large" },
+          { value: "", label: "Enter a model ID manually" },
+        ],
+      }),
+    );
+    expect(discoveryFetch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        url: "http://localhost:1234/v1/models",
+        init: { headers: { Authorization: "Bearer fixture-key" } },
+        timeoutMs: 5_000,
+      }),
+    );
+  });
+
+  it("keeps manual model entry available when discovery succeeds", async () => {
+    discoveryFetch.mockImplementation(async () => ({
+      response: Response.json({ data: [{ id: "advertised-model" }] }),
+      release: async () => {},
+    }));
+    const prompter = createTestPrompter({
+      text: ["http://localhost:1234/v1", "", "unlisted-model", "custom", ""],
+      select: ["plaintext", "openai-responses", ""],
+    });
+    const result = await runPromptCustomApi(prompter, {}, undefined, {
+      verification: "deferred",
+    });
+    expect(result.modelId).toBe("unlisted-model");
+    expect(discoveryFetch).toHaveBeenCalledOnce();
+    expect(prompter.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: [
+          { value: "advertised-model", label: "advertised-model" },
+          { value: "", label: "Enter a model ID manually" },
+        ],
+      }),
+    );
+  });
+
+  it.each(["empty", "invalid", "http", "timeout"])(
+    "explains manual entry after %s discovery",
+    async (failure) => {
+      discoveryFetch.mockImplementation(async () => {
+        if (failure === "timeout") {
+          throw new DOMException("Timed out", "TimeoutError");
+        }
+        return {
+          response:
+            failure === "http"
+              ? new Response(null, { status: 401 })
+              : failure === "invalid"
+                ? new Response("not JSON")
+                : Response.json({ data: [] }),
+          release: async () => {},
+        };
+      });
+      const prompter = createTestPrompter({
+        text: ["http://localhost:1234/v1", "", "manual-model", "custom", ""],
+        select: ["plaintext", "openai"],
+      });
+      const result = await runPromptCustomApi(prompter, {}, undefined, {
+        verification: "deferred",
+      });
+      expect(result.modelId).toBe("manual-model");
+      expect(prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining("enter a model ID manually"),
+        "Model ID",
+      );
+    },
+  );
+
+  it("keeps Anthropic setup on manual entry", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://provider.example", "fixture-key", "claude-model", "custom", ""],
+      select: ["plaintext", "anthropic"],
+    });
+    const result = await runPromptCustomApi(prompter, {}, undefined, {
+      verification: "deferred",
+    });
+    expect(result.modelId).toBe("claude-model");
+    expect(discoveryFetch).not.toHaveBeenCalled();
   });
 
   it("rejects aliases already used only by the selected agent", async () => {
@@ -384,6 +502,7 @@ describe("promptCustomApiConfig", () => {
 
   it("aborts verification after timeout", async () => {
     vi.useFakeTimers();
+    const requestStarted = Promise.withResolvers<void>();
     const prompter = createTestPrompter({
       text: ["http://localhost:11434/v1", "", "slow-model", "fast-model", "custom", ""],
       select: ["plaintext", "openai", "model"],
@@ -392,6 +511,7 @@ describe("promptCustomApiConfig", () => {
     const fetchMock = vi
       .fn()
       .mockImplementationOnce((_url: string, init?: { signal?: AbortSignal }) => {
+        requestStarted.resolve();
         return new Promise((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => reject(new Error("AbortError")));
         });
@@ -401,6 +521,7 @@ describe("promptCustomApiConfig", () => {
 
     const promise = runPromptCustomApi(prompter);
 
+    await requestStarted.promise;
     await vi.advanceTimersByTimeAsync(30_000);
     await promise;
 

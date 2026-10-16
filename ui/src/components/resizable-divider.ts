@@ -1,5 +1,6 @@
 import { createRenderEffect, onCleanup } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import "./resizable-divider.css";
 
@@ -198,8 +199,8 @@ defineSolidBridge<ResizableDividerProps>(
 
     host.setAttribute("role", "separator");
     host.setAttribute("tabindex", "0");
-    host.addEventListener("pointerdown", handlePointerDown);
-    host.addEventListener("keydown", handleKeyDown);
+    nativeListener("pointerdown", handlePointerDown)(host);
+    nativeListener("keydown", handleKeyDown)(host);
     createRenderEffect(
       () => ({
         min: toAriaValue(props.minRatio),
@@ -216,11 +217,7 @@ defineSolidBridge<ResizableDividerProps>(
         setAttribute("aria-orientation", value.orientation);
       },
     );
-    onCleanup(() => {
-      host.removeEventListener("pointerdown", handlePointerDown);
-      host.removeEventListener("keydown", handleKeyDown);
-      finishDragging(new Event("disconnect"));
-    });
+    onCleanup(() => finishDragging(new Event("disconnect")));
     return undefined;
   },
   {

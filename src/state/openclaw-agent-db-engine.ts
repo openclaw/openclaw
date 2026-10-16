@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import type { PostgresSqlConnection } from "../infra/sql-connection.js";
@@ -17,7 +17,7 @@ import { agentPostgresRuntime } from "./postgres-schema.generated/agent-runtime.
 import { agentSearchPostgresRuntime } from "./postgres-schema.generated/agent-search-runtime.js";
 
 export function agentEngineInput() {
-  return getDatabaseEngineSelection()?.input;
+  return getDatabaseEngineInput("agent");
 }
 
 const agentEngineSchema = {

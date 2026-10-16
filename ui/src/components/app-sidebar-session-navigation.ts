@@ -89,7 +89,7 @@ import type { SessionOrganizerController } from "./session-organizer-controller.
 import { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 import { SidebarEmptyGroupsController } from "./sidebar-empty-groups-controller.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
-import { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
+import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import {
   memoizedSidebarCatalogs,
   memoizedSidebarHome,
@@ -169,7 +169,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     this.sessionProjection.refreshPresencePresentation(this, sidebarPresenceScope(this));
   }
 
-  readonly navigationCatalog = new SidebarNavigationCatalog(this, () => this.context);
+  abstract readonly navigationCatalog: SidebarNavigationCatalog;
   sessionPullRequests!: SessionPullRequestIndicators;
 
   readSessionPullRequestRows(): readonly SidebarRecentSession[] {

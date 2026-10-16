@@ -80,6 +80,29 @@ describe("applySystemAgentModelSelection", () => {
     });
   });
 
+  it.each(["defaults", "agent"] as const)(
+    "keeps %s utility fallbacks when setup replaces the primary",
+    async (owner) => {
+      const utilityModel = { primary: "local/old", fallbacks: ["local/backup"] };
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: { utilityModel },
+          entries: { main: owner === "agent" ? { utilityModel } : {} },
+        },
+      };
+      const result = await applySystemAgentModelSelection({
+        config,
+        model: "local/new",
+        modelTarget: "utility",
+      });
+      expect(
+        owner === "agent"
+          ? result.agents?.entries?.main?.utilityModel
+          : result.agents?.defaults?.utilityModel,
+      ).toEqual({ primary: "local/new", fallbacks: ["local/backup"] });
+    },
+  );
+
   it("keeps a newly approved model allowed when migrating a first-run legacy model map", async () => {
     const cfg = await applySystemAgentModelSelection({
       config: { agents: { defaults: { models: { "fixture/old": {} } } } },

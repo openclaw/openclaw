@@ -395,6 +395,7 @@ function writeProgressFault(root: string, code: string, phase: string): string {
       }
       return write.call(this, fd, value, ...args);
     };
+    require("node:module").syncBuiltinESMExports();
     `,
   );
   return preload;

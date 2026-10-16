@@ -63,7 +63,9 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-index-schema.ts",
     "src/infra/sqlite-integrity.ts",
     "src/infra/sqlite-pragma.test-support.ts",
+    "src/infra/sqlite-schema-catalog.ts",
     "src/infra/sqlite-schema-contract.ts",
+    "src/infra/sqlite-schema-dynamic.ts",
     // Cross-store reservations own native BEGIN/ROLLBACK, without application queries.
     "src/infra/sqlite-source-fence.ts",
     "src/infra/sqlite-strict.ts",

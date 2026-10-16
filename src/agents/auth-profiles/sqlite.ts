@@ -9,7 +9,7 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { assertEngineStoreExecutionAllowed } from "../../infra/database-engine/admission-scope.js";
-import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
+import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../../infra/node-sqlite.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
@@ -198,7 +198,7 @@ function resolveAuthProfileDatabaseKind(
 /** Validate selected-agent ownership without requiring a current session schema. */
 export function assertAuthProfileStoreAgentOwner(agentDir: string, agentId: string): void {
   const pathname = resolveAuthProfileDatabasePath(agentDir);
-  if (getDatabaseEngineSelection()?.input) {
+  if (getDatabaseEngineInput("agent")) {
     const opened = openOpenClawAgentDatabaseReadOnly({ agentId, path: pathname });
     if (opened.found) {
       opened.database.close();
@@ -264,7 +264,7 @@ export function inspectAuthProfileJsonCellReadOnly(
         : { status: "unreadable" };
     }
   }
-  if (getDatabaseEngineSelection()?.input) {
+  if (getDatabaseEngineInput("agent")) {
     try {
       return (
         readSelectedAgentAuthDatabase(databaseTarget, (db) =>
@@ -292,7 +292,7 @@ export function readAuthProfileStateJsonTextReadOnly(
       { path: target.path, ...(target.env ? { env: target.env } : {}) },
     );
   }
-  if (getDatabaseEngineSelection()?.input) {
+  if (getDatabaseEngineInput("agent")) {
     const result = readSelectedAgentAuthDatabase(target, (db) =>
       readAuthProfileJsonCellText(db, "state", "agent"),
     );

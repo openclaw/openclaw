@@ -12,6 +12,12 @@ import {
   type ModelRoutingPercentiles,
   type ModelRoutingSortConfig,
 } from "../../llm-core/src/model-data.js";
+import type { ModelInferenceCapabilities } from "./model-inference-capabilities.js";
+
+export type {
+  ModelInferenceCapabilities,
+  ModelDecisionCapabilities,
+} from "./model-inference-capabilities.js";
 
 // Tier capacity is separate from the model's full context window. Leave room
 // below the observed serving boundary for output and tool-round growth.
@@ -215,6 +221,8 @@ export const MODEL_CATALOG_MAX_CONTEXT_WINDOWS = 16;
 
 export type ModelCatalogModel = {
   id: string;
+  /** Task facts for this exact served route, independent of chat wire metadata. */
+  inference?: ModelInferenceCapabilities;
   name?: string;
   api?: ModelCatalogApi;
   baseUrl?: string;

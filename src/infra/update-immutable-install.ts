@@ -523,7 +523,7 @@ export async function prepareImmutableUpdate(params: {
     requireUpdater();
     const { verifyImmutableService } = await import("./update-immutable-service.js");
     const { runImmutableBuild } = await import("./update-immutable-build.js");
-    const { readGitTargetSchemaVersions } = await import("./update-runner-git-target.js");
+    const { readGitTargetSchemaVersions } = await import("./update-runner-git-schema.js");
     const selectedSha = targetSha;
     return await withImmutableUpdateOwner(installation.root, async (assertOwner) => {
       const record = await readImmutableInstallRecord(installation.root);

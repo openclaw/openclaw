@@ -1,10 +1,9 @@
-import { createMemo, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import type { SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import {
   chatProviderReviewRow,
   holdProviderReviewQueuedInputs,
@@ -13,46 +12,45 @@ import {
 import { isTerminalFailureChatSendAck, normalizeChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 
-export class ChatProviderReviewController {
-  private canWrite = false;
+type ReviewBinding = {
+  state: ChatHost;
+  sessionKey: string;
+  sessionId: string;
+  agentId?: string;
+  client: ChatHost["client"];
+  connectionEpoch: number;
+  connectionGeneration: number | undefined;
+  review: ChatProviderReview;
+  idempotencyKey: string;
+  attemptedRunId: string | null;
+  accepted: boolean;
+};
 
-  private binding: {
-    state: ChatHost;
-    sessionKey: string;
-    sessionId: string;
-    agentId?: string;
-    client: ChatHost["client"];
-    connectionEpoch: number;
-    connectionGeneration: number | undefined;
-    review: ChatProviderReview;
-    open: boolean;
-    loading: boolean;
-    pending: boolean;
-    submitted: boolean;
-    refreshing: boolean;
-    error: string | null;
-    idempotencyKey: string;
-    attemptedRunId: string | null;
-  } | null = null;
+type ReviewPresentation = {
+  binding: ReviewBinding | null;
+  open: boolean;
+  loading: boolean;
+  pending: boolean;
+  submitted: boolean;
+  refreshing: boolean;
+  error: string | null;
+};
 
-  constructor(
-    host: Pick<SolidControllerHost, "addController">,
-    private readonly readState: () => ChatHost | undefined,
-    private readonly notify: () => void,
-  ) {
-    host.addController(this);
-  }
+export function createChatProviderReview(deps: {
+  source: () => { state: ChatHost; canWrite: boolean } | undefined;
+  readState: () => ChatHost | undefined;
+}) {
+  let disposed = false;
+  let continuationInFlight: ReviewBinding | null = null;
+  let refreshInFlight: ReviewBinding | null = null;
+  onCleanup(() => {
+    disposed = true;
+  });
 
-  hostDisconnected() {
-    this.binding = null;
-  }
-
-  private isCurrent(binding: NonNullable<ChatProviderReviewController["binding"]>): boolean {
-    const state = this.readState();
+  const matches = (binding: ReviewBinding, state = deps.readState()) => {
     const row = state && chatProviderReviewRow(state);
     const review = row?.providerReview;
     return (
-      this.binding === binding &&
       state === binding.state &&
       state.connected &&
       state.client === binding.client &&
@@ -68,21 +66,17 @@ export class ChatProviderReviewController {
       review.continuationMessage === binding.review.continuationMessage &&
       review.canContinue === binding.review.canContinue
     );
-  }
-
-  sync(canWrite: boolean): void {
-    this.canWrite = canWrite;
-    if (this.binding && this.isCurrent(this.binding)) {
-      this.reconcileTerminalAttempt(this.binding);
-      return;
-    }
-    this.binding = null;
-    const state = this.readState();
+  };
+  const binding = createMemo<ReviewBinding | null>((previous) => {
+    const state = deps.source()?.state;
     const row = state && chatProviderReviewRow(state);
     if (!state?.connected || !row?.sessionId || !row.providerReview) {
-      return;
+      return null;
     }
-    this.binding = {
+    if (previous && matches(previous, state)) {
+      return previous;
+    }
+    return {
       state,
       sessionKey: state.sessionKey,
       sessionId: row.sessionId,
@@ -91,199 +85,189 @@ export class ChatProviderReviewController {
       connectionEpoch: state.connectionEpoch,
       connectionGeneration: state.client?.connectionGeneration,
       review: row.providerReview,
-      open: false,
-      loading: false,
-      pending: false,
-      submitted: false,
-      refreshing: false,
-      error: null,
       idempotencyKey: generateUUID(),
       attemptedRunId: null,
+      accepted: false,
     };
-  }
-
-  private reconcileTerminalAttempt(binding: NonNullable<ChatProviderReviewController["binding"]>) {
-    // An unresolved ACK or status read still owns its result; settle it before offering another attempt.
-    if (binding.pending || binding.refreshing || !binding.attemptedRunId) {
-      return;
+  });
+  // A new review identity resets local presentation; ordinary pane publications preserve it.
+  const [presentation, setPresentation] = createSignal<ReviewPresentation>((previous) => {
+    const current = binding();
+    return previous?.binding === current
+      ? previous
+      : {
+          binding: current,
+          open: false,
+          loading: false,
+          pending: false,
+          submitted: false,
+          refreshing: false,
+          error: null,
+        };
+  });
+  const isCurrent = (current: ReviewBinding) =>
+    // Admission reads current authority without subscribing the caller to presentation.
+    !disposed && untrack(binding) === current && matches(current);
+  const update = (
+    current: ReviewBinding | null,
+    patch: Partial<Omit<ReviewPresentation, "binding">>,
+  ) => {
+    if (current && isCurrent(current)) {
+      setPresentation((previous) => ({ ...previous, ...patch }));
     }
-    const row = chatProviderReviewRow(binding.state);
-    if (
-      !row ||
-      row.lastRunId !== binding.attemptedRunId ||
-      row.hasActiveRun !== false ||
-      row.activeRunIds?.length ||
-      (row.status !== "failed" && row.status !== "timeout" && row.status !== "killed")
-    ) {
-      return;
-    }
-    this.recordFailedAttempt(binding, row.lastRunError);
-  }
-
-  private recordFailedAttempt(
-    binding: NonNullable<ChatProviderReviewController["binding"]>,
-    error?: string,
-  ) {
-    binding.submitted = false;
-    binding.attemptedRunId = null;
-    // The old key now owns a terminal receipt. Only a new explicit click may submit this fresh key.
-    binding.idempotencyKey = generateUUID();
-    binding.error = [
-      t("chat.providerReview.continuationFailed"),
-      error ? formatUiError(error) : null,
-    ]
+  };
+  const failureMessage = (error?: string) =>
+    [t("chat.providerReview.continuationFailed"), error ? formatUiError(error) : null]
       .filter(Boolean)
       .join(" ");
-  }
-
-  private clearCurrentFlag(
-    binding: NonNullable<ChatProviderReviewController["binding"]>,
-    flag: "open" | "loading" | "pending" | "refreshing",
-  ) {
-    if (this.isCurrent(binding)) {
-      binding[flag] = false;
-      this.notify();
-    }
-  }
-
-  private async open(binding: NonNullable<ChatProviderReviewController["binding"]>) {
-    if (!this.isCurrent(binding) || binding.loading) {
+  const recordFailedAttempt = (current: ReviewBinding, error: string) => {
+    current.accepted = false;
+    current.attemptedRunId = null;
+    // A terminal receipt owns the old key; another explicit click gets a fresh one.
+    current.idempotencyKey = generateUUID();
+    update(current, { submitted: false, error });
+  };
+  // Canonical terminal receipts settle transport authority, rather than copying row state.
+  createEffect(
+    () => {
+      const source = deps.source();
+      const current = binding();
+      const activity = presentation();
+      const row = source && chatProviderReviewRow(source.state);
+      return current &&
+        !activity.pending &&
+        !activity.refreshing &&
+        current.attemptedRunId &&
+        row?.lastRunId === current.attemptedRunId &&
+        row.hasActiveRun === false &&
+        !row.activeRunIds?.length &&
+        (row.status === "failed" || row.status === "timeout" || row.status === "killed")
+        ? { current, error: failureMessage(row.lastRunError) }
+        : null;
+    },
+    (terminal) => {
+      if (
+        terminal &&
+        isCurrent(terminal.current) &&
+        continuationInFlight !== terminal.current &&
+        refreshInFlight !== terminal.current
+      ) {
+        recordFailedAttempt(terminal.current, terminal.error);
+      }
+    },
+  );
+  const refresh = async (current: ReviewBinding | null) => {
+    if (!current || !isCurrent(current) || !current.accepted || refreshInFlight === current) {
       return;
     }
-    binding.loading = true;
-    this.notify();
+    refreshInFlight = current;
+    update(current, { refreshing: true, error: null });
     try {
-      await import("../../components/modal-dialog.ts");
-      if (this.isCurrent(binding)) {
-        binding.open = true;
-      }
-    } catch (error) {
-      if (this.isCurrent(binding)) {
-        binding.error = formatUiError(error);
-      }
-    } finally {
-      this.clearCurrentFlag(binding, "loading");
-    }
-  }
-
-  private async acknowledge(binding: NonNullable<ChatProviderReviewController["binding"]>) {
-    if (
-      !this.isCurrent(binding) ||
-      !binding.open ||
-      !this.canWrite ||
-      binding.pending ||
-      binding.submitted ||
-      !binding.review.canContinue ||
-      !binding.review.explanation?.trim() ||
-      !binding.review.continuationMessage?.trim()
-    ) {
-      return;
-    }
-    if (!holdProviderReviewQueuedInputs(binding.state, binding.sessionKey, binding.agentId)) {
-      binding.error = t("chat.providerReview.queueHoldFailed");
-      this.notify();
-      return;
-    }
-    binding.pending = true;
-    binding.attemptedRunId = binding.idempotencyKey;
-    binding.error = null;
-    this.notify();
-    try {
-      const result = await binding.client!.request("sessions.providerReview.continue", {
-        sessionKey: binding.sessionKey,
-        ...(binding.agentId ? { agentId: binding.agentId } : {}),
-        sessionId: binding.sessionId,
-        reviewId: binding.review.id,
-        idempotencyKey: binding.idempotencyKey,
-      });
-      if (!this.isCurrent(binding)) {
-        return;
-      }
-      const ack = normalizeChatSendAck(result, binding.idempotencyKey);
-      if (isTerminalFailureChatSendAck(ack)) {
-        this.recordFailedAttempt(binding);
-        return;
-      }
-      binding.attemptedRunId = ack.runId;
-      binding.submitted = true;
-      // A transport ACK does not clear the pause. Only the canonical row can do that.
-      await this.refresh(binding);
-    } catch (error) {
-      if (this.isCurrent(binding)) {
-        binding.error = formatUiError(error);
-      }
-    } finally {
-      this.clearCurrentFlag(binding, "pending");
-    }
-  }
-
-  private async refresh(binding: NonNullable<ChatProviderReviewController["binding"]>) {
-    if (!this.isCurrent(binding) || !binding.submitted || binding.refreshing) {
-      return;
-    }
-    binding.refreshing = true;
-    binding.error = null;
-    this.notify();
-    try {
-      const outcome = await binding.state.sessions.reconcileMutation(binding.agentId);
-      if (this.isCurrent(binding) && outcome.status === "failed") {
-        binding.error = t("chat.providerReview.refreshFailed");
+      const outcome = await current.state.sessions.reconcileMutation(current.agentId);
+      if (outcome.status === "failed") {
+        update(current, { error: t("chat.providerReview.refreshFailed") });
       }
     } catch {
-      if (this.isCurrent(binding)) {
-        binding.error = t("chat.providerReview.refreshFailed");
-      }
+      update(current, { error: t("chat.providerReview.refreshFailed") });
     } finally {
-      this.clearCurrentFlag(binding, "refreshing");
+      if (refreshInFlight === current) {
+        refreshInFlight = null;
+      }
+      update(current, { refreshing: false });
     }
-  }
-
-  view() {
-    const state = this.readState();
-    const review = state && chatProviderReviewRow(state)?.providerReview;
-    const binding = this.binding;
-    const dialog = binding?.open && this.isCurrent(binding) ? binding : null;
+  };
+  const view = createMemo(() => {
+    const activity = presentation();
+    const current = binding();
+    const source = deps.source();
     return {
-      review,
-      dialog,
-      error: binding?.error,
-      loading: binding?.loading,
-      available: Boolean(binding),
-      canWrite: this.canWrite,
-      onOpen: () => {
-        if (binding) {
-          void this.open(binding);
-        }
-      },
-      onClose: () => {
-        if (dialog) {
-          this.clearCurrentFlag(dialog, "open");
-        }
-      },
-      onRefresh: () => {
-        if (dialog) {
-          void this.refresh(dialog);
-        }
-      },
-      onAcknowledge: () => {
-        if (dialog) {
-          void this.acknowledge(dialog);
-        }
-      },
+      ...activity,
+      review: source && chatProviderReviewRow(source.state)?.providerReview,
+      dialog: activity.open && current && matches(current) ? current : null,
+      available: Boolean(current),
+      canWrite: source?.canWrite ?? false,
     };
-  }
+  });
+  return {
+    view,
+    async open() {
+      const current = binding();
+      if (!current || !isCurrent(current) || presentation().loading) {
+        return;
+      }
+      update(current, { loading: true });
+      try {
+        await import("../../components/modal-dialog.ts");
+        update(current, { open: true });
+      } catch (error) {
+        update(current, { error: formatUiError(error) });
+      } finally {
+        update(current, { loading: false });
+      }
+    },
+    close: () => update(binding(), { open: false }),
+    refresh: () => void refresh(view().dialog),
+    async acknowledge() {
+      const current = binding();
+      if (
+        !current ||
+        !isCurrent(current) ||
+        !presentation().open ||
+        !deps.source()?.canWrite ||
+        continuationInFlight === current ||
+        current.accepted ||
+        !current.review.canContinue ||
+        !current.review.explanation?.trim() ||
+        !current.review.continuationMessage?.trim()
+      ) {
+        return;
+      }
+      if (!holdProviderReviewQueuedInputs(current.state, current.sessionKey, current.agentId)) {
+        update(current, { error: t("chat.providerReview.queueHoldFailed") });
+        return;
+      }
+      // Request claims stay synchronous: Solid's presentation writes are deferred.
+      continuationInFlight = current;
+      current.attemptedRunId = current.idempotencyKey;
+      update(current, { pending: true, error: null });
+      try {
+        const result = await current.client!.request("sessions.providerReview.continue", {
+          sessionKey: current.sessionKey,
+          ...(current.agentId ? { agentId: current.agentId } : {}),
+          sessionId: current.sessionId,
+          reviewId: current.review.id,
+          idempotencyKey: current.idempotencyKey,
+        });
+        if (!isCurrent(current)) {
+          return;
+        }
+        const ack = normalizeChatSendAck(result, current.idempotencyKey);
+        if (isTerminalFailureChatSendAck(ack)) {
+          recordFailedAttempt(current, failureMessage());
+          return;
+        }
+        current.attemptedRunId = ack.runId;
+        current.accepted = true;
+        update(current, { submitted: true });
+        // A transport ACK does not clear the pause. Only the canonical row can do that.
+        await refresh(current);
+      } catch (error) {
+        update(current, { error: formatUiError(error) });
+      } finally {
+        if (continuationInFlight === current) {
+          continuationInFlight = null;
+        }
+        update(current, { pending: false });
+      }
+    },
+  };
 }
 
-type ProviderReviewViewProps = {
-  controller: ChatProviderReviewController;
-  revision?: unknown;
-};
+export type ChatProviderReviewOwner = ReturnType<typeof createChatProviderReview>;
+type ProviderReviewViewProps = { owner: ChatProviderReviewOwner };
 
 export function ChatProviderReviewNotice(props: ProviderReviewViewProps) {
-  const view = createMemo(() => {
-    void props.revision;
-    return props.controller.view();
-  });
+  const view = () => props.owner.view();
   return (
     <Show when={view().review} keyed>
       {(review) => {
@@ -320,7 +304,7 @@ export function ChatProviderReviewNotice(props: ProviderReviewViewProps) {
                 class="btn btn--sm"
                 type="button"
                 disabled={view().loading || !view().available}
-                onClick={() => view().onOpen()}
+                onClick={() => void props.owner.open()}
               >
                 {t("chat.providerReview.review")}
               </button>
@@ -333,10 +317,7 @@ export function ChatProviderReviewNotice(props: ProviderReviewViewProps) {
 }
 
 export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
-  const view = createMemo(() => {
-    void props.revision;
-    return props.controller.view();
-  });
+  const view = () => props.owner.view();
   return (
     <Show when={view().dialog} keyed>
       {(binding) => {
@@ -344,15 +325,10 @@ export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
         const canContinue =
           review.canContinue &&
           Boolean(review.explanation?.trim() && review.continuationMessage?.trim());
-        // The binding is stable until the owner changes; publications refresh its fields without remounting the modal.
-        const current = () => {
-          view();
-          return binding;
-        };
         return (
           <openclaw-modal-dialog
             label={t("chat.providerReview.review")}
-            onModal-cancel={() => view().onClose()}
+            onModal-cancel={() => props.owner.close()}
           >
             <section class="exec-approval-card chat-provider-review-dialog">
               <h2 class="exec-approval-title">
@@ -383,15 +359,15 @@ export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
                       : "chat.providerReview.queueStopped",
                   )}
                 </p>
-                {current().error ? (
+                {view().error ? (
                   <p class="callout danger" role="alert">
-                    {current().error}
+                    {view().error}
                   </p>
                 ) : null}
-                {current().submitted && !current().error ? (
+                {view().submitted && !view().error ? (
                   <p role="status">
                     {t(
-                      current().refreshing
+                      view().refreshing
                         ? "chat.providerReview.checkingStatus"
                         : "chat.providerReview.waiting",
                     )}
@@ -399,18 +375,18 @@ export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
                 ) : null}
               </div>
               <openclaw-modal-actions class="exec-approval-actions">
-                <button type="button" class="btn" autofocus onClick={() => view().onClose()}>
+                <button type="button" class="btn" autofocus onClick={() => props.owner.close()}>
                   {t("common.close")}
                 </button>
-                {current().submitted ? (
+                {view().submitted ? (
                   <button
                     type="button"
                     class="btn"
-                    disabled={current().refreshing}
-                    onClick={() => view().onRefresh()}
+                    disabled={view().refreshing}
+                    onClick={() => props.owner.refresh()}
                   >
                     {t(
-                      current().refreshing
+                      view().refreshing
                         ? "chat.providerReview.checkingStatus"
                         : "chat.providerReview.checkStatus",
                     )}
@@ -420,11 +396,11 @@ export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
                   <button
                     type="button"
                     class="btn primary"
-                    disabled={!view().canWrite || current().pending || current().submitted}
-                    onClick={() => view().onAcknowledge()}
+                    disabled={!view().canWrite || view().pending || view().submitted}
+                    onClick={() => void props.owner.acknowledge()}
                   >
                     {t(
-                      current().pending && !current().submitted
+                      view().pending && !view().submitted
                         ? "chat.providerReview.continuing"
                         : "chat.providerReview.acknowledge",
                     )}

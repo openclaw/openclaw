@@ -44,6 +44,10 @@ function managedImageResourceIdentity(
     : undefined;
   const authToken = opts?.authToken?.trim() ?? "";
   const artifactKey = artifactId?.trim() ?? "";
+  const artifactSessionKey =
+    artifactKey && opts?.resolveArtifactDownload && source
+      ? resolveManagedOutgoingMediaSessionKey(source)
+      : undefined;
   const cacheKey = JSON.stringify([
     opts?.connectionEpoch,
     opts?.resourceBasePath,
@@ -51,7 +55,7 @@ function managedImageResourceIdentity(
     opts?.agentId,
     opts?.policyKey,
     authToken,
-    variantUrl,
+    artifactSessionKey ?? variantUrl,
     artifactKey,
     variant,
     variant === "thumbnail" ? previewWidth : undefined,

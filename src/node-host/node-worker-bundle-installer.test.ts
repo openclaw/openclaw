@@ -13,6 +13,7 @@ import {
 import { withinTest } from "../../test/helpers/promise.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { NodeWorkerBundleInstallError } from "../worker/node-bundle-install-protocol.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import {
   buildBundleFixture,
@@ -20,6 +21,18 @@ import {
   type BundleFixture,
   type BundleFixtureOptions,
 } from "./node-worker-bundle-installer.test-support.js";
+
+const bundleWarnings = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "node/worker-bundle" ? { ...logger, warn: bundleWarnings } : logger;
+    },
+  };
+});
 
 vi.mock("node:timers/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:timers/promises")>();
@@ -50,6 +63,7 @@ describe("node worker bundle installer", () => {
   });
 
   beforeEach(async () => {
+    bundleWarnings.mockClear();
     vi.mocked(timers.setTimeout).mockReset();
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-node-bundle-"));
   });
@@ -248,6 +262,112 @@ describe("node worker bundle installer", () => {
     ).resolves.toEqual([]);
   });
 
+  it.each(["missing", "malformed"] as const)(
+    "quietly repairs a %s bundle cache receipt",
+    async (receiptState) => {
+      const fixture = await bundleFixture();
+      await prepareLocalArchive(fixture);
+      const installer = new NodeWorkerBundleInstaller({ root });
+      const destination = path.join(
+        root,
+        fixture.input.gatewayNamespace,
+        "bundles",
+        fixture.input.build.bundleHash,
+      );
+      if (receiptState === "malformed") {
+        await fs.mkdir(destination, { recursive: true });
+        await fs.writeFile(path.join(destination, "bootstrap-receipt.json"), "{invalid");
+      }
+      const inspection = {
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHash: fixture.input.build.bundleHash,
+      };
+
+      await expect(installer.inspect(inspection)).resolves.toEqual({
+        bundleHash: fixture.input.build.bundleHash,
+        status: "missing",
+      });
+      await expect(
+        installer.ensure({ input: fixture.input, gatewayUrl: "ws://127.0.0.1:1" }),
+      ).resolves.toEqual(fixture.input.build);
+      await expect(installer.inspect(inspection)).resolves.toEqual({
+        bundleHash: fixture.input.build.bundleHash,
+        status: "installed",
+      });
+      expect(bundleWarnings).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["receipt", "EACCES"],
+    ["manifest", "EIO"],
+  ] as const)(
+    "reports %s %s failures once per operation while preserving cache repair",
+    async (phase, errorCode) => {
+      const fixture = await bundleFixture();
+      await prepareLocalArchive(fixture);
+      const installer = new NodeWorkerBundleInstaller({ root });
+      const install = { input: fixture.input, gatewayUrl: "ws://127.0.0.1:1" };
+      await installer.ensure(install);
+      const destination = path.join(
+        root,
+        fixture.input.gatewayNamespace,
+        "bundles",
+        fixture.input.build.bundleHash,
+      );
+      const failure = Object.assign(new Error("synthetic private message and tool content"), {
+        code: errorCode,
+        request: { body: "synthetic private request" },
+      });
+      let failuresRemaining = 2;
+      const readFile = fs.readFile.bind(fs);
+      const readdir = fs.readdir.bind(fs);
+      const readFailure =
+        phase === "receipt"
+          ? vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+              if (
+                args[0] === path.join(destination, "bootstrap-receipt.json") &&
+                failuresRemaining > 0
+              ) {
+                failuresRemaining--;
+                throw failure;
+              }
+              return await readFile(...args);
+            })
+          : vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+              if (args[0] === destination && failuresRemaining > 0) {
+                failuresRemaining--;
+                throw failure;
+              }
+              return await readdir(...args);
+            });
+      const inspection = {
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHash: fixture.input.build.bundleHash,
+      };
+      const warning =
+        phase === "receipt"
+          ? "Worker bundle receipt read failed; treating installation as missing. Check node-host storage permissions and disk health."
+          : "Worker bundle cache read failed; treating installation as missing. Check node-host storage permissions and disk health.";
+
+      await expect(installer.inspect(inspection)).resolves.toEqual({
+        bundleHash: fixture.input.build.bundleHash,
+        status: "missing",
+      });
+      expect(bundleWarnings).toHaveBeenCalledExactlyOnceWith(warning, { errorCode });
+      bundleWarnings.mockClear();
+      await expect(installer.ensure(install)).resolves.toEqual(fixture.input.build);
+      expect(bundleWarnings).toHaveBeenCalledExactlyOnceWith(warning, { errorCode });
+      expect(failuresRemaining).toBe(0);
+      readFailure.mockRestore();
+      await expect(installer.inspect(inspection)).resolves.toEqual({
+        bundleHash: fixture.input.build.bundleHash,
+        status: "installed",
+      });
+      expect(bundleWarnings).toHaveBeenCalledExactlyOnceWith(warning, { errorCode });
+    },
+  );
+
   it("installs the exact prepared archive without HTTP and creates a fresh admission receipt", async () => {
     const fixture = await bundleFixture();
     const archivePath = await prepareLocalArchive(fixture);
@@ -426,6 +546,51 @@ describe("node worker bundle installer", () => {
     await expect(fs.readFile(path.join(destination, "prior-install"), "utf8")).resolves.toBe(
       "preserved",
     );
+  });
+
+  it("reports retained prior bytes when publication and rollback both fail", async () => {
+    const fixture = await bundleFixture();
+    await prepareLocalArchive(fixture);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const bundlesRoot = path.join(root, fixture.input.gatewayNamespace, "bundles");
+    const destination = path.join(bundlesRoot, fixture.input.build.bundleHash);
+    const priorBytes = Buffer.from("prior installation\n");
+    await fs.mkdir(destination, { recursive: true });
+    await fs.writeFile(path.join(destination, "prior-install"), priorBytes);
+    const publicationFailure = new Error("staging publication failed");
+    const rollbackFailure = new Error("prior installation rollback failed");
+    const rename = fs.rename.bind(fs);
+    let backup = "";
+    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      if (args[0] === destination) {
+        await rename(...args);
+        backup = String(args[1]);
+        return;
+      }
+      if (args[1] === destination) {
+        throw args[0] === backup ? rollbackFailure : publicationFailure;
+      }
+      await rename(...args);
+    });
+
+    const failure: unknown = await installer
+      .ensure({ input: fixture.input, gatewayUrl: "ws://127.0.0.1:1" })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(NodeWorkerBundleInstallError);
+    expect(failure).toHaveProperty(
+      "message",
+      `worker-bundle-install-failed: bundle transfer rollback failed; recover ${backup}`,
+    );
+    if (!(failure instanceof Error) || !(failure.cause instanceof Error)) {
+      throw new Error("expected installer recovery failure", { cause: failure });
+    }
+    expect(failure.cause.cause).toBe(publicationFailure);
+    expect(failure.cause).toHaveProperty("rollbackError", rollbackFailure);
+    expect(backup.startsWith(`${destination}.previous-`)).toBe(true);
+    await expect(fs.readdir(bundlesRoot)).resolves.toEqual([path.basename(backup)]);
+    await expect(fs.readdir(backup)).resolves.toEqual(["prior-install"]);
+    await expect(fs.readFile(path.join(backup, "prior-install"))).resolves.toEqual(priorBytes);
+    await expect(fs.access(destination)).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it("does not renew retention when cancelled while validating an installed bundle", async () => {

@@ -2,17 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
-import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveDaemonRuntimePinStorePath } from "../daemon/runtime-pin-store.js";
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
-import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import {
-  resolveOpenClawRegisteredAgentDatabasePath,
-  resolveOpenClawStateDirForDatabasePath,
-} from "../state/openclaw-state-db.paths.js";
+import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-state-db.paths.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerHasSourceCustody,
@@ -33,7 +29,6 @@ import {
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
-import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import {
   StateDatabaseDiscoverySchema,
   UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
@@ -48,7 +43,6 @@ import {
   sealUpdateCandidatePluginCodeLinks,
   type UpdateCandidatePluginCodeLink,
 } from "./update-candidate-plugin-code-links.js";
-import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
 import {
   createUpdateStateIoReporter,
   createUpdateStateSnapshotReporter,
@@ -59,6 +53,11 @@ import {
   runUpdateStateInspectionWorker,
 } from "./update-candidate-state.inspection.js";
 import { withStateInspectionCleanup } from "./update-candidate-state.process.js";
+import {
+  collectRegisteredPaths,
+  readSharedDatabaseVersion,
+  type StateInput,
+} from "./update-candidate-state.shared.js";
 import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
@@ -81,14 +80,6 @@ export const UpdateCandidateStateSnapshotSchema = z.object({
   pluginPaths: z.record(z.string(), z.string()),
   pluginCodeLinks: UpdateCandidatePluginCodeLinkReceiptSchema.optional(),
 });
-type StateInput = {
-  stateDir: string;
-  config: OpenClawConfigWithLegacyRoster;
-  includeLocalStoreVersions?: boolean;
-  env?: NodeJS.ProcessEnv;
-  includeRetainedAgentPaths?: true;
-  sourceBundledPlugins?: UpdateCandidateBundledSource;
-};
 type CandidateStateDatabase = Pick<
   DB,
   "agent_databases" | "agent_database_leases" | "state_leases"
@@ -109,43 +100,6 @@ export const UpdateStateSchemaInspectionPlanSchema = z.object({
   sharedVersion: UpdateStateSchemaVersionsSchema.element,
 });
 type UpdateStateSchemaInspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
-
-function collectRegisteredPaths(
-  db: DatabaseSync,
-  shared: string,
-  files: Map<string, StateDatabaseDiscovery>,
-) {
-  // Raw registries can predate agent IDs; keep their paths without inventing ownership.
-  const rows = tableExists(db, "agent_databases")
-    ? executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<CandidateStateDatabase>(db)
-          .selectFrom("agent_databases")
-          .select("path")
-          .select((eb) =>
-            tableHasColumn(db, "agent_databases", "agent_id")
-              ? eb.ref("agent_id").as("agent_id")
-              : eb.val(null).as("agent_id"),
-          )
-          .orderBy("path"),
-      ).rows
-    : [];
-  return rows.map(({ path: stored, agent_id: agentId }) => {
-    const source = resolveOpenClawRegisteredAgentDatabasePath(shared, stored);
-    // Discover registrations from the exact private generation being inspected.
-    // Spellings dedupe on one projection identity per database, but every raw
-    // alias stays queued: released workers reported them all, and released
-    // rollback baselines compare exact paths against the versions response.
-    queueStateDatabaseSpelling(
-      files,
-      resolveOpenClawStateDirForDatabasePath(shared),
-      source,
-      typeof agentId === "string" && agentId.length > 0 ? { role: "agent", agentId } : undefined,
-      stored,
-    );
-    return { stored, source, agentId };
-  });
-}
 
 async function withStateDatabaseSnapshot<T>(
   file: string,
@@ -228,6 +182,18 @@ export async function collectStateDatabasePaths(
   );
 }
 
+async function collectUpdateCandidateDatabasePaths(input: StateInput) {
+  const files = await collectStateDatabasePaths(input);
+  if (input.config.database?.engine === "postgres") {
+    const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
+    // Capture already froze plugin roots before taking maintenance custody.
+    for (const file of input.additionalPaths ?? (await discoverBackupDatabasePaths(input))) {
+      queueStateDatabaseSpelling(files, input.stateDir, file);
+    }
+  }
+  return files;
+}
+
 /** Publish exact aliases; released shared/agent callers opt out of local schema versions. */
 function publishStateDatabaseVersions(
   files: Map<string, StateDatabaseDiscovery>,
@@ -279,16 +245,18 @@ export async function readUpdateCandidateStateInventoryInProcess(
     await fs.utimes(planPath, new Date(now), new Date(now));
   };
   const { prepareUpdateCandidatePlugins } = await import("./update-candidate-plugins.js");
-  const files = await collectStateDatabasePaths(input);
+  const files = await collectUpdateCandidateDatabasePaths(input);
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   const measure = async (
     sharedStateDatabasePath?: string,
+    sharedStatePluginIndex?: import("./update-candidate-plugins.js").UpdateCandidatePluginIndex,
   ): Promise<z.infer<typeof UpdateCandidateSnapshotInventorySchema>> => {
     // Database discovery is complete; plugin failures must retain their own phase.
     input.onProgress?.({ phase: "plugin inventory", path: input.stateDir });
     const plugins = await prepareUpdateCandidatePlugins({
       ...input,
       sharedStateDatabasePath,
+      sharedStatePluginIndex,
       onProgress,
     });
     await fs.writeFile(planPath, JSON.stringify(plugins));
@@ -300,6 +268,14 @@ export async function readUpdateCandidateStateInventoryInProcess(
     };
   };
   if (await updateStateDatabaseExists(shared)) {
+    if (input.config.database?.engine === "postgres") {
+      const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
+      const result = await readUpdatePostgresState(input, files);
+      for (const [identity, discovery] of result.files) {
+        files.set(identity, discovery);
+      }
+      return measure(undefined, result.pluginIndex);
+    }
     return withStateDatabaseSnapshot(
       shared,
       async (location) => {
@@ -318,30 +294,6 @@ export async function readUpdateCandidateStateInventoryInProcess(
   return measure();
 }
 
-async function readSharedDatabaseVersion(
-  location: string,
-  shared: string,
-  files: Map<string, StateDatabaseDiscovery>,
-  input: StateInput,
-): Promise<Omit<UpdateStateSchemaVersion, "path">> {
-  const db = openNodeSqliteDatabase(location, { readOnly: true });
-  try {
-    const registered = collectRegisteredPaths(db, shared, files);
-    let held: string[] = [];
-    if (input.includeRetainedAgentPaths) {
-      const { readUpdateHeldAgentPaths } = await import("./update-candidate-state.retained.js");
-      held = readUpdateHeldAgentPaths(db, shared, files.values(), registered, input);
-    }
-    return {
-      userVersion: readSqliteUserVersion(db),
-      contentVersion: readStateSchemaContentVersion(db),
-      ...(held.length ? { retainedAgentPaths: held } : {}),
-    };
-  } finally {
-    db.close();
-  }
-}
-
 /** Discover registered stores from the same private shared-database generation used for inspection. */
 export async function discoverUpdateStateSchemaInspectionInProcess(
   input: StateInput & {
@@ -352,9 +304,14 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
 ): Promise<UpdateStateSchemaInspectionPlan> {
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   input.onProgress?.({ phase: "shared database discovery", path: shared });
-  const files = await collectStateDatabasePaths(input);
+  const files = await collectUpdateCandidateDatabasePaths(input);
   if (!(await updateStateDatabaseExists(shared))) {
     return { files: [...files], sharedVersion: { path: shared, userVersion: null } };
+  }
+  if (input.config.database?.engine === "postgres") {
+    const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
+    const result = await readUpdatePostgresState(input, files);
+    return { files: result.files, sharedVersion: { path: shared, ...result.version } };
   }
   const sharedVersion = await withStateDatabaseSnapshot(
     shared,
@@ -381,7 +338,7 @@ export async function readUpdateStateSchemaVersionsInProcess(
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   const files = input.inspectionPlan
     ? new Map(input.inspectionPlan.files)
-    : await collectStateDatabasePaths(input);
+    : await collectUpdateCandidateDatabasePaths(input);
   const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
   // Inspect each identity once, then publish every spelling for released rollback baselines.
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
@@ -404,6 +361,15 @@ export async function readUpdateStateSchemaVersionsInProcess(
     // Missing stores stay explicit so creation is checked and loss blocks rollback.
     if (!(await updateStateDatabaseExists(file))) {
       inspected.set(identity, { userVersion: null });
+      continue;
+    }
+    if (file === shared && input.config.database?.engine === "postgres") {
+      const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
+      const result = await readUpdatePostgresState(input, files);
+      for (const [key, entry] of result.files) {
+        files.set(key, entry);
+      }
+      inspected.set(identity, result.version);
       continue;
     }
     if (file !== shared) {
@@ -480,6 +446,7 @@ export async function readUpdateDatabaseGenerationsIsolated(
     signal?: AbortSignal;
     acquisition?: UpdateRecoveryCaptureAcquisition;
     retryAdvice?: boolean;
+    pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   } = {},
 ): Promise<UpdateDatabaseGenerations> {
   const scope = getOpenClawDatabaseMaintenanceScope();
@@ -506,6 +473,7 @@ export async function readUpdateDatabaseGenerationsIsolated(
         input: {
           mode: "database-generations",
           paths,
+          ...(options.pluginOwners ? { pluginOwners: options.pluginOwners } : {}),
           stateDir: resolveStateDir(sourceEnv),
           config: {},
         },
@@ -630,8 +598,15 @@ export async function snapshotUpdateCandidateState(
   const execApprovals = createUpdateCandidateExecApprovalsProjection(sourceRoot, targetPath);
   // Physical copies dedupe on projection identity; the published versions
   // keep every raw alias so released rollback baselines still match.
-  const files = await collectStateDatabasePaths(input);
+  const files = await collectUpdateCandidateDatabasePaths(input);
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
+  if (input.config.database?.engine === "postgres" && (await updateStateDatabaseExists(shared))) {
+    const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
+    const discovered = await readUpdatePostgresState(input, files);
+    for (const [identity, discovery] of discovered.files) {
+      files.set(identity, discovery);
+    }
+  }
   for (const [identity, discovery] of files) {
     if (!admittedDatabases.has(identity)) {
       throw new Error(
@@ -647,8 +622,25 @@ export async function snapshotUpdateCandidateState(
     let contentVersion: number | undefined;
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     const progress = createUpdateStateSnapshotReporter(file, "database snapshot", input.onProgress);
+    let snapshotSource = file;
+    if (input.config.database?.engine === "postgres") {
+      const { capturePostgresBackup, readBackupEngine } =
+        await import("../snapshot/database-backup.js");
+      if (readBackupEngine(file).engine === "postgres") {
+        const directory = `${target}.postgres`;
+        await capturePostgresBackup({
+          sourcePath: file,
+          directory,
+          config: input.config,
+          profile: "exact",
+          assertCurrent() {},
+        });
+        // Rehearsal owns this portable image; the source engine never changes.
+        snapshotSource = path.join(directory, "database.sqlite");
+      }
+    }
     const snapshot = await createVerifiedSqliteSnapshot({
-      sourcePath: file,
+      sourcePath: snapshotSource,
       targetPath: target,
       sourceAcquisition: { mode: "isolated-process", stagingRoot: input.targetStateDir },
       // The rehearsal is private and disposable; compaction would create another

@@ -190,6 +190,52 @@ it("keeps ordinary task errors reusable", async () => {
   expect(process.exitCode).toBe(exitCode);
 });
 
+it("scopes the complete selection to each generic worker task", async () => {
+  let result = createDeferred();
+  const port = Object.assign(new EventEmitter(), {
+    postMessage: vi.fn(() => result.resolve()),
+    close: vi.fn(),
+  });
+  boundary.port = port;
+  const { serveWorkerTasks } = await import("./worker-task-server.js");
+  const { getDatabaseEngineSelection } = await import("./database-engine/context.js");
+  const selection = {
+    effectiveEngines: {
+      state: "sqlite",
+      agent: "sqlite",
+      workboard: "postgres",
+      logbook: "sqlite",
+      "team-reports": "sqlite",
+      quarantine: "sqlite",
+      "managed-update": "sqlite",
+      "package-activation": "sqlite",
+    },
+    postgres: { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" },
+  } as const;
+  serveWorkerTasks(() => getDatabaseEngineSelection());
+  port.emit("message", {
+    taskId: 1,
+    nativeSections: new SharedArrayBuffer(4),
+    taskContext: { ...taskContext(), databaseEngineSelection: selection },
+  });
+  await result.promise;
+  expect(port.postMessage).toHaveBeenLastCalledWith(
+    { status: "ok", value: selection, taskId: 1 },
+    [],
+  );
+  result = createDeferred();
+  port.emit("message", {
+    taskId: 2,
+    nativeSections: new SharedArrayBuffer(4),
+    taskContext: taskContext(),
+  });
+  await result.promise;
+  expect(port.postMessage).toHaveBeenLastCalledWith(
+    { status: "ok", value: undefined, taskId: 2 },
+    [],
+  );
+});
+
 it("retains admission context for asynchronous resource cleanup and successor tasks", async () => {
   let result = createDeferred();
   const cleanupEntered = createDeferred();

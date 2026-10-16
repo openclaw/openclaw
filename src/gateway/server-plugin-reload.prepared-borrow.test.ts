@@ -834,6 +834,7 @@ describe("published Gateway plugin services", () => {
           expect(gatewayInstance.retainedWorkCount).toBeGreaterThan(retainedBeforeRun);
           await runLease[Symbol.asyncDispose]();
           runLease = undefined;
+          await gatewayInstance.waitForRetainedWork(runtime.requestEntryLifetime.signal);
           expect(gatewayInstance.retainedWorkCount).toBe(retainedBeforeRun);
         } finally {
           await runLease?.[Symbol.asyncDispose]();

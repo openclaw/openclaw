@@ -9,6 +9,7 @@ import {
   withDatabaseEngineSelection,
 } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import type {
   AdmissionTaskInput,
   AdmissionTaskResult,
@@ -42,13 +43,14 @@ it.each([false, true])(
     const run = () => pool.run({ label: "selection", readEngineSelection: true }, {});
     const prewarmed = await run();
     expect(prewarmed.engineSelection).toBeUndefined();
-    const sqlite = { input: undefined };
+    const sqlite = { effectiveEngines: resolveDatabaseFamilyEngines({}) };
     const offline = await withDatabaseEngineSelection(sqlite, run);
     expect(offline.threadId).toBe(prewarmed.threadId);
     expect(offline.engineSelection).toEqual(sqlite);
     expect((await run()).engineSelection).toBeUndefined();
     const selection = {
-      input: { connection: "postgresql://synthetic.invalid/r4", schemaPrefix: "r4" },
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: "postgresql://synthetic.invalid/r4", schemaPrefix: "r4" },
     };
     installDatabaseEngineSelection(selection);
     const selected = await run();
@@ -57,7 +59,10 @@ it.each([false, true])(
     expect((await run()).engineSelection).toEqual(selection);
     for (const scoped of [
       sqlite,
-      { input: { connection: "postgresql://synthetic.invalid/port", schemaPrefix: "port" } },
+      {
+        effectiveEngines: { ...sqlite.effectiveEngines, state: "postgres" as const },
+        postgres: { connection: "postgresql://synthetic.invalid/port", schemaPrefix: "port" },
+      },
     ]) {
       const reply = await withDatabaseEngineSelection(scoped, run);
       expect(reply.threadId).toBe(prewarmed.threadId);

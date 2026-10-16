@@ -98,7 +98,7 @@ function createQueueFifo(): QueueFifo {
   return { head: undefined, tail: undefined };
 }
 
-export function createLaneQueue(): LaneQueue {
+function createLaneQueue(): LaneQueue {
   return {
     background: createQueueFifo(),
     normal: createQueueFifo(),

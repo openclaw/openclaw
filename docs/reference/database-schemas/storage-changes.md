@@ -2800,8 +2800,11 @@ writes or pruning invalidate rollup inputs. Worker retirement discards the worki
 set. Reports keep their independent read snapshots. A concurrent repair during a
 refresh can defer correction to the next refresh; it does not require another
 metadata comparison on the ordinary background path.
-Full refreshes submit pruning only when their metadata scan found stale rows;
-deletion still matches each observed row's checkpoint and update timestamp.
+Full refreshes transfer stale row snapshots in bounded batches under that
+reservation, then submit one prune request. Deletion still matches each observed
+row's checkpoint and update timestamp. Targeted refreshes do not prune other keys.
+Selected month deletion uses bounded key batches in the existing rollup write
+transaction.
 Doctor owns cleanup of retired cache scopes, so ordinary refreshes do not repeat
 legacy deletions. Retired rows may remain until `openclaw doctor --fix` runs.
 Deletion, transcript rewind or branch changes, and pricing revisions rebuild

@@ -13,6 +13,7 @@ import type {
   SessionAcpMeta,
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import type { PluginStateReadDependency } from "../plugin-state/plugin-state-publication.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
@@ -21,12 +22,8 @@ import type { SessionRepositoryWorkspaceRecord } from "../state/session-reposito
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
-import {
-  captureSessionRowPresentation,
-  renderSessionRowRecord,
-  type SnapshotOptions,
-} from "./session-row-render.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
+import { sessionTitleRequests } from "./session-title-state.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -178,6 +175,13 @@ export type Query = {
   sortBy?: Parameters<typeof compareSessionEntryPairs>[2] | null;
 };
 export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
+export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
+  active?: boolean;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
+  preparedFacts?: ReturnType<NonNullable<Row["facts"]>["present"]>;
+};
 export type Lookup = { agentId: string; key: string; storePath?: string };
 type RowTarget = Pick<Row, "agentId" | "key" | "storeTarget">;
 export const identity = (row: RowTarget) =>
@@ -456,12 +460,37 @@ export function present(
   options: SnapshotOptions = {},
 ) {
   const now = options.now ?? Date.now();
-  return renderSessionRowRecord(captureSessionRowPresentation(record, context, options), {
+  const live = resolveProjectedAgentRunModel({
+    agentId: record.agentId,
+    sessionId: record.entry.sessionId,
+    index: context.projectedAgentRuns!,
+  });
+  const active = options.active ?? live !== undefined;
+  const row = rowProjection.presentSessionRow(record.materialized, {
     now,
     subagentRuns: options.subagentRuns ?? context.subagentRuns.atTime(now),
     projectedAgentRuns: context.projectedAgentRuns,
     projectedSubagentActivity: context.projectedSubagentActivity,
+    activeModel: active ? (live ?? undefined) : record.fallbackModel,
+    excludedChildKeys: options.excludedChildKeys,
   });
+  Object.assign(row, options.preparedFacts ?? record.facts?.present());
+  row.hasBoard = record.hasBoard;
+  // Naming belongs to the in-flight owner, not persisted or materialized row state.
+  row.titlePending =
+    sessionTitleRequests.get({
+      storePath: record.storeTarget.storePath,
+      sessionKey: record.key,
+      sessionId: record.entry.sessionId,
+    }) !== undefined;
+  // Undefined omits wire fields without converting each presented row to dictionary storage.
+  if (!options.includeDerivedTitles) {
+    row.derivedTitle = undefined;
+  }
+  if (!options.includeLastMessage) {
+    row.lastMessagePreview = undefined;
+  }
+  return row;
 }
 
 /** The wire snapshot and lifecycle identity come from the same materialized record. */

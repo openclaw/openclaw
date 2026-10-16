@@ -25,7 +25,8 @@ import { ContentPresentation } from "../lib/solid/presentation.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
-import type { ViewKind } from "./control-ui-view.ts";
+
+type ViewKind = "pages" | "panels" | "accessories" | "widgets" | "replacements";
 
 type ViewRegistration = ControlUiRegistration<{ mount: ControlUiView<unknown> }>;
 type PluginViewProps = {

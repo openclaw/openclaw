@@ -6,7 +6,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
 import { chatCommentLineEnd, resolveChatCommentAnchor } from "./chat-comment-anchor.ts";
 import { currentChatComments } from "./chat-comment-controller.ts";
-import { dispatchChatCommentAction } from "./chat-selection-annotations.ts";
+import { dispatchChatCommentAction } from "./chat-selection-annotations.tsx";
 import "../../../styles/chat/selection-annotations.css";
 
 registerChatMessageMetadataEnglish();

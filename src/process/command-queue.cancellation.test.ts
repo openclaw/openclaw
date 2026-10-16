@@ -9,9 +9,9 @@ import {
   setCommandLaneConcurrency,
 } from "./command-queue.js";
 import {
-  createLaneQueue,
   dequeueLaneQueue,
   enqueueLaneQueue,
+  getLaneState,
   peekLaneQueue,
   type QueueEntry,
   removeLaneQueueEntry,
@@ -69,7 +69,7 @@ function measureCancellationWork(count: number) {
     proxies.set(proxy, proxy);
     return proxy;
   }
-  const queue = observe(createLaneQueue());
+  const queue = observe(getLaneState(`cancellation-work:${count}`).queue);
   const entries = Array.from({ length: count }, (_, index) => observe(makeEntry(index)));
   for (const entry of entries) {
     enqueueLaneQueue(queue, entry);
@@ -275,7 +275,7 @@ describe("queued command scheduling and cancellation", () => {
   });
 
   it("releases entry references before reentrant cancellation cleanup", () => {
-    const queue = createLaneQueue();
+    const queue = getLaneState("reentrant-cancellation").queue;
     const entries = [makeEntry(0), makeEntry(1), makeEntry(2)];
     for (const entry of entries) {
       enqueueLaneQueue(queue, entry);

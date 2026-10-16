@@ -11,7 +11,7 @@ import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback
 import { createInitializationContext } from "./chat-pane.test-support.ts";
 import { enqueueChatMessage } from "./chat-queue.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import { ChatStateController } from "./chat-state-controller.ts";
+import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { QUEUED_MESSAGE_EDIT_CONFLICT_ERROR } from "./queued-message-edit.ts";
@@ -37,13 +37,11 @@ afterEach(() => {
 });
 
 function createControllerFixture(withClient = false) {
-  const controller = new ChatStateController<ChatPageHost>({
-    addController: () => undefined,
-    removeController: () => undefined,
+  const controller = createChatState<ChatPageHost>({
     requestUpdate: () => undefined,
     updateComplete: Promise.resolve(true),
   });
-  controller.hostConnected();
+  const dispose = controller.dispose;
   const state = createPageState(createInitializationContext(), controller.createRenderLifecycle(), {
     dispatchEvent: () => true,
     querySelector: () => null,
@@ -52,7 +50,7 @@ function createControllerFixture(withClient = false) {
     state.client = createTestGatewayClient(async () => ({}));
   }
   controller.attach(state);
-  return { controller, state };
+  return { state, dispose };
 }
 
 describe("queued edit page callbacks", () => {
@@ -73,7 +71,7 @@ describe("queued edit page callbacks", () => {
   ] as const)(
     "clears only resolved edit feedback when opening a queued editor (%s, %s)",
     (lastError, chatError, expectedLastError, expectedChatError) => {
-      const { controller, state } = createControllerFixture(true);
+      const { state, dispose } = createControllerFixture(true);
       try {
         const queued = enqueueChatMessage(state, "queued original")!;
         state.chatMessage = "separate composer draft";
@@ -89,7 +87,7 @@ describe("queued edit page callbacks", () => {
         expect(state.lastError).toBe(expectedLastError);
         expect(state.chatError).toBe(expectedChatError);
       } finally {
-        controller.hostDisconnected();
+        dispose();
       }
       expect(canReloadControlUiDocument()).toBe(true);
     },
@@ -98,7 +96,7 @@ describe("queued edit page callbacks", () => {
   it.each(["later edit", "another reload guard", "confirmed discard", "private fallback"] as const)(
     "keeps private-draft discard scoped during %s",
     async (scenario) => {
-      const { controller, state } = createControllerFixture();
+      const { state, dispose } = createControllerFixture();
       state.sessionKey = "agent:main:dashboard:incognito-private-review";
       state.chatMessage = "captured private text";
       if (scenario === "private fallback") {
@@ -148,7 +146,7 @@ describe("queued edit page callbacks", () => {
         }
       } finally {
         releaseOther();
-        controller.hostDisconnected();
+        dispose();
       }
       expect(canReloadControlUiDocument()).toBe(true);
     },

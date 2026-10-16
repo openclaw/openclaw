@@ -127,7 +127,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
                     <label class="session-filter-field">
                       <span class="session-filter-label">{t(labelKey)}</span>
                       <input
-                        class={`session-filter-input session-filter-input--${suffix}`}
+                        class={["session-filter-input", `session-filter-input--${suffix}`]}
                         placeholder={
                           key === "activeMinutes" ? t("sessionsView.minutesPlaceholder") : undefined
                         }
@@ -239,13 +239,6 @@ export function handleSessionsSearchKeydown(
   event.preventDefault();
   event.stopPropagation();
   props.onSearchChange("");
-}
-
-export function clearSessionsSearch(event: MouseEvent, onSearchChange: (query: string) => void) {
-  // SAFETY: This listener is bound directly to the clear button.
-  const input = (event.currentTarget as HTMLElement).parentElement?.querySelector("input");
-  input?.focus({ preventScroll: true });
-  onSearchChange("");
 }
 
 // Drag-over highlighting toggles a class directly on the target row instead of

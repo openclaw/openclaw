@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -15,6 +16,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { preparePersonalGitHubSessionReceiptDeletion } from "./github-personal-publication-lifecycle.js";
+import { githubPublicationReceipts } from "./github-publication-receipts.js";
 import { prepareGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import {
   insertGitHubPublicationSessionLifecycle,
@@ -34,6 +36,16 @@ import {
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
+
+const receiptFault = useSqliteWorkerFault([
+  {
+    name: "fail_receipt_batch",
+    match: /^delete from github_personal_publication_requests\b/u,
+    sql: `CREATE TEMP TRIGGER fail_receipt_batch BEFORE DELETE ON main.github_personal_publication_requests
+      WHEN OLD.request_id = '00000000-0000-4000-8000-000000000064'
+      BEGIN SELECT RAISE(ABORT, 'synthetic receipt deletion failure'); END;`,
+  },
+]);
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterAll(cleanup));
 
@@ -267,5 +279,119 @@ describe("retained publication lifecycle authority", () => {
     }
     await rejected;
     expect((await prepareGitHubPublicationSessionLifecycle(input)).readCurrent()).toBeUndefined();
+  });
+
+  it("rolls back receipt batches and publishes only the exact committed tombstones", async () => {
+    const databasePath = lifecycleContext.admission.databasePath;
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    openOpenClawStateDatabase();
+    lifecycleContext = captureOpenClawStateWorkerContext();
+    const selected = Array.from({ length: 65 }, (_, index) =>
+      personalRow(`00000000-0000-4000-8000-${String(index).padStart(12, "0")}`),
+    );
+    const retained = personalRow(randomUUID());
+    runOpenClawStateWriteTransaction((database) => {
+      for (const row of [...selected, retained]) {
+        insertPersonalGitHubPublicationInDatabase(
+          database,
+          row,
+          "original-revision",
+          lifecycleContext.admission.assertCurrent,
+        );
+      }
+      // Shared and personal lifecycle keys can use the same request ID.
+      insertGitHubPublicationSessionLifecycle(database.db, {
+        publicationKind: "shared",
+        requestId: selected[0]!.request_id,
+        lifecycleRevision: "shared-revision",
+        requester,
+      });
+    });
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    lifecycleContext = captureOpenClawStateWorkerContext();
+    const installed = new Map<string, unknown>();
+    const unsubscribe = githubPublicationReceipts.subscribeFacts((change) => {
+      if (change.kind === "committed") {
+        for (const [key, fact] of change.receipt.facts) {
+          installed.set(key, fact);
+        }
+      }
+    });
+    const generations = selected.map((row) => ({
+      sessionKey: row.session_key,
+      sessionId: row.session_id,
+      lifecycleRevision: "original-revision",
+    }));
+    try {
+      const remove = await preparePersonalGitHubSessionReceiptDeletion({
+        agentId: "main",
+        generations,
+      });
+      receiptFault.enable();
+      await expect(remove()).rejects.toThrow("synthetic receipt deletion failure");
+      receiptFault.disable();
+      expect(installed.size).toBe(0);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      const { db } = openOpenClawStateDatabase();
+      expect(
+        db
+          .prepare(`SELECT request_id FROM github_personal_publication_requests
+          WHERE request_id LIKE '00000000-0000-4000-8000-%' ORDER BY request_id`)
+          .all(),
+      ).toEqual(selected.map((row) => ({ request_id: row.request_id })));
+      expect(
+        db
+          .prepare(`SELECT request_id FROM github_publication_session_lifecycles
+          WHERE publication_kind = 'personal' AND request_id LIKE '00000000-0000-4000-8000-%'
+          ORDER BY request_id`)
+          .all(),
+      ).toEqual(selected.map((row) => ({ request_id: row.request_id })));
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      lifecycleContext = captureOpenClawStateWorkerContext();
+      const retry = await preparePersonalGitHubSessionReceiptDeletion({
+        agentId: "main",
+        generations,
+      });
+      await retry();
+      const expected = new Map<string, unknown>();
+      for (const row of selected) {
+        expected.set(JSON.stringify(["personal", row.request_id]), { kind: "absent" });
+        expected.set(JSON.stringify(["personal-lifecycle", row.request_id]), { kind: "absent" });
+      }
+      expect(installed).toEqual(expected);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      const reopened = openOpenClawStateDatabase().db;
+      expect(
+        reopened
+          .prepare(`SELECT count(*) AS count FROM github_personal_publication_requests
+          WHERE request_id LIKE '00000000-0000-4000-8000-%'`)
+          .get(),
+      ).toEqual({ count: 0 });
+      expect(
+        reopened
+          .prepare(`SELECT count(*) AS count FROM github_publication_session_lifecycles
+          WHERE publication_kind = 'personal' AND request_id LIKE '00000000-0000-4000-8000-%'`)
+          .get(),
+      ).toEqual({ count: 0 });
+      expect(
+        reopened
+          .prepare(
+            "SELECT request_id FROM github_personal_publication_requests WHERE request_id = ?",
+          )
+          .get(retained.request_id),
+      ).toEqual({ request_id: retained.request_id });
+      expect(durable(retained.request_id)?.lifecycle_revision).toBe("original-revision");
+      expect(
+        readGitHubPublicationSessionLifecycle(
+          { publicationKind: "shared", requestId: selected[0]!.request_id },
+          reopened,
+        )?.lifecycle_revision,
+      ).toBe("shared-revision");
+    } finally {
+      receiptFault.disable();
+      unsubscribe();
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      lifecycleContext = captureOpenClawStateWorkerContext();
+    }
   });
 });

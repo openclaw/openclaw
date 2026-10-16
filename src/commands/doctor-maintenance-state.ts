@@ -52,6 +52,7 @@ export async function createDoctorMaintenanceState(options: {
   let liveAuthorityReadsAdmitted = false;
   const capture = createUpdateDoctorDatabaseWriteCapture(params.databaseGenerations, {
     env: selectedEnv,
+    pluginOwners: params.databasePluginOwners,
     root: params.root ?? undefined,
     signal: options.signal,
     assertCurrent: () => owner!.assertCurrent(options.assertCurrent),

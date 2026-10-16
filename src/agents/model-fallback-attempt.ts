@@ -420,7 +420,7 @@ export function resolveNextFallbackCandidateIndex(params: {
 }
 
 export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
-  params: ModelFallbackRuntimeContext & ModelCandidate,
+  params: ModelFallbackRuntimeContext & ModelCandidate & { skipAuthProfileRuntime?: boolean },
 ): Promise<{ skipsProviderAuthCooldown: boolean; agentHarnessRuntimeOverride?: string }> {
   const { agentHarnessRuntimeOverride, explicitAgentRuntime, runtime, runtimeSource } =
     resolveModelFallbackCandidateAgentRuntime(params);
@@ -428,7 +428,8 @@ export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
     skipsProviderAuthCooldown,
     agentHarnessRuntimeOverride,
   });
-  if (!params.cfg) {
+  // Delegated attempts validate their own retained runtime registry after admission.
+  if (!params.cfg || params.skipAuthProfileRuntime) {
     return result(false);
   }
   if (!explicitAgentRuntime && isCliProvider(params.provider, params.cfg)) {
