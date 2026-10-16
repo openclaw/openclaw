@@ -79,6 +79,21 @@ async function git(repo: string, ...args: string[]) {
   return (await execFileAsync("git", ["-C", repo, ...args])).stdout.trim();
 }
 
+const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
+const readJson = async (...parts: string[]) => JSON.parse(await readText(...parts));
+const expectMissing = (file: string) =>
+  expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
+
+function stubHome(env: NodeJS.ProcessEnv, root: string, includeState = false) {
+  for (const key of ["HOME", "USERPROFILE"]) {
+    vi.stubEnv(key, root);
+  }
+  if (includeState) {
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", env.OPENCLAW_CONFIG_PATH);
+  }
+}
+
 describe("same-root local mutation routing", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   let root: string;
@@ -98,6 +113,10 @@ describe("same-root local mutation routing", () => {
   const requests: string[] = [];
   const methods: string[] = [];
   const failures: unknown[] = [];
+  const acquireOwner = () =>
+    acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
+  const run = (args: string[]) => runCliProcessChild({ nodeArgs: [...entrypoint, ...args], env });
+  const observation = () => readJson(root, "control", "sql-observation.json");
 
   beforeAll(async () => {
     root = roots.make("openclaw-local-owner-online-");
@@ -137,14 +156,11 @@ describe("same-root local mutation routing", () => {
         gateway: { mode: "local", port: claim.port, auth: { mode: "token", token } },
       }),
     );
-    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", env.OPENCLAW_CONFIG_PATH);
-    vi.stubEnv("HOME", root);
-    vi.stubEnv("USERPROFILE", root);
+    stubHome(env, root, true);
     const cfg = { worktreeRoot: path.join(root, "gateway-worktrees"), worktreeAcceleration: false };
     service = new ManagedWorktreeService({ env, getConfig: () => cfg });
     repoFingerprint = (await service.resolveRepositoryIdentity(repo)).fingerprint;
-    owner = await acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
+    owner = await acquireOwner();
     expect(owner).not.toBeNull();
     const handlers = createWorktreesHandlers(service);
     const context = createSessionMutationTestContext(cfg);
@@ -223,10 +239,7 @@ describe("same-root local mutation routing", () => {
 
   beforeEach(() => {
     mode = "normal";
-    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", env.OPENCLAW_CONFIG_PATH);
-    vi.stubEnv("HOME", root);
-    vi.stubEnv("USERPROFILE", root);
+    stubHome(env, root, true);
   });
 
   afterAll(async () => {
@@ -298,18 +311,14 @@ describe("same-root local mutation routing", () => {
     expect(record.path).toContain(path.join(root, "gateway-worktrees"));
     expect(record.ownerKind).toBe("manual");
     if (process.platform !== "win32") {
-      expect(await fs.readFile(path.join(record.path, "setup-proof.txt"), "utf8")).toBe(
-        "owner setup complete\n",
-      );
+      expect(await readText(record.path, "setup-proof.txt")).toBe("owner setup complete\n");
     }
     expect(await service.listRegistryRecords()).toContainEqual(
       expect.objectContaining({ id: record.id, path: record.path }),
     );
-    expect(await fs.readFile(path.join(record.path, "alpha/a.txt"), "utf8")).toBe("alpha/a.txt");
-    expect(await fs.readFile(path.join(record.path, "beta/b.txt"), "utf8")).toBe("beta/b.txt");
-    await expect(fs.access(path.join(record.path, "excluded/no.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    expect(await readText(record.path, "alpha/a.txt")).toBe("alpha/a.txt");
+    expect(await readText(record.path, "beta/b.txt")).toBe("beta/b.txt");
+    await expectMissing(path.join(record.path, "excluded/no.txt"));
     expect(await git(record.path, "rev-parse", "HEAD")).toBe(await git(repo, "rev-parse", "HEAD"));
     expect(requests).toEqual(["routed"]);
     await fs.writeFile(path.join(record.path, "alpha/a.txt"), "retained routed work\n");
@@ -320,9 +329,7 @@ describe("same-root local mutation routing", () => {
       const repeated = await create("routed");
       expect(repeated.code, repeated.stderr).toBe(0);
       expect(JSON.parse(repeated.stdout)).toMatchObject({ id: record.id, path: record.path });
-      expect(await fs.readFile(path.join(record.path, "alpha/a.txt"), "utf8")).toBe(
-        "retained routed work\n",
-      );
+      expect(await readText(record.path, "alpha/a.txt")).toBe("retained routed work\n");
       expect(
         (await service.listRegistryRecords()).find((item) => item.id === record.id)?.removedAt,
       ).toBeUndefined();
@@ -411,9 +418,7 @@ describe("same-root local mutation routing", () => {
           expect((await readRecord())?.removedAt !== undefined).toBe(mutated);
           const retained = payload?.recoveryPath;
           expect(retained).toBeTypeOf("string");
-          expect(await fs.readFile(path.join(String(retained), "README.md"), "utf8")).toBe(
-            "working\n",
-          );
+          expect(await readText(String(retained), "README.md")).toBe("working\n");
           expect(payload).toMatchObject({
             removed: true,
             recoveryRetainedUntil: expect.any(Number),
@@ -466,31 +471,21 @@ describe("same-root local mutation routing", () => {
         owner = null;
       }
       try {
-        const result = await runCliProcessChild({
-          nodeArgs: [...entrypoint, ...prepared.args],
-          env,
-        });
+        const result = await run(prepared.args);
         if (scenario === "offline") {
-          owner = await acquireGatewayLock({
-            env,
-            port: claim.port,
-            allowInTests: true,
-            timeoutMs: 0,
-          });
+          owner = await acquireOwner();
           expect(owner).not.toBeNull();
         }
-        const observation = JSON.parse(
-          await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
-        );
+        const observed = await observation();
         expect(result.code, result.stderr).toBe(0);
         expect(methods.slice(before)).toEqual(scenario === "live" ? [method] : []);
         if (scenario === "offline") {
-          expect(observation.missingCustody).toBe(0);
-          for (const pid of observation.ownerPids) {
-            expect(pid).toBe(observation.pid);
+          expect(observed.missingCustody).toBe(0);
+          for (const pid of observed.ownerPids) {
+            expect(pid).toBe(observed.pid);
           }
         } else {
-          expect(observation.worktreeSql).toBe(0);
+          expect(observed.worktreeSql).toBe(0);
         }
         let payload = JSON.parse(result.stdout);
         if (kind === "gc-partial") {
@@ -502,10 +497,7 @@ describe("same-root local mutation routing", () => {
           });
           await prepared.verify(false);
           await maintenanceClock.advanceBy(0);
-          const progress = await runCliProcessChild({
-            nodeArgs: [...entrypoint, "worktrees", "gc", "--job", payload.jobId, "--json"],
-            env,
-          });
+          const progress = await run(["worktrees", "gc", "--job", payload.jobId, "--json"]);
           expect(progress.code, progress.stderr).toBe(1);
           expect(methods.slice(before)).toEqual([method, method]);
           const completed = JSON.parse(progress.stdout);
@@ -514,22 +506,13 @@ describe("same-root local mutation routing", () => {
             state: "completed",
             completedAt: expect.any(Number),
           });
-          expect(
-            JSON.parse(
-              await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
-            ).worktreeSql,
-          ).toBe(0);
+          expect((await observation()).worktreeSql).toBe(0);
           payload = completed;
         }
         await prepared.verify(true, payload);
       } finally {
         if (!owner) {
-          owner = await acquireGatewayLock({
-            env,
-            port: claim.port,
-            allowInTests: true,
-            timeoutMs: 0,
-          });
+          owner = await acquireOwner();
         }
         await prepared.cleanup();
       }
@@ -557,19 +540,13 @@ describe("same-root local mutation routing", () => {
     "refuses live %s before changing local state or dispatching to the owner",
     async (_name, args) => {
       const before = methods.length;
-      const configBefore = await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8");
-      const result = await runCliProcessChild({
-        nodeArgs: [...entrypoint, ...args],
-        env,
-      });
+      const configBefore = await readText(env.OPENCLAW_CONFIG_PATH!);
+      const result = await run(args);
       expect(result.code, result.stderr).toBe(1);
       expect(result.stderr).toContain("exclusive offline state ownership");
       expect(methods).toHaveLength(before);
-      expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(configBefore);
-      expect(
-        JSON.parse(await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"))
-          .worktreeSql,
-      ).toBe(0);
+      expect(await readText(env.OPENCLAW_CONFIG_PATH!)).toBe(configBefore);
+      expect((await observation()).worktreeSql).toBe(0);
     },
   );
 });
@@ -583,8 +560,7 @@ describe("offline local mutation custody", () => {
     async () => {
       const root = roots.make("openclaw-local-owner-offline-");
       const env = environment(root);
-      vi.stubEnv("HOME", root);
-      vi.stubEnv("USERPROFILE", root);
+      stubHome(env, root);
       const repo = await initializeRepository(root);
       await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}\n");
       const setupReady = createDeferred<Socket>();
@@ -639,14 +615,10 @@ socket.on("data", () => {
         });
         expect(result.code, result.stderr).toBe(0);
         const record: ManagedWorktreeRecord = JSON.parse(result.stdout);
-        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
-        expect(await fs.readFile(path.join(record.path, "setup-proof.txt"), "utf8")).toBe(
-          "local setup complete\n",
-        );
+        expect(await readText(record.path, "README.md")).toBe("base\n");
+        expect(await readText(record.path, "setup-proof.txt")).toBe("local setup complete\n");
         expect(record.path).toContain(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"));
-        await expect(fs.access(resolveGatewayLockPaths(env).ownerLockPath)).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+        await expectMissing(resolveGatewayLockPaths(env).ownerLockPath);
         const successor = await acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 });
         expect(successor).not.toBeNull();
         await successor?.release();
@@ -663,8 +635,7 @@ socket.on("data", () => {
     async (interrupt) => {
       const root = roots.make("openclaw-local-owner-settlement-");
       const env = environment(root);
-      vi.stubEnv("HOME", root);
-      vi.stubEnv("USERPROFILE", root);
+      stubHome(env, root);
       const repo = await initializeRepository(root);
       await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}\n");
       const pending = createDeferred();
@@ -705,13 +676,11 @@ socket.on("data", () => {
         },
       });
       expect(result.code, result.stderr).toBe(interrupt ? 143 : 0);
-      expect(JSON.parse(await fs.readFile(path.join(root, "settlement.json"), "utf8"))).toEqual({
+      expect(JSON.parse(await readText(root, "settlement.json"))).toEqual({
         databaseOpen: false,
       });
       expect(await git(repo, "branch", "--list", "openclaw/settled")).toBe("+ openclaw/settled");
-      await expect(fs.access(resolveGatewayLockPaths(env).ownerLockPath)).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectMissing(resolveGatewayLockPaths(env).ownerLockPath);
       const successor = await acquireGatewayLock({
         env,
         port: 18789,

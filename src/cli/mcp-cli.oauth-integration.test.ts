@@ -24,6 +24,13 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { getFreePort } from "../test-utils/ports.js";
 import { registerMcpCli } from "./mcp-cli.js";
 
+function createCli() {
+  const program = new Command().exitOverride();
+  registerMcpCli(program);
+  const run = (...args: string[]) => program.parseAsync(["mcp", ...args], { from: "user" });
+  return { run, set: (server: object) => run("set", "fixture", JSON.stringify(server)) };
+}
+
 function sendJson(response: ServerResponse, body: unknown, status = 200): void {
   response.writeHead(status, { "Content-Type": "application/json" });
   response.end(JSON.stringify(body));
@@ -231,35 +238,24 @@ describe("mcp login OAuth integration", () => {
       vi.spyOn(defaultRuntime, "log").mockImplementation((line) => logs.push(String(line)));
       vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => json.push(value));
       const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
-      const program = new Command().exitOverride();
-      registerMcpCli(program);
-      await program.parseAsync(
-        [
-          "mcp",
-          "set",
-          "fixture",
-          JSON.stringify({
-            url: "https://mcp.example.com/rpc",
-            transport: "streamable-http",
-            auth: "oauth",
-            oauth: { identity: "per-requester" },
-          }),
-        ],
-        { from: "user" },
-      );
+      const { run, set } = createCli();
+      await set({
+        url: "https://mcp.example.com/rpc",
+        transport: "streamable-http",
+        auth: "oauth",
+        oauth: { identity: "per-requester" },
+      });
       logs.length = 0;
 
-      await program.parseAsync(["mcp", "list"], { from: "user" });
+      await run("list");
       expect(logs).toContain("- fixture (0 connected principals)");
       logs.length = 0;
-      await program.parseAsync(["mcp", "status", "--json"], { from: "user" });
+      await run("status", "--json");
       expect(json.at(-1)).toMatchObject({
         servers: [{ name: "fixture", connectedPrincipals: 0 }],
       });
       json.length = 0;
-      await expect(
-        program.parseAsync(["mcp", "doctor", "--probe", "--json"], { from: "user" }),
-      ).rejects.toMatchObject({ code: 1 });
+      await expect(run("doctor", "--probe", "--json")).rejects.toMatchObject({ code: 1 });
       expect(exit).not.toHaveBeenCalled();
       expect(captureGatewayStateOwner(resolveOpenClawStateSqlitePath())).toBeUndefined();
       expect(json.at(-1)).toMatchObject({ servers: [{ name: "fixture" }] });
@@ -279,22 +275,13 @@ describe("mcp login OAuth integration", () => {
   it("clears requester credentials when the same URL changes to shared OAuth", async () => {
     await withTempHome(`openclaw-mcp-identity-flip-${randomUUID()}-`, async () => {
       const serverUrl = "https://mcp.example.com/rpc";
-      const program = new Command().exitOverride();
-      registerMcpCli(program);
-      await program.parseAsync(
-        [
-          "mcp",
-          "set",
-          "fixture",
-          JSON.stringify({
-            url: serverUrl,
-            transport: "streamable-http",
-            auth: "oauth",
-            oauth: { identity: "per-requester" },
-          }),
-        ],
-        { from: "user" },
-      );
+      const { set } = createCli();
+      await set({
+        url: serverUrl,
+        transport: "streamable-http",
+        auth: "oauth",
+        oauth: { identity: "per-requester" },
+      });
       const operator = operatorMcpOAuthIdentity("fixture", serverUrl);
       const requester = requesterMcpOAuthIdentity("fixture", serverUrl, {
         requesterSenderId: "alice",
@@ -310,19 +297,11 @@ describe("mcp login OAuth integration", () => {
         );
       }
 
-      await program.parseAsync(
-        [
-          "mcp",
-          "set",
-          "fixture",
-          JSON.stringify({
-            url: serverUrl,
-            transport: "streamable-http",
-            auth: "oauth",
-          }),
-        ],
-        { from: "user" },
-      );
+      await set({
+        url: serverUrl,
+        transport: "streamable-http",
+        auth: "oauth",
+      });
 
       await expect(readMcpOAuthCredentialsStatus(requester)).resolves.toEqual({
         state: "unauthenticated",
@@ -338,6 +317,12 @@ describe("mcp login OAuth integration", () => {
     await withTempHome(`openclaw-mcp-login-${randomUUID()}-`, async () => {
       const fixture = await startOAuthFixture();
       try {
+        const expectAuth = (state: string) =>
+          expect(
+            readMcpOAuthCredentialsStatus(
+              operatorMcpOAuthIdentity("fixture", `${fixture.issuer}/mcp`),
+            ),
+          ).resolves.toMatchObject({ state });
         const callbackPort = await getFreePort();
         const redirectUrl = `http://127.0.0.1:${callbackPort}/oauth/callback`;
         const logs: string[] = [];
@@ -349,22 +334,13 @@ describe("mcp login OAuth integration", () => {
             authorizationUrl.resolve(text);
           }
         });
-        const program = new Command().exitOverride();
-        registerMcpCli(program);
-        await program.parseAsync(
-          [
-            "mcp",
-            "set",
-            "fixture",
-            JSON.stringify({
-              url: `${fixture.issuer}/mcp`,
-              transport: "streamable-http",
-              auth: "oauth",
-              oauth: { redirectUrl },
-            }),
-          ],
-          { from: "user" },
-        );
+        const { run, set } = createCli();
+        await set({
+          url: `${fixture.issuer}/mcp`,
+          transport: "streamable-http",
+          auth: "oauth",
+          oauth: { redirectUrl },
+        });
         logs.length = 0;
 
         // Drive the browser from the published URL, not a polling deadline that
@@ -373,21 +349,12 @@ describe("mcp login OAuth integration", () => {
           const response = await fetch(url);
           return { status: response.status, body: await response.text() };
         });
-        const [browserResponse] = await Promise.all([
-          browser,
-          program.parseAsync(["mcp", "login", "fixture"], { from: "user" }),
-        ]);
+        const [browserResponse] = await Promise.all([browser, run("login", "fixture")]);
         expect(logs.some((line) => line.includes("Waiting for the browser"))).toBe(true);
         expect(browserResponse.status).toBe(200);
         expect(browserResponse.body).toContain("Authorization received");
 
-        await expect(
-          readMcpOAuthCredentialsStatus(
-            operatorMcpOAuthIdentity("fixture", `${fixture.issuer}/mcp`),
-          ),
-        ).resolves.toMatchObject({
-          state: "authorized",
-        });
+        await expectAuth("authorized");
         expect(fixture.exchange()).toMatchObject({
           tokenRedirectUri: redirectUrl,
           tokenVerifier: expect.any(String),
@@ -395,7 +362,7 @@ describe("mcp login OAuth integration", () => {
         expect(logs).toContain('MCP OAuth credentials saved for "fixture".');
 
         logs.length = 0;
-        await program.parseAsync(["mcp", "probe", "fixture"], { from: "user" });
+        await run("probe", "fixture");
         expect(logs).toContain("- fixture: 1 tools, Codex approval auto");
         expect(fixture.mcpRequests().map((request) => JSON.parse(request.body).method)).toEqual([
           "initialize",
@@ -438,29 +405,19 @@ describe("mcp login OAuth integration", () => {
             ["tools", "fixture", "--clear"],
             ["unset", "fixture"],
           ]) {
-            await expect(
-              program.parseAsync(["mcp", ...args], { from: "user" }),
-            ).rejects.toMatchObject({
+            await expect(run(...args)).rejects.toMatchObject({
               code: "OWNER_UNAVAILABLE",
               message: expect.stringContaining("stop the Gateway"),
             });
           }
           expect(fixture.mcpRequests()).toHaveLength(requestCount);
-          await expect(
-            readMcpOAuthCredentialsStatus(
-              operatorMcpOAuthIdentity("fixture", `${fixture.issuer}/mcp`),
-            ),
-          ).resolves.toMatchObject({ state: "authorized" });
-          await program.parseAsync(["mcp", "doctor", "fixture"], { from: "user" });
+          await expectAuth("authorized");
+          await run("doctor", "fixture");
         } finally {
           discover.mockRestore();
         }
-        await program.parseAsync(["mcp", "logout", "fixture"], { from: "user" });
-        await expect(
-          readMcpOAuthCredentialsStatus(
-            operatorMcpOAuthIdentity("fixture", `${fixture.issuer}/mcp`),
-          ),
-        ).resolves.toMatchObject({ state: "unauthenticated" });
+        await run("logout", "fixture");
+        await expectAuth("unauthenticated");
         await expect(fetch(redirectUrl)).rejects.toThrow();
       } finally {
         await fixture.close();

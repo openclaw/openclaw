@@ -13,6 +13,19 @@ const control = path.join(root, "control");
 fs.mkdirSync(control, { recursive: true });
 registerSealedRuntime({ json5, resolveSecureTempRoot: () => control });
 installCliSignalExitHandlers();
+const writeJson = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+const registrations: Record<string, () => Promise<(program: Command) => void>> = {
+  sandbox: async () => (await import("./sandbox-cli.js")).registerSandboxCli,
+  agents: async () => (await import("./program/register.agent.js")).registerAgentsCommands,
+  setup: async () => (await import("./program/register.setup.js")).registerSetupCommand,
+  onboard: async () => (await import("./program/register.onboard.js")).registerOnboardCommand,
+  config: async () => (await import("./config-cli.js")).registerConfigCli,
+  migrate: async () => (await import("./program/register.migrate.js")).registerMigrateCommand,
+  mcp: async () => (await import("./mcp-cli.js")).registerMcpCli,
+  models: async () => (await import("./models-cli.js")).registerModelsCli,
+  "exec-policy": async () => (await import("./exec-policy-cli.js")).registerExecPolicyCli,
+  database: async () => (await import("./program/register.database.js")).registerDatabaseCommand,
+};
 try {
   if (process.argv[2] === "migrate-uncertain") {
     const [
@@ -85,15 +98,13 @@ try {
       laterRefused = true;
     }
     const owner = readLockPayloadSync(resolveGatewayLockPaths(process.env).ownerLockPath);
-    process.stdout.write(
-      `${JSON.stringify({
-        applyCompleted,
-        uncertain: hasCommandProcessCleanupError(failure),
-        ownsState: owner?.pid === process.pid,
-        laterMutationRan,
-        laterRefused,
-      })}\n`,
-    );
+    writeJson({
+      applyCompleted,
+      uncertain: hasCommandProcessCleanupError(failure),
+      ownsState: owner?.pid === process.pid,
+      laterMutationRan,
+      laterRefused,
+    });
   } else if (process.argv[2] === "settlement") {
     const [
       { ManagedWorktreeService },
@@ -233,50 +244,18 @@ try {
               const { claimOpenClawStateOwnership } =
                 await import("../state/openclaw-state-ownership-operations.js");
               const ownership = claimOpenClawStateOwnership("supervisor");
-              process.stdout.write(`${JSON.stringify({ ownership })}\n`);
+              writeJson({ ownership });
               return;
             }
             const program = new Command().name("openclaw").exitOverride();
             registerWorktreesCli(program);
-            if (process.argv[2] === "sandbox") {
-              const { registerSandboxCli } = await import("./sandbox-cli.js");
-              registerSandboxCli(program);
-            } else if (process.argv[2] === "agents") {
-              const { registerAgentsCommands } = await import("./program/register.agent.js");
+            const command = process.argv[2]!;
+            const register = await registrations[command]?.();
+            if (["agents", "setup", "onboard", "config"].includes(command)) {
               const { registerPreActionHooks } = await import("./program/preaction.js");
               registerPreActionHooks(program, "test");
-              registerAgentsCommands(program);
-            } else if (process.argv[2] === "setup") {
-              const { registerSetupCommand } = await import("./program/register.setup.js");
-              const { registerPreActionHooks } = await import("./program/preaction.js");
-              registerPreActionHooks(program, "test");
-              registerSetupCommand(program);
-            } else if (process.argv[2] === "onboard") {
-              const { registerOnboardCommand } = await import("./program/register.onboard.js");
-              const { registerPreActionHooks } = await import("./program/preaction.js");
-              registerPreActionHooks(program, "test");
-              registerOnboardCommand(program);
-            } else if (process.argv[2] === "config") {
-              const { registerConfigCli } = await import("./config-cli.js");
-              const { registerPreActionHooks } = await import("./program/preaction.js");
-              registerPreActionHooks(program, "test");
-              registerConfigCli(program);
-            } else if (process.argv[2] === "migrate") {
-              const { registerMigrateCommand } = await import("./program/register.migrate.js");
-              registerMigrateCommand(program);
-            } else if (process.argv[2] === "mcp") {
-              const { registerMcpCli } = await import("./mcp-cli.js");
-              registerMcpCli(program);
-            } else if (process.argv[2] === "models") {
-              const { registerModelsCli } = await import("./models-cli.js");
-              registerModelsCli(program);
-            } else if (process.argv[2] === "exec-policy") {
-              const { registerExecPolicyCli } = await import("./exec-policy-cli.js");
-              registerExecPolicyCli(program);
-            } else if (process.argv[2] === "database") {
-              const { registerDatabaseCommand } = await import("./program/register.database.js");
-              registerDatabaseCommand(program);
             }
+            register?.(program);
             await program.parseAsync(process.argv.slice(2), { from: "user" });
           },
           { retainRoutingUntilProcessExit: true },
@@ -290,7 +269,7 @@ try {
   const [{ formatCliFailureLines, formatCliJsonFailure }, { isJsonOutputModeActive }] =
     await Promise.all([import("./failure-output.js"), import("./json-output-mode.js")]);
   if (isJsonOutputModeActive(process.argv)) {
-    process.stdout.write(`${JSON.stringify(formatCliJsonFailure(error))}\n`);
+    writeJson(formatCliJsonFailure(error));
   }
   for (const line of formatCliFailureLines({
     title: "The CLI command failed.",

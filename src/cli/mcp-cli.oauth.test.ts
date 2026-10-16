@@ -1,4 +1,3 @@
-// MCP CLI OAuth tests cover credential status, login callbacks, and logout behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import {
@@ -16,6 +15,22 @@ import {
   runMcpCommand,
 } from "./mcp-cli.test-harness.js";
 
+const mcp = (...args: string[]) => runMcpCommand(["mcp", ...args]);
+const httpServer = { url: "https://mcp.example.com", transport: "streamable-http" };
+const setServer = (name: string, server: object) => mcp("set", name, JSON.stringify(server));
+async function readServer() {
+  mockLog.mockClear();
+  await mcp("show", "docs", "--json");
+  return JSON.parse(lastLogLine());
+}
+
+async function withMcpHome(run: () => Promise<void>) {
+  await withTempHome("openclaw-cli-mcp-home-", async () => {
+    vi.spyOn(process, "cwd").mockReturnValue(await createWorkspace());
+    await run();
+  });
+}
+
 describe("mcp cli OAuth", () => {
   beforeEach(() => {
     resetMcpCliTestState();
@@ -26,29 +41,22 @@ describe("mcp cli OAuth", () => {
   });
 
   it("surfaces required OAuth authorization in status and doctor", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+    await withMcpHome(async () => {
       readMcpOAuthCredentialsStatus.mockResolvedValue({
         state: "requires-authorization",
       });
 
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
-      ]);
+      await setServer("docs", { ...httpServer, auth: "oauth" });
       mockLog.mockClear();
 
-      await runMcpCommand(["mcp", "status", "--verbose"]);
+      await mcp("status", "--verbose");
 
       const statusLines = mockLog.mock.calls.map((call) => String(call[0]));
       expect(statusLines).toContain("- docs: streamable-http oauth authorization-required");
       expect(statusLines).toContain("  oauth: requires-authorization");
 
       mockLog.mockClear();
-      await runMcpCommand(["mcp", "doctor", "--json"]);
+      await mcp("doctor", "--json");
 
       expect(JSON.parse(lastLogLine())).toMatchObject({
         ok: true,
@@ -70,26 +78,29 @@ describe("mcp cli OAuth", () => {
   });
 
   it("shows connected requester principals in list and status output", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+    await withMcpHome(async () => {
       countMcpOAuthPrincipals.mockResolvedValue(2);
 
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "calendar",
-        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth","oauth":{"identity":"per-requester"}}',
-      ]);
+      await setServer("calendar", {
+        ...httpServer,
+        auth: "oauth",
+        oauth: { identity: "per-requester" },
+      });
+      await setServer("context7", { command: "uvx", args: ["context7-mcp"] });
       mockLog.mockClear();
 
-      await runMcpCommand(["mcp", "list"]);
+      await mcp("list");
       expect(mockLog.mock.calls.map(([line]) => String(line))).toContain(
         "- calendar (2 connected principals)",
       );
+      const listing = mockLog.mock.calls.map(([line]) => String(line)).join("\n");
+      expect(listing).toContain("- context7");
+      expect(listing).toContain("OpenClaw-managed MCP servers (");
+      expect(listing).toContain("OpenClaw-managed mcp.servers entries");
+      expect(listing).toContain("does not include mcporter servers from config/mcporter.json");
 
       mockLog.mockClear();
-      await runMcpCommand(["mcp", "status", "--json"]);
+      await mcp("status", "--json");
       expect(JSON.parse(lastLogLine()).servers[0]).toMatchObject({
         name: "calendar",
         connectedPrincipals: 2,
@@ -99,28 +110,12 @@ describe("mcp cli OAuth", () => {
   });
 
   it("configures enablement, timeouts, and OAuth login", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+    await withMcpHome(async () => {
       completeMcpOAuthAuthorization.mockResolvedValueOnce("authorized");
 
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http"}',
-      ]);
-      await runMcpCommand([
-        "mcp",
-        "configure",
-        "docs",
-        "--disable",
-        "--timeout",
-        "9",
-        "--auth",
-        "oauth",
-      ]);
-      await runMcpCommand(["mcp", "login", "docs", "--code", "abc123"]);
+      await setServer("docs", httpServer);
+      await mcp("configure", "docs", "--disable", "--timeout", "9", "--auth", "oauth");
+      await mcp("login", "docs", "--code", "abc123");
 
       expect(completeMcpOAuthAuthorization).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -132,7 +127,7 @@ describe("mcp cli OAuth", () => {
       );
 
       mockLog.mockClear();
-      await runMcpCommand(["mcp", "status", "--json"]);
+      await mcp("status", "--json");
       expect(JSON.parse(lastLogLine()).servers[0]).toMatchObject({
         name: "docs",
         enabled: false,
@@ -143,46 +138,24 @@ describe("mcp cli OAuth", () => {
     });
   });
 
-  it.each([
-    {
-      name: "per-requester identity and redirect metadata",
-      oauth: {
+  it("preserves per-requester identity and redirect metadata when updating OAuth scope", async () => {
+    await withMcpHome(async () => {
+      const oauth = {
         identity: "per-requester",
         scope: "docs.read",
         redirectUrl: "https://gateway.example.com/oauth/mcp/callback",
         clientMetadataUrl: "https://gateway.example.com/oauth/mcp.json",
-      },
-    },
-  ])("preserves $name when updating OAuth scope", async ({ oauth }) => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        JSON.stringify({
-          url: "https://mcp.example.com",
-          transport: "streamable-http",
-          auth: "oauth",
-          oauth,
-          toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
-        }),
-      ]);
+      };
+      await setServer("docs", {
+        ...httpServer,
+        auth: "oauth",
+        oauth,
+        toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
+      });
 
-      await runMcpCommand([
-        "mcp",
-        "configure",
-        "docs",
-        "--oauth-scope",
-        "docs.write",
-        "--include",
-        "search",
-      ]);
+      await mcp("configure", "docs", "--oauth-scope", "docs.write", "--include", "search");
 
-      mockLog.mockClear();
-      await runMcpCommand(["mcp", "show", "docs", "--json"]);
-      expect(JSON.parse(lastLogLine())).toMatchObject({
+      expect(await readServer()).toMatchObject({
         oauth: { ...oauth, scope: "docs.write" },
         toolFilter: { include: ["search"], exclude: ["admin_*"] },
       });
@@ -190,22 +163,14 @@ describe("mcp cli OAuth", () => {
   });
 
   it("does not restore previous OAuth metadata after an explicit clear", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        JSON.stringify({
-          url: "https://mcp.example.com",
-          auth: "oauth",
-          oauth: { authProfileId: "docs:mcp", scope: "docs.read" },
-        }),
-      ]);
+    await withMcpHome(async () => {
+      await setServer("docs", {
+        url: "https://mcp.example.com",
+        auth: "oauth",
+        oauth: { authProfileId: "docs:mcp", scope: "docs.read" },
+      });
 
-      await runMcpCommand([
-        "mcp",
+      await mcp(
         "configure",
         "docs",
         "--clear-auth",
@@ -213,38 +178,31 @@ describe("mcp cli OAuth", () => {
         "oauth",
         "--oauth-scope",
         "docs.write",
-      ]);
+      );
 
-      mockLog.mockClear();
-      await runMcpCommand(["mcp", "show", "docs", "--json"]);
-      expect(JSON.parse(lastLogLine()).oauth).toEqual({ scope: "docs.write" });
+      expect((await readServer()).oauth).toEqual({ scope: "docs.write" });
     });
   });
 
   it("rejects operator login and logout for per-requester OAuth", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "calendar",
-        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth","oauth":{"identity":"per-requester"}}',
-      ]);
+    await withMcpHome(async () => {
+      await setServer("calendar", {
+        ...httpServer,
+        auth: "oauth",
+        oauth: { identity: "per-requester" },
+      });
       mockError.mockClear();
       completeMcpOAuthAuthorization.mockClear();
       clearMcpOAuthCredentials.mockClear();
 
-      await expect(
-        runMcpCommand(["mcp", "login", "calendar", "--code", "abc123"]),
-      ).rejects.toMatchObject({ code: 1 });
+      await expect(mcp("login", "calendar", "--code", "abc123")).rejects.toMatchObject({ code: 1 });
       expect(lastErrorLine()).toBe(
         'MCP server "calendar" uses per-requester OAuth. Senders connect from the channel via the MCP connect flow.',
       );
       expect(completeMcpOAuthAuthorization).not.toHaveBeenCalled();
 
       mockError.mockClear();
-      await expect(runMcpCommand(["mcp", "logout", "calendar"])).rejects.toMatchObject({ code: 1 });
+      await expect(mcp("logout", "calendar")).rejects.toMatchObject({ code: 1 });
       expect(lastErrorLine()).toBe(
         'MCP server "calendar" uses per-requester OAuth. Remove or replace the server to clear requester credentials.',
       );
@@ -253,18 +211,10 @@ describe("mcp cli OAuth", () => {
   });
 
   it("clears stored OAuth credentials after auth is removed", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http"}',
-      ]);
+    await withMcpHome(async () => {
+      await setServer("docs", httpServer);
       clearMcpOAuthCredentials.mockClear();
-      await runMcpCommand(["mcp", "logout", "docs"]);
+      await mcp("logout", "docs");
 
       expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
         expect.objectContaining({

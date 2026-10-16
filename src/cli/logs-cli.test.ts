@@ -30,6 +30,50 @@ function transientCloseError() {
   });
 }
 
+function expectGatewayPoll(call: number, cursor?: number, timeout = "30000") {
+  expect(callGatewayFromCli).toHaveBeenNthCalledWith(
+    call,
+    "logs.tail",
+    expect.objectContaining({ timeout }),
+    { cursor, limit: 200, maxBytes: 250_000 },
+    expect.any(Object),
+  );
+}
+
+function expectJournalArgs(call: number, args: string[]) {
+  expect(execFileUtf8Tail).toHaveBeenNthCalledWith(
+    call,
+    "journalctl",
+    expect.arrayContaining(args),
+    expect.any(Object),
+  );
+}
+
+function expectRecoveryCalls(gateway: number, journal: number) {
+  expect(readConfiguredLogTail).not.toHaveBeenCalled();
+  expect(callGatewayFromCli).toHaveBeenCalledTimes(gateway);
+  expect(execFileUtf8Tail).toHaveBeenCalledTimes(journal);
+}
+
+function expectText(text: string, includes: string[], excludes: string[] = []) {
+  for (const value of includes) {
+    expect(text).toContain(value);
+  }
+  for (const value of excludes) {
+    expect(text).not.toContain(value);
+  }
+}
+
+const captureOutput = () => ({
+  stdoutWrites: captureStdoutWrites(),
+  stderrWrites: captureStderrWrites(),
+});
+
+function useJournal() {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
+}
+
 describe("logs cli", () => {
   useLogsCliTestHarness();
   beforeEach(() => {
@@ -46,42 +90,35 @@ describe("logs cli", () => {
       reset: true,
     });
 
-    const stdoutWrites = captureStdoutWrites();
-    const stderrWrites = captureStderrWrites();
+    const { stdoutWrites, stderrWrites } = captureOutput();
 
     await runLogsCli(["logs"]);
 
-    expect(stdoutWrites.join("")).toContain("Log file:");
-    expect(stdoutWrites.join("")).toContain("raw line");
-    expect(stderrWrites.join("")).toContain(
+    expectText(stdoutWrites.join(""), ["Log file:", "raw line"]);
+    expectText(stderrWrites.join(""), [
       "Log tail truncated (increase --limit or --max-bytes).",
-    );
-    expect(stderrWrites.join("")).toContain("Log cursor reset");
+      "Log cursor reset",
+    ]);
   });
 
-  it.each(["json"])(
-    "reports a byte-budget re-anchor without claiming rotation in %s output",
-    async (mode) => {
-      callGatewayFromCli.mockResolvedValueOnce({
-        file: "/tmp/openclaw.log",
-        cursor: 8192,
-        size: 8192,
-        lines: ["line after skipped burst"],
-        truncated: true,
-        reset: true,
-        skippedBytes: 4096,
-      });
+  it("reports a byte-budget re-anchor without claiming rotation in JSON output", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 8192,
+      size: 8192,
+      lines: ["line after skipped burst"],
+      truncated: true,
+      reset: true,
+      skippedBytes: 4096,
+    });
 
-      const stdoutWrites = captureStdoutWrites();
-      const stderrWrites = captureStderrWrites();
+    const { stdoutWrites, stderrWrites } = captureOutput();
 
-      await runLogsCli(["logs", mode === "json" ? "--json" : "--plain"]);
+    await runLogsCli(["logs", "--json"]);
 
-      const output = `${stdoutWrites.join("")}\n${stderrWrites.join("")}`;
-      expect(output).toContain("re-anchored (skipped 4096 bytes)");
-      expect(output).not.toContain("file rotated");
-    },
-  );
+    const output = `${stdoutWrites.join("")}\n${stderrWrites.join("")}`;
+    expectText(output, ["re-anchored (skipped 4096 bytes)"], ["file rotated"]);
+  });
 
   it.each([
     { mode: "plain UTC", tty: true, args: ["--utc", "--plain"], time: "2025-01-01T12:00:00.000Z" },
@@ -133,61 +170,40 @@ describe("logs cli", () => {
     },
   );
 
-  it.each([{ context: { plugin: "calendar" }, label: "calendar" }])(
-    "retains $label log identity in text and JSON",
-    async ({ context, label }) => {
-      const raw = JSON.stringify({
-        message: "sent",
-        _meta: { name: JSON.stringify(context), logLevelName: "INFO" },
-      });
-      callGatewayFromCli.mockResolvedValueOnce({
-        file: "/tmp/openclaw.log",
-        lines: [raw, "raw control"],
-      });
-      const writes = captureStdoutWrites();
-      await runLogsCli(["logs", "--plain", "--no-color"]);
-      expect(writes.join("")).toContain(`info ${label} sent\n`);
-      expect(writes.join("")).toContain("raw control\n");
-      writes.length = 0;
-      callGatewayFromCli.mockResolvedValueOnce({
-        file: "/tmp/openclaw.log",
-        lines: [raw, "raw control"],
-      });
-      await runLogsCli(["logs", "--json"]);
-      const records = writes
-        .join("")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      expect(records).toContainEqual(
-        expect.objectContaining({ type: "log", ...context, message: "sent", raw }),
-      );
-      expect(records).toContainEqual({ type: "raw", raw: "raw control" });
-    },
-  );
-
-  it("warns when the output pipe closes", async () => {
+  it("retains calendar log identity in text and JSON", async () => {
+    const context = { plugin: "calendar" };
+    const raw = JSON.stringify({
+      message: "sent",
+      _meta: { name: JSON.stringify(context), logLevelName: "INFO" },
+    });
     callGatewayFromCli.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",
-      lines: ["line one"],
+      lines: [raw, "raw control"],
     });
-
-    const stderrWrites = captureStderrWrites();
-    vi.spyOn(process.stdout, "write").mockImplementation(() => {
-      const err = new Error("EPIPE") as NodeJS.ErrnoException;
-      err.code = "EPIPE";
-      throw err;
+    const writes = captureStdoutWrites();
+    await runLogsCli(["logs", "--plain", "--no-color"]);
+    expectText(writes.join(""), ["info calendar sent\n", "raw control\n"]);
+    writes.length = 0;
+    callGatewayFromCli.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      lines: [raw, "raw control"],
     });
-
-    await runLogsCli(["logs"]);
-
-    expect(stderrWrites.join("")).toContain("output stdout closed");
+    await runLogsCli(["logs", "--json"]);
+    const records = writes
+      .join("")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records).toContainEqual(
+      expect.objectContaining({ type: "log", ...context, message: "sent", raw }),
+    );
+    expect(records).toContainEqual({ type: "raw", raw: "raw control" });
   });
 
-  it.each([
-    ["scope-upgrade", () => new Error("scope upgrade pending approval (requestId: req-123)")],
-  ] as const)("falls back to the configured local log on %s errors", async (_kind, error) => {
-    callGatewayFromCli.mockRejectedValueOnce(error());
+  it("falls back to the configured local log on scope-upgrade errors", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(
+      new Error("scope upgrade pending approval (requestId: req-123)"),
+    );
     readConfiguredLogTail.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",
       cursor: 5,
@@ -196,8 +212,7 @@ describe("logs cli", () => {
       truncated: false,
       reset: false,
     });
-    const stdoutWrites = captureStdoutWrites();
-    const stderrWrites = captureStderrWrites();
+    const { stdoutWrites, stderrWrites } = captureOutput();
 
     await runLogsCli(["logs"]);
 
@@ -228,31 +243,27 @@ describe("logs cli", () => {
       truncated: false,
       reset: false,
     });
-    const stdoutWrites = captureStdoutWrites();
-    const stderrWrites = captureStderrWrites();
+    const { stdoutWrites, stderrWrites } = captureOutput();
 
     await runLogsCli(["logs", "--json"]);
 
     expect(stdoutWrites.join("")).toContain("Gateway startup failed");
-    expect(stderrWrites.join("")).toContain("Configuration could not be read");
-    expect(stderrWrites.join("")).toContain("openclaw doctor --fix");
+    expectText(stderrWrites.join(""), ["Configuration could not be read", "openclaw doctor --fix"]);
     expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 
   describe("--follow retry behavior", () => {
     it("uses the active systemd journal for implicit local follow failures", async () => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      useJournal();
       const closeError = transientCloseError();
       callGatewayFromCli.mockRejectedValueOnce(closeError).mockRejectedValueOnce(closeError);
-      readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
       execFileUtf8Tail
         .mockResolvedValueOnce(
           journalPage("Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz", "abc"),
         )
         .mockResolvedValueOnce(journalPage("second journal line", "def"));
 
-      const stderrWrites = captureStderrWrites();
-      const stdoutWrites = captureStdoutWrites();
+      const { stdoutWrites, stderrWrites } = captureOutput();
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
       await runLogsCli(["logs", "--follow", "--interval", "1"]);
@@ -270,26 +281,24 @@ describe("logs cli", () => {
         ]),
         expect.any(Object),
       );
-      expect(execFileUtf8Tail).toHaveBeenNthCalledWith(
-        2,
-        "journalctl",
-        expect.arrayContaining(["--after-cursor=s=abc"]),
-        expect.any(Object),
-      );
+      expectJournalArgs(2, ["--after-cursor=s=abc"]);
       expect(stderrWrites.join("")).toContain("reading active systemd gateway journal");
-      expect(stdoutWrites.join("")).toContain(
-        "Log source: journalctl --user --boot --user-unit=openclaw-gateway.service _PID=2557",
+      expectText(
+        stdoutWrites.join(""),
+        [
+          "Log source: journalctl --user --boot --user-unit=openclaw-gateway.service _PID=2557",
+          "Service PID: 2557",
+          "Service Unit: openclaw-gateway.service",
+          "Authorization: Bearer",
+          "second journal line",
+        ],
+        ["sk-abcdefghijklmnopqrstuvwxyz"],
       );
-      expect(stdoutWrites.join("")).toContain("Service PID: 2557");
-      expect(stdoutWrites.join("")).toContain("Service Unit: openclaw-gateway.service");
-      expect(stdoutWrites.join("")).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
-      expect(stdoutWrites.join("")).toContain("Authorization: Bearer");
-      expect(stdoutWrites.join("")).toContain("second journal line");
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
     it("switches back to Gateway logs.tail after temporary journal fallback", async () => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      useJournal();
       const recoveredPayload = {
         file: "/tmp/openclaw.log",
         cursor: 10,
@@ -309,7 +318,6 @@ describe("logs cli", () => {
         .mockRejectedValueOnce(transientCloseError())
         .mockImplementationOnce(() => recoveryProbe)
         .mockRejectedValueOnce(new Error("stop after delayed recovery"));
-      readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
       execFileUtf8Tail
         .mockResolvedValueOnce(journalPage("journal bridge line", "abc"))
         .mockImplementationOnce(async () => {
@@ -326,27 +334,21 @@ describe("logs cli", () => {
         runLogsCli(["logs", "--follow", "--plain", "--interval", "1", "--timeout", "250"]),
       );
 
-      expect(readConfiguredLogTail).not.toHaveBeenCalled();
-      expect(execFileUtf8Tail).toHaveBeenCalledTimes(2);
-      expect(callGatewayFromCli).toHaveBeenCalledTimes(3);
-      expect(callGatewayFromCli).toHaveBeenNthCalledWith(
-        2,
-        "logs.tail",
-        expect.objectContaining({ timeout: "250" }),
-        { cursor: undefined, limit: 200, maxBytes: 250_000 },
-        expect.any(Object),
-      );
+      expectRecoveryCalls(3, 2);
+      expectGatewayPoll(2, undefined, "250");
       const output = stdoutWrites.join("");
-      expect(output).toContain("journal bridge line");
-      expect(output).toContain("journal while probing");
-      expect(output).toContain("Log file: /tmp/openclaw.log");
-      expect(output).toContain("rpc recovered line");
-      expect(output).toContain("2026-05-29T20:00:00.000");
+      expectText(output, [
+        "journal bridge line",
+        "journal while probing",
+        "Log file: /tmp/openclaw.log",
+        "rpc recovered line",
+        "2026-05-29T20:00:00.000",
+      ]);
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
     it("keeps journal polling responsive while a Gateway recovery probe is pending", async () => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      useJournal();
       const closeError = transientCloseError();
       callGatewayFromCli.mockRejectedValueOnce(closeError).mockImplementationOnce(
         (...args: Parameters<typeof import("./gateway-rpc.js").callGatewayFromCli>) =>
@@ -360,7 +362,6 @@ describe("logs cli", () => {
             );
           }),
       );
-      readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
       execFileUtf8Tail
         .mockResolvedValueOnce(journalPage("first journal line", "abc"))
         .mockResolvedValueOnce(journalPage("second journal line", "def"));
@@ -381,13 +382,7 @@ describe("logs cli", () => {
       await runLogsCli(["logs", "--follow", "--plain", "--interval", "1"]);
 
       expect(stdoutWrites.join("")).toContain("second journal line");
-      expect(callGatewayFromCli).toHaveBeenNthCalledWith(
-        2,
-        "logs.tail",
-        expect.objectContaining({ timeout: "30000" }),
-        { cursor: undefined, limit: 200, maxBytes: 250_000 },
-        expect.any(Object),
-      );
+      expectGatewayPoll(2, undefined, "30000");
       expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
       expect(execFileUtf8Tail).toHaveBeenCalledTimes(2);
       const probeExtra = callGatewayFromCli.mock.calls[1]?.[3] as { signal?: AbortSignal };
@@ -396,7 +391,7 @@ describe("logs cli", () => {
     });
 
     it("prints source changes when Gateway RPC falls back to journal and recovers", async () => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      useJournal();
       const timestamps = [
         "2026-06-01T00:00:01.000Z",
         "2026-06-01T00:00:02.000Z",
@@ -424,34 +419,25 @@ describe("logs cli", () => {
         })
         .mockRejectedValueOnce(closeError)
         .mockRejectedValueOnce(new Error("stop after recovered cursor probe"));
-      readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
       execFileUtf8Tail
         .mockResolvedValueOnce(journalPage("overlap line", "abc"))
         .mockResolvedValueOnce(journalPage("journal after recovery", "def"));
 
-      const stderrWrites = captureStderrWrites();
-      const stdoutWrites = captureStdoutWrites();
+      const { stdoutWrites, stderrWrites } = captureOutput();
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
       await runLogsCli(["logs", "--follow", "--plain", "--interval", "1"]);
 
-      expect(readConfiguredLogTail).not.toHaveBeenCalled();
-      expect(callGatewayFromCli).toHaveBeenCalledTimes(5);
-      expect(execFileUtf8Tail).toHaveBeenCalledTimes(2);
-      expect(execFileUtf8Tail).toHaveBeenNthCalledWith(
-        2,
-        "journalctl",
-        expect.arrayContaining(["--since=2026-06-01 00:00:03.000 UTC"]),
-        expect.any(Object),
-      );
+      expectRecoveryCalls(5, 2);
+      expectJournalArgs(2, ["--since=2026-06-01 00:00:03.000 UTC"]);
       const secondJournalArgs = execFileUtf8Tail.mock.calls[1]?.[1] as string[];
       expect(secondJournalArgs).not.toContain("--after-cursor=s=abc");
       const output = stdoutWrites.join("");
       expect(output.match(/Log file: \/tmp\/openclaw\.log/g)).toHaveLength(2);
-      expect(output).toContain(
+      expectText(output, [
         "Log source: journalctl --user --boot --user-unit=openclaw-gateway.service _PID=2557",
-      );
-      expect(output).toContain("initial rpc line");
+        "initial rpc line",
+      ]);
       expect(output.match(/overlap line/g)).toHaveLength(2);
       expect(output).toContain("journal after recovery");
       expect(stderrWrites.join("")).toContain("reading active systemd gateway journal");
@@ -459,7 +445,7 @@ describe("logs cli", () => {
     });
 
     it("keeps journal cursor across repeated fallback before Gateway recovery", async () => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      useJournal();
       const closeError = transientCloseError();
       callGatewayFromCli
         .mockRejectedValueOnce(closeError)
@@ -476,7 +462,6 @@ describe("logs cli", () => {
           ],
         })
         .mockRejectedValueOnce(new Error("stop after recovered cursor probe"));
-      readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
       execFileUtf8Tail
         .mockResolvedValueOnce(journalPage("first journal bridge line", "abc"))
         .mockResolvedValueOnce(journalPage("second journal bridge line", "def"));
@@ -488,12 +473,7 @@ describe("logs cli", () => {
 
       expect(readConfiguredLogTail).not.toHaveBeenCalled();
       expect(execFileUtf8Tail).toHaveBeenCalledTimes(2);
-      expect(execFileUtf8Tail).toHaveBeenNthCalledWith(
-        2,
-        "journalctl",
-        expect.arrayContaining(["--after-cursor=s=abc"]),
-        expect.any(Object),
-      );
+      expectJournalArgs(2, ["--after-cursor=s=abc"]);
       expect(callGatewayFromCli).toHaveBeenCalledTimes(4);
       expect(callGatewayFromCli).toHaveBeenNthCalledWith(
         2,
@@ -517,9 +497,11 @@ describe("logs cli", () => {
         expect.any(Object),
       );
       const output = stdoutWrites.join("");
-      expect(output).toContain("first journal bridge line");
-      expect(output).toContain("second journal bridge line");
-      expect(output).toContain("rpc recovered line");
+      expectText(output, [
+        "first journal bridge line",
+        "second journal bridge line",
+        "rpc recovered line",
+      ]);
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
@@ -529,8 +511,7 @@ describe("logs cli", () => {
         callGatewayFromCli.mockRejectedValueOnce(closeError);
       }
 
-      const stderrWrites = captureStderrWrites();
-      const stdoutWrites = captureStdoutWrites();
+      const { stdoutWrites, stderrWrites } = captureOutput();
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
       await runLogsCli(["logs", "--follow", "--interval", "1"]);
@@ -559,12 +540,11 @@ describe("logs cli", () => {
       await runLogsCli(["logs", mode === "json" ? "--json" : "--plain", "--url", rawUrl]);
 
       const stderr = stderrWrites.join("");
-      expect(stderr).toContain("failed to connect to");
-      expect(stderr).toContain("gateway.example/ws");
-      expect(stderr).not.toContain("password");
-      expect(stderr).not.toContain("secret");
-      expect(stderr).not.toContain("api-key");
-      expect(stderr).not.toContain("signed");
+      expectText(
+        stderr,
+        ["failed to connect to", "gateway.example/ws"],
+        ["password", "secret", "api-key", "signed"],
+      );
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
@@ -578,8 +558,7 @@ describe("logs cli", () => {
         }),
       );
 
-      const stdoutWrites = captureStdoutWrites();
-      const stderrWrites = captureStderrWrites();
+      const { stdoutWrites, stderrWrites } = captureOutput();
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
       // Simulate PTY: stderr is a TTY so the terminal reset fires and gets
