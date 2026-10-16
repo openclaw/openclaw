@@ -21,10 +21,7 @@ import {
   type CodexAccountUsageSummary,
 } from "./app-server/rate-limits.js";
 import { isLikelyEmailAddress } from "./command-account-email.js";
-import type {
-  SafeCodexControlRequestFn as SafeCodexControlRequest,
-  SafeValue,
-} from "./command-rpc.js";
+import { safeCodexControlRequest, type SafeValue } from "./command-rpc.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 
@@ -52,7 +49,6 @@ export async function readCodexAccountAuthOverview(params: {
   agentDir: string;
   authProfileId: string | null | undefined;
   pluginConfig: CodexPluginConfig | undefined;
-  safeCodexControlRequest: SafeCodexControlRequest;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
 }): Promise<CodexAccountAuthOverview | undefined> {
@@ -87,7 +83,7 @@ export async function readCodexAccountAuthOverview(params: {
       ? summarizeCodexAccountUsage(params.limits.value, now)
       : undefined;
   if (subscriptionProfileId && !activeIsSubscription) {
-    const limits = await params.safeCodexControlRequest(
+    const limits = await safeCodexControlRequest(
       params.pluginConfig,
       CODEX_CONTROL_METHODS.rateLimits,
       undefined,

@@ -19,6 +19,14 @@ intent to the macOS app without requiring a running Gateway or PostgreSQL
 connection. Shared-state engine selection does not move this store.
 No release stored runtime pins in PostgreSQL shared state, so PostgreSQL installs have no legacy pin source to migrate.
 
+Managed-update notifications use the selected shared-state engine. PostgreSQL
+handoffs report through the running Gateway, or through an admitted offline owner
+while it is stopped; the anchor never stores restart notifications. The local
+handoff lease still owns service recovery when PostgreSQL is unavailable. A missed
+notification is reported in the handoff log without suppressing recovery.
+SQLite handoffs retain their direct-file notification path, including recovery
+through an older installed runtime.
+
 ## Configure PostgreSQL
 
 Use a PostgreSQL database and a role that can create schemas
@@ -100,7 +108,8 @@ The supported PostgreSQL families are:
   tombstones remain intact. Duplicate-key voice JSON refuses the port with a hashed
   row locator. Cold archive references are retained; user backups embed their blobs.
   PostgreSQL agent schemas support current-version
-  bootstrap only and reject schema drift before exposing the store.
+  bootstrap and the schema 27 to 28 forward migration, and reject schema drift
+  before exposing the store.
 - **Workboard:** runtime storage, bidirectional database ports, and matched backups.
 - **Logbook:** runtime frames, batches, observations, cards, and standups;
   bidirectional database ports; and matched backups. Frame images remain local

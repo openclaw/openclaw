@@ -1,7 +1,13 @@
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import {
+  captureRetainedNativeWorkerSource,
+  type RetainedNativeWorkerSource,
+} from "../infra/worker-native-lifecycle.js";
 import { createOwnedWorkerTaskPool } from "../infra/worker-task-pool.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
@@ -27,6 +33,35 @@ export type PreparedPluginGenerationArtifact = {
   attachModuleSource(callback: (filename: string) => string): void;
 };
 type PreparationParameters = { rootDir: string; source: string; standalone?: boolean };
+type PreparationOwner = { closing: boolean; clients: Set<() => Promise<void>> };
+const preparationOwners = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginPreparationOwners"),
+  () => new WeakMap<RetainedNativeWorkerSource, PreparationOwner>(),
+);
+
+function preparationOwnerFor(source: RetainedNativeWorkerSource): PreparationOwner {
+  let owner = preparationOwners.get(source);
+  if (!owner) {
+    owner = { closing: false, clients: new Set() };
+    preparationOwners.set(source, owner);
+    const retained = owner;
+    source.retain(owner, async () => {
+      retained.closing = true;
+      const outcomes = await Promise.allSettled([...retained.clients].map((close) => close()));
+      const errors = outcomes.flatMap((outcome) =>
+        outcome.status === "rejected" ? [outcome.reason] : [],
+      );
+      if (errors.length) {
+        throw new AggregateError(errors, "Plugin preparation workers failed to close");
+      }
+    });
+  }
+  if (owner.closing) {
+    throw new Error("Plugin preparation owner is closing");
+  }
+  return owner;
+}
+
 /** Each exposed artifact owns its capture worker; registry instance caching owns reuse. */
 export async function preparePluginGenerationArtifact(
   params: PreparationParameters,
@@ -35,6 +70,8 @@ export async function preparePluginGenerationArtifact(
 }
 /** One artifact lifetime owns its worker, including recovery and native-root leases. */
 function createPreparationClient() {
+  const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const owner = preparationOwnerFor(nativeSource);
   const storage = resolvePluginSourceCaptureStorage();
   const installRoots = resolveActivePluginInstallRoots();
   const publishAdmission = createPluginSourceAdmissionPublisher({
@@ -50,6 +87,7 @@ function createPreparationClient() {
   let nextCapture = 0;
   let resources = 0;
   let pending = 0;
+  let drained: ReturnType<typeof createDeferredCore<void>> | undefined;
   let closing: Promise<void> | undefined;
   const pendingNativeLoads = new Set<string>();
   const waitSignal = new Int32Array(new SharedArrayBuffer(4));
@@ -61,7 +99,7 @@ function createPreparationClient() {
       restartOnError: false,
       prepareWorker: () => ({ options: {}, releaseResources: releaseRoot }),
     },
-    { retainedTransport: true },
+    { retainedTransport: true, nativeSource },
   );
   const stopObserving = subscribePluginNativeLoads((filename) => {
     if (!closing) {
@@ -113,14 +151,26 @@ function createPreparationClient() {
     (closing ??= (async () => {
       stopObserving();
       try {
+        if (pending) {
+          await (drained ??= createDeferredCore()).promise;
+        }
+        // Retained artifacts and recovery leases belong to the worker; dispose
+        // them before the pool joins its physical execution lifetime.
+        await pool.closeResources();
         await pool.close();
         await releaseRoot();
+        owner.clients.delete(close);
       } finally {
         port1.close();
       }
     })());
+  owner.clients.add(close);
   const codec = new GenerationCodec(
-    (handle, args, asynchronous, sourceCapture) => {
+    (handle, args, asynchronous, sourceCapture, disposal) => {
+      // Terminal cleanup already owns remote disposal; callers join its outcome.
+      if (closing && disposal) {
+        return asynchronous ? closing : undefined;
+      }
       const command: GenerationWorkerInput = {
         operation: "call",
         handle,
@@ -178,6 +228,9 @@ function createPreparationClient() {
         }
       } finally {
         pending--;
+        if (!pending) {
+          drained?.resolve();
+        }
         if (!pending && !resources) {
           await close();
         }
@@ -232,6 +285,9 @@ function createPreparationClient() {
         }
       } finally {
         pending--;
+        if (!pending) {
+          drained?.resolve();
+        }
         if (!pending && !resources) {
           queueMicrotask(() => {
             void close();

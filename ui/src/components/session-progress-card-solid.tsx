@@ -46,25 +46,40 @@ export type SessionProgressCardProps = {
 
 type CardProps = SessionProgressCardProps & { card: ProgressCard };
 
-function ActivityTime(props: { timestamp: number; labelKey: Parameters<typeof t>[0] }) {
+function CardActivity(props: { view: ReturnType<typeof cardPresentation>; composer?: boolean }) {
   const presented = useContext(ContentPresentation);
   const [revision, setRevision] = createSignal(0);
-  createEffect(createMemo(presented), (active) => {
-    if (!active) {
-      return undefined;
+  createEffect(createMemo(presented), (active): void | (() => void) => {
+    if (active) {
+      setRevision((value) => value + 1);
+      const timer = setInterval(() => setRevision((value) => value + 1), 30_000);
+      return () => clearInterval(timer);
     }
-    setRevision((value) => value + 1);
-    const timer = setInterval(() => setRevision((value) => value + 1), 30_000);
-    return () => clearInterval(timer);
   });
+  const timestamp = () => props.view().activityTimestamp;
   const label = createMemo(() => {
     revision();
-    return t(props.labelKey, { time: formatRelativeTimestamp(props.timestamp) });
+    return t(props.view().activityKey, { time: formatRelativeTimestamp(timestamp()) });
+  });
+  const count = createMemo(() => {
+    const { counts, currentPosition } = props.view();
+    return counts
+      ? props.composer
+        ? `${t("sessionProgressCard.stepCount", {
+            current: String(currentPosition),
+            total: String(counts.total),
+          })} · `
+        : ` · ${counts.completed}/${counts.total}`
+      : "";
   });
   return (
-    <time datetime={new Date(props.timestamp).toISOString()} aria-label={label()} title={label()}>
-      {label()}
-    </time>
+    <span>
+      {props.composer && count()}
+      <time datetime={new Date(timestamp()).toISOString()} aria-label={label()} title={label()}>
+        {label()}
+      </time>
+      {!props.composer && count()}
+    </span>
   );
 }
 
@@ -78,12 +93,10 @@ function StepMarker(props: {
       fallback={
         <Icon
           name={
-            props.outcome
-              ? props.outcome === "completed"
-                ? "check"
-                : "circleX"
-              : props.status === "completed"
-                ? "check"
+            (props.outcome ?? props.status) === "completed"
+              ? "check"
+              : props.outcome
+                ? "circleX"
                 : "clock"
           }
         />
@@ -139,7 +152,7 @@ function Step(props: {
     );
   return (
     <li
-      class={`session-progress-card__step session-progress-card__step--${status()}`}
+      class={["session-progress-card__step", `session-progress-card__step--${status()}`]}
       aria-label={t("sessionProgressCard.stepLabel", { status: label(), step: props.step.step })}
     >
       <span
@@ -314,7 +327,10 @@ function ComposerCard(props: CardProps) {
     <details
       ref={disclosure.details}
       onClick={disclosure.onClick}
-      class={`session-progress-card session-progress-card--composer ${props.placement === "details" ? "session-progress-card--details" : ""}`}
+      class={[
+        "session-progress-card session-progress-card--composer",
+        { "session-progress-card--details": props.placement === "details" },
+      ]}
       data-progress-card-placement={props.placement}
       data-complete={String(view().complete)}
     >
@@ -324,7 +340,13 @@ function ComposerCard(props: CardProps) {
         aria-label={`${view().stepLabel}. ${view().outcomeLabel ?? view().countLabel}`}
       >
         <span
-          class={`session-progress-card__summary-indicator session-progress-card__current-marker${view().complete || view().effectiveSessionStatus === "done" ? " session-progress-card__summary-indicator--complete" : ""}`}
+          class={[
+            "session-progress-card__summary-indicator session-progress-card__current-marker",
+            {
+              "session-progress-card__summary-indicator--complete":
+                view().complete || view().effectiveSessionStatus === "done",
+            },
+          ]}
           data-status={view().presentedCurrentStatus ?? "pending"}
           data-outcome={view().effectiveSessionStatus}
           aria-hidden="true"
@@ -350,20 +372,7 @@ function ComposerCard(props: CardProps) {
             {t("sessionProgressCard.composerTitle")}
           </span>
           <span class="session-progress-card__heading-actions">
-            <span>
-              <Show when={view().counts}>
-                {(counts) => (
-                  <>
-                    {t("sessionProgressCard.stepCount", {
-                      current: String(view().currentPosition),
-                      total: String(counts().total),
-                    })}
-                    {" · "}
-                  </>
-                )}
-              </Show>
-              <ActivityTime timestamp={view().activityTimestamp} labelKey={view().activityKey} />
-            </span>
+            <CardActivity view={view} composer />
           </span>
         </span>
         <span class="session-progress-card__summary-controls">
@@ -404,24 +413,14 @@ function BoardCard(props: CardProps) {
   const view = cardPresentation(props);
   return (
     <section
-      class={`session-progress-card session-progress-card--${props.placement}`}
+      class={["session-progress-card", `session-progress-card--${props.placement}`]}
       data-progress-card-placement={props.placement}
       aria-label={view().countLabel}
     >
       <div class="session-progress-card__heading">
         <span>{t("sessionProgressCard.title")}</span>
         <span class="session-progress-card__heading-actions">
-          <span>
-            <ActivityTime timestamp={view().activityTimestamp} labelKey={view().activityKey} />
-            <Show when={view().counts}>
-              {(counts) => (
-                <>
-                  {" "}
-                  · {counts().completed}/{counts().total}
-                </>
-              )}
-            </Show>
-          </span>
+          <CardActivity view={view} />
           <CardAction card={props.card} onAction={props.onDismiss} />
         </span>
       </div>

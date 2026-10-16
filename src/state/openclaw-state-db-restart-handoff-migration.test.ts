@@ -94,6 +94,7 @@ describe("gateway restart handoff state migration", () => {
       { kind: "meeting-transcript-start-time", path: databasePath },
       { kind: "task-run-indexes-v24", path: databasePath },
       { kind: "subagent-operator-recovery-v25", path: databasePath },
+      { kind: "session-state-head-layout-v26", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: databasePath },
     ]);

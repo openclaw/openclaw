@@ -74,6 +74,8 @@ packages/memory-host-sdk/src/host/memory-schema-provenance.ts
 packages/memory-host-sdk/src/host/memory-schema-recall.ts
 packages/memory-host-sdk/src/host/memory-schema-storage-migration.ts
 packages/memory-host-sdk/src/host/memory-schema.ts
+packages/memory-host-sdk/src/host/memory-search-schema.ts
+packages/memory-host-sdk/src/host/openclaw-runtime-kysely.ts
 packages/memory-host-sdk/src/host/openclaw-runtime-paths.ts
 packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts
 packages/model-catalog-core/package.json
@@ -375,9 +377,12 @@ src/infra/database-engine/postgres-search-schema.ts
 src/infra/database-engine/postgres-search.ts
 src/infra/database-engine/postgres-vector.ts
 src/infra/database-engine/registry.ts
+src/infra/database-engine/search-admission.ts
 src/infra/database-engine/search-extension.ts
 src/infra/database-engine/search.ts
 src/infra/database-engine/sqlite-full-text.ts
+src/infra/database-engine/sqlite-memory-search-fragments.ts
+src/infra/database-engine/sqlite-memory-vector-schema.ts
 src/infra/database-engine/sqlite-search-schema.ts
 src/infra/database-engine/sqlite-vector-subprocess.ts
 src/infra/database-engine/sqlite-vector-types.ts
@@ -1890,6 +1895,7 @@ src/state/openclaw-agent-storage-schema.ts
 src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts
 src/state/openclaw-agent-transcript-payload-migration.ts
+src/state/openclaw-agent-write-layout-migration.ts
 src/state/openclaw-agent-write-admission.ts
 src/state/openclaw-agent-write-admission-state.ts
 src/state/openclaw-database-preflight-agent-scheduler.ts
@@ -1948,6 +1954,7 @@ src/state/openclaw-state-db-schema-v13-widerow.ts
 src/state/openclaw-state-db-schema-v21-columns.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
+src/state/openclaw-state-db-schema-v26-layout.ts
 src/state/openclaw-state-db-schema-version.ts
 src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts
@@ -2023,6 +2030,7 @@ src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts
 src/state/session-metadata-unavailable-error.ts
 src/state/session-watch-cursor-provenance.ts
+src/state/sqlite-table-layout-migration.ts
 src/state/worker-operation-registry.ts
 src/system-agent/agent-id.ts
 src/test-utils/bun-process.ts
