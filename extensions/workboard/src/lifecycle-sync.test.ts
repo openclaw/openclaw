@@ -61,7 +61,7 @@ function execution(
 
 async function runSessionSweep(params: {
   store: WorkboardStore;
-  sessions: Array<{
+  sessions?: Array<{
     key: string;
     updatedAt?: number;
     status?: "running" | "done" | "failed" | "killed" | "timeout";
@@ -71,11 +71,12 @@ async function runSessionSweep(params: {
   complete?: boolean;
   now?: number;
   onMatched?: Parameters<typeof createWorkboardLifecycleService>[0]["onMatched"];
+  readSessions?: Parameters<typeof createWorkboardLifecycleService>[0]["readSessions"];
 }) {
-  const readSessions = vi.fn().mockResolvedValue({
-    sessions: params.sessions,
-    complete: params.complete ?? true,
-  });
+  const readSessions = vi.fn(
+    params.readSessions ??
+      (async () => ({ sessions: params.sessions ?? [], complete: params.complete ?? true })),
+  );
   const now = params.now;
   const service = createWorkboardLifecycleService({
     store: params.store,
@@ -90,7 +91,9 @@ async function runSessionSweep(params: {
     // The admitted operation spans the full sweep, including SQLite worker writes.
     expect(runOperation).toHaveBeenCalled();
     await runOperation.mock.results[0]?.value;
-    expect(readSessions).toHaveBeenCalledOnce();
+    if (!params.readSessions) {
+      expect(readSessions).toHaveBeenCalledOnce();
+    }
   } finally {
     service.onGatewayStop();
     await service.stop?.({ logger: { warn: vi.fn() } } as never);
@@ -780,7 +783,7 @@ describe("Workboard gateway lifecycle sync", () => {
       }
       expect(method).toBe("sessions.list");
       expect(options).toMatchObject({ includeGlobal: false, includeUnknown: false });
-      return { sessions: [] };
+      return { sessions: [], hasMore: false };
     });
 
     await expect(
@@ -800,23 +803,129 @@ describe("Workboard gateway lifecycle sync", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("treats a full sessions.list page as possibly truncated", async () => {
-    // Keep a full page conservative even when a mock or older peer omits pagination
-    // metadata, or absent sessions could be marked missing.
-    const request = vi.fn().mockResolvedValue({
-      sessions: Array.from({ length: 10_000 }, (_, index) => ({
-        key: `agent:main:dashboard:${index}`,
-        status: "done",
-      })),
-    });
+  it.each([
+    [false, undefined],
+    [undefined, undefined],
+    [true, undefined],
+    [true, 0],
+    [true, -1],
+    [true, "1"],
+    [true, 2],
+  ])(
+    "requires an explicit end or valid continuation (hasMore=%s nextOffset=%s)",
+    async (hasMore, nextOffset) => {
+      const request = vi.fn().mockResolvedValue({
+        sessions: [{ key: "agent:main:dashboard:recent", status: "done" }],
+        hasMore,
+        nextOffset,
+      });
 
+      const snapshot = await readWorkboardLifecycleSessions({
+        isAvailable: async () => true,
+        request,
+      });
+      expect(snapshot.complete).toBe(hasMore === false);
+      expect(request).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("yields between bounded pages and retains later running rows without inferring absence", async () => {
+    let yielded = false;
+    const later = { key: "agent:main:later", status: "running", hasActiveRun: true };
+    const first = Array.from({ length: 200 }, (_, index) => ({ key: `agent:main:page-${index}` }));
+    const request = vi.fn().mockImplementation(async (_method, params) => {
+      expect(params.limit).toBe(200);
+      if (params.offset === 0) {
+        setImmediate(() => {
+          yielded = true;
+        });
+        return { sessions: first, hasMore: true, nextOffset: 200 };
+      }
+      expect(params.offset).toBe(200);
+      expect(yielded).toBe(true);
+      return {
+        sessions: [first[199], later],
+        hasMore: false,
+      };
+    });
     const snapshot = await readWorkboardLifecycleSessions({
       isAvailable: async () => true,
       request,
     });
     expect(snapshot.complete).toBe(false);
-    expect(snapshot.sessions).toHaveLength(10_000);
+    expect(snapshot.sessions).toHaveLength(201);
+    expect(snapshot.sessions.at(-1)).toEqual(later);
   });
+
+  it("stops at the source-row budget even when moving pages repeat identities", async () => {
+    const request = vi.fn().mockImplementation(async (_method, params) => ({
+      sessions: Array.from({ length: 200 }, (_, index) => ({
+        key: `agent:main:repeated-${index}`,
+      })),
+      hasMore: true,
+      nextOffset: params.offset + 200,
+    }));
+    const snapshot = await readWorkboardLifecycleSessions({
+      isAvailable: async () => true,
+      request,
+    });
+    expect(snapshot.complete).toBe(false);
+    expect(snapshot.sessions).toHaveLength(200);
+    expect(request).toHaveBeenCalledTimes(50);
+  });
+
+  it.each(["later-page", "moving-window", "missing", "truncated-search"] as const)(
+    "recovers prepared launches through bounded discovery (%s)",
+    async (scenario) => {
+      const store = createWorkboardSqliteTestStore();
+      const card = await store.create({ title: "Prepared paging recovery", status: "ready" });
+      const requestedSessionKey = workboardSessionKeyForCard(card);
+      const claimed = await store.claim(card.id, {
+        ownerId: "workboard-dispatcher",
+        token: "paging-claim",
+      });
+      await store.prepareExecutionLaunch(card.id, {
+        requestedSessionKey,
+        now: claimed.card.updatedAt,
+        scope: { ownerId: "workboard-dispatcher", token: claimed.token },
+      });
+      const accepted = {
+        key: `agent:worker:${requestedSessionKey}`,
+        status: "running",
+        hasActiveRun: true,
+      };
+      const request = vi.fn().mockImplementation(async (_method, params) => {
+        if (params.search !== undefined) {
+          expect(params.search).toBe(requestedSessionKey);
+          return {
+            sessions: ["moving-window", "later-page"].includes(scenario) ? [accepted] : [],
+            hasMore: scenario === "truncated-search",
+            ...(scenario === "truncated-search" ? { nextOffset: 200 } : {}),
+          };
+        }
+        return params.offset === 0
+          ? { sessions: [{ key: "agent:main:unrelated" }], hasMore: true, nextOffset: 1 }
+          : { sessions: scenario === "later-page" ? [accepted] : [], hasMore: false };
+      });
+      await runSessionSweep({
+        store,
+        readSessions: (options) =>
+          readWorkboardLifecycleSessions({ isAvailable: async () => true, request }, options),
+      });
+      const current = await store.get(card.id);
+      expect(current?.status).toBe(scenario === "missing" ? "blocked" : "running");
+      expect(current?.metadata?.automation?.launch?.phase).toBe(
+        scenario === "missing"
+          ? "failed"
+          : scenario === "truncated-search"
+            ? "prepared"
+            : "accepted",
+      );
+      expect(request.mock.calls.filter(([, params]) => params.search !== undefined)).toHaveLength(
+        1,
+      );
+    },
+  );
 });
 
 function createSessionReader(sessionKey: string, updatedAt: number) {

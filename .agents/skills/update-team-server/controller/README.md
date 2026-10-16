@@ -274,12 +274,15 @@ shell even when its bundles and precompressed assets are reused.
 Sealing makes every regular file read-only (preserving executable bits as `0555`),
 every directory `0555`, and leaves relative in-tree symlinks intact. The staging
 copy has independent inodes, is root-owned, and is not exposed to the runtime
-user. After the complete permission walk, GNU `sync -f` performs one `syncfs`
-barrier for the staging filesystem: file bytes, inode metadata, and directory
-entries must be durable before publication. A failed barrier aborts publication;
-the rename still has its separate parent-directory fsync. The barrier flushes
-the filesystem's other pending writes too, so its latency can reflect concurrent
-I/O. It does not evict page-cache contents.
+user. After the permission walk, sealing fsyncs regular files followed by
+directories, with at most eight open handles at once. This persists file bytes,
+inode modes, symlinks, and directory entries before publication without requesting
+a filesystem-wide flush of unrelated dirty data. Storage contention can still
+slow those operations. The durability deadline is two minutes plus ten
+milliseconds per file/directory and one second per eight MiB of file data.
+A failed fsync or expired deadline aborts publication; no sync subprocess is
+left behind. The rename retains its separate parent-directory fsync. Adopt the
+script and library together to remove the former fixed 120-second sealing bound.
 
 The manifest binds the exact source SHA, build ID, schema declarations, official
 origin, and Control UI entrypoint SHA-256; validation also checks build stamps,

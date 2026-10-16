@@ -509,10 +509,12 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
       fixture.host.querySelector<HTMLButtonElement>('[role="switch"]'),
       "palette worktree switch",
     );
-  // Cold preference imports can outlive vi.waitFor's one-second polling deadline.
+  // Wait out cold preference imports, then flush their queued presentation updates.
   await fixture.host.settingsReady.promise;
-  expect(remember().disabled).toBe(false);
-  expect(worktree().disabled).toBe(false);
+  await waitForSolid(() => {
+    expect(remember().disabled).toBe(false);
+    expect(worktree().disabled).toBe(false);
+  });
   return {
     ...fixture,
     entries,

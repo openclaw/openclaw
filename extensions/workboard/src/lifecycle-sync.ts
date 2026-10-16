@@ -1,4 +1,5 @@
 import { AsyncResource } from "node:async_hooks";
+import { setImmediate } from "node:timers/promises";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -20,6 +21,8 @@ import type { WorkboardStore } from "./store.js";
 const WORKBOARD_LIFECYCLE_SWEEP_MS = 60_000;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 const WORKBOARD_SESSION_SWEEP_LIMIT = 10_000;
+const WORKBOARD_SESSION_PAGE_SIZE = 200;
+const WORKBOARD_SESSION_RECOVERY_SWEEP_LIMIT = 32;
 const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
 // Prepared hook generations share the active service reader, never a worker's
 // caller authority. Gateway restart clears both readiness and that reader.
@@ -70,6 +73,7 @@ function sessionProvesPreparedAcceptance(session: WorkboardLifecycleSession): bo
 type WorkboardLifecycleSessionReadOptions = {
   includeUnknown: boolean;
   sessionKey?: string;
+  search?: string;
 };
 
 type WorkboardLifecycleSessionReader = (
@@ -280,7 +284,12 @@ async function syncWorkboardLifecycleSessions(params: {
   complete?: boolean;
   now?: number;
   onMatched?: WorkboardLifecycleMatchHandler;
-}): Promise<number> {
+  recovery?: {
+    readSessions: WorkboardLifecycleSessionReader;
+    remaining: number;
+    nextOffset: number;
+  };
+}): Promise<void> {
   const now = params.now ?? Date.now();
   const sessionsByKey = new Map<string, WorkboardLifecycleSession>();
   const sessionsByWorkboardSuffix = new Map<string, WorkboardLifecycleSession>();
@@ -299,8 +308,8 @@ async function syncWorkboardLifecycleSessions(params: {
       }
     }
   }
-  let count = 0;
-  for (const card of params.cards ?? (await params.store.list())) {
+  const cards = params.cards ?? (await params.store.list());
+  for (const [index, card] of cards.entries()) {
     if (card.metadata?.archivedAt) {
       continue;
     }
@@ -315,9 +324,11 @@ async function syncWorkboardLifecycleSessions(params: {
             card.metadata?.claim?.ownerId === DEFAULT_WORKBOARD_DISPATCH_OWNER)));
     // Persisted links and explicit agent targets stay authoritative. The unique
     // suffix fallback recovers a run accepted before its link could be persisted.
+    const exactSession = sessionsByKey.get(lookupKey);
+    const canMatchSuffix = canUseAgentlessFallback && suffixIndex >= 0;
     const session =
-      sessionsByKey.get(lookupKey) ??
-      (canUseAgentlessFallback && suffixIndex >= 0
+      exactSession ??
+      (params.complete && canMatchSuffix
         ? sessionsByWorkboardSuffix.get(lookupKey.slice(suffixIndex))
         : undefined);
     const launch = card.metadata?.automation?.launch;
@@ -327,19 +338,40 @@ async function syncWorkboardLifecycleSessions(params: {
           ? Math.max(now, launch.preparedAt)
           : session.updatedAt
         : undefined;
-    if (
+    const preparedNeedsRecovery =
       launch?.phase === "prepared" &&
-      (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt)
+      (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt);
+    if (
+      !params.complete &&
+      params.recovery &&
+      ((!exactSession && canMatchSuffix) || preparedNeedsRecovery)
     ) {
-      if (
-        params.complete &&
-        (await params.store.failPreparedLaunch(card.id, {
+      // Moving pages cannot establish absence or a unique cross-agent suffix.
+      if (params.recovery.remaining === 0) {
+        continue;
+      }
+      params.recovery.remaining -= 1;
+      params.recovery.nextOffset = index + 1;
+      const snapshot = await params.recovery.readSessions({
+        includeUnknown: linkedSessionKey === "unknown",
+        search: canMatchSuffix ? lookupKey.slice(suffixIndex) : lookupKey,
+      });
+      await syncWorkboardLifecycleSessions({
+        store: params.store,
+        cards: [card],
+        ...snapshot,
+        now,
+        onMatched: params.onMatched,
+      });
+      continue;
+    }
+    if (preparedNeedsRecovery) {
+      if (params.complete) {
+        await params.store.failPreparedLaunch(card.id, {
           expectedLaunch: launch,
           reason: "Gateway did not accept the prepared Workboard session before restart.",
           failedAt: now,
-        }))
-      ) {
-        count += 1;
+        });
       }
       continue;
     }
@@ -361,13 +393,11 @@ async function syncWorkboardLifecycleSessions(params: {
         },
       })
     ) {
-      count += 1;
       if (observation.state === "succeeded" || observation.state === "failed") {
         await params.onMatched?.({ cards: [card], sessionKey: session.key });
       }
     }
   }
-  return count;
 }
 
 function normalizeSession(value: unknown): WorkboardLifecycleSession | undefined {
@@ -423,29 +453,53 @@ export async function readWorkboardLifecycleSessions(
     // captured link only while the Gateway proves that its owner is unambiguous.
     includeUnknown = !agentsPayload.selectionRequired;
   }
-  const payload = await gateway.request(
-    "sessions.list",
-    {
-      limit: WORKBOARD_SESSION_SWEEP_LIMIT,
-      configuredAgentsOnly: true,
-      archived: "all",
-      includeGlobal: false,
-      includeUnknown,
-    },
-    { scopes: ["operator.read"] },
-  );
-  if (!isRecord(payload) || !Array.isArray(payload.sessions)) {
-    throw new Error("sessions.list returned an invalid lifecycle snapshot");
-  }
-  return {
-    sessions: payload.sessions.flatMap((value) => {
+  const sessions = new Map<string, WorkboardLifecycleSession>();
+  let complete = false;
+  let offset = 0;
+  while (offset < WORKBOARD_SESSION_SWEEP_LIMIT) {
+    const payload = await gateway.request(
+      "sessions.list",
+      {
+        rowMode: "compact",
+        limit: Math.min(WORKBOARD_SESSION_PAGE_SIZE, WORKBOARD_SESSION_SWEEP_LIMIT - offset),
+        offset,
+        ...(options.search !== undefined ? { search: options.search } : {}),
+        configuredAgentsOnly: true,
+        archived: "all",
+        includeGlobal: false,
+        includeUnknown,
+      },
+      { scopes: ["operator.read"] },
+    );
+    if (!isRecord(payload) || !Array.isArray(payload.sessions)) {
+      throw new Error("sessions.list returned an invalid lifecycle snapshot");
+    }
+    for (const value of payload.sessions) {
       const session = normalizeSession(value);
-      return session ? [session] : [];
-    }),
-    // A short page proves the snapshot is complete. Keep full pages conservative
-    // so absent sessions are never inferred as "missing" when the page is truncated.
-    complete: payload.sessions.length < WORKBOARD_SESSION_SWEEP_LIMIT,
-  };
+      if (session) {
+        sessions.set(session.key, session);
+      }
+    }
+    if (payload.hasMore === false) {
+      // A moving multi-page roster supplies positive observations, never absence.
+      complete = offset === 0;
+      break;
+    }
+    const nextOffset = offset + payload.sessions.length;
+    if (
+      options.search !== undefined ||
+      payload.hasMore !== true ||
+      payload.sessions.length === 0 ||
+      payload.nextOffset !== nextOffset
+    ) {
+      break;
+    }
+    offset = nextOffset;
+    if (offset < WORKBOARD_SESSION_SWEEP_LIMIT) {
+      await setImmediate();
+    }
+  }
+  return { sessions: [...sessions.values()], complete };
 }
 
 export function createWorkboardLifecycleService(params: {
@@ -462,6 +516,7 @@ export function createWorkboardLifecycleService(params: {
   let begin: (() => void) | undefined;
   let removeDrainListener: (() => void) | undefined;
   let cleanupCursor = 0;
+  let recoveryCursor = 0;
   let serviceReader: WorkboardLifecycleSessionReader | undefined;
   const cleanupWorktrees = async (
     cards: readonly WorkboardCard[],
@@ -546,20 +601,18 @@ export function createWorkboardLifecycleService(params: {
             if (generation !== owner) {
               return;
             }
-            if (cards.some((card) => needsWorkboardLifecycleReconciliation(card))) {
+            const lifecycleCards = cards.filter(needsWorkboardLifecycleReconciliation);
+            if (lifecycleCards.length > 0) {
               try {
                 const snapshot = await params.readSessions({
-                  includeUnknown: cards.some(
-                    (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
-                  ),
+                  includeUnknown: lifecycleCards.some((card) => cardSessionKey(card) === "unknown"),
                 });
                 // Incognito sessions are absent from discovery. Read only identities
                 // already linked to cards, without requesting private preview content.
                 let describedIncognitoKeys: Set<string> | undefined;
-                for (const card of cards) {
+                for (const card of lifecycleCards) {
                   const sessionKey = cardSessionKey(card);
                   if (
-                    card.metadata?.archivedAt ||
                     !sessionKey ||
                     !isIncognitoSessionKey(sessionKey) ||
                     describedIncognitoKeys?.has(sessionKey)
@@ -570,13 +623,29 @@ export function createWorkboardLifecycleService(params: {
                   const exact = await params.readSessions({ includeUnknown: false, sessionKey });
                   snapshot.sessions.push(...exact.sessions);
                 }
-                await syncWorkboardLifecycleSessions({
-                  store: params.store,
-                  cards,
-                  ...snapshot,
-                  now: params.now?.() ?? Date.now(),
-                  onMatched,
-                });
+                const recoveryStart = recoveryCursor % lifecycleCards.length;
+                const recovery = {
+                  readSessions: params.readSessions,
+                  remaining: WORKBOARD_SESSION_RECOVERY_SWEEP_LIMIT,
+                  nextOffset: 0,
+                };
+                try {
+                  await syncWorkboardLifecycleSessions({
+                    store: params.store,
+                    cards: [
+                      ...lifecycleCards.slice(recoveryStart),
+                      ...lifecycleCards.slice(0, recoveryStart),
+                    ],
+                    ...snapshot,
+                    now: params.now?.() ?? Date.now(),
+                    onMatched,
+                    recovery,
+                  });
+                } finally {
+                  // Rotate past attempted lookups, including failures, so orphaned
+                  // cards cannot monopolize the next sweep's recovery budget.
+                  recoveryCursor = recoveryStart + recovery.nextOffset;
+                }
                 cards = await params.store.list();
               } catch (error) {
                 if (generation === owner) {

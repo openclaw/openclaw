@@ -680,10 +680,6 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/agent-guidance:
-    dependencies:
-      '@openclaw/fs-safe':
-        specifier: 0.26.5
-        version: 0.26.5
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -776,6 +772,16 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/arcee:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/autoreview:
+    dependencies:
+      typebox:
+        specifier: 1.3.36
+        version: 1.3.36
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
