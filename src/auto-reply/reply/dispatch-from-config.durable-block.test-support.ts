@@ -24,25 +24,46 @@ import { createBlockReplyDeliveryHandler, type DirectBlockDelivery } from "./rep
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+function telegramCtx(overrides: Partial<MsgContext> = {}) {
+  return buildTestCtx({
+    Provider: "telegram",
+    Surface: "telegram",
+    OriginatingChannel: "telegram",
+    OriginatingTo: "telegram:999",
+    ...overrides,
+  });
+}
+
+function privateWebchatCtx(ExplicitDeliverRoute?: boolean) {
+  return buildTestCtx({
+    Provider: "webchat",
+    Surface: "webchat",
+    OriginatingChannel: "imessage",
+    OriginatingTo: "imessage:+15550001111",
+    ...(ExplicitDeliverRoute === undefined ? {} : { ExplicitDeliverRoute }),
+  });
+}
+
+function blockReply(text: string, deliveryIntentId?: string) {
+  return async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+    await requireBlockReplyHandler(opts?.onBlockReply)(
+      { text },
+      deliveryIntentId ? { deliveryIntentId } : undefined,
+    );
+  };
+}
+
 export function registerDurableBlockRoutingTests(): void {
   it("never lets a durable block intent route a private webchat turn to an inherited external recipient", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "imessage" });
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "webchat",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:+15550001111",
-    });
-    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await requireBlockReplyHandler(opts?.onBlockReply)(
-        { text: "Private dashboard update" },
-        { deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:private" },
-      );
-      return undefined;
-    };
+    const ctx = privateWebchatCtx();
+    const replyResolver = blockReply(
+      "Private dashboard update",
+      "block-reply:v1:codex-app-server:thread-1:turn-1:private",
+    );
 
     await dispatchReplyFromConfig({
       ctx,
@@ -77,22 +98,13 @@ export function registerDurableBlockRoutingTests(): void {
       },
     });
     const dispatcher = createDispatcher();
-    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await requireBlockReplyHandler(opts?.onBlockReply)(
-        { text: "Private delegated progress" },
-        { deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:child" },
-      );
-      return undefined;
-    };
+    const replyResolver = blockReply(
+      "Private delegated progress",
+      "block-reply:v1:codex-app-server:thread-1:turn-1:child",
+    );
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        SessionKey: "agent:main:background-child",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:999",
-      }),
+      ctx: telegramCtx({ SessionKey: "agent:main:background-child" }),
       cfg: automaticDirectReplyConfig,
       dispatcher,
       replyResolver,
@@ -108,13 +120,7 @@ export function registerDurableBlockRoutingTests(): void {
     installThreadingTestPlugin({ id: "imessage" });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "webchat",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:+15550001111",
-      ExplicitDeliverRoute: true,
-    });
+    const ctx = privateWebchatCtx(true);
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
@@ -287,13 +293,7 @@ export function registerDurableBlockRoutingTests(): void {
     };
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        AccountId: "work",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:999",
-      }),
+      ctx: telegramCtx({ AccountId: "work" }),
       cfg: automaticDirectReplyConfig,
       dispatcher,
       replyOptions: { onBlockReplyQueued },
@@ -320,18 +320,10 @@ export function registerDurableBlockRoutingTests(): void {
     setNoAbort();
     mocks.routeReply.mockClear();
     const dispatcher = createDispatcher();
-    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await requireBlockReplyHandler(opts?.onBlockReply)({ text: "ordinary block" });
-      return undefined;
-    };
+    const replyResolver = blockReply("ordinary block");
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:999",
-      }),
+      ctx: telegramCtx(),
       cfg: automaticDirectReplyConfig,
       dispatcher,
       replyResolver,
@@ -346,20 +338,11 @@ export function registerDurableBlockRoutingTests(): void {
     const deliveryIntentId = "block-reply:v1:codex-app-server:thread-1:turn-1:item-retry";
     mocks.routeReply
       .mockReset()
-      .mockResolvedValueOnce({
-        ok: false,
-        delivered: false,
-        error: "durable queue unavailable",
-      })
+      .mockResolvedValueOnce({ ok: false, delivered: false, error: "durable queue unavailable" })
       .mockResolvedValueOnce({ ok: true, delivered: true, messageId: "retried" });
     installThreadingTestPlugin({ id: "telegram" });
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-    });
+    const ctx = telegramCtx();
     const dispatch = () =>
       dispatchReplyFromConfig({
         ctx,
@@ -387,11 +370,9 @@ export function registerDurableBlockRoutingTests(): void {
 
   it("returns durable routed block failures to the producing runtime", async () => {
     setNoAbort();
-    mocks.routeReply.mockReset().mockResolvedValue({
-      ok: false,
-      delivered: false,
-      error: "durable queue unavailable",
-    });
+    mocks.routeReply
+      .mockReset()
+      .mockResolvedValue({ ok: false, delivered: false, error: "durable queue unavailable" });
     installThreadingTestPlugin({ id: "telegram" });
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -399,13 +380,10 @@ export function registerDurableBlockRoutingTests(): void {
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
     });
-    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await requireBlockReplyHandler(opts?.onBlockReply)(
-        { text: "retry this update" },
-        { deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:item-2" },
-      );
-      return undefined;
-    };
+    const replyResolver = blockReply(
+      "retry this update",
+      "block-reply:v1:codex-app-server:thread-1:turn-1:item-2",
+    );
 
     await expect(
       dispatchReplyFromConfig({

@@ -14,7 +14,6 @@ import {
   mocks,
   resetPluginTtsAndThreadMocks,
   runtimePluginMocks,
-  sessionBindingMocks,
   sessionStoreMocks,
   setDiscordTestRegistry,
   ttsMocks,
@@ -29,6 +28,7 @@ import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { resetDispatchSessionMocks } from "./dispatch-from-config.test-support.js";
 import {
   createDispatchMemorySession,
   dispatchMemorySessionScope,
@@ -106,46 +106,28 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     resetReplyRunRegistry();
     setDiscordTestRegistry();
     resetInboundDedupe();
+    resetDispatchSessionMocks();
     mocks.routeReply
       .mockReset()
       .mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
-    mocks.tryFastAbortFromMessage.mockReset().mockResolvedValue({
-      handled: false,
-      aborted: false,
-    });
-    hookMocks.runner.hasHooks.mockReset();
-    hookMocks.runner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "reply_dispatch",
-    );
+    mocks.tryFastAbortFromMessage.mockReset().mockResolvedValue({ handled: false, aborted: false });
+    hookMocks.runner.hasHooks
+      .mockReset()
+      .mockImplementation((hookName?: string) => hookName === "reply_dispatch");
     hookMocks.runner.runInboundClaim.mockReset().mockResolvedValue(undefined);
     hookMocks.runner.runInboundClaimForPlugin.mockReset().mockResolvedValue(undefined);
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockReset().mockResolvedValue({
-      status: "no_handler",
-    });
+    hookMocks.runner.runInboundClaimForPluginOutcome
+      .mockReset()
+      .mockResolvedValue({ status: "no_handler" });
     hookMocks.runner.runMessageReceived.mockReset().mockResolvedValue(undefined);
     hookMocks.runner.runBeforeDispatch.mockReset().mockResolvedValue(undefined);
     hookMocks.runner.runReplyDispatch.mockReset().mockResolvedValue(undefined);
-    internalHookMocks.createInternalHookEvent.mockReset();
-    internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
-    internalHookMocks.triggerInternalHook.mockReset().mockResolvedValue(undefined);
-    acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
-    acpMocks.readAcpSessionEntry.mockReset().mockReturnValue(null);
-    acpMocks.upsertAcpSessionMeta.mockReset().mockResolvedValue(null);
-    acpMocks.requireAcpRuntimeBackend.mockReset();
-    sessionBindingMocks.listBySession.mockReset().mockReturnValue([]);
-    sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
-    sessionBindingMocks.touch.mockReset();
-    sessionStoreMocks.currentEntry = undefined;
-    sessionStoreMocks.loadSessionStoreEntry.mockReset();
-    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(
-      () => sessionStoreMocks.currentEntry,
-    );
-    sessionStoreMocks.resolveSessionStorePathCore
+    internalHookMocks.createInternalHookEvent
       .mockReset()
-      .mockReturnValue("/tmp/mock-sessions.json");
+      .mockImplementation(createInternalHookEventPayload);
+    internalHookMocks.triggerInternalHook.mockReset().mockResolvedValue(undefined);
     sessionStoreMocks.updateSessionEntry.mockClear();
-    acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
-    acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
+    acpManagerRuntimeMocks.getAcpSessionManager.mockReset().mockImplementation(() => ({
       resolveSessionAsync: async () => ({ kind: "none" as const }),
       getObservabilitySnapshot: () => ({
         runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
@@ -161,17 +143,14 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       }),
       runTurn: vi.fn(),
     }));
-    agentEventMocks.emitAgentEvent.mockReset();
-    agentEventMocks.emitAgentAuditEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReset().mockImplementation(() => () => {});
     diagnosticMocks.logMessageQueued.mockReset();
     diagnosticMocks.logMessageProcessed.mockReset();
     diagnosticMocks.logSessionStateChange.mockReset();
     diagnosticMocks.markDiagnosticSessionProgress.mockReset();
-    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReset();
-    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
-      runtimePluginMocks.pluginRegistry,
-    );
+    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle
+      .mockReset()
+      .mockReturnValue(runtimePluginMocks.pluginRegistry);
     resetPluginTtsAndThreadMocks();
   });
 
@@ -185,9 +164,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   it.each(["agent:beta:main"])(
     "preserves the prepared store owner for ACP metadata in %s",
     async (sessionKey) => {
-      const cfg = {
-        agents: { ownership: "explicit" as const, entries: { qa: {}, beta: {} } },
-      };
+      const cfg = { agents: { ownership: "explicit" as const, entries: { qa: {}, beta: {} } } };
       const { resolveSessionStorePathForAcp } = await vi.importActual<
         typeof import("../../acp/runtime/session-meta-store.js")
       >("../../acp/runtime/session-meta-store.js");
