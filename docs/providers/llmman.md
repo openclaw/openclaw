@@ -32,18 +32,18 @@ Three modes are supported:
 | Reference model  | `qwen3.8` (Qwen3.8 27B, vision-capable, 262,144-token native context)         |
 
 <Warning>
-On loopback, `llmman serve` needs no key. Bound anywhere else, llmman 0.1.386+ refuses to start without `LLMMAN_API_KEYS`. Never use `LLMMAN_AUTH=off` on a public interface.
+On loopback with no keys configured, `llmman serve` needs no key. Bound anywhere else, llmman 0.1.386+ refuses to start without `LLMMAN_API_KEYS`. Never use `LLMMAN_AUTH=off` on a public interface.
 </Warning>
 
 <Info>
-Version scope: this page is verified against [llmman v0.1.334](https://github.com/llmmanorg/llmman/releases/tag/v0.1.334), commit [`22b6d73`](https://github.com/llmmanorg/llmman/commit/22b6d7330e1b0882401e83e35fe592817eb7c816). Model names, hybrid routing, vision, and tool calling on this page were exercised against that build with `qwen3.8`.
+Version scope: this page is verified against [llmman v0.1.334](https://github.com/llmmanorg/llmman/releases/tag/v0.1.334), commit [`22b6d73`](https://github.com/llmmanorg/llmman/commit/22b6d7330e1b0882401e83e35fe592817eb7c816). Model names, hybrid routing, vision, and tool calling on this page were exercised against that build with `qwen3.8`. Authentication behavior (key enforcement off loopback and with configured keys) reflects [llmman v0.1.552](https://github.com/llmmanorg/llmman/releases/tag/v0.1.552).
 </Info>
 
 ## Auth rules
 
 <AccordionGroup>
-  <Accordion title="Local llmman has no auth">
-    A loopback `llmman serve` never checks credentials. OpenClaw still needs a non-empty `apiKey` on the provider entry so the provider counts as configured. This page uses `LLMMAN_API_KEY=llmman-local` with `apiKey: "${LLMMAN_API_KEY}"`, mirroring the `OLLAMA_API_KEY=ollama-local` convention. A literal `apiKey: "llmman-local"` works too.
+  <Accordion title="Local llmman needs no key by default">
+    With no keys configured, a loopback `llmman serve` does not require credentials; once `LLMMAN_API_KEYS` is set, llmman enforces it on every bind, loopback included, so set OpenClaw's `apiKey` to that key. OpenClaw still needs a non-empty `apiKey` on the provider entry so the provider counts as configured. This page uses `LLMMAN_API_KEY=llmman-local` with `apiKey: "${LLMMAN_API_KEY}"`, mirroring the `OLLAMA_API_KEY=ollama-local` convention. A literal `apiKey: "llmman-local"` works too.
   </Accordion>
   <Accordion title="The bearer matters for hybrid and hosted refs">
     For `llmman.hybrid/...` and `llmman.provider/...` refs, llmman forwards the bearer OpenClaw presents to the hosted provider as that provider's API key. The one exception is the literal placeholder `llmman`, which tells the daemon to use its own key. See [Hybrid inference](#hybrid-inference) for both patterns. A marker such as `llmman-local` would be sent to the hosted provider and rejected there.
