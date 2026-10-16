@@ -523,6 +523,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
   min-height: 48px;
 }
 
+.settings-row-mount + .settings-row-mount > .settings-row,
 .settings-row + .settings-row,
 .settings-row + .settings-subrows,
 .settings-subrows + .settings-row {

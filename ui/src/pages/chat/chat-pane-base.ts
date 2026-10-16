@@ -71,7 +71,7 @@ import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
-import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import { createChatTranscript } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
@@ -172,6 +172,7 @@ export abstract class ChatPaneBase extends ControllerHost {
     this.paneLifecycleRoot = this.closest("openclaw-app-shell") ?? this.element.parentElement;
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     super.connect();
+    this.transcript.start();
     this.chatState.addCleanup(
       chatInputOwnerForContext(this.context).subscribe(() => this.activeChanged(this.active)),
     );
@@ -205,6 +206,7 @@ export abstract class ChatPaneBase extends ControllerHost {
     this.context?.connectionBootstrap.setForegroundPane(this, null);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.chatState.dispose();
+    this.transcript.dispose();
     super.disconnect();
     this.completeUpdate?.();
     this.completeUpdate = undefined;
@@ -421,12 +423,16 @@ export abstract class ChatPaneBase extends ControllerHost {
   protected readonly composerCapabilities = new ChatComposerCapabilityHost(() =>
     this.requestUpdate(),
   );
-  protected readonly transcript = new ChatTranscriptController(this, () => this.paneId, {
-    geometryEventTarget: this.element,
-    onViewportResize: () => this.chatState.handleTranscriptResize(),
-    canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
-    onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
-  });
+  protected readonly transcript = createChatTranscript(
+    () => this.requestUpdate(),
+    () => this.paneId,
+    {
+      geometryEventTarget: this.element,
+      onViewportResize: () => this.chatState.handleTranscriptResize(),
+      canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
+      onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
+    },
+  );
   protected get progressCards() {
     return sessionProgressCardsForGateway(this.context.gateway);
   }

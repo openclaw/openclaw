@@ -17,8 +17,8 @@ import {
   nativeControlNavigationCases,
 } from "../test-helpers/chat-scroll-input.tsx";
 import { mountTestTranscript, render } from "../test-helpers/chat-transcript-native.tsx";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
+import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
 import {
   publishTranscriptScroll,
   subscribeTranscriptScroll,
@@ -35,7 +35,7 @@ import {
 
 function createPolicyTranscript(paneId: string) {
   const policy = makeChatHost({ chatHasAutoScrolled: true });
-  const transcript = new ChatTranscriptController(
+  const transcript = createTranscriptTestOwner(
     {
       addController: vi.fn(),
       removeController: vi.fn(),
@@ -63,7 +63,7 @@ describe("chat transcript scroll ownership", () => {
     });
     transcriptDomState.measuredRowHeight = 1000;
     const requestUpdate = vi.fn();
-    const transcript = new ChatTranscriptController(
+    const transcript = createTranscriptTestOwner(
       {
         addController: vi.fn(),
         removeController: vi.fn(),
@@ -167,7 +167,7 @@ describe("chat transcript scroll ownership", () => {
       };
       let updateRequested = true;
       const onReaderScroll = vi.fn();
-      const transcript = new ChatTranscriptController(
+      const transcript = createTranscriptTestOwner(
         {
           addController: vi.fn(),
           removeController: vi.fn(),
@@ -482,7 +482,7 @@ describe("chat transcript scroll ownership", () => {
   it("cancels the active native target when the reader locks following", async () => {
     const flushFrames = stubAnimationFrames();
     const policy = makeChatHost({ chatHasAutoScrolled: true });
-    const transcript = new ChatTranscriptController(
+    const transcript = createTranscriptTestOwner(
       {
         addController: vi.fn(),
         removeController: vi.fn(),
@@ -555,7 +555,7 @@ describe("chat transcript scroll ownership", () => {
   it("preserves reader policy when row measurement clamps a positive adjustment to the end", async () => {
     transcriptDomState.measuredRowHeight = 120;
     const policy = makeChatHost({ chatHasAutoScrolled: true });
-    const transcript = new ChatTranscriptController(
+    const transcript = createTranscriptTestOwner(
       {
         addController: vi.fn(),
         removeController: vi.fn(),

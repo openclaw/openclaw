@@ -20,7 +20,11 @@ import {
   resolveMessageActionDetails,
 } from "./components/chat-message-markdown.ts";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
-import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
+import {
+  createTranscriptTestOwner,
+  type TestChatTranscript,
+} from "./components/chat-transcript-owner.test-support.ts";
 
 type ChatModelControlsProps = Parameters<typeof ChatModelControls>[0];
 const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
@@ -60,14 +64,14 @@ let nextTestTranscriptId = 0;
 
 export function createTestTranscript(
   paneId = `test-transcript-${++nextTestTranscriptId}`,
-): ChatTranscriptController {
-  return new ChatTranscriptController(
+): TestChatTranscript {
+  return createTranscriptTestOwner(
     {
       addController: () => undefined,
       removeController: () => undefined,
       requestUpdate: () => undefined,
       updateComplete: Promise.resolve(true),
-    } satisfies ConstructorParameters<typeof ChatTranscriptController>[0],
+    } satisfies Parameters<typeof createTranscriptTestOwner>[0],
     () => paneId,
   );
 }
@@ -238,7 +242,7 @@ export function renderChatView(overrides: Partial<ChatProps> = {}) {
   return container;
 }
 
-const renderedTranscripts = new WeakMap<HTMLElement, ChatTranscriptController>();
+const renderedTranscripts = new WeakMap<HTMLElement, ChatTranscript>();
 const mountedViews = new WeakMap<
   HTMLElement,
   { update: (props: ChatProps, application?: ApplicationContext) => void; unmount: () => void }
@@ -247,7 +251,7 @@ const mountedViews = new WeakMap<
 export function disposeChatView(container: HTMLElement) {
   mountedViews.get(container)?.unmount();
   mountedViews.delete(container);
-  renderedTranscripts.get(container)?.hostDisconnected();
+  renderedTranscripts.get(container)?.dispose();
   renderedTranscripts.delete(container);
 }
 
@@ -288,15 +292,15 @@ export function renderChatPropsInto(
       }
     });
   } else if (previous !== props.transcript) {
-    previous.hostDisconnected();
+    previous.dispose();
   }
   renderedTranscripts.set(container, props.transcript);
   if (previous) {
     mountedViews.get(container)?.update(props, application);
   }
   flush();
-  props.transcript.hostConnected();
-  props.transcript.hostUpdated();
+  props.transcript.start();
+  props.transcript.update();
   flush();
 }
 

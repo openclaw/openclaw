@@ -30,8 +30,8 @@ import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { PaneOutboxRecovery } from "../chat-outbox-recovery.tsx";
 import type { ChatPaneModelControl } from "../chat-pane-model-control.tsx";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
-import type { ComposerDictationController } from "../composer-dictation.ts";
-import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
+import type { ComposerDictationOwner } from "../composer-dictation.ts";
+import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkCameraDevice } from "../talk/input.ts";
@@ -71,7 +71,7 @@ export type ChatComposerDisabledBanner = {
   disabledReason?: string;
 } & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });
 
-export type ChatComposerProps = ChatAttachmentControlsProps & {
+export type ChatComposerProps = Omit<ChatAttachmentControlsProps, "onRequestUpdate"> & {
   paneId: string;
   sessionKey: string;
   currentAgentId: string;
@@ -232,12 +232,11 @@ export type ChatComposerState = {
   restoreComposerFocus: boolean;
   composerInput: HTMLElement | null;
   composerTextarea: HTMLTextAreaElement | null;
-  microphonePicker: ComposerMicrophonePicker | null;
-  // Stable Lit refs: inline arrows would change identity per render and force
-  // layout observers to detach and reconnect on every chat update.
+  microphonePicker: ComposerMicrophoneOwner | null;
+  // Stable refs keep layout observers attached across frame updates.
   composerInputRef: ((element?: Element) => void) | null;
   textareaRef: ((element?: Element) => void) | null;
-  dictation: ComposerDictationController | null;
+  dictation: ComposerDictationOwner | null;
   composerDraftScope: { key: string } | null;
   dictationSelection: { start: number; end: number; value: string } | null;
 };

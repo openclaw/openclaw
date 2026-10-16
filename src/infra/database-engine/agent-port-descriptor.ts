@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  memoryStandingIntentSearchSchema,
   memoryTextSearchSchema,
   memoryVectorSearchSchema,
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
@@ -65,6 +66,8 @@ const agentSourceSearchPostData: NonNullable<PortDescriptor["postgresSourcePostD
       const body = asOptionalRecord(asOptionalRecord(value?.text)?.body);
       const mode = asOptionalRecord(body?.postgres)?.mode;
       expected = memoryTextSearchSchema(mode === "trigram" ? "trigram" : "unicode61");
+    } else if (name === "memory.standing-intents") {
+      expected = memoryStandingIntentSearchSchema;
     } else if (name === "memory.vector") {
       const chunks = asOptionalRecord(asOptionalRecord(value?.vector)?.chunks);
       const dimensions = asOptionalRecord(chunks?.postgres)?.dimensions;

@@ -1,7 +1,7 @@
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "./chat-types.ts";
 
-export type ComposerDraftSnapshot = {
+type ComposerDraftSnapshot = {
   draft: string;
   mentions: readonly HumanMention[];
   attachments: ChatAttachment[];

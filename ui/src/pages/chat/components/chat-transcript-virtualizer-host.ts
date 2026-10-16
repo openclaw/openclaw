@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 // Per-session virtualizer host: scroll anchoring, measurement, and row sync
-// for one transcript. Owned and swapped by ChatTranscriptController.
+// for one transcript. Owned and swapped by the chat transcript owner.
 import { Virtualizer } from "@tanstack/virtual-core";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";

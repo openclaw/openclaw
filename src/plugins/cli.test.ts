@@ -54,6 +54,13 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
 }));
 
+vi.mock("../config/runtime-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/runtime-snapshot.js")>()),
+  loadPinnedRuntimeConfigAsync: async (
+    loadFresh: (assertCurrent: () => void) => Promise<{ config: OpenClawConfig }>,
+  ) => mocks.getRuntimeConfigSnapshot() ?? (await loadFresh(() => {})).config,
+}));
+
 let getPluginCliCommandDescriptors: typeof import("./cli-root-descriptors.js").getPluginCliCommandDescriptors;
 let registerPluginCliCommandsFromValidatedConfig: typeof import("./cli.js").registerPluginCliCommandsFromValidatedConfig;
 

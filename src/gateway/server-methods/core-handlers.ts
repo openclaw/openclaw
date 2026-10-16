@@ -102,6 +102,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   send: () => import("./send.js").then((module) => module.sendHandlers),
   "sessions-files": () =>
     import("./sessions-files.js").then((module) => module.sessionsFilesHandlers),
+  "factory-github-proof": () =>
+    import("./factory-github-proof.js").then((module) => module.factoryGitHubProofHandlers),
   "sessions-github": () =>
     import("./sessions-github.js").then((module) => module.sessionsGitHubHandlers),
   "sessions-diff": () => import("./sessions-diff.js").then((module) => module.sessionsDiffHandlers),

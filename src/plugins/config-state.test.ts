@@ -126,7 +126,12 @@ describe("normalizePluginsConfig", () => {
       entry: {
         hooks: hookPolicy,
       },
-      expectedHooks: hookPolicy,
+      expectedHooks: {
+        allowPromptInjection: false,
+        allowConversationAccess: true,
+        timeoutMs: 250,
+        timeouts: { before_prompt_build: 90_000, agent_end: 60_000 },
+      },
     },
     {
       name: "drops invalid plugin hook policy values",

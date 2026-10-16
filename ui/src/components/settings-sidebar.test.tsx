@@ -778,6 +778,8 @@ it("preserves search drafts and navigation focus during unrelated status updates
   render({ ...props, connectionStatus: "offline" }, container);
   expect(container.querySelector(".settings-sidebar__item")).toBe(link);
   expect(document.activeElement).toBe(link);
+  render({ ...props, searchQuery: "gateway" }, container);
+  expect(input.value).toBe("gateway");
 });
 
 it("refreshes the Ask label when the branding owner publishes", () => {

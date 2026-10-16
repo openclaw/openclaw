@@ -1622,6 +1622,9 @@ importers:
       '@openclaw/fs-safe':
         specifier: 0.26.6
         version: 0.26.6
+      '@solidjs/web':
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
       json5:
         specifier: 2.2.3
         version: 2.2.3
@@ -1631,6 +1634,9 @@ importers:
       p-limit:
         specifier: 7.3.3
         version: 7.3.3
+      solid-js:
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
       typebox:
         specifier: 1.3.36
         version: 1.3.36
@@ -1638,6 +1644,12 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@solidjs/compiler':
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       openclaw:
         specifier: workspace:*
         version: link:../..

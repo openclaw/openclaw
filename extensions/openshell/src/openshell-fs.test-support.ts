@@ -38,20 +38,17 @@ export function createMirrorBackendMock(): OpenShellMirrorBackend {
   };
 }
 
-export async function createMirrorFsBridgeFixture(
-  workspaceDir: string,
-  backend: OpenShellMirrorBackend = createMirrorBackendMock(),
-  workspaceAccess: "rw" | "none" | "ro" = "rw",
-) {
+export async function createMirrorFsBridgeFixture(workspaceDir: string) {
+  const backend = createMirrorBackendMock();
   const sandbox = createSandboxTestContext({
     overrides: {
       backendId: "openshell",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
-      workspaceAccess,
+      workspaceAccess: "rw",
       containerWorkdir: "/sandbox",
     },
   });
   const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-  return { backend, bridge: createOpenShellFsBridge({ sandbox, backend }) };
+  return { bridge: createOpenShellFsBridge({ sandbox, backend }) };
 }

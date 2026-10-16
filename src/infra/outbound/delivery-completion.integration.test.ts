@@ -248,14 +248,16 @@ describe("pending-final durable delivery completion", () => {
           {
             ...completion,
             agentId,
-            sessionWriterDeliveryAuthority: writer
+            ...(writer
               ? {
-                  agentId: writer,
-                  expectedSessionId: completion.sessionId,
-                  sessionKey,
-                  storePath,
+                  sessionWriterDeliveryAuthority: {
+                    agentId: writer,
+                    expectedSessionId: completion.sessionId,
+                    sessionKey,
+                    storePath,
+                  },
                 }
-              : undefined,
+              : {}),
           },
           "delivered",
         ),

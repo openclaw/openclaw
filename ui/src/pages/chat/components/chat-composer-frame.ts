@@ -16,9 +16,9 @@ import { updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
+import { insertComposerDictation, type ComposerDictationOwner } from "../composer-dictation.ts";
 import { normalizeChatComposerDraft } from "../composer-draft.ts";
-import { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
+import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatRunControlsProps, MicrophonePickerProps } from "./chat-composer-controls.tsx";
 import {
   adjustTextareaHeight,
@@ -47,7 +47,7 @@ import {
   markComposerInputIntent,
   suppressStaleSubmittedDraftReplay,
 } from "./chat-composer-state.ts";
-import type { ChatComposerProps } from "./chat-composer-types.ts";
+import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
 
 registerChatGoalsEnglish();
@@ -63,6 +63,7 @@ export function createChatComposerContext(
   props: ChatComposerProps,
   interaction: ComposerInteraction,
   goalComposer: GoalComposer,
+  voice: { dictation: ComposerDictationOwner; picker: ComposerMicrophoneOwner },
   prediction: ComposerPrediction | undefined,
   questionPanelProps: QuestionPanelProps | null,
 ) {
@@ -97,8 +98,6 @@ export function createChatComposerContext(
     state.restoreComposerFocus ||= state.composerTextarea === document.activeElement;
     state.textareaRef?.();
     state.composerComposing = false;
-    state.dictation?.dispose();
-    state.dictation = null;
     state.dictationSelection = null;
   }
   if (state.composerDraftScope?.key !== draftKey) {
@@ -153,7 +152,6 @@ export function createChatComposerContext(
         : composerRunStatus.phase === "done"
           ? t("chat.composer.runDone")
           : t("chat.composer.runInterrupted");
-  const requestUpdate = props.onRequestUpdate ?? (() => {});
   const mentionsUnsupported = props.mentionsUnsupported || goalComposer.active;
   const mentionDirectory =
     props.connected && canCompose && !mentionsUnsupported ? props.mentionDirectory : undefined;
@@ -445,9 +443,7 @@ export function createChatComposerContext(
     }
     props.onTypingChange?.(false);
   };
-  state.microphonePicker ??= new ComposerMicrophonePicker(requestUpdate);
-  const devicePicker = state.microphonePicker;
-  devicePicker.syncCatalog(props.gatewayClient ?? null, props.connected, props.sessionKey);
+  const devicePicker = voice.picker;
   const startRealtimeTalk = () => {
     // Catalog help does not require history; only starting Talk does.
     if (devicePicker.realtimeStatus !== "ready") {
@@ -495,89 +491,21 @@ export function createChatComposerContext(
           } else {
             patchSettings({ composerHoldToRecord: enabled });
           }
-          requestUpdate();
         },
         onOpenTalkSettings: props.onOpenTalkSettings,
         onOpenDictationSettings: props.onOpenDictationSettings,
       }
     : undefined;
-  const dictationOptions = {
-    client: props.gatewayClient ?? null,
-    sessionKey: props.sessionKey,
-    connected: props.connected,
-    enabled: props.composerHoldToRecord !== false,
-    dictationAvailable: devicePicker.dictationStatus === "ready",
-    realtimeTalkActive: props.realtimeTalkActive === true,
-    onCommit: (transcript: string, late?: true) => {
-      const target = state.composerTextarea;
-      const captured = state.dictationSelection;
-      const liveValue = target?.value ?? props.getDraft?.() ?? props.draft;
-      // Stop unlocks the draft. Preserve later edits by using the live caret only
-      // when a delayed final finds that the captured draft has changed.
-      const selection =
-        captured && (!late || captured.value === liveValue)
-          ? captured
-          : {
-              start: target?.selectionStart ?? liveValue.length,
-              end: target?.selectionEnd ?? liveValue.length,
-              value: liveValue,
-            };
-      const insertion = insertComposerDictation(
-        selection.value,
-        transcript,
-        selection.start,
-        selection.end,
-      );
-      if (target) {
-        target.value = insertion.value;
-        adjustTextareaHeight(target);
-      }
-      commitComposerDraft(props, insertion.value);
-      state.dictationSelection = null;
-      requestUpdate();
-      queueMicrotask(() => {
-        const textarea = state.composerTextarea;
-        if (!textarea) {
-          return;
-        }
-        textarea.focus({ preventScroll: true });
-        textarea.selectionStart = insertion.caret;
-        textarea.selectionEnd = insertion.caret;
-      });
-    },
-    onError: (
-      message: string,
-      failure: { kind: "interrupted" | "start"; preservesText: boolean },
-    ) => {
-      const recovery =
-        failure.kind === "interrupted" && failure.preservesText
-          ? t("chat.composer.dictationInterruptedRecovery")
-          : t("chat.composer.dictationStartRecovery");
-      interaction.setError(`${message} ${recovery}`);
-    },
-    onStateChange: () => {
-      // A new dictation gesture retires an earlier Talk recovery offer before
-      // either can acquire another microphone, including queued button clicks.
-      if (state.dictation?.locksComposer) {
-        state.editRevision += 1;
-        props.onDismissRealtimeTalkError?.();
-      }
-      requestUpdate();
-    },
-    onDictationUnavailable: devicePicker.handleOpen,
-    // With an initial empty composer, this button retains the existing
-    // send-after-typing behavior until the host rerenders the primary actions.
-    // Once a draft is rendered, the separate voice control starts Talk directly.
-    onTap:
-      visibleDraft.trim() || props.attachments?.length
-        ? startRealtimeTalk
-        : handleVoicePrimaryAction,
-  };
-  state.dictation ??= new ComposerDictationController(dictationOptions);
-  state.dictation.update(dictationOptions);
+  const dictationOptions = createComposerDictationOptions(
+    props,
+    state,
+    devicePicker,
+    interaction.setError,
+    visibleDraft.trim() || props.attachments?.length ? startRealtimeTalk : handleVoicePrimaryAction,
+  );
   const dictation =
     props.onToggleRealtimeTalk && props.composerHoldToRecord !== false
-      ? state.dictation
+      ? voice.dictation
       : undefined;
   const handleDictationStart = (event?: PointerEvent) => {
     interaction.setError(null);
@@ -677,6 +605,7 @@ export function createChatComposerContext(
     handleCompositionEnd,
     handleBlur,
     dictation,
+    dictationOptions,
     runControlsProps,
     menus,
     mentionMenuHost,
@@ -686,5 +615,71 @@ export function createChatComposerContext(
     skillMenuHost,
     slashMenuHost,
     goalComposer,
+  };
+}
+
+export function createComposerDictationOptions(
+  props: ChatComposerProps,
+  state: ChatComposerState,
+  devicePicker: ComposerMicrophoneOwner,
+  setError: (error: string | null) => void,
+  onTap?: () => void,
+) {
+  return {
+    client: props.gatewayClient ?? null,
+    sessionKey: props.sessionKey,
+    draftKey: composerDraftKey(props),
+    connected: props.connected,
+    enabled: props.composerHoldToRecord !== false,
+    dictationAvailable: devicePicker.dictationStatus === "ready",
+    realtimeTalkActive: props.realtimeTalkActive === true,
+    onCommit: (transcript: string, late?: true) => {
+      const target = state.composerTextarea;
+      const captured = state.dictationSelection;
+      const liveValue = target?.value ?? props.getDraft?.() ?? props.draft;
+      // Stop unlocks the draft. Preserve later edits by using the live caret only
+      // when a delayed final finds that the captured draft has changed.
+      const selection =
+        captured && (!late || captured.value === liveValue)
+          ? captured
+          : {
+              start: target?.selectionStart ?? liveValue.length,
+              end: target?.selectionEnd ?? liveValue.length,
+              value: liveValue,
+            };
+      const insertion = insertComposerDictation(
+        selection.value,
+        transcript,
+        selection.start,
+        selection.end,
+      );
+      if (target) {
+        target.value = insertion.value;
+        adjustTextareaHeight(target);
+      }
+      commitComposerDraft(props, insertion.value);
+      state.dictationSelection = null;
+      queueMicrotask(() => {
+        const textarea = state.composerTextarea;
+        if (!textarea) {
+          return;
+        }
+        textarea.focus({ preventScroll: true });
+        textarea.selectionStart = insertion.caret;
+        textarea.selectionEnd = insertion.caret;
+      });
+    },
+    onError: (
+      message: string,
+      failure: { kind: "interrupted" | "start"; preservesText: boolean },
+    ) => {
+      const recovery =
+        failure.kind === "interrupted" && failure.preservesText
+          ? t("chat.composer.dictationInterruptedRecovery")
+          : t("chat.composer.dictationStartRecovery");
+      setError(`${message} ${recovery}`);
+    },
+    onDictationUnavailable: devicePicker.handleOpen,
+    onTap,
   };
 }

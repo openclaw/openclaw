@@ -308,7 +308,7 @@ function cloudflareAccessAssertion(params: {
 }
 
 /** An Enterprise GitHub principal is authoritative only after trusted-proxy admission. */
-function resolveTrustedEnterpriseGitHubAccountId(params: {
+export function resolveTrustedEnterpriseGitHubAccountId(params: {
   authResult: Pick<GatewayAuthResult, "ok" | "method" | "user">;
   authConfig?: GatewayAuthConfig;
   config?: OpenClawConfig;
