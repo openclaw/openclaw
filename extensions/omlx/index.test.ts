@@ -376,6 +376,32 @@ describe("oMLX registered embedding provider", () => {
       customKey: null,
       deployment: "fixture-route",
     },
+    {
+      name: "memory Authorization override of custom auth",
+      request: {
+        headers: { "X-Deployment": "fixture-route" },
+        auth: { mode: "header", headerName: "X-oMLX-Key", value: "fixture-old-key" },
+      },
+      remoteHeaders: { Authorization: "Bearer fixture-memory-key" },
+      authorization: "Bearer fixture-memory-key",
+      customKey: null,
+      deployment: "fixture-route",
+    },
+    {
+      name: "memory Authorization override of unavailable custom auth",
+      request: {
+        headers: { "X-Deployment": "fixture-route" },
+        auth: {
+          mode: "header",
+          headerName: "X-oMLX-Key",
+          value: { source: "env", provider: "default", id: "OMLX_STALE_TEST_AUTH" },
+        },
+      },
+      remoteHeaders: { authorization: "Bearer fixture-memory-key" },
+      authorization: "Bearer fixture-memory-key",
+      customKey: null,
+      deployment: "fixture-route",
+    },
   ])(
     "uses $name for embeddings",
     async ({ request, remoteHeaders, remoteApiKey, authorization, customKey, deployment }) => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { buildAllowedModelSet } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretInput } from "../config/types.secrets.js";
 import {
   applySystemAgentModelSelection,
   projectSetupInferenceConfig,
@@ -10,7 +11,12 @@ import {
 describe("projectSetupInferenceConfig", () => {
   const profileId = "omlx:setup-proof";
 
-  it.each([
+  it.each<{
+    name: string;
+    credential: Extract<AuthProfileCredential, { type: "api_key" | "token" }>;
+    providerApiKey?: SecretInput;
+    expectedApiKey: SecretInput;
+  }>([
     {
       name: "core no-auth marker",
       credential: { type: "api_key", provider: "custom-studio", key: "custom-local" },
@@ -43,11 +49,31 @@ describe("projectSetupInferenceConfig", () => {
         provider: "omlx",
         keyRef: { source: "env", provider: "default", id: "OMLX_API_KEY" },
       },
+      expectedApiKey: { source: "env", provider: "default", id: "OMLX_API_KEY" },
+    },
+    {
+      name: "environment template reference",
+      credential: {
+        type: "api_key",
+        provider: "omlx",
+        keyRef: { source: "env", provider: "default", id: "OMLX_API_KEY" },
+      },
+      providerApiKey: "${OMLX_API_KEY}",
+      expectedApiKey: "${OMLX_API_KEY}",
+    },
+    {
+      name: "profile binding backed by a SecretRef",
+      credential: {
+        type: "api_key",
+        provider: "omlx",
+        keyRef: { source: "env", provider: "default", id: "OMLX_API_KEY" },
+      },
+      providerApiKey: profileId,
       expectedApiKey: profileId,
     },
-  ] satisfies { name: string; credential: AuthProfileCredential; expectedApiKey: string }[])(
+  ])(
     "preserves credential semantics for $name",
-    ({ credential, expectedApiKey }) => {
+    ({ credential, providerApiKey, expectedApiKey }) => {
       const provider = credential.provider;
       const prepared: OpenClawConfig = {
         models: {
@@ -55,9 +81,10 @@ describe("projectSetupInferenceConfig", () => {
             [provider]: {
               baseUrl: "http://127.0.0.1:8000/v1",
               apiKey:
-                credential.type === "token"
+                providerApiKey ??
+                (credential.type === "token"
                   ? credential.token
-                  : (credential.key ?? credential.keyRef),
+                  : (credential.key ?? credential.keyRef)),
               models: [],
             },
           },
@@ -73,7 +100,7 @@ describe("projectSetupInferenceConfig", () => {
         credential,
       });
 
-      expect(projected.models?.providers?.[provider]?.apiKey).toBe(expectedApiKey);
+      expect(projected.models?.providers?.[provider]?.apiKey).toEqual(expectedApiKey);
     },
   );
 });

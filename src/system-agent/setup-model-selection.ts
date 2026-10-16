@@ -9,6 +9,7 @@ import { applyMergePatch } from "../config/merge-patch.js";
 import { mergeAgentModelEntryForConfig } from "../config/model-input.js";
 import { materializeModelPolicyAllowlist } from "../config/model-policy-allowlist-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { materializeUtilityModelSeparation } from "../config/utility-model-separation-migration.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 
@@ -265,13 +266,15 @@ export function projectSetupInferenceConfig(params: {
     const selectedProvider = structuredClone(providerConfig);
     if (params.profileId) {
       if (params.credential?.type === "api_key" || params.credential?.type === "token") {
-        const key =
-          params.credential.type === "api_key" ? params.credential.key : params.credential.token;
-        // No-auth markers must remain visible to the provider's transport preparation.
-        selectedProvider.apiKey =
-          key && isNonSecretApiKeyMarker(key, { includeEnvVarName: false })
-            ? key.trim()
-            : params.profileId;
+        if (!parseSecretRef(selectedProvider.apiKey, params.prepared.secrets?.defaults)) {
+          const key =
+            params.credential.type === "api_key" ? params.credential.key : params.credential.token;
+          // No-auth markers must remain visible to the provider's transport preparation.
+          selectedProvider.apiKey =
+            key && isNonSecretApiKeyMarker(key, { includeEnvVarName: false })
+              ? key.trim()
+              : params.profileId;
+        }
       } else {
         delete selectedProvider.apiKey;
       }

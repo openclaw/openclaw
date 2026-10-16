@@ -32,7 +32,12 @@ export const omlxEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
       const { resolveOmlxHeaders, withoutOmlxAuthentication } = await import("./connection.js");
       const remoteKey = options.remote?.apiKey;
       const hasRemoteKey = Boolean(typeof remoteKey === "string" ? remoteKey.trim() : remoteKey);
-      if (hasRemoteKey) {
+      const hasRemoteAuth =
+        hasRemoteKey ||
+        Object.entries(options.remote?.headers ?? {}).some(
+          ([name, value]) => name.trim().toLowerCase() === "authorization" && Boolean(value.trim()),
+        );
+      if (hasRemoteAuth) {
         configured = withoutOmlxAuthentication(configured);
       }
       const { headers, hasHeaderAuth } = await resolveOmlxHeaders(
@@ -40,11 +45,6 @@ export const omlxEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
         configured,
         options.remote?.headers,
       );
-      const hasRemoteAuth =
-        hasRemoteKey ||
-        Object.entries(options.remote?.headers ?? {}).some(
-          ([name, value]) => name.trim().toLowerCase() === "authorization" && Boolean(value.trim()),
-        );
       let apiKey = configured.apiKey;
       if (!hasHeaderAuth && !hasRemoteAuth && apiKey === OMLX_API_KEY_ENV_VAR) {
         apiKey = process.env[OMLX_API_KEY_ENV_VAR];
