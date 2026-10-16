@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -17,6 +18,7 @@ import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
 } from "./update-managed-service-handoff-database.js";
+import type { ManagedHandoffLeaseStoreOptions } from "./update-managed-service-handoff-lease-types.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 import { parseManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 
@@ -32,6 +34,48 @@ vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const windowsArgv = ["C:\\node.exe", "C:\\openclaw\\entry.js"];
+function windowsStore(options: Partial<ManagedHandoffLeaseStoreOptions> = {}) {
+  return createManagedHandoffLeaseStore({
+    databasePath: "unused-handoff-identity.sqlite",
+    serviceManagerEnv: { SystemRoot: "C:\\Windows" },
+    ...options,
+  });
+}
+function useHostSqlite() {
+  const hostPlatform = process.platform;
+  const existingUri = nodeSqlite.resolveExistingSqliteFileUri;
+  vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((pathname) =>
+    existingUri(pathname, hostPlatform),
+  );
+}
+function seedLease(
+  databasePath: string,
+  root: string,
+  owner: string,
+  payload: unknown,
+  updatedAt = Date.now(),
+) {
+  createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
+    executeSqliteQuerySync(
+      db,
+      leaseQueries(db)
+        .insertInto("managed_update_handoffs")
+        .values({
+          install_root: root,
+          owner,
+          payload_json: JSON.stringify(payload),
+          updated_at: updatedAt,
+        }),
+    ),
+  );
+}
+const leasePayload = (identity: unknown) => ({
+  version: 2,
+  helper: identity,
+  executor: identity,
+  action: { kind: "update" },
+});
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -119,80 +163,34 @@ describe("managed handoff Windows process identities", () => {
       startIdentity: z.string().min(1).max(128),
     });
     const startedAt = vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(123);
-    const store = createManagedHandoffLeaseStore({
-      databasePath: "unused-handoff-identity.sqlite",
-      serviceManagerEnv: {},
-    });
+    const store = windowsStore({ serviceManagerEnv: {} });
     withMockedPlatform("win32", () => {
-      const argv = ["C:\\node.exe", "C:\\openclaw\\entry.js"];
-      expect(publishedIdentity.parse(store.processIdentity(42, argv))).toEqual({
+      expect(publishedIdentity.parse(store.processIdentity(42, windowsArgv))).toEqual({
         pid: 42,
         startIdentity: "123",
       });
       startedAt.mockReturnValue(null);
-      const fallback = store.processIdentity(42, argv);
+      const fallback = store.processIdentity(42, windowsArgv);
       expect(
-        parseManagedHandoffLeasePayload(
-          JSON.stringify({
-            version: 2,
-            helper: fallback,
-            executor: fallback,
-            action: { kind: "update" },
-          }),
-        ),
+        parseManagedHandoffLeasePayload(JSON.stringify(leasePayload(fallback))),
       ).not.toBeNull();
       expect(publishedIdentity.safeParse(fallback).success).toBe(false);
       const unguarded = { pid: fallback.pid, startIdentity: fallback.startIdentity };
-      expect(
-        parseManagedHandoffLeasePayload(
-          JSON.stringify({
-            version: 2,
-            helper: unguarded,
-            executor: unguarded,
-            action: { kind: "update" },
-          }),
-        ),
-      ).toBeNull();
+      expect(parseManagedHandoffLeasePayload(JSON.stringify(leasePayload(unguarded)))).toBeNull();
     });
   });
 
   it("does not reclaim a live fallback lease when launcher attribution disagrees", async () => {
-    const hostPlatform = process.platform;
-    const existingUri = nodeSqlite.resolveExistingSqliteFileUri;
     // SQLite remains on the host VFS while Windows process facts are simulated.
-    vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((pathname) =>
-      existingUri(pathname, hostPlatform),
-    );
+    useHostSqlite();
     vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(null);
     const dead = vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
     spawnSyncMock.mockReturnValue({ status: 0, stdout: "C:\\node.exe C:\\different\\entry.js" });
     const root = dirs.make("handoff-live-attribution-");
     const databasePath = path.join(root, "handoff.sqlite");
-    const store = createManagedHandoffLeaseStore({
-      databasePath,
-      serviceManagerEnv: { SystemRoot: "C:\\Windows" },
-    });
-    const identity = withMockedPlatform("win32", () =>
-      store.processIdentity(42, ["C:\\node.exe", "C:\\openclaw\\entry.js"]),
-    );
-    createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
-      executeSqliteQuerySync(
-        db,
-        leaseQueries(db)
-          .insertInto("managed_update_handoffs")
-          .values({
-            install_root: root,
-            owner: "live-original",
-            payload_json: JSON.stringify({
-              version: 2,
-              helper: identity,
-              executor: identity,
-              action: { kind: "update" },
-            }),
-            updated_at: Date.now(),
-          }),
-      ),
-    );
+    const store = windowsStore({ databasePath });
+    const identity = withMockedPlatform("win32", () => store.processIdentity(42, windowsArgv));
+    seedLease(databasePath, root, "live-original", leasePayload(identity));
     withMockedPlatform("win32", () => {
       expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
       expect(store.acquire(root, "replacement", { kind: "update" })).toMatchObject({
@@ -221,10 +219,7 @@ describe("managed handoff Windows process identities", () => {
       status: 0,
       stdout: args.some((arg) => arg.includes("CommandLine")) ? commandLine : "",
     }));
-    const store = createManagedHandoffLeaseStore({
-      databasePath: "unused-handoff-identity.sqlite",
-      serviceManagerEnv: { SystemRoot: "C:\\Windows" },
-    });
+    const store = windowsStore();
 
     await withMockedPlatform("win32", async () => {
       const identity = store.processIdentity(42, argv);
@@ -245,12 +240,9 @@ describe("managed handoff Windows process identities", () => {
   it("keeps known creation-time mismatches authoritative", async () => {
     vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
     const startedAt = vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(123);
-    const store = createManagedHandoffLeaseStore({
-      databasePath: "unused-handoff-identity.sqlite",
-      serviceManagerEnv: { SystemRoot: "C:\\Windows" },
-    });
+    const store = windowsStore();
     await withMockedPlatform("win32", async () => {
-      const identity = store.processIdentity(42, ["C:\\node.exe", "C:\\openclaw\\entry.js"]);
+      const identity = store.processIdentity(42, windowsArgv);
       expect(identity.startIdentity).toBe("123");
       expect(store.isProcessIdentityCurrent(identity)).toBe(true);
       startedAt.mockReturnValue(456);
@@ -266,11 +258,7 @@ describe("managed handoff Windows process identities", () => {
     const onProcessIdentityWarning = vi.fn(() => {
       throw new Error("diagnostic sink unavailable");
     });
-    const store = createManagedHandoffLeaseStore({
-      databasePath: "unused-handoff-identity.sqlite",
-      serviceManagerEnv: { SystemRoot: "C:\\Windows" },
-      onProcessIdentityWarning,
-    });
+    const store = windowsStore({ onProcessIdentityWarning });
     await withMockedPlatform("win32", async () => {
       const identity = store.processIdentity();
       expect(store.isProcessIdentityCurrent(identity)).toBe(true);
@@ -298,10 +286,7 @@ describe("managed handoff Windows process identities", () => {
         return { status: completed ? 0 : 1, stdout: completed ? createdAt : "" };
       },
     );
-    const store = createManagedHandoffLeaseStore({
-      databasePath: "unused-handoff-identity.sqlite",
-      serviceManagerEnv: { SystemRoot: "C:\\Windows" },
-    });
+    const store = windowsStore();
 
     await withMockedPlatform("win32", async () => {
       if (acquired) {
@@ -334,23 +319,15 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
     const startIdentity = String(Date.parse(`${startedAt} UTC`) / 1000);
     const executor = { pid: executorPid, startIdentity };
     const database = createManagedHandoffLeaseDatabase(databasePath);
-    database(true, (db) =>
-      executeSqliteQuerySync(
-        db,
-        leaseQueries(db)
-          .insertInto("managed_update_handoffs")
-          .values({
-            install_root: root,
-            owner: "original-v1-helper",
-            payload_json: JSON.stringify({ version: 1, pid: helperPid, startIdentity }),
-            updated_at: 100,
-          }),
-      ),
+    seedLease(
+      databasePath,
+      root,
+      "original-v1-helper",
+      { version: 1, pid: helperPid, startIdentity },
+      100,
     );
     const parent = store.readLegacyParent(root, executor);
-    if (!parent) {
-      throw new Error("expected the seeded v1 parent");
-    }
+    assert(parent, "expected the seeded v1 parent");
     const identities = [process.pid, ...chain.filter((pid) => pid !== 1)].map((pid, index) => ({
       pid,
       parentPid: chain[index] ?? 1,
@@ -376,11 +353,7 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
       };
     });
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-    const hostPlatform = process.platform;
-    const existingUri = nodeSqlite.resolveExistingSqliteFileUri;
-    vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((pathname) =>
-      existingUri(pathname, hostPlatform),
-    );
+    useHostSqlite();
     return {
       identities,
       probes,

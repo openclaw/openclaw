@@ -40,23 +40,46 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function insertRow(db: DatabaseSync, key: string, owner: string): void {
+function insertRow(
+  db: DatabaseSync,
+  key: string,
+  owner: string,
+  payload = "{}",
+  updatedAt = 1,
+): void {
   db.prepare(
     "INSERT INTO managed_update_handoffs " +
       "(install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
-  ).run(key, owner, "{}", 1);
+  ).run(key, owner, payload, updatedAt);
 }
 
-function readOwners(): string[] {
-  const db = new DatabaseSync(databasePath, { readOnly: true });
+function withSqlite<T>(run: (db: DatabaseSync) => T, readOnly = false): T {
+  const db = new DatabaseSync(databasePath, { readOnly });
   try {
-    return db
-      .prepare("SELECT owner FROM managed_update_handoffs ORDER BY owner")
-      .all()
-      .map((row) => String(row.owner));
+    return run(db);
   } finally {
     db.close();
   }
+}
+
+function readOwners(): string[] {
+  return withSqlite(
+    (db) =>
+      db
+        .prepare("SELECT owner FROM managed_update_handoffs ORDER BY owner")
+        .all()
+        .map((row) => String(row.owner)),
+    true,
+  );
+}
+
+function publish(owner: string, key = root): void {
+  createManagedHandoffLeaseDatabase(databasePath)(true, (db) => insertRow(db, key, owner));
+}
+
+function expectSingleLink(owners: string[]): void {
+  expect(readOwners()).toEqual(owners);
+  expect(fs.statSync(databasePath).nlink).toBe(1);
 }
 
 type RunningChild = {
@@ -145,8 +168,7 @@ describe("managed handoff database publication", () => {
     if (process.platform !== "win32") {
       expect(stat.mode & 0o777).toBe(0o600);
     }
-    expect(stat.nlink).toBe(1);
-    expect(readOwners()).toEqual(["first"]);
+    expectSingleLink(["first"]);
     expect(fs.readdirSync(root)).toEqual([path.basename(databasePath)]);
   });
 
@@ -159,23 +181,15 @@ describe("managed handoff database publication", () => {
       return args[0] === root && typeof result === "string" ? result + path.sep + "." : result;
     });
 
-    createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
-      insertRow(db, root, "alias-owner"),
-    );
-
-    expect(readOwners()).toEqual(["alias-owner"]);
-    expect(fs.statSync(databasePath).nlink).toBe(1);
+    publish("alias-owner");
+    expectSingleLink(["alias-owner"]);
   });
 
   it("publishes when the parent file ID exceeds Number's exact range", () => {
     mockLargeDirectoryId(root);
 
-    createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
-      insertRow(db, root, "exact-owner"),
-    );
-
-    expect(readOwners()).toEqual(["exact-owner"]);
-    expect(fs.statSync(databasePath).nlink).toBe(1);
+    publish("exact-owner");
+    expectSingleLink(["exact-owner"]);
   });
 
   it.skipIf(process.platform === "win32")(
@@ -190,12 +204,11 @@ describe("managed handoff database publication", () => {
         return open(pathname, flags, mode);
       });
 
-      createManagedHandoffLeaseDatabase(databasePath)(true, (db) => insertRow(db, root, "winner"));
+      publish("winner");
 
       expect(fs.statSync(databasePath).ino).toBe(winnerInode);
       expect(fs.statSync(databasePath).mode & 0o777).toBe(0o600);
-      expect(fs.statSync(databasePath).nlink).toBe(1);
-      expect(readOwners()).toEqual(["winner"]);
+      expectSingleLink(["winner"]);
     },
   );
 
@@ -259,9 +272,7 @@ describe("managed handoff database publication", () => {
         });
         expect(fs.readFileSync(databasePath, "utf8")).toBe("");
         vi.restoreAllMocks();
-        createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
-          insertRow(db, root, "recovered"),
-        );
+        publish("recovered");
         expect(fs.statSync(databasePath)).toMatchObject({
           dev: originalFile.dev,
           ino: originalFile.ino,
@@ -281,18 +292,15 @@ describe("managed handoff database publication", () => {
     (state) => {
       fs.writeFileSync(databasePath, state === "malformed" ? "not SQLite" : "", { mode: 0o600 });
       if (state !== "empty-file" && state !== "malformed") {
-        const db = new DatabaseSync(databasePath);
-        try {
+        withSqlite((db) =>
           db.exec(
             state === "empty-schema"
               ? "VACUUM"
               : state === "foreign-schema"
                 ? "CREATE TABLE unrelated(value TEXT)"
                 : "CREATE TABLE managed_update_handoffs(wrong TEXT)",
-          );
-        } finally {
-          db.close();
-        }
+          ),
+        );
       }
       const bytes = fs.readFileSync(databasePath);
       const before = fs.statSync(databasePath);
@@ -337,8 +345,7 @@ describe("managed handoff database publication", () => {
       expect(await second.closed).toEqual([0, null]);
       expect(first.output()).toEqual({ stdout: "done", stderr: "" });
       expect(second.output()).toEqual({ stdout: "done", stderr: "" });
-      expect(readOwners()).toEqual(["first", "second"]);
-      expect(fs.statSync(databasePath).nlink).toBe(1);
+      expectSingleLink(["first", "second"]);
     } finally {
       await stopChildProcess(first.child, 5_000);
       await stopChildProcess(second.child, 5_000);
@@ -419,8 +426,7 @@ describe("managed handoff database publication", () => {
         Atomics.notify(gate, 0);
         expect(await first.exited).toEqual([0]);
         expect(await second.exited).toEqual([0]);
-        expect(readOwners()).toEqual(["first", "second"]);
-        expect(fs.statSync(databasePath).nlink).toBe(1);
+        expectSingleLink(["first", "second"]);
       } finally {
         Atomics.store(gate, 0, 1);
         Atomics.notify(gate, 0);
@@ -451,8 +457,7 @@ describe("managed handoff database publication", () => {
       } while (writer.child.exitCode === null && writer.child.signalCode === null);
       expect(await writer.closed).toEqual([0, null]);
       expect(writer.output().stderr).toBe("");
-      expect(fs.statSync(databasePath).nlink).toBe(1);
-      expect(readOwners()).toEqual([]);
+      expectSingleLink([]);
     } finally {
       await stopChildProcess(writer.child, 5_000);
     }
@@ -487,9 +492,7 @@ describe("managed handoff database publication", () => {
         kind: "absent",
       });
       await killFixture(writer);
-      createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
-        insertRow(db, root, "recovered"),
-      );
+      publish("recovered");
       expect(fs.statSync(databasePath).ino).toBe(before.ino);
       expect(readOwners()).toEqual(["recovered"]);
     } finally {
@@ -500,9 +503,7 @@ describe("managed handoff database publication", () => {
   it.each(["reader", "writer"] as const)(
     "waits for a held SQLite %s before writing",
     async (kind) => {
-      createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
-        insertRow(db, root, "original"),
-      );
+      publish("original");
       const script = `
       import { DatabaseSync } from "node:sqlite";
       import fs from "node:fs";
@@ -515,9 +516,7 @@ describe("managed handoff database publication", () => {
       const holder = spawnFixture(script, [databasePath, kind]);
       try {
         await holder.waitForMarker("held");
-        createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
-          insertRow(db, "next", "next"),
-        );
+        publish("next", "next");
         expect(await holder.closed).toEqual([0, null]);
         expect(holder.output().stderr).toBe("");
         expect(readOwners()).toEqual(["next", "original"]);
@@ -551,13 +550,9 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     });
     const write = createManagedHandoffLeaseDatabase(databasePath);
     write(true, (db) => {
-      db.prepare(
-        "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
-      ).run(root, owner, payload, 1);
+      insertRow(db, root, owner, payload);
       if (spawnerKey !== root) {
-        db.prepare(
-          "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
-        ).run(spawnerKey, runId, payload, 1);
+        insertRow(db, spawnerKey, runId, payload);
       }
     });
     const parent = store.read(root);
@@ -616,14 +611,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
           action: { kind: "update" },
         })
       : payload;
-    const db = new DatabaseSync(databasePath);
-    try {
-      db.prepare(
-        "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
-      ).run(childKey, runId, childPayload, 2);
-    } finally {
-      db.close();
-    }
+    withSqlite((db) => insertRow(db, childKey, runId, childPayload, 2));
     const grant: UpdateCommandChildGrant = {
       runId,
       root,
@@ -644,26 +632,20 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     expect(admitted.databaseIdentity.parentIdentity).toMatch(new RegExp(`^\\d+:${initialInode}$`));
     expect(admitted.store.read(root)).toMatchObject({ kind: "current" });
     const descendantKey = `${childKey}/.openclaw-update-child-${randomUUID()}-lineage-${childLineageDigest(parent.lease, admitted.child, parent.lease, admitted.databaseIdentity)}`;
-    const descendants = new DatabaseSync(databasePath);
-    try {
-      descendants
-        .prepare(
-          "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
-        )
-        .run(
-          descendantKey,
-          runId,
-          JSON.stringify({
-            version: 2,
-            helper: admitted.child.executor,
-            executor: admitted.child.executor,
-            action: admitted.child.action,
-          }),
-          3,
-        );
-    } finally {
-      descendants.close();
-    }
+    withSqlite((db) =>
+      insertRow(
+        db,
+        descendantKey,
+        runId,
+        JSON.stringify({
+          version: 2,
+          helper: admitted.child.executor,
+          executor: admitted.child.executor,
+          action: admitted.child.action,
+        }),
+        3,
+      ),
+    );
     const descendantGrant = {
       ...grant,
       originalParent: parent.lease,
@@ -712,12 +694,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     );
     readError = undefined;
     parentInode = initialInode;
-    const damaged = new DatabaseSync(databasePath);
-    try {
-      damaged.exec("DROP TABLE managed_update_handoffs");
-    } finally {
-      damaged.close();
-    }
+    withSqlite((db) => db.exec("DROP TABLE managed_update_handoffs"));
     await expect(resolveUpdateCommandChildBinding(grant, runId, root)).rejects.toThrow(
       /lease is unreadable:.*no such table/i,
     );

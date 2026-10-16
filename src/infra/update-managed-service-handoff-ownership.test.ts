@@ -5,6 +5,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { PassThrough, type Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -78,6 +79,65 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
 const tempDirs = createManagedHandoffTempDirTracker();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
+type SentinelFixture = {
+  version: number;
+  revision?: number;
+  payload: {
+    kind: string;
+    status: string;
+    ts?: number;
+    sessionKey?: string;
+    threadId?: string;
+    message?: string;
+    deliveryContext?: { channel?: string; to?: string; accountId?: string };
+    continuation?: unknown;
+    doctorHint?: string;
+    stats?: unknown;
+  };
+};
+
+function pendingSentinel(
+  handoffId: string,
+  overrides: Partial<SentinelFixture["payload"]> = {},
+): SentinelFixture {
+  return {
+    version: 1,
+    revision: 100,
+    payload: {
+      kind: "update",
+      status: "skipped",
+      ts: 100,
+      stats: { handoffId, reason: "managed-service-handoff-started" },
+      ...overrides,
+    },
+  };
+}
+
+function withStateDatabase<T>(
+  env: NodeJS.ProcessEnv,
+  run: (db: DatabaseSync) => T,
+  readOnly = false,
+): T {
+  const db = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly });
+  try {
+    return run(db);
+  } finally {
+    db.close();
+  }
+}
+
+async function snapshotStateDatabase(env: NodeJS.ProcessEnv) {
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  const { ctimeMs, ino, mode, mtimeMs } = await fs.stat(databasePath);
+  return {
+    bytes: await fs.readFile(databasePath),
+    entries: (await fs.readdir(path.dirname(databasePath))).toSorted(),
+    ctimeMs,
+    ino,
+    mode,
+    mtimeMs,
+  };
+}
 
 beforeEach(async () => {
   // Helpers in one fixture share a coordinator without touching the operator's database.
@@ -109,61 +169,35 @@ afterEach(async () => {
   vi.resetModules();
 });
 
-function writeRestartSentinelRow(env: NodeJS.ProcessEnv, sentinel: unknown): void {
+function writeRestartSentinelRow(env: NodeJS.ProcessEnv, sentinel: SentinelFixture): void {
   const { db } = openOpenClawStateDatabase({ env });
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const payload =
-    sentinel && typeof sentinel === "object" && (sentinel as { version?: unknown }).version === 1
-      ? (sentinel as { payload?: unknown }).payload
-      : null;
-  if (!payload || typeof payload !== "object") {
-    throw new Error("expected versioned restart sentinel payload");
-  }
-  const record = payload as {
-    kind?: unknown;
-    status?: unknown;
-    ts?: unknown;
-    sessionKey?: unknown;
-    threadId?: unknown;
-    deliveryContext?: { channel?: unknown; to?: unknown; accountId?: unknown };
-    message?: unknown;
-    continuation?: unknown;
-    doctorHint?: unknown;
-    stats?: unknown;
-  };
-  const revision =
-    typeof (sentinel as { revision?: unknown }).revision === "number"
-      ? (sentinel as { revision: number }).revision
-      : Date.now();
+  // Raw insertion deliberately permits malformed stats/continuation fixtures.
+  const { payload: record, revision = Date.now() } = sentinel;
   executeSqliteQuerySync(
     db,
     stateDb.insertInto("gateway_restart_sentinel").values({
       sentinel_key: record.kind === "revision-floor" ? "revision-floor" : "current",
       version: 1,
-      kind: typeof record.kind === "string" ? record.kind : "update",
-      status: typeof record.status === "string" ? record.status : "skipped",
-      ts: typeof record.ts === "number" ? record.ts : Date.now(),
-      session_key: typeof record.sessionKey === "string" ? record.sessionKey : null,
-      thread_id: typeof record.threadId === "string" ? record.threadId : null,
-      delivery_channel:
-        typeof record.deliveryContext?.channel === "string" ? record.deliveryContext.channel : null,
-      delivery_to:
-        typeof record.deliveryContext?.to === "string" ? record.deliveryContext.to : null,
-      delivery_account_id:
-        typeof record.deliveryContext?.accountId === "string"
-          ? record.deliveryContext.accountId
-          : null,
-      message: typeof record.message === "string" ? record.message : null,
+      kind: record.kind,
+      status: record.status,
+      ts: record.ts ?? Date.now(),
+      session_key: record.sessionKey ?? null,
+      thread_id: record.threadId ?? null,
+      delivery_channel: record.deliveryContext?.channel ?? null,
+      delivery_to: record.deliveryContext?.to ?? null,
+      delivery_account_id: record.deliveryContext?.accountId ?? null,
+      message: record.message ?? null,
       continuation_json: record.continuation ? JSON.stringify(record.continuation) : null,
-      doctor_hint: typeof record.doctorHint === "string" ? record.doctorHint : null,
+      doctor_hint: record.doctorHint ?? null,
       stats_json: record.stats ? JSON.stringify(record.stats) : null,
-      payload_json: JSON.stringify(payload),
+      payload_json: JSON.stringify(record),
       updated_at_ms: revision,
     }),
   );
 }
 
-function replaceRestartSentinelRow(env: NodeJS.ProcessEnv, sentinel: unknown): void {
+function replaceRestartSentinelRow(env: NodeJS.ProcessEnv, sentinel: SentinelFixture): void {
   const { db } = openOpenClawStateDatabase({ env });
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   executeSqliteQuerySync(
@@ -189,11 +223,9 @@ function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): un
 }
 
 async function createLegacyRestartSentinelTable(env: NodeJS.ProcessEnv): Promise<void> {
-  const sqlite = await import("node:sqlite");
   const stateDatabasePath = resolveOpenClawStateSqlitePath(env);
   await fs.mkdir(path.dirname(stateDatabasePath), { recursive: true });
-  const db = new sqlite.DatabaseSync(stateDatabasePath);
-  try {
+  withStateDatabase(env, (db) =>
     db.exec(`
       CREATE TABLE gateway_restart_sentinel (
         sentinel_key TEXT NOT NULL PRIMARY KEY,
@@ -206,17 +238,14 @@ async function createLegacyRestartSentinelTable(env: NodeJS.ProcessEnv): Promise
         payload_json TEXT NOT NULL,
         updated_at_ms INTEGER NOT NULL
       );
-    `);
-  } finally {
-    db.close();
-  }
+    `),
+  );
 }
 
 async function runOwnershipHelper(params: {
   handoffId?: string;
-  metaHandoffId?: string;
   prepareStateDatabase?: (env: NodeJS.ProcessEnv) => Promise<void> | void;
-  sentinel?: unknown;
+  sentinel?: SentinelFixture;
   deepStatePath?: boolean;
   commandDelayMs?: number;
   commandExitCode?: number;
@@ -253,7 +282,7 @@ async function runOwnershipHelper(params: {
     ...(params.handoffId ? { handoffId: params.handoffId } : {}),
     env,
     meta: {
-      ...(params.metaHandoffId ? { handoffId: params.metaHandoffId } : {}),
+      ...(params.handoffId ? { handoffId: params.handoffId } : {}),
       sessionKey: "agent:test:webchat:dm:user-123",
       continuationMessage: "continue after restart",
     },
@@ -463,32 +492,14 @@ fs.appendFileSync = function(file, data, ...args) {
 
 describe("managed service update handoff state ownership and sentinel persistence", () => {
   it("refuses fallback writes to externally owned state without the supervisor marker", async () => {
-    let before:
-      | {
-          bytes: Buffer;
-          entries: string[];
-          ctimeMs: number;
-          ino: number;
-          mode: number;
-          mtimeMs: number;
-        }
-      | undefined;
+    let before: Awaited<ReturnType<typeof snapshotStateDatabase>> | undefined;
     const { result, env, logPath } = await runOwnershipHelper({
       commandExitCode: 7,
       prepareStateDatabase: async (stateEnv) => {
         const externalEnv = { ...stateEnv, OPENCLAW_SUPERVISOR_MODE: "external" };
         claimOpenClawStateOwnership("gateway-supervisor", { env: externalEnv });
         closeOpenClawStateDatabaseForTest();
-        const databasePath = resolveOpenClawStateSqlitePath(stateEnv);
-        const stat = await fs.stat(databasePath);
-        before = {
-          bytes: await fs.readFile(databasePath),
-          entries: (await fs.readdir(path.dirname(databasePath))).toSorted(),
-          ctimeMs: stat.ctimeMs,
-          ino: stat.ino,
-          mode: stat.mode,
-          mtimeMs: stat.mtimeMs,
-        };
+        before = await snapshotStateDatabase(stateEnv);
       },
     });
 
@@ -496,42 +507,20 @@ describe("managed service update handoff state ownership and sentinel persistenc
     await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
       "managed update update command exited code=7",
     );
-    const databasePath = resolveOpenClawStateSqlitePath(env);
-    const stat = await fs.stat(databasePath);
-    expect({
-      bytes: await fs.readFile(databasePath),
-      entries: (await fs.readdir(path.dirname(databasePath))).toSorted(),
-      ctimeMs: stat.ctimeMs,
-      ino: stat.ino,
-      mode: stat.mode,
-      mtimeMs: stat.mtimeMs,
-    }).toEqual(before);
+    expect(await snapshotStateDatabase(env)).toEqual(before);
     await expect(fs.readFile(logPath, "utf8")).resolves.toMatch(
       /gateway-supervisor.*OPENCLAW_SUPERVISOR_MODE=external/u,
     );
   });
 
   it("rechecks external ownership after waiting for the state write lock", async ({ signal }) => {
-    const pendingSentinel = {
-      version: 1 as const,
-      revision: 100,
-      payload: {
-        kind: "update",
-        status: "skipped",
-        ts: 100,
-        stats: {
-          handoffId: "handoff-ownership-race",
-          reason: "managed-service-handoff-started",
-        },
-      },
-    };
     const ownership = {
       version: 1,
       mode: "external",
       managerId: "race-supervisor",
       claimedAt: Date.now(),
     };
-    let claimant: import("node:sqlite").DatabaseSync | undefined;
+    let claimant: DatabaseSync | undefined;
     let claimantTransactionOpen = false;
     let beforeSentinelRow: unknown;
     let helperResult: Awaited<ReturnType<typeof runOwnershipHelper>> | undefined;
@@ -540,12 +529,10 @@ describe("managed service update handoff state ownership and sentinel persistenc
         commandExitCode: 7,
         handoffId: "handoff-ownership-race",
         observeUpdateExit: true,
-        metaHandoffId: "handoff-ownership-race",
         prepareStateDatabase: async (stateEnv) => {
-          writeRestartSentinelRow(stateEnv, pendingSentinel);
+          writeRestartSentinelRow(stateEnv, pendingSentinel("handoff-ownership-race"));
           closeOpenClawStateDatabaseForTest();
-          const sqlite = await import("node:sqlite");
-          claimant = new sqlite.DatabaseSync(resolveOpenClawStateSqlitePath(stateEnv));
+          claimant = new DatabaseSync(resolveOpenClawStateSqlitePath(stateEnv));
           claimant.exec("BEGIN IMMEDIATE;");
           claimantTransactionOpen = true;
           claimant
@@ -589,22 +576,21 @@ describe("managed service update handoff state ownership and sentinel persistenc
       throw new Error("expected the detached helper to return a result");
     }
     expect(helperResult.result).toEqual({ code: 7, signal: null });
-    const databasePath = resolveOpenClawStateSqlitePath(helperResult.env);
-    const sqlite = await import("node:sqlite");
-    const verifyDb = new sqlite.DatabaseSync(databasePath, { readOnly: true });
-    try {
-      const ownershipRow = verifyDb
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-        .get("gateway.supervision") as { value_json?: unknown } | undefined;
-      expect(ownershipRow?.value_json).toBe(JSON.stringify(ownership));
-      expect(
-        verifyDb
-          .prepare("SELECT * FROM gateway_restart_sentinel WHERE sentinel_key = ?")
-          .get("current"),
-      ).toEqual(beforeSentinelRow);
-    } finally {
-      verifyDb.close();
-    }
+    withStateDatabase(
+      helperResult.env,
+      (verifyDb) => {
+        const ownershipRow = verifyDb
+          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+          .get("gateway.supervision") as { value_json?: unknown } | undefined;
+        expect(ownershipRow?.value_json).toBe(JSON.stringify(ownership));
+        expect(
+          verifyDb
+            .prepare("SELECT * FROM gateway_restart_sentinel WHERE sentinel_key = ?")
+            .get("current"),
+        ).toEqual(beforeSentinelRow);
+      },
+      true,
+    );
     await expect(fs.readFile(helperResult.logPath, "utf8")).resolves.toMatch(
       /race-supervisor.*OPENCLAW_SUPERVISOR_MODE=external/u,
     );
@@ -615,7 +601,6 @@ describe("managed service update handoff state ownership and sentinel persistenc
       ? (["closed-gate"] as const)
       : (["closed-gate", "unavailable-identity"] as const),
   )("joins the exact gated runner and records failure after %s", async (runnerFault) => {
-    const { DatabaseSync } = await import("node:sqlite");
     const handoffId = `handoff-runner-${runnerFault}`;
     const {
       result,
@@ -628,7 +613,6 @@ describe("managed service update handoff state ownership and sentinel persistenc
       leaseKey,
     } = await runOwnershipHelper({
       handoffId,
-      metaHandoffId: handoffId,
       runnerFault,
     });
 
@@ -687,7 +671,6 @@ describe("managed service update handoff state ownership and sentinel persistenc
       const { result, env } = await runOwnershipHelper({
         deepStatePath: true,
         handoffId: "handoff-windows-long-path",
-        metaHandoffId: "handoff-windows-long-path",
       });
       const statePath = resolveOpenClawStateSqlitePath(env);
       expect(statePath.startsWith("\\\\?\\")).toBe(false);
@@ -703,12 +686,10 @@ describe("managed service update handoff state ownership and sentinel persistenc
     let lockReleased: Promise<void> | undefined;
     const { result, env } = await runOwnershipHelper({
       handoffId: "handoff-locked",
-      metaHandoffId: "handoff-locked",
       prepareStateDatabase: async (stateEnv) => {
         openOpenClawStateDatabase({ env: stateEnv });
         closeOpenClawStateDatabaseForTest();
-        const sqlite = await import("node:sqlite");
-        const lock = new sqlite.DatabaseSync(resolveOpenClawStateSqlitePath(stateEnv));
+        const lock = new DatabaseSync(resolveOpenClawStateSqlitePath(stateEnv));
         lock.exec("BEGIN IMMEDIATE;");
         lockReleased = new Promise((resolve) => {
           setTimeout(() => {
@@ -751,19 +732,13 @@ describe("managed service update handoff state ownership and sentinel persistenc
   it.each(["continuation", "stats", "empty routing"] as const)(
     "uses canonical sentinel rows without overwriting invalid metadata (%s)",
     async (shape) => {
-      const { DatabaseSync } = await import("node:sqlite");
       let before: unknown;
       const { result, env } = await runOwnershipHelper({
         handoffId: "handoff-typed-row",
-        metaHandoffId: "handoff-typed-row",
         prepareStateDatabase: (stateEnv) => {
-          writeRestartSentinelRow(stateEnv, {
-            version: 1,
-            revision: 100,
-            payload: {
-              kind: "update",
-              status: "skipped",
-              ts: 100,
+          writeRestartSentinelRow(
+            stateEnv,
+            pendingSentinel("handoff-typed-row", {
               sessionKey: "",
               threadId: "",
               message: "",
@@ -775,79 +750,71 @@ describe("managed service update handoff state ownership and sentinel persistenc
                 reason: "managed-service-handoff-started",
                 ...(shape === "stats" ? { durationMs: "invalid" } : {}),
               },
-            },
-          });
+            }),
+          );
           closeOpenClawStateDatabaseForTest();
-          const db = new DatabaseSync(resolveOpenClawStateSqlitePath(stateEnv), { readOnly: true });
-          try {
-            before = db
-              .prepare("SELECT * FROM gateway_restart_sentinel ORDER BY sentinel_key")
-              .all();
-          } finally {
-            db.close();
-          }
+          before = withStateDatabase(
+            stateEnv,
+            (db) =>
+              db.prepare("SELECT * FROM gateway_restart_sentinel ORDER BY sentinel_key").all(),
+            true,
+          );
         },
       });
       expect(result).toEqual({ code: 1, signal: null });
-      const db = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
-      try {
-        if (shape === "empty routing") {
-          expect(
-            db
-              .prepare("SELECT * FROM gateway_restart_sentinel WHERE sentinel_key = 'current'")
-              .get(),
-          ).toMatchObject({ status: "error", session_key: "", thread_id: "", message: "" });
-        } else {
-          expect(
-            db.prepare("SELECT * FROM gateway_restart_sentinel ORDER BY sentinel_key").all(),
-          ).toEqual(before);
-        }
-      } finally {
-        db.close();
-      }
+      withStateDatabase(
+        env,
+        (db) => {
+          if (shape === "empty routing") {
+            expect(
+              db
+                .prepare("SELECT * FROM gateway_restart_sentinel WHERE sentinel_key = 'current'")
+                .get(),
+            ).toMatchObject({ status: "error", session_key: "", thread_id: "", message: "" });
+          } else {
+            expect(
+              db.prepare("SELECT * FROM gateway_restart_sentinel ORDER BY sentinel_key").all(),
+            ).toEqual(before);
+          }
+        },
+        true,
+      );
     },
   );
 
   it("repairs legacy restart sentinel columns without changing the database schema version", async () => {
     const { result, env } = await runOwnershipHelper({
       handoffId: "handoff-123",
-      metaHandoffId: "handoff-123",
       prepareStateDatabase: async (stateEnv) => {
         await createLegacyRestartSentinelTable(stateEnv);
-        const { DatabaseSync } = await import("node:sqlite");
-        const db = new DatabaseSync(resolveOpenClawStateSqlitePath(stateEnv));
-        try {
-          db.exec("PRAGMA user_version = 7");
-        } finally {
-          db.close();
-        }
+        withStateDatabase(stateEnv, (db) => db.exec("PRAGMA user_version = 7"));
       },
     });
 
     expect(result).toEqual({ code: 1, signal: null });
-    const { DatabaseSync } = await import("node:sqlite");
-    const db = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
-    try {
-      expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 7 });
-      expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
-        { name: "gateway_restart_sentinel" },
-      ]);
-      expect(readRestartSentinelRowSync(db)).toMatchObject({
-        kind: "valid",
-        sentinel: {
-          version: 1,
-          payload: {
-            kind: "update",
-            status: "error",
-            stats: {
-              reason: "managed-service-handoff-failed",
+    withStateDatabase(
+      env,
+      (db) => {
+        expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 7 });
+        expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
+          { name: "gateway_restart_sentinel" },
+        ]);
+        expect(readRestartSentinelRowSync(db)).toMatchObject({
+          kind: "valid",
+          sentinel: {
+            version: 1,
+            payload: {
+              kind: "update",
+              status: "error",
+              stats: {
+                reason: "managed-service-handoff-failed",
+              },
             },
           },
-        },
-      });
-    } finally {
-      db.close();
-    }
+        });
+      },
+      true,
+    );
   });
 
   it("does not overwrite a newer pending update handoff sentinel", async () => {
@@ -868,7 +835,6 @@ describe("managed service update handoff state ownership and sentinel persistenc
     };
     const { result, env } = await runOwnershipHelper({
       handoffId: "old-handoff",
-      metaHandoffId: "old-handoff",
       sentinel: newerSentinel,
     });
 
@@ -877,19 +843,6 @@ describe("managed service update handoff state ownership and sentinel persistenc
   });
 
   it("preserves a newer sentinel written while the detached helper is active", async () => {
-    const oldSentinel = {
-      version: 1,
-      revision: 100,
-      payload: {
-        kind: "update",
-        status: "skipped",
-        ts: 100,
-        stats: {
-          handoffId: "old-handoff",
-          reason: "managed-service-handoff-started",
-        },
-      },
-    };
     const newerSentinel = {
       version: 1,
       revision: 200,
@@ -901,8 +854,7 @@ describe("managed service update handoff state ownership and sentinel persistenc
     };
     const { env } = await runOwnershipHelper({
       handoffId: "old-handoff",
-      metaHandoffId: "old-handoff",
-      sentinel: oldSentinel,
+      sentinel: pendingSentinel("old-handoff"),
       commandDelayMs: 200,
       whileHelperRunning: async ({ env: stateEnv }) => {
         await new Promise<void>((resolve) => {
@@ -922,19 +874,9 @@ describe("managed service update handoff state ownership and sentinel persistenc
     const futureRevision = Date.now() + 60_000;
     const { env } = await runOwnershipHelper({
       handoffId: "handoff-future-revision",
-      metaHandoffId: "handoff-future-revision",
       sentinel: {
-        version: 1,
+        ...pendingSentinel("handoff-future-revision", { kind: "revision-floor", ts: 123 }),
         revision: futureRevision,
-        payload: {
-          kind: "revision-floor",
-          status: "skipped",
-          ts: 123,
-          stats: {
-            handoffId: "handoff-future-revision",
-            reason: "managed-service-handoff-started",
-          },
-        },
       },
     });
 

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -24,9 +25,10 @@ function fixture() {
   const acquired = createManagedHandoffLeaseStore(options).acquire(root, "original", {
     kind: "update",
   });
-  if (acquired.kind !== "acquired" || !acquired.originalDatabaseIdentity) {
-    throw new Error("Missing original acquisition");
-  }
+  assert(
+    acquired.kind === "acquired" && acquired.originalDatabaseIdentity,
+    "Missing original acquisition",
+  );
   const store = createManagedHandoffLeaseStore({
     ...options,
     existingIdentity: acquired.originalDatabaseIdentity,
@@ -47,9 +49,7 @@ it("accepts cancellation only from the unchanged original acquisition object", (
     kind: "update",
     mutationProtocol: "original-cancellation-v1",
   });
-  if (child.kind !== "acquired") {
-    throw new Error("Missing descendant");
-  }
+  assert(child.kind === "acquired", "Missing descendant");
   const cancelled = store.cancelUpdate(original);
   expect(cancelled).not.toBeNull();
   expect(store.current(original)).toBe(false);
@@ -79,9 +79,7 @@ async function nativeCommandFixture() {
   const retainedRoot = path.join(path.dirname(f.root), "retained");
   fs.mkdirSync(retainedRoot);
   const retained = f.store.acquire(retainedRoot, "retained", { kind: "update" });
-  if (retained.kind !== "acquired") {
-    throw new Error("Missing retained owner");
-  }
+  assert(retained.kind === "acquired", "Missing retained owner");
   const native = await createManagedCommandProcessCustody({
     roots: [f.root, retainedRoot],
     parents: [f.original, retained.lease],
@@ -97,8 +95,7 @@ it("refuses cancellation until a reserved command has confirmed its non-start", 
   const commands = f.store.readCommandChildren([f.root, f.retained.key]);
   expect(commands).toHaveLength(2);
   expect(f.store.cancelUpdate(f.original, f.retained)).toBeNull();
-  expect(f.store.current(f.original)).toBe(true);
-  expect(f.store.current(f.retained)).toBe(true);
+  expect([f.original, f.retained].map((lease) => f.store.current(lease))).toEqual([true, true]);
   expect(commands.map((command) => f.store.current(command))).toEqual([true, true]);
   reservation.settled();
   expect(f.store.readCommandChildren([f.root, f.retained.key])).toEqual([]);
@@ -137,9 +134,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
     } else {
       expect(f.store.current(f.retained)).toBe(true);
       const peer = f.store.readCommandChildren([f.retained.key])[0];
-      if (!peer) {
-        throw new Error("Missing retained command alias");
-      }
+      assert(peer, "Missing retained command alias");
       expect(f.store.current(peer)).toBe(false);
       const descendant = await createManagedCommandProcessCustody({
         roots: [peer.key],
@@ -171,9 +166,7 @@ it("refuses cancellation over a legacy receiver", () => {
   const child = store.acquire(`${root}/.openclaw-update-child-unknown`, "unknown", {
     kind: "update",
   });
-  if (child.kind !== "acquired") {
-    throw new Error("Missing refused child fixture");
-  }
+  assert(child.kind === "acquired", "Missing refused child fixture");
   expect(store.cancelUpdate(original)).toBeNull();
   expect(store.current(original)).toBe(true);
   expect(store.read(child.lease.key)).toEqual({ kind: "current", lease: child.lease });
@@ -189,16 +182,12 @@ it.skipIf(process.platform === "win32").each(["unrecognized child", "foreign ali
         kind: "update",
         custody: "reserved",
       });
-      if (child.kind !== "acquired") {
-        throw new Error("Missing refused child fixture");
-      }
+      assert(child.kind === "acquired", "Missing refused child fixture");
       const bound = f.store.bindUpdateChildren(
         [child.lease],
         f.store.processIdentity(process.ppid),
       );
-      if (!bound) {
-        throw new Error("Missing bound child fixture");
-      }
+      assert(bound, "Missing bound child fixture");
       commandKey = bound[0]!.key;
       expect(f.store.cancelUpdate(f.original)).toBeNull();
       expect(f.store.read(commandKey)).toEqual({ kind: "current", lease: bound[0] });
@@ -222,7 +211,6 @@ it.skipIf(process.platform === "win32").each(["unrecognized child", "foreign ali
         lease: { owner: "foreign-command-owner" },
       });
     }
-    expect(f.store.current(f.original)).toBe(true);
-    expect(f.store.current(f.retained)).toBe(true);
+    expect([f.original, f.retained].map((lease) => f.store.current(lease))).toEqual([true, true]);
   },
 );

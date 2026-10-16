@@ -60,31 +60,31 @@ beforeEach(() => {
 });
 
 describe("foreground update through the prepared managed helper", () => {
-  it
-    .runIf(process.platform !== "win32")
-    .each([
-      "success",
-      "no-op",
-      "cancel",
-      "retained-lock",
-      "busy-port",
-      "retargeted-config",
-      "stale-owner",
-      "dead-parent",
-      "safe-recovery",
-      "unsafe-recovery",
-      "lost-claim",
-      "lost-terminal-claim",
-      "pending-sibling",
-      "pending-sibling-unsafe",
-      "pending-sibling-foreign-root",
-      "pending-sibling-failed-exit",
-      "pending-sibling-signal",
-      "admission-busy",
-      "finalize-admission-busy",
-      "notice-refused",
-      "notice-refused-after-timeout",
-    ] as const)("joins actual parent, runner IPC, owner, locks and port: %s", async (mode) => {
+  it.runIf(process.platform !== "win32").each([
+    // mode, exit code, activated, untouched listener, staged, ledger status
+    ["success", 0, true, false, true, "running"],
+    ["no-op", 0, false, true, true, "skipped"],
+    ["cancel", 0, false, true, true, "skipped"],
+    ["retained-lock", 1, false, false, true, "failed"],
+    ["busy-port", 1, false, false, true, "failed"],
+    ["retargeted-config", 1, false, false, true, "failed"],
+    ["stale-owner", 1, false, true, false, "failed"],
+    ["dead-parent", 1, false, true, false, "failed"],
+    ["safe-recovery", 1, true, false, true, "failed"],
+    ["unsafe-recovery", 79, true, false, true, "failed"],
+    ["lost-claim", 1, false, true, false, "running"],
+    ["lost-terminal-claim", 1, false, true, true, "running"],
+    ["pending-sibling", 0, true, false, true, "skipped"],
+    ["pending-sibling-unsafe", 0, true, false, true, "skipped"],
+    ["pending-sibling-foreign-root", 0, true, false, true, "skipped"],
+    ["pending-sibling-failed-exit", 1, true, false, true, "failed"],
+    ["pending-sibling-signal", 1, true, false, true, "failed"],
+    ["admission-busy", 0, false, true, false, "skipped"],
+    ["finalize-admission-busy", 1, false, true, false, "skipped"],
+    ["notice-refused", 1, false, false, true, "failed"],
+    ["notice-refused-after-timeout", 1, false, false, true, "failed"],
+  ] as const)("joins actual parent, runner IPC, owner, locks and port: %s", async (...outcome) => {
+    const [mode, helperCode, activated, untouched, staged, run] = outcome;
     const root = await fs.realpath(tempDirs.make("foreground-handoff-"));
     const coordinator = path.join(root, "coordinator");
     await fs.mkdir(coordinator);
@@ -384,70 +384,15 @@ describe("foreground update through the prepared managed helper", () => {
         replacementOwner?: string;
       };
       const log = await fs.readFile(prepared.logPath, "utf8");
-      expect(result.helperSignal, log).toBeNull();
-      expect(result.helperCode, log).toBe(
-        [
-          "success",
-          "no-op",
-          "cancel",
-          "pending-sibling",
-          "pending-sibling-unsafe",
-          "pending-sibling-foreign-root",
-          "admission-busy",
-        ].includes(mode)
-          ? 0
-          : mode === "unsafe-recovery"
-            ? 79
-            : 1,
-      );
-      expect(result.activated, log).toBe(
-        ["success", "safe-recovery", "unsafe-recovery"].includes(mode) ||
-          mode.startsWith("pending-sibling"),
-      );
-      expect(result.notices, log).toBe(
-        [
-          "no-op",
-          "cancel",
-          "stale-owner",
-          "dead-parent",
-          "lost-claim",
-          "lost-terminal-claim",
-          "admission-busy",
-          "finalize-admission-busy",
-        ].includes(mode)
-          ? 0
-          : 1,
-      );
-      expect(result.stillServing, log).toBe(
-        [
-          "no-op",
-          "cancel",
-          "stale-owner",
-          "dead-parent",
-          "lost-claim",
-          "lost-terminal-claim",
-          "admission-busy",
-          "finalize-admission-busy",
-        ].includes(mode),
-      );
-      expect(result.staged, log).toBe(
-        ![
-          "stale-owner",
-          "dead-parent",
-          "lost-claim",
-          "admission-busy",
-          "finalize-admission-busy",
-        ].includes(mode),
-      );
-      expect(result.run, log).toBe(
-        ["success", "lost-claim", "lost-terminal-claim"].includes(mode)
-          ? "running"
-          : ["no-op", "cancel", "admission-busy", "finalize-admission-busy"].includes(mode) ||
-              (mode.startsWith("pending-sibling") &&
-                !["pending-sibling-failed-exit", "pending-sibling-signal"].includes(mode))
-            ? "skipped"
-            : "failed",
-      );
+      expect(result, log).toMatchObject({
+        helperSignal: null,
+        helperCode,
+        activated,
+        notices: untouched ? 0 : 1,
+        stillServing: untouched,
+        staged,
+        run,
+      });
       if (result.notices) {
         expect(result.output, log).toContain(
           `foreground-settled:${["success", "safe-recovery", "pending-sibling"].includes(mode) ? "respawn" : "stopped"}\n`,

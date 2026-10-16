@@ -97,40 +97,28 @@ export type ManagedServiceManagerBoundaryResult = {
   };
 };
 
-type ManagedSystemdFailureCase = readonly [string, ManagedSystemdPostExitState];
-
-type ManagedTestApi = {
-  (name: string, callback: () => Promise<void>): void;
-  each(
-    cases: readonly ManagedSystemdFailureCase[],
-  ): (
-    name: string,
-    callback: (label: string, value: ManagedSystemdPostExitState) => Promise<void>,
-  ) => void;
-};
-
-type ManagedExpectation = {
-  toBeNull(): void;
-  toBeUndefined(): void;
-  toEqual(expected: unknown): void;
-  toHaveLength(expected: number): void;
-  toMatchObject(expected: unknown): void;
-};
-
-type ManagedExpect = {
-  (actual: unknown): ManagedExpectation;
-  arrayContaining(expected: readonly unknown[]): unknown;
-  objectContaining(expected: object): unknown;
-};
-
 export function registerManagedSystemdHandoffConvergenceTests(
   runManagedServiceManagerBoundary: (
     kind: "systemd",
     options?: ManagedServiceManagerBoundaryOptions,
   ) => Promise<ManagedServiceManagerBoundaryResult>,
-  itUnix: ManagedTestApi,
-  expect: ManagedExpect,
+  itUnix: ReturnType<typeof import("vitest").it.runIf>,
+  expect: typeof import("vitest").expect,
 ): void {
+  function expectHandoff(sentinel: unknown, status: string, reason: string, restoreExit?: number) {
+    expect(sentinel).toMatchObject({ payload: { status, stats: { reason } } });
+    if (restoreExit !== undefined) {
+      expect(sentinel).toMatchObject({
+        payload: {
+          stats: {
+            steps: expect.arrayContaining([
+              expect.objectContaining({ name: "service-restore", log: { exitCode: restoreExit } }),
+            ]),
+          },
+        },
+      });
+    }
+  }
   itUnix("waits for the exact systemd stop job to finish after parent exit", async () => {
     const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
       systemdPostExitStates: [
@@ -184,17 +172,7 @@ export function registerManagedSystemdHandoffConvergenceTests(
 
     expect(verbs).toEqual(["show", "stop", "show", "start", "show"]);
     expect(state).toMatchObject({ parked: true, restored: true });
-    expect(sentinel).toMatchObject({
-      payload: {
-        status: "skipped",
-        stats: {
-          reason: "managed-service-handoff-cancelled",
-          steps: expect.arrayContaining([
-            expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
-          ]),
-        },
-      },
-    });
+    expectHandoff(sentinel, "skipped", "managed-service-handoff-cancelled", 0);
   });
 
   itUnix.each([
@@ -240,17 +218,7 @@ export function registerManagedSystemdHandoffConvergenceTests(
 
       expect(state).toMatchObject({ parked: true, stopCompleted: true, postExitShows: 2 });
       expect(commands.filter((command) => command.includes("reset-failed"))).toHaveLength(0);
-      expect(sentinel).toMatchObject({
-        payload: {
-          status: "error",
-          stats: {
-            reason: "managed-service-handoff-restore-failed",
-            steps: expect.arrayContaining([
-              expect.objectContaining({ name: "service-restore", log: { exitCode: 1 } }),
-            ]),
-          },
-        },
-      });
+      expectHandoff(sentinel, "error", "managed-service-handoff-restore-failed", 1);
     },
   );
 
@@ -289,9 +257,7 @@ export function registerManagedSystemdHandoffConvergenceTests(
       expect(state.reset).toBeUndefined();
       expect(state.restored).toBeUndefined();
       expect(state.stopCompleted).toBeUndefined();
-      expect(sentinel).toMatchObject({
-        payload: { status: "error", stats: { reason: "managed-service-handoff-restore-failed" } },
-      });
+      expectHandoff(sentinel, "error", "managed-service-handoff-restore-failed");
     },
   );
 }

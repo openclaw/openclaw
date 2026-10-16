@@ -39,6 +39,15 @@ function write(file: string, bytes: string | Buffer) {
   fs.writeFileSync(file, bytes);
 }
 
+async function rejectsStaging(message: string | RegExp, privateRequire?: () => unknown) {
+  await withMockedPlatform("freebsd", async () => {
+    expect(() => stageManagedHandoffRuntime(destination)).toThrow(message);
+    if (privateRequire) {
+      expect(privateRequire).not.toHaveBeenCalled();
+    }
+  });
+}
+
 function installedProcSafe() {
   const sourceRoot = path.join(root, "install", "node_modules", "@openclaw", "proc-safe");
   const nativeRoot = path.join(root, "install", "node_modules", platformName);
@@ -51,12 +60,11 @@ function installedProcSafe() {
   write(selectedNative, selectedBytes);
   write(path.join(nativeRoot, "package.json"), JSON.stringify({ name: platformName, version }));
 
-  const sourceIdentity = {
+  const identity = () => ({
     readProcessIdentity: vi.fn(() => ({ startTimeSinceBootMicros: 5_200_002 })),
-  };
-  const privateIdentity = {
-    readProcessIdentity: vi.fn(() => ({ startTimeSinceBootMicros: 5_200_002 })),
-  };
+  });
+  const sourceIdentity = identity();
+  const privateIdentity = identity();
   const privateModules = path.join(destination, "runtime", "node_modules");
   const privateEntry = path.join(privateModules, "@openclaw", "proc-safe", "dist", "identity.js");
   const privateNativePath = path.join(privateModules, platformName, "proc-safe-native.node");
@@ -124,55 +132,43 @@ describe("managed handoff native staging", () => {
     });
   });
 
-  it.each([true])(
-    "copies private regular bytes through a temporary-directory alias=%s",
-    async (alias) => {
-      if (alias) {
-        fs.symlinkSync(
-          root,
-          path.join(root, "alias"),
-          process.platform === "win32" ? "junction" : "dir",
-        );
-        destination = path.join(root, "alias", "handoff");
+  it("copies private regular bytes through a temporary-directory alias", async () => {
+    fs.symlinkSync(root, path.join(root, "alias"), supportsPosixFiles ? "dir" : "junction");
+    destination = path.join(root, "alias", "handoff");
+    const fixture = installedProcSafe();
+    await withMockedPlatform("freebsd", async () => {
+      const files = stageManagedHandoffRuntime(destination);
+      const privateModules = path.join(destination, "runtime", "node_modules");
+      expect(files).toEqual([
+        path.join(destination, "runtime", "managed-handoff-runtime.mjs"),
+        ...Object.keys(packageFiles).map((relative) =>
+          path.join(privateModules, "@openclaw", "proc-safe", relative),
+        ),
+        path.join(privateModules, platformName, "package.json"),
+        path.join(privateModules, platformName, "proc-safe-native.node"),
+      ]);
+      expect(fs.readFileSync(files.at(-1)!)).toEqual(fixture.selectedBytes);
+      for (const [relative, bytes] of Object.entries(packageFiles)) {
+        expect(
+          fs.readFileSync(path.join(privateModules, "@openclaw", "proc-safe", relative), "utf8"),
+        ).toBe(bytes);
       }
-      const fixture = installedProcSafe();
-      await withMockedPlatform("freebsd", async () => {
-        const files = stageManagedHandoffRuntime(destination);
-        const privateModules = path.join(destination, "runtime", "node_modules");
-        expect(files).toEqual([
-          path.join(destination, "runtime", "managed-handoff-runtime.mjs"),
-          ...Object.keys(packageFiles).map((relative) =>
-            path.join(privateModules, "@openclaw", "proc-safe", relative),
-          ),
-          path.join(privateModules, platformName, "package.json"),
-          path.join(privateModules, platformName, "proc-safe-native.node"),
-        ]);
-        expect(fs.readFileSync(files.at(-1)!)).toEqual(fixture.selectedBytes);
-        for (const [relative, bytes] of Object.entries(packageFiles)) {
-          expect(
-            fs.readFileSync(path.join(privateModules, "@openclaw", "proc-safe", relative), "utf8"),
-          ).toBe(bytes);
+      for (const file of files) {
+        expect(fs.lstatSync(file).isFile()).toBe(true);
+        if (supportsPosixFiles) {
+          expect(fs.statSync(file).mode & 0o777).toBe(0o600);
         }
-        for (const file of files) {
-          expect(fs.lstatSync(file).isFile()).toBe(true);
-          if (supportsPosixFiles) {
-            expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-          }
-        }
-        expect(fixture.privateIdentity.readProcessIdentity).toHaveBeenCalledExactlyOnceWith(
-          process.pid,
-        );
-      });
-    },
-  );
+      }
+      expect(fixture.privateIdentity.readProcessIdentity).toHaveBeenCalledExactlyOnceWith(
+        process.pid,
+      );
+    });
+  });
 
   it("rejects an addon that was not loaded from the selected package", async () => {
     const fixture = installedProcSafe();
     delete fixture.cache[fixture.selectedNative];
-    await withMockedPlatform("freebsd", async () => {
-      expect(() => stageManagedHandoffRuntime(destination)).toThrow("could not identify");
-      expect(fixture.privateRequire).not.toHaveBeenCalled();
-    });
+    await rejectsStaging("could not identify", fixture.privateRequire);
   });
 
   it.skipIf(!supportsPosixFiles).each(["LICENSE", "dist", "dist/native.js"])(
@@ -183,12 +179,7 @@ describe("managed handoff native staging", () => {
       const moved = path.join(root, "substitute");
       fs.renameSync(original, moved);
       fs.symlinkSync(moved, original);
-      await withMockedPlatform("freebsd", async () => {
-        expect(() => stageManagedHandoffRuntime(destination)).toThrow(
-          /regular package|unexpected package path/u,
-        );
-        expect(fixture.privateRequire).not.toHaveBeenCalled();
-      });
+      await rejectsStaging(/regular package|unexpected package path/u, fixture.privateRequire);
     },
   );
 
@@ -201,18 +192,13 @@ describe("managed handoff native staging", () => {
     fixture.sourceRequire.resolve.mockImplementation((name: string) =>
       name.endsWith("/package.json") ? path.join(fixture.nativeRoot, "package.json") : substitute,
     );
-    await withMockedPlatform("freebsd", async () => {
-      expect(() => stageManagedHandoffRuntime(destination)).toThrow("unexpected package path");
-      expect(fixture.privateRequire).not.toHaveBeenCalled();
-    });
+    await rejectsStaging("unexpected package path", fixture.privateRequire);
   });
 
   it("rejects private loading that reuses the source addon", async () => {
     const fixture = installedProcSafe();
     fixture.privateRequire.mockImplementation(() => fixture.privateIdentity);
-    await withMockedPlatform("freebsd", async () => {
-      expect(() => stageManagedHandoffRuntime(destination)).toThrow("could not identify");
-    });
+    await rejectsStaging("could not identify");
   });
 
   it("refuses a native package version outside the root's exact pin", async () => {
@@ -221,18 +207,13 @@ describe("managed handoff native staging", () => {
       path.join(fixture.nativeRoot, "package.json"),
       JSON.stringify({ name: platformName, version: "0.0.0" }),
     );
-    await withMockedPlatform("freebsd", async () => {
-      expect(() => stageManagedHandoffRuntime(destination)).toThrow("version does not match");
-      expect(fixture.privateRequire).not.toHaveBeenCalled();
-    });
+    await rejectsStaging("version does not match", fixture.privateRequire);
   });
 
   it("requires the private runtime to reproduce the source identity", async () => {
     const fixture = installedProcSafe();
     fixture.privateIdentity.readProcessIdentity.mockReturnValue({ startTimeSinceBootMicros: 0 });
-    await withMockedPlatform("freebsd", async () => {
-      expect(() => stageManagedHandoffRuntime(destination)).toThrow("did not load its private");
-    });
+    await rejectsStaging("did not load its private");
   });
 
   it("keeps the sealed loader from loading an external replacement addon", async () => {
@@ -255,12 +236,7 @@ describe("managed handoff native staging", () => {
       value: "/external-resources",
     });
     try {
-      await withMockedPlatform("freebsd", async () => {
-        expect(() => stageManagedHandoffRuntime(destination)).toThrow(
-          "external FreeBSD native resource path",
-        );
-        expect(createRequireMock).not.toHaveBeenCalled();
-      });
+      await rejectsStaging("external FreeBSD native resource path", createRequireMock);
     } finally {
       if (previous) {
         Object.defineProperty(process, "resourcesPath", previous);
