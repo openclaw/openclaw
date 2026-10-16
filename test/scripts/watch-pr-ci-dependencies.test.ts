@@ -117,14 +117,13 @@ it("checks fallback versions before loading through the watcher child and preser
   const tooling = join(root, "tooling #root");
   const lib = join(checkout, "scripts", "lib");
   mkdirSync(lib, { recursive: true });
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+  };
   for (const directory of [checkout, tooling]) {
-    for (const args of [
-      ["init", "--quiet", directory],
-      ["-C", directory, "remote", "add", "origin", "https://github.com/openclaw/openclaw.git"],
-    ]) {
-      const result = spawnSync("git", args, { encoding: "utf8" });
-      expect(result.status, result.stderr).toBe(0);
-    }
+    git("init", "--quiet", directory);
+    git("-C", directory, "remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
   }
   const manifest = {
     dependencies: { "fixture-pkg": "1.0.0" },
@@ -138,10 +137,10 @@ it("checks fallback versions before loading through the watcher child and preser
     "local-check-runtime.mts",
     "tooling-dependencies.mjs",
     "managed-cleanup-handoff.mts",
+    "../watch-pr-ci.mjs",
   ]) {
     copyFileSync(resolve("scripts/lib", file), join(lib, file));
   }
-  copyFileSync(resolve("scripts/watch-pr-ci.mjs"), join(checkout, "scripts/watch-pr-ci.mjs"));
   writePackage(tooling, "fixture-pkg", "tooling");
   writePackage(root, "fixture-pkg", "stale ancestor", "0.0.0-stale");
   writePackage(tooling, "dev-pkg", "dev");

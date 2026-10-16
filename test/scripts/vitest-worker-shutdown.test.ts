@@ -183,8 +183,7 @@ import path from 'node:path';
 import {syncFixtureBuiltinExports} from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 ${fixtureReceiptClientSource(receipts.endpoint)}
 const root=${JSON.stringify(root)}, input=${JSON.stringify(input)};
-// CI workspaces need not provide native directory notifications. Control-file
-// readiness must remain observable without that optional filesystem facility.
+// Control-file readiness must work without native directory notifications.
 const nativeWatch=fs.watch;
 fs.watch=(directory,...args)=>{
   if(directory===root) throw new Error('Native fixture notifications unavailable');
@@ -223,8 +222,7 @@ cp.spawn=(bin,args,options)=>{
   publish(process.env.OPENCLAW_VITEST_SHARD_NAME==='ci-held'?'held-owner.json':'owner.json',{owner,borrower:child.pid,generation});
   return child;
 };
-// Node can cache process.emit before a preload replaces it. Probe held I/O
-// directly; adding a signal listener could rescue a broken wrapper instead.
+// Probe held I/O; a signal listener could rescue a broken wrapper.
 const waitForRelease=()=>new Promise(resolve=>{
   let idle=false, responsive=false;
   const check=()=>{
@@ -257,8 +255,7 @@ fs.readFile=(filename,...args)=>{
   }
   return readFile(filename,...args);
 };
-// The same delayed deletion blocks synchronous callers but lets async callers
-// process signals. Neither path may finish until the external fixture releases it.
+// Hold both deletion paths; only the async path can still process signals.
 const rm=fsp.rm, rmSync=fs.rmSync;
 fsp.rm=async(filename,...args)=>{
   if(phase==='deletion' && filename===generation) {
@@ -290,8 +287,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
                 "scripts/test-projects-serial.mts",
                 "test/scripts/vitest-worker-shutdown.test.ts",
               ];
-      // Keep the wrappers, IPC and process owners real; only expensive child
-      // executables and one verification read or deletion are controlled by the fixture.
+      // Keep wrappers and IPC real; control only child executables and held I/O.
       const command = workerArtifacts.fixtureLifetime.track(
         runNodeScript(
           args,
@@ -345,8 +341,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
           Promise.race([
             receipts.waitFor(filename, "ready"),
             command.then(() => {
-              // Publication precedes the receipt and command completion, but their
-              // separate transports can deliver command completion first.
+              // Separate transports can deliver completion before its receipt.
               if (!fs.existsSync(filename) || fs.statSync(filename).size === 0) {
                 throw new Error(`Missing shutdown receipt: ${filename}`);
               }
@@ -357,8 +352,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
       let owner: OwnerReceipt | undefined;
       let heldOwner: OwnerReceipt | undefined;
       try {
-        // Child readiness can beat the parent's PID receipts. Join every required
-        // publication before reading them.
+        // Child readiness can beat PID receipts; join every publication before reading.
         const ready = phase === "compilation" ? compiling : admitted;
         await Promise.all(
           [ready, ownerFile, compilerFile, ...(route === "ci-shared" ? [heldOwnerFile] : [])].map(
@@ -375,8 +369,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
         if (phase === "compilation") {
           expect(isProcessAlive(compilerPid)).toBe(true);
           expect(fs.existsSync(path.join(owner.generation, "manifest.json"))).toBe(false);
-          // Only the borrower dies. Its completion must let the invocation cancel
-          // the compiler, rather than waiting for that compiler before disposal.
+          // Borrower death must allow disposal to cancel the unfinished compiler.
           process.kill(owner.borrower, shutdownSignal);
           if (heldOwner) {
             await waitForReceipt(path.join(root, `owner-${owner.owner}.closed`));
@@ -394,8 +387,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
         } else {
           expect(readReceipt(admitted)).toEqual({ owner: owner.owner });
           if (phase === "admission") {
-            // An ordinary borrower failure cannot supply the owner's signal status.
-            // Observe a loop turn after close before interrupting the retained owner.
+            // Distinguish borrower failure from the retained owner's later interruption.
             fs.writeFileSync(borrowerExit, "exit");
             await waitForReceipt(borrowerClosed);
             expect(readReceipt(borrowerClosed)).toMatchObject({
@@ -464,8 +456,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
             if (pid === undefined) {
               continue;
             }
-            // The command joins its process tree; nested wrappers join their
-            // borrowers and compiler before their own close can settle it.
+            // Command completion must have joined every nested borrower and compiler.
             expect(isProcessAlive(pid)).toBe(false);
             expect(
               managedChild.inspectManagedProcessGroup(

@@ -38,6 +38,31 @@ function parseCalls(text: string): string[][] {
 function readCalls(file: string) {
   return parseCalls(readFileSync(file, "utf8"));
 }
+function ghProgram(callsPath: string, body: string) {
+  return `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const callsPath = ${JSON.stringify(callsPath)};
+const calls = fs.readFileSync(callsPath, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
+fs.appendFileSync(callsPath, JSON.stringify(args) + "\\n");
+let value;
+${body}
+console.log(JSON.stringify(value));
+`;
+}
+function contextPage(nodes: RollupCheck[], state = "FAILURE") {
+  return {
+    state,
+    contexts: {
+      totalCount: nodes.length,
+      nodes,
+      pageInfo: { hasNextPage: false, endCursor: null },
+    },
+  };
+}
+function requiredFailure() {
+  return contextPage([{ kind: "StatusContext", context: "new required check", state: "FAILURE" }]);
+}
 function placeholder() {
   const fixture = structuredClone(placeholderFixture);
   const rollup = fixture.graphql.data.repository.pullRequest.statusCheckRollup;
@@ -88,16 +113,13 @@ function replayPlaceholder(
     writeFileSync(payload, JSON.stringify({ ...fixture, ...evidence }));
     writeFileSync(calls, "");
     const result = await runWatcher(
-      `#!/usr/bin/env node
-const fs = require("node:fs");
+      ghProgram(
+        calls,
+        `
 const fixture = JSON.parse(fs.readFileSync(${JSON.stringify(payload)}, "utf8"));
-const args = process.argv.slice(2);
-const calls = fs.readFileSync(${JSON.stringify(calls)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
-fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 const runPath = "repos/openclaw/openclaw/actions/runs/33155056361";
 const scanned = calls.some((call) => call[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/"));
 const currentGraphql = scanned && fixture.afterAliasScan !== undefined ? fixture.afterAliasScan : fixture.graphql;
-let value;
 if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
@@ -165,8 +187,8 @@ else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/")) {
   if (value === undefined) throw new Error("missing direct job response");
 }
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
-console.log(JSON.stringify(value));
 `,
+      ),
       placeholderFixture.run.head_sha,
       evidence.watchTimeout === undefined
         ? []
@@ -201,11 +223,9 @@ function replaySummary({
     const callsPath = join(root, "calls.jsonl");
     writeFileSync(callsPath, "");
     const result = await runWatcher(
-      `#!/usr/bin/env node
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-const calls = fs.readFileSync(${JSON.stringify(callsPath)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
-fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
+      ghProgram(
+        callsPath,
+        `
 const runReads = calls.filter((call) => call[0] === "run" && call[1] === "view").length;
 const identity = {
   workflow_id: 10, event: "pull_request", head_sha: "${sha}",
@@ -216,7 +236,6 @@ const pr = {
   statusCheckRollup: { state: ${JSON.stringify(state)} },
   ...(runReads >= 2 ? ${JSON.stringify(afterRun)} : {}),
 };
-let value;
 if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
@@ -254,8 +273,8 @@ if (args[0] === "browse") {
 } else {
   throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 }
-console.log(JSON.stringify(value));
 `,
+      ),
       sha,
       ["--timeout", "3"],
     );
@@ -281,6 +300,9 @@ function restCheck(id = 1, patch: Record<string, unknown> = {}) {
 function restPage(key: string, rows: unknown[], total_count = rows.length) {
   return { total_count, [key]: rows };
 }
+const checkPages = (...checks: unknown[]) => [restPage("check_runs", checks)];
+const suitePages = (...suites: unknown[]) => [restPage("check_suites", suites)];
+const runPages = (...runs: unknown[]) => [restPage("workflow_runs", runs)];
 function restStatusPage(
   state: string,
   statuses: unknown[],
@@ -338,11 +360,9 @@ function replayRestRollup(
     writeFileSync(callsPath, "");
     writeFileSync(payloadPath, JSON.stringify(fixture));
     const result = await runWatcher(
-      `#!/usr/bin/env node
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-const calls = fs.readFileSync(${JSON.stringify(callsPath)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
-fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
+      ghProgram(
+        callsPath,
+        `
 const original = JSON.parse(fs.readFileSync(${JSON.stringify(payloadPath)}, "utf8"));
 const runReads = calls.filter((call) => call[0] === "run" && call[1] === "view").length;
 const fixture = { ...original, ...(runReads >= 2 ? original.afterRun : {}) };
@@ -350,7 +370,6 @@ const run = { id: 201, workflow_id: 10, check_suite_id: 20_000, event: "pull_req
 const checkPages = fixture.checkPages ?? [{ total_count: 1, check_runs: [${JSON.stringify(restCheck())}] }];
 const page = Number(new URLSearchParams(args[1]?.split("?")[1]).get("page") ?? 1);
 const collected = calls.some((call) => call[1]?.includes("/check-suites?"));
-let value;
 if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
@@ -384,8 +403,8 @@ if (args[0] === "browse") {
   throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 }
 if (value === undefined) throw new Error("missing fixture page");
-console.log(JSON.stringify(value));
 `,
+      ),
       sha,
       ["--timeout", "3"],
     );
@@ -539,11 +558,9 @@ esac
       const callsPath = join(root, "calls.jsonl");
       writeFileSync(callsPath, "");
       const result = await runWatcher(
-        `#!/usr/bin/env node
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
-let value;
+        ghProgram(
+          callsPath,
+          `
 if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
@@ -559,8 +576,8 @@ if (args[0] === "browse") {
 } else {
   throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 }
-console.log(JSON.stringify(value));
 `,
+        ),
         sha,
         ["--completion", "ci-run"],
       );
@@ -669,16 +686,13 @@ console.log(JSON.stringify(value));
         }
         writeFileSync(callsPath, "");
         const result = await runWatcher(
-          `#!/usr/bin/env node
-const fs = require("node:fs");
-const args = process.argv.slice(2);
+          ghProgram(
+            callsPath,
+            `
 if (${inheritedNotifier} && process.env.OPENCLAW_PR_LOCK_NOTIFY_FD !== undefined) throw new Error("unexpected inherited PR notifier");
-const calls = fs.readFileSync(${JSON.stringify(callsPath)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
-fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
 const pullPath = ${JSON.stringify(pullPath)};
 const reads = calls.filter((call) => call.includes(pullPath)).length;
 if (${notifier} && (args[0] === "browse" || args.includes(pullPath))) fs.writeSync(3, args[0] + "\\n");
-let value;
 if (args[0] === "browse") {
   if (args[args.indexOf("--repo") + 1] !== ${JSON.stringify(repo)}) throw new Error("wrong repository selection");
   console.log("https://" + ${JSON.stringify(host)} + "/" + ${JSON.stringify(repo)});
@@ -708,8 +722,8 @@ if (args[0] === "browse") {
 } else {
   throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 }
-console.log(JSON.stringify(value));
 `,
+          ),
           sha,
           ["--repo", repo, "--completion", "ci-run"],
           slowQuota ? { readClock: readClockPath } : slowPr ? "wall" : "poll",
@@ -987,7 +1001,7 @@ console.log(JSON.stringify(value));
     const failedCheck = restCheck(1, { conclusion: "failure" });
     it.concurrent("keeps an unknown completed REST outcome pending", async () => {
       const result = await replayRestRollup({
-        checkPages: [restPage("check_runs", [restCheck(1, { conclusion: "new_outcome" })])],
+        checkPages: checkPages(restCheck(1, { conclusion: "new_outcome" })),
       });
       expectRun(result, 16, "STATUS rollup=pending", "\nGREEN");
     });
@@ -1012,11 +1026,11 @@ console.log(JSON.stringify(value));
       },
       {
         label: "duplicate check identity",
-        checkPages: [restPage("check_runs", [restCheck(), restCheck()])],
+        checkPages: checkPages(restCheck(), restCheck()),
       },
       {
         label: "foreign check head",
-        checkPages: [restPage("check_runs", [restCheck(1, { head_sha: "b".repeat(40) })])],
+        checkPages: checkPages(restCheck(1, { head_sha: "b".repeat(40) })),
       },
       {
         label: "foreign status head",
@@ -1042,24 +1056,24 @@ console.log(JSON.stringify(value));
         { status: "completed", conclusion: "failure" },
       ].map((outcome) => ({
         label: `${outcome.status}/${outcome.conclusion} suite after successful check collection`,
-        suitePages: [restPage("check_suites", [restSuite(20_000, outcome)])],
+        suitePages: suitePages(restSuite(20_000, outcome)),
       })),
       ...[
         { status: "queued", conclusion: null },
         { status: "completed", conclusion: "failure" },
       ].map((outcome) => ({
         label: `new ${outcome.status}/${outcome.conclusion} suite with a missing published check`,
-        suitePages: [restPage("check_suites", [restSuite(), restSuite(30_000, outcome)])],
+        suitePages: suitePages(restSuite(), restSuite(30_000, outcome)),
       })),
       {
         label: "duplicate workflow identity",
-        checkPages: [restPage("check_runs", [failedCheck])],
-        runPages: [restPage("workflow_runs", [workflow, workflow])],
+        checkPages: checkPages(failedCheck),
+        runPages: runPages(workflow, workflow),
       },
       {
         label: "foreign workflow head",
-        checkPages: [restPage("check_runs", [failedCheck])],
-        runPages: [restPage("workflow_runs", [{ ...workflow, head_sha: "b".repeat(40) }])],
+        checkPages: checkPages(failedCheck),
+        runPages: runPages({ ...workflow, head_sha: "b".repeat(40) }),
       },
     ])(
       "rejects $label without accepting partial success",
@@ -1077,16 +1091,14 @@ console.log(JSON.stringify(value));
       "allows a $status empty third-party suite without inventing pending checks",
       async (outcome) => {
         const result = await replayRestRollup({
-          suitePages: [
-            restPage("check_suites", [
-              restSuite(),
-              restSuite(30_000, {
-                app: { id: 34598, slug: "github-pages" },
-                latest_check_runs_count: 0,
-                ...outcome,
-              }),
-            ]),
-          ],
+          suitePages: suitePages(
+            restSuite(),
+            restSuite(30_000, {
+              app: { id: 34598, slug: "github-pages" },
+              latest_check_runs_count: 0,
+              ...outcome,
+            }),
+          ),
         });
         expectRun(result, 0, "\nGREEN");
       },
@@ -1117,16 +1129,14 @@ console.log(JSON.stringify(value));
       ];
       const result = await replayRestRollup({
         runStatuses: active ? ["in_progress"] : undefined,
-        checkPages: [
-          restPage("check_runs", [
-            restCheck(1, { name: "build", conclusion: "failure", check_suite: { id: 10_000 } }),
-            restCheck(2, {
-              name: "build",
-              ...(active ? { status: "in_progress", conclusion: null } : {}),
-            }),
-          ]),
-        ],
-        runPages: [restPage("workflow_runs", runs, runs.length)],
+        checkPages: checkPages(
+          restCheck(1, { name: "build", conclusion: "failure", check_suite: { id: 10_000 } }),
+          restCheck(2, {
+            name: "build",
+            ...(active ? { status: "in_progress", conclusion: null } : {}),
+          }),
+        ),
+        runPages: runPages(...runs),
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
       expect(result.stdout).toContain(
@@ -1254,6 +1264,20 @@ console.log(JSON.stringify(value));
     function timeout(label: string, details: Omit<OwnershipScenario, "label"> = {}) {
       return ownership(label, { ...details, exitCode: 16, output: "TIMEOUT" });
     }
+    function priorPage(
+      label: string,
+      details: Omit<OwnershipScenario, "label"> = {},
+      oldRunCount = 1,
+    ) {
+      return ownership(`${oldRunCount === 1 ? 21 : oldRunCount}-run ${label}`, {
+        olderRunOutsidePage: true,
+        oldRunCount,
+        ...details,
+      });
+    }
+    function metadata(label: string, details: Omit<OwnershipScenario, "label"> = {}) {
+      return priorPage(label, { expectedMetadataReads: 32, ...details }, 33);
+    }
 
     it.each<OwnershipScenario>([
       timeout("queued replacement", { status: "queued", conclusion: null }),
@@ -1271,100 +1295,78 @@ console.log(JSON.stringify(value));
         exitCode: 0,
         output: "GREEN",
       })),
-      green("65-run refreshed SUCCESS", {
-        oldRunCount: 65,
-        olderRunOutsidePage: true,
-        afterMetadataState: "SUCCESS",
-        expectedMetadataReads: 32,
-      }),
-      ownership("65-run SUCCESS with failed attached run", {
-        oldRunCount: 65,
-        olderRunOutsidePage: true,
-        rollupState: "SUCCESS",
-        oldConclusion: "SUCCESS",
-        conclusion: "failure",
-        expectedMetadataReads: 0,
-        output: "FAILING checks=CI workflow (failure)",
-      }),
-      ...[32, 33, 65].map((oldRunCount) => ({
-        label: `${oldRunCount}-run metadata progress`,
-        oldRunCount,
-        olderRunOutsidePage: true,
-        exitCode: 0,
-        output: "GREEN",
-      })),
-      ownership("33-run unknown association", {
-        oldRunCount: 33,
-        olderRunOutsidePage: true,
+      priorPage(
+        "refreshed SUCCESS",
+        {
+          exitCode: 0,
+          output: "GREEN",
+          afterMetadataState: "SUCCESS",
+          expectedMetadataReads: 32,
+        },
+        65,
+      ),
+      priorPage(
+        "SUCCESS with failed attached run",
+        {
+          rollupState: "SUCCESS",
+          oldConclusion: "SUCCESS",
+          conclusion: "failure",
+          expectedMetadataReads: 0,
+          output: "FAILING checks=CI workflow (failure)",
+        },
+        65,
+      ),
+      ...[32, 33, 65].map((count) =>
+        priorPage("metadata progress", { exitCode: 0, output: "GREEN" }, count),
+      ),
+      metadata("unknown association", {
         previousPatch: { pull_requests: [] },
-        expectedMetadataReads: 32,
       }),
-      ownership("33-run foreign association", {
-        oldRunCount: 33,
-        olderRunOutsidePage: true,
+      metadata("foreign association", {
         previousPatch: { pull_requests: [association(43)] },
-        expectedMetadataReads: 32,
       }),
-      ownership("33-run failed attached run", {
-        oldRunCount: 33,
-        olderRunOutsidePage: true,
+      metadata("failed attached run", {
         conclusion: "failure",
-        expectedMetadataReads: 32,
         output: "FAILING checks=CI workflow (failure)",
       }),
-      ownership("33-run moved head", {
-        oldRunCount: 33,
-        olderRunOutsidePage: true,
+      metadata("moved head", {
         afterMetadata: { headRefOid: "c".repeat(40) },
-        expectedMetadataReads: 32,
         exitCode: 11,
         output: "HEAD-MOVED",
       }),
-      ownership("33-run deferred unknown association", {
-        oldRunCount: 33,
-        olderRunOutsidePage: true,
-        lastPreviousPatch: { pull_requests: [] },
-      }),
-      ownership("33-run deferred foreign association", {
-        oldRunCount: 33,
-        olderRunOutsidePage: true,
-        lastPreviousPatch: { pull_requests: [association(43)] },
-      }),
-      ownership("33-run independent failed check", {
-        oldRunCount: 33,
-        olderRunOutsidePage: true,
+      priorPage(
+        "deferred unknown association",
+        {
+          lastPreviousPatch: { pull_requests: [] },
+        },
+        33,
+      ),
+      priorPage(
+        "deferred foreign association",
+        {
+          lastPreviousPatch: { pull_requests: [association(43)] },
+        },
+        33,
+      ),
+      metadata("independent failed check", {
         newCheckName: "new required job",
         newCheckConclusion: "FAILURE",
-        expectedMetadataReads: 32,
         output: "FAILING checks=new required job",
       }),
-      ownership("33-run new failure during metadata", {
-        oldRunCount: 33,
-        olderRunOutsidePage: true,
-        afterMetadata: {
-          statusCheckRollup: {
-            state: "FAILURE",
-            contexts: {
-              totalCount: 1,
-              pageInfo: { hasNextPage: false, endCursor: null },
-              nodes: [{ kind: "StatusContext", context: "new required check", state: "FAILURE" }],
-            },
-          },
-        },
-        expectedMetadataReads: 32,
+      metadata("new failure during metadata", {
+        afterMetadata: { statusCheckRollup: requiredFailure() },
         output: "FAILING checks=new required check",
       }),
-      green("21-run same-PR replacement", { olderRunOutsidePage: true }),
-      green("21-run same-PR cancellation replacement", {
-        olderRunOutsidePage: true,
+      priorPage("same-PR replacement", { exitCode: 0, output: "GREEN" }),
+      priorPage("same-PR cancellation replacement", {
+        exitCode: 0,
+        output: "GREEN",
         oldConclusion: "CANCELLED",
       }),
-      ownership("21-run unknown older association", {
-        olderRunOutsidePage: true,
+      priorPage("unknown older association", {
         previousPatch: { pull_requests: [] },
       }),
-      ownership("21-run foreign older association", {
-        olderRunOutsidePage: true,
+      priorPage("foreign older association", {
         previousPatch: { pull_requests: [association(43)] },
       }),
       ...[
@@ -1389,16 +1391,7 @@ console.log(JSON.stringify(value));
           output: "CONFLICTING-MID-WAIT",
         }),
         ownership("new failing check", {
-          afterMetadata: {
-            statusCheckRollup: {
-              state: "FAILURE",
-              contexts: {
-                totalCount: 1,
-                pageInfo: { hasNextPage: false, endCursor: null },
-                nodes: [{ kind: "StatusContext", context: "new required check", state: "FAILURE" }],
-              },
-            },
-          },
+          afterMetadata: { statusCheckRollup: requiredFailure() },
           output: "FAILING checks=new required check",
         }),
         timeout("slow metadata", { slowMetadata: true }),
@@ -1581,14 +1574,7 @@ console.log(JSON.stringify(value));
           state: "OPEN",
           mergeable: true,
           headRefOid: sha,
-          statusCheckRollup: {
-            state: rollupState,
-            contexts: {
-              totalCount: nodes.length,
-              pageInfo: { hasNextPage: false, endCursor: null },
-              nodes,
-            },
-          },
+          statusCheckRollup: contextPage(nodes, rollupState),
         };
         const listedRuns = olderRunOutsidePage
           ? [run, ...Array.from({ length: 19 }, (_, index) => ({ ...run, id: 200 - index }))]
@@ -1619,17 +1605,14 @@ console.log(JSON.stringify(value));
           const calls = join(root, "calls.jsonl");
           writeFileSync(calls, "");
           const watched = await runWatcher(
-            `#!/usr/bin/env node
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-const calls = fs.readFileSync(${JSON.stringify(calls)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
-fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+            ghProgram(
+              calls,
+              `
 const metadataRead = calls.some((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100");
 const pr = { ...${JSON.stringify(pr)}, ...(metadataRead ? ${JSON.stringify(afterMetadata ?? {})} : {}) };
 if (metadataRead && ${Boolean(afterMetadataState)}) pr.statusCheckRollup.state = ${JSON.stringify(afterMetadataState)};
 const runs = ${JSON.stringify(listedRuns)};
 const previousRuns = ${JSON.stringify(previousRuns)};
-let value;
 if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
@@ -1653,8 +1636,8 @@ else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/runs/")) {
 }
 else if (args[1]?.includes("/actions/runs?event=pull_request_target")) value = { workflow_runs: [{ ...runs[0], event: "pull_request_target", pull_requests: [] }] };
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
-console.log(JSON.stringify(value));
 `,
+            ),
             sha,
             completion ? ["--completion", completion] : oldRunCount > 1 ? ["--timeout", "6"] : [],
             slowMetadata || slowFinalRun || slowWatchPr ? "wall" : "poll",
