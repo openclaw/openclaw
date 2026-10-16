@@ -658,6 +658,15 @@ export function isCodexAppServerLiveThreadClaimed(
   return runtime !== undefined && !runtime.closed && runtime.claimedThreads.has(threadId);
 }
 
+/** Native commands and children can still need an otherwise-idle subscription. */
+export function isCodexAppServerLiveThreadProtected(
+  client: CodexAppServerClient,
+  threadId: string,
+): boolean {
+  const runtime = configuredClients.get(client);
+  return runtime !== undefined && !runtime.closed && runtime.protectedThreads.has(threadId);
+}
+
 export function hasCodexAppServerSiblingThreadWork(
   client: CodexAppServerClient,
   threadId: string,
@@ -755,13 +764,10 @@ export function protectCodexAppServerLiveThread(
   scheduleRetainedThreadEviction(client, runtime);
   let protectedThread = true;
   return () => {
-    if (!protectedThread) {
+    if (!protectedThread || runtime.closed) {
       return;
     }
     protectedThread = false;
-    if (runtime.closed) {
-      return;
-    }
     if (releaseThreadProtection(runtime, threadId)) {
       const retained = runtime.retainedThreads.get(threadId);
       if (retained) {
