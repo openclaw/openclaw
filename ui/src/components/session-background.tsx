@@ -7,11 +7,12 @@ import { subscribeBrowserAuthRestored } from "../app/browser-http.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { resolveProfileAppearancePrefs } from "../app/server-prefs-profile.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "../styles/session-background.css";
 import { backgroundPaletteKey, readBackgroundOpacityLimit } from "./session-background-contrast.ts";
 import { backgroundImageReadIdentity, readBackgroundImage } from "./session-background-image.ts";
-import { BackgroundFadeLayout } from "./session-background-layout.ts";
+import { createBackgroundFadeLayout } from "./session-background-layout.ts";
 
 export type SessionBackgroundSurface = "new-session" | "session" | "preview";
 type Props = {
@@ -50,10 +51,11 @@ export const SessionBackground = defineSolidBridge<Props>(
   (props, host) => {
     const inheritedContext = useOptionalApplication();
     const context = () => props.context ?? inheritedContext;
-    const fadeLayout = new BackgroundFadeLayout(host);
+    const fadeLayout = createBackgroundFadeLayout(host);
     const [revision, setRevision] = createSignal(0);
     const notify = () => setRevision((value) => value + 1);
     const [image, setImage] = createSignal<string>();
+    let imageElement: HTMLImageElement | undefined;
     const accessibility =
       typeof matchMedia === "function"
         ? matchMedia(
@@ -87,6 +89,7 @@ export const SessionBackground = defineSolidBridge<Props>(
         ? backgroundImageReadIdentity(context()!, source.assetId)
         : null;
     };
+    // Keep live-prop snapshots outside tracking, including during effect apply.
     const syncSurface = () =>
       untrack(() => {
         const surface =
@@ -108,7 +111,7 @@ export const SessionBackground = defineSolidBridge<Props>(
       setImage(undefined);
       if (prior?.url) {
         // Clear private pixels in the owner notification, before deferred DOM work.
-        host.querySelector("img")?.removeAttribute("src");
+        imageElement?.removeAttribute("src");
         host.removeAttribute("data-painted");
         syncSurface();
         URL.revokeObjectURL(prior.url);
@@ -155,12 +158,12 @@ export const SessionBackground = defineSolidBridge<Props>(
       releaseImage();
       notify();
     };
-    accessibility?.addEventListener("change", accessibilityChanged);
+    const stopAccessibility =
+      accessibility && listen(accessibility, "change", accessibilityChanged);
     onCleanup(() => {
       observer.disconnect();
-      accessibility?.removeEventListener("change", accessibilityChanged);
+      stopAccessibility?.();
       releaseImage();
-      fadeLayout.disconnect();
       surfaceElement?.removeAttribute("data-background-custom");
       surfaceElement?.removeAttribute("data-background-painted");
     });
@@ -283,6 +286,7 @@ export const SessionBackground = defineSolidBridge<Props>(
             />
           ) : image() ? (
             <img
+              ref={(element) => (imageElement = element)}
               class="session-background__image"
               style={{ opacity: String(view().opacity) }}
               src={image()}

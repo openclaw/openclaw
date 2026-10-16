@@ -31,6 +31,21 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
+type Calls = Array<{ method: string; params: unknown }>;
+
+function progressText(calls: Calls) {
+  return calls
+    .filter((call) => call.method === "node.invoke.progress")
+    .map((call) => (call.params as { chunk: string }).chunk)
+    .join("");
+}
+
+function decode(params: Record<string, unknown>) {
+  return decodeClaudeCliNodeRunParams(
+    JSON.stringify({ idleTimeoutMs: 1_000, timeoutMs: 2_000, ...params }),
+  );
+}
+
 function frame(params: unknown): NodeInvokeRequestPayload {
   return {
     id: "invoke-1",
@@ -40,10 +55,7 @@ function frame(params: unknown): NodeInvokeRequestPayload {
   };
 }
 
-function client(
-  calls: Array<{ method: string; params: unknown }>,
-  onProgress?: () => void,
-): NodeHostClient {
+function client(calls: Calls, onProgress?: () => void): NodeHostClient {
   return {
     async request<T>(method: string, params?: unknown): Promise<T> {
       calls.push({ method, params });
@@ -105,7 +117,7 @@ describe("Claude CLI node command", () => {
       );
       const cwd = path.dirname(executable);
       const marker = path.join(cwd, "spawned.txt");
-      const calls: Array<{ method: string; params: unknown }> = [];
+      const calls: Calls = [];
       let staged = 0;
       let stagedPrompt: string | undefined;
       const writeFile = fs.writeFile.bind(fs);
@@ -149,10 +161,7 @@ describe("Claude CLI node command", () => {
       const reply = calls.find((call) => call.method === "node.invoke.result")?.params as
         | { ok?: boolean; error?: { code?: string; message?: string } }
         | undefined;
-      const progress = calls
-        .filter((call) => call.method === "node.invoke.progress")
-        .map((call) => (call.params as { chunk: string }).chunk)
-        .join("");
+      const progress = progressText(calls);
       expect(staged).toBe(1);
       expect(existsSync(marker)).toBe(!revoke);
       expect(reply?.ok).toBe(!revoke);
@@ -181,44 +190,36 @@ describe("Claude CLI node command", () => {
     { argv: ["--permission-mode", "bypassPermissions"], error: "not allowed" },
     { argv: ["--permission-mode=bypassPermissions"], error: "not allowed" },
   ])("rejects unsafe argv $argv", async ({ argv, error }) => {
-    await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({ argv, idleTimeoutMs: 1_000, timeoutMs: 2_000 }),
-      ),
-    ).rejects.toThrow(error);
+    await expect(decode({ argv })).rejects.toThrow(error);
   });
 
   it("accepts bounded Claude resume/fork args and a separate system prompt", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-cwd-"));
     tempDirs.push(cwd);
     await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({
-          argv: [
-            "-p",
-            "--output-format=stream-json",
-            "--permission-mode=plan",
-            "--resume",
-            "session-1",
-            "--fork-session",
-          ],
-          stdin: "hello",
-          systemPrompt: "private prompt",
-          cwd,
-          env: {
-            NO_COLOR: "1",
-            CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
-            CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
-          },
-          clearEnv: [
-            "ANTHROPIC_API_KEY",
-            "CLAUDE_CODE_DISABLE_1M_CONTEXT",
-            "CLAUDE_CODE_OAUTH_TOKEN",
-          ],
-          idleTimeoutMs: 1_000,
-          timeoutMs: 2_000,
-        }),
-      ),
+      decode({
+        argv: [
+          "-p",
+          "--output-format=stream-json",
+          "--permission-mode=plan",
+          "--resume",
+          "session-1",
+          "--fork-session",
+        ],
+        stdin: "hello",
+        systemPrompt: "private prompt",
+        cwd,
+        env: {
+          NO_COLOR: "1",
+          CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
+          CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+        },
+        clearEnv: [
+          "ANTHROPIC_API_KEY",
+          "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+          "CLAUDE_CODE_OAUTH_TOKEN",
+        ],
+      }),
     ).resolves.toMatchObject({
       cwd,
       stdin: "hello",
@@ -234,62 +235,42 @@ describe("Claude CLI node command", () => {
 
   it("rejects missing cwd and non-allowlisted environment", async () => {
     await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({
-          argv: ["-p"],
-          cwd: "/definitely/missing/openclaw-node-cwd",
-          idleTimeoutMs: 1_000,
-          timeoutMs: 2_000,
-        }),
-      ),
+      decode({
+        argv: ["-p"],
+        cwd: "/definitely/missing/openclaw-node-cwd",
+      }),
     ).rejects.toThrow("cwd must be an existing directory");
     await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({
-          argv: ["-p"],
-          env: { [["OPENCLAW", "GATEWAY", "TOKEN"].join("_")]: "" },
-          idleTimeoutMs: 1_000,
-          timeoutMs: 2_000,
-        }),
-      ),
+      decode({
+        argv: ["-p"],
+        env: { [["OPENCLAW", "GATEWAY", "TOKEN"].join("_")]: "" },
+      }),
     ).rejects.toThrow("environment key is not allowed");
     await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({
-          argv: ["-p"],
-          clearEnv: [["OPENCLAW", "GATEWAY", "TOKEN"].join("_")],
-          idleTimeoutMs: 1_000,
-          timeoutMs: 2_000,
-        }),
-      ),
+      decode({
+        argv: ["-p"],
+        clearEnv: [["OPENCLAW", "GATEWAY", "TOKEN"].join("_")],
+      }),
     ).rejects.toThrow("clearEnv key is not allowed");
     await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({
-          argv: ["-p"],
-          env: { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1" },
-          idleTimeoutMs: 1_000,
-          timeoutMs: 2_000,
-        }),
-      ),
+      decode({
+        argv: ["-p"],
+        env: { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1" },
+      }),
     ).rejects.toThrow("environment key is not allowed");
     await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({
-          argv: ["-p"],
-          env: {
-            ANTHROPIC_API_KEY: "selected-api-key",
-            CLAUDE_CODE_OAUTH_TOKEN: "selected-oauth-token",
-          },
-          idleTimeoutMs: 1_000,
-          timeoutMs: 2_000,
-        }),
-      ),
+      decode({
+        argv: ["-p"],
+        env: {
+          ANTHROPIC_API_KEY: "selected-api-key",
+          CLAUDE_CODE_OAUTH_TOKEN: "selected-oauth-token",
+        },
+      }),
     ).rejects.toThrow("exactly one Claude credential");
   });
 
   it("requires binary availability before consulting exec approval policy", async () => {
-    const calls: Array<{ method: string; params: unknown }> = [];
+    const calls: Calls = [];
     const handleSystemRun = vi.fn();
     await handleInvoke(
       frame({ argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 2_000 }),
@@ -322,7 +303,7 @@ describe("Claude CLI node command", () => {
     async ({ config, security, ask }) => {
       setRuntimeConfigSnapshot(config);
       const { executable } = await nativeCliFixture("process.exit(0);");
-      const calls: Array<{ method: string; params: unknown }> = [];
+      const calls: Calls = [];
       const handleSystemRun = vi.fn(
         async (options: {
           params: { command: string[] };
@@ -388,7 +369,7 @@ process.stdout.write(JSON.stringify({
   scrubPresent: Object.hasOwn(process.env, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
   gitInstructionsDisabled: process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS,
 }) + "\\n");`);
-      const calls: Array<{ method: string; params: unknown }> = [];
+      const calls: Calls = [];
       let runResult: RunResult | undefined;
       const handleSystemRun = vi.fn(
         async (options: {
@@ -442,10 +423,7 @@ process.stdout.write(JSON.stringify({
         timedOut: false,
         noOutputTimedOut: false,
       });
-      const progress = calls
-        .filter((call) => call.method === "node.invoke.progress")
-        .map((call) => (call.params as { chunk: string }).chunk)
-        .join("");
+      const progress = progressText(calls);
       expect(JSON.parse(progress)).toMatchObject({
         result: value.trim() || "native-login",
         descriptor: value.trim() ? "3" : null,
@@ -741,7 +719,7 @@ const child = spawn(process.execPath, ["--input-type=module", "-e",
 child.unref();
 process.stdout.write(JSON.stringify({ type: "result", result: prompt }) + "\\n");`);
         await withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, async () => {
-          const calls: Array<{ method: string; params: unknown }> = [];
+          const calls: Calls = [];
           const request = {
             argv: ["-p"],
             systemPrompt: "descendant-owned prompt",
@@ -781,10 +759,7 @@ process.stdout.write(JSON.stringify({ type: "result", result: prompt }) + "\\n")
               timedOut: false,
               noOutputTimedOut: false,
             });
-            const output = calls
-              .filter((call) => call.method === "node.invoke.progress")
-              .map((call) => (call.params as { chunk: string }).chunk)
-              .join("");
+            const output = progressText(calls);
             const promptPath = (JSON.parse(output) as { result: string }).result;
             promptDir = path.dirname(promptPath);
 
@@ -829,17 +804,14 @@ process.stdout.write(Buffer.concat([
   Buffer.alloc(199_997, 120), Buffer.from([0xe2, 0x82]), Buffer.from("A\\n")
 ]), writeChunk);`,
     );
-    const calls: Array<{ method: string; params: unknown }> = [];
+    const calls: Calls = [];
     const request = { argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 5_000 };
     const result = await runCommand(executable, request, { client: client(calls) });
     const progressBytes = calls
       .filter((call) => call.method === "node.invoke.progress")
       .reduce((sum, call) => sum + Buffer.byteLength((call.params as { chunk: string }).chunk), 0);
 
-    const progress = calls
-      .filter((call) => call.method === "node.invoke.progress")
-      .map((call) => (call.params as { chunk: string }).chunk)
-      .join("");
+    const progress = progressText(calls);
     expect(progress.startsWith(`${"x".repeat(199_997)}�A`)).toBe(true);
     // OUTPUT_CAP_BYTES + TERMINAL_EVENT_MAX_BYTES from invoke-agent-cli-claude.ts.
     expect(progressBytes).toBeLessThanOrEqual(200_000 + 1024 * 1024);
@@ -937,7 +909,7 @@ process.stdout.write(Buffer.concat([
     );
     const controller = new AbortController();
     const request = { argv: ["-p"], idleTimeoutMs: 5_000, timeoutMs: 10_000 };
-    const calls: Array<{ method: string; params: unknown }> = [];
+    const calls: Calls = [];
     let resolveProgress!: () => void;
     const progressObserved = new Promise<void>((resolve) => {
       resolveProgress = resolve;

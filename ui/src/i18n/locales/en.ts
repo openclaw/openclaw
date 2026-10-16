@@ -297,7 +297,8 @@ export const en: TranslationMap & {
   sessionProgressCard: {
     title: "Progress",
     composerTitle: "Task progress",
-    shortCount: "{completed} of {total}",
+    stepCount: "Step {current} of {total}",
+    hide: "Hide this card",
     noteLabel: "Progress note",
     dismiss: "Dismiss progress card",
     clearSaved: "Clear saved progress for everyone",

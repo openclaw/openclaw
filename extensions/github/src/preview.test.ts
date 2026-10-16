@@ -2,10 +2,10 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ControlUiGitHubError, formatControlUiGitHubPreviewError } from "./github-api.js";
+import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
 import {
   loadControlUiGitHubPreview as loadPluginPreview,
   parseControlUiGitHubPreviewTarget,
-  type ControlUiGitHubPreviewIdentity,
 } from "./preview.js";
 import {
   githubJson,

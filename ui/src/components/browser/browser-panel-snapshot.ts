@@ -11,8 +11,8 @@ import {
 } from "./browser-client.ts";
 import type { BrowserPanelNative } from "./browser-panel-native-owner.ts";
 import type {
-  BrowserPanelControllerHost,
-  BrowserPanelOperationOwnership,
+  BrowserPanelHost,
+  BrowserPanelOperations,
   BrowserPanelSnapshotOutcome,
 } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
@@ -31,7 +31,7 @@ type BrowserPanelSnapshotState = {
 };
 
 interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
-  readonly host: Pick<BrowserPanelControllerHost, "resourceBasePath" | "authToken" | "fixedTab">;
+  readonly host: Pick<BrowserPanelHost, "resourceBasePath" | "authToken" | "fixedTab">;
   readonly native: Pick<BrowserPanelNative, "activeTab" | "mergeRemoteTabs">;
   readonly stream: Pick<
     BrowserPanelStream,
@@ -41,7 +41,7 @@ interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
   readonly pendingInput: Pick<BrowserPanelPendingInput, "scheduleRefresh">;
   readonly mode: "interact" | "annotate" | "inspect";
   readonly operations: Pick<
-    BrowserPanelOperationOwnership,
+    BrowserPanelOperations,
     | "epoch"
     | "hasPendingCapture"
     | "captureClient"

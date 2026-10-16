@@ -1,6 +1,6 @@
 import type { NativeBrowserTab } from "../../app/native-browser-bridge.ts";
 import { resizeBrowserViewport, type BrowserRequestClient } from "./browser-client.ts";
-import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
+import type { BrowserPanelOperations } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
 
 interface BrowserPanelViewportHost {
@@ -9,7 +9,7 @@ interface BrowserPanelViewportHost {
   readonly activeTargetId: string | null;
   readonly canAutoResizeViewport: boolean;
   readonly view: BrowserPanelView | null;
-  readonly operations: Pick<BrowserPanelOperationOwnership, "captureClient">;
+  readonly operations: Pick<BrowserPanelOperations, "captureClient">;
   runAction(action: (client: BrowserRequestClient) => Promise<void>): Promise<boolean>;
 }
 

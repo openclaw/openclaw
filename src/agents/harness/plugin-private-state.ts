@@ -21,6 +21,7 @@ export function withoutPluginHarnessPrivateState(
     trajectoryRecorder: _trajectoryRecorder,
     inputAttachmentMedia: _inputAttachmentMedia,
     supportsTurnScopedToolRestrictions: _supportsTurnScopedToolRestrictions,
+    prepareContinuationRetryCount: _prepareContinuationRetryCount,
     __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
     ...pluginParams
   } = params;

@@ -14,7 +14,6 @@ import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
   readLegacyCronStorePath,
-  rethrowLegacyCronStoreError,
   type LegacyCronRepairState,
 } from "./legacy-repair.js";
 import {
@@ -111,7 +110,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   try {
     state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
   } catch (err) {
-    rethrowLegacyCronStoreError(err);
+    rethrowSqliteSchemaVersionError(err);
     const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     return [
       legacyCronStoreFinding({
@@ -249,7 +248,7 @@ export async function maybeRepairLegacyCronStore(params: {
   try {
     state = await loadLegacyCronRepairState({ cfg: params.cfg });
   } catch (err) {
-    rethrowLegacyCronStoreError(err);
+    rethrowSqliteSchemaVersionError(err);
     const reason = err instanceof Error ? err.message : String(err);
     const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     note(
