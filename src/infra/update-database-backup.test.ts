@@ -81,10 +81,20 @@ async function fixture(externalAgents = false) {
 }
 
 it.each(["legacy", "current"] as const)(
-  "captures the %s parent's database inventory",
+  "captures the %s parent's database inventory including retained custom state",
   async (dialect) => {
     const f = await fixture();
-    const inspectionPlan = structuredClone(f.inspectionPlan);
+    const customRoot = path.join(f.root, "custom-calls");
+    const custom = path.join(customRoot, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(custom), { recursive: true });
+    await fs.copyFile(f.shared, custom);
+    const input = {
+      ...f.input,
+      config: {
+        plugins: { enabled: false, entries: { "voice-call": { config: { store: customRoot } } } },
+      },
+    };
+    const inspectionPlan = await discoverUpdateStateSchemaInspectionInProcess(input);
     // Released drivers parse these owners before invoking the candidate's capture code.
     const releasedOwner = z.discriminatedUnion("role", [
       z.object({ role: z.literal("global") }),
@@ -100,9 +110,9 @@ it.each(["legacy", "current"] as const)(
       }
     }
     const before = await fs.readFile(f.shared);
-    const backup = await createUpdateDatabaseBackupInProcess({ ...f.input, inspectionPlan });
+    const backup = await createUpdateDatabaseBackupInProcess({ ...input, inspectionPlan });
     expect(backup.sourcePaths).toEqual(
-      f.inspectionPlan.files.flatMap(([, database]) => database.spellings).toSorted(),
+      inspectionPlan.files.flatMap(([, database]) => database.spellings).toSorted(),
     );
     expect(backup.databaseOwners).toEqual(
       dialect === "legacy"
@@ -116,7 +126,9 @@ it.each(["legacy", "current"] as const)(
             },
           ].toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
     );
-    expect(backup.databases).toHaveLength(1);
+    expect(backup.databases.map((entry) => entry.path).toSorted()).toEqual(
+      [custom, f.shared].toSorted(),
+    );
     const published = await fs.readFile(backup.databases[0]!.snapshotPath);
     expect(backup.databases[0]).toMatchObject({
       sha256: createHash("sha256").update(published).digest("hex"),
@@ -372,12 +384,18 @@ async function originalCaptureFixture(externalAgents = false) {
 
 it("seals equivalent original bytes under isolated and maintenance-owned capture", async () => {
   const f = await originalCaptureFixture(true);
+  const retainedState = path.join(f.stateDir, "voice-calls", "state", "openclaw.sqlite");
+  await fs.mkdir(path.dirname(retainedState), { recursive: true });
+  await fs.copyFile(f.pluginDatabase, retainedState);
   const externalBytes = await Promise.all(f.external.map((source) => fs.readFile(source)));
   const result = await f.captureOriginal("original");
   const raw = await fs.readFile(result.ref.manifestPath, "utf8");
   const manifest = parseUpdateRecoveryBackupManifest(raw);
   expect(createHash("sha256").update(raw).digest("hex")).toBe(result.ref.manifestSha256);
   expect(manifest).toMatchObject({ schemaVersion: 2, generation: { kind: "baseline" } });
+  expect(manifest.databases?.filter((database) => database.role === "global")).toEqual([
+    { path: f.shared, role: "global" },
+  ]);
   const entries = new Map(manifest.entries.map((entry) => [entry.sourcePath, entry]));
   const payload = (source: string) => {
     const entry = entries.get(source);
@@ -388,7 +406,7 @@ it("seals equivalent original bytes under isolated and maintenance-owned capture
     expect(await fs.readFile(payload(source))).toEqual(bytes);
     expect(await fs.readFile(source)).toEqual(bytes);
   }
-  for (const source of [f.shared, f.pluginDatabase, ...f.external]) {
+  for (const source of [f.shared, retainedState, f.pluginDatabase, ...f.external]) {
     expect(entries.get(source)).toMatchObject({ kind: "file", sqlite: true });
     using snapshot = new DatabaseSync(payload(source), { readOnly: true });
     expect(snapshot.prepare("SELECT rowid,value FROM payload").all()).toEqual([

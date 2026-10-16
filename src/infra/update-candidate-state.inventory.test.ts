@@ -36,6 +36,11 @@ describe("snapshot inventory", () => {
     const root = dirs.make("candidate-shared-roots-");
     const stateDir = path.join(root, "selected");
     const external = path.join(root, "external");
+    for (const parent of [path.join(stateDir, "voice-calls"), external]) {
+      const file = path.join(parent, "state", "openclaw.sqlite");
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, "");
+    }
     const discovered = await collectStateDatabasePaths(
       {
         stateDir,
@@ -52,15 +57,15 @@ describe("snapshot inventory", () => {
       },
       { includeUnconfiguredAgents: false },
     );
-    for (const parent of [
-      stateDir,
-      path.join(stateDir, "voice-calls"),
-      external,
-      path.join(root, "retained-calls"),
-    ]) {
+    const shared = path.join(stateDir, "state", "openclaw.sqlite");
+    expect(discovered.get(shared)).toEqual({ spellings: [shared], owners: [{ role: "global" }] });
+    for (const parent of [path.join(stateDir, "voice-calls"), external]) {
       const file = path.join(parent, "state", "openclaw.sqlite");
-      expect(discovered.get(file)).toEqual({ spellings: [file], owners: [{ role: "global" }] });
+      expect(discovered.get(file)).toEqual({ spellings: [file] });
     }
+    expect(discovered.has(path.join(root, "retained-calls", "state", "openclaw.sqlite"))).toBe(
+      false,
+    );
   });
 
   it.each([

@@ -11,6 +11,7 @@ import {
 } from "../../scripts/generate-postgres-schema.mts";
 import { catalog as readCatalog, portTables } from "../../scripts/lib/postgres-schema-catalog.mts";
 import { listOpenClawStateFeatureSchemas } from "../../src/state/openclaw-state-feature-schema.js";
+import type statePortMetadata from "../../src/state/postgres-schema.generated/state-port.json";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -38,7 +39,7 @@ function verifiedFixture(sql: string, verify: (db: DatabaseSync) => void) {
 describe("PostgreSQL schema generation", () => {
   it("generates state port metadata from every canonical table and optional fragment", async () => {
     const { files, report } = await generatePostgresSchemas(root);
-    const metadata = JSON.parse(files["state-port.json"]!);
+    const metadata: typeof statePortMetadata = JSON.parse(files["state-port.json"]!);
     const schemas = [metadata, ...metadata.fragments];
     expect(
       schemas.flatMap((schema) => schema.tables.map((table) => table.name)).toSorted(),

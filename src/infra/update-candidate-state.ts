@@ -187,7 +187,11 @@ export async function collectStateDatabasePaths(
   };
   queue(shared, { role: "global" });
   for (const file of resolveStatePortRoots({ ...input, env: input.env ?? process.env })) {
-    queue(file, { role: "global" });
+    // Only the selected installation owns the published global recovery identity.
+    // Retained custom roots use the existing exact, opaque capture contract.
+    if (file !== shared && (await updateStateDatabaseExists(file))) {
+      queue(file);
+    }
   }
   // Published owners describe shared/agent schemas; local stores retain exact opaque contents.
   queue(resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: stateRoot }));
