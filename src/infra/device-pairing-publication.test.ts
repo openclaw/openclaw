@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
@@ -312,17 +312,18 @@ test.each(["lookup", "pending read", "token revocation"] as const)(
   },
 );
 
-test.each([
+test.for([
   "token verification",
   "connection record",
   "presence update",
   "metadata update",
   "token revocation",
-] as const)("keeps other node authority readable during one device's %s", async (change) => {
+] as const)("keeps other node authority during %s", async (change, { signal }) => {
   const node = expectDefined(await getPairedDevice("node", baseDir), "paired node");
   const other = {
     ...structuredClone(node),
     deviceId: "other",
+    approvedScopes: [],
     publicKey: "synthetic-other-key",
     tokens: {
       node: { token: "synthetic-other-token", role: "node", scopes: [], createdAtMs: 1 },
@@ -389,8 +390,8 @@ test.each([
   const mutation = mutate();
   try {
     if (change === "token verification") {
-      await mutation;
-      await entered.promise;
+      expect(await mutation).toEqual({ ok: true });
+      await withinTest(entered.promise, signal);
     } else {
       await awaitGateBeforeSettlement(entered.promise, mutation, "pairing mutation was not held");
     }

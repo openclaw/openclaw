@@ -338,6 +338,7 @@ test("reconnect receipts ignore pending rows and leave sibling pairing changes t
     });
     expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(currentBinding);
   } finally {
+    await withDevicePairingLock(async () => {});
     database.db
       .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
       .run("[]", "refreshed");
