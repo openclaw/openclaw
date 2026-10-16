@@ -63,6 +63,8 @@ describe("session transcript inbound context", () => {
         timestamp: 2_000,
       },
     ]);
+    // Channel replay is the one reader that opts into the replay byte budget.
+    expect(readRecent.mock.calls[0]?.[0]).toMatchObject({ boundReplayBytes: true });
   });
 
   it("renders the configured native window without restoring stale transcript content", async () => {

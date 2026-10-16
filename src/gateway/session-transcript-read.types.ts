@@ -7,7 +7,7 @@ import type {
 } from "../config/sessions/session-accessor.types.js";
 import type {
   ReadRecentSessionConversationTextOptions,
-  SessionRecentConversationText,
+  SessionRecentConversationTextRow,
 } from "../config/sessions/transcript-recent-text.js";
 import type {
   TranscriptAnchorPageOptions,
@@ -192,7 +192,7 @@ export type SessionTranscriptProjectionSelection =
   | { kind: "lookup"; messageId: string };
 
 export type SessionTranscriptProjectionSelectionResults = {
-  "recent-text": SessionRecentConversationText[];
+  "recent-text": SessionRecentConversationTextRow[];
   delta: SessionTranscriptDisplayDeltaResult;
   count: number;
   recent: ReadRecentSessionMessagesResult;

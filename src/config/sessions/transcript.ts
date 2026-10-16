@@ -69,6 +69,7 @@ import {
   type SessionTranscriptDeliveryMirror,
   type SubagentCompletionDirectDeliveryMirror,
 } from "./transcript-mirror.js";
+import { groundRecentConversationRows } from "./transcript-recent-grounding.js";
 import type {
   ReadRecentSessionConversationTextOptions,
   SessionRecentConversationText,
@@ -119,7 +120,15 @@ export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appen
 
 export type { SessionRecentConversationText } from "./transcript-recent-text.js";
 
-type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
+type ReadRecentGroundedConversationTextOptions = ReadRecentSessionConversationTextOptions & {
+  /**
+   * Channel replay only: clamp each entry to 32 KiB and the whole read to 128 KiB. Provenance
+   * readers such as session-upstream-monitor.ts compare complete text and leave this unset.
+   */
+  boundReplayBytes?: boolean;
+};
+
+type ReadRecentSessionConversationTextParams = ReadRecentGroundedConversationTextOptions & {
   agentId: string;
   sessionKey: string;
   storePath?: string;
@@ -155,17 +164,26 @@ function parseAssistantTranscriptText(line: string): LatestAssistantTranscriptTe
 async function readRecentUserAssistantTextFromSqliteTranscript(
   scope: SessionTranscriptReadScope,
   assertCurrent: () => void,
-  options: ReadRecentSessionConversationTextOptions = {},
+  options: ReadRecentGroundedConversationTextOptions = {},
 ): Promise<SessionRecentConversationText[]> {
   try {
     const { readRecentSessionConversationTextAsync } =
       await import("../../gateway/session-transcript-readers.js");
     const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
-    return await readRestoredSessionTranscript(
+    // Rows and their same-turn media provenance come from one transcript snapshot; a cold-storage
+    // restore retries the read, and grounding runs after it on what was selected.
+    const rows = await readRestoredSessionTranscript(
       scope,
-      () => readRecentSessionConversationTextAsync(scope, options),
+      () =>
+        readRecentSessionConversationTextAsync(scope, {
+          ...options,
+          includeTurnMediaReferences: true,
+        }),
       { assertCurrent },
     );
+    return await groundRecentConversationRows(rows, {
+      boundReplayBytes: options.boundReplayBytes === true,
+    });
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
       return [];

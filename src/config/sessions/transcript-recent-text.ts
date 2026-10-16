@@ -18,6 +18,7 @@ import {
   normalizeTranscriptTimestamp,
   readPreferredUpstreamUserText,
 } from "./transcript-recent-window.js";
+import { createTurnMediaReferenceCollector } from "./transcript-turn-media-references.js";
 
 export type SessionRecentConversationText = {
   id?: string;
@@ -34,6 +35,16 @@ export type ReadRecentSessionConversationTextOptions = {
   minTimestampMs?: number;
   role?: "user" | "assistant";
   preferUpstreamUserText?: boolean;
+  /**
+   * Replay grounding only: give each assistant entry the managed media that trusted tool results
+   * earlier in its own turn carried, read from the same snapshot as the entry.
+   */
+  includeTurnMediaReferences?: boolean;
+};
+
+/** A recent entry; assistant entries carry `turnMediaReferences` when the read asked for them. */
+export type SessionRecentConversationTextRow = SessionRecentConversationText & {
+  turnMediaReferences?: string[];
 };
 
 function extractRecentConversationText(
@@ -97,24 +108,35 @@ export function readRecentTranscriptConversationText(
     options: SessionTranscriptBoundedMessageTailOptions,
   ) => SessionTranscriptBoundedMessageTailPage,
   options: ReadRecentSessionConversationTextOptions = {},
-): SessionRecentConversationText[] {
+): SessionRecentConversationTextRow[] {
   const limit = normalizeRecentTranscriptLimit(options.limit);
   const pageSize = 250;
-  const recent: SessionRecentConversationText[] = [];
-  for (let offset = 0; recent.length < limit; offset += pageSize) {
+  const recent: SessionRecentConversationTextRow[] = [];
+  // Turn references read on past the limit until the oldest selected reply reaches its turn start.
+  const turns = options.includeTurnMediaReferences
+    ? createTurnMediaReferenceCollector()
+    : undefined;
+  const reading = () => recent.length < limit || turns?.collecting() === true;
+  for (let offset = 0; reading(); offset += pageSize) {
     const page = readPage({ maxMessages: pageSize, maxBytes: Number.MAX_SAFE_INTEGER, offset });
     for (const event of page.events.toReversed()) {
-      const entry = extractRecentConversationText(event.event, options);
+      turns?.observe(event.event);
+      const entry: SessionRecentConversationTextRow | undefined =
+        recent.length < limit ? extractRecentConversationText(event.event, options) : undefined;
       if (entry && isWithinTranscriptWindow(entry.timestamp, options)) {
         recent.push(entry);
-        if (recent.length >= limit) {
-          break;
+        if (entry.role === "assistant") {
+          turns?.track(entry);
         }
+      }
+      if (!reading()) {
+        break;
       }
     }
     if (offset + page.scannedMessages >= page.totalMessages) {
       break;
     }
   }
+  turns?.finish();
   return recent.toReversed();
 }

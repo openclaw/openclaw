@@ -37,7 +37,7 @@ import type {
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
   ReadRecentSessionConversationTextOptions,
-  SessionRecentConversationText,
+  SessionRecentConversationTextRow,
 } from "./transcript-recent-text.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -298,7 +298,7 @@ export type SessionHistoryWorkerRequest =
 export type SessionHistoryWorkerResult =
   | { kind: "recent-usage"; result: SessionTranscriptUsageSnapshot | null }
   | { kind: "history-event-page"; result: SessionTranscriptMessageEventPage }
-  | { kind: "recent-text"; result: SessionRecentConversationText[] }
+  | { kind: "recent-text"; result: SessionRecentConversationTextRow[] }
   | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }
   | { kind: "bounded-tail"; result: SessionTranscriptBoundedMessageTailPage }
   | { kind: "inline-visibility"; subagentCoordination: SessionHistorySubagentFacts }

@@ -42,10 +42,17 @@ export function parseInboundMediaUri(source: string): InboundMediaUri | null {
     });
   }
 
-  if (parsed.hostname !== "inbound") {
+  // `new URL` reports hostname "inbound" for inbound:, inbound:123, user@inbound and
+  // user:pw@inbound:9 alike, so no combination of parsed fields separates them from the
+  // canonical spelling: a bare colon sets no port at all. The grounding matcher keys on
+  // the exact portless root and would not redact any of those forms, leaving a reference
+  // that still resolves here. Compare the raw authority instead; this scheme names no
+  // network location, so userinfo and ports are never valid.
+  const rawAuthority = normalizedSource.slice("media://".length).split(/[/?#]/u, 1)[0] ?? "";
+  if (parsed.hostname !== "inbound" || rawAuthority !== "inbound") {
     throw new MediaReferenceError(
       "path-not-allowed",
-      `Unsupported media URI location: ${parsed.hostname || "(missing)"}`,
+      `Unsupported media URI location: ${rawAuthority || "(missing)"}`,
     );
   }
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
