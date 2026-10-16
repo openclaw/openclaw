@@ -250,9 +250,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.boardProviderLifecycleConnected = true;
     this.resumeStagedAttachments();
     super.connectedCallback();
-    if (!this.presented) {
-      this.minutePoll.stop();
-    }
     const mountGatewayOwner = this.context.gateway.snapshot.client;
     this.stagedAttachmentGatewayOwner = mountGatewayOwner;
     this.requestUpdate();

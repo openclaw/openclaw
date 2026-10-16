@@ -475,7 +475,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return;
     }
     if (presented) {
-      this.minutePoll.start();
       this.consumeSessionHandoff(this.sessionKey);
       this.activateComposerPresentation();
       this.syncActiveBindings();
@@ -508,7 +507,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       void this.refreshSessionPullRequests();
       return;
     }
-    this.minutePoll.stop();
     if (this.state) {
       retireChatBranchRequests(this.state);
       // Unwatch can cancel an admitted refresh before sync; a later presentation

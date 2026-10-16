@@ -7,6 +7,8 @@ import {
   Show,
   untrack,
 } from "solid-js";
+import { i18nRevision } from "../../lib/reactive/i18n.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
@@ -23,12 +25,13 @@ function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
   runtime.mountToolIcons();
   const [presented, setPresented] = createSignal(runtime.presented);
   const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
-  const visibilityChanged = () => runtime.requestUpdate();
-  document.addEventListener("visibilitychange", visibilityChanged);
+  // Relative labels tick only while this retained pane is presented.
+  const minutePoll = useVisiblePoll(60_000, () => runtime.requestUpdate());
   const lifecycle = createSolidRenderLifecycle({
     host: runtime.element,
     presented: () => presented() && visible(),
     read: () => {
+      i18nRevision();
       runtime.prepareRender();
       return runtime.render(() => providerReview);
     },
@@ -44,13 +47,19 @@ function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
     readState: () => runtime.readProviderReviewState(),
   });
   createEffect(
-    () => frame(),
-    () => runtime.commitRender(),
+    () => ({ frame: frame(), presented: presented() }),
+    (next, previous) => {
+      if (next.frame !== previous?.frame) {
+        runtime.commitRender();
+      }
+      if (next.presented) {
+        minutePoll.start();
+      } else {
+        minutePoll.stop();
+      }
+    },
   );
-  onCleanup(() => {
-    unsubscribe();
-    document.removeEventListener("visibilitychange", visibilityChanged);
-  });
+  onCleanup(unsubscribe);
   return (
     <>
       <PaneLayout layout={frame().layout} />
