@@ -82,14 +82,9 @@ const frozenCoreScenarioIds = [
   "codex-plugin-pinned-old",
   "compaction-retry-mutating-tool",
   "runtime-first-hour-20-turn",
-  "runtime-tool-apply-patch",
-  "runtime-tool-bash",
-  "runtime-tool-edit",
-  "runtime-tool-exec",
-  "runtime-tool-fs-list",
-  "runtime-tool-fs-read",
-  "runtime-tool-fs-write",
-  "runtime-tool-grep",
+  ...["apply-patch", "bash", "edit", "exec", "fs-list", "fs-read", "fs-write", "grep"].map(
+    (name) => `runtime-tool-${name}`,
+  ),
   "runtime-tool-session-status",
   "runtime-tool-sessions-spawn",
   "runtime-tool-web-fetch",
@@ -110,7 +105,11 @@ const frozenLegacyCoreScenarioIds = frozenCoreScenarioIds.filter(
   (scenarioId) =>
     scenarioId !== "codex-plugin-pinned-new" && scenarioId !== "codex-plugin-pinned-old",
 );
-const frozenLegacyTargetSha = "ee5ead24b1b46a3560f28f8d57e0afcd911acacb";
+const legacyOptions = {
+  candidateSuiteOutcome: "success",
+  targetSha: "ee5ead24b1b46a3560f28f8d57e0afcd911acacb",
+  lane: "core",
+};
 
 function frozenCoreSummary() {
   return summary(
@@ -216,32 +215,23 @@ describe("frozen QA runtime-pair summary validation", () => {
     const fixture = frozenLegacyStatuslessSummary();
     delete (fixture.run as { finishedAt?: string }).finishedAt;
 
-    expect(() =>
-      validateQaRuntimePairSummary(fixture, {
-        candidateSuiteOutcome: "success",
-        targetSha: frozenLegacyTargetSha,
-        lane: "core",
-      }),
-    ).toThrow("runtime-pair summary is not completed");
+    expect(() => validateQaRuntimePairSummary(fixture, legacyOptions)).toThrow(
+      "runtime-pair summary is not completed",
+    );
   });
 
   it("still rejects scenario and count failures after frozen profile admission", () => {
-    const options = {
-      candidateSuiteOutcome: "success",
-      targetSha: frozenLegacyTargetSha,
-      lane: "core",
-    };
     const failedScenario = frozenLegacyStatuslessSummary();
     failedScenario.scenarios[0]!.status = "fail";
     failedScenario.counts.passed -= 1;
     failedScenario.counts.failed += 1;
-    expect(() => validateQaRuntimePairSummary(failedScenario, options)).toThrow(
+    expect(() => validateQaRuntimePairSummary(failedScenario, legacyOptions)).toThrow(
       "runtime-pair failure or unsupported skip",
     );
 
     const countDrift = frozenLegacyStatuslessSummary();
     countDrift.counts.passed -= 1;
-    expect(() => validateQaRuntimePairSummary(countDrift, options)).toThrow(
+    expect(() => validateQaRuntimePairSummary(countDrift, legacyOptions)).toThrow(
       "counts do not match validated scenario evidence",
     );
   });
@@ -250,67 +240,52 @@ describe("frozen QA runtime-pair summary validation", () => {
     const fixture = frozenLegacyStatuslessSummary();
     const reportSummary = reportFor(fixture.scenarios);
     const markdown = markdownFor(fixture.scenarios);
-    const options = {
-      candidateSuiteOutcome: "success",
-      targetSha: frozenLegacyTargetSha,
-      lane: "core",
-    };
 
-    expect(validateQaRuntimePairReport(fixture, reportSummary, markdown, options)).toMatchObject({
+    expect(
+      validateQaRuntimePairReport(fixture, reportSummary, markdown, legacyOptions),
+    ).toMatchObject({
       total: 25,
       passed: 25,
     });
     expect(() =>
       validateQaRuntimePairReport(fixture, reportSummary, markdown, {
-        ...options,
+        ...legacyOptions,
         candidateSuiteOutcome: "failure",
       }),
     ).toThrow("runtime-pair summary is not completed");
   });
 
   it("rejects malformed or unsafe advisory gap evidence", () => {
-    const buildAdvisoryGap = () => {
-      const advisoryGap = scenario({
+    const mutations: Array<(entry: ReturnType<typeof scenario>) => void> = [
+      (entry) => {
+        entry.runtimeParity.cells.codex.details = "implementation unavailable";
+      },
+      (entry) => {
+        entry.runtimeParity.cells.openclaw.status = "skip";
+      },
+      (entry) => {
+        entry.runtimeParity.cells.codex.runtimeErrorClass = "auth";
+      },
+      (entry) => {
+        entry.runtimeParity.cells.codex.toolCalls.push({ errorClass: "tool-result-missing" });
+      },
+      (entry) => {
+        entry.runtimeParity.drift = "failure-mode";
+      },
+    ];
+    for (const mutate of mutations) {
+      const entry = scenario({
         name: "tracked advisory gap",
         status: "pass",
         drift: "structural",
         codexStatus: "skip",
         codexDetails: "known-harness-gap exec: tracked\ntracking: #80319",
       });
-      return advisoryGap;
-    };
-
-    const unannotated = buildAdvisoryGap();
-    unannotated.runtimeParity.cells.codex.details = "implementation unavailable";
-    expect(() => validateQaRuntimePairSummary(summary([unannotated]))).toThrow(
-      "reports pass without two passing, passable runtime cells",
-    );
-
-    const pairedSkip = buildAdvisoryGap();
-    pairedSkip.runtimeParity.cells.openclaw.status = "skip";
-    expect(() => validateQaRuntimePairSummary(summary([pairedSkip]))).toThrow(
-      "reports pass without two passing, passable runtime cells",
-    );
-
-    const hardError = buildAdvisoryGap();
-    hardError.runtimeParity.cells.codex.runtimeErrorClass = "auth";
-    expect(() => validateQaRuntimePairSummary(summary([hardError]))).toThrow(
-      "reports pass without two passing, passable runtime cells",
-    );
-
-    const missingResult = buildAdvisoryGap();
-    missingResult.runtimeParity.cells.codex.toolCalls.push({
-      errorClass: "tool-result-missing",
-    });
-    expect(() => validateQaRuntimePairSummary(summary([missingResult]))).toThrow(
-      "reports pass without two passing, passable runtime cells",
-    );
-
-    const failureMode = buildAdvisoryGap();
-    failureMode.runtimeParity.drift = "failure-mode";
-    expect(() => validateQaRuntimePairSummary(summary([failureMode]))).toThrow(
-      "reports pass without two passing, passable runtime cells",
-    );
+      mutate(entry);
+      expect(() => validateQaRuntimePairSummary(summary([entry]))).toThrow(
+        "reports pass without two passing, passable runtime cells",
+      );
+    }
   });
 
   it("requires complete declared results before overriding a nonzero suite exit", () => {

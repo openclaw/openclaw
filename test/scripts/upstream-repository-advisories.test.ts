@@ -33,6 +33,16 @@ function advisory(range: unknown = "< 2.0.0", fields: Record<string, unknown> = 
   return row;
 }
 
+function reviewedResponse(fields: Record<string, unknown> = {}) {
+  return Response.json({
+    ghsa_id: ADVISORY_ID,
+    published_at: "2026-08-01T00:00:00Z",
+    github_reviewed_at: "2026-08-02T00:00:00Z",
+    withdrawn_at: null,
+    ...fields,
+  });
+}
+
 function manifest(url: URL, repository: unknown = `git+https://github.com/${REPOSITORY}.git`) {
   const [name, version] = url.pathname.slice(1).split("/").map(decodeURIComponent);
   return Response.json({ name, version, repository });
@@ -61,12 +71,7 @@ function createSourceFetch(
         return handlers.reviewed(url, init);
       }
       const row = publishedRows.get(url.pathname.split("/").at(-1) ?? "");
-      return Response.json({
-        ...row,
-        published_at: "2026-08-01T00:00:00Z",
-        github_reviewed_at: "2026-08-02T00:00:00Z",
-        withdrawn_at: null,
-      });
+      return reviewedResponse({ ...row, withdrawn_at: null });
     }
     if (url.pathname.endsWith("/security-advisories")) {
       return handlers.page ? handlers.page(url, init) : Response.json([]);
@@ -80,6 +85,11 @@ function createSourceFetch(
 
 function scan(fetchImpl: typeof fetch, payload: Record<string, string[]> = { fixture: ["1.0.0"] }) {
   return fetchPublishedRepositoryAdvisories({ payload, registryBaseUrl: REGISTRY, fetchImpl });
+}
+
+function expectPartialPage(report: Awaited<ReturnType<typeof scan>>) {
+  expect(report.advisories).toHaveLength(1);
+  expect(report.coverage).toMatchObject({ status: "partial", checkedRepositories: 0 });
 }
 
 beforeEach(() => {
@@ -152,11 +162,8 @@ describe("published upstream repository advisories", () => {
           advisory(raw, { ghsa_id: id, vulnerabilities: [vulnerability(raw, name)] }),
         ]),
       reviewed: () =>
-        Response.json({
+        reviewedResponse({
           ghsa_id: id,
-          published_at: "2026-08-01T00:00:00Z",
-          github_reviewed_at: "2026-08-02T00:00:00Z",
-          withdrawn_at: null,
           vulnerabilities: [vulnerability(reviewed, name)],
         }),
     });
@@ -221,11 +228,7 @@ describe("published upstream repository advisories", () => {
     const source = createSourceFetch({
       page: () => Response.json([advisory()]),
       reviewed: () =>
-        Response.json({
-          ghsa_id: ADVISORY_ID,
-          published_at: "2026-08-01T00:00:00Z",
-          github_reviewed_at: "2026-08-02T00:00:00Z",
-          withdrawn_at: null,
+        reviewedResponse({
           vulnerabilities: [vulnerability("< 1.0.0")],
           ...response,
         }),
@@ -257,11 +260,8 @@ describe("published upstream repository advisories", () => {
             { status: 403, headers: { "x-ratelimit-remaining": "100" } },
           );
         }
-        return Response.json({
+        return reviewedResponse({
           ghsa_id: id,
-          published_at: "2026-08-01T00:00:00Z",
-          github_reviewed_at: "2026-08-02T00:00:00Z",
-          withdrawn_at: null,
           vulnerabilities: [vulnerability(id === staleMatch ? "< 1.0.0" : "< 2.0.0")],
         });
       },
@@ -484,9 +484,7 @@ describe("published upstream repository advisories", () => {
       },
     });
     const report = await scan(source.fetchImpl);
-    expect(report.advisories).toHaveLength(1);
-    expect(report.coverage.status).toBe("partial");
-    expect(report.coverage.checkedRepositories).toBe(0);
+    expectPartialPage(report);
     expect(report.coverage.issues).toHaveLength(1);
   });
 
@@ -582,8 +580,7 @@ describe("published upstream repository advisories", () => {
         message: `Upstream advisory request exceeded timeout of ${deadline === "run" ? 5 : 15_000}ms`,
       });
       expect(cancel).toHaveBeenCalledTimes(deadline === "run" ? 1 : 0);
-      expect(report.advisories).toHaveLength(1);
-      expect(report.coverage).toMatchObject({ status: "partial", checkedRepositories: 0 });
+      expectPartialPage(report);
       expect(report.coverage.issues).toContainEqual({
         subject: REPOSITORY,
         reason: deadline === "run" ? "budget-exhausted" : "request-failed",
@@ -611,11 +608,8 @@ describe("published upstream repository advisories", () => {
           reviewStarted.resolve();
           await releaseReview.promise;
         }
-        return Response.json({
+        return reviewedResponse({
           ghsa_id: url.pathname.split("/").at(-1),
-          published_at: "2026-08-01T00:00:00Z",
-          github_reviewed_at: "2026-08-02T00:00:00Z",
-          withdrawn_at: null,
           vulnerabilities: [
             vulnerability(url.pathname.endsWith(affectedId) ? "< 1.0.1" : "< 1.0.0"),
           ],

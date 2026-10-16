@@ -10,9 +10,40 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const command = resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
 
 describe.skipIf(process.platform === "win32")("survivor resolved candidate schema contract", () => {
-  it.each([
-    {
-      name: "uses schema 17 for a base tarball after archive removal",
+  it.each<
+    [
+      string,
+      Partial<{
+        scenario: string;
+        kind: string;
+        baseline: string;
+        version: string;
+        schema: number | string | undefined;
+        actual: number;
+        succeeds: boolean;
+      }>,
+    ]
+  >([
+    ["base tarball after archive removal", {}],
+    ["legacy tarball after archive removal", { scenario: "legacy-operator-state" }],
+    ["unmigrated base tarball", { actual: 16, succeeds: false }],
+    [
+      "unmigrated legacy tarball",
+      { scenario: "legacy-operator-state", actual: 16, succeeds: false },
+    ],
+    ["paired transition without metadata", { schema: undefined, actual: 16, succeeds: false }],
+    ["string schema", { schema: "16", actual: 16, succeeds: false }],
+    ["negative schema", { schema: -1, actual: 16, succeeds: false }],
+    ["fractional schema", { schema: 16.5, actual: 16, succeeds: false }],
+    [
+      "older metadata-less tarball",
+      { baseline: "2026.7.1-2", version: "2026.8.1", schema: undefined, actual: 15 },
+    ],
+    ["unpaired baseline without metadata", { baseline: "2026.8.2", schema: undefined, actual: 15 }],
+    ["published npm schema 16", { kind: "npm", schema: undefined, actual: 16 }],
+    ["published npm rejects schema 17", { kind: "npm", schema: undefined, succeeds: false }],
+  ])("%s", (_name, overrides) => {
+    const { scenario, kind, baseline, version, schema, actual, succeeds } = {
       scenario: "base",
       kind: "tarball",
       baseline: "2026.9.2",
@@ -20,118 +51,8 @@ describe.skipIf(process.platform === "win32")("survivor resolved candidate schem
       schema: 17,
       actual: 17,
       succeeds: true,
-    },
-    {
-      name: "uses schema 17 for a legacy tarball after archive removal",
-      scenario: "legacy-operator-state",
-      kind: "tarball",
-      baseline: "2026.9.2",
-      version: "2026.9.3",
-      schema: 17,
-      actual: 17,
-      succeeds: true,
-    },
-    {
-      name: "rejects an unmigrated base tarball schema",
-      scenario: "base",
-      kind: "tarball",
-      baseline: "2026.9.2",
-      version: "2026.9.3",
-      schema: 17,
-      actual: 16,
-      succeeds: false,
-    },
-    {
-      name: "rejects an unmigrated legacy tarball schema",
-      scenario: "legacy-operator-state",
-      kind: "tarball",
-      baseline: "2026.9.2",
-      version: "2026.9.3",
-      schema: 17,
-      actual: 16,
-      succeeds: false,
-    },
-    {
-      name: "requires metadata for the paired tarball transition",
-      scenario: "base",
-      kind: "tarball",
-      baseline: "2026.9.2",
-      version: "2026.9.3",
-      schema: undefined,
-      actual: 16,
-      succeeds: false,
-    },
-    {
-      name: "rejects a string schema in the candidate contract",
-      scenario: "base",
-      kind: "tarball",
-      baseline: "2026.9.2",
-      version: "2026.9.3",
-      schema: "16",
-      actual: 16,
-      succeeds: false,
-    },
-    {
-      name: "rejects a negative candidate schema",
-      scenario: "base",
-      kind: "tarball",
-      baseline: "2026.9.2",
-      version: "2026.9.3",
-      schema: -1,
-      actual: 16,
-      succeeds: false,
-    },
-    {
-      name: "rejects a fractional candidate schema",
-      scenario: "base",
-      kind: "tarball",
-      baseline: "2026.9.2",
-      version: "2026.9.3",
-      schema: 16.5,
-      actual: 16,
-      succeeds: false,
-    },
-    {
-      name: "keeps older metadata-less tarballs working",
-      scenario: "base",
-      kind: "tarball",
-      baseline: "2026.7.1-2",
-      version: "2026.8.1",
-      schema: undefined,
-      actual: 15,
-      succeeds: true,
-    },
-    {
-      name: "does not require metadata outside the paired baseline",
-      scenario: "base",
-      kind: "tarball",
-      baseline: "2026.8.2",
-      version: "2026.9.3",
-      schema: undefined,
-      actual: 15,
-      succeeds: true,
-    },
-    {
-      name: "keeps the published npm schema-16 contract",
-      scenario: "base",
-      kind: "npm",
-      baseline: "2026.9.2",
-      version: "2026.9.3",
-      schema: undefined,
-      actual: 16,
-      succeeds: true,
-    },
-    {
-      name: "rejects schema 17 for the published npm contract",
-      scenario: "base",
-      kind: "npm",
-      baseline: "2026.9.2",
-      version: "2026.9.3",
-      schema: undefined,
-      actual: 17,
-      succeeds: false,
-    },
-  ])("$name", ({ scenario, kind, baseline, version, schema, actual, succeeds }) => {
+      ...overrides,
+    };
     const root = tempDirs.make("survivor-resolved-schema-");
     mkdirSync(join(root, "state"));
     const database = new DatabaseSync(join(root, "state", "openclaw.sqlite"));
@@ -512,43 +433,27 @@ describe("published upgrade survivor consent recovery", () => {
     expect(result.status, result.stderr).toBe(0);
   });
 
-  it.each([
+  it.each<[string, (result: ReturnType<typeof deniedUpdate>) => unknown]>([
     [
       "core update failure",
-      (result: ReturnType<typeof deniedUpdate>) =>
-        (expectDefined(result.steps[0], "global update step").exitCode = 1),
+      (result) => (expectDefined(result.steps[0], "global update step").exitCode = 1),
     ],
-    [
-      "wrong installed version",
-      (result: ReturnType<typeof deniedUpdate>) => (result.after.version = "2026.7.1-2"),
-    ],
-    [
-      "wrong baseline version",
-      (result: ReturnType<typeof deniedUpdate>) => (result.before.version = "2026.8.1"),
-    ],
-    ["missing core swap", (result: ReturnType<typeof deniedUpdate>) => result.steps.pop()],
-    [
-      "other update failure",
-      (result: ReturnType<typeof deniedUpdate>) => (result.reason = "doctor"),
-    ],
+    ["wrong installed version", (result) => (result.after.version = "2026.7.1-2")],
+    ["wrong baseline version", (result) => (result.before.version = "2026.8.1")],
+    ["missing core swap", (result) => result.steps.pop()],
+    ["other update failure", (result) => (result.reason = "doctor")],
     [
       "plugin sync failure",
-      (result: ReturnType<typeof deniedUpdate>) =>
-        result.postUpdate.plugins.sync.errors.push("network failed"),
+      (result) => result.postUpdate.plugins.sync.errors.push("network failed"),
     ],
     [
       "plugin update failure",
-      (result: ReturnType<typeof deniedUpdate>) =>
-        result.postUpdate.plugins.npm.outcomes.push({ status: "error" }),
+      (result) => result.postUpdate.plugins.npm.outcomes.push({ status: "error" }),
     ],
-    [
-      "integrity drift",
-      (result: ReturnType<typeof deniedUpdate>) =>
-        result.postUpdate.plugins.integrityDrifts.push("changed"),
-    ],
+    ["integrity drift", (result) => result.postUpdate.plugins.integrityDrifts.push("changed")],
     [
       "unreviewed plugin",
-      (result: ReturnType<typeof deniedUpdate>) => {
+      (result) => {
         const warning = expectDefined(
           result.postUpdate.plugins.warnings[0],
           "Codex consent warning",
@@ -559,16 +464,13 @@ describe("published upgrade survivor consent recovery", () => {
     ],
     [
       "unrelated warning",
-      (result: ReturnType<typeof deniedUpdate>) =>
+      (result) =>
         result.postUpdate.plugins.warnings.push({
           reason: "broken config",
           message: "broken config",
         }),
     ],
-    [
-      "no consent denial",
-      (result: ReturnType<typeof deniedUpdate>) => (result.postUpdate.plugins.warnings = []),
-    ],
+    ["no consent denial", (result) => (result.postUpdate.plugins.warnings = [])],
   ])("refuses repair after %s", (_name, mutate) => {
     const result = deniedUpdate();
     mutate(result);

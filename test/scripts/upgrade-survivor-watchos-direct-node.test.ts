@@ -11,6 +11,10 @@ const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const adapter = resolve("scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs");
 
+function writeJson(file: string, value: unknown) {
+  writeFileSync(file, JSON.stringify(value));
+}
+
 function createTlsFixture(root: string) {
   const tlsRoot = join(root, "tls");
   const caKey = join(tlsRoot, "ca-key.pem");
@@ -20,47 +24,35 @@ function createTlsFixture(root: string) {
   const serverCert = join(tlsRoot, "server-cert.pem");
   const serverExt = join(tlsRoot, "server.ext");
   mkdirSync(tlsRoot);
-  execFileSync(
-    "openssl",
-    [
-      "req",
-      "-x509",
-      "-newkey",
-      "rsa:2048",
-      "-nodes",
-      "-sha256",
-      "-days",
-      "1",
-      "-subj",
-      "/CN=OpenClaw watchOS survivor test CA",
-      "-addext",
-      "basicConstraints=critical,CA:TRUE",
-      "-addext",
-      "keyUsage=critical,keyCertSign,cRLSign",
-      "-keyout",
-      caKey,
-      "-out",
-      caCert,
-    ],
-    { stdio: "ignore" },
-  );
-  execFileSync(
-    "openssl",
-    [
-      "req",
-      "-newkey",
-      "rsa:2048",
-      "-nodes",
-      "-sha256",
-      "-subj",
-      "/CN=localhost",
-      "-keyout",
-      serverKey,
-      "-out",
-      serverCsr,
-    ],
-    { stdio: "ignore" },
-  );
+  const requestKey = (name: string, key: string, out: string, extra: string[] = []) =>
+    execFileSync(
+      "openssl",
+      [
+        "req",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-sha256",
+        "-subj",
+        `/CN=${name}`,
+        "-keyout",
+        key,
+        "-out",
+        out,
+        ...extra,
+      ],
+      { stdio: "ignore" },
+    );
+  requestKey("OpenClaw watchOS survivor test CA", caKey, caCert, [
+    "-x509",
+    "-days",
+    "1",
+    "-addext",
+    "basicConstraints=critical,CA:TRUE",
+    "-addext",
+    "keyUsage=critical,keyCertSign,cRLSign",
+  ]);
+  requestKey("localhost", serverKey, serverCsr);
   writeFileSync(
     serverExt,
     [
@@ -104,6 +96,81 @@ function adapterEnv(caCert: string) {
   return { ...process.env, NODE_EXTRA_CA_CERTS: caCert };
 }
 
+function connect(state: string, out: string, label: string, caCert: string, credential?: string) {
+  return execFileAsync(
+    process.execPath,
+    [
+      adapter,
+      "connect",
+      "--mode",
+      credential ? "bootstrap" : "device",
+      ...(credential ? ["--credential", credential] : []),
+      "--state",
+      state,
+      "--out",
+      out,
+      "--label",
+      label,
+    ],
+    { env: adapterEnv(caCert) },
+  );
+}
+
+async function gateway(
+  tls: ReturnType<typeof createTlsFixture>,
+  deviceToken: string,
+  prefix = "session",
+) {
+  const requests: Array<Record<string, any>> = [];
+  const pollTokens: string[] = [];
+  let challengeCount = 0;
+  const server = createServer({ cert: tls.cert, key: tls.key }, (request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url?.endsWith("/challenge")) {
+      response.end(
+        JSON.stringify({ ok: true, nonce: `nonce-${++challengeCount}`, ts: Date.now() }),
+      );
+    } else if (request.url?.endsWith("/connect")) {
+      let raw = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        raw += chunk;
+      });
+      request.on("end", () => {
+        const body = JSON.parse(raw);
+        requests.push(body);
+        response.end(
+          JSON.stringify({
+            ok: true,
+            sessionToken: `${prefix}-${requests.length}`,
+            deviceToken,
+            nodeId: body.device.id,
+            protocol: 4,
+          }),
+        );
+      });
+    } else if (request.url?.endsWith("/poll")) {
+      pollTokens.push(request.headers.authorization ?? "");
+      response.end(JSON.stringify({ ok: true, event: null }));
+    } else {
+      response.statusCode = 404;
+      response.end();
+    }
+  });
+  await new Promise<void>((resolveListen) => {
+    server.listen(0, "127.0.0.1", resolveListen);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("failed to bind watch fixture");
+  }
+  const close = () =>
+    new Promise<void>((resolveClose) => {
+      server.close(() => resolveClose());
+    });
+  return { address, requests, pollTokens, close };
+}
+
 function signaturePayload(body: Record<string, any>, token: string): string {
   return [
     "v3",
@@ -132,108 +199,22 @@ describe.skipIf(process.platform === "win32")(
       const tls = createTlsFixture(root);
       const bootstrapToken = "bootstrap-secret";
       const deviceToken = "retained-device-secret";
-      const requests: Array<Record<string, any>> = [];
-      const pollTokens: string[] = [];
-      let challengeCount = 0;
-      const server = createServer({ cert: tls.cert, key: tls.key }, (request, response) => {
-        if (request.url?.endsWith("/challenge")) {
-          challengeCount += 1;
-          response.setHeader("content-type", "application/json");
-          response.end(
-            JSON.stringify({ ok: true, nonce: `nonce-${challengeCount}`, ts: Date.now() }),
-          );
-          return;
-        }
-        if (request.url?.endsWith("/connect")) {
-          let raw = "";
-          request.setEncoding("utf8");
-          request.on("data", (chunk) => {
-            raw += chunk;
-          });
-          request.on("end", () => {
-            const body = JSON.parse(raw);
-            requests.push(body);
-            response.setHeader("content-type", "application/json");
-            response.end(
-              JSON.stringify({
-                ok: true,
-                sessionToken: `session-${requests.length}`,
-                deviceToken,
-                nodeId: body.device.id,
-                protocol: 4,
-              }),
-            );
-          });
-          return;
-        }
-        if (request.url?.endsWith("/poll")) {
-          pollTokens.push(request.headers.authorization ?? "");
-          response.setHeader("content-type", "application/json");
-          response.end(JSON.stringify({ ok: true, event: null }));
-          return;
-        }
-        response.statusCode = 404;
-        response.end();
+      const { address, requests, pollTokens, close } = await gateway(tls, deviceToken);
+      writeJson(setup, {
+        setupCode: `oc-pair://${Buffer.from(
+          JSON.stringify({
+            url: `wss://localhost:${address.port}`,
+            bootstrapToken,
+            expiresAtMs: Date.now() + 60_000,
+          }),
+        ).toString("base64url")}`,
       });
-      await new Promise<void>((resolveListen) => {
-        server.listen(0, "127.0.0.1", resolveListen);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("failed to bind watch fixture");
-      }
-      writeFileSync(
-        setup,
-        JSON.stringify({
-          setupCode: `oc-pair://${Buffer.from(
-            JSON.stringify({
-              url: `wss://localhost:${address.port}`,
-              bootstrapToken,
-              expiresAtMs: Date.now() + 60_000,
-            }),
-          ).toString("base64url")}`,
-        }),
-      );
 
       try {
-        await execFileAsync(
-          process.execPath,
-          [
-            adapter,
-            "connect",
-            "--mode",
-            "bootstrap",
-            "--credential",
-            setup,
-            "--state",
-            state,
-            "--out",
-            bootstrapArtifact,
-            "--label",
-            "baseline",
-          ],
-          { env: adapterEnv(tls.caCert) },
-        );
-        await execFileAsync(
-          process.execPath,
-          [
-            adapter,
-            "connect",
-            "--mode",
-            "device",
-            "--state",
-            state,
-            "--out",
-            reconnectArtifact,
-            "--label",
-            "candidate",
-          ],
-          { env: adapterEnv(tls.caCert) },
-        );
+        await connect(state, bootstrapArtifact, "baseline", tls.caCert, setup);
+        await connect(state, reconnectArtifact, "candidate", tls.caCert);
       } finally {
-        await new Promise<void>((resolveClose) => {
-          server.close(() => resolveClose());
-        });
+        await close();
       }
 
       expect(requests).toHaveLength(2);
@@ -324,32 +305,23 @@ describe.skipIf(process.platform === "win32")(
       const nodes = join(root, "nodes.json");
       const devices = join(root, "devices.json");
       const artifact = join(root, "artifact.json");
-      writeFileSync(
-        state,
-        JSON.stringify({
-          deviceId: "watch-device",
-          instanceId: "watchos-upgrade-survivor",
-        }),
-      );
-      writeFileSync(
-        nodes,
-        JSON.stringify({
-          nodes: [
-            {
-              nodeId: "watch-device",
-              clientId: "openclaw-watchos",
-              clientMode: "node",
-            },
-          ],
-        }),
-      );
-      writeFileSync(
-        devices,
-        JSON.stringify({
-          pending: [],
-          paired: [{ deviceId: "watch-device" }],
-        }),
-      );
+      writeJson(state, {
+        deviceId: "watch-device",
+        instanceId: "watchos-upgrade-survivor",
+      });
+      writeJson(nodes, {
+        nodes: [
+          {
+            nodeId: "watch-device",
+            clientId: "openclaw-watchos",
+            clientMode: "node",
+          },
+        ],
+      });
+      writeJson(devices, {
+        pending: [],
+        paired: [{ deviceId: "watch-device" }],
+      });
 
       await execFileAsync(process.execPath, [
         adapter,
@@ -387,106 +359,32 @@ describe.skipIf(process.platform === "win32")(
       const secondArtifact = join(root, "reconnect-second.json");
       const retainedToken = "retained-device-secret";
       const rotatedToken = "rotated-device-secret";
-      const authenticatedTokens: string[] = [];
-      const pollTokens: string[] = [];
       const tls = createTlsFixture(root);
       const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
       const publicDer = publicKey.export({ format: "der", type: "spki" });
       const rawPublicKey = Buffer.from(publicDer).subarray(-32);
-      const server = createServer({ cert: tls.cert, key: tls.key }, (request, response) => {
-        response.setHeader("content-type", "application/json");
-        if (request.url?.endsWith("/challenge")) {
-          response.end(JSON.stringify({ ok: true, nonce: "rotation-nonce", ts: Date.now() }));
-          return;
-        }
-        if (request.url?.endsWith("/connect")) {
-          let raw = "";
-          request.setEncoding("utf8");
-          request.on("data", (chunk) => {
-            raw += chunk;
-          });
-          request.on("end", () => {
-            const body = JSON.parse(raw);
-            authenticatedTokens.push(body.auth.deviceToken);
-            response.end(
-              JSON.stringify({
-                ok: true,
-                sessionToken: `rotation-session-${authenticatedTokens.length}`,
-                deviceToken: rotatedToken,
-                nodeId: body.device.id,
-                protocol: 4,
-              }),
-            );
-          });
-          return;
-        }
-        if (request.url?.endsWith("/poll")) {
-          pollTokens.push(request.headers.authorization ?? "");
-          response.end(JSON.stringify({ ok: true, event: null }));
-          return;
-        }
-        response.statusCode = 404;
-        response.end();
-      });
-      await new Promise<void>((resolveListen) => {
-        server.listen(0, "127.0.0.1", resolveListen);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("failed to bind watch fixture");
-      }
-      writeFileSync(
-        state,
-        JSON.stringify({
-          deviceId: crypto.createHash("sha256").update(rawPublicKey).digest("hex"),
-          publicKey: rawPublicKey.toString("base64url"),
-          privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
-          instanceId: "watchos-upgrade-survivor",
-          deviceToken: retainedToken,
-          endpoint: { host: "localhost", port: address.port, tls: true },
-        }),
+      const { address, requests, pollTokens, close } = await gateway(
+        tls,
+        rotatedToken,
+        "rotation-session",
       );
+      writeJson(state, {
+        deviceId: crypto.createHash("sha256").update(rawPublicKey).digest("hex"),
+        publicKey: rawPublicKey.toString("base64url"),
+        privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
+        instanceId: "watchos-upgrade-survivor",
+        deviceToken: retainedToken,
+        endpoint: { host: "localhost", port: address.port, tls: true },
+      });
 
       try {
-        await execFileAsync(
-          process.execPath,
-          [
-            adapter,
-            "connect",
-            "--mode",
-            "device",
-            "--state",
-            state,
-            "--out",
-            firstArtifact,
-            "--label",
-            "candidate",
-          ],
-          { env: adapterEnv(tls.caCert) },
-        );
-        await execFileAsync(
-          process.execPath,
-          [
-            adapter,
-            "connect",
-            "--mode",
-            "device",
-            "--state",
-            state,
-            "--out",
-            secondArtifact,
-            "--label",
-            "restart",
-          ],
-          { env: adapterEnv(tls.caCert) },
-        );
+        await connect(state, firstArtifact, "candidate", tls.caCert);
+        await connect(state, secondArtifact, "restart", tls.caCert);
       } finally {
-        await new Promise<void>((resolveClose) => {
-          server.close(() => resolveClose());
-        });
+        await close();
       }
 
-      expect(authenticatedTokens).toEqual([retainedToken, rotatedToken]);
+      expect(requests.map((body) => body.auth.deviceToken)).toEqual([retainedToken, rotatedToken]);
       expect(pollTokens).toEqual(["Bearer rotation-session-1", "Bearer rotation-session-2"]);
       expect(JSON.parse(readFileSync(state, "utf8"))).toMatchObject({
         deviceToken: rotatedToken,
