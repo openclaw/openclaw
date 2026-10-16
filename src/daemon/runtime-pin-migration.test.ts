@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { inspectServiceRuntimeIntent } from "../cli/daemon-cli/status.runtime-intent.js";
 import { createConfigMachineStateStep } from "../infra/state-migrations.config-machine-state-step.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
+import {
+  captureUpdateDoctorConfigWrites,
+  getDoctorRepairOutcome,
+} from "../infra/update-doctor-result.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -91,19 +95,26 @@ describe("runtime pin migration before service resume", () => {
             expect(readDaemonRuntimePin({ kind: "gateway", env }, command).pin).toEqual(pin);
           }
         };
-        if (entry === "resume") {
-          await withDaemonRuntimePinMigration(env, readMigratedPin);
-        } else {
-          const result = await createConfigMachineStateStep({
-            config: {},
-            configPath: state.configPath,
-            configIncludedPaths: [],
-            stateDir: state.stateDir,
-            env,
-          }).run();
-          expect(result.warnings).toEqual([]);
-          readMigratedPin();
-        }
+        await captureUpdateDoctorConfigWrites(state.configPath, async () => {
+          if (entry === "resume") {
+            await withDaemonRuntimePinMigration(env, readMigratedPin);
+          } else {
+            const result = await createConfigMachineStateStep({
+              config: {},
+              configPath: state.configPath,
+              configIncludedPaths: [],
+              stateDir: state.stateDir,
+              env,
+            }).run();
+            expect(result.warnings).toEqual([]);
+            readMigratedPin();
+          }
+          expect(getDoctorRepairOutcome()).toBe(true);
+        });
+        await captureUpdateDoctorConfigWrites(state.configPath, async () => {
+          await withDaemonRuntimePinMigration(env, () => undefined);
+          expect(getDoctorRepairOutcome()).toBe(false);
+        });
         expect(admitted).toBe(true);
         expect((await status()).runtimeIntent.status).toBe(malformed ? "unknown" : "known");
         expect(

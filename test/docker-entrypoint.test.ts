@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect } from "vitest";
+import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { createCommandTest, type CommandFixture } from "./helpers/command-fixture.js";
 
 const it = createCommandTest();
+const nodeExecPath = resolveTestNodeExecPath();
 
 function fixture(command: CommandFixture) {
   const root = command.createTempDir("docker-activation-");
@@ -33,10 +35,10 @@ if (args.includes('doctor')) {
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
   const record = path.join(root, "calls.jsonl");
   const runCommand = (argv: string[], env: Record<string, string> = {}) =>
-    command.run(process.execPath, [path.join(root, "docker-entrypoint.mjs"), ...argv], {
+    command.run(nodeExecPath, [path.join(root, "docker-entrypoint.mjs"), ...argv], {
       cwd: root,
       env: {
-        PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        PATH: `${path.dirname(nodeExecPath)}:/usr/bin:/bin`,
         HOME: root,
         RECORD: record,
         ...env,
@@ -53,7 +55,7 @@ if (args.includes('doctor')) {
         .map((line) => JSON.parse(line)),
     runCommand,
     run: (args: string[], env: Record<string, string> = {}) =>
-      runCommand([process.execPath, ...args], env),
+      runCommand([nodeExecPath, ...args], env),
   };
 }
 
@@ -79,7 +81,7 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
       }
       const result = installed
         ? await f.runCommand(args, {
-            PATH: `${f.root}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+            PATH: `${f.root}:${path.dirname(nodeExecPath)}:/usr/bin:/bin`,
           })
         : await f.run(args);
       expect(result, result.stderr).toMatchObject({ status: 0, signal: null, error: undefined });
@@ -124,7 +126,7 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     fs.mkdirSync(first);
     fs.mkdirSync(second);
     fs.mkdirSync(path.join(first, "activation-command"));
-    fs.symlinkSync(process.execPath, path.join(second, "activation-command"));
+    fs.symlinkSync(nodeExecPath, path.join(second, "activation-command"));
     const result = await f.runCommand(
       ["activation-command", "-e", "process.stdout.write('unchanged')"],
       {

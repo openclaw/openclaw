@@ -13,6 +13,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { recordDoctorRepairOutcome } from "./update-doctor-result.js";
 
 export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<MigrationMessages> {
   if (completeUnshippedDaemonRuntimePinMigration(env)) {
@@ -35,7 +36,7 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
       );
     }
   };
-  return await withLegacyMigrationStateLock({
+  const result = await withLegacyMigrationStateLock({
     env,
     stateDir: resolveStateDir(env),
     label: "daemon runtime pins",
@@ -107,4 +108,6 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
       };
     },
   });
+  recordDoctorRepairOutcome(result.warnings.length ? undefined : result.changes.length > 0);
+  return result;
 }

@@ -437,9 +437,7 @@ async function runDoctorHealthFlowWithResult(
           ),
       );
       recordAgentDatabaseAdmissions(agentDatabaseRefusals);
-      if (agentDatabaseRefusals.length) {
-        recordDoctorRepairOutcome(undefined);
-      }
+      recordDoctorRepairOutcome(agentDatabaseRefusals.length ? undefined : false);
       const { CONFIG_PATH } = await import("../config/config.js");
       const ctx: DoctorHealthFlowContext = {
         runtime: doctorRuntime,
@@ -707,12 +705,8 @@ async function runDoctorHealthFlowWithResult(
     throw error;
   } finally {
     await measureGatewayBootstrapStep("doctor.maintenance.release", () => resources.disposeAsync());
-    if (
-      doctorResult.status === "ok" &&
-      !exitCode &&
-      !doctorResult.maintenanceRefusal &&
-      !doctorResult.failureFacts?.length
-    ) {
+    const { status, maintenanceRefusal, failureFacts } = doctorResult;
+    if (status === "ok" && !exitCode && !maintenanceRefusal && !failureFacts?.length) {
       await retireOriginalCapture?.();
     }
     if (updateResult) {
