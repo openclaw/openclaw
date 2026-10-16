@@ -5,10 +5,14 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
-import type { PluginHookBeforePromptBuildResult } from "../../../plugins/hook-before-agent-start.types.js";
+import type {
+  PluginHookBeforePromptBuildEvent,
+  PluginHookBeforePromptBuildResult,
+} from "../../../plugins/hook-before-agent-start.types.js";
 import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
@@ -80,6 +84,9 @@ async function assembleWithCapturedHookCtx(
     >[0]["prepareSystemPrompt"];
     requiresToolAuthority?: true;
   } = {},
+  assembly: {
+    preparedUserTurnMessage?: PersistedUserTurnMessage;
+  } = {},
 ) {
   const config = attemptOverrides?.config ?? {};
   setRuntimeConfigSnapshot(config);
@@ -112,6 +119,7 @@ async function assembleWithCapturedHookCtx(
     ...attemptOverrides,
   };
   const captured: PluginHookAgentContext[] = [];
+  const capturedEvents: PluginHookBeforePromptBuildEvent[] = [];
   const hookRunner = createHookRunner({
     hooks: [],
     plugins: [],
@@ -121,8 +129,9 @@ async function assembleWithCapturedHookCtx(
         hookName: "before_prompt_build",
         source: "test",
         requiresToolAuthority: promptPolicy.requiresToolAuthority,
-        handler: async (_event: unknown, ctx: PluginHookAgentContext) => {
+        handler: async (event: PluginHookBeforePromptBuildEvent, ctx: PluginHookAgentContext) => {
           captured.push(ctx);
+          capturedEvents.push(event);
           return promptPolicy.hookResult;
         },
       },
@@ -140,6 +149,9 @@ async function assembleWithCapturedHookCtx(
     hookAgentId: "main",
     diagnosticTrace: { traceId: "11111111111111111111111111111111" },
     isRawModelRun: false,
+    ...(assembly.preparedUserTurnMessage
+      ? { preparedUserTurnMessage: assembly.preparedUserTurnMessage }
+      : {}),
     sessionAgentId: "main",
     runtimeModel: testModel.id,
     systemPromptText: "Base system prompt",
@@ -150,7 +162,7 @@ async function assembleWithCapturedHookCtx(
     setLeasedSteering,
   });
   expect(session.messages).toEqual(priorMessages);
-  return { captured, prompt, setLeasedSteering, setSystemPrompt };
+  return { captured, capturedEvents, prompt, setLeasedSteering, setSystemPrompt };
 }
 
 describe("prompt-build hook context input provenance", () => {
@@ -223,6 +235,59 @@ describe("prompt-build hook context input provenance", () => {
     });
     expect(captured).toHaveLength(1);
     expect(captured[0]).toMatchObject({ trigger: "user", inputProvenance });
+  });
+});
+
+describe("prompt-build hook current-input identity", () => {
+  it("binds the recorder-owned admitted request to the hook event", async () => {
+    const preparedUserTurnMessage: PersistedUserTurnMessage = {
+      role: "user",
+      content: "Handoff payload",
+      timestamp: 1,
+      idempotencyKey: "run-admitted:user",
+    };
+    const { capturedEvents } = await assembleWithCapturedHookCtx(
+      "current-input-admitted-request",
+      undefined,
+      {},
+      { preparedUserTurnMessage },
+    );
+
+    expect(capturedEvents).toHaveLength(1);
+    expect(capturedEvents[0]).toMatchObject({
+      currentUserMessage: "Handoff payload",
+      currentUserMessageId: "run-admitted:user",
+    });
+  });
+
+  it("keeps an admitted request without text instead of reusing the projected prompt", async () => {
+    const preparedUserTurnMessage: PersistedUserTurnMessage = {
+      role: "user",
+      content: [{ type: "image", mimeType: "image/png", data: "synthetic-image" }],
+      timestamp: 1,
+      idempotencyKey: "run-image-only:user",
+    };
+    const { capturedEvents } = await assembleWithCapturedHookCtx(
+      "current-input-text-free-admitted-request",
+      undefined,
+      {},
+      { preparedUserTurnMessage },
+    );
+
+    expect(capturedEvents[0]?.prompt).toBe("Handoff payload");
+    expect(capturedEvents[0]).toMatchObject({
+      currentUserMessage: "",
+      currentUserMessageId: "run-image-only:user",
+    });
+  });
+
+  it("keeps the legacy identity-free event when no request was admitted", async () => {
+    const { capturedEvents } = await assembleWithCapturedHookCtx("current-input-legacy-producer");
+
+    expect(capturedEvents).toHaveLength(1);
+    expect(capturedEvents[0]).toMatchObject({ prompt: "Handoff payload", messages: [] });
+    expect(capturedEvents[0]).not.toHaveProperty("currentUserMessage");
+    expect(capturedEvents[0]).not.toHaveProperty("currentUserMessageId");
   });
 });
 

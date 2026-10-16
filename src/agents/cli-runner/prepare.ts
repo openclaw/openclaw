@@ -38,7 +38,6 @@ import type {
   CliBackendPreparedExecution,
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
-import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
@@ -100,6 +99,7 @@ import {
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
 import { beginContextEngineLogicalTurn } from "../harness/context-engine-turn-begin.js";
+import { buildPromptBuildHookEvent } from "../hook-prompt-build-event.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
@@ -141,6 +141,7 @@ import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
 import * as mcp from "./prepare-mcp.js";
+import { buildCliPromptHookContext, resolveCliCurrentInput } from "./prepare-prompt-build.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
 import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import {
@@ -556,19 +557,13 @@ async function prepareCliRunContextWithinReadFence(
     openClawHistoryMessages ??= await loadCliSessionHistoryMessages(params);
     return openClawHistoryMessages;
   };
-  const promptBuildHookContext = {
-    runId: params.runId,
+  const promptBuildHookContext = buildCliPromptHookContext(params, {
     agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
     workspaceDir,
-    modelProviderId: params.provider,
     modelId,
-    trigger: params.trigger,
-    inputProvenance: params.inputProvenance,
-    ...buildAgentHookContextChannelFields(params),
-  };
+  });
   const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
+  const currentUserMessage = await resolveCliCurrentInput(params, skipsTurnPreparation);
   let promptBuildHookResult: ResolvedPromptBuildHookResult | undefined;
   if (!skipsTurnPreparation) {
     try {
@@ -576,6 +571,7 @@ async function prepareCliRunContextWithinReadFence(
         config: runConfig,
         prompt: params.prompt,
         messages: await loadOpenClawHistoryMessages(),
+        currentUserMessage,
         hookCtx: promptBuildHookContext,
         hookRunner: promptBuildHookRunner,
       });
@@ -888,10 +884,11 @@ async function prepareCliRunContextWithinReadFence(
     }
     try {
       return await promptBuildHookRunner.runAuthorizedPromptBuild(
-        {
+        buildPromptBuildHookEvent({
           prompt: params.prompt,
           messages: await loadOpenClawHistoryMessages(),
-        },
+          currentUserMessage,
+        }),
         promptBuildHookContext,
         {
           toolAuthorityFingerprint,

@@ -1,10 +1,13 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CurrentInboundPromptContext } from "../embedded-agent-runner/run/params.js";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import {
+  buildPromptBuildHookEvent,
+  type PromptBuildHookCurrentUserMessage,
+} from "../hook-prompt-build-event.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
 import { resolvePluginTurnContext } from "../plugin-turn-context.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -38,7 +41,7 @@ type AgentHarnessDeveloperInstructionBuilder = {
 export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   prompt: string;
   currentInboundContext?: CurrentInboundPromptContext;
-  currentUserMessage?: string | Pick<PersistedUserTurnMessage, "content" | "idempotencyKey">;
+  currentUserMessage?: PromptBuildHookCurrentUserMessage;
   currentUserMessageId?: string;
   developerInstructions: string | AgentHarnessDeveloperInstructionBuilder;
   messages: unknown[] | (() => Promise<unknown[]>);
@@ -60,33 +63,17 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     isHeartbeatTurn && Boolean(hookRunner?.hasHooks("heartbeat_prompt_contribution"));
   const hasPromptBuildHooks = Boolean(hookRunner?.hasHooks("before_prompt_build"));
   const hookCtx = buildAgentHookContext(params.ctx);
-  const currentUserMessage = params.currentUserMessage;
-  const currentUserMessageText =
-    typeof currentUserMessage === "string"
-      ? currentUserMessage
-      : currentUserMessage
-        ? typeof currentUserMessage.content === "string"
-          ? currentUserMessage.content
-          : currentUserMessage.content
-              .flatMap((part) => (part.type === "text" ? [part.text] : []))
-              .join("\n")
-        : undefined;
-  const currentUserMessageId =
-    params.currentUserMessageId ??
-    (typeof currentUserMessage === "object" ? currentUserMessage.idempotencyKey : undefined);
-  const promptEvent = {
+  const promptEvent = buildPromptBuildHookEvent({
     prompt: inputPrompt,
-    ...(typeof currentUserMessageText === "string"
-      ? { currentUserMessage: currentUserMessageText }
-      : {}),
-    ...(typeof currentUserMessageId === "string" ? { currentUserMessageId } : {}),
+    currentUserMessage: params.currentUserMessage,
+    currentUserMessageId: params.currentUserMessageId,
     messages:
       hasPromptBuildHooks || hookRunner?.hasHooks("agent_turn_prepare")
         ? typeof params.messages === "function"
           ? await params.messages()
           : params.messages
         : [],
-  };
+  });
 
   const turnContext = await resolvePluginTurnContext({
     config: params.ctx.config ?? {},
