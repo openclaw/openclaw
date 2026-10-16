@@ -18,9 +18,8 @@ jobs:
   comment:
     name: Comment on PR
     runs-on: ubuntu-24.04
-    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
     if: >
-      (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (
+      (
       github.repository == 'openclaw/openclaw' &&
       github.event.workflow_run.event == 'pull_request' &&
       (github.event.workflow_run.name == 'iOS Periphery Dead Code' ||

@@ -1,13 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { installDatabaseEngineSelection } from "./database-engine/context.js";
+import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 const firstContext: SqliteWorkerStateContext = {
   environment: { OPENCLAW_STATE_DIR: "/fixture/first" },
-  coordinatorRuntime: { directory: "/fixture/first/coordinator", keepAlive: false },
 };
 const secondContext: SqliteWorkerStateContext = {
   environment: { OPENCLAW_STATE_DIR: "/fixture/second" },
-  coordinatorRuntime: { directory: "/fixture/second/coordinator", keepAlive: false },
 };
 
 async function loadModuleCopies() {
@@ -19,7 +19,18 @@ async function loadModuleCopies() {
   return { first, second };
 }
 
+afterEach(resetDatabaseEngineSelectionForTest);
+
 describe("SQLite worker state context across module copies", () => {
+  it("hands the installed selection to generic agent workers that can also open shared state", async () => {
+    const input = { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" };
+    installDatabaseEngineSelection({ input });
+    const { first } = await loadModuleCopies();
+    const captured = first.captureSqliteWorkerStateContext(firstContext);
+    expect(captured.databaseEngineInput).toBe(input);
+    expect(first.captureSqliteWorkerStateContext(captured).databaseEngineInput).toBe(input);
+  });
+
   it("shares the current actor facts and restores nested scopes", async () => {
     const { first, second } = await loadModuleCopies();
     first.runWithSqliteWorkerStateContext(firstContext, () => {

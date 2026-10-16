@@ -12,7 +12,7 @@ import type { QaProviderMode } from "../../model-selection.js";
 import type { QaMockOpenAiServerOptions } from "../../providers/mock-openai/server-options.js";
 import { startQaProviderServer } from "../../providers/server-runtime.js";
 import type { QaThinkingLevel } from "../../qa-gateway-config.js";
-import type { RuntimeId } from "../../runtime-parity.js";
+import type { RuntimeId } from "../../runtime-id.js";
 
 function omitMemoryCoreEntry<T extends Record<string, unknown> | undefined>(entries: T): T {
   if (!entries || !Object.hasOwn(entries, "memory-core")) {
@@ -25,21 +25,19 @@ function omitMemoryCoreEntry<T extends Record<string, unknown> | undefined>(entr
 function prepareLiveTransportGatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
   return {
     ...cfg,
-    plugins: cfg.plugins
-      ? {
-          ...cfg.plugins,
-          allow: cfg.plugins.allow?.filter((pluginId) => pluginId !== "memory-core"),
-          entries: omitMemoryCoreEntry(cfg.plugins.entries),
-          slots: {
-            ...cfg.plugins.slots,
-            memory: "none",
-          },
-        }
-      : {
-          slots: {
-            memory: "none",
-          },
-        },
+    plugins: {
+      ...(cfg.plugins
+        ? {
+            ...cfg.plugins,
+            allow: cfg.plugins.allow?.filter((pluginId) => pluginId !== "memory-core"),
+            entries: omitMemoryCoreEntry(cfg.plugins.entries),
+          }
+        : {}),
+      slots: {
+        ...cfg.plugins?.slots,
+        memory: "none",
+      },
+    },
     memory: {
       ...cfg.memory,
       search: {
@@ -131,32 +129,19 @@ export function createQaLiveLaneGateway() {
         throw new Error("qa live gateway lifecycle already started or closed");
       }
       startup = (async () => {
+        const { mockProviderOptions, mutateConfig, ...gatewayParams } = params;
         mock = await startQaProviderServer(params.providerMode, {
           modelRefs: [params.primaryModel, params.alternateModel],
-          ...params.mockProviderOptions,
+          ...mockProviderOptions,
         });
         if (closed) {
           throw new Error("qa live gateway lifecycle is closed");
         }
         const gateway = await gatewayOwner.start({
-          repoRoot: params.repoRoot,
-          command: params.command,
+          ...gatewayParams,
           providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
-          transport: params.transport,
-          transportBaseUrl: params.transportBaseUrl,
-          controlUiAllowedOrigins: params.controlUiAllowedOrigins,
-          providerMode: params.providerMode,
-          primaryModel: params.primaryModel,
-          alternateModel: params.alternateModel,
-          fastMode: params.fastMode,
-          forcedRuntime: params.forcedRuntime,
-          thinkingDefault: params.thinkingDefault,
-          claudeCliAuthMode: params.claudeCliAuthMode,
-          controlUiEnabled: params.controlUiEnabled,
-          mockAuthAgentIds: params.mockAuthAgentIds,
-          ...(params.runtimeEnvPatch ? { runtimeEnvPatch: params.runtimeEnvPatch } : {}),
           mutateConfig: (cfg) =>
-            prepareLiveTransportGatewayConfig(params.mutateConfig ? params.mutateConfig(cfg) : cfg),
+            prepareLiveTransportGatewayConfig(mutateConfig ? mutateConfig(cfg) : cfg),
         });
 
         return { gateway, mock, stop: stopReady };

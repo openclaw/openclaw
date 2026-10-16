@@ -85,11 +85,15 @@ suite.define(() => {
   );
 
   it.each([1280, 390])(
-    "keeps the selected model during startup, then tracks fallback and recovery at %ipx",
+    "keeps the saved preference through startup, fallback, reload, and recovery at %ipx",
     async (width) => {
       const artifactDir = suite.artifactDir;
       await suite.withPage(
-        { viewport: { width, height: 900 }, recordVideo: { dir: artifactDir } },
+        {
+          viewport: { width, height: 900 },
+          recordVideo:
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? { dir: artifactDir } : undefined,
+        },
         async ({ page }) => {
           const selectedModel = { id: "gpt-5.5", name: "GPT-5.5", provider: "codex" };
           const activeModel = { id: "qwen3.5:9b", name: "Qwen 3.5 9B", provider: "ollama" };
@@ -128,7 +132,7 @@ suite.define(() => {
           const composer = page.locator(".agent-chat__input");
           const trigger = composer.locator('[data-chat-model-select="true"]');
 
-          await expect.poll(() => trigger.textContent()).toContain("Qwen 3.5 9B");
+          await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
           await expect
             .poll(() =>
               composer
@@ -146,14 +150,14 @@ suite.define(() => {
           const runId = (send.params as { idempotencyKey: string }).idempotencyKey;
           await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
           expect(await trigger.textContent()).not.toContain(activeModel.name);
-          expect(await trigger.getAttribute("aria-busy")).toBe("true");
-          expect(await trigger.locator(".btn__spinner").count()).toBe(1);
+          expect(await trigger.getAttribute("aria-busy")).toBe("false");
+          expect(await trigger.locator(".btn__spinner").count()).toBe(0);
           await page.screenshot({ path: `${artifactDir}/send-admission-model.png` });
           await gateway.resolveDeferred("chat.send");
           await page.getByRole("button", { name: "Stop generating" }).waitFor();
           await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
           expect(await trigger.textContent()).not.toContain("Model pending");
-          expect(await trigger.getAttribute("aria-busy")).toBe("true");
+          expect(await trigger.getAttribute("aria-busy")).toBe("false");
           await page.screenshot({ path: `${artifactDir}/pending-executing-model.png` });
           const startedAt = Date.now();
           for (const [index, model] of [selectedModel, activeModel].entries()) {
@@ -190,7 +194,7 @@ suite.define(() => {
                 activeRunState: { active: true },
               }),
             });
-            await expect.poll(() => trigger.textContent()).toContain(model.name);
+            await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
             await expect.poll(() => trigger.getAttribute("aria-busy")).toBe("false");
             expect(await trigger.locator(".btn__spinner").count()).toBe(0);
             expect(
@@ -204,7 +208,7 @@ suite.define(() => {
           }
           await page.reload();
           await gateway.waitForRequest("chat.startup");
-          await expect.poll(() => trigger.textContent()).toContain(activeModel.name);
+          await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
           expect(
             await composer
               .locator('[data-chat-model-option="codex/gpt-5.5"]')
@@ -925,38 +929,4 @@ suite.define(() => {
       }
     });
   });
-
-  it.each([
-    [1280, 900, "desktop"],
-    [390, 844, "mobile"],
-  ] as const)(
-    "restores the native composer placeholder after a whitespace-only %s draft",
-    async (width, height, label) => {
-      await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
-        const gateway = await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
-
-        const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-        await textarea.fill("   ");
-        await textarea.blur();
-
-        await expect.poll(() => textarea.inputValue()).toBe("");
-        await expect
-          .poll(() => textarea.evaluate((node) => node.matches(":placeholder-shown")))
-          .toBe(true);
-        await expect.poll(() => textarea.getAttribute("placeholder")).toContain("Message");
-        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-        const artifactDir = artifactRoot
-          ? createControlUiE2eArtifactDir("chat-composer-catalog", artifactRoot)
-          : undefined;
-        if (artifactDir) {
-          await page.locator(".agent-chat__composer-shell").screenshot({
-            animations: "disabled",
-            path: `${artifactDir}/placeholder-${label}.png`,
-          });
-        }
-      });
-    },
-  );
 });

@@ -11,16 +11,46 @@ import {
 // Feishu emoji types for typing indicator
 // See: https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
 // Full list: https://github.com/go-lark/lark/blob/main/emoji.go
-const TYPING_EMOJI = "Typing"; // Typing indicator emoji
+const TYPING_EMOJI = "Typing";
 
 export type TypingIndicatorState = {
   messageId: string;
   reactionId: string | null;
 };
 
-type FeishuMessageReactionCreateResponse = Awaited<
-  ReturnType<ReturnType<typeof createFeishuClient>["im"]["messageReaction"]["create"]>
->;
+async function requestTypingReaction<T, R>(
+  request: () => Promise<T>,
+  operation: "add" | "remove",
+  readResponse: (response: T) => R,
+  runtime?: RuntimeEnv,
+): Promise<R | undefined> {
+  const indicator = `typing indicator${operation === "remove" ? " removal" : ""}`;
+  try {
+    const response = await request();
+    // SDK errors may be returned rather than thrown; both must trip the breaker.
+    const backoffCode = getBackoffCodeFromResponse(response);
+    if (backoffCode !== undefined) {
+      if (getFeishuRuntime().logging.shouldLogVerbose()) {
+        runtime?.log?.(
+          `[feishu] ${indicator} response contains backoff code ${backoffCode}, stopping keepalive`,
+        );
+      }
+      throw new FeishuBackoffError(backoffCode);
+    }
+    return readResponse(response);
+  } catch (err) {
+    if (isFeishuBackoffError(err)) {
+      if (getFeishuRuntime().logging.shouldLogVerbose()) {
+        runtime?.log?.(`[feishu] ${indicator} hit rate-limit/quota, stopping keepalive`);
+      }
+      throw err;
+    }
+    if (getFeishuRuntime().logging.shouldLogVerbose()) {
+      runtime?.log?.(`[feishu] failed to ${operation} typing indicator: ${String(err)}`);
+    }
+    return undefined;
+  }
+}
 
 /**
  * Add a typing indicator (reaction) to a message.
@@ -45,42 +75,17 @@ export async function addTypingIndicator(params: {
 
   const client = createFeishuClient(account);
 
-  try {
-    const response = await client.im.messageReaction.create({
-      path: { message_id: messageId },
-      data: {
-        reaction_type: { emoji_type: TYPING_EMOJI },
-      },
-    });
-
-    // Feishu SDK may return a normal response with an API-level error code
-    // instead of throwing. Detect backoff codes and throw to trip the breaker.
-    const backoffCode = getBackoffCodeFromResponse(response);
-    if (backoffCode !== undefined) {
-      if (getFeishuRuntime().logging.shouldLogVerbose()) {
-        runtime?.log?.(
-          `[feishu] typing indicator response contains backoff code ${backoffCode}, stopping keepalive`,
-        );
-      }
-      throw new FeishuBackoffError(backoffCode);
-    }
-
-    const typedResponse: FeishuMessageReactionCreateResponse = response;
-    const reactionId = typedResponse.data?.reaction_id ?? null;
-    return { messageId, reactionId };
-  } catch (err) {
-    if (isFeishuBackoffError(err)) {
-      if (getFeishuRuntime().logging.shouldLogVerbose()) {
-        runtime?.log?.("[feishu] typing indicator hit rate-limit/quota, stopping keepalive");
-      }
-      throw err;
-    }
-    // Silently fail for other non-critical errors (e.g. message deleted, permission issues)
-    if (getFeishuRuntime().logging.shouldLogVerbose()) {
-      runtime?.log?.(`[feishu] failed to add typing indicator: ${String(err)}`);
-    }
-    return { messageId, reactionId: null };
-  }
+  const reactionId = await requestTypingReaction(
+    () =>
+      client.im.messageReaction.create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: TYPING_EMOJI } },
+      }),
+    "add",
+    (response) => response.data?.reaction_id ?? null,
+    runtime,
+  );
+  return { messageId, reactionId: reactionId ?? null };
 }
 
 /**
@@ -106,36 +111,13 @@ export async function removeTypingIndicator(params: {
 
   const client = createFeishuClient(account);
 
-  try {
-    const result = await client.im.messageReaction.delete({
-      path: {
-        message_id: state.messageId,
-        reaction_id: state.reactionId,
-      },
-    });
-
-    // Check for backoff codes in non-throwing SDK responses
-    const backoffCode = getBackoffCodeFromResponse(result);
-    if (backoffCode !== undefined) {
-      if (getFeishuRuntime().logging.shouldLogVerbose()) {
-        runtime?.log?.(
-          `[feishu] typing indicator removal response contains backoff code ${backoffCode}, stopping keepalive`,
-        );
-      }
-      throw new FeishuBackoffError(backoffCode);
-    }
-  } catch (err) {
-    if (isFeishuBackoffError(err)) {
-      if (getFeishuRuntime().logging.shouldLogVerbose()) {
-        runtime?.log?.(
-          "[feishu] typing indicator removal hit rate-limit/quota, stopping keepalive",
-        );
-      }
-      throw err;
-    }
-    // Silently fail for other non-critical errors
-    if (getFeishuRuntime().logging.shouldLogVerbose()) {
-      runtime?.log?.(`[feishu] failed to remove typing indicator: ${String(err)}`);
-    }
-  }
+  await requestTypingReaction(
+    () =>
+      client.im.messageReaction.delete({
+        path: { message_id: state.messageId, reaction_id: state.reactionId! },
+      }),
+    "remove",
+    () => undefined,
+    runtime,
+  );
 }

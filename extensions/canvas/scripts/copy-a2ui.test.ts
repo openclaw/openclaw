@@ -61,25 +61,6 @@ describe("canvas a2ui copy", () => {
     });
   });
 
-  it("copies bundled assets to dist", async () => {
-    await withA2uiFixture(async (dir) => {
-      const srcDir = path.join(dir, "src");
-      const outDir = path.join(dir, "dist");
-      await fs.mkdir(srcDir, { recursive: true });
-      await fs.writeFile(path.join(srcDir, "a2ui.bundle.js"), "console.log(1);", "utf8");
-      await fs.writeFile(path.join(srcDir, "a2ui-v0.9.bundle.js"), "console.log(2);", "utf8");
-
-      await copyA2uiAssets({ srcDir, outDir });
-
-      await expect(fs.readFile(path.join(outDir, "a2ui.bundle.js"), "utf8")).resolves.toBe(
-        "console.log(1);",
-      );
-      await expect(fs.readFile(path.join(outDir, "a2ui-v0.9.bundle.js"), "utf8")).resolves.toBe(
-        "console.log(2);",
-      );
-    });
-  });
-
   it("copies nested bundled assets and removes stale output", async () => {
     await withA2uiFixture(async (dir) => {
       const srcDir = path.join(dir, "src");
@@ -94,6 +75,12 @@ describe("canvas a2ui copy", () => {
 
       await copyA2uiAssets({ srcDir, outDir });
 
+      await expect(fs.readFile(path.join(outDir, "a2ui.bundle.js"), "utf8")).resolves.toBe(
+        "console.log(1);",
+      );
+      await expect(fs.readFile(path.join(outDir, "a2ui-v0.9.bundle.js"), "utf8")).resolves.toBe(
+        "console.log(2);",
+      );
       await expect(
         fs.readFile(path.join(outDir, "assets", "demo", "sample.txt"), "utf8"),
       ).resolves.toBe("nested-asset");

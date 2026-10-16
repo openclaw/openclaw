@@ -61,12 +61,14 @@ internal fun foldSafeRegion(
   host: IntRect,
   features: List<DisplayFeature>,
   direction: LayoutDirection,
-): IntRect =
-  foldSafeRegions(host, features).minWithOrNull(
+): IntRect = foldSafeRegions(host, features).preferredFoldSafeRegion(direction) ?: IntRect(host.left, host.top, host.left, host.top)
+
+internal fun List<IntRect>.preferredFoldSafeRegion(direction: LayoutDirection): IntRect? =
+  minWithOrNull(
     compareByDescending<IntRect> { it.width.toLong() * it.height }
       .thenBy { it.top }
       .thenBy { if (direction == LayoutDirection.Ltr) it.left else -it.right },
-  ) ?: IntRect(host.left, host.top, host.left, host.top)
+  )
 
 internal fun foldSafeRegions(
   host: IntRect,

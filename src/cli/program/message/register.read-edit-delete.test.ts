@@ -21,9 +21,12 @@ function createReadProgram() {
   const message = program.command("message");
   const runMessageAction = vi.fn(async () => undefined);
   const helpers: MessageCliHelpers = {
-    withMessageBase: (command) => command.option("--channel <channel>"),
-    withMessageTarget: (command) => command.option("-t, --target <target>"),
-    withRequiredMessageTarget: (command) => command.requiredOption("-t, --target <target>"),
+    withMessageBase: (command, target) => {
+      if (target === "required") {
+        command.requiredOption("-t, --target <target>");
+      }
+      return command.option("--channel <channel>");
+    },
     runMessageAction,
   };
   registerMessageReadEditDeleteCommands(message, helpers);

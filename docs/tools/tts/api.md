@@ -23,6 +23,27 @@ per-call provider request timeout in milliseconds. Per-call values override
 `tts.timeoutMs`; configured TTS timeouts override any plugin-authored
 provider default.
 
+### Tool profiles
+
+`tts` is not part of the `minimal`, `coding`, or `messaging`
+[tool profiles](/gateway/config-tools/tool-policy#tool-profiles). Agents on
+those profiles cannot call it until you grant it explicitly:
+
+```json5
+{
+  tools: {
+    profile: "messaging",
+    alsoAllow: ["tts"],
+  },
+}
+```
+
+The `full` profile and an unset profile include `tts` without extra
+configuration. Other allow/deny layers can still remove it.
+
+Tool profiles do not affect [automatic TTS](/tools/tts/output#auto-tts-behavior):
+`tts.auto` still speaks replies when the agent cannot call the `tts` tool.
+
 ## Gateway RPC
 
 | Method            | Purpose                                      |

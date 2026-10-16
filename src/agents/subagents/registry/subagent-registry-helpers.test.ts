@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../../runtime.js";
-import { resolveSubagentAttachmentDir } from "../subagent-attachment-paths.js";
+import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import {
   capFrozenResultText,
@@ -42,14 +42,6 @@ describe("resolveAnnounceRetryDelayMs", () => {
     ]);
     randomSpy.mockRestore();
   });
-
-  it("applies positive jitter without exceeding the five-minute cap", () => {
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
-
-    expect(resolveAnnounceRetryDelayMs(1)).toBe(18_000);
-    expect(resolveAnnounceRetryDelayMs(6)).toBe(300_000);
-    randomSpy.mockRestore();
-  });
 });
 
 describe("capFrozenResultText", () => {
@@ -65,48 +57,6 @@ describe("capFrozenResultText", () => {
 describe("updateSubagentArchiveAtMs", () => {
   const cfg = { agents: { defaults: { subagents: { archiveAfterMinutes: 5 } } } };
 
-  it("defers delete-mode and collector retention until terminal completion", () => {
-    for (const overrides of [
-      { cleanup: "delete" as const },
-      { cleanup: "keep" as const, collect: true },
-      { cleanup: "delete" as const, collect: true },
-    ]) {
-      const entry = createRunEntry(overrides);
-      expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(false);
-      expect(entry.archiveAtMs).toBeUndefined();
-    }
-  });
-
-  it("starts ordinary delete-mode retention at execution completion", () => {
-    const entry = createRunEntry({
-      cleanup: "delete",
-      createdAt: 500,
-      execution: { status: "terminal", startedAt: 1_000, endedAt: 602_000 },
-      archiveAtMs: 300_500,
-    });
-
-    expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(true);
-    expect(entry.archiveAtMs).toBe(902_000);
-    expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(false);
-  });
-
-  it("starts collector retention when terminal completion is frozen", () => {
-    const entry = createRunEntry({
-      collect: true,
-      execution: {
-        status: "terminal",
-        startedAt: 1_000,
-        endedAt: 2_000,
-        outcome: { status: "ok" },
-      },
-      completion: { required: false, resultText: "done", capturedAt: 2_000 },
-    });
-
-    expect(updateSwarmCollectorCompletion(entry, cfg)).toBe(true);
-    expect(entry.collectorCompletion).toEqual({ status: "done" });
-    expect(entry.archiveAtMs).toBe(302_000);
-  });
-
   it("starts retention when a delayed result first becomes waitable", () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -121,22 +71,10 @@ describe("updateSubagentArchiveAtMs", () => {
       completion: { required: false, resultText: "done" },
     });
 
-    expect(updateSwarmCollectorCompletion(entry, cfg)).toBe(true);
+    expect(updateSwarmCollectorCompletion(entry, cfg, { entry: undefined })).toBe(true);
     expect(entry.completion?.capturedAt).toBe(10_000);
     expect(entry.archiveAtMs).toBe(310_000);
     vi.useRealTimers();
-  });
-
-  it("backfills legacy collectors from their terminal time", () => {
-    const entry = createRunEntry({
-      collect: true,
-      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
-      archiveAtMs: 10_000,
-    });
-
-    expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(true);
-    expect(entry.archiveAtMs).toBe(302_000);
-    expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(false);
   });
 
   it("clears stale deadlines from active, paused, persistent, and retained runs", () => {
@@ -192,10 +130,14 @@ describe("safeRemoveAttachmentsDir", () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachment-state-"));
     const attachmentId = "2d4a8398-4d5a-4c20-9c16-0a5f6627cf92";
     const childSessionKey = "agent:main:subagent:child";
-    const attachmentDir = resolveSubagentAttachmentDir("main", childSessionKey, attachmentId, {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-    });
+    const attachmentDir = path.join(
+      resolveSubagentSessionAttachmentRootDir({
+        agentId: "main",
+        childSessionKey,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+      attachmentId,
+    );
     const siblingDir = path.join(stateDir, "attachments", "subagents", "main", "sibling");
     await fs.mkdir(attachmentDir, { recursive: true });
     await fs.mkdir(siblingDir, { recursive: true });
@@ -209,7 +151,7 @@ describe("safeRemoveAttachmentsDir", () => {
     await expect(
       safeRemoveAttachmentsDir(createRunEntry({ attachmentId, childSessionKey })),
     ).resolves.toBe(true);
-    await expect(fs.access(siblingDir)).resolves.toBeUndefined();
+    await fs.access(siblingDir);
 
     vi.unstubAllEnvs();
     await fs.rm(stateDir, { recursive: true, force: true });
@@ -243,27 +185,6 @@ describe("safeRemoveAttachmentsDir", () => {
 describe("logAnnounceGiveUp", () => {
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("includes the last delivery error in expiry warnings", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(9_000);
-    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const entry = createRunEntry({
-      execution: { status: "terminal", startedAt: 1_000, endedAt: 4_000 },
-      delivery: {
-        status: "failed",
-        attemptCount: 3,
-        lastError: "direct-primary: routed-dispatch-did-not-queue-final",
-      },
-    });
-
-    logAnnounceGiveUp(entry, "expiry");
-
-    expect(logSpy).toHaveBeenCalledWith(
-      '[warn] Subagent announce give up (expiry) run=run-1 child=agent:main:subagent:child requester=agent:main:main retries=3 endedAgo=5s deliveryError="direct-primary: routed-dispatch-did-not-queue-final"',
-    );
-    logSpy.mockRestore();
   });
 
   it("normalizes multiline delivery errors onto one gateway log line", () => {

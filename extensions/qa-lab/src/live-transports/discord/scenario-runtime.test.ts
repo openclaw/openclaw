@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  discordQaScenarioSupport,
-  type DiscordQaScenarioImplementation,
-} from "./discord-live.runtime.js";
+import * as testing from "./discord-live.runtime.js";
+import type { DiscordQaScenarioImplementation } from "./discord-live.runtime.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 import { runDiscordScenario } from "./scenario-runtime.js";
 
@@ -37,7 +35,6 @@ describe("Discord QA scenario runtime", () => {
       sutAccountId: "sut",
       sutIdentity: { id: "323456789012345678", bot: true },
     } as unknown as DiscordQaScenarioEnvironment;
-    const testing = discordQaScenarioSupport.testing;
     vi.spyOn(testing, "sendChannelMessage").mockResolvedValue({
       id: "523456789012345678",
       channel_id: environment.runtimeEnv.channelId,
@@ -95,7 +92,6 @@ describe("Discord QA scenario runtime", () => {
       sutAccountId: "sut",
       sutIdentity: { id: "323456789012345678", bot: true },
     } as unknown as DiscordQaScenarioEnvironment;
-    const testing = discordQaScenarioSupport.testing;
     vi.spyOn(testing, "sendChannelMessage").mockResolvedValue({
       id: "523456789012345678",
       channel_id: environment.runtimeEnv.channelId,

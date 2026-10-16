@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { PluginRuntime, RuntimeLogger } from "../../plugins/runtime/types.js";
+import { createPluginGatewayRuntimeMock } from "./plugin-runtime-gateway-mock.js";
 
 export type MeetingBrowserFixtureOptions = {
   url: string;
@@ -138,7 +139,11 @@ export function createMeetingBrowserFixture(options: MeetingBrowserFixtureOption
     browserResult(params),
   );
   const runtime = {
-    gateway: { isAvailable: vi.fn(async () => true), request: gatewayRequest },
+    gateway: {
+      ...createPluginGatewayRuntimeMock(),
+      isAvailable: vi.fn(async () => true),
+      request: gatewayRequest,
+    },
     system: {
       runCommandWithTimeout: vi.fn(async () => ({
         code: 0,

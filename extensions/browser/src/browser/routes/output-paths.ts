@@ -1,10 +1,4 @@
 import { pathScope } from "openclaw/plugin-sdk/security-runtime";
-/**
- * Browser route output-path helpers.
- *
- * Validates writable output paths against a route-specific root before any
- * screenshot, trace, or download route writes to disk.
- */
 import { ensureOutputDirectory } from "../output-directories.js";
 import type { BrowserResponse } from "./types.js";
 

@@ -31,10 +31,15 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../../state/openclaw-state-db.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { gatewayFixtureLifetime } from "../gateway-fixture-lifetime.test-support.js";
 import { getGatewayRecoveryRuntime } from "../server-recovery-runtime-context.js";
 import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import { removeSessionFixtureDirectory } from "../session-fixture-directory.test-support.js";
+import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { testState } from "../test-helpers.runtime-state.js";
 import { installGatewayTestHooks } from "../test-helpers.server.js";
@@ -133,6 +138,7 @@ export function installGatewaySessionsTestResources(
 
   installGatewayTestHooks({
     scope: "suite",
+    prepareServer: startServer,
     setup: async () => {
       const workspace = getRuntimeConfig().agents?.defaults?.workspace;
       if (!workspace) {
@@ -186,5 +192,18 @@ export function installGatewaySessionsTestResources(
     }
     return sharedSessionStoreDir;
   };
-  return { requireHarness, requireSharedSessionStoreDir };
+  async function withSessionTestState<T>(
+    options: Parameters<typeof withOpenClawTestState>[0],
+    run: (state: OpenClawTestState) => Promise<T>,
+  ): Promise<T> {
+    return await withOpenClawTestState(options, (state) =>
+      runQaGatewayFixture(
+        () => run(state),
+        disposeSessionReadContexts,
+        // Nested fixtures can leave suite projection work pending outside state.root.
+        () => releaseGatewaySessionStoreFixture(requireSharedSessionStoreDir()),
+      ),
+    );
+  }
+  return { requireHarness, requireSharedSessionStoreDir, withSessionTestState };
 }

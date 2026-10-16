@@ -1,5 +1,6 @@
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -13,7 +14,6 @@ import type {
   GatewayRequestContext,
   RespondFn,
 } from "../../gateway/server-methods/types.js";
-import { isAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionsTool } from "./sessions-tool.js";
@@ -74,7 +74,8 @@ function createStoredSessionTool(config: OpenClawConfig = {}) {
   });
 }
 
-async function seedSessions() {
+async function seedSessions(config: OpenClawConfig = {}) {
+  setRuntimeConfigSnapshot(config);
   for (const [index, sessionKey] of [currentKey, ...targetKeys].entries()) {
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
@@ -84,21 +85,6 @@ async function seedSessions() {
 }
 
 describe("sessions tool batch patch", () => {
-  it("retains agent-selected model recovery for batch patches", async () => {
-    const callGateway: AgentToolGatewayRequestCaller = async <T>() => {
-      expect(isAgentSessionModelPatchOrigin()).toBe(true);
-      return { outcomes: [{ ok: true, key: targetKeys[0] }] } as T;
-    };
-    const tool = createSessionsTool({ agentSessionKey: currentKey, config: {}, callGateway });
-    const result = await tool.execute("batch-model", {
-      action: "patch",
-      targets: [{ sessionKey: targetKeys[0] }],
-      model: "openai/gpt-5.6-luna",
-    });
-    expect(result.details).toMatchObject({ status: "updated", succeeded: [0], failed: [] });
-    expect(isAgentSessionModelPatchOrigin()).toBe(false);
-  });
-
   it("groups the selected sessions through the Gateway and reports a replaced target without touching the current session", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seedSessions();
@@ -174,8 +160,9 @@ describe("sessions tool batch patch", () => {
 
   it("preserves session visibility while applying allowed targets", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await seedSessions();
-      const tool = createStoredSessionTool({ tools: { sessions: { visibility: "self" } } });
+      const config: OpenClawConfig = { tools: { sessions: { visibility: "self" } } };
+      await seedSessions(config);
+      const tool = createStoredSessionTool(config);
       const result = await tool.execute("pin-visible", {
         action: "patch",
         targets: [{ sessionKey: targetKeys[0] }, { sessionKey: "current" }],
@@ -191,69 +178,22 @@ describe("sessions tool batch patch", () => {
     });
   });
 
-  it("returns the child pin error while pinning a root in the same batch", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await seedSessions();
-      const childKey = targetKeys[0]!;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: childKey },
-        { spawnedBy: currentKey },
-      );
-      const result = await createStoredSessionTool().execute("pin-selected", {
-        action: "patch",
-        targets: [{ sessionKey: childKey }, { sessionKey: "current" }],
-        pinned: true,
-      });
-      expect(result.details).toMatchObject({
-        status: "partial",
-        succeeded: [1],
-        failed: [0],
-        errors: [
-          { index: 0, message: "cannot pin a child session; pin its parent session instead" },
-        ],
-      });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })?.pinnedAt).toBeUndefined();
-      expect(loadSessionEntry({ agentId: "main", sessionKey: currentKey })?.pinnedAt).toEqual(
-        expect.any(Number),
-      );
-    });
-  });
-
-  it("rejects duplicate aliases before any batch mutation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await seedSessions();
-      const tool = createStoredSessionTool();
-      await expect(
-        tool.execute("duplicate-target", {
-          action: "patch",
-          targets: [{ sessionKey: "current" }, { sessionKey: currentKey }],
-          pinned: true,
-        }),
-      ).rejects.toThrow("Duplicate target");
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: currentKey })?.pinnedAt,
-      ).toBeUndefined();
-    });
-  });
-
   it.each([
-    { name: "empty batch", args: { targets: [] } },
     {
       name: "overlong batch",
       args: { targets: Array.from({ length: 101 }, () => ({ sessionKey: currentKey })) },
     },
     {
-      name: "mixed session selectors",
-      args: { targets: [{ sessionKey: currentKey }], sessionKey: currentKey },
-    },
-    {
       name: "shared lifecycle identity",
       args: { targets: [{ sessionKey: currentKey }], expectedSessionId: "current-session" },
     },
-    { name: "different action", args: { action: "reset", targets: [{ sessionKey: currentKey }] } },
   ])("rejects $name before dispatch", async ({ args }) => {
     const callGateway = vi.fn();
-    const tool = createSessionsTool({ agentSessionKey: currentKey, config: {}, callGateway });
+    const tool = createSessionsTool({
+      agentSessionKey: currentKey,
+      config: {},
+      callGateway,
+    });
     await expect(
       tool.execute("invalid-batch", { action: "patch", pinned: true, ...args }),
     ).rejects.toThrow();

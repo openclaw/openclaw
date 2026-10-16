@@ -1,21 +1,14 @@
-import { afterEach, beforeEach, vi } from "vitest";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
+import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
+import { configureMockSubagentRegistryPersistence } from "../agents/subagent-test-fixtures.test-helpers.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { consumeSwarmStructuredOutput } from "../agents/tools/structured-output-tool.js";
-
-vi.mock("../agents/subagents/registry/subagent-registry-state.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../agents/subagents/registry/subagent-registry-state.js")
-    >();
-  return {
-    ...actual,
-    persistSubagentRunsToDiskOrThrow: vi.fn(actual.persistSubagentRunsToDiskOrThrow),
-  };
-});
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 
 export function useMcpCollectorRegistry(
   entry: Pick<
@@ -23,14 +16,23 @@ export function useMcpCollectorRegistry(
     "runId" | "childSessionKey" | "outputSchema"
   >,
 ) {
-  beforeEach(() => {
-    resetSubagentRegistryForTests({ persist: false });
-    vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {});
-    addSubagentRunForTests({ ...entry, collect: true });
+  let state: OpenClawTestState;
+  beforeAll(async () => {
+    state = await createOpenClawTestState({
+      prefix: "openclaw-mcp-collector-registry-",
+      layout: "state-only",
+    });
   });
-  afterEach(() => {
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests({ persist: false });
+    await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
+    await addSubagentRunForTests({ ...entry, collect: true });
+  });
+  afterEach(async () => {
     consumeSwarmStructuredOutput(entry.runId);
-    resetSubagentRegistryForTests({ persist: false });
-    vi.mocked(persistSubagentRunsToDiskOrThrow).mockReset();
+    await resetSubagentRegistryForTests();
+  });
+  afterAll(async () => {
+    await state.cleanup();
   });
 }

@@ -128,7 +128,10 @@ function extractInteractiveElementText(
     }
     return parts.filter(Boolean).join("\n") || undefined;
   }
-  if ((tag === "markdown" || tag === "lark_md") && typeof element.content === "string") {
+  if (
+    (tag === "markdown" || tag === "lark_md" || tag === "plain_text") &&
+    typeof element.content === "string"
+  ) {
     return applyCardTemplateVariables(element.content, variables);
   }
   if ((tag === "text" || tag === "a" || tag === "button") && element.text !== undefined) {
@@ -137,9 +140,6 @@ function extractInteractiveElementText(
   if (tag === "at") {
     const mention = normalizeInteractiveValue(element.user_name ?? element.user_id, variables);
     return mention ? (mention.startsWith("@") ? mention : `@${mention}`) : undefined;
-  }
-  if (tag === "plain_text" && typeof element.content === "string") {
-    return applyCardTemplateVariables(element.content, variables);
   }
   if (tag === "table") {
     return extractInteractiveTableText(element, variables);
@@ -186,26 +186,13 @@ function extractInteractiveElementsText(
 
 function readInteractiveElementArrays(parsed: Record<string, unknown>): unknown[][] {
   const body = isRecord(parsed.body) ? parsed.body : undefined;
-  const elementArrays: unknown[][] = [];
-
-  for (const candidate of [parsed.elements, body?.elements]) {
-    if (Array.isArray(candidate)) {
-      elementArrays.push(candidate);
-    }
-  }
-
-  for (const candidate of [parsed.i18n_elements, body?.i18n_elements]) {
-    if (!isRecord(candidate)) {
-      continue;
-    }
-    for (const localeElements of Object.values(candidate)) {
-      if (Array.isArray(localeElements)) {
-        elementArrays.push(localeElements);
-      }
-    }
-  }
-
-  return elementArrays;
+  return [
+    parsed.elements,
+    body?.elements,
+    ...[parsed.i18n_elements, body?.i18n_elements].flatMap((candidate) =>
+      isRecord(candidate) ? Object.values(candidate) : [],
+    ),
+  ].filter(Array.isArray);
 }
 
 function readInteractiveCardTitle(

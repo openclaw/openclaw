@@ -245,7 +245,7 @@ export function hasAuth() { return false; }
       },
     } as OpenClawConfig;
 
-    refreshPersistedInstalledPluginIndex({
+    await refreshPersistedInstalledPluginIndex({
       stateDir,
       env,
       config,
@@ -347,7 +347,7 @@ export function hasAuth() { return false; }
         entries: { "enabled-only-session-owner": { enabled: true } },
       },
     } as OpenClawConfig;
-    refreshPersistedInstalledPluginIndex({
+    await refreshPersistedInstalledPluginIndex({
       stateDir,
       env,
       config,
@@ -425,7 +425,7 @@ export const legacySessionSurface = {
         entries: { "broken-session-owner": { enabled: true } },
       },
     } as OpenClawConfig;
-    refreshPersistedInstalledPluginIndex({
+    await refreshPersistedInstalledPluginIndex({
       stateDir,
       env,
       config,

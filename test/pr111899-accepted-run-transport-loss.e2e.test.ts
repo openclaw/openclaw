@@ -194,7 +194,7 @@ describe("accepted agent run transport loss against a real gateway", () => {
                 [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
               },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
           session: { store: path.join(stateDir, "sessions.json"), mainKey: "main" },
@@ -212,8 +212,7 @@ describe("accepted agent run transport loss against a real gateway", () => {
         // the transport exactly after the Gateway acceptance frame.
         proxy = await startAcceptedThenCloseProxy(`ws://127.0.0.1:${gateway.port}`);
         setTestEnvValue("OPENCLAW_GATEWAY_URL", proxy.url);
-        clearRuntimeConfigSnapshot();
-        clearConfigCache();
+        // Keep the same-process Gateway's published config alive while the CLI uses the proxy.
 
         const errorMessages: string[] = [];
         const runtime: RuntimeEnv = {

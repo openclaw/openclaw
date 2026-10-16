@@ -42,7 +42,25 @@ beforeEach(() => {
 });
 
 describe("ONNX resident model cache", () => {
-  it.each(["model-missing", "model-integrity", "invalid-tokenizer"] as const)(
+  it("releases every native session even when one release fails", async () => {
+    const failure = new Error("release failed");
+    const first = vi.fn(async () => {
+      throw failure;
+    });
+    const second = vi.fn(async () => {});
+    create.mockResolvedValueOnce({ release: first }).mockResolvedValueOnce({ release: second });
+    const cache = new ModelCache({ modelDir: "/models", threads: 1, maxLoadedModels: 2 });
+    await cache.get(edge);
+    await cache.get(base);
+    await expect(cache.close()).rejects.toMatchObject({ errors: [failure] });
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledOnce();
+    await cache.close();
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledOnce();
+  });
+
+  it.each(["model-integrity", "invalid-tokenizer"] as const)(
     "keeps the warm session when the replacement has %s",
     async (failure) => {
       const release = vi.fn(async () => {});
@@ -59,7 +77,7 @@ describe("ONNX resident model cache", () => {
       } else {
         vi.mocked(readModelArtifact).mockRejectedValueOnce(new OnnxWorkerError(failure));
       }
-      await expect(cache.get(base)).rejects.toThrow(/model-missing|model-integrity/);
+      await expect(cache.get(base)).rejects.toThrow("model-integrity");
 
       const resident = await cache.get(edge);
       await expect(

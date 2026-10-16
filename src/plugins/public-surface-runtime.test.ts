@@ -3,11 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
 import {
-  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   resolveBundledPluginPublicSurfacePath,
   resolveBundledPluginSourcePublicSurfacePath,
   resolvePluginRootPublicSurfacePath,
@@ -101,47 +101,49 @@ describe("bundled plugin public surface runtime", () => {
     },
   );
 
-  it.each(["dist", "dist-runtime"])(
-    "retains config migration entrypoints after externalization in %s",
-    (dist) => {
-      const rootDir = tempDirs.make("openclaw-retained-doctor-");
-      const retained = path.join(rootDir, dist, "config-doctor", "demo.js");
-      fs.mkdirSync(path.dirname(retained), { recursive: true });
-      fs.writeFileSync(retained, "export const legacyConfigRules = [];\n");
-      const params = { rootDir, dirName: "demo", env: noBundledPluginOverrideEnv };
+  it.each([
+    ["dist", "config-doctor"],
+    ["dist-runtime", "config-doctor"],
+    ["dist", "state-retention"],
+    ["dist-runtime", "state-retention"],
+  ])("retains %s/%s entrypoints after externalization", (dist, surface) => {
+    const rootDir = tempDirs.make("openclaw-retained-doctor-");
+    const retained = path.join(rootDir, dist, surface, "demo.js");
+    fs.mkdirSync(path.dirname(retained), { recursive: true });
+    fs.writeFileSync(retained, "export const legacyConfigRules = [];\n");
+    const params = { rootDir, dirName: "demo", env: noBundledPluginOverrideEnv };
 
-      expect(
-        resolveBundledPluginPublicSurfacePath({
-          ...params,
-          artifactBasename: "config-doctor-api.js",
-        }),
-      ).toBe(retained);
-      expect(
-        resolveBundledPluginPublicSurfacePath({
-          ...params,
-          bundledPluginsDir: path.join(rootDir, dist, "extensions"),
-          artifactBasename: "config-doctor-api.js",
-        }),
-      ).toBe(retained);
-      for (const artifactBasename of ["doctor-contract-api.js", "api.js"]) {
-        expect(resolveBundledPluginPublicSurfacePath({ ...params, artifactBasename })).toBeNull();
-      }
-      expect(
-        resolveBundledPluginPublicSurfacePath({
-          ...params,
-          artifactBasename: "config-doctor-api.js",
-          bundledPluginsDir: tempDirs.make("openclaw-foreign-plugins-"),
-        }),
-      ).toBeNull();
-      expect(
-        resolveBundledPluginPublicSurfacePath({
-          ...params,
-          artifactBasename: "config-doctor-api.js",
-          env: { ...noBundledPluginOverrideEnv, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-        }),
-      ).toBeNull();
-    },
-  );
+    expect(
+      resolveBundledPluginPublicSurfacePath({
+        ...params,
+        artifactBasename: `${surface}-api.js`,
+      }),
+    ).toBe(retained);
+    expect(
+      resolveBundledPluginPublicSurfacePath({
+        ...params,
+        bundledPluginsDir: path.join(rootDir, dist, "extensions"),
+        artifactBasename: `${surface}-api.js`,
+      }),
+    ).toBe(retained);
+    for (const artifactBasename of ["doctor-contract-api.js", "api.js"]) {
+      expect(resolveBundledPluginPublicSurfacePath({ ...params, artifactBasename })).toBeNull();
+    }
+    expect(
+      resolveBundledPluginPublicSurfacePath({
+        ...params,
+        artifactBasename: `${surface}-api.js`,
+        bundledPluginsDir: tempDirs.make("openclaw-foreign-plugins-"),
+      }),
+    ).toBeNull();
+    expect(
+      resolveBundledPluginPublicSurfacePath({
+        ...params,
+        artifactBasename: `${surface}-api.js`,
+        env: { ...noBundledPluginOverrideEnv, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      }),
+    ).toBeNull();
+  });
 
   it("exports the canonical public surface source extension list", () => {
     expect(PUBLIC_SURFACE_SOURCE_EXTENSIONS).toEqual([

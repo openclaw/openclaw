@@ -7,15 +7,7 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { formatDaemonRuntimeShort } from "./status.format.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 
-type DaemonStatusSummary = Awaited<ReturnType<typeof readServiceStatusSummary>> & {
-  loaded: boolean | null;
-  runtimeShort: string | null;
-};
-
-async function buildDaemonStatusSummary(
-  serviceLabel: "gateway" | "node",
-  timeoutMs?: number,
-): Promise<DaemonStatusSummary> {
+async function buildDaemonStatusSummary(serviceLabel: "gateway" | "node", timeoutMs?: number) {
   const service = serviceLabel === "gateway" ? resolveGatewayService() : resolveNodeService();
   const fallbackLabel = serviceLabel === "gateway" ? "Daemon" : "Node";
   const activePackageRoot =
@@ -41,12 +33,10 @@ async function buildDaemonStatusSummary(
   };
 }
 
-/** Returns the gateway daemon status summary. */
-export async function getDaemonStatusSummary(timeoutMs?: number): Promise<DaemonStatusSummary> {
+export async function getDaemonStatusSummary(timeoutMs?: number) {
   return await buildDaemonStatusSummary("gateway", timeoutMs);
 }
 
-/** Returns the node service status summary. */
-export async function getNodeDaemonStatusSummary(timeoutMs?: number): Promise<DaemonStatusSummary> {
+export async function getNodeDaemonStatusSummary(timeoutMs?: number) {
   return await buildDaemonStatusSummary("node", timeoutMs);
 }

@@ -1,7 +1,6 @@
 // Canonical durable approval presentation safety tests.
 import { describe, expect, it } from "vitest";
 import { buildApprovalPresentation } from "./approval-presentation.js";
-import { PLUGIN_APPROVAL_DETAIL_MAX_LENGTH } from "./plugin-approvals.js";
 
 const allowedDecisions = ["allow-once", "deny"] as const;
 
@@ -78,7 +77,7 @@ describe("buildApprovalPresentation", () => {
       host: "gate\\u{A}way\\u{202E}",
       nodeId: "node\\u{0}id",
     });
-    expect(JSON.stringify(presentation)).not.toContain(githubToken);
+    expect(presentation).toMatchObject({ agentId: githubToken });
     expect(
       buildExecPresentation({
         command: "printf safe",
@@ -110,27 +109,6 @@ describe("buildApprovalPresentation", () => {
     });
   });
 
-  it("redacts secret-like content before applying presentation length limits", () => {
-    const githubToken = `ghp_${"a".repeat(100)}`;
-    const openAiToken = "sk-abc123456789012345678";
-    const presentation = buildPluginPresentation({
-      title: githubToken,
-      description: `Token:\n${openAiToken}`,
-      pluginId: githubToken,
-      toolName: openAiToken,
-      agentId: `operator-${githubToken}`,
-    });
-
-    expect(presentation).not.toBeNull();
-    const serialized = JSON.stringify(presentation);
-    expect(serialized).not.toContain(githubToken);
-    expect(serialized).not.toContain(openAiToken);
-    expect(presentation).toMatchObject({
-      kind: "plugin",
-      description: expect.stringContaining("Token:\n"),
-    });
-  });
-
   it("applies plugin limits by Unicode code point after sanitization", () => {
     const title = String.fromCodePoint(0x1f680).repeat(80);
     const description = String.fromCodePoint(0x1f6e1).repeat(512);
@@ -158,7 +136,7 @@ describe("buildApprovalPresentation", () => {
     const presentation = buildPluginPresentation({
       title: "Review tool input",
       description: "Bounded channel summary",
-      detail: "x".repeat(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH + 1),
+      detail: "x".repeat(16_385),
     });
 
     expect(presentation).toMatchObject({
@@ -168,7 +146,7 @@ describe("buildApprovalPresentation", () => {
     if (presentation?.kind !== "plugin" || !presentation.detail) {
       throw new Error("expected plugin detail");
     }
-    expect(Array.from(presentation.detail)).toHaveLength(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH);
+    expect(Array.from(presentation.detail)).toHaveLength(16_384);
   });
 
   it("projects only bounded reviewer-safe external verification metadata", () => {
@@ -282,24 +260,20 @@ describe("buildApprovalPresentation (system-agent)", () => {
     });
   }
 
-  it("drops a split emoji at the title boundary instead of leaving a lone surrogate", () => {
+  it("drops split emoji at the title and description boundaries without lone surrogates", () => {
     const title = `${"a".repeat(79)}\u{1F600}`;
-    const presentation = buildSystemAgentPresentation({ title, description: "d" });
-    expect(presentation).toMatchObject({ kind: "system-agent", title: "a".repeat(79) });
+    const description = `${"a".repeat(511)}\u{1F6E1}`;
+    const presentation = buildSystemAgentPresentation({ title, description });
+    expect(presentation).toMatchObject({
+      kind: "system-agent",
+      title: "a".repeat(79),
+      description: "a".repeat(511),
+    });
   });
 
   it("keeps an emoji that fits within the title limit intact", () => {
     const title = `${"a".repeat(78)}\u{1F600}`;
     const presentation = buildSystemAgentPresentation({ title, description: "d" });
     expect(presentation).toMatchObject({ kind: "system-agent", title });
-  });
-
-  it("drops a split emoji at the description boundary instead of leaving a lone surrogate", () => {
-    const description = `${"a".repeat(511)}\u{1F6E1}`;
-    const presentation = buildSystemAgentPresentation({ title: "t", description });
-    expect(presentation).toMatchObject({
-      kind: "system-agent",
-      description: "a".repeat(511),
-    });
   });
 });

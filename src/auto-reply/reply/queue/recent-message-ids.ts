@@ -1,4 +1,3 @@
-// Recent-queue message-id dedupe shared by enqueue admission and abandonment release.
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import type { TurnAdoptionLifecycle } from "../../get-reply-options.types.js";
 
@@ -38,8 +37,4 @@ export function recordRecentQueueMessageId(
       onAbandoned?.();
     };
   }
-}
-
-export function resetRecentQueuedMessageIdDedupe(): void {
-  RECENT_QUEUE_MESSAGE_IDS.clear();
 }

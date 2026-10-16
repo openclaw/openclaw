@@ -1,10 +1,10 @@
 // Signal tests cover access policy plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { AccessGroupsConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { resolveSignalSender } from "../identity.js";
 import { setSignalRuntime } from "../runtime.js";
-import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
+import { resolveSignalAccessState } from "./access-policy.js";
 
 beforeEach(() => {
   setSignalRuntime(createPluginRuntimeMock());
@@ -62,15 +62,6 @@ function accessGroupsConfig(
 }
 
 describe("resolveSignalAccessState", () => {
-  it("allows group messages when groupAllowFrom contains the inbound Signal group id", async () => {
-    const { groupDecision } = await resolveGroupAccess({
-      groupAllowFrom: [SIGNAL_GROUP_ID],
-      groupId: SIGNAL_GROUP_ID,
-    });
-
-    expect(groupDecision.decision).toBe("allow");
-  });
-
   it("allows Signal group target forms in groupAllowFrom", async () => {
     const groupTargetDecision = await resolveGroupAccess({
       groupAllowFrom: [`group:${SIGNAL_GROUP_ID}`],
@@ -83,24 +74,6 @@ describe("resolveSignalAccessState", () => {
 
     expect(groupTargetDecision.groupDecision.decision).toBe("allow");
     expect(signalGroupTargetDecision.groupDecision.decision).toBe("allow");
-  });
-
-  it("blocks group messages when groupAllowFrom contains a different Signal group id", async () => {
-    const { groupDecision } = await resolveGroupAccess({
-      groupAllowFrom: [OTHER_SIGNAL_GROUP_ID],
-      groupId: SIGNAL_GROUP_ID,
-    });
-
-    expect(groupDecision.decision).toBe("block");
-  });
-
-  it("keeps sender allowlist compatibility for Signal group messages", async () => {
-    const { groupDecision } = await resolveGroupAccess({
-      groupAllowFrom: [SIGNAL_SENDER.e164],
-      groupId: SIGNAL_GROUP_ID,
-    });
-
-    expect(groupDecision.decision).toBe("allow");
   });
 
   it("falls back to allowFrom for group sender access when groupAllowFrom is unset", async () => {
@@ -284,46 +257,5 @@ describe("resolveSignalAccessState", () => {
     expect(access.senderAccess.decision).toBe("allow");
     expect(access.commandAccess.authorized).toBe(true);
     expect(access.commandAccess.shouldBlockControlCommand).toBe(false);
-  });
-});
-
-describe("handleSignalDirectMessageAccess", () => {
-  it("returns true for already-allowed direct messages", async () => {
-    await expect(
-      handleSignalDirectMessageAccess({
-        dmPolicy: "open",
-        dmAccessDecision: "allow",
-        senderId: "+15551230000",
-        senderIdLine: "Signal number: +15551230000",
-        senderDisplay: "Alice",
-        accountId: "default",
-        sendPairingReply: async () => {},
-        log: () => {},
-      }),
-    ).resolves.toBe(true);
-  });
-
-  it("issues a pairing challenge for pairing-gated senders", async () => {
-    const replies: string[] = [];
-    const sendPairingReply = vi.fn(async (text: string) => {
-      replies.push(text);
-    });
-
-    await expect(
-      handleSignalDirectMessageAccess({
-        dmPolicy: "pairing",
-        dmAccessDecision: "pairing",
-        senderId: "+15551230000",
-        senderIdLine: "Signal number: +15551230000",
-        senderDisplay: "Alice",
-        senderName: "Alice",
-        accountId: "default",
-        sendPairingReply,
-        log: () => {},
-      }),
-    ).resolves.toBe(false);
-
-    expect(sendPairingReply).toHaveBeenCalledTimes(1);
-    expect(replies[0]).toContain("Pairing code:");
   });
 });

@@ -385,6 +385,8 @@ class SettingsScreensContrastTest {
     previousRuntime = app.peekRuntime()
     NativeStringResources.install(app)
     NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
+    val plainPrefs = app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().putString("node.instanceId", "9f294b46-53d6-4eda-9d9e-4db361727e0a").commit()
     val prefs = SecurePrefs(app, app.getSharedPreferences("typography-${UUID.randomUUID()}", Context.MODE_PRIVATE))
     prefs.setManualHost("wss://gateway.example.test")
     prefs.setManualPort(443)
@@ -591,11 +593,11 @@ class SettingsScreensContrastTest {
       File(evidence, "cron-readiness.json").writeText(
         JSONObject()
           .put("connected", model.isConnected.value)
-          .put("status", model.statusText.value)
+          .put("status", model.gatewayConnectionDisplay.value.statusText)
           .put("cronEnabled", model.cronStatus.value.enabled)
           .put("cronRefreshing", model.cronRefreshing.value)
           .put("runtimeConnected", runtime.isConnected.value)
-          .put("runtimeStatus", runtime.statusText.value)
+          .put("runtimeStatus", runtime.gatewayConnectionDisplay.value.statusText)
           .put("cronError", model.cronErrorText.value)
           .put("methods", JSONArray(gateway.methods))
           .toString(2),
@@ -707,7 +709,7 @@ class SettingsScreensContrastTest {
   fun terminalNoticeDoesNotCoexistWithItsActionableCard() {
     app = RuntimeEnvironment.getApplication() as NodeApp
     previousRuntime = app.peekRuntime()
-    gateway = OperationalCaptionsGateway()
+    gateway = OperationalCaptionsGateway(keepOtherApprovalPending = true)
     val prefs = SecurePrefs(app, app.getSharedPreferences("approval-coherence-${UUID.randomUUID()}", Context.MODE_PRIVATE))
     prefs.setManualTls(false)
     prefs.saveGatewayCredentials(gateway.endpoint.stableId, token = "synthetic-coherence-proof")
@@ -729,11 +731,11 @@ class SettingsScreensContrastTest {
         SemanticsActions.OnClick in it.config && SemanticsProperties.Disabled !in it.config
       } && composeRule.onAllNodesWithText("echo ok").fetchSemanticsNodes().isNotEmpty() &&
         !model.execApprovalInbox.value.refreshing && model.execApprovalInbox.value.approvals
-          .singleOrNull()
-          ?.id == "approval-1"
+          .map { it.id }
+          .toSet() == setOf("approval-1", "approval-2")
     }
     composeRule
-      .onNodeWithText("Deny")
+      .onNodeWithText("Allow Always")
       .performScrollTo()
       .assertIsDisplayed()
       .assertIsEnabled()
@@ -755,26 +757,28 @@ class SettingsScreensContrastTest {
         composeRule.waitUntil(10_000) {
           composeRule.onAllNodesWithText("Approval approval-1").fetchSemanticsNodes().isNotEmpty() && noticeReached.count == 0L
         }
+        composeRule.onNodeWithText("echo still pending").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("A prior response already denied this approval.").assertIsDisplayed()
         composeRule.onNodeWithText("Approval approval-1").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Dismiss approval notice").assertIsDisplayed().assertHasClickAction()
         val commands = composeRule.onAllNodesWithText("echo ok").fetchSemanticsNodes()
-        val deny = composeRule.onAllNodesWithText("Deny").fetchSemanticsNodes()
+        val allowAlways = composeRule.onAllNodesWithText("Allow Always").fetchSemanticsNodes()
         val mixed =
           commands.isNotEmpty() &&
-            deny.any {
+            allowAlways.any {
               SemanticsActions.OnClick in it.config && SemanticsProperties.Disabled !in it.config
             }
         if (mixed) {
           composeRule.onNodeWithText("echo ok").assertIsDisplayed()
           composeRule
-            .onNodeWithText("Deny")
+            .onNodeWithText("Allow Always")
             .assertIsDisplayed()
             .assertIsEnabled()
             .assertHasClickAction()
           assertEquals(
             "approval-1",
             model.execApprovalInbox.value.approvals
-              .single()
+              .single { it.id == "approval-1" }
               .id,
           )
         }
@@ -796,21 +800,36 @@ class SettingsScreensContrastTest {
     composeRule.waitUntil(10_000) {
       composeRule.onAllNodesWithText("echo ok").fetchSemanticsNodes().isEmpty() &&
         model.execApprovalInbox.value.approvals
-          .isEmpty() && model.execApprovalInbox.value.notice
+          .singleOrNull()
+          ?.id == "approval-2" && model.execApprovalInbox.value.notice
           ?.approvalId == "approval-1"
     }
+    composeRule.onNodeWithText("echo still pending").assertIsDisplayed()
     composeRule.onNodeWithText("Approval approval-1").assertIsDisplayed()
-    composeRule.onNodeWithText("Deny").assertDoesNotExist()
+    composeRule.onNodeWithText("Allow Always").assertDoesNotExist()
+    composeRule.onNodeWithText("Allow Once").assertIsEnabled().assertHasClickAction()
     composeRule.onNodeWithContentDescription("Dismiss approval notice").performClick()
     composeRule.waitUntil(10_000) {
       composeRule.onAllNodesWithText("Approval approval-1").fetchSemanticsNodes().isEmpty() && model.execApprovalInbox.value.notice == null
     }
+    composeRule.onNodeWithText("A prior response already denied this approval.").assertDoesNotExist()
+    composeRule.onNodeWithContentDescription("Dismiss approval notice").assertDoesNotExist()
+    composeRule.onNodeWithText("echo still pending").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithText("Allow Once").assertIsEnabled().assertHasClickAction()
+    assertEquals(
+      "approval-2",
+      model.execApprovalInbox.value.approvals
+        .single()
+        .id,
+    )
     assertFalse(gateway.methods.any { it in setOf("approval.resolve", "exec.approval.resolve", "chat.send", "cron.run") })
     assertFalse("A rendered terminal notice must not coexist with its same-ID actionable card", renderedTogether)
   }
 }
 
-private class OperationalCaptionsGateway : AutoCloseable {
+private class OperationalCaptionsGateway(
+  private val keepOtherApprovalPending: Boolean = false,
+) : AutoCloseable {
   private val json = Json { ignoreUnknownKeys = true }
   private val server = MockWebServer()
   private val startedAtMs = System.currentTimeMillis()
@@ -874,11 +893,20 @@ private class OperationalCaptionsGateway : AutoCloseable {
             }
 
             "exec.approval.list" -> {
-              json.parseToJsonElement("""[{"id":"approval-1","createdAtMs":$createdAtMs,"expiresAtMs":$expiresAtMs}]""")
+              val ids = if (keepOtherApprovalPending) listOf("approval-1", "approval-2") else listOf("approval-1")
+              json.parseToJsonElement(
+                ids.joinToString(prefix = "[", postfix = "]") { approvalId ->
+                  """{"id":"$approvalId","createdAtMs":$createdAtMs,"expiresAtMs":$expiresAtMs}"""
+                },
+              )
             }
 
             "approval.get" -> {
-              if (params["id"]?.jsonPrimitive?.content == "approval-1") approval() else null
+              when (val approvalId = params["id"]?.jsonPrimitive?.content) {
+                "approval-1" -> approval(approvalId)
+                "approval-2" -> if (keepOtherApprovalPending) approval(approvalId) else null
+                else -> null
+              }
             }
 
             "chat.history" -> {
@@ -926,10 +954,13 @@ private class OperationalCaptionsGateway : AutoCloseable {
       }
     }
 
-  private fun approval(): JsonElement {
-    val terminalFields = if (terminal) ",\"resolvedAtMs\":${System.currentTimeMillis()},\"reason\":\"user\",\"decision\":\"deny\"" else ""
+  private fun approval(id: String): JsonElement {
+    val resolved = id == "approval-1" && terminal
+    val terminalFields = if (resolved) ",\"resolvedAtMs\":${System.currentTimeMillis()},\"reason\":\"user\",\"decision\":\"deny\"" else ""
+    val command = if (id == "approval-1") "echo ok" else "echo still pending"
+    val decisions = if (id == "approval-1") "[\"allow-once\",\"allow-always\",\"deny\"]" else "[\"allow-once\",\"deny\"]"
     return json.parseToJsonElement(
-      """{"approval":{"id":"approval-1","urlPath":"/approve/approval-1","status":"${if (terminal) "denied" else "pending"}","createdAtMs":$createdAtMs,"expiresAtMs":$expiresAtMs,"presentation":{"kind":"exec","commandText":"echo ok","commandPreview":"echo","warningText":null,"host":"gateway","nodeId":null,"agentId":"main","allowedDecisions":["allow-once","allow-always","deny"]}$terminalFields}}""",
+      """{"approval":{"id":"$id","urlPath":"/approve/$id","status":"${if (resolved) "denied" else "pending"}","createdAtMs":$createdAtMs,"expiresAtMs":$expiresAtMs,"presentation":{"kind":"exec","commandText":"$command","commandPreview":"echo","warningText":null,"host":"gateway","nodeId":null,"agentId":"main","allowedDecisions":$decisions}$terminalFields}}""",
     )
   }
 

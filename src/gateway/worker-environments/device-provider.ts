@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { hasEffectivePairedDeviceRole } from "../../infra/device-pairing.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
-  formatNodeRunnerUpdateRequired,
+  formatNodeRunnerInventoryIssue,
   type NodeRunnerInventoryIssue,
 } from "../../infra/node-runner-inventory.js";
 import {
@@ -15,6 +15,7 @@ import type {
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import { workerInferencePlacement } from "./inference-placement.js";
 import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
 
 export { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
@@ -53,7 +54,7 @@ export async function resolveDeviceWorkerAvailability(
 
 export function deviceUnavailableText(deviceId: string, availability: DeviceWorkerAvailability) {
   if (availability.issue) {
-    return formatNodeRunnerUpdateRequired(deviceId, availability.issue);
+    return formatNodeRunnerInventoryIssue(deviceId, availability.issue);
   }
   switch (availability.unavailableReason) {
     case "unpaired":
@@ -85,6 +86,10 @@ export async function reconcileDeviceWorker(
 }
 
 function requireDeviceId(profile: WorkerProfile): string {
+  workerInferencePlacement({
+    providerId: DEVICE_WORKER_PROVIDER_ID,
+    profileSnapshot: { settings: profile },
+  });
   const deviceId = profile.device;
   if (typeof deviceId !== "string" || !deviceId.trim()) {
     throw new WorkerProviderError("device worker profile requires a device setting");

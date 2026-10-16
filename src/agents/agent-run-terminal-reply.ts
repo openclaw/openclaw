@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { normalizeAgentRunRouteChange } from "./agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
 
@@ -13,29 +13,38 @@ function isMessageToolNotCalledTerminalReply(
   return reply?.disposition === "empty" && reply.code === "message-tool-not-called";
 }
 
-/** Sanitizes and caps producer-owned text before it enters lifecycle or durable state. */
-export function sanitizeAgentRunTerminalReplyText(text: string): string {
-  const sanitized = stripInternalMetadataForDisplay(text).trim();
-  if (sanitized.length <= AGENT_RUN_TERMINAL_REPLY_MAX_CHARS) {
-    return sanitized;
+/** Sanitizes and caps known-visible text without classifying silence. */
+export function sanitizeAgentRunTerminalReply(rawText: string): AgentRunTerminalReplySnapshot {
+  const visibleText = stripInternalMetadataForDisplay(rawText).trim();
+  const text = truncateWithMarker(visibleText, AGENT_RUN_TERMINAL_REPLY_MAX_CHARS, {
+    marker: "…",
+    reserve: 1,
+    trimEnd: true,
+  });
+  if (!text) {
+    return { disposition: "empty" };
   }
-  return `${truncateUtf16Safe(sanitized, AGENT_RUN_TERMINAL_REPLY_MAX_CHARS - 1).trimEnd()}…`;
+  return { disposition: "visible", text };
 }
 
-/** Builds the authoritative terminal reply fact while raw assistant text is still available. */
-export function buildAgentRunTerminalReplySnapshot(params: {
-  visibleText?: string;
+export type PreparedAgentRunTerminalReply = {
+  text: string;
+  terminalReply: AgentRunTerminalReplySnapshot;
+};
+
+/** Classifies raw final text, then strips one literal leading silence line before rendering. */
+export function prepareAgentRunTerminalReply(params: {
   rawText?: string;
-  terminalReplyKind?: "silent-empty";
-}): AgentRunTerminalReplySnapshot {
-  if (
-    params.terminalReplyKind === "silent-empty" ||
-    isSilentReplyText(params.rawText ?? params.visibleText, SILENT_REPLY_TOKEN)
-  ) {
-    return { disposition: "silent" };
+}): PreparedAgentRunTerminalReply {
+  const rawText = params.rawText ?? "";
+  if (isSilentReplyText(rawText)) {
+    return { text: "", terminalReply: { disposition: "silent" } };
   }
-  const text = sanitizeAgentRunTerminalReplyText(params.visibleText ?? "");
-  return text ? { disposition: "visible", text } : { disposition: "empty" };
+  const text = rawText.startsWith("NO_REPLY\n") ? rawText.slice("NO_REPLY\n".length) : rawText;
+  return {
+    text,
+    terminalReply: sanitizeAgentRunTerminalReply(text),
+  };
 }
 
 /** Normalizes lifecycle/RPC evidence without allowing raw or unbounded text through. */
@@ -62,11 +71,14 @@ export function normalizeAgentRunTerminalReplySnapshot(
   if (typeof rawText !== "string") {
     return undefined;
   }
-  const text = sanitizeAgentRunTerminalReplyText(rawText);
-  const modelRouteChange = normalizeAgentRunRouteChange(value.modelRouteChange);
-  return text
-    ? { disposition: "visible", text, ...(modelRouteChange ? { modelRouteChange } : {}) }
-    : { disposition: "empty" };
+  const snapshot = sanitizeAgentRunTerminalReply(rawText);
+  if (snapshot.disposition === "visible") {
+    const modelRouteChange = normalizeAgentRunRouteChange(value.modelRouteChange);
+    if (modelRouteChange) {
+      snapshot.modelRouteChange = modelRouteChange;
+    }
+  }
+  return snapshot;
 }
 
 /** Reply evidence merges independently from sticky timeout/cancellation precedence. */
@@ -74,19 +86,14 @@ export function mergeAgentRunTerminalReplySnapshot(
   existing: AgentRunTerminalReplySnapshot | undefined,
   incoming: AgentRunTerminalReplySnapshot | undefined,
 ): AgentRunTerminalReplySnapshot | undefined {
-  if (!incoming) {
+  if (!incoming || isMessageToolNotCalledTerminalReply(existing)) {
     return existing;
   }
-  if (!existing) {
-    return incoming;
-  }
-  if (isMessageToolNotCalledTerminalReply(existing)) {
-    return existing;
-  }
-  if (isMessageToolNotCalledTerminalReply(incoming)) {
-    return incoming;
-  }
-  if (existing.disposition === "empty") {
+  if (
+    !existing ||
+    isMessageToolNotCalledTerminalReply(incoming) ||
+    existing.disposition === "empty"
+  ) {
     return incoming;
   }
   return incoming.disposition === "empty" ? existing : incoming;

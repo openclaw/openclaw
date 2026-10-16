@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as workerContext from "../state/openclaw-state-worker-context.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
@@ -95,30 +96,10 @@ it("persists captured snapshots and serves the offline catalog without parent SQ
       },
       savedAt: "2026-09-16T00:00:00.000Z",
     };
-    const native = requireNodeSqlite();
-    const counters = [
-      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-      vi.spyOn(native.DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
     try {
-      const calibration = new native.DatabaseSync(":memory:");
-      try {
-        calibration.exec("CREATE TABLE calibration (value INTEGER)");
-        calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
-        const read = calibration.prepare("SELECT value FROM calibration");
-        read.get();
-        read.all();
-        expect([...read.iterate()]).toHaveLength(1);
-        expect(counters.every((counter) => counter.mock.calls.length > 0)).toBe(true);
-      } finally {
-        calibration.close();
-        for (const counter of counters) {
-          counter.mockClear();
-        }
-      }
+      sql.calibrate();
 
       await expect(store.read(url)).resolves.toBeNull();
       expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
@@ -144,11 +125,9 @@ it("persists captured snapshots and serves the offline catalog without parent SQ
       });
       await expect(store.read(url)).resolves.toBeNull();
       expect(existsSync(resolveOpenClawStateSqlitePath(options.env))).toBe(false);
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      sql.expectIdle();
     } finally {
-      for (const counter of counters) {
-        counter.mockRestore();
-      }
+      sql.restore();
     }
   });
 });

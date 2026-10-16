@@ -31,7 +31,7 @@ export function createOfflineDeviceNode(nowMs = Date.now()) {
       memoryTotalBytes: 192 * 1024 ** 3,
       memoryFreeBytes: 41 * 1024 ** 3,
       diskTotalBytes: 2 * 1024 ** 4,
-      diskAvailableBytes: 1.2 * 1024 ** 4,
+      diskAvailableBytes: Math.round(1.2 * 1024 ** 4),
       updatedAtMs: nowMs - 27 * 86_400_000,
     },
   };

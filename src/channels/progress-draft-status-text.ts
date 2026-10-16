@@ -1,13 +1,13 @@
-// Progress-draft status text normalization for reasoning, preamble, and commentary lanes.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { compactProgressText } from "../shared/text-truncate.js";
 import { type CodeRegion, findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
 
 const REASONING_PROGRESS_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu;
+const REASONING_PROGRESS_HEADING_RE =
+  /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i;
 const REASONING_PROGRESS_TAG_NAMES = [
   "think",
   "thinking",
@@ -31,10 +31,7 @@ function normalizeReasoningProgressLine(text: string): string {
     return "";
   }
   return stripReasoningProgressTagsOutsideCode(reasoningText)
-    .replace(
-      /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i,
-      "",
-    )
+    .replace(REASONING_PROGRESS_HEADING_RE, "")
     .replace(/\s{2,}|[^\S ]/g, " ")
     .trim();
 }
@@ -58,18 +55,10 @@ function readReasoningProgressTextOutsideCode(text: string): string | undefined 
       continue;
     }
     hasTags = true;
-    if (match[1]) {
-      if (inReasoning) {
-        chunks.push(text.slice(cursor, offset));
-      }
-      inReasoning = false;
-      cursor = offset + match[0].length;
-      continue;
-    }
     if (inReasoning) {
       chunks.push(text.slice(cursor, offset));
     }
-    inReasoning = true;
+    inReasoning = !match[1];
     cursor = offset + match[0].length;
   }
   if (!hasTags) {
@@ -125,11 +114,7 @@ export function formatReasoningProgressDisplayLine(text: string, maxChars: numbe
 }
 
 export function sanitizeProgressStatusText(text: string): string {
-  const cleaned = stripInlineDirectiveTagsForDelivery(text).text.trim();
-  if (!cleaned || isSilentCommentaryProgressText(cleaned)) {
-    return "";
-  }
-  return redactToolPayloadText(cleaned);
+  return stripInlineDirectiveTagsForDelivery(text).text.trim();
 }
 
 export function normalizeCommentaryProgressText(text: string): string {
@@ -143,11 +128,6 @@ export function normalizeCommentaryProgressText(text: string): string {
     .filter(Boolean)
     .map((line) => `_${line}_`)
     .join("\n");
-}
-
-function isSilentCommentaryProgressText(text: string): boolean {
-  const normalized = text.replace(/^[\s*_`~]+|[\s*_`~]+$/gu, "").trim();
-  return /^NO_REPLY$/iu.test(normalized);
 }
 
 function mergeReasoningProgressText(
@@ -170,7 +150,7 @@ function mergeReasoningProgressText(
   }
   if (
     options?.snapshot === true ||
-    isReasoningSnapshotText(incoming) ||
+    REASONING_PROGRESS_HEADING_RE.test(incoming) ||
     (normalizedCurrent && normalizedIncoming.startsWith(normalizedCurrent))
   ) {
     // Snapshot-style providers resend the full reasoning text. Replace the
@@ -178,12 +158,6 @@ function mergeReasoningProgressText(
     return incoming;
   }
   return `${current}${incoming}`;
-}
-
-function isReasoningSnapshotText(text: string): boolean {
-  return /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i.test(
-    text,
-  );
 }
 
 function shouldAppendEmptyReasoningProgressDelta(current: string, incoming: string): boolean {
@@ -220,7 +194,7 @@ export function resolveCommentaryLineId(commentary: {
     return `commentary:${commentary.itemId}`;
   }
   if (!commentary.normalized) {
-    // Sanitized to nothing (directive-only / NO_REPLY): no line to address, so
+    // Sanitized to nothing (directive-only): no line to address, so
     // it cannot retract the open one. Only an explicit itemId clears a line.
     return "";
   }
@@ -245,7 +219,7 @@ export function createReasoningProgressAccumulator() {
         return "";
       }
       rawText = mergeReasoningProgressText(rawText, text, options);
-      return redactToolPayloadText(normalizeReasoningProgressLine(rawText));
+      return normalizeReasoningProgressLine(rawText);
     },
   };
 }

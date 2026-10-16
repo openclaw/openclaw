@@ -1,17 +1,20 @@
 import { z } from "zod";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ensureMeetingAudioBackend, resolveMeetingAudioRuntimeForFormat } from "./audio-backend.js";
+import { createMeetingBrowserAdapterOptions } from "./browser-adapter-options.js";
+import { defineBrowserMeetingPlugin } from "./browser-plugin.js";
 import {
   createMeetingChromeTransport,
   createMeetingChromeTransportWithExternalAudio,
 } from "./chrome-transport.js";
 import { createMeetingConfiguredNodeHost } from "./configured-node-host.js";
 import { isMeetingRealtimeRouteReady, isMeetingTalkBackMode } from "./meeting-modes.js";
+import { normalizeMeetingObservationProvenance } from "./observation-provenance.js";
+import { createMeetingPageScripts } from "./page-script-source.js";
 import type {
-  MeetingBrowserAdapter,
   MeetingBrowserLeaveStep,
-  MeetingManualActionCategory,
   MeetingPlatformAdapter as MeetingPlatformAdapterContract,
+  MeetingPlatformAdapterOptions,
   MeetingPlatformRuntimeMetadata,
 } from "./platform-adapter-contract.js";
 import { registerMeetingPluginCli } from "./plugin-cli.js";
@@ -28,7 +31,12 @@ import {
 import { createMeetingRuntimeFacade } from "./runtime-facade.js";
 import { createMeetingRuntimeProbes, resolveMeetingProbeTimeoutMs } from "./runtime-probes.js";
 import { createMeetingRuntimeSetup } from "./runtime-setup.js";
-import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-types.js";
+import {
+  meetingCaptionSourceSchema,
+  type MeetingBrowserHealth,
+  type MeetingTranscriptLine,
+  type MeetingTranscriptSnapshot,
+} from "./session-types.js";
 import { createMeetingStatusCallSource } from "./status-call-source.js";
 import { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
 
@@ -63,47 +71,6 @@ export interface MeetingPlatformAdapter<
   DialInPlan
 > {}
 
-type MeetingPlatformAdapterOptions<
-  Session,
-  Mode extends string,
-  Health extends MeetingBrowserHealth,
-  Transcript extends MeetingTranscriptSnapshot,
-  CreateParams = never,
-  CreateResult = never,
-  DialInParams = never,
-  DialInPlan = never,
-> = Omit<
-  MeetingPlatformAdapter<
-    Session,
-    Mode,
-    Health,
-    Transcript,
-    CreateParams,
-    CreateResult,
-    DialInParams,
-    DialInPlan
-  >,
-  "agentConsult" | "browser" | "session"
-> & {
-  agentConsult: MeetingPlatformRuntimeMetadata["agentConsult"];
-  browser: Omit<
-    MeetingBrowserAdapter<Mode, Health, Transcript>,
-    "captions" | "classifyManualAction" | "parseLeaveResult" | "parseStatus" | "permissionNotes"
-  > & {
-    captions: Omit<MeetingBrowserAdapter<Mode, Health, Transcript>["captions"], "parseTranscript">;
-    permissionNotes?: MeetingBrowserAdapter<Mode, Health, Transcript>["permissionNotes"];
-  };
-  parsing: {
-    classifyManualActionReason(reason: string): MeetingManualActionCategory;
-    displayName: string;
-    invalidTranscriptMessage: string;
-    malformedStatusMessage: string;
-    malformedTranscriptMessage: string;
-    statusFields?(parsed: Record<string, unknown>): Partial<Health>;
-  };
-  session: MeetingPlatformRuntimeMetadata["session"];
-};
-
 function browserResultString(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
@@ -115,18 +82,32 @@ function browserResultString(result: unknown): string | undefined {
 const optionalBrowserString = z.string().optional().catch(undefined);
 const optionalBrowserBoolean = z.boolean().optional().catch(undefined);
 const optionalBrowserNumber = z.number().optional().catch(undefined);
-const invalidBrowserArrayItemSchema = z.unknown().transform(() => null);
 const meetingTranscriptLineSchema = z
   .object({
     at: optionalBrowserString,
     speaker: optionalBrowserString,
     text: z.string().refine((value) => value.trim().length > 0),
+    provenance: z.unknown().optional(),
   })
-  .transform(({ at, speaker, text }) => ({
+  .transform(({ at, speaker, text, provenance }) => ({
     ...(at !== undefined ? { at } : {}),
     ...(speaker !== undefined ? { speaker } : {}),
     text,
+    ...(provenance !== undefined ? { provenance } : {}),
   }));
+
+const meetingTranscriptLinesSchema = z
+  .array(meetingTranscriptLineSchema.nullable().catch(null))
+  .transform((lines) => lines.filter((line) => line !== null));
+
+const meetingCaptionLinesSchema = z
+  .array(
+    meetingTranscriptLineSchema
+      .and(z.object({ source: z.unknown().optional() }))
+      .nullable()
+      .catch(null),
+  )
+  .transform((lines) => lines.filter((line) => line !== null));
 
 const meetingBrowserStatusSchema = z.looseObject({
   inCall: optionalBrowserBoolean,
@@ -140,11 +121,7 @@ const meetingBrowserStatusSchema = z.looseObject({
   lastCaptionAt: optionalBrowserString,
   lastCaptionSpeaker: optionalBrowserString,
   lastCaptionText: optionalBrowserString,
-  recentTranscript: z
-    .array(z.union([meetingTranscriptLineSchema, invalidBrowserArrayItemSchema]))
-    .transform((lines) => lines.filter((line) => line !== null))
-    .optional()
-    .catch(undefined),
+  recentTranscript: meetingTranscriptLinesSchema.optional().catch(undefined),
   audioInputRouted: optionalBrowserBoolean,
   audioInputDeviceLabel: optionalBrowserString,
   audioInputRouteError: optionalBrowserString,
@@ -156,7 +133,7 @@ const meetingBrowserStatusSchema = z.looseObject({
   url: optionalBrowserString,
   title: optionalBrowserString,
   notes: z
-    .array(z.union([z.string(), invalidBrowserArrayItemSchema]))
+    .array(z.string().nullable().catch(null))
     .transform((notes) => notes.filter((note) => note !== null))
     .optional()
     .catch(undefined),
@@ -164,6 +141,7 @@ const meetingBrowserStatusSchema = z.looseObject({
 
 function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
   result: unknown,
+  adapterId: string,
   options: MeetingPlatformAdapterOptions<
     never,
     string,
@@ -193,7 +171,18 @@ function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
     lastCaptionAt: parsed.lastCaptionAt,
     lastCaptionSpeaker: parsed.lastCaptionSpeaker,
     lastCaptionText: parsed.lastCaptionText,
-    recentTranscript: parsed.recentTranscript,
+    recentTranscript: parsed.recentTranscript?.map((line) => ({
+      ...line,
+      ...(line.provenance !== undefined
+        ? {
+            provenance: normalizeMeetingObservationProvenance(line.provenance, {
+              observer: adapterId,
+              observedAt: line.at,
+              speaker: line.speaker,
+            }),
+          }
+        : {}),
+    })),
     audioInputRouted: parsed.audioInputRouted,
     audioInputDeviceLabel: parsed.audioInputDeviceLabel,
     audioInputRouteError: parsed.audioInputRouteError,
@@ -239,6 +228,7 @@ function parseMeetingLeaveResult(result: unknown): MeetingBrowserLeaveStep {
 
 function parseMeetingTranscript<Transcript extends MeetingTranscriptSnapshot>(
   result: unknown,
+  adapterId: string,
   options: MeetingPlatformAdapterOptions<
     never,
     string,
@@ -259,39 +249,47 @@ function parseMeetingTranscript<Transcript extends MeetingTranscriptSnapshot>(
   if (!parsed || typeof parsed !== "object") {
     throw new Error(options.invalidTranscriptMessage);
   }
-  const payload = parsed as {
-    droppedLines?: unknown;
-    epoch?: unknown;
-    lines?: unknown;
-    sessionMatched?: unknown;
-    urlMatched?: unknown;
-  };
+  const payload = parsed as Record<string, unknown>;
   const droppedLines =
     typeof payload.droppedLines === "number" && Number.isSafeInteger(payload.droppedLines)
       ? Math.max(0, payload.droppedLines)
       : 0;
-  const lines = Array.isArray(payload.lines)
-    ? payload.lines.flatMap((value) => {
-        if (!value || typeof value !== "object") {
-          return [];
+  const parseLines = (values: unknown): MeetingTranscriptLine[] =>
+    meetingCaptionLinesSchema
+      .catch([])
+      .parse(values)
+      .map((line) => {
+        const source = meetingCaptionSourceSchema.safeParse(line.source);
+        const identity =
+          source.success && source.data.epoch === payload.epoch ? source.data : undefined;
+        // Legacy rows keep their shape; observation facts do not grant action authority.
+        const transcriptLine: MeetingTranscriptLine = { text: line.text };
+        if (line.at !== undefined) {
+          transcriptLine.at = line.at;
         }
-        const line = value as { at?: unknown; speaker?: unknown; text?: unknown };
-        if (typeof line.text !== "string" || !line.text.trim()) {
-          return [];
+        if (line.speaker !== undefined) {
+          transcriptLine.speaker = line.speaker;
         }
-        return [
-          {
-            ...(typeof line.at === "string" ? { at: line.at } : {}),
-            ...(typeof line.speaker === "string" ? { speaker: line.speaker } : {}),
-            text: line.text,
-          },
-        ];
-      })
-    : [];
+        if (line.provenance !== undefined || line.source !== undefined) {
+          transcriptLine.provenance = normalizeMeetingObservationProvenance(line.provenance, {
+            observer: adapterId,
+            epoch: payload.epoch,
+            observedAt: line.at,
+            speaker: line.speaker,
+          });
+        }
+        if (identity) {
+          transcriptLine.source = identity;
+        }
+        return transcriptLine;
+      });
   return {
     droppedLines,
     ...(typeof payload.epoch === "string" ? { epoch: payload.epoch } : {}),
-    lines,
+    lines: parseLines(payload.lines),
+    ...(Array.isArray(payload.pendingLines)
+      ? { pendingLines: parseLines(payload.pendingLines) }
+      : {}),
     ...(typeof payload.urlMatched === "boolean" ? { urlMatched: payload.urlMatched } : {}),
     ...(typeof payload.sessionMatched === "boolean"
       ? { sessionMatched: payload.sessionMatched }
@@ -335,7 +333,7 @@ function createMeetingPlatformAdapter<
     ...platform,
     browser: {
       ...browser,
-      parseStatus: (result) => parseMeetingBrowserStatus(result, parsing),
+      parseStatus: (result) => parseMeetingBrowserStatus(result, options.id, parsing),
       classifyManualAction: (health) => {
         if (!health.manualAction) {
           return undefined;
@@ -349,7 +347,7 @@ function createMeetingPlatformAdapter<
       parseLeaveResult: parseMeetingLeaveResult,
       captions: {
         ...browser.captions,
-        parseTranscript: (result) => parseMeetingTranscript(result, parsing),
+        parseTranscript: (result) => parseMeetingTranscript(result, options.id, parsing),
       },
       permissionNotes:
         browser.permissionNotes ??
@@ -385,17 +383,28 @@ function createMeetingPlatformAdapter<
 
 export const MeetingPlatformAdapter = {
   create: createMeetingPlatformAdapter,
+  createBrowserAdapterOptions: createMeetingBrowserAdapterOptions,
+  createPageScripts: createMeetingPageScripts,
+  defineBrowserMeetingPlugin,
   createChromeTransport: createMeetingChromeTransport,
   createChromeTransportWithExternalAudio: createMeetingChromeTransportWithExternalAudio,
   createChromeRuntimeBindings: createMeetingChromeRuntimeBindings,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginChromeTransport: createMeetingPluginChromeTransport,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginConfigSchema: createMeetingPluginConfigSchema,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginNodeHostHandler: createMeetingPluginNodeHostHandler,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginNodeInvokePolicy: createMeetingPluginNodeInvokePolicy,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginShellEntry: createMeetingPluginShellEntry,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createRuntimeFacade: createMeetingRuntimeFacade,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createRuntimeSetup: createMeetingRuntimeSetup,
   pluginTypes: createMeetingPluginTypes,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   registerPluginCli: registerMeetingPluginCli,
   resolveProbeTimeoutMs: resolveMeetingProbeTimeoutMs,
   createRuntimeProbes: createMeetingRuntimeProbes,

@@ -3,16 +3,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runManagedCommand } from "./managed-child-process.mts";
+import { acquireManagedCleanup } from "./managed-cleanup-handoff.mts";
 import { createVitestResourceOwner } from "./vitest-resource-ownership.mts";
 import {
   requestVitestWorkerArtifacts,
   verifyVitestWorkerArtifacts,
   VITEST_WORKER_PREPARE_REQUEST,
   VITEST_WORKER_PREPARE_REPLY,
-  type VitestWorkerDescriptor,
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
 import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
+import type { VitestWorkerDescriptor } from "./vitest-worker-descriptor.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -51,6 +52,7 @@ export function createVitestWorkerRun(
     | typeof import("./vitest-worker-cache.mts").retainVitestWorkerArtifacts
     | undefined;
   let disposal: Promise<void> | undefined;
+  let releaseCleanup: Awaited<ReturnType<typeof acquireManagedCleanup>>;
   const borrowers: Promise<unknown>[] = [];
   let channelError: Error | undefined;
   const compilerAbort = new AbortController();
@@ -77,6 +79,9 @@ export function createVitestWorkerRun(
       return Promise.reject(new Error("Compiled subprocess owner is closing"));
     }
     return (preparation ??= (async () => {
+      // The loan remains in use through final verification after its child joins.
+      // Keep that work under the same parent custody as the managed command.
+      releaseCleanup = await acquireManagedCleanup(compilerAbort.signal);
       if (parent) {
         // One upstream loan serves this group's real borrowers; each still verifies below.
         await requestVitestWorkerArtifacts(compilerAbort.signal);
@@ -197,40 +202,62 @@ export function createVitestWorkerRun(
       void ownedCompletion.catch(() => {});
       return joined;
     },
-    dispose(): Promise<void> {
+    /** `interrupted`: the invocation is exiting by signal, so its outcome cannot change. */
+    dispose({ interrupted = false }: { interrupted?: boolean } = {}): Promise<void> {
       return (disposal ??= (async () => {
         compilerAbort.abort();
         const settled = await Promise.allSettled(borrowers);
         const uncertain = settled.find((result) => result.status === "rejected");
-        try {
-          const manifest = await preparation;
-          resources?.assertReleased();
-          resourcesReleased = true;
-          if (uncertain?.status === "rejected") {
-            throw uncertain.reason;
-          }
-          if (channelError) {
-            throw channelError;
-          }
-          if (fs.existsSync(path.join(directory, "manifest.json"))) {
-            console.error("[vitest-workers] verifying completed generation before cleanup");
-            await verifyVitestWorkerArtifacts(directory, manifest);
-          }
-          if (!parent && manifest?.cacheSignature) {
-            if (await retainArtifacts?.(root, directory, manifest)) {
-              console.error("[vitest-workers] retained completed compiler outputs for reuse");
+        const [cleanupOutcome] = await Promise.allSettled([
+          (async () => {
+            try {
+              const manifest = await preparation;
+              resources?.assertReleased();
+              resourcesReleased = true;
+              if (uncertain?.status === "rejected") {
+                throw uncertain.reason;
+              }
+              if (channelError) {
+                throw channelError;
+              }
+              // An interrupted run already exits by signal: verification cannot change
+              // that outcome, and a full scan can outlast the caller's kill escalation.
+              if (interrupted) {
+                return;
+              }
+              if (fs.existsSync(path.join(directory, "manifest.json"))) {
+                console.error("[vitest-workers] verifying completed generation before cleanup");
+                await verifyVitestWorkerArtifacts(directory, manifest);
+              }
+              if (!parent && manifest?.cacheSignature) {
+                if (await retainArtifacts?.(root, directory, manifest)) {
+                  console.error("[vitest-workers] retained completed compiler outputs for reuse");
+                }
+              }
+            } finally {
+              process.off("disconnect", onParentDisconnect);
+              if (uncertain || !compilerJoined || !resourcesReleased) {
+                console.error(
+                  `[vitest-workers] retaining ${directory}: ${!compilerJoined ? "compiler" : !resourcesReleased ? "fixture resource" : "borrower"} join failed`,
+                );
+              } else if (!parent) {
+                // Large generations must not block signal delivery during final cleanup.
+                // Desktop metadata can arrive between child deletion and the final rmdir.
+                await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 3 });
+              }
             }
+          })(),
+        ]);
+        try {
+          await releaseCleanup?.(!uncertain && compilerJoined && resourcesReleased, true);
+        } catch (error) {
+          if (cleanupOutcome.status === "fulfilled") {
+            throw error;
           }
-        } finally {
-          process.off("disconnect", onParentDisconnect);
-          if (uncertain || !compilerJoined || !resourcesReleased) {
-            console.error(
-              `[vitest-workers] retaining ${directory}: ${!compilerJoined ? "compiler" : !resourcesReleased ? "fixture resource" : "borrower"} join failed`,
-            );
-          } else if (!parent) {
-            // Large generations must not block signal delivery during final cleanup.
-            await fs.promises.rm(directory, { recursive: true, force: true });
-          }
+          console.error(error);
+        }
+        if (cleanupOutcome.status === "rejected") {
+          throw cleanupOutcome.reason;
         }
       })());
     },

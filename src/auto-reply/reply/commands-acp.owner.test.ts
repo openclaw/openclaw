@@ -13,7 +13,7 @@ import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
 } from "../../state/user-channel-identities.js";
-import { setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { installDiscordRegistryHooks } from "../test-helpers/command-auth-registry-fixture.js";
 import { handleAcpCommand } from "./commands-acp.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
@@ -21,7 +21,6 @@ import { buildCommandTestParams } from "./commands.test-harness.js";
 installDiscordRegistryHooks();
 
 const principals = [
-  { principal: "first-admin", senderId: "100", transition: "none" },
   { principal: "second-admin", senderId: "101", transition: "none" },
   { principal: "channel-member", senderId: "ordinary-member", transition: "none" },
   { principal: "demoted-admin", senderId: "100", transition: "role" },
@@ -37,9 +36,20 @@ it.each(
       effect: "approval_policy=auto-approve",
       option: "permissionProfile",
       value: "auto-approve",
+      principals,
     },
-    { action: "set-mode plan", effect: "mode=plan", option: "runtimeMode", value: "plan" },
-  ].flatMap((action) => principals.map((principal) => Object.assign({}, action, principal))),
+    {
+      action: "set-mode plan",
+      effect: "mode=plan",
+      option: "runtimeMode",
+      value: "plan",
+      principals: principals.filter(
+        ({ transition }) => transition === "role" || transition === "accepted",
+      ),
+    },
+  ].flatMap(({ principals: cases, ...action }) =>
+    cases.map((principal) => ({ ...action, ...principal })),
+  ),
 )(
   "fences the real /acp $action effect for $principal",
   async ({ action, effect, option, value, principal, senderId, transition }) => {

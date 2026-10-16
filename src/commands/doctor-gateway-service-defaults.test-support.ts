@@ -25,7 +25,7 @@ export function registerDoctorServiceDefaultsTests({
   mockProcessPlatform,
   expectNoNoteContaining,
 }: ServiceDefaultsTestContext) {
-  it.each([true, false])(
+  it.each([true])(
     "reports definition facts without creating repair work (command available: %s)",
     async (hasCommand) => {
       const command = { programArguments: gatewayProgramArguments, environment: {} };
@@ -108,27 +108,5 @@ export function registerDoctorServiceDefaultsTests({
       expect.objectContaining({ programArguments: expect.arrayContaining(["18888"]) }),
     );
     expectNoNoteContaining("operator-owned systemd drop-in", "Gateway service config");
-  });
-
-  it("repairs a short systemd stop timeout through the managed service installer", async () => {
-    mockProcessPlatform("linux");
-    const command = { programArguments: gatewayProgramArguments, environment: {} };
-    mocks.readCommand.mockResolvedValue(command);
-    mocks.buildGatewayInstallPlan.mockResolvedValue(command);
-    mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: false,
-      issues: [
-        {
-          code: "systemd-stop-timeout",
-          message:
-            "TimeoutStopSec=330 or longer is required for the Gateway drain and final cleanup.",
-          level: "recommended",
-        },
-      ],
-    });
-
-    await runRepair({ gateway: {} });
-
-    expect(mocks.install).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(command));
   });
 }

@@ -31,7 +31,7 @@ const WIDGET_BASE_STYLES = `:root{color-scheme:light dark;
 --accent:#ff5c5c;--accent-fill:#d13c3c;--accent-fg:#ffffff;
 --ok:#22c55e;--warn:#f59e0b;--danger:#ef4444;--info:#3b82f6}}
 *{box-sizing:border-box}@supports not selector(::-webkit-scrollbar-thumb){*{scrollbar-color:var(--scrollbar-thumb) transparent;scrollbar-width:thin}}html,body{margin:0}::-webkit-scrollbar{width:var(--scrollbar-size);height:var(--scrollbar-size);background:var(--surface)}::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}::-webkit-scrollbar-button{display:none}::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);background-clip:content-box;border:var(--scrollbar-thumb-inset) solid transparent;border-radius:var(--radius-full)}::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-thumb-hover);background-clip:content-box}.openclaw-chat-host,.openclaw-chat-host body{scrollbar-width:none}.openclaw-chat-host::-webkit-scrollbar,.openclaw-chat-host body::-webkit-scrollbar{display:none}
-body{font:14px/1.5 var(--font-body);color:var(--text)}
+body{display:flow-root;font:14px/1.5 var(--font-body);color:var(--text)}
 h1,h2,h3{margin:0 0 8px;color:var(--text-strong);font-weight:600}
 h1{font-size:18px}h2{font-size:16px}h3{font-size:14px}
 p{margin:0 0 8px}
@@ -72,48 +72,18 @@ export function buildWidgetDocument(
   const bodyClass = isSvg ? ' class="svg-widget"' : "";
   // CSP admits public CDN assets but keeps data connections separate; preview metadata
   // prevents the iframe from inheriting same-origin access to the parent application.
-  // The embedding bridge lets a host fit the iframe to its content. A board
-  // host also receives only the vertical scroll remainder that the widget
-  // document cannot consume itself; without that handoff, an auto-height frame
-  // traps touch and wheel gestures before they can reach the board scroller.
+  // The embedding bridge lets a host fit the iframe to its content. Private
+  // scroll authority belongs to the sandbox runtime, which also covers saved
+  // widget documents without rewriting their approved bytes.
   const sizeReporter =
     "<script>(()=>{if(!window.parent||window.parent===window)return;" +
     "const parent=window.parent;const post=parent.postMessage.bind(parent);" +
     "const listen=window.addEventListener.bind(window);" +
-    "const stop=Event.prototype.stopImmediatePropagation;let boardNonce='';" +
-    'listen("message",event=>{const data=event.data;if(event.source!==parent||' +
-    'data?.type!=="openclaw:widget-board-host"||typeof data.nonce!=="string"||!data.nonce)return;' +
-    "boardNonce=data.nonce;stop.call(event);},true);" +
     // documentElement.scrollHeight reports the viewport for short content, so
     // measure the body box, which tracks the actual widget height.
     "let last=0;const report=()=>{const b=document.body;if(!b)return;" +
     "const h=Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,b.getBoundingClientRect().height));" +
     'if(h&&h!==last){last=h;post({type:"openclaw:widget-size",height:h},"*");}};' +
-    "const remainder=(target,delta)=>{let value=delta;const root=document.scrollingElement;" +
-    "let rootSeen=false;const consume=node=>{if(!value)return;const max=node.scrollHeight-node.clientHeight;" +
-    "if(max<=1)return;const available=value<0?node.scrollTop:max-node.scrollTop;" +
-    "value=Math.sign(value)*Math.max(0,Math.abs(value)-Math.max(0,available));};" +
-    "let node=target instanceof Element?target:null;while(node){const style=getComputedStyle(node);" +
-    'const overflow=style.overflowY;if((overflow==="auto"||overflow==="scroll")){consume(node);' +
-    "if(node===root)rootSeen=true;}node=node.parentElement;}if(root&&!rootSeen)consume(root);return value;};" +
-    'listen("wheel",event=>{if(!event.isTrusted||!boardNonce||event.ctrlKey)return;' +
-    "const scale=event.deltaMode===1?16:event.deltaMode===2?window.innerHeight:1;" +
-    "const delta=event.deltaY*scale;if(!delta||Math.abs(delta)<=Math.abs(event.deltaX*scale))return;" +
-    "const deltaY=remainder(event.target,delta);if(!deltaY)return;" +
-    'if(deltaY===delta)event.preventDefault();post({type:"openclaw:widget-scroll",deltaY,nonce:boardNonce},"*");},{passive:false});' +
-    "let touchId=-1;let lastX=0;let lastY=0;const findTouch=touches=>{" +
-    "for(let index=0;index<touches.length;index++){const touch=touches.item(index);" +
-    "if(touch?.identifier===touchId)return touch;}return null;};" +
-    'listen("touchstart",event=>{if(!event.isTrusted||!boardNonce||event.touches.length!==1)return;' +
-    "const touch=event.touches.item(0);if(!touch)return;touchId=touch.identifier;" +
-    "lastX=touch.clientX;lastY=touch.clientY;},{passive:true});" +
-    'listen("touchmove",event=>{if(!event.isTrusted||!boardNonce||touchId<0)return;const touch=findTouch(event.touches);' +
-    "if(!touch)return;const deltaX=lastX-touch.clientX;const deltaY=lastY-touch.clientY;" +
-    "lastX=touch.clientX;lastY=touch.clientY;if(!deltaY||Math.abs(deltaY)<=Math.abs(deltaX))return;" +
-    "const remaining=remainder(event.target,deltaY);if(!remaining)return;" +
-    'if(remaining===deltaY)event.preventDefault();post({type:"openclaw:widget-scroll",deltaY:remaining,nonce:boardNonce},"*");},{passive:false});' +
-    "const endTouch=event=>{if(touchId>=0&&!findTouch(event.touches))touchId=-1;};" +
-    'listen("touchend",endTouch,{passive:true});listen("touchcancel",endTouch,{passive:true});' +
     "listen('load',report);new ResizeObserver(report).observe(document.body);" +
     "setTimeout(report,50);setTimeout(report,500);})();</script>";
   // This bridge precedes widget code and snapshots every authority-bearing
@@ -194,15 +164,18 @@ export function buildWidgetDocument(
     "<script>(()=>{if(!window.parent||window.parent===window)return;" +
     "const post=window.parent.postMessage.bind(window.parent);const listen=window.addEventListener.bind(window);" +
     "const stringify=String;const slice=Function.prototype.call.bind(String.prototype.slice);" +
+    "const charCodeAt=Function.prototype.call.bind(String.prototype.charCodeAt);" +
+    "const clip=(text,max)=>{const last=charCodeAt(text,max-1);const next=charCodeAt(text,max);" +
+    "return slice(text,0,last>=0xd800&&last<=0xdbff&&next>=0xdc00&&next<=0xdfff?max-1:max);};" +
     "const replace=Function.prototype.call.bind(String.prototype.replace);const integer=Number.isInteger;" +
     "const seen=new Set();const has=seen.has.bind(seen);const add=seen.add.bind(seen);let count=0;" +
     "const report=(event,rejection)=>{try{if(count>=3)return;" +
     'if(!rejection&&typeof event.message!=="string"&&!event.error)return;' +
     "const reason=rejection?event.reason:undefined;" +
-    "const message=slice(stringify(rejection?(reason?.message??reason):(event.error?.message??event.message)),0,500);" +
+    "const message=clip(stringify(rejection?(reason?.message??reason):(event.error?.message??event.message)),500);" +
     "if(has(message))return;" +
     'const data={type:"openclaw:widget-runtime-error",message};' +
-    'if(typeof event.filename==="string"){const source=slice(replace(replace(event.filename,/[?#].*$/,""),/^.*[\\\\/]/,""),0,200);if(source)data.source=source;}' +
+    'if(typeof event.filename==="string"){const source=clip(replace(replace(event.filename,/[?#].*$/,""),/^.*[\\\\/]/,""),200);if(source)data.source=source;}' +
     "if(integer(event.lineno))data.line=event.lineno;if(integer(event.colno))data.column=event.colno;" +
     'add(message);count++;post(data,"*");}catch{}};' +
     'listen("error",event=>report(event,false),true);listen("unhandledrejection",event=>report(event,true),true);})();</script>';

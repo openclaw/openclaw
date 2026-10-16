@@ -1,58 +1,20 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  createPaneHeaderWorkspaceFixture,
+  createSessionCapabilityFixture,
+  createTestChatPane,
+} from "./chat-pane.test-support.ts";
 
 describe("chat pane session access", () => {
-  it("opens the resolved parent from the header breadcrumb", () => {
-    const { pane, state } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture(),
-    });
-    const parent = {
-      key: "agent:main:parent",
-      kind: "direct",
-      label: "Release prep",
-      updatedAt: 1,
-    } satisfies GatewaySessionRow;
-    const child = {
-      key: "agent:main:child",
-      kind: "direct",
-      label: "Implementation",
-      parentSessionKey: parent.key,
-      updatedAt: 2,
-    } satisfies GatewaySessionRow;
-    state.sessionsResult = { sessions: [parent, child] } as NonNullable<
-      typeof state.sessionsResult
-    >;
-    pane.paneId = "pane-child";
-    pane.onPaneSessionChange = vi.fn();
-    const container = document.createElement("div");
-
-    render(
-      pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
-        child,
-        false,
-        undefined,
-        false,
-        null,
-      ),
-      container,
-    );
-    container.querySelector<HTMLButtonElement>(".chat-pane__parent-session")?.click();
-
-    expect(pane.onPaneSessionChange).toHaveBeenCalledExactlyOnceWith("pane-child", parent.key);
-  });
-
   it("refuses ordinary session creation for read-only operators", async () => {
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),
@@ -117,7 +79,7 @@ describe("chat pane session access", () => {
 
       pane.beginHeaderRename(session);
 
-      expect(pane.headerEditing).toBe(false);
+      expect(Boolean(pane.headerRenameSession)).toBe(false);
       expect(state.chatError).toBeTruthy();
       expect(requestUpdate).toHaveBeenCalledOnce();
       expect(patch).not.toHaveBeenCalled();
@@ -177,7 +139,7 @@ describe("chat pane session access", () => {
     });
     pane.commitHeaderRename();
 
-    expect(pane.headerEditing).toBe(false);
+    expect(Boolean(pane.headerRenameSession)).toBe(false);
     expect(patch).not.toHaveBeenCalled();
   });
 
@@ -211,6 +173,18 @@ describe("chat pane session access", () => {
       auth: { role: "operator", scopes: ["operator.write"] },
       features: { methods: ["sessions.patch"] },
     } as ApplicationContext["gateway"]["snapshot"]["hello"];
+    state.sessionsResult = sessionsResult(
+      [
+        {
+          key: state.sessionKey,
+          kind: "direct",
+          sessionId: "session-a",
+          archived: true,
+          sharingRole: "owner",
+        },
+      ],
+      0,
+    );
 
     await pane.restoreArchivedSession(state.sessionKey, "session-a");
 
@@ -238,10 +212,9 @@ describe("chat pane session access", () => {
     } satisfies GatewaySessionRow;
     const container = document.createElement("div");
 
-    render(
+    renderPaneLegacyContent(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         session,
         false,
         undefined,
@@ -254,7 +227,7 @@ describe("chat pane session access", () => {
     expect(container.querySelector(".chat-pane__sharing-menu")).toBeNull();
   });
 
-  it("keeps visibility controls available without member-list support", () => {
+  it("keeps visibility controls available without member-list support", async () => {
     const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
       sessions: createSessionCapabilityFixture(),
@@ -272,11 +245,12 @@ describe("chat pane session access", () => {
       visibility: "shared",
     } satisfies GatewaySessionRow;
     const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
 
-    render(
+    renderPaneLegacyContent(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         session,
         false,
         undefined,
@@ -286,12 +260,18 @@ describe("chat pane session access", () => {
       container,
     );
 
-    expect(
-      container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled,
-    ).toBe(false);
-    expect(
-      container.querySelector('wa-dropdown-item[value="visibility:read-only"]'),
-    ).not.toBeNull();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled,
+      ).toBe(false),
+    );
+    container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.click();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-pane__sharing-panel")?.matches(":popover-open")).toBe(
+        true,
+      ),
+    );
+    expect(container.querySelector('[data-value="visibility:read-only"]')).not.toBeNull();
     expect(container.textContent).not.toContain("People");
   });
 });

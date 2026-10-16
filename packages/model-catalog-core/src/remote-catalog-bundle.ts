@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import {
   MODEL_CATALOG_APIS,
@@ -22,25 +23,17 @@ const pricingTierSchema = z
   })
   .strict();
 
-const costSchema = z
-  .object({
-    input: z.number().finite().nonnegative().optional(),
-    output: z.number().finite().nonnegative().optional(),
-    cacheRead: z.number().finite().nonnegative().optional(),
-    cacheWrite: z.number().finite().nonnegative().optional(),
+const costSchema = pricingTierSchema
+  .omit({ range: true })
+  .partial()
+  .extend({
     tieredPricing: z.array(pricingTierSchema).optional(),
-  })
-  .strict();
+  });
 
-const hostedPricingSchema = z
-  .object({
-    input: z.number().finite().nonnegative(),
-    output: z.number().finite().nonnegative(),
-    cacheRead: z.number().finite().nonnegative().optional(),
-    cacheWrite: z.number().finite().nonnegative().optional(),
-    tieredPricing: z.array(pricingTierSchema).optional(),
-  })
-  .strict();
+const hostedPricingSchema = costSchema.extend({
+  input: pricingTierSchema.shape.input,
+  output: pricingTierSchema.shape.output,
+});
 
 export type RemoteModelCatalogPricing = z.infer<typeof hostedPricingSchema>;
 
@@ -52,13 +45,14 @@ const contextWindowOptionSchema = z
   })
   .strict();
 
+const inputModalitySchema = z.enum(["text", "image", "video", "document"]);
 const modelFieldsSchema = z.object({
   id: z.string().trim().min(1),
   name: z.string().optional(),
   api: z.enum(MODEL_CATALOG_APIS).optional(),
   baseUrl: z.string().optional(),
   headers: stringMapSchema.optional(),
-  input: z.array(z.enum(["text", "image", "document"])).optional(),
+  input: z.array(inputModalitySchema).optional(),
   reasoning: z.boolean().optional(),
   contextWindow: z.number().finite().positive().optional(),
   contextWindows: z
@@ -99,7 +93,51 @@ function validateContextWindowDefault(
 
 const modelSchema = modelFieldsSchema.superRefine(validateContextWindowDefault);
 
-export const remoteModelCatalogProviderSchema = z
+type CatalogWarning = (message: string) => void;
+
+function parseCatalogRows<T extends { id: string }>(
+  rows: unknown[],
+  schema: z.ZodType<T>,
+  path: string,
+  warn: CatalogWarning,
+  key: (model: T) => string = (model) => model.id,
+): T[] {
+  const seen = new Set<string>();
+  return rows.flatMap((raw, index) => {
+    const row = `${path}.${index}${isRecord(raw) && typeof raw.id === "string" ? ` (${raw.id})` : ""}`;
+    let value = raw;
+    let droppedInput = false;
+    if (
+      isRecord(raw) &&
+      Array.isArray(raw.input) &&
+      raw.input.every((v) => typeof v === "string")
+    ) {
+      const input = raw.input.filter((v) =>
+        inputModalitySchema.options.some((known) => known === v),
+      );
+      droppedInput = input.length !== raw.input.length;
+      if (droppedInput) {
+        if (input.length === 0) {
+          warn(`remote model catalog: skipped row with no supported input modalities ${row}`);
+          return [];
+        }
+        value = { ...raw, input };
+      }
+    }
+    const parsed = schema.safeParse(value);
+    if (!parsed.success || seen.has(key(parsed.data))) {
+      warn(`remote model catalog: skipped invalid row ${row}`);
+      return [];
+    }
+    seen.add(key(parsed.data));
+    if (droppedInput) {
+      warn(`remote model catalog: dropped unknown input modalities from ${row}`);
+    }
+    return [parsed.data];
+  });
+}
+
+const providerFieldsSchema = z
   .object({
     baseUrl: z.string().optional(),
     api: z.enum(MODEL_CATALOG_APIS).optional(),
@@ -108,8 +146,10 @@ export const remoteModelCatalogProviderSchema = z
     defaultUtilityModel: z.string().optional(),
     models: z.array(modelSchema).min(1),
   })
-  .strict()
-  .superRefine((provider, context) => {
+  .strict();
+
+export const remoteModelCatalogProviderSchema = providerFieldsSchema.superRefine(
+  (provider, context) => {
     const seen = new Set<string>();
     for (const [index, model] of provider.models.entries()) {
       if (seen.has(model.id)) {
@@ -121,7 +161,8 @@ export const remoteModelCatalogProviderSchema = z
       }
       seen.add(model.id);
     }
-  });
+  },
+);
 
 export const remoteModelCatalogBundleSchema = z
   .object({
@@ -178,13 +219,32 @@ const pricingV2Schema = z.discriminatedUnion("status", [
 
 export type RemoteModelCatalogPricingV2 = z.infer<typeof pricingV2Schema>;
 
+// Standalone rates cover models outside `models`, in USD per million tokens.
+// `upstreamPricing` is keyed by the source's vendor/model ID and serves passthrough
+// gateways plus same-vendor lookups. The entry's own rate wins; `alternatives` keep
+// later sources' rates for providers that allow only those sources. `passthroughOnly`
+// entries are owned by catalog rows and serve gateways alone. `providerPricing` holds
+// provider-owned rates for models without a catalog row.
+const sourcedPricingV2Schema = hostedPricingSchema
+  .extend({ source: z.string().trim().min(1) })
+  .strict();
+const upstreamPricingV2Schema = sourcedPricingV2Schema
+  .extend({
+    passthroughOnly: z.literal(true).optional(),
+    alternatives: z.array(sourcedPricingV2Schema).min(1).optional(),
+  })
+  .strict();
+const standalonePricingKeySchema = z
+  .string()
+  .regex(/^[^/\s]+\/\S+$/u, "standalone pricing keys must be provider/model");
+
 const modelV2Schema = modelFieldsSchema
   .omit({ cost: true, baseUrl: true, headers: true })
   .extend({ provider: z.string().trim().min(1), pricing: pricingV2Schema })
   .strict()
   .superRefine(validateContextWindowDefault);
 
-export const remoteModelCatalogBundleV2Schema = remoteModelCatalogBundleSchema
+const bundleV2FieldsSchema = remoteModelCatalogBundleSchema
   .omit({ providers: true, pricing: true })
   .extend({
     schemaVersion: z.literal(2),
@@ -195,12 +255,20 @@ export const remoteModelCatalogBundleV2Schema = remoteModelCatalogBundleSchema
           api: z.enum(MODEL_CATALOG_APIS).optional(),
           defaultModel: z.string().optional(),
           defaultUtilityModel: z.string().optional(),
+          recommendedModels: z
+            .array(z.string().trim().min(1))
+            .refine((ids) => new Set(ids).size === ids.length, "duplicate recommended model id")
+            .optional(),
         })
         .strict(),
     ),
     models: z.array(modelV2Schema).min(1),
-  })
-  .superRefine((bundle, context) => {
+    upstreamPricing: z.record(standalonePricingKeySchema, upstreamPricingV2Schema).optional(),
+    providerPricing: z.record(standalonePricingKeySchema, sourcedPricingV2Schema).optional(),
+  });
+
+export const remoteModelCatalogBundleV2Schema = bundleV2FieldsSchema.superRefine(
+  (bundle, context) => {
     const providers = new Map<string, Set<string>>();
     for (const [index, model] of bundle.models.entries()) {
       if (!Object.hasOwn(bundle.providers, model.provider)) {
@@ -221,7 +289,19 @@ export const remoteModelCatalogBundleV2Schema = remoteModelCatalogBundleSchema
       ids.add(model.id);
       providers.set(model.provider, ids);
     }
-  });
+    for (const [provider, entry] of Object.entries(bundle.providers)) {
+      for (const [index, id] of (entry.recommendedModels ?? []).entries()) {
+        if (!providers.get(provider)?.has(id)) {
+          context.addIssue({
+            code: "custom",
+            message: `recommended model must reference a model of provider ${provider}: ${id}`,
+            path: ["providers", provider, "recommendedModels", index],
+          });
+        }
+      }
+    }
+  },
+);
 
 export type RemoteModelCatalogModelV2 = Omit<
   ModelCatalogModel,
@@ -265,29 +345,77 @@ function stripRemoteTransportOverrides(value: unknown): unknown {
 }
 
 /** Removes every transport endpoint/header override before remote data reaches persistence. */
-export function sanitizeRemoteModelCatalogBundle(
-  bundle: RemoteModelCatalogBundle,
-): RemoteModelCatalogBundle {
-  return stripRemoteTransportOverrides(bundle) as RemoteModelCatalogBundle;
+export function sanitizeRemoteModelCatalogBundle<
+  T extends RemoteModelCatalogBundle | RemoteModelCatalogBundleV2,
+>(bundle: T): T {
+  // v2 provider dictionary keys are identities, even when named "headers" or "baseUrl".
+  return (
+    bundle.schemaVersion === 1
+      ? stripRemoteTransportOverrides(bundle)
+      : { ...bundle, models: bundle.models.map(stripRemoteTransportOverrides) }
+  ) as T;
 }
 
 export function validateAndSanitizeRemoteModelCatalogBundle(
   value: unknown,
+  warn: CatalogWarning = console.warn,
 ): RemoteModelCatalogBundle {
-  return sanitizeRemoteModelCatalogBundle(parseRemoteModelCatalogBundle(value));
+  const bundle = remoteModelCatalogBundleSchema
+    .extend({
+      providers: z.record(
+        z.string().trim().min(1),
+        providerFieldsSchema.extend({
+          models: z.array(z.unknown()),
+        }),
+      ),
+    })
+    .parse(value);
+  const providers = Object.fromEntries(
+    Object.entries(bundle.providers).flatMap<[string, ModelCatalogProvider]>(([id, provider]) => {
+      const models = parseCatalogRows(provider.models, modelSchema, `providers.${id}.models`, warn);
+      return models.length > 0 ? [[id, { ...provider, models }]] : [];
+    }),
+  );
+  // v1 permits standalone pricing without declaring model providers.
+  if (Object.keys(bundle.providers).length > 0 && Object.keys(providers).length === 0) {
+    throw new Error("remote model catalog contains no valid models");
+  }
+  return sanitizeRemoteModelCatalogBundle({ ...bundle, providers });
 }
 
 export function validateAndSanitizeRemoteModelCatalogBundleV2(
   value: unknown,
+  warn: CatalogWarning = console.warn,
 ): RemoteModelCatalogBundleV2 {
-  const bundle = parseRemoteModelCatalogBundleV2(value);
-  // Provider dictionary keys are identities, even when named "headers" or "baseUrl".
-  // Their strict defaults contain no transport overrides; only model metadata needs stripping.
-  return {
-    ...bundle,
-    models: bundle.models.map((model) => {
-      // SAFETY: strict v2 fields exclude transport keys; only freeform metadata can contain them.
-      return stripRemoteTransportOverrides(model) as RemoteModelCatalogModelV2;
-    }),
-  };
+  const bundle = bundleV2FieldsSchema
+    .extend({
+      models: z.array(z.unknown()),
+    })
+    .parse(value);
+  const models = parseCatalogRows(
+    bundle.models,
+    modelV2Schema.refine((model) => Object.hasOwn(bundle.providers, model.provider)),
+    "models",
+    warn,
+    (model) => JSON.stringify([model.provider, model.id]),
+  );
+  if (models.length === 0) {
+    throw new Error("remote model catalog contains no valid models");
+  }
+  const providers = Object.fromEntries(
+    Object.entries(bundle.providers).map(([id, provider]) => [
+      id,
+      {
+        ...provider,
+        ...(provider.recommendedModels
+          ? {
+              recommendedModels: provider.recommendedModels.filter((modelId) =>
+                models.some((model) => model.provider === id && model.id === modelId),
+              ),
+            }
+          : {}),
+      },
+    ]),
+  );
+  return sanitizeRemoteModelCatalogBundle({ ...bundle, providers, models });
 }

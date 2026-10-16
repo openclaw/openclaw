@@ -10,17 +10,14 @@ import type {
   CodexCatalogIndexRow,
   CodexCatalogRolloutFingerprint,
 } from "./session-catalog-index-row.js";
-import { CODEX_CATALOG_MAX_ROWS, detachCodexCatalogString } from "./session-catalog-limits.js";
+import { detachCodexCatalogString } from "./session-catalog-limits.js";
 import {
   boundedCatalogString,
-  MAX_CWD_LENGTH,
   selectCodexCatalogPreviewInput,
   truncateCodexCatalogPreview,
 } from "./session-catalog-parsing.js";
 
 const WINDOW_BYTES = 128 * 1024;
-const DIRECTORY_PARTS = [/^\d{4}$/, /^(?:0[1-9]|1[0-2])$/, /^(?:0[1-9]|[12]\d|3[01])$/];
-const ROLLOUT_FILE_NAME = /\.jsonl(?:\.zst)?$/;
 const ROLLOUT_SOURCE_DENIAL_CODES = new Set([
   "symlink",
   "hardlink",
@@ -30,69 +27,6 @@ const ROLLOUT_SOURCE_DENIAL_CODES = new Set([
   "not-file",
   "path-alias",
 ]);
-
-export type CodexCatalogRolloutScan = {
-  files: Map<string, CodexCatalogRolloutFingerprint>;
-  present: Set<string>;
-};
-type RolloutCandidate = [string, CodexCatalogRolloutFingerprint];
-
-function compareRolloutCandidates(left: RolloutCandidate, right: RolloutCandidate): number {
-  return (
-    left[1].mtimeMs - right[1].mtimeMs || (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0)
-  );
-}
-
-/** Retain only the newest fingerprints while streaming an arbitrarily large home. */
-class NewestRolloutCandidates {
-  private readonly heap: RolloutCandidate[] = [];
-
-  offer(candidate: RolloutCandidate): void {
-    if (this.heap.length < CODEX_CATALOG_MAX_ROWS) {
-      let childIndex = this.heap.length;
-      this.heap.push(candidate);
-      while (childIndex > 0) {
-        const parentIndex = Math.floor((childIndex - 1) / 2);
-        const parent = this.heap[parentIndex];
-        if (!parent || compareRolloutCandidates(parent, candidate) <= 0) {
-          break;
-        }
-        this.heap[childIndex] = parent;
-        childIndex = parentIndex;
-      }
-      this.heap[childIndex] = candidate;
-      return;
-    }
-    const oldest = this.heap[0];
-    if (!oldest || compareRolloutCandidates(candidate, oldest) <= 0) {
-      return;
-    }
-    let parentIndex = 0;
-    while (true) {
-      let childIndex = parentIndex * 2 + 1;
-      let child = this.heap[childIndex];
-      if (!child) {
-        break;
-      }
-      const right = this.heap[childIndex + 1];
-      if (right && compareRolloutCandidates(right, child) < 0) {
-        child = right;
-        childIndex++;
-      }
-      if (compareRolloutCandidates(candidate, child) <= 0) {
-        break;
-      }
-      this.heap[parentIndex] = child;
-      parentIndex = childIndex;
-    }
-    this.heap[parentIndex] = candidate;
-  }
-
-  finish(): Map<string, CodexCatalogRolloutFingerprint> {
-    this.heap.sort((left, right) => compareRolloutCandidates(right, left));
-    return new Map(this.heap);
-  }
-}
 
 /** Codex returns the plain logical path for either rollout representation. */
 export function codexCatalogRolloutLogicalPath(rolloutPath: string): string {
@@ -115,105 +49,6 @@ export function resolveCodexCatalogRolloutFingerprint(
       ? previous.fingerprint
       : undefined)
   );
-}
-
-export function indexCodexCatalogRowsByRollout(
-  rows: Iterable<CodexCatalogIndexRow>,
-): Map<string, CodexCatalogIndexRow> {
-  return new Map(
-    [...rows].flatMap((row) =>
-      row.rolloutPath ? [[codexCatalogRolloutLogicalPath(row.rolloutPath), row] as const] : [],
-    ),
-  );
-}
-
-/** Absence is meaningful only inside the layout visited by the currency scan. */
-export function isCodexCatalogRolloutPathCovered(
-  sessionsRoot: string,
-  rolloutPath: string,
-): boolean {
-  const directories = path.relative(sessionsRoot, rolloutPath).split(path.sep);
-  const fileName = directories.pop();
-  return (
-    fileName !== undefined &&
-    ROLLOUT_FILE_NAME.test(fileName) &&
-    directories.length === DIRECTORY_PARTS.length &&
-    directories.every((part, index) => DIRECTORY_PARTS[index]?.test(part) === true)
-  );
-}
-
-async function unlessMissing<T>(operation: Promise<T>): Promise<T | undefined> {
-  try {
-    return await operation;
-  } catch (error) {
-    if (isRecord(error) && error.code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-/** Stat-only currency scan. Content is read separately, only for changed fingerprints. */
-export async function scanCodexCatalogRollouts(
-  sessionsRoot: string,
-  trackedPaths: ReadonlySet<string>,
-): Promise<CodexCatalogRolloutScan> {
-  const present = new Set<string>();
-  const rootStat = await unlessMissing(fs.lstat(sessionsRoot));
-  if (!rootStat?.isDirectory() || rootStat.isSymbolicLink()) {
-    return { files: new Map(), present };
-  }
-  const rootReal = await unlessMissing(fs.realpath(sessionsRoot));
-  if (!rootReal) {
-    return { files: new Map(), present };
-  }
-  const candidates = new NewestRolloutCandidates();
-  const scan = async (directory: string, depth: number): Promise<void> => {
-    // Reject a directory swapped for a symlink after its parent was listed.
-    if ((await unlessMissing(fs.realpath(directory))) !== directory) {
-      return;
-    }
-    const entries = await unlessMissing(fs.opendir(directory));
-    if (!entries) {
-      return;
-    }
-    const directoryPattern = DIRECTORY_PARTS[depth];
-    for await (const entry of entries) {
-      const file = path.join(directory, entry.name);
-      if (directoryPattern) {
-        if (entry.isDirectory() && directoryPattern.test(entry.name)) {
-          await scan(file, depth + 1);
-        }
-      } else if (entry.isFile() && ROLLOUT_FILE_NAME.test(entry.name)) {
-        const stat = await unlessMissing(fs.lstat(file));
-        if (stat?.isFile() && stat.nlink === 1) {
-          const physicalPath = path.join(sessionsRoot, path.relative(rootReal, file));
-          if (physicalPath.length > MAX_CWD_LENGTH) {
-            continue;
-          }
-          const logicalPath = codexCatalogRolloutLogicalPath(physicalPath);
-          if (trackedPaths.has(logicalPath)) {
-            present.add(logicalPath);
-          }
-          if (physicalPath !== logicalPath) {
-            const plain = await unlessMissing(fs.lstat(codexCatalogRolloutLogicalPath(file)));
-            if (plain?.isFile() && plain.nlink === 1) {
-              continue;
-            }
-          }
-          candidates.offer([
-            detachCodexCatalogString(physicalPath),
-            {
-              mtimeMs: stat.mtimeMs,
-              size: stat.size,
-            },
-          ]);
-        }
-      }
-    }
-  };
-  await scan(rootReal, 0);
-  return { files: candidates.finish(), present };
 }
 
 function records(bytes: Buffer, skipFirst: boolean): Record<string, unknown>[] {
@@ -296,8 +131,6 @@ async function compressedHead(handle: fs.FileHandle, size: number): Promise<Buff
     chunkSize: 16 * 1024,
     params: { [constants.ZSTD_d_windowLogMax]: 25 },
   });
-  // Destroying a FileHandle-backed stream also closes its descriptor, even with
-  // autoClose:false. Keep ownership here so the caller can verify its final stat.
   decoder.end(input.subarray(0, bytesRead));
   const timer = setTimeout(() => decoder.destroy(new Error("Rollout read timed out")), 5_000);
   const chunks: Buffer[] = [];
@@ -365,10 +198,6 @@ export async function readCodexCatalogRollout(
       const bytes = Buffer.alloc(stat.size - offset);
       await handle.read(bytes, 0, bytes.length, offset);
       tail = records(bytes, true);
-    }
-    const current = await handle.stat();
-    if (stat.size !== current.size || stat.mtimeMs !== current.mtimeMs) {
-      return undefined;
     }
     const thread: CodexThread = {
       id,

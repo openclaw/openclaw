@@ -23,10 +23,9 @@ Codex's own tool-search surface:
 - `apply_patch`
 - `exec`
 - `process`
-- `tool_call`
+- `dispatch_action`
 - `tool_describe`
 - `tool_search`
-- `tool_search_code`
 
 `progress_card` is not filtered with those native workspace tools. It remains
 available through the OpenClaw dynamic-tool bridge as the durable session status

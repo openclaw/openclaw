@@ -6,7 +6,7 @@ const append = (filePath, value) => {
 
 export default {
   id: "qa-voice-call-runtime",
-  register(api) {
+  register(api, sendReceipt) {
     api.registerRealtimeVoiceProvider({
       id: "qa-voice-call-realtime",
       label: "QA Voice Call Realtime",
@@ -41,7 +41,10 @@ export default {
           sendAudio() {},
           setMediaTimestamp() {},
           submitToolResult(callId, result, options) {
-            append(process.env.OPENCLAW_QA_VOICE_TOOL_RESULTS_PATH, { callId, result, options });
+            const filePath = process.env.OPENCLAW_QA_VOICE_TOOL_RESULTS_PATH;
+            append(filePath, { callId, result, options });
+            // Media closure can beat the receipt; keep its durable result authoritative.
+            sendReceipt(filePath, "tool result appended");
           },
           acknowledgeMark() {},
           close() {

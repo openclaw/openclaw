@@ -55,7 +55,7 @@ function joinEvent(source: webhook.Source): webhook.JoinEvent {
 
 function createContext(config: LineAccountConfig = {}) {
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "main" }, { id: "room-agent" }] },
+    agents: { entries: { main: {}, "room-agent": {} } },
     accessGroups: {
       empty: { type: "message.senders", members: {} },
       other: { type: "message.senders", members: { discord: [userId] } },

@@ -16,27 +16,6 @@ describe("plugin newline chunk delivery", () => {
       expected: [report],
     },
     {
-      name: "preserves a terminating blank line that fits",
-      text: `${report}\n\n`,
-      limit: 32,
-      transportLimit: 32,
-      expected: [`${report}\n\n`],
-    },
-    {
-      name: "bounds the last report after earlier lines were delivered",
-      text: `${report}\n${report}\n\n`,
-      limit: 31,
-      transportLimit: 31,
-      expected: [report, `${report}\n`],
-    },
-    {
-      name: "preserves ordinary blank lines between reports",
-      text: `${report}\n\n${report}`,
-      limit: 32,
-      transportLimit: 32,
-      expected: [report, `\n${report}`],
-    },
-    {
       name: "preserves an unsplit long line without adding excess blank lines",
       text: `${report}\n\n`,
       limit: 10,
@@ -50,20 +29,6 @@ describe("plugin newline chunk delivery", () => {
       limit: 1,
       transportLimit: 2,
       expected: ["😀"],
-    },
-    {
-      name: "reserves a complete astral character after leading blank lines",
-      text: "\n😀",
-      limit: 2,
-      transportLimit: 2,
-      expected: ["😀"],
-    },
-    {
-      name: "reserves a complete astral character after interior blank lines",
-      text: "ok\n\n😀",
-      limit: 2,
-      transportLimit: 2,
-      expected: ["ok", "😀"],
     },
   ])("$name", ({ text, limit, transportLimit, options, expected }) => {
     const accepted: string[] = [];

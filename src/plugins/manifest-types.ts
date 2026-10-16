@@ -1,24 +1,28 @@
 import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
+import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
-import type { ConfigUiPresentation, ConfigUiGroup } from "../shared/config-ui-hints-types.js";
+import type { ConfigUiHint, ConfigUiGroup } from "../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
+import type { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 /** UI hint metadata for plugin config schema fields. */
-export type PluginConfigUiHint = {
-  label?: string;
-  help?: string;
-  tags?: string[];
-  advanced?: boolean;
-  sensitive?: boolean;
-  placeholder?: string;
-  presentation?: ConfigUiPresentation;
-};
+export type PluginConfigUiHint = Pick<
+  ConfigUiHint,
+  | "label"
+  | "help"
+  | "tags"
+  | "advanced"
+  | "sensitive"
+  | "placeholder"
+  | "presentation"
+  | "multiline"
+>;
 
 /** Static, portable palettes; no plugin JavaScript or native UI activation is required. */
 export type PluginManifestTheme = {
@@ -26,8 +30,10 @@ export type PluginManifestTheme = {
   name: string;
   description: string;
   source: string;
+  icons?: Record<string, string>;
   hats?: Record<string, string>;
   critters?: Record<string, { source: string; title?: string; crossMs?: number }>;
+  backgrounds?: Partial<Record<"light" | "dark", string>>;
 };
 
 /** Top-level plugin manifest format. */
@@ -46,13 +52,14 @@ export type PluginDiagnosticCode =
   | "configured-plugin-path-inspection-failed"
   | "configured-plugin-path-unavailable"
   | "dashboard-declaration-invalid"
+  | "explicit-config-plugin-selection"
   | "plugin-verification"
   | "sdk-incompatible"
   | "workspace-scope-omitted";
 
 /** Diagnostic emitted while discovering or validating plugins. */
 export type PluginDiagnostic = {
-  level: "warn" | "error";
+  level: "info" | "warn" | "error";
   message: string;
   pluginId?: string;
   source?: string;
@@ -139,6 +146,8 @@ export type PluginManifestProviderEndpoint = {
 export type PluginManifestProviderRequestProvider = {
   family?: string;
   compatibilityFamily?: "moonshot";
+  /** Schema for this provider's per-model params; defaults are documentation only. */
+  modelParamsSchema?: JsonSchemaObject;
   openAICompletions?: {
     supportsStreamingUsage?: boolean;
   };
@@ -435,6 +444,8 @@ export type PluginManifest = {
   /** Account-key selection rules available before channel runtime loads. */
   channelAccountKeyPolicies?: Record<string, ChannelAccountKeyPolicy>;
   providers?: string[];
+  /** The declared providers own transient rate-limit/overload recovery, never auth or billing. */
+  managesOwnAvailability?: boolean;
   /**
    * Optional lightweight module that exports provider plugin metadata for
    * auth/catalog discovery. It should not import the full plugin runtime.
@@ -505,6 +516,8 @@ export type PluginManifest = {
   /** Widget data and action capabilities validated against runtime registrations. */
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  /** Static UI contributions; omission is unspecified and an empty list declares none. */
+  uiCapabilities?: PluginUiCapability[];
   themes?: PluginManifestTheme[];
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;
@@ -543,39 +556,9 @@ export type PluginManifest = {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 
-export type PluginManifestContracts = {
-  /** Executor ids implemented by the plugin's code-mode-executor-api artifact. */
-  codeModeExecutors?: string[];
-  embeddedExtensionFactories?: string[];
-  agentToolResultMiddleware?: string[];
-  trustedToolPolicies?: string[];
-  /**
-   * Provider ids whose external auth profile hook can contribute runtime-only
-   * credentials. Declaring this lets auth-store overlays load only the owning
-   * plugin instead of every provider plugin.
-   */
-  externalAuthProviders?: string[];
-  decisionProviders?: string[];
-  embeddingProviders?: string[];
-  speechProviders?: string[];
-  realtimeTranscriptionProviders?: string[];
-  realtimeVoiceProviders?: string[];
-  mediaUnderstandingProviders?: string[];
-  transcriptSourceProviders?: string[];
-  documentExtractors?: string[];
-  imageGenerationProviders?: string[];
-  videoGenerationProviders?: string[];
-  musicGenerationProviders?: string[];
-  webContentExtractors?: string[];
-  webFetchProviders?: string[];
-  webSearchProviders?: string[];
-  workerProviders?: string[];
-  /** Provider ids whose plugin owns usage auth and snapshot hooks. */
-  usageProviders?: string[];
-  migrationProviders?: string[];
-  gatewayMethodDispatch?: string[];
-  tools?: string[];
-};
+export type PluginManifestContracts = Partial<
+  Record<(typeof PLUGIN_MANIFEST_CONTRACT_KEYS)[number], string[]>
+>;
 
 export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
 
@@ -660,6 +643,8 @@ export type PluginManifestProviderAuthChoice = {
   icon?: string;
   /** Optional HTTPS product or installation URL for onboarding surfaces. */
   website?: string;
+  /** Optional HTTPS guide comparing this provider's connection methods. */
+  docsUrl?: string;
   /** Lower values sort earlier in interactive assistant pickers. */
   assistantPriority?: number;
   /** Keep the choice out of interactive assistant pickers while preserving manual CLI support. */

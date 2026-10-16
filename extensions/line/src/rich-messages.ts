@@ -1,4 +1,3 @@
-// Line plugin module owns typed rich-message schemas and native rendering.
 import type { messagingApi } from "@line/bot-sdk";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
@@ -11,7 +10,6 @@ import {
   type MessagePresentation,
   type MessagePresentationAction,
   type MessagePresentationBlock,
-  type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   resolveAskUserQuestionOptionIndex,
@@ -23,7 +21,6 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Type } from "typebox";
 import { hasLineCredentials } from "./account-helpers.js";
 import { resolveLineAccount } from "./accounts.js";
 import { messageAction, postbackAction, type Action } from "./actions.js";
@@ -36,79 +33,9 @@ import {
 import { fitsLineFlexBubble } from "./flex-templates/message.js";
 import { createAgendaCard, createEventCard } from "./flex-templates/schedule-cards.js";
 import { inferLineTargetChatType } from "./messaging-target.js";
-import { buildLineQuestionPostbackData, type LineQuestionPostback } from "./question-postback.js";
-import type { LineQuickReplyItem, LineRichCard } from "./types.js";
-
-const nonempty = () => Type.String({ minLength: 1 });
-const closed = <T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
-  Type.Object(properties, { additionalProperties: false });
-
-const lineCardSchema = Type.Union([
-  closed({
-    type: Type.Literal("media_player"),
-    title: nonempty(),
-    artist: Type.Optional(nonempty()),
-    source: Type.Optional(nonempty()),
-    imageUrl: Type.Optional(Type.String({ pattern: "^https://" })),
-    status: Type.Optional(Type.Union([Type.Literal("playing"), Type.Literal("paused")])),
-  }),
-  closed({
-    type: Type.Literal("event"),
-    title: nonempty(),
-    date: nonempty(),
-    time: Type.Optional(nonempty()),
-    location: Type.Optional(nonempty()),
-    description: Type.Optional(nonempty()),
-  }),
-  closed({
-    type: Type.Literal("agenda"),
-    title: nonempty(),
-    events: Type.Array(
-      closed({
-        title: nonempty(),
-        time: Type.Optional(nonempty()),
-        location: Type.Optional(nonempty()),
-      }),
-      { minItems: 1, maxItems: 6 },
-    ),
-  }),
-  closed({
-    type: Type.Literal("device"),
-    name: nonempty(),
-    deviceType: Type.Optional(nonempty()),
-    status: Type.Optional(nonempty()),
-    controls: Type.Optional(
-      Type.Array(closed({ label: nonempty(), action: nonempty() }), { maxItems: 6 }),
-    ),
-  }),
-  closed({
-    type: Type.Literal("appletv_remote"),
-    name: Type.Optional(nonempty()),
-    status: Type.Optional(nonempty()),
-  }),
-]);
-
-const lineChannelDataSchema = Type.Optional(
-  closed({
-    line: closed({
-      location: Type.Optional(
-        closed({
-          title: nonempty(),
-          address: nonempty(),
-          latitude: Type.Number({ minimum: -90, maximum: 90 }),
-          longitude: Type.Number({ minimum: -180, maximum: 180 }),
-        }),
-      ),
-      card: Type.Optional(lineCardSchema),
-      mediaKind: Type.Optional(
-        Type.Union([Type.Literal("image"), Type.Literal("video"), Type.Literal("audio")]),
-      ),
-      previewImageUrl: Type.Optional(Type.String({ pattern: "^https://" })),
-      durationMs: Type.Optional(Type.Integer({ minimum: 1 })),
-      trackingId: Type.Optional(nonempty()),
-    }),
-  }),
-);
+import { buildLineQuestionPostbackData } from "./question-postback.js";
+import { lineChannelDataSchema, type LineRichCard } from "./rich-message-schema.js";
+import type { LineQuickReplyItem } from "./types.js";
 
 export const lineMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: ({ cfg, accountId }) => {
@@ -144,60 +71,28 @@ export const LINE_PRESENTATION_CAPABILITIES = {
   },
 } satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
-/**
- * Reads the choice one question button carries. The Gateway owns option order, so a
- * tap sends the index it published, never the rendered label; a choice it no longer
- * lists renders no button at all rather than a tap that answers the wrong option.
- */
-function toLineQuestionChoice(
-  action: Extract<MessagePresentationAction, { type: "question" }>,
-  questionOptionIndices: AskUserQuestionOptionIndices | undefined,
-): LineQuestionPostback | undefined {
-  if ("intent" in action) {
-    // The free-text control is dropped before the card is built, so only a
-    // declared choice ever reaches here.
-    return undefined;
-  }
-  const optionIndex = resolveAskUserQuestionOptionIndex({
-    questionOptionIndices,
-    questionId: action.questionId,
-    optionValue: action.optionValue,
-  });
-  return optionIndex === undefined ? undefined : { questionId: action.questionId, optionIndex };
-}
-
-/**
- * The free-text control is not drawn. LINE can open the composer on a tap
- * (`inputOption: "openKeyboard"`), so the platform is not the reason: an answer
- * is claimed only on the plain-text inbound path, which no postback reaches, so
- * the button cannot change whether what follows it counts as the answer. It
- * would add a tap that changes nothing the card's own words already offer, which
- * is why Discord and Slack leave that route in text too.
- */
-function isLineTextFallbackButton(button: MessagePresentationButton): boolean {
-  const action = resolveMessagePresentationButtonAction(button);
-  return action?.type === "question" && "intent" in action && action.intent === "custom-input";
-}
-
-/** A control the Gateway owns, whose label the operator cannot disambiguate. */
-function isLineQuestionButton(button: MessagePresentationButton): boolean {
-  return resolveMessagePresentationButtonAction(button)?.type === "question";
-}
-
 function toLineAction(
-  button: MessagePresentationButton,
+  label: string,
+  normalized: MessagePresentationAction | undefined,
   questionOptionIndices?: AskUserQuestionOptionIndices,
 ): Action | undefined {
-  const normalized = resolveMessagePresentationButtonAction(button);
-  const { label } = button;
   if (normalized?.type === "question") {
-    const choice = toLineQuestionChoice(normalized, questionOptionIndices);
-    const data = choice && buildLineQuestionPostbackData(choice);
+    if ("intent" in normalized) {
+      return undefined;
+    }
+    // Send the Gateway's canonical index, never an option inferred from its label.
+    const optionIndex = resolveAskUserQuestionOptionIndex({
+      questionOptionIndices,
+      questionId: normalized.questionId,
+      optionValue: normalized.optionValue,
+    });
+    const data =
+      optionIndex === undefined
+        ? undefined
+        : buildLineQuestionPostbackData({ questionId: normalized.questionId, optionIndex });
     if (!data) {
       return undefined;
     }
-    // The postback carries the Gateway's canonical option index; LINE echoes
-    // the chosen label in the chat through displayText.
     return { type: "postback", label, data, displayText: label };
   }
   if (normalized?.type === "command") {
@@ -222,7 +117,11 @@ export function renderLinePresentation(
   sourcePresentation: MessagePresentation = presentation,
 ) {
   const hasQuestion = sourcePresentation.blocks.some(
-    (block) => block.type === "buttons" && block.buttons.some(isLineQuestionButton),
+    (block) =>
+      block.type === "buttons" &&
+      block.buttons.some(
+        (button) => resolveMessagePresentationButtonAction(button)?.type === "question",
+      ),
   );
   const hasAuthoredPrompt =
     Boolean(sourcePresentation.title?.trim()) ||
@@ -242,40 +141,39 @@ export function renderLinePresentation(
   const hasCard = presentation.blocks.some(
     (block) => block.type === "buttons" && block.buttons.length > 0,
   );
-  const buttons: Array<{ label: string; action: Action }> = [];
+  const buttons: Action[] = [];
   const quickReplyItems: LineQuickReplyItem[] = [];
   const carriedBlocks: MessagePresentationBlock[] = [];
   const cardBody: string[] = [];
-  // Controls this renderer declines to draw. The shared adapter already names a
-  // control it drops for budget under `Actions:`, so naming these the same way
-  // keeps one wording for "offered, but not tappable here" no matter which layer
-  // dropped it; without it a two- or three-option question loses the free-text
-  // route from the card entirely.
+  // Keep omitted controls visible using the shared adapter's `Actions:` wording.
   const omittedControlLabels: string[] = [];
   const questionLabels = new Set<string>();
   const questionOptionIndices = resolveAskUserQuestionOptionIndices(payload);
   for (const block of presentation.blocks) {
     if (block.type === "buttons") {
       for (const button of block.buttons) {
-        if (isLineTextFallbackButton(button)) {
+        const normalized = resolveMessagePresentationButtonAction(button);
+        // Only plain-text inbound can claim a free-text answer; a postback adds no action.
+        if (
+          normalized?.type === "question" &&
+          "intent" in normalized &&
+          normalized.intent === "custom-input"
+        ) {
           omittedControlLabels.push(button.label);
           continue;
         }
-        const action = toLineAction(button, questionOptionIndices);
+        const action = toLineAction(button.label, normalized, questionOptionIndices);
         if (!action) {
           return null;
         }
-        // Two Gateway options are distinct by contract, but a label is truncated
-        // to fit the control. Options that collide after that would be two
-        // identical taps, so the whole reply falls back to text that still
-        // distinguishes them.
-        if (isLineQuestionButton(button)) {
+        // Truncation can make distinct options look identical; retain the text fallback.
+        if (normalized?.type === "question") {
           if (questionLabels.has(button.label)) {
             return null;
           }
           questionLabels.add(button.label);
         }
-        buttons.push({ label: button.label, action });
+        buttons.push(action);
       }
     } else if (block.type === "select") {
       const overflow: typeof block.options = [];
@@ -397,12 +295,12 @@ export function renderLineCard(card: LineRichCard): { altText: string; contents:
         source: card.source,
         imageUrl: card.imageUrl,
         isPlaying: card.status ? card.status === "playing" : undefined,
-        controls: Object.fromEntries(
-          ["previous", "play", "pause", "next"].map((action) => [
-            action,
-            { data: lineActionData(action, device) },
-          ]),
-        ),
+        controls: {
+          previous: { data: lineActionData("previous", device) },
+          play: { data: lineActionData("play", device) },
+          pause: { data: lineActionData("pause", device) },
+          next: { data: lineActionData("next", device) },
+        },
       }),
     };
   }

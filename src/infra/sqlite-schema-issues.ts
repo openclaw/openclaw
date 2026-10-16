@@ -1,3 +1,13 @@
+/** A completed inspection proved schema drift; native read failures retain their own type. */
+export class SqliteSchemaMismatchError extends Error {
+  override name = "SqliteSchemaMismatchError";
+}
+
+export function isSqliteSchemaMismatchError(error: unknown): boolean {
+  // Native worker envelopes preserve error names without changing their wire contract.
+  return error instanceof Error && error.name === "SqliteSchemaMismatchError";
+}
+
 export type SqliteSchemaIssueCode =
   | "column-definition-drift"
   | "missing-column"
@@ -19,6 +29,10 @@ export type SqliteSchemaIssue = {
 };
 
 export type SqliteSchemaCompatibility = {
+  /** Tables outside this inspection's view of the canonical schema, even when present. */
+  excludedTables?: readonly string[];
+  /** Named indexes outside the expected view; actual unexpected uniqueness still fails. */
+  excludedIndexes?: readonly string[];
   /**
    * Canonical additive tables that may be absent until their owning feature
    * performs its one-time lazy ensure. Present tables still require the exact
@@ -55,34 +69,33 @@ export type SqliteSchemaCompatibility = {
   }[];
 };
 
+const ISSUE_DESCRIPTIONS = {
+  "missing-table": "missing table",
+  "missing-column": "column definitions differ for",
+  "unexpected-column": "column definitions differ for",
+  "column-definition-drift": "column definitions differ for",
+  "table-constraint-drift": "table constraints differ for",
+  "table-definition-drift": "table definition differs for",
+  "missing-or-drifted-index": "missing or drifted index",
+  "unexpected-unique-index": "unexpected unique index",
+  "missing-or-drifted-trigger": "missing or drifted trigger",
+  "unexpected-trigger": "unexpected trigger",
+  "virtual-table-definition-drift": "virtual table definition differs for",
+  "table-options-drift": "table options differ for",
+} satisfies Record<SqliteSchemaIssueCode, string>;
+
+function isColumnIssue(code: SqliteSchemaIssueCode): boolean {
+  return (
+    code === "column-definition-drift" || code === "missing-column" || code === "unexpected-column"
+  );
+}
+
 function defaultIssueMessage(code: SqliteSchemaIssueCode, objectName: string): string {
-  const tableName = objectName.split(".", 1)[0];
-  switch (code) {
-    case "missing-table":
-      return `missing table ${objectName}`;
-    case "missing-column":
-    case "unexpected-column":
-    case "column-definition-drift":
-      return `column definitions differ for ${tableName}`;
-    case "table-constraint-drift":
-      return `table constraints differ for ${objectName}`;
-    case "table-definition-drift":
-      return `table definition differs for ${objectName}`;
-    case "missing-or-drifted-index":
-      return `missing or drifted index ${objectName}`;
-    case "unexpected-unique-index":
-      return `unexpected unique index ${objectName}`;
-    case "missing-or-drifted-trigger":
-      return `missing or drifted trigger ${objectName}`;
-    case "unexpected-trigger":
-      return `unexpected trigger ${objectName}`;
-    case "virtual-table-definition-drift":
-      return `virtual table definition differs for ${objectName}`;
-    case "table-options-drift":
-      return `table options differ for ${objectName}`;
+  if (!Object.hasOwn(ISSUE_DESCRIPTIONS, code)) {
+    throw new Error("Unsupported SQLite schema issue code", { cause: code });
   }
-  const exhaustiveCode: never = code;
-  throw new Error("Unsupported SQLite schema issue code", { cause: exhaustiveCode });
+  const target = isColumnIssue(code) ? objectName.split(".", 1)[0] : objectName;
+  return `${ISSUE_DESCRIPTIONS[code]} ${target}`;
 }
 
 export function createSqliteSchemaIssue(
@@ -94,12 +107,10 @@ export function createSqliteSchemaIssue(
 }
 
 export function legacySqliteSchemaIssueMessages(issues: readonly SqliteSchemaIssue[]): string[] {
-  const isColumnIssue = (issue: SqliteSchemaIssue) =>
-    issue.code === "column-definition-drift" ||
-    issue.code === "missing-column" ||
-    issue.code === "unexpected-column";
   const columnIssueTables = new Set(
-    issues.filter(isColumnIssue).map((issue) => issue.objectName.split(".", 1)[0]),
+    issues
+      .filter((issue) => isColumnIssue(issue.code))
+      .map((issue) => issue.objectName.split(".", 1)[0]),
   );
   return [
     ...new Set(
@@ -123,7 +134,7 @@ export function throwSqliteSchemaMismatches(
   }
   // Drift is repairable by the doctor migration owner, so the throw must name it:
   // callers surface this straight to operators, and the gateway refuses to start.
-  throw new Error(
+  throw new SqliteSchemaMismatchError(
     `SQLite schema is incomplete or noncanonical for ${databaseLabel}: ${shown.join("; ")}; run openclaw doctor --fix to repair it.`,
   );
 }

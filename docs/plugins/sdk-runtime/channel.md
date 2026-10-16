@@ -55,6 +55,10 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
 
     Guarded fetch also accepts a synchronous `resolveDispatcherPolicy(url)` override, reevaluated for each redirect. An undefined result uses `dispatcherPolicy`, or direct routing when no default policy is supplied. Providers preserving operator-configured proxy routing can use `resolveEnvHttpProxyAgentOptions` and `matchesNoProxy` from `openclaw/plugin-sdk/fetch-runtime` to select each hop. The `trusted_explicit_proxy` mode permits HTTP, HTTPS, `socks:` and `socks5:` proxy URLs and delegates target DNS to the explicitly trusted proxy; proxy-host validation and target-host policy still apply. Direct hops keep DNS pinning. Strict mode rejects SOCKS proxies, and the separate trusted-env-proxy gate remains HTTP(S)-only.
 
+    When returning a guarded response for streaming, use `responseWithRelease(response, release)` from `openclaw/plugin-sdk/fetch-runtime` to retain request ownership until its body completes, fails, or is cancelled. Consume or cancel bodies explicitly for prompt release; garbage collection of abandoned wrappers provides only best-effort cleanup.
+
+    Guarded fetch accepts `streamTimeoutMs` for header/body inactivity independently of the whole-request `timeoutMs`; when both are supplied, `timeoutMs` takes precedence. The existing `createPinnedDispatcher` helper also accepts `streamTimeoutMs` as its fifth argument. These stream settings retain TCP/TLS connection deadlines and default to the existing transport policy when omitted.
+
     `api.runtime.channel.mentions` is the shared inbound mention-policy surface for bundled channel plugins that use runtime injection:
 
     ```typescript
@@ -97,10 +101,32 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
   </Accordion>
 </AccordionGroup>
 
+Reply options accept `onVisibleWorkSessions(sessions)` to receive visible work sessions. For a fresh child created through the local Gateway, the host awaits this callback before the child's first turn, so plugins can persist session-scoped context first. Accepted sessions are also reported before final reply delivery, including when the settled run failed. Each descriptor carries `sessionKey`, the session `url`, and an optional `label`. A child can be reported at creation and again at settlement; consumers must be idempotent by session key.
+
 ## Awaited conversation binding mutations
 
 Import routing and service helpers from
 `openclaw/plugin-sdk/conversation-binding-runtime`.
+
+Await `service.bind(input)` and `service.unbind(input)` before publishing a binding
+change. Current-conversation persistence uses the existing worker owner and
+rechecks the selected adapter before committing. A failed or uncertain write
+does not authorize replay. Released synchronous selectors retain their current
+contract; bundled session listings await the internal owner.
+
+For directory ownership checks, implement
+`messaging.prepareConversationRouteOwnersAsync(inputs, inspectBindings)`. Await
+the supplied `inspectBindings(refs)` once for the batch to prepare binding facts
+in workers. It returns a synchronous reader over those facts. Return exactly one
+synchronous resolver per input, in the same order, and call the reader inside
+each resolver so in-process write receipts invalidate ownership before an effect.
+Core preserves the resolver's error and fallback handling and releases prepared
+facts when the operation ends; do not retain the reader for later operations.
+
+The released synchronous `resolveConversationRouteOwner` hook remains deprecated
+compatibility while plugins migrate. The unreleased synchronous
+`prepareConversationRouteOwners` hook has been removed. See
+[binding migration](/plugins/sdk-migration/how-to-migrate#await-plugin-state-and-conversation-bindings).
 
 Await `getSessionBindingService().touchAsync(bindingId, at, scope)` when recording
 binding activity. Adapters implement `touchAsync` to return a Promise that settles
@@ -118,6 +144,53 @@ projection performs no storage access. Inspection preserves the distinction
 between a missing binding and an unavailable adapter without creating a missing
 store or pruning expired rows.
 
+`inspectRuntimeConversationBindingRoute` and the synchronous
+`resolveRuntimeConversationBindingRoute` also accept a deferred `resolveRoute` callback
+instead of a completed `route`.
+Pass exactly one of `route` or `resolveRoute`; the input type rejects supplying both
+or neither. Existing callers can keep passing a completed route.
+The callback receives `{ inspection, bindingOwnerAvailable, bindingRecord, boundAgentId }`
+after the owner has classified the binding, before ordinary agent selection:
+
+```ts
+const result = inspectRuntimeConversationBindingRoute({
+  inspection,
+  resolveRoute: ({ bindingOwnerAvailable, boundAgentId }) => {
+    if (!bindingOwnerAvailable) {
+      throw new Error("Conversation binding owner is unavailable; retry the message.");
+    }
+    return resolveAgentRoute({
+      channel: "acme-chat",
+      accountId,
+      peer,
+      cfg: boundAgentId ? { session: cfg.session } : cfg,
+      defaultAgentId: boundAgentId,
+    });
+  },
+});
+```
+
+Import `resolveAgentRoute` from `openclaw/plugin-sdk/routing`. A bound agent can
+therefore supply the route even when the ordinary roster requires an explicit
+selection. Agent-scoped session keys take precedence over metadata; unscoped
+targets can use `metadata.agentId`. Missing, ignored cron-run, and plugin-owned
+bindings do not supply a bound agent. An unscoped target without a nonblank metadata
+agent ID also leaves `boundAgentId` undefined; it does not invent a default agent.
+Plugin bindings retain their record so a
+channel can distinguish a plugin fallback from an unbound parent lookup.
+`inspection` retains the prepared conversation identity for composing a thread
+observation before its selected parent without reading the binding store again.
+The callback owns route construction; core still projects the selected session
+and ownership facts. If an agent-owned binding selects a different agent, core
+rebuilds `mainSessionKey` for that agent while preserving the base route's main-key
+name, then derives `lastRoutePolicy` against the bound agent's main session. This
+also applies to completed-route inputs and leaves the ordinary route unchanged
+for channel-specific stale-binding comparison.
+Preserve those facts through context construction so reply
+admission can reject a revoked, reassigned, or unavailable owner. When activity
+must retain a captured selection, await the scoped `touchAsync` after projection
+and keep that route for admission rather than silently selecting a replacement.
+
 Adapters provide `inspectByConversationAsync` for read-only inspection and
 `resolveByConversationAsync` for ordinary lookup. The host service exposes both
 methods. Generic bindings and bundled account-scoped adapters run inspection in
@@ -132,18 +205,17 @@ Lifecycle setters have explicit Promise-returning counterparts:
 Callers await their results before reporting the affected bindings.
 
 The existing synchronous lookup, touch, route resolver, and lifecycle setter contracts
-remain deprecated through the next Plugin SDK major. The resolver's staged
-migration is recorded here and in the compatibility registry; its broad barrel
-is already deprecated, while its per-function IDE annotation is deferred until
-the caller migration is complete. Synchronous entry points call only synchronous
+remain deprecated through 2026-12-31, with removal in the first January 2027
+stable release. See the [binding migration mapping](/plugins/sdk-migration/sqlite-async#conversation-and-native-session-bindings).
+Synchronous entry points call only synchronous
 implementations; they never start an async mutation whose result would be lost.
 An adapter exposing both variants keeps them under the same state owner.
 
 During the staged migration, async dispatch falls back to an adapter's existing
 synchronous method when its async counterpart is absent. This preserves external
 plugin compatibility; that fallback does not make a legacy adapter nonblocking.
-Generic and account-scoped bind/unbind operations, list operations, and separate
-lifecycle setters still require their own persistence migrations. Other bundled
-stores also retain their existing behavior until their respective cutovers.
-Worker-backed route reads and activity updates do not imply a fully migrated
-binding service or stronger durability for those remaining operations.
+Generic and account-scoped bind/unbind operations and bundled session listings
+use the shared-state worker. Their released synchronous selectors remain available
+through the compatibility boundary. Separate lifecycle setters and other bundled
+stores retain their existing behavior until their respective cutovers; this
+execution change does not strengthen their durability contracts.

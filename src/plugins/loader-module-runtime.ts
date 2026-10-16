@@ -58,8 +58,8 @@ const LAZY_RUNTIME_PROPERTIES = {
   sandbox: true,
   worktrees: true,
   webSearch: true,
-  tasks: true,
   modelConfig: true,
+  capabilities: true,
 } satisfies Record<keyof PluginRuntime, true>;
 
 export function runPluginRegisterSyncInRegistry(
@@ -264,7 +264,7 @@ export function createLazyPluginRuntime(params: {
       if (prop === "version") {
         return VERSION;
       }
-      if (prop === "config" || prop === "state" || prop === "system") {
+      if (prop === "capabilities" || prop === "config" || prop === "state" || prop === "system") {
         return base[prop];
       }
     }
@@ -284,7 +284,7 @@ export function createLazyPluginRuntime(params: {
         return getRuntimeProperty(prop);
       },
     };
-    // Policy facets match defineCachedValue's getter-only contract before loading too.
+    // Policy facets match the runtime's getter-only contract before loading too.
     if (prop !== "modelAuth" && prop !== "modelConfig") {
       descriptor.set = (value: unknown) => {
         Reflect.set(resolveRuntime() as object, prop, value);

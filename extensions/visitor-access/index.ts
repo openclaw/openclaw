@@ -35,10 +35,15 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
   const service = new VisitorAccessService(
     config,
     store,
-    new VisitorPolicyClient(config, fetch, lifetime.signal),
+    new VisitorPolicyClient(
+      config,
+      fetch,
+      lifetime.signal,
+      () => api.runtime.config.current().gateway?.auth?.trustedProxy?.cloudflareAccessOidc,
+    ),
     api.logger,
     createVisitorAccessReader(api.runtime),
-    fetch,
+    api.runtime.gateway.resolveGitHubAccount,
     lifetime.signal,
   );
   const runtime: VisitorRuntime = {
@@ -48,7 +53,7 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
 
   api.registerGatewayAccessPolicy({
     resume({ profile, grantId }) {
-      return service.resume(profile.emails, grantId);
+      return service.resume(profile.emails, grantId, profile.githubAccountIds);
     },
     authorize({ config: currentConfig, profile, requiredByRole }) {
       const roles = currentConfig.gateway?.roles;
@@ -59,7 +64,7 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
         return undefined;
       }
       resolveVisitorRole(currentConfig);
-      return service.authorize(profile.emails);
+      return service.authorize(profile.emails, profile.githubAccountIds);
     },
   });
 

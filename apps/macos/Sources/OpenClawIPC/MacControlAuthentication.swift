@@ -13,10 +13,7 @@ public struct MacControlEnvelope: Codable, Sendable {
         self.id = UUID().uuidString
         self.nonce = UUID().uuidString
         self.ts = Int64(now.timeIntervalSince1970 * 1000)
-        guard let requestJson = try String(data: JSONEncoder().encode(request), encoding: .utf8) else {
-            throw MacControlError(code: "invalid_request", message: "Could not encode the control request.")
-        }
-        self.requestJson = requestJson
+        self.requestJson = try String(bytes: JSONEncoder().encode(request), encoding: .utf8)!
         self.hmac = Self.signature(nonce: self.nonce, ts: self.ts, requestJson: self.requestJson, token: token)
     }
 

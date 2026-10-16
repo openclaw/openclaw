@@ -26,3 +26,18 @@ export async function saveUserPreferences(
     invalidateUserPreferences(client);
   }
 }
+
+/** Document coverage seeds only this profile projection on its first connection. */
+export function seedUserPreferences(
+  client: GatewayBrowserClient,
+  profileId: string,
+  keys: readonly string[],
+  entries: Record<string, unknown>,
+): void {
+  userPreferenceReads.set(
+    client,
+    new Map([
+      [JSON.stringify([profileId, keys.toSorted()]), Promise.resolve({ status: "ok", entries })],
+    ]),
+  );
+}

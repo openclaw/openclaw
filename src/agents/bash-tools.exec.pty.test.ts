@@ -1,8 +1,3 @@
-/**
- * Exec PTY integration tests.
- * Starts PTY sessions, polls them through the process tool, and verifies
- * terminal input/output handling.
- */
 import { readFile } from "node:fs/promises";
 import { afterEach, expect, test } from "vitest";
 import { deleteSession, markBackgrounded } from "./bash-process-registry.js";
@@ -47,41 +42,8 @@ async function startPtySession(command: string) {
   return { processTool, sessionId: run.session.id, run };
 }
 
-async function expectSessionCompletion(params: {
-  processTool: ReturnType<typeof createProcessTool>;
-  sessionId: string;
-  expectedText: string | string[];
-}) {
-  const expectedTexts = Array.isArray(params.expectedText)
-    ? params.expectedText
-    : [params.expectedText];
-  await expect
-    .poll(
-      async () => {
-        const poll = await params.processTool.execute("toolcall", {
-          action: "poll",
-          sessionId: params.sessionId,
-        });
-        const details = poll.details as { status?: string; aggregated?: string };
-        if (details.status === "running") {
-          return false;
-        }
-        expect(details.status).toBe("completed");
-        for (const expectedText of expectedTexts) {
-          expect(details.aggregated ?? "").toContain(expectedText);
-        }
-        return true;
-      },
-      {
-        timeout: process.platform === "win32" ? 12_000 : 8_000,
-        interval: 30,
-      },
-    )
-    .toBe(true);
-}
-
 test("exec supports pty output, OPENCLAW_SHELL, send-keys, and submit", async () => {
-  const { processTool, sessionId } = await startPtySession(
+  const { processTool, sessionId, run } = await startPtySession(
     currentNodeEvalCommand(
       [
         "process.stdout.write(`ok:${process.env.OPENCLAW_SHELL || ''}`);",
@@ -108,11 +70,13 @@ test("exec supports pty output, OPENCLAW_SHELL, send-keys, and submit", async ()
     sessionId,
   });
 
-  await expectSessionCompletion({
-    processTool,
-    sessionId,
-    expectedText: ["submitted", "ok", "exec"],
-  });
+  await run.promise;
+  const poll = await processTool.execute("toolcall", { action: "poll", sessionId });
+  const details = poll.details as { status?: string; aggregated?: string };
+  expect(details.status).toBe("completed");
+  for (const text of ["submitted", "ok", "exec"]) {
+    expect(details.aggregated ?? "").toContain(text);
+  }
 });
 
 test.skipIf(process.platform === "win32")(

@@ -1,4 +1,3 @@
-// Control UI module implements presenter behavior.
 import { resolveExactDurationParts } from "../../../src/infra/format-time/format-duration-exact.ts";
 import type { CronJob, GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
@@ -51,7 +50,7 @@ export function formatCronState(job: CronJob) {
   return `${status} · next ${next} · last ${last}`;
 }
 
-export function formatCronSchedule(job: CronJob) {
+export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
   const s = job.schedule;
   if (s.kind === "at") {
     const atMs = Date.parse(s.at);
@@ -65,6 +64,10 @@ export function formatCronSchedule(job: CronJob) {
     // on-exit jobs carry a watched command (+ optional cwd), not a cron expr;
     // without this branch they fall through and render "Cron undefined".
     return `On exit: ${s.command}${s.cwd ? ` (cwd: ${s.cwd})` : ""}`;
+  }
+  if (s.kind === "event") {
+    const name = typeof s.options.name === "string" ? s.options.name : s.source;
+    return `Event: ${name}`;
   }
   if (s.kind === "stream") {
     return `Stream: ${s.command.join(" ")}${s.cwd ? ` (cwd: ${s.cwd})` : ""}`;

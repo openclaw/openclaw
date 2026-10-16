@@ -18,8 +18,9 @@ const mocks = vi.hoisted(() => ({
   message: vi.fn(async () => ({ content: [{ type: "text", text: "message result" }] })),
   beforeTool: vi.fn(async ({ params }: { params: unknown }) => ({ blocked: false, params })),
 }));
+// mock-isolation: Exercise real MCP grants and policy with inert search and message tools.
 vi.mock("../agents/openclaw-tools.js", () => ({
-  createOpenClawTools: () =>
+  createOpenClawToolsAsync: async () =>
     ["web_search", "message"].map((name) => ({
       name,
       label: name,
@@ -45,7 +46,7 @@ describe("private MCP search denial", () => {
         const cfg: OpenClawConfig = {
           agents: {
             defaults: { workspace: state.workspaceDir },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           plugins: { enabled: false },
           tools: { allow: ["web_search", "message"] },

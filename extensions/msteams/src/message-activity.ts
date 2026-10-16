@@ -17,3 +17,10 @@ export function buildMSTeamsMessageActivity(text?: string) {
     entities: [...parsed.entities, AI_GENERATED_ENTITY],
   };
 }
+
+export function buildMSTeamsAdaptiveCardActivity(card: Record<string, unknown>) {
+  return {
+    type: "message" as const,
+    attachments: [{ contentType: "application/vnd.microsoft.card.adaptive", content: card }],
+  };
+}

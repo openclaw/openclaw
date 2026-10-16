@@ -21,29 +21,20 @@ vi.mock("ws", async () => {
       constructor() {
         super();
         socketHarness.current = this;
-        queueMicrotask(() =>
-          this.emit(
-            "message",
-            Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
-          ),
-        );
+        this.receive({ op: 10, d: { heartbeat_interval: 60_000 } });
+      }
+      receive(packet: unknown) {
+        queueMicrotask(() => this.emit("message", Buffer.from(JSON.stringify(packet))));
       }
       send(value: string) {
         const packet: unknown = JSON.parse(value);
         if (packet && typeof packet === "object" && "op" in packet && packet.op === 2) {
-          queueMicrotask(() =>
-            this.emit(
-              "message",
-              Buffer.from(
-                JSON.stringify({
-                  op: 0,
-                  s: 1,
-                  t: "READY",
-                  d: { user: { id: "423456789012345678", bot: true } },
-                }),
-              ),
-            ),
-          );
+          this.receive({
+            op: 0,
+            s: 1,
+            t: "READY",
+            d: { user: { id: "423456789012345678", bot: true } },
+          });
         }
       }
       terminate() {
@@ -65,6 +56,7 @@ afterEach(async () => {
       await session.cleanup().catch(() => {});
     }),
   );
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -131,23 +123,18 @@ function fixture(options: { manageThreads?: boolean; missingPermissions?: boolea
         messages.delete(id);
         return new Response(null, { status: 204 });
       }
-      if (method === "PATCH" && id) {
-        const message = messages.get(id)!;
-        message.content = z
-          .object({ content: z.string() })
-          .parse(JSON.parse(z.string().parse(init?.body))).content;
-        return Response.json(message);
+      if (method === "GET") {
+        if (id) {
+          return messages.has(id)
+            ? Response.json(messages.get(id))
+            : Response.json({ message: "Unknown message" }, { status: 404 });
+        }
+        return Response.json(
+          [...messages.values()].filter((message) => message.channel_id === target),
+        );
       }
-      if (id) {
-        return messages.has(id)
-          ? Response.json(messages.get(id))
-          : Response.json({ message: "Unknown message" }, { status: 404 });
-      }
-      return Response.json(
-        [...messages.values()].filter((message) => message.channel_id === target),
-      );
     }
-    if (route.includes("/reactions/") || /^\/channels\/\d+$/u.test(route)) {
+    if (/^\/channels\/\d+$/u.test(route)) {
       return new Response(null, { status: 204 });
     }
     throw new Error(`unexpected fixture route ${method} ${route}`);
@@ -314,6 +301,72 @@ describe("Discord agent E2E authority and evidence", () => {
       route: `/channels/${channelId}/messages/${id}`,
       token: "Bot sut-token",
     });
+  });
+
+  it("cleans marker-correlated replies after a recorder failure without claiming unrelated messages", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const marker = "OWNED_REPLY_MARKER";
+    const trigger = await f.driver.send({ text: `reply with ${marker}`, mention: true });
+    const thread = await f.driver.thread({ name: "owned thread", messageId: trigger.id });
+    const waiting = f.driver.waitForReply({ afterMessageId: trigger.id, textIncludes: marker });
+    const rejected = expect(waiting).rejects.toThrow("closed (1006)");
+    await vi.advanceTimersByTimeAsync(0);
+    const reply = {
+      id: "623456789012345678",
+      channel_id: channelId,
+      author: { id: sutId },
+      content: marker,
+    };
+    const unrelated: DiscordE2eNativeMessage[] = [
+      { ...reply, id: "523456789012345677" },
+      { ...reply, id: "623456789012345679", content: "another conversation" },
+      { ...reply, id: "623456789012345680", author: { id: driverId } },
+      { ...reply, id: "623456789012345681", channel_id: thread.threadId },
+      {
+        ...reply,
+        id: "623456789012345682",
+        message_reference: { message_id: "923456789012345678" },
+      },
+    ];
+    for (const message of [reply, ...unrelated]) {
+      f.messages.set(message.id, message);
+      f.emit("MESSAGE_CREATE", message);
+    }
+    socketHarness.current!.emit("close", 1006);
+    await vi.advanceTimersByTimeAsync(100);
+    await rejected;
+    await f.session.stop();
+    await expect(f.session.cleanup()).rejects.toThrow("closed (1006)");
+
+    expect(f.messages.has(trigger.id)).toBe(false);
+    expect(f.messages.has(reply.id)).toBe(false);
+    expect(unrelated.every((message) => f.messages.has(message.id))).toBe(true);
+    expect(f.mutations.filter((row) => row.method === "DELETE")).toEqual(
+      expect.arrayContaining([
+        {
+          method: "DELETE",
+          route: `/channels/${channelId}/messages/${trigger.id}`,
+          token: "Bot driver-token",
+        },
+        {
+          method: "DELETE",
+          route: `/channels/${channelId}/messages/${reply.id}`,
+          token: "Bot sut-token",
+        },
+      ]),
+    );
+    expect(f.mutations.filter((row) => row.method === "DELETE")).toHaveLength(2);
+    expect(await f.evidence()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "correlation",
+          messageId: reply.id,
+          triggerMessageId: trigger.id,
+        }),
+        expect.objectContaining({ source: "recorder", continuous: false }),
+      ]),
+    );
   });
 
   it("never retries an uncertain write or sweeps the channel to conceal its missing receipt", async () => {

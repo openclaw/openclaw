@@ -16,7 +16,7 @@ For the usual OpenClaw iMessage deployment, run the Gateway and `imsg` on the sa
 BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`. OpenClaw supports iMessage through `imsg` only. Start with [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short announcement, or [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full migration table.
 </Warning>
 
-Status: native external CLI integration. The Gateway spawns `imsg rpc` and speaks JSON-RPC over stdio — no separate daemon or port. Private API mode is strongly encouraged for a complete iMessage channel. Replies, tapbacks, effects, polls, attachment replies, and group actions require `imsg launch` and a successful private API probe.
+Status: native external CLI integration. The Gateway spawns `imsg rpc` and speaks JSON-RPC over stdio — no separate daemon or port. Private API mode is strongly encouraged for a complete iMessage channel. Replies, tapbacks, effects, polls, attachment replies, and group actions require `imsg launch` and a successful private API check.
 
 For the common local setup, OpenClaw setup can offer a user-confirmed Homebrew install or update for `imsg` on the signed-in Messages Mac. Manual setup and SSH-wrapper topologies remain operator-managed: install or update `imsg` in the same user context that will run the Gateway or wrapper.
 
@@ -78,7 +78,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="ssh-wrapper-sends-fail-with-appleevents-1743" />[SSH wrapper sends fail with AppleEvents -1743](/channels/imessage/setup#ssh-wrapper-sends-fail-with-appleevents-1743)
 - <a id="dm-policy" />[DM policy](/channels/imessage/access-control#dm-policy)
 - <a id="group-policy-%2B-mentions" />[Group policy + mentions](/channels/imessage/access-control#group-policy-%2B-mentions)
-- <a id="sessions-and-deterministic-replies" />[Sessions and deterministic replies](/channels/imessage/access-control#sessions-and-deterministic-replies)
+- <a id="sessions-and-deterministic-replies" />[Sessions and reply routing](/channels/imessage/access-control#sessions-and-deterministic-replies)
 - <a id="dedicated-bot-macos-user-separate-imessage-identity" />[Dedicated bot macOS user (separate iMessage identity)](/channels/imessage/deployment#dedicated-bot-macos-user-separate-imessage-identity)
 - <a id="remote-mac-over-tailscale-example" />[Remote Mac over Tailscale (example)](/channels/imessage/deployment#remote-mac-over-tailscale-example)
 - <a id="multi-account-pattern" />[Multi-account pattern](/channels/imessage/deployment#multi-account-pattern)

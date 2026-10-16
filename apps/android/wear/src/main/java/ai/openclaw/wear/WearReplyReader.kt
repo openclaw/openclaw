@@ -92,9 +92,8 @@ internal fun ReplyReader(
           reply.target == null -> WearReplyTextPage(WearReplyTextStatus.Unavailable)
           else -> readReply(reply.target, offset, revision)
         }
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
+      } catch (err: Throwable) {
+        if (err is CancellationException) throw err
         WearReplyTextPage(WearReplyTextStatus.Failed)
       }
     if (page?.status == WearReplyTextStatus.Ready) revision = page?.revision
@@ -110,7 +109,7 @@ internal fun ReplyReader(
             item(key = "paragraph:$offset:$index") {
               Text(
                 text = paragraph,
-                color = OpenClawWearTheme.colors.text,
+                color = OpenClawWearTheme.canvasColors.text,
                 fontSize = 13.sp,
                 lineHeight = 17.sp,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
@@ -142,7 +141,7 @@ internal fun ReplyReader(
                     else -> R.string.reply_failed
                   },
                 ),
-              color = OpenClawWearTheme.colors.text,
+              color = OpenClawWearTheme.canvasColors.text,
               fontSize = 13.sp,
               modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
             )

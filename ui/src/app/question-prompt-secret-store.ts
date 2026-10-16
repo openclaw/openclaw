@@ -127,10 +127,7 @@ export function prepareQuestionSecretStoreSubmission(
   const allowedHosts =
     secretQuestion?.secretStore?.kind === "secret"
       ? allowedHostsDraft !== undefined
-        ? allowedHostsDraft
-            .split(/[,\s]+/u)
-            .map((host) => host.trim())
-            .filter(Boolean)
+        ? allowedHostsDraft.split(/[,\s]+/u).filter(Boolean)
         : secretQuestion.secretStore.allowedHosts
       : undefined;
   return {

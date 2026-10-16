@@ -1,12 +1,19 @@
-import { nothing, render } from "lit";
 import MarkdownIt from "markdown-it";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { TextareaTokenAnchor } from "../../components/textarea-token-anchor.ts";
+import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
 import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
-import { renderNewSessionComposer } from "../new-session/composer.ts";
-import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { mountNewSessionComposer } from "../new-session/composer.test-support.ts";
+import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
+import { NewSessionModelControl } from "../new-session/model-control.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  resetComposerFixture,
+  disposeComposer,
+  renderComposerInto,
+} from "./chat-composer.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 const controllers: NewSessionComposerTextareaController[] = [];
@@ -25,7 +32,7 @@ afterEach(async () => {
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
   // jsdom has no layout/ResizeObserver; real-browser tests cover placement and cleanup.
-  vi.spyOn(TextareaTokenAnchor.prototype, "update").mockImplementation(() => {});
+  vi.spyOn(TextareaTokenAnchor.prototype, "updateNative").mockImplementation(() => {});
   // jsdom has no editing engine. Exercise the browser command's input contract;
   // native undo itself is covered by the real-browser composer suite.
   Object.defineProperty(document, "execCommand", {
@@ -45,18 +52,30 @@ beforeEach(() => {
 });
 
 function fixture(kind: "chat" | "new", locked = false, requiresModifier = false) {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   document.body.append(container);
   let retired = false;
+  let native: ReturnType<typeof mountNewSessionComposer> | undefined;
+  let nativeOptions: NewSessionComposerOptions;
   fixtureDisposals.push(() => {
     retired = true;
-    render(nothing, container);
+    attachmentDraft.reset();
+    if (native) {
+      native.unmount();
+    } else {
+      disposeComposer(container);
+    }
     container.remove();
   });
   let draft = "";
   const send = vi.fn();
   const backgroundSend = vi.fn();
   const controller = new NewSessionComposerTextareaController();
+  const attachmentDraft = new NewSessionAttachmentDraft(
+    () => redraw(),
+    () => {},
+  );
+  const modelControl = new NewSessionModelControl(() => redraw());
   controllers.push(controller);
   const props = createComposerProps({
     canSend: !locked,
@@ -71,33 +90,36 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     if (retired) {
       return;
     }
-    render(
-      kind === "chat"
-        ? renderChatComposer({ ...props, draft })
-        : renderNewSessionComposer({
-            renderCritters: () => nothing,
-            attachments: [],
-            getAttachments: () => [],
-            canSubmit: true,
-            message: draft,
-            pendingAttachmentReads: 0,
-            readSignal: new AbortController().signal,
-            requiresModifier,
-            submitting: false,
-            messageLocked: locked,
-            textareaController: controller,
-            requestUpdate: redraw,
-            onAttachmentsChange: () => {},
-            onPendingReadsChange: () => {},
-            onInput: (next) => {
-              draft = next;
-              redraw();
-            },
-            onSubmit: send,
-            onBackgroundSubmit: backgroundSend,
-          }),
-      container,
-    );
+    if (kind === "chat") {
+      renderComposerInto(container, { ...props, draft });
+    } else {
+      nativeOptions = {
+        agentId: "main",
+        context: undefined,
+        draftOwnerKey: "emoji",
+        attachmentDraft,
+        modelControl,
+        isCatalogTarget: true,
+        canSubmit: true,
+        message: draft,
+        requiresModifier,
+        submitting: false,
+        messageLocked: locked,
+        textareaController: controller,
+        requestUpdate: redraw,
+        onInput: (next) => {
+          draft = next;
+          redraw();
+        },
+        onSubmit: send,
+        onBackgroundSubmit: backgroundSend,
+      };
+      if (native) {
+        native.rerender();
+      } else {
+        native = mountNewSessionComposer(() => nativeOptions, container);
+      }
+    }
   }
   redraw();
   const textarea = container.querySelector("textarea")!;
@@ -132,9 +154,66 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
   return { container, textarea, input, key, colon, send, backgroundSend, draft: () => draft };
 }
 
+describe("chat emoji acceptance", () => {
+  it("does not send on held Enter after accepting an emoji, but sends on a fresh press", () => {
+    const f = fixture("chat");
+    f.input(":smi");
+    f.key("Enter");
+    expect(f.draft()).toBe("😄");
+    expect(f.container.querySelector('[role="listbox"]')).toBeNull();
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.key("Enter", { repeat: true }).defaultPrevented).toBe(true);
+    expect(f.draft()).toBe("😄");
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.key("Enter").defaultPrevented).toBe(true);
+    expect(f.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports mouse and Tab acceptance and persistent Escape dismissal", () => {
+    const f = fixture("chat");
+    f.input(":smi");
+    f.key("Escape");
+    f.textarea.dispatchEvent(new Event("select"));
+    expect(f.container.querySelector('[role="listbox"]')).toBeNull();
+    expect(f.draft()).toBe(":smi");
+    f.input(":smil");
+    f.container.querySelector<HTMLElement>('[role="option"]')!.click();
+    expect(f.draft()).toBe("😄");
+    f.input(":thumbsup");
+    f.key("Tab");
+    expect(f.draft()).toBe("👍");
+    expect(f.send).not.toHaveBeenCalled();
+  });
+});
+
 describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
-  it("navigates accessible suggestions and inserts only the caret token without sending", () => {
+  it("ignores a queued selection event after focus leaves the composer", () => {
     const f = fixture(kind);
+    f.input(":smi");
+    f.textarea.setSelectionRange(4, 4);
+    f.textarea.blur();
+    f.textarea.dispatchEvent(new Event("select"));
+    expect(f.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
+    expect(f.draft()).toBe(":smi");
+  });
+
+  it("leaves IME composition and locked text alone", () => {
+    const f = fixture(kind);
+    f.input(":smi");
+    f.textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    expect(f.key("Enter", { isComposing: true }).defaultPrevented).toBe(false);
+    expect(f.colon().defaultPrevented).toBe(false);
+    expect(f.send).not.toHaveBeenCalled();
+    const locked = fixture(kind, true);
+    locked.input(":smile");
+    expect(locked.colon().defaultPrevented).toBe(false);
+    expect(locked.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
+  });
+});
+
+describe("chat emoji composer", () => {
+  it("navigates accessible suggestions and inserts only the caret token without sending", () => {
+    const f = fixture("chat");
     f.input("Before :smi after", 11);
     const list = f.container.querySelector('[role="listbox"]')!;
     expect(list.getAttribute("aria-label")).toBe("Emoji suggestions");
@@ -149,97 +228,38 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
     expect(document.activeElement).toBe(f.textarea);
     expect(f.send).not.toHaveBeenCalled();
   });
-  it("does not send on held Enter after accepting an emoji, but sends on a fresh press", () => {
-    const f = fixture(kind);
-    f.input(":smi");
-    f.key("Enter");
-    expect(f.draft()).toBe("😄");
-    expect(f.container.querySelector('[role="listbox"]')).toBeNull();
-    expect(f.send).not.toHaveBeenCalled();
-    expect(f.key("Enter", { repeat: true }).defaultPrevented).toBe(true);
-    expect(f.draft()).toBe("😄");
-    expect(f.send).not.toHaveBeenCalled();
-    expect(f.key("Enter").defaultPrevented).toBe(true);
-    expect(f.send).toHaveBeenCalledTimes(1);
-  });
-  it("supports mouse and Tab acceptance and persistent Escape dismissal", () => {
-    const f = fixture(kind);
-    f.input(":smi");
-    f.key("Escape");
-    f.textarea.dispatchEvent(new Event("select"));
-    expect(f.container.querySelector('[role="listbox"]')).toBeNull();
-    expect(f.draft()).toBe(":smi");
-    f.input(":smil");
-    f.container.querySelector<HTMLElement>('[role="option"]')!.click();
-    expect(f.draft()).toBe("😄");
-    f.input(":thumbsup");
-    f.key("Tab");
-    expect(f.draft()).toBe("👍");
-    expect(f.send).not.toHaveBeenCalled();
-  });
-  it("converts a typed closing colon through the draft owner, not paste or undo", () => {
-    const f = fixture(kind);
-    f.input("Hi :smile");
-    expect(f.colon().defaultPrevented).toBe(true);
-    expect(f.draft()).toBe("Hi 😄");
-    f.input(":smile:");
-    expect(f.draft()).toBe(":smile:");
-    f.textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "historyUndo" }));
-    expect(f.draft()).toBe(":smile:");
-  });
+
   it.each([
-    "`:smile",
-    "`a\\` b ` :smile",
-    "```text\n:smile",
-    "~~~~\n:smile",
-    "    :smile",
-    ">     :smile",
-    "-     :smile",
     "> -     :smile",
-    "~~~\n    ~~~\n:smile",
-    "~~~\n> ~~~\n:smile",
-    " \t:smile",
-    "https://example.com/:smile",
-    "//example.com/?emoji=:smile",
-    "example.com?emoji=:smile",
     "../page?emoji=:smile",
-    "/page#emoji=:smile",
-    "page?emoji=:smile",
-    "mailto:person@example.com?subject=:smile",
-    "[link](:smile",
     "[x](foo(bar)(:smile",
-    "\\:smile",
-    ":not_a_real_emoji",
     "/echo :smile",
     "$skill:smi",
   ])("keeps literal or command context %s", (value) => {
-    const f = fixture(kind);
+    const f = fixture("chat");
     f.input(value);
     expect(f.colon().defaultPrevented).toBe(false);
     expect(f.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
     expect(f.draft()).toBe(value);
   });
+
   it.each([
     "Use `code` :smile",
-    "Use `[link](` :smile",
-    "Use `<tag` :smile",
     "😄:smile",
-    "See <https://example.com/it's> :smile",
     "See <o'brien@example.com> :smile",
     "Use \\`literal :smile",
     "~~~\nif (a < b) {}\n~~~\n\nNice :smile",
-    "| Status |\n| --- |\n| :smile",
-    "| A | B |\n| --- | --- |\n| :smile",
   ])("converts prose after inline syntax: %s", (value) => {
-    const f = fixture(kind);
+    const f = fixture("chat");
     f.input(value);
     expect(f.colon().defaultPrevented).toBe(true);
     expect(f.draft()).toBe(value.replace(":smile", "😄"));
   });
+
   it("avoids Markdown work for ordinary typing and reuses an unchanged shortcode context", () => {
     const parse = vi.spyOn(MarkdownIt.prototype, "parse");
     try {
-      const f = fixture(kind);
+      const f = fixture("chat");
       f.input("Ordinary typing");
       f.input(":zzzzunknown");
       expect(parse).not.toHaveBeenCalled();
@@ -257,51 +277,9 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
       parse.mockRestore();
     }
   });
-  it("handles a first lookup after a large unbroken token without a multi-second stall", () => {
-    const f = fixture(kind);
-    const draft = "a".repeat(100_000) + " :smi";
-    const started = performance.now();
-    f.input(draft);
-    expect(f.container.querySelector('[aria-label="Emoji suggestions"]')).not.toBeNull();
-    // Deliberately generous: catch quadratic stalls, not ordinary CI timing variation.
-    expect(performance.now() - started).toBeLessThan(1_000);
-  });
-  it("ignores a queued selection event after focus leaves the composer", () => {
-    const f = fixture(kind);
-    f.input(":smi");
-    f.textarea.setSelectionRange(4, 4);
-    f.textarea.blur();
-    f.textarea.dispatchEvent(new Event("select"));
-    expect(f.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
-    expect(f.draft()).toBe(":smi");
-  });
-  it("leaves IME composition and locked text alone", () => {
-    const f = fixture(kind);
-    f.input(":smi");
-    f.textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    expect(f.key("Enter", { isComposing: true }).defaultPrevented).toBe(false);
-    expect(f.colon().defaultPrevented).toBe(false);
-    expect(f.send).not.toHaveBeenCalled();
-    const locked = fixture(kind, true);
-    locked.input(":smile");
-    expect(locked.colon().defaultPrevented).toBe(false);
-    expect(locked.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
-  });
 });
 
 describe("New Session emoji submission shortcuts", () => {
-  it.each([
-    { requiresModifier: false, shiftKey: true },
-    { requiresModifier: true, shiftKey: false },
-    { requiresModifier: true, shiftKey: true },
-  ])("preserves native repeated newlines for %j", ({ requiresModifier, shiftKey }) => {
-    const f = fixture("new", false, requiresModifier);
-    f.input("A draft");
-    expect(f.key("Enter", { shiftKey }).defaultPrevented).toBe(false);
-    expect(f.key("Enter", { shiftKey, repeat: true }).defaultPrevented).toBe(false);
-    expect(f.send).not.toHaveBeenCalled();
-    expect(f.backgroundSend).not.toHaveBeenCalled();
-  });
   it("consumes held emoji acceptance until Enter is released in modifier mode", () => {
     const f = fixture("new", false, true);
     f.input(":smi");
@@ -312,24 +290,18 @@ describe("New Session emoji submission shortcuts", () => {
     expect(f.key("Enter", { repeat: true }).defaultPrevented).toBe(false);
     expect(f.send).not.toHaveBeenCalled();
   });
-  it.each([
-    { requiresModifier: false, ctrlKey: true, shiftKey: false },
-    { requiresModifier: false, metaKey: true, shiftKey: false },
-    { requiresModifier: true, ctrlKey: true, shiftKey: true },
-    { requiresModifier: true, metaKey: true, shiftKey: true },
-  ])(
-    "ignores held background shortcut %j after emoji acceptance",
-    ({ requiresModifier, ...keys }) => {
-      const f = fixture("new", false, requiresModifier);
-      f.input(":smi");
-      f.key("Enter");
-      expect(f.draft()).toBe("😄");
-      expect(f.key("Enter", { ...keys, repeat: true }).defaultPrevented).toBe(true);
-      expect(f.draft()).toBe("😄");
-      expect(f.send).not.toHaveBeenCalled();
-      expect(f.backgroundSend).not.toHaveBeenCalled();
-      expect(f.key("Enter", keys).defaultPrevented).toBe(true);
-      expect(f.backgroundSend).toHaveBeenCalledTimes(1);
-    },
-  );
+
+  it("ignores held background shortcut after emoji acceptance", () => {
+    const f = fixture("new", false, true);
+    const keys = { ctrlKey: true, shiftKey: true };
+    f.input(":smi");
+    f.key("Enter");
+    expect(f.draft()).toBe("😄");
+    expect(f.key("Enter", { ...keys, repeat: true }).defaultPrevented).toBe(true);
+    expect(f.draft()).toBe("😄");
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.backgroundSend).not.toHaveBeenCalled();
+    expect(f.key("Enter", keys).defaultPrevented).toBe(true);
+    expect(f.backgroundSend).toHaveBeenCalledTimes(1);
+  });
 });

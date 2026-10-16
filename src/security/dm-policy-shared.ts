@@ -1,9 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Shares direct-message policy normalization for channel audits.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { resolveChannelIngressEffectiveAllowFromLists } from "../channels/message-access/effective-allow-from.js";
-import { readChannelIngressStoreAllowFromForDmPolicy } from "../channels/message-access/store-allow-from.js";
-import type { ChannelId } from "../channels/plugins/channel-id.types.js";
+import { resolveChannelIngressEffectiveAllowFromLists as resolveEffectiveAllowFromLists } from "../channels/message-access/effective-allow-from.js";
 import type { GroupPolicy } from "../config/types.base.js";
 
 /**
@@ -35,18 +33,7 @@ export function resolvePinnedMainDmOwnerFromAllowlist(params: {
 }
 
 /** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
-export function resolveEffectiveAllowFromLists(params: {
-  allowFrom?: Array<string | number> | null;
-  groupAllowFrom?: Array<string | number> | null;
-  storeAllowFrom?: Array<string | number> | null;
-  dmPolicy?: string | null;
-  groupAllowFromFallbackToAllowFrom?: boolean | null;
-}): {
-  effectiveAllowFrom: string[];
-  effectiveGroupAllowFrom: string[];
-} {
-  return resolveChannelIngressEffectiveAllowFromLists(params);
-}
+export { resolveEffectiveAllowFromLists };
 
 /** Admission decision returned by legacy DM/group access helpers. */
 export type DmGroupAccessDecision = "allow" | "block" | "pairing";
@@ -116,15 +103,7 @@ type DmGroupAccessInputParams = {
 };
 
 /** @deprecated Use `resolveChannelMessageIngress` or `readChannelIngressStoreAllowFromForDmPolicy` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
-export async function readStoreAllowFromForDmPolicy(params: {
-  provider: ChannelId;
-  accountId: string;
-  dmPolicy?: string | null;
-  shouldRead?: boolean | null;
-  readStore?: (provider: ChannelId, accountId: string) => Promise<string[]>;
-}): Promise<string[]> {
-  return await readChannelIngressStoreAllowFromForDmPolicy(params);
-}
+export { readChannelIngressStoreAllowFromForDmPolicy as readStoreAllowFromForDmPolicy } from "../channels/message-access/store-allow-from.js";
 
 function resolveLegacyDmGroupAccessDecision(params: {
   isGroup: boolean;

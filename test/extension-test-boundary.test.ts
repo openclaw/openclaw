@@ -2,14 +2,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import type { SourceFile } from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
 import { getChangedPathFacts } from "../scripts/lib/changed-path-facts.mjs";
 import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../src/plugin-sdk/test-helpers/public-artifacts.js";
 import { expectNoReaddirSyncDuring } from "../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../src/test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
   GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES,
 );
@@ -92,10 +96,9 @@ function walkCode(dir: string, entries: string[] = []): string[] {
   return entries;
 }
 
-function findExtensionImports(source: string, fileName = "source.ts"): string[] {
+function findExtensionImports(source: SourceFile): string[] {
   return (
     collectModuleReferencesFromSource(source, {
-      fileName,
       acceptSpecifier: (specifier) => /^(?:\.\.\/)+extensions\//u.test(specifier),
     })
       // This guard owns import specifiers, not URL construction for fixture roots or manifests.
@@ -213,19 +216,24 @@ describe("non-extension test boundaries", () => {
     'export * from "../../extensions/feishu/src/client.js";',
     'export { client } from "../../extensions/feishu/src/client.js";',
   ])("detects plugin dependencies in executable and type syntax: %s", (source) => {
-    expect(findExtensionImports(source)).toEqual(["../../extensions/feishu/src/client.js"]);
+    expect(findExtensionImports(parser.parseSourceFile("source.ts", source))).toEqual([
+      "../../extensions/feishu/src/client.js",
+    ]);
   });
 
   it("ignores diagnostic strings, import examples, and fixture URLs", () => {
     expect(
       findExtensionImports(
-        [
-          'const modulePath = "../../extensions/feishu/src/client.js";',
-          'const fixtureUrl = new URL("../../extensions/feishu/openclaw.plugin.json", import.meta.url);',
-          'const example = `import { client } from "../../extensions/feishu/src/client.js";`;',
-          '// import("../../extensions/feishu/src/client.js");',
-          '/* export * from "../../extensions/feishu/src/client.js"; */',
-        ].join("\n"),
+        parser.parseSourceFile(
+          "source.ts",
+          [
+            'const modulePath = "../../extensions/feishu/src/client.js";',
+            'const fixtureUrl = new URL("../../extensions/feishu/openclaw.plugin.json", import.meta.url);',
+            'const example = `import { client } from "../../extensions/feishu/src/client.js";`;',
+            '// import("../../extensions/feishu/src/client.js");',
+            '/* export * from "../../extensions/feishu/src/client.js"; */',
+          ].join("\n"),
+        ),
       ),
     ).toEqual([]);
   });
@@ -254,24 +262,25 @@ describe("non-extension test boundaries", () => {
         !file.startsWith("ui/"),
     );
 
-    const offenders = testFiles
-      .map((file) => {
-        const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-        const imports = findExtensionImports(source, file).filter(
+    const offenders: { file: string; imports: string[] }[] = [];
+    // Batch project reloads without retaining syntax trees for the entire repository.
+    const batchSize = 128;
+    for (let offset = 0; offset < testFiles.length; offset += batchSize) {
+      const sources = testFiles.slice(offset, offset + batchSize).map((fileName) => ({
+        fileName,
+        text: fs.readFileSync(path.join(repoRoot, fileName), "utf8"),
+      }));
+      for (const source of parser.parseSourceFiles(sources)) {
+        const file = toRepoRelativePath(repoRoot, source.fileName);
+        const imports = findExtensionImports(source).filter(
           (specifier) => !isAllowedExtensionPublicImport(specifier),
         );
-        if (imports.length === 0) {
-          return null;
+        if (imports.length === 0 || isAllowedCoreContractSuite(file, imports)) {
+          continue;
         }
-        if (isAllowedCoreContractSuite(file, imports)) {
-          return null;
-        }
-        return {
-          file,
-          imports,
-        };
-      })
-      .filter((value): value is { file: string; imports: string[] } => value !== null);
+        offenders.push({ file, imports });
+      }
+    }
 
     expect(offenders).toStrictEqual([]);
   });

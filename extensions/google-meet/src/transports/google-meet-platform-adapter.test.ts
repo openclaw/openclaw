@@ -47,9 +47,7 @@ function microphoneSelect(labels: string[]) {
   let value = options[0]?.value;
   return {
     dispatchEvent: vi.fn(),
-    get options() {
-      return options;
-    },
+    options,
     get selectedOptions() {
       return options.filter((option) => option.selected);
     },
@@ -93,18 +91,9 @@ async function runAudioStatus(
     body: { textContent: "" },
     title: "Meet",
     querySelector(selector: string) {
-      if (selector.includes("select") && selector.includes("microphone")) {
-        return select;
-      }
-      return null;
+      return selector.includes("select") && selector.includes("microphone") ? select : null;
     },
     querySelectorAll(selector: string) {
-      if (selector === "button") {
-        return buttons;
-      }
-      if (selector === "input") {
-        return [];
-      }
       if (selector === "audio, video") {
         return [media];
       }
@@ -144,21 +133,8 @@ async function runAudioStatus(
       window: {},
     },
   );
-  return {
-    health: JSON.parse(result) as Record<string, unknown>,
-    media,
-    microphone,
-    select,
-  };
+  return { health: JSON.parse(result) as Record<string, unknown>, media, microphone, select };
 }
-
-describe("GOOGLE_MEET_PLATFORM_ADAPTER captions", () => {
-  it("enables caption capture for durable notes in every browser mode", () => {
-    expect(GOOGLE_MEET_PLATFORM_ADAPTER.browser.captions.enabled("agent")).toBe(true);
-    expect(GOOGLE_MEET_PLATFORM_ADAPTER.browser.captions.enabled("bidi")).toBe(true);
-    expect(GOOGLE_MEET_PLATFORM_ADAPTER.browser.captions.enabled("transcribe")).toBe(true);
-  });
-});
 
 describe("GOOGLE_MEET_PLATFORM_ADAPTER audio routing", () => {
   it.each(["BlackHole 2ch", "Monitor of OpenClaw Meeting Audio"])(

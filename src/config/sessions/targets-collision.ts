@@ -1,4 +1,3 @@
-// Fixed-store collision ownership and physical SQLite target deduplication.
 import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -7,6 +6,7 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sql
 import {
   readSessionStoreRegistryRows,
   resolveSqliteTargetFromSessionStorePath,
+  type ResolvedSqliteStoreTarget,
   type SessionStoreRegistryRead,
 } from "./session-sqlite-target.js";
 import type { SessionStoreReadCandidate } from "./session-store-read-candidates.js";
@@ -22,13 +22,7 @@ type SessionStoreTargetCollisionDiagnostic = {
   sqlitePath: string;
   ownerAgentId?: string;
   ignoredAgentIds: string[];
-  ownerSource:
-    | "database-registry"
-    | "database-path"
-    | "registered-suffixed"
-    | "occupied-unsuffixed"
-    | "configured-default"
-    | "ambiguous-registry";
+  ownerSource: NonNullable<ResolvedSqliteStoreTarget["ownerSource"]>;
 };
 
 const log = createSubsystemLogger("sessions/targets");
@@ -45,6 +39,13 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
   },
 ): SessionStoreTarget[] {
+  const reportDiagnostic = (diagnostic: SessionStoreTargetCollisionDiagnostic) => {
+    if (options.onDiagnostic) {
+      options.onDiagnostic(diagnostic);
+    } else {
+      log.warn(diagnostic.message);
+    }
+  };
   // Ownership must not fall back while the authoritative registry is unreadable:
   // doing so can project the same physical DB under a different configured default.
   const registeredDatabases = readSessionStoreRegistryRows(
@@ -66,9 +67,22 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
   // Alias targets can change between calls. Reuse prepared identities only for this
   // synchronous dedupe invocation so collision ownership never relies on stale paths.
   const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
-  const resolvePhysicalGroupKey = <T>(groups: ReadonlyMap<string, T>, pathname: string) =>
-    [...groups.keys()].find((candidate) => isSameDatabasePath(candidate, pathname)) ??
-    path.resolve(pathname);
+  const physicalGroupKey = isSameDatabasePath.createIndex();
+  const logicalGroupKey = isSameDatabasePath.createIndex();
+  const resolveGroupKey = (
+    groups: ReadonlyMap<string, unknown>,
+    key: (pathname: string) => string,
+    pathname: string,
+  ) => {
+    // A singleton group needs no additional physical inspection.
+    if (groups.size === 0) {
+      return path.resolve(pathname);
+    }
+    if (groups.size === 1) {
+      key(groups.keys().next().value!);
+    }
+    return key(pathname);
+  };
   for (const target of targets) {
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
@@ -78,7 +92,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       isSameDatabasePath,
       readCandidates: options.readCandidates,
     });
-    const sqlitePath = resolvePhysicalGroupKey(grouped, resolved.path ?? target.storePath);
+    const sqlitePath = resolveGroupKey(grouped, physicalGroupKey, resolved.path);
     const group = grouped.get(sqlitePath) ?? [];
     group.push({
       target,
@@ -91,9 +105,9 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       continue;
     }
     const resolvedUnsuffixedPath = path.resolve(
-      resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path ?? target.storePath,
+      resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path,
     );
-    const unsuffixedPath = resolvePhysicalGroupKey(logicalGroups, resolvedUnsuffixedPath);
+    const unsuffixedPath = resolveGroupKey(logicalGroups, logicalGroupKey, resolvedUnsuffixedPath);
     const logicalGroup = logicalGroups.get(unsuffixedPath) ?? [];
     logicalGroup.push({
       target,
@@ -127,11 +141,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       ignoredAgentIds,
       ownerSource,
     };
-    if (options.onDiagnostic) {
-      options.onDiagnostic(diagnostic);
-    } else {
-      log.warn(diagnostic.message);
-    }
+    reportDiagnostic(diagnostic);
   }
   const deduped: SessionStoreTarget[] = [];
   for (const [sqlitePath, group] of grouped) {
@@ -159,11 +169,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
         ignoredAgentIds: [...byAgentId.keys()],
         ownerSource: "ambiguous-registry",
       };
-      if (options.onDiagnostic) {
-        options.onDiagnostic(diagnostic);
-      } else {
-        log.warn(diagnostic.message);
-      }
+      reportDiagnostic(diagnostic);
       continue;
     }
     const ownerSource =
@@ -210,11 +216,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
         ignoredAgentIds: effectiveIgnoredAgentIds,
         ownerSource,
       };
-      if (options.onDiagnostic) {
-        options.onDiagnostic(diagnostic);
-      } else {
-        log.warn(diagnostic.message);
-      }
+      reportDiagnostic(diagnostic);
     }
   }
   return deduped;

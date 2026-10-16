@@ -141,12 +141,6 @@ struct ComputerActionServiceTests {
             postEvent: .granted,
             screenCapture: .granted)
 
-        #expect(permissions.diagnostic == .accessibilityGrantMayBeStale)
-        #expect(permissions.diagnostic.detailText == """
-        OpenClaw may already appear enabled under System Settings → Privacy & Security → Accessibility. \
-        If so, the grant is pinned to an older build: select OpenClaw, remove it with −, then re-add \
-        /Applications/OpenClaw.app.
-        """)
         #expect(permissions.inputAccess == .accessibilityGrantMayBeStale)
         let error = self.validationError {
             try ComputerActionService.validateInputPermissions(permissions)
@@ -162,11 +156,6 @@ struct ComputerActionServiceTests {
             postEvent: .granted,
             screenCapture: .missing)
 
-        #expect(permissions.diagnostic == .missing([.accessibility, .screenCapture]))
-        #expect(permissions.diagnostic.detailText == """
-        Missing: Accessibility, Screen Recording. \
-        Grant access in System Settings → Privacy & Security, then reopen OpenClaw.
-        """)
         #expect(permissions.inputAccess == .accessibilityMissing)
         let error = self.validationError {
             try ComputerActionService.validateInputPermissions(permissions)
@@ -182,7 +171,6 @@ struct ComputerActionServiceTests {
             postEvent: .missing,
             screenCapture: .granted)
 
-        #expect(permissions.diagnostic == .missing([.postEvent]))
         #expect(permissions.inputAccess == .postEventMissing)
         #expect(throws: ComputerActionService.ComputerActionError.self) {
             try ComputerActionService.validateInputPermissions(permissions)

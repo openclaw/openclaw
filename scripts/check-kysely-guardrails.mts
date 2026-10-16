@@ -1,21 +1,17 @@
 #!/usr/bin/env node
 
 // Enforces Kysely and SQLite guardrails in infrastructure code.
-import { promises as fs } from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
-import type { Expression, ImportDeclaration, Node, SourceFile } from "typescript";
+import * as ts from "typescript/unstable/ast";
+import type { Expression, ImportDeclaration, Node, SourceFile } from "typescript/unstable/ast";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
-  collectTypeScriptFilesFromRoots,
+  collectFileViolations,
   getPropertyNameText,
   runAsScript,
   toLine,
   unwrapExpression,
 } from "./lib/ts-guard-utils.mts";
-
-const require = createRequire(import.meta.url);
-const ts: typeof import("typescript") = require("typescript");
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const sourceRoots = [path.join(repoRoot, "src")];
@@ -26,6 +22,8 @@ const nodeSqliteBoundaryRoots = [
 ];
 
 const nodeSqliteConstructorOwnerPaths = new Set([
+  // Native conformance must observe raw driver close on disposable probe databases.
+  "src/infra/bun-sqlite-close-probe.worker.ts",
   "src/infra/node-sqlite.ts",
   "src/infra/sqlite-runtime-version.ts",
 ]);
@@ -35,22 +33,45 @@ const kyselyRawAllowPaths = new Set(["src/infra/kysely-sync.ts"]);
 const compiledRawAllowPaths = new Set(["src/infra/kysely-node-sqlite.ts"]);
 
 const rawSqliteAllowPathGroups = {
+  "offline canonical port preserves native cell bytes and 64-bit allocation state": [
+    "src/infra/database-engine/port.worker.ts",
+  ],
+  "native close conformance on disposable probe databases": [
+    "src/infra/bun-sqlite-close-probe.worker.ts",
+  ],
   "native Kysely adapter and sync execution": [
     "src/infra/kysely-node-sqlite.ts",
     "src/infra/kysely-sync-cache-state.ts",
     "src/infra/kysely-sync.ts",
   ],
+  "admitted search indexes own native FTS schema, triggers, and rebuilds": [
+    "src/infra/database-engine/sqlite-search-schema.ts",
+  ],
+  "sqlite-vec native extension probe, candidate queries, and index writes": [
+    "src/infra/database-engine/sqlite-vec.ts",
+    "src/infra/database-engine/sqlite-vector.ts",
+  ],
+  "isolated vector reader owns connection-local query-only and busy-timeout pragmas": [
+    "src/infra/database-engine/sqlite-vector.child.ts",
+  ],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
+    "src/daemon/runtime-pin-store.ts",
+    // Engine admission owns anchor metadata and schema bootstrap, not application queries.
+    "src/infra/database-engine/adapters.ts",
+    "src/infra/database-engine/open.ts",
     "src/infra/node-sqlite.ts",
     "src/infra/sqlite-index-schema.ts",
     "src/infra/sqlite-integrity.ts",
     "src/infra/sqlite-pragma.test-support.ts",
     "src/infra/sqlite-schema-contract.ts",
+    // Cross-store reservations own native BEGIN/ROLLBACK, without application queries.
+    "src/infra/sqlite-source-fence.ts",
     "src/infra/sqlite-strict.ts",
     "src/infra/sqlite-transaction.ts",
     "src/infra/sqlite-user-version.ts",
     "src/infra/sqlite-wal.ts",
     // Historical structural migrations extracted from the admitted schema owner.
+    "src/state/openclaw-agent-canonical-validation-migration.ts",
     "src/state/openclaw-agent-db-legacy-schema.ts",
     "src/state/openclaw-agent-db-maintenance.ts",
     "src/state/openclaw-agent-db-registry.ts",
@@ -64,6 +85,8 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-session-migrations.ts",
     "src/state/openclaw-agent-db-session-provenance.ts",
     "src/state/openclaw-agent-db.ts",
+    // The outbox rebuild preserves historical rowids and stored schema-object SQL.
+    "src/state/openclaw-agent-outbox-sequence-migration.ts",
     // Versioned payload rebuild preserves native bytes and 64-bit physical rowids.
     "src/state/openclaw-agent-transcript-payload-migration.ts",
     "src/state/openclaw-agent-transcript-fts-schema.ts",
@@ -71,6 +94,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-delivery-queue-backfill.ts",
     "src/state/openclaw-state-db-legacy-backfills.ts",
     "src/state/openclaw-state-db-maintenance.ts",
+    "src/state/openclaw-state-db-meeting-chronology-migration.ts",
     "src/state/openclaw-state-db-operator-approval-migration.ts",
     "src/state/openclaw-state-db-schema-additive.ts",
     "src/state/openclaw-state-db-schema-helpers.ts",
@@ -85,13 +109,14 @@ const rawSqliteAllowPathGroups = {
     "src/transcripts/sqlite-schema.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
-  "cross-process SQLite coordination locks": ["src/infra/sqlite-coordinator.ts"],
   "schema-less ownership token: lock only, no data queries; Kysely has no lock primitive": [
     "src/infra/sqlite-snapshot-staging.ts",
   ],
   "backup snapshot maintenance": [
     "src/commands/backup-verify.ts",
     "src/infra/backup-create.ts",
+    // The scoped archive preserves native cell types, rowids, and SQLite schema SQL.
+    "src/infra/sqlite-migration-scoped-snapshot.ts",
     "src/snapshot/git-backup-codec.ts",
     "src/snapshot/local-repository.ts",
   ],
@@ -101,7 +126,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-readonly.ts",
   ],
   "cold-process read-only relay lookup avoids the shared state writer lifecycle": [
-    "src/agents/harness/native-hook-relay-client.worker.ts",
+    "src/agents/harness/native-hook-relay-client-read.ts",
   ],
   "read-only schema preflight and integrity verification access": [
     "src/state/openclaw-database-preflight.ts",
@@ -116,10 +141,11 @@ const rawSqliteAllowPathGroups = {
     "extensions/memory-core/src/memory/manager-status-presence.ts",
   ],
   "doctor SQLite maintenance and legacy state migration": [
+    "src/infra/state-migrations.daemon-runtime-pins.ts",
     "src/commands/doctor-agent-memory-schema.ts",
-    "src/commands/doctor/cron/legacy-run-log-migration.ts",
-    "src/commands/doctor/cron/migration-ledger.ts",
     "src/commands/doctor-sqlite-compact.ts",
+    // Exclusive Doctor maintenance reads auto-vacuum and page-size PRAGMAs.
+    "src/commands/doctor-sqlite-reclamation.ts",
     "src/commands/doctor-session-sqlite.ts",
     "src/infra/session-sqlite-migration-readers.ts",
     "src/commands/doctor-session-sqlite-transcript-readers.ts",
@@ -134,6 +160,8 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.meeting-transcripts-files.ts",
     "src/infra/state-migrations.meeting-transcripts-verify.ts",
     "src/infra/state-migrations.media-persistence.ts",
+    // Doctor FK PRAGMAs classify repair eligibility; row operations still use Kysely.
+    "src/infra/state-migrations.session-window-repair.ts",
     "src/infra/state-migrations.transcript-directives-archives.ts",
     "src/infra/state-migrations.transcript-directives.ts",
     // Doctor integrity PRAGMAs and lossless native 64-bit orphan-row preservation.
@@ -154,8 +182,6 @@ const rawSqliteAllowPathGroups = {
     "src/plugins/installed-plugin-index-store-write.ts",
     "src/plugin-state/plugin-state-store.sqlite.ts",
     "src/proxy-capture/store.sqlite.ts",
-    "src/tasks/task-flow-registry.store.sqlite.ts",
-    "src/tasks/task-registry.store.kernel.ts",
   ],
 };
 
@@ -288,11 +314,10 @@ function isSqliteStorePath(relativePath: string) {
   return relativePath.endsWith(".sqlite.ts") || relativePath.includes(".store.sqlite.ts");
 }
 
-function collectNodeSqliteBoundaryViolations(content: string, relativePath: string) {
+function collectNodeSqliteBoundaryViolations(sourceFile: SourceFile, relativePath: string) {
   if (isTestPath(relativePath) || nodeSqliteConstructorOwnerPaths.has(relativePath)) {
     return [];
   }
-  const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
   const constructorNames = new Set<string>();
 
   function collectConstructorNames(node: Node) {
@@ -310,6 +335,7 @@ function collectNodeSqliteBoundaryViolations(content: string, relativePath: stri
       for (const element of node.name.elements) {
         if (
           !element.dotDotDotToken &&
+          element.name &&
           ts.isIdentifier(element.name) &&
           (element.propertyName ? getPropertyNameText(element.propertyName) : element.name.text) ===
             "DatabaseSync"
@@ -318,7 +344,7 @@ function collectNodeSqliteBoundaryViolations(content: string, relativePath: stri
         }
       }
     }
-    ts.forEachChild(node, collectConstructorNames);
+    node.forEachChild(collectConstructorNames);
   }
 
   collectConstructorNames(sourceFile);
@@ -339,7 +365,7 @@ function collectNodeSqliteBoundaryViolations(content: string, relativePath: stri
         );
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
   visit(sourceFile);
   return violations;
@@ -355,11 +381,7 @@ function isLikelySqliteReceiver(expression: Expression) {
 
 function isPersistedRowExpression(expression: Expression) {
   const unwrapped = unwrapExpression(expression);
-  if (ts.isPropertyAccessExpression(unwrapped)) {
-    const owner = unwrapExpression(unwrapped.expression);
-    return ts.isIdentifier(owner) && /^(?:row|record|entry)$/u.test(owner.text);
-  }
-  if (ts.isElementAccessExpression(unwrapped)) {
+  if (ts.isPropertyAccessExpression(unwrapped) || ts.isElementAccessExpression(unwrapped)) {
     const owner = unwrapExpression(unwrapped.expression);
     return ts.isIdentifier(owner) && /^(?:row|record|entry)$/u.test(owner.text);
   }
@@ -368,26 +390,19 @@ function isPersistedRowExpression(expression: Expression) {
 
 function isPersistedStringCastType(typeText: string) {
   return [
-    /\bTaskRecord\["(?:runtime|scopeKind|status|deliveryStatus|notifyPolicy|terminalOutcome)"\]/u,
-    /\bTaskFlowRecord\["(?:status|notifyPolicy)"\]/u,
-    /\bTaskFlowSyncMode\b/u,
     /\bVirtualAgentFsEntryKind\b/u,
     /\b[A-Z][A-Za-z0-9]*(?:Status|Kind|Mode|Policy|Runtime|Outcome)\b/u,
   ].some((pattern) => pattern.test(typeText));
 }
 
-/**
- * Collects Kysely/raw SQLite violations from one source file.
- */
-function collectKyselyGuardrailViolations(content: string, relativePath: string) {
-  const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
+function collectKyselyGuardrailViolations(sourceFile: SourceFile, relativePath: string) {
   const imports = collectImports(sourceFile);
   const violations: GuardViolation[] = [];
 
   function visit(node: Node) {
     if (
       isSqliteStorePath(relativePath) &&
-      (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) &&
+      (ts.isAsExpression(node) || ts.isTypeAssertion(node)) &&
       isPersistedStringCastType(node.type.getText(sourceFile)) &&
       isPersistedRowExpression(node.expression) &&
       !hasAllowComment(sourceFile, node, "sqlite-allow-persisted-cast")
@@ -493,42 +508,38 @@ function collectKyselyGuardrailViolations(content: string, relativePath: string)
       );
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
   return violations;
 }
 
-/**
- * Collects Kysely guardrail violations across configured source roots.
- */
 async function collectKyselyGuardrails() {
-  const files = await collectTypeScriptFilesFromRoots(sourceRoots, { includeTests: true });
   const violations: Array<GuardViolation & { path: string }> = [];
-  for (const filePath of files) {
-    const relativePath = path.relative(repoRoot, filePath).split(path.sep).join("/");
-    const content = await fs.readFile(filePath, "utf8");
-    for (const violation of collectKyselyGuardrailViolations(content, relativePath)) {
-      violations.push({ path: relativePath, ...violation });
-    }
-  }
-  const nodeSqliteFiles = await collectTypeScriptFilesFromRoots(nodeSqliteBoundaryRoots, {
-    includeTests: false,
-  });
-  for (const filePath of nodeSqliteFiles) {
-    const relativePath = path.relative(repoRoot, filePath).split(path.sep).join("/");
-    const content = await fs.readFile(filePath, "utf8");
-    for (const violation of collectNodeSqliteBoundaryViolations(content, relativePath)) {
-      violations.push({ path: relativePath, ...violation });
+  for (const scan of [
+    { sourceRoots, includeTests: true, collect: collectKyselyGuardrailViolations },
+    {
+      sourceRoots: nodeSqliteBoundaryRoots,
+      includeTests: false,
+      collect: collectNodeSqliteBoundaryViolations,
+    },
+  ]) {
+    const found = await collectFileViolations({
+      repoRoot,
+      sourceRoots: scan.sourceRoots,
+      includeTests: scan.includeTests,
+      findViolations: (_content, filePath, sourceFile) =>
+        scan.collect(sourceFile, path.relative(repoRoot, filePath).split(path.sep).join("/")),
+    });
+    for (const violation of found) {
+      violation.path = violation.path.split(path.sep).join("/");
+      violations.push(violation);
     }
   }
   return violations;
 }
 
-/**
- * Runs the Kysely guardrail check.
- */
 async function main() {
   const violations = await collectKyselyGuardrails();
   if (violations.length === 0) {

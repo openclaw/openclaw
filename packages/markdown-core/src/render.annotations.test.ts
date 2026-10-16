@@ -116,7 +116,7 @@ describe("renderMarkdownWithMarkers semantic annotations", () => {
     expect(opened).toEqual(["first", "second", "user", "assistant"]);
   });
 
-  it("renders many independently styled annotations without cross-product scans", () => {
+  it("renders 256 code-wrapped transcript headers", () => {
     const markdown = Array.from(
       { length: 256 },
       (_, index) => `**user[t${index}]** line ${index}`,

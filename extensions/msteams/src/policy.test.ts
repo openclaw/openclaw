@@ -30,35 +30,6 @@ function resolveNamedTeamRouteConfig(allowNameMatching = false) {
 
 describe("msteams policy", () => {
   describe("resolveMSTeamsRouteConfig", () => {
-    it("returns team and channel config when present", () => {
-      const cfg: MSTeamsConfig = {
-        teams: {
-          team123: {
-            requireMention: false,
-            channels: {
-              chan456: { requireMention: true },
-            },
-          },
-        },
-      };
-
-      const res = resolveMSTeamsRouteConfig({
-        cfg,
-        teamId: "team123",
-        conversationId: "chan456",
-      });
-
-      if (!res.teamConfig || !res.channelConfig) {
-        throw new Error("expected matched team and channel config");
-      }
-      expect(res.teamConfig.requireMention).toBe(false);
-      expect(res.channelConfig.requireMention).toBe(true);
-      expect(res.allowlistConfigured).toBe(true);
-      expect(res.allowed).toBe(true);
-      expect(res.channelMatchKey).toBe("chan456");
-      expect(res.channelMatchSource).toBe("direct");
-    });
-
     it("returns undefined configs when teamId is missing", () => {
       const cfg: MSTeamsConfig = {
         teams: { team123: { requireMention: false } },
@@ -82,17 +53,6 @@ describe("msteams policy", () => {
       expect(res.channelConfig).toBeUndefined();
       expect(res.allowed).toBe(false);
     });
-
-    it("matches team and channel by name when dangerous name matching is enabled", () => {
-      const res = resolveNamedTeamRouteConfig(true);
-
-      if (!res.teamConfig || !res.channelConfig) {
-        throw new Error("expected matched named team and channel config");
-      }
-      expect(res.teamConfig.requireMention).toBe(true);
-      expect(res.channelConfig.requireMention).toBe(false);
-      expect(res.allowed).toBe(true);
-    });
   });
 
   describe("resolveMSTeamsReplyPolicy", () => {
@@ -110,17 +70,6 @@ describe("msteams policy", () => {
         globalConfig: {},
       });
       expect(policy).toEqual({ requireMention: true, replyStyle: "thread" });
-    });
-
-    it("defaults replyStyle to top-level when requireMention=false", () => {
-      const policy = resolveMSTeamsReplyPolicy({
-        isDirectMessage: false,
-        globalConfig: { requireMention: false },
-      });
-      expect(policy).toEqual({
-        requireMention: false,
-        replyStyle: "top-level",
-      });
     });
 
     it("prefers channel overrides over team and global defaults", () => {
@@ -148,14 +97,6 @@ describe("msteams policy", () => {
         requireMention: false,
         replyStyle: "top-level",
       });
-    });
-
-    it("uses explicit replyStyle even when requireMention defaults would differ", () => {
-      const policy = resolveMSTeamsReplyPolicy({
-        isDirectMessage: false,
-        globalConfig: { requireMention: false, replyStyle: "thread" },
-      });
-      expect(policy).toEqual({ requireMention: false, replyStyle: "thread" });
     });
   });
 

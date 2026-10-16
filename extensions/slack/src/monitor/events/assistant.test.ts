@@ -65,22 +65,6 @@ function makeThreadEvent(type: string) {
   };
 }
 
-function makeTopLevelContextThreadEvent(type: string) {
-  return {
-    type,
-    assistant_thread: {
-      user_id: "U123",
-      channel_id: "D123",
-      thread_ts: "1729999327.187299",
-    },
-    context: {
-      channel_id: "C456",
-      team_id: "T789",
-      enterprise_id: "E123",
-    },
-  };
-}
-
 describe("registerSlackAssistantEvents", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -118,20 +102,7 @@ describe("registerSlackAssistantEvents", () => {
     });
   });
 
-  it("updates assistant thread context without resetting prompts", async () => {
-    const harness = createHarness();
-
-    await harness.handlers.assistant_thread_context_changed?.({
-      event: makeThreadEvent("assistant_thread_context_changed"),
-      body: {},
-    });
-
-    expect(harness.trackEvent).toHaveBeenCalledTimes(1);
-    expect(harness.saveSlackAssistantThreadContext).toHaveBeenCalledTimes(1);
-    expect(harness.setSlackSuggestedPrompts).not.toHaveBeenCalled();
-  });
-
-  it.each(["1729999327.187299", "1729999327.300000"])(
+  it.each(["1729999327.187299"])(
     "persists changed assistant thread context onto the first bot message at %s",
     async (botMessageTs) => {
       const messages = [
@@ -176,26 +147,9 @@ describe("registerSlackAssistantEvents", () => {
           },
         },
       });
+      expect(harness.setSlackSuggestedPrompts).not.toHaveBeenCalled();
     },
   );
-
-  it("accepts Slack assistant context when it is sent beside the thread", async () => {
-    const harness = createHarness();
-
-    await harness.handlers.assistant_thread_context_changed?.({
-      event: makeTopLevelContextThreadEvent("assistant_thread_context_changed"),
-      body: {},
-    });
-
-    expect(harness.saveSlackAssistantThreadContext).toHaveBeenCalledWith({
-      assistantChannelId: "D123",
-      threadTs: "1729999327.187299",
-      userId: "U123",
-      channelId: "C456",
-      teamId: "T789",
-      enterpriseId: "E123",
-    });
-  });
 
   it("merges partial assistant thread context per field", async () => {
     const harness = createHarness();

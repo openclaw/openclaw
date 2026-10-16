@@ -1,6 +1,7 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import type { HomeView } from "@slack/types";
-import { DEFAULT_SLACK_SUGGESTED_PROMPTS, type SlackMonitorContext } from "../context.js";
+import { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "../../channel-meta.js";
+import type { SlackMonitorContext } from "../context.js";
 import type { SlackAppHomeOpenedEvent } from "../types.js";
 
 function buildSlackHomeView(slashCommandName?: string): HomeView {

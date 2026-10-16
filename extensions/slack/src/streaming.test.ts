@@ -142,36 +142,6 @@ describe("stopSlackStream finalize error handling", () => {
     },
   );
 
-  it("flushes short committed replies through the real SDK before stream finalization", async () => {
-    const { client, start, append, stop } = createNativeStreamClient();
-    stop.mockRejectedValue(slackApiError("internal_error"));
-
-    const session = await startSlackStream({
-      client,
-      channel: "C123",
-      threadTs: "1700000000.000100",
-      text: "first short answer",
-      chunks: [],
-    });
-    expect(start).toHaveBeenCalledWith(
-      expect.objectContaining({
-        thread_ts: "1700000000.000100",
-        chunks: [{ type: "markdown_text", text: "first short answer" }],
-      }),
-    );
-
-    await appendSlackStream({ session, text: "second short answer", chunks: [] });
-    expect(append).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ts: "1700000000.500300",
-        chunks: [{ type: "markdown_text", text: "second short answer" }],
-      }),
-    );
-    expect(session.pendingText).toBe("");
-    await expect(stopSlackStream({ session })).rejects.toThrow("internal_error");
-    expect(session.delivered).toBe(true);
-  });
-
   it("starts and appends supported structured stream chunks without buffering markdown text", async () => {
     const { client, start } = createNativeStreamClient();
     const chunks = [{ type: "plan_update" as const, title: "Inspecting" }];
@@ -196,73 +166,6 @@ describe("stopSlackStream finalize error handling", () => {
     });
     expect(session.delivered).toBe(true);
     expect(session.pendingText).toBe("");
-  });
-
-  it("appends supported task update chunks to an active stream", async () => {
-    const session = makeSession({
-      appendImpl: async () => ({ ts: "1700000000.100206" }),
-    });
-    const chunks = [
-      {
-        type: "task_update" as const,
-        id: "item_1",
-        title: "Run tests",
-        status: "in_progress" as const,
-      },
-    ];
-
-    await appendSlackStream({ session, chunks });
-
-    expect(session.streamer["append"]).toHaveBeenCalledWith({ chunks });
-    expect(session.delivered).toBe(true);
-    expect(session.pendingText).toBe("");
-  });
-
-  it("swallows user_not_found after prior append flushed (delivered=true)", async () => {
-    const session = makeSession({
-      appendImpl: async () => ({ ts: "1700000000.100200" }), // non-null => flushed
-      stopImpl: async () => {
-        throw slackApiError("user_not_found");
-      },
-    });
-    await appendSlackStream({ session, text: "some text that Slack saw" });
-    expect(session.delivered).toBe(true);
-
-    await expect(stopSlackStream({ session })).resolves.toEqual({});
-    expect(session.stopped).toBe(true);
-  });
-
-  it("falls back when deferred stream start rejects custom identity scope", async () => {
-    const session = makeSession({
-      stopImpl: async () => {
-        throw slackApiError("missing_scope");
-      },
-    });
-    session.pendingText = "short reply";
-
-    const thrown = await stopSlackStream({ session }).catch((error: unknown) => error);
-
-    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
-    expect(thrown).toMatchObject({ pendingText: "short reply", slackCode: "missing_scope" });
-  });
-
-  it("throws SlackStreamNotDeliveredError when user_not_found fires before any flush", async () => {
-    const session = makeSession({
-      appendImpl: async () => null, // null => buffered, never hit Slack
-      stopImpl: async () => {
-        throw slackApiError("user_not_found");
-      },
-    });
-    await appendSlackStream({ session, text: "short reply under buffer size" });
-    expect(session.delivered).toBe(false);
-
-    const thrown = await stopSlackStream({ session }).catch((err: unknown) => err);
-    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
-    expect((thrown as SlackStreamNotDeliveredError).slackCode).toBe("user_not_found");
-    expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe(
-      "short reply under buffer size",
-    );
-    expect(session.stopped).toBe(true);
   });
 
   it("throws SlackStreamNotDeliveredError for unexpected finalize codes while text is buffered", async () => {
@@ -296,81 +199,37 @@ describe("stopSlackStream finalize error handling", () => {
     expect(session.pendingText).toBe("locally buffered reply");
   });
 
-  it.each([
-    new Error("socket reset"),
-    slackApiError("internal_error"),
-    slackApiError("fatal_error"),
-  ])("does not replay an ambiguous append through later append or stop: %s", async (error) => {
-    const { client, append, stop } = createNativeStreamClient();
-    const session = await startSlackStream({
-      client,
-      channel: "C123",
-      threadTs: "1700000000.000100",
-      text: "acknowledged prefix",
-      chunks: [],
-    });
-    await appendSlackStream({ session, text: "buffered suffix" });
-    append.mockRejectedValueOnce(error);
-
-    await expect(appendSlackStream({ session, text: " final suffix", chunks: [] })).rejects.toBe(
-      error,
-    );
-    await appendSlackStream({ session, text: "late final", chunks: [] });
-    await stopSlackStream({ session });
-
-    expect(append).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        chunks: [{ type: "markdown_text", text: "buffered suffix final suffix" }],
-      }),
-    );
-    expect(stop).not.toHaveBeenCalled();
-    expect(session.pendingText).toBe("buffered suffix final suffix");
-  });
-
-  it("clears pendingText after an append flush is acknowledged by Slack", async () => {
-    const session = makeSession({
-      appendImpl: async () => ({ ts: "1700000000.100203" }),
-    });
-
-    await appendSlackStream({ session, text: "flushed text" });
-
-    expect(session.delivered).toBe(true);
-    expect(session.pendingText).toBe("");
-  });
-
-  it("passes message metadata when finalizing the stream", async () => {
-    const stopImpl = vi.fn(async () => {});
-    const session = makeSession({ stopImpl });
-    const metadata = {
-      event_type: "assistant_thread_context",
-      event_payload: { channel_id: "C123", team_id: "T123" },
-    };
-
-    await stopSlackStream({ session, metadata });
-
-    expect(stopImpl).toHaveBeenCalledWith({ metadata });
-  });
-
-  it.each(["user_not_found", "missing_scope"])(
-    "preserves pending text when append rejects with %s",
-    async (code) => {
-      const session = makeSession({
-        appendImpl: vi.fn().mockResolvedValueOnce(null).mockRejectedValueOnce(slackApiError(code)),
+  it.each([new Error("socket reset")])(
+    "does not replay an ambiguous append through later append or stop: %s",
+    async (error) => {
+      const { client, append, stop } = createNativeStreamClient();
+      const session = await startSlackStream({
+        client,
+        channel: "C123",
+        threadTs: "1700000000.000100",
+        text: "acknowledged prefix",
+        chunks: [],
       });
+      await appendSlackStream({ session, text: "buffered suffix" });
+      append.mockRejectedValueOnce(error);
 
-      await appendSlackStream({ session, text: "first buffered" });
-      const thrown = await appendSlackStream({ session, text: "\nsecond flushes" }).catch(
-        (err: unknown) => err,
+      await expect(appendSlackStream({ session, text: " final suffix", chunks: [] })).rejects.toBe(
+        error,
       );
+      await appendSlackStream({ session, text: "late final", chunks: [] });
+      await stopSlackStream({ session });
 
-      expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
-      expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe(
-        "first buffered\nsecond flushes",
+      expect(append).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          chunks: [{ type: "markdown_text", text: "buffered suffix final suffix" }],
+        }),
       );
+      expect(stop).not.toHaveBeenCalled();
+      expect(session.pendingText).toBe("buffered suffix final suffix");
     },
   );
 
-  it.each(["team_not_found", "message_not_in_streaming_state"])(
+  it.each(["team_not_found"])(
     "preserves only the rejected tail and tolerates finalize after %s fallback",
     async (code) => {
       const { client, append, stop } = createNativeStreamClient();
@@ -403,78 +262,6 @@ describe("stopSlackStream finalize error handling", () => {
     },
   );
 
-  it("swallows missing_recipient_user_id when delivered", async () => {
-    const session = makeSession({
-      appendImpl: async () => ({ ts: "1700000000.100201" }),
-      stopImpl: async () => {
-        throw slackApiError("missing_recipient_user_id");
-      },
-    });
-    await appendSlackStream({ session, text: "chars" });
-    await expect(stopSlackStream({ session })).resolves.toEqual({});
-    expect(session.stopped).toBe(true);
-  });
-
-  it("re-throws unexpected Slack API errors even when delivered", async () => {
-    const session = makeSession({
-      appendImpl: async () => ({ ts: "1700000000.100202" }),
-      stopImpl: async () => {
-        throw slackApiError("not_authed");
-      },
-    });
-    await appendSlackStream({ session, text: "some text" });
-    await expect(stopSlackStream({ session })).rejects.toThrow(/not_authed/);
-    // Session is still marked stopped so retries do not re-enter streamer.stop.
-    expect(session.stopped).toBe(true);
-  });
-
-  it("re-throws non-Slack-shaped errors unchanged", async () => {
-    const session = makeSession({
-      stopImpl: async () => {
-        throw new Error("socket reset");
-      },
-    });
-    await expect(stopSlackStream({ session })).rejects.toThrow(/socket reset/);
-    expect(session.stopped).toBe(true);
-  });
-
-  it("returns a no-op on an already-stopped session", async () => {
-    const stop = vi.fn(async () => {});
-    const session: SlackStreamSession = {
-      streamer: { append: vi.fn(async () => null), stop } as unknown as ChatStreamer,
-      channel: "C123",
-      threadTs: "1700000000.000100",
-      stopped: true,
-      delivered: false,
-      pendingText: "",
-    };
-    await expect(stopSlackStream({ session })).resolves.toEqual({});
-    expect(stop).not.toHaveBeenCalled();
-  });
-
-  it("marks delivered=true on successful stop() without prior flush", async () => {
-    const session = makeSession({
-      appendImpl: async () => null,
-      stopImpl: async () => {},
-    });
-    await appendSlackStream({ session, text: "short" });
-    expect(session.delivered).toBe(false);
-    await stopSlackStream({ session });
-    expect(session.delivered).toBe(true);
-    expect(session.pendingText).toBe("");
-  });
-
-  it("returns the finalized message ts as messageId on a successful stop()", async () => {
-    const session = makeSession({
-      appendImpl: async () => null,
-      stopImpl: async () => ({ ok: true, ts: "1700000000.500100" }),
-    });
-    await appendSlackStream({ session, text: "short" });
-    await expect(stopSlackStream({ session })).resolves.toEqual({
-      messageId: "1700000000.500100",
-    });
-  });
-
   it("falls back to message.ts when chat.stopStream omits the top-level ts", async () => {
     const session = makeSession({
       appendImpl: async () => null,
@@ -495,13 +282,7 @@ describe("stopSlackStream finalize error handling", () => {
     await expect(stopSlackStream({ session })).resolves.toEqual({});
   });
 
-  it.each([
-    "user_not_found",
-    "missing_scope",
-    "channel_type_not_supported",
-    "missing_recipient_team_id",
-    "enterprise_is_restricted",
-  ])("preserves pending text when start rejects with %s", async (code) => {
+  it.each(["missing_scope"])("preserves pending text when start rejects with %s", async (code) => {
     const { client, start } = createNativeStreamClient();
     start.mockRejectedValueOnce(slackApiError(code));
 

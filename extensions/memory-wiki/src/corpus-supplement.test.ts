@@ -21,7 +21,7 @@ vi.mock("./query.js", async (importOriginal) => ({
 
 describe("memory-wiki corpus supplement", () => {
   const appConfig = {
-    agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+    agents: { entries: { support: {}, marketing: {} } },
   } as OpenClawConfig;
   const config = resolveMemoryWikiConfig({
     vault: { scope: "agent", path: "/tmp/memory-wiki-agents" },

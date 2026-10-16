@@ -26,14 +26,6 @@ test("retains package backups after unverified post-swap module failures", async
     }),
     {
       cwd: sourceRoot,
-      // Bind the child to this checkout, not a historical proof override.
-      env: {
-        ...process.env,
-        RESTART_SOURCE_ROOT: sourceRoot,
-        RESTART_TRANSACTION_SOURCE_ROOT: sourceRoot,
-        RESTART_DEPENDENCY_ROOT: sourceRoot,
-        RESTART_VARIANT: "main",
-      },
       timeout: 30_000,
     },
   );

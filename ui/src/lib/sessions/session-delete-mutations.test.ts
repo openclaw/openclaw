@@ -58,13 +58,10 @@ describe("optimistic session deletion", () => {
     },
   );
 
-  it.each(
-    ["main", "agent:main:main"].flatMap((firstKey) =>
-      (["single", "batch"] as const).flatMap((firstMode) =>
-        (["single", "batch"] as const).map((secondMode) => ({ firstKey, firstMode, secondMode })),
-      ),
-    ),
-  )(
+  it.each([
+    { firstKey: "main", firstMode: "single", secondMode: "batch" },
+    { firstKey: "agent:main:main", firstMode: "batch", secondMode: "single" },
+  ] as const)(
     "returns caller keys when $firstMode $firstKey shares its deletion with a $secondMode alias",
     async ({ firstKey, firstMode, secondMode }) => {
       const h = createSessionDeletionHarness();

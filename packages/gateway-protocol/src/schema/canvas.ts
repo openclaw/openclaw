@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 
 export const CANVAS_DOCUMENT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
+export const WIDGET_HTML_MAX_UTF8_BYTES = 10 * 1024 * 1024;
 
 export const CanvasDocumentPreviewParamsSchema = closedObject({
   html: Type.String({
@@ -16,7 +17,7 @@ export const CanvasDocumentViewParamsSchema = closedObject({
 });
 
 export const CanvasDocumentViewResultSchema = closedObject({
-  html: Type.String({ maxLength: 2 * 1024 * 1024 }),
+  html: Type.String({ maxLength: WIDGET_HTML_MAX_UTF8_BYTES }),
   sandboxUrl: Type.String(),
   sandboxPort: Type.Integer({ minimum: 1, maximum: 65535 }),
   sandboxOrigin: Type.Optional(Type.String()),

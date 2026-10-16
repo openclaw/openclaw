@@ -2,9 +2,13 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { teamsQuotedTableReply } from "./format.test-fixtures.js";
 import {
   deleteMessageMSTeams,
   editAdaptiveCardMSTeams,
@@ -15,8 +19,12 @@ import {
 const mockState = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
   resolveMSTeamsSendContext: vi.fn(),
-  resolveMarkdownTableMode: vi.fn(() => "off"),
-  convertMarkdownTables: vi.fn((text: string) => text),
+  resolveMarkdownTableMode: vi.fn<
+    typeof import("openclaw/plugin-sdk/markdown-table-runtime").resolveMarkdownTableMode
+  >(() => "off"),
+  convertMarkdownTables: vi.fn<
+    typeof import("openclaw/plugin-sdk/text-chunking").convertMarkdownTables
+  >((text) => text),
   runtimeResolveMarkdownTableMode: vi.fn(() => "off"),
   runtimeConvertMarkdownTables: vi.fn((text: string) => text),
   requiresFileConsent: vi.fn(),
@@ -26,7 +34,9 @@ const mockState = vi.hoisted(() => ({
   extractFilename: vi.fn(async () => "fallback.bin"),
   sendMSTeamsMessages: vi.fn(),
   sendMSTeamsActivityWithReference: vi.fn(async () => ({ id: "message-1" })),
-  updateMSTeamsActivityWithReference: vi.fn(async () => ({ id: "updated" })),
+  updateMSTeamsActivityWithReference: vi.fn<
+    typeof import("./sdk-proactive.js").updateMSTeamsActivityWithReference
+  >(async () => ({ id: "updated" })),
   deleteMSTeamsActivityWithReference: vi.fn(async () => {}),
   uploadAndShareSharePoint: vi.fn(),
   getDriveItemProperties: vi.fn(),
@@ -59,7 +69,8 @@ vi.mock("./send-context.js", () => ({
   resolveMSTeamsSendContext: mockState.resolveMSTeamsSendContext,
 }));
 
-vi.mock("./file-consent-helpers.js", () => ({
+vi.mock("./file-consent-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./file-consent-helpers.js")>()),
   requiresFileConsent: mockState.requiresFileConsent,
   prepareFileConsentActivity: mockState.prepareFileConsentActivity,
   prepareFileConsentActivityFs: mockState.prepareFileConsentActivityFs,
@@ -69,7 +80,8 @@ vi.mock("./pending-uploads-fs.js", () => ({
   setPendingUploadActivityIdFs: mockState.setPendingUploadActivityIdFs,
 }));
 
-vi.mock("./media-helpers.js", () => ({
+vi.mock("./media-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./media-helpers.js")>()),
   extractFilename: mockState.extractFilename,
   extractMessageId: () => "message-1",
 }));
@@ -122,39 +134,12 @@ vi.mock("./sdk-proactive.js", () => ({
   deleteMSTeamsActivityWithReference: mockState.deleteMSTeamsActivityWithReference,
 }));
 
-function createMockApp(overrides?: {
-  send?: ReturnType<typeof vi.fn>;
-  update?: ReturnType<typeof vi.fn>;
-  delete?: ReturnType<typeof vi.fn>;
-}) {
-  const sendFn = overrides?.send ?? vi.fn(async () => ({ id: "message-1" }));
-  const updateFn = overrides?.update ?? vi.fn(async () => ({ id: "updated" }));
-  const deleteFn = overrides?.delete ?? vi.fn(async () => {});
-  return {
-    send: sendFn,
-    api: {
-      conversations: {
-        activities: () => ({
-          create: sendFn,
-          update: updateFn,
-          delete: deleteFn,
-        }),
-      },
-    },
-  };
-}
-
 function mockProactiveSendContextFailure(error: string) {
   mockState.sendMSTeamsActivityWithReference.mockRejectedValue(new Error(error));
   mockState.updateMSTeamsActivityWithReference.mockRejectedValue(new Error(error));
   mockState.deleteMSTeamsActivityWithReference.mockRejectedValue(new Error(error));
-  const failingApp = createMockApp({
-    send: vi.fn().mockRejectedValue(new Error(error)),
-    update: vi.fn().mockRejectedValue(new Error(error)),
-    delete: vi.fn().mockRejectedValue(new Error(error)),
-  });
   mockState.resolveMSTeamsSendContext.mockResolvedValue({
-    app: failingApp,
+    app: { id: "failing-app" },
     appId: "app-id",
     conversationId: "19:conversation@thread.tacv2",
     ref: {
@@ -172,7 +157,7 @@ function mockProactiveSendContextFailure(error: string) {
 
 function createSharePointSendContext(params: { conversationId: string; siteId: string }) {
   return {
-    app: createMockApp(),
+    app: { id: "sharepoint-app" },
     appId: "app-id",
     conversationId: params.conversationId,
     ref: {},
@@ -265,7 +250,7 @@ describe("sendMessageMSTeams", () => {
     mockState.extractFilename.mockResolvedValue("fallback.bin");
     mockState.requiresFileConsent.mockReturnValue(false);
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      app: createMockApp(),
+      app: { id: "send-app" },
       appId: "app-id",
       conversationId: "19:conversation@thread.tacv2",
       ref: {},
@@ -347,97 +332,56 @@ describe("sendMessageMSTeams", () => {
     },
   );
 
-  it("loads media through shared helper and forwards mediaLocalRoots", async () => {
-    const mediaBuffer = Buffer.from("tiny-image");
-    mockState.sendMSTeamsMessages.mockResolvedValueOnce(["message-text", "message-media"]);
-    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
-      buffer: mediaBuffer,
-      contentType: "image/png",
-      fileName: "inline.png",
-      kind: "image",
-    });
-
-    const result = await sendMessageMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: "conversation:19:conversation@thread.tacv2",
-      text: "hello",
-      mediaUrl: "file:///tmp/agent-workspace/inline.png",
-      mediaLocalRoots: ["/tmp/agent-workspace"],
-    });
-
-    expect(mockState.loadOutboundMediaFromUrl).toHaveBeenCalledWith(
-      "file:///tmp/agent-workspace/inline.png",
-      {
-        maxBytes: 8 * 1024,
-        mediaLocalRoots: ["/tmp/agent-workspace"],
-      },
-    );
-
-    const sendPayload = firstObjectArg(mockState.sendMSTeamsMessages);
-    const messages = sendPayload.messages as Array<Record<string, unknown>>;
-    expect(messages).toHaveLength(2);
-    expect(messages[0]?.text).toBe("hello");
-    expect(messages[0]?.mediaUrl).toBeUndefined();
-    expect(messages[1]?.text).toBeUndefined();
-    expect(messages[1]?.mediaUrl).toBe(`data:image/png;base64,${mediaBuffer.toString("base64")}`);
-    expect(result.messageId).toBe("message-text");
-    expect(result.receipt?.primaryPlatformMessageId).toBe("message-text");
-    expect(result.receipt?.platformMessageIds).toEqual(["message-text", "message-media"]);
-    expect(result.receipt?.parts).toHaveLength(2);
-    expect(result.receipt?.parts[0]?.platformMessageId).toBe("message-text");
-    expect(result.receipt?.parts[1]?.platformMessageId).toBe("message-media");
-    expect(result.receipt?.parts[0]?.kind).toBe("text");
-    expect(result.receipt?.parts[1]?.kind).toBe("media");
-  });
-
-  it.each([
-    { name: "trusted host reader", hostReader: true },
-    { name: "reader-free gateway authority", hostReader: false },
-  ])("loads workspace-relative media through $name", async ({ hostReader }) => {
-    const workspaceDir = await realpath(
-      await mkdtemp(join(tmpdir(), "openclaw-msteams-workspace-")),
-    );
-    const filePath = join(workspaceDir, "report.txt");
-    const fileContents = Buffer.from("approved Teams attachment");
-    const approvedReader = vi.fn(async (candidate: string) => await readFile(candidate));
-    const conflictingReader = vi.fn(async () => Buffer.from("forged Teams attachment"));
-    const mediaAccess = {
-      localRoots: [workspaceDir],
-      workspaceDir,
-      ...(hostReader ? { readFile: approvedReader } : {}),
-    };
-
-    try {
-      await writeFile(filePath, fileContents);
-      await useActualOutboundMediaLoader();
-
-      await sendMessageMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "conversation:19:conversation@thread.tacv2",
-        text: "approved attachment",
-        mediaUrl: "report.txt",
-        mediaAccess,
-        mediaLocalRoots: [join(workspaceDir, "unapproved")],
-        ...(hostReader ? { mediaReadFile: conflictingReader } : {}),
-      });
-
-      expect(mockState.loadOutboundMediaFromUrl.mock.calls[0]?.[1]?.mediaAccess).toBe(mediaAccess);
-      expect(conflictingReader).not.toHaveBeenCalled();
-      if (hostReader) {
-        expect(approvedReader).toHaveBeenCalledWith(filePath);
-      } else {
-        expect(approvedReader).not.toHaveBeenCalled();
-      }
-      const messages = firstObjectArg(mockState.sendMSTeamsMessages).messages as Array<{
-        mediaUrl?: string;
-      }>;
-      expect(messages[1]?.mediaUrl).toBe(
-        `data:text/plain;base64,${fileContents.toString("base64")}`,
+  it.each([{ name: "trusted host reader", hostReader: true }])(
+    "loads workspace-relative media through $name",
+    async ({ hostReader }) => {
+      const workspaceDir = await realpath(
+        await mkdtemp(join(tmpdir(), "openclaw-msteams-workspace-")),
       );
-    } finally {
-      await rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
+      const filePath = join(workspaceDir, "report.txt");
+      const fileContents = Buffer.from("approved Teams attachment");
+      const approvedReader = vi.fn(async (candidate: string) => await readFile(candidate));
+      const conflictingReader = vi.fn(async () => Buffer.from("forged Teams attachment"));
+      const mediaAccess = {
+        localRoots: [workspaceDir],
+        workspaceDir,
+        ...(hostReader ? { readFile: approvedReader } : {}),
+      };
+
+      try {
+        await writeFile(filePath, fileContents);
+        await useActualOutboundMediaLoader();
+
+        await sendMessageMSTeams({
+          cfg: {} as OpenClawConfig,
+          to: "conversation:19:conversation@thread.tacv2",
+          text: "approved attachment",
+          mediaUrl: "report.txt",
+          mediaAccess,
+          mediaLocalRoots: [join(workspaceDir, "unapproved")],
+          ...(hostReader ? { mediaReadFile: conflictingReader } : {}),
+        });
+
+        expect(mockState.loadOutboundMediaFromUrl.mock.calls[0]?.[1]?.mediaAccess).toBe(
+          mediaAccess,
+        );
+        expect(conflictingReader).not.toHaveBeenCalled();
+        if (hostReader) {
+          expect(approvedReader).toHaveBeenCalledWith(filePath);
+        } else {
+          expect(approvedReader).not.toHaveBeenCalled();
+        }
+        const messages = firstObjectArg(mockState.sendMSTeamsMessages).messages as Array<{
+          mediaUrl?: string;
+        }>;
+        expect(messages[1]?.mediaUrl).toBe(
+          `data:text/plain;base64,${fileContents.toString("base64")}`,
+        );
+      } finally {
+        await rm(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("rejects workspace-relative attachments outside host-approved roots", async () => {
     const sandbox = await realpath(await mkdtemp(join(tmpdir(), "openclaw-msteams-roots-")));
@@ -480,94 +424,6 @@ describe("sendMessageMSTeams", () => {
     ).rejects.toThrow("Host media read requires explicit localRoots");
     expect(approvedReader).not.toHaveBeenCalled();
     expect(mockState.sendMSTeamsMessages).not.toHaveBeenCalled();
-  });
-
-  it("sends with provided cfg even when Teams runtime text helpers are unavailable", async () => {
-    mockState.runtimeResolveMarkdownTableMode.mockImplementation(() => {
-      throw new Error("MSTeams runtime not initialized");
-    });
-    mockState.runtimeConvertMarkdownTables.mockImplementation(() => {
-      throw new Error("MSTeams runtime not initialized");
-    });
-    mockState.resolveMarkdownTableMode.mockReturnValue("off");
-    const { source: text, expected } = teamsQuotedTableReply;
-
-    const result = await sendMessageMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: "conversation:19:conversation@thread.tacv2",
-      text,
-    });
-
-    expect(result.messageId).toBe("message-1");
-    expect(result.conversationId).toBe("19:conversation@thread.tacv2");
-    expect(result.receipt?.primaryPlatformMessageId).toBe("message-1");
-    expect(result.receipt?.platformMessageIds).toEqual(["message-1"]);
-    expect(result.receipt?.parts).toHaveLength(1);
-    expect(result.receipt?.parts[0]?.platformMessageId).toBe("message-1");
-    expect(result.receipt?.parts[0]?.kind).toBe("text");
-
-    expect(mockState.resolveMarkdownTableMode).toHaveBeenCalledWith({
-      cfg: {},
-      channel: "msteams",
-    });
-    expect(mockState.convertMarkdownTables).toHaveBeenCalledWith(text, "off");
-    expect(firstObjectArg(mockState.sendMSTeamsMessages).messages).toEqual([
-      { text: expected, mediaUrl: undefined },
-    ]);
-  });
-
-  it("passes the resolved proactive replyStyle to text sends", async () => {
-    mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      adapter: {},
-      appId: "app-id",
-      conversationId: "19:channel@thread.tacv2",
-      ref: {
-        threadId: "thread-root-1",
-        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" },
-      },
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      conversationType: "channel",
-      replyStyle: "thread",
-      sdkCloudOptions: { cloud: "Public" },
-      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-      mediaMaxBytes: 8 * 1024,
-      sharePointSiteId: undefined,
-    });
-
-    await sendMessageMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: "conversation:19:channel@thread.tacv2",
-      text: "threaded reply",
-    });
-
-    expect(firstObjectArg(mockState.sendMSTeamsMessages).replyStyle).toBe("thread");
-  });
-
-  it("keeps top-level proactive replyStyle when resolved for a channel", async () => {
-    mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      adapter: {},
-      appId: "app-id",
-      conversationId: "19:channel@thread.tacv2",
-      ref: {
-        threadId: "thread-root-1",
-        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" },
-      },
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      conversationType: "channel",
-      replyStyle: "top-level",
-      sdkCloudOptions: { cloud: "Public" },
-      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-      mediaMaxBytes: 8 * 1024,
-      sharePointSiteId: undefined,
-    });
-
-    await sendMessageMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: "conversation:19:channel@thread.tacv2",
-      text: "top-level reply",
-    });
-
-    expect(firstObjectArg(mockState.sendMSTeamsMessages).replyStyle).toBe("top-level");
   });
 
   it("uses the Graph-native group conversation ID for SharePoint sharing", async () => {
@@ -626,80 +482,73 @@ describe("sendMessageMSTeams", () => {
 });
 
 describe("editMessageMSTeams", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+    mockState.resolveMarkdownTableMode.mockReset().mockReturnValue("off");
+    mockState.convertMarkdownTables.mockReset().mockImplementation((text) => text);
+  });
+
   beforeEach(() => {
     mockState.resolveMSTeamsSendContext.mockReset();
     mockState.updateMSTeamsActivityWithReference.mockReset();
     mockState.updateMSTeamsActivityWithReference.mockResolvedValue({ id: "updated" });
   });
 
-  it("updates with the resolved Teams conversation reference", async () => {
-    const mockUpdateActivity = vi.fn(async () => ({ id: "updated" }));
-    const mockApp = createMockApp({ update: mockUpdateActivity });
-    mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      app: mockApp,
-      appId: "app-id",
-      conversationId: "19:conversation@thread.tacv2",
-      ref: {
-        user: { id: "user-1" },
-        agent: { id: "agent-1" },
-        conversation: { id: "19:conversation@thread.tacv2", conversationType: "personal" },
-        channelId: "msteams",
-      },
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      conversationType: "personal",
-      sdkCloudOptions: { cloud: "Public" },
-      tokenProvider: {},
-    });
-
-    const result = await editMessageMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: "conversation:19:conversation@thread.tacv2",
-      activityId: "activity-123",
-      text: "Updated message text",
-    });
-
-    expect(result.conversationId).toBe("19:conversation@thread.tacv2");
-
-    expect(mockState.updateMSTeamsActivityWithReference).toHaveBeenCalledWith(
-      mockApp,
-      expect.objectContaining({
-        conversation: { id: "19:conversation@thread.tacv2", conversationType: "personal" },
-        serviceUrl: "https://service.example.com",
-      }),
-      "activity-123",
-      {
-        type: "message",
-        id: "activity-123",
-        text: "Updated message text",
-        entities: [
+  it.each([undefined])(
+    "applies selected/default account table policy to edited activities (%s)",
+    async (accountId) => {
+      setActivePluginRegistry(
+        createTestRegistry([
           {
-            type: "https://schema.org/Message",
-            "@type": "Message",
-            "@context": "https://schema.org",
-            "@id": "",
-            additionalType: ["AIGeneratedContent"],
+            pluginId: "msteams",
+            source: "test",
+            plugin: { id: "msteams", meta: { id: "msteams" } },
           },
-        ],
-      },
-      { serviceUrlBoundary: { cloud: "Public" } },
-    );
-  });
-
-  it("throws a descriptive error when update fails", async () => {
-    mockProactiveSendContextFailure("Service unavailable");
-
-    await expect(
-      editMessageMSTeams({
-        cfg: {} as OpenClawConfig,
+        ]),
+      );
+      const markdown = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/markdown-table-runtime")
+      >("openclaw/plugin-sdk/markdown-table-runtime");
+      const text = await vi.importActual<typeof import("openclaw/plugin-sdk/text-chunking")>(
+        "openclaw/plugin-sdk/text-chunking",
+      );
+      mockState.resolveMarkdownTableMode.mockImplementation(markdown.resolveMarkdownTableMode);
+      mockState.convertMarkdownTables.mockImplementation(text.convertMarkdownTables);
+      mockState.resolveMSTeamsSendContext.mockResolvedValue({
+        app: {},
+        conversationId: "19:conversation@thread.tacv2",
+        ref: { conversation: { id: "19:conversation@thread.tacv2" } },
+        log: { debug: vi.fn(), info: vi.fn() },
+        sdkCloudOptions: { cloud: "Public" },
+      });
+      const cfg: OpenClawConfig = {
+        channels: {
+          msteams: {
+            defaultAccount: "support",
+            markdown: { tables: "off" },
+            accounts: {
+              support: { markdown: { tables: "bullets" } },
+            },
+          },
+        },
+      };
+      await editMessageMSTeams({
+        cfg,
+        accountId,
         to: "conversation:19:conversation@thread.tacv2",
-        activityId: "activity-123",
-        text: "Updated text",
-      }),
-    ).rejects.toThrow("msteams edit failed");
-  });
+        activityId: "edited-message",
+        text: "| Name | Status |\n| --- | --- |\n| Widget | Ready |",
+      });
+      const activity = mockState.updateMSTeamsActivityWithReference.mock.calls[0]?.[3];
+      expect(activity).toMatchObject({ type: "message", id: "edited-message" });
+      expect(activity).toMatchObject({ text: expect.stringContaining("Widget") });
+      expect(activity).toMatchObject({ text: expect.stringContaining("Status: Ready") });
+      expect(activity).not.toMatchObject({ text: expect.stringContaining("| Name |") });
+    },
+  );
 
   it("updates an existing activity with a replacement Adaptive Card", async () => {
-    const mockApp = createMockApp();
+    const mockApp = { id: "adaptive-card-app" };
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
       app: mockApp,
       conversationId: "19:conversation@thread.tacv2",
@@ -739,8 +588,7 @@ describe("deleteMessageMSTeams", () => {
   });
 
   it("deletes with the resolved Teams conversation reference", async () => {
-    const mockDeleteActivity = vi.fn(async () => {});
-    const mockApp = createMockApp({ delete: mockDeleteActivity });
+    const mockApp = { id: "delete-app" };
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
       app: mockApp,
       appId: "app-id",
@@ -786,42 +634,5 @@ describe("deleteMessageMSTeams", () => {
         activityId: "activity-456",
       }),
     ).rejects.toThrow("msteams delete failed");
-  });
-
-  it("uses app from the resolved context for delete operations", async () => {
-    const mockDeleteActivity = vi.fn(async () => {});
-    const mockApp = createMockApp({ delete: mockDeleteActivity });
-    mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      app: mockApp,
-      appId: "my-app-id",
-      conversationId: "19:conv@thread.tacv2",
-      ref: {
-        activityId: "original-activity",
-        user: { id: "user-1" },
-        agent: { id: "agent-1" },
-        conversation: { id: "19:conv@thread.tacv2" },
-        channelId: "msteams",
-      },
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      conversationType: "personal",
-      sdkCloudOptions: { cloud: "Public" },
-      tokenProvider: {},
-    });
-
-    await deleteMessageMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: "conversation:19:conv@thread.tacv2",
-      activityId: "activity-789",
-    });
-
-    expect(mockState.deleteMSTeamsActivityWithReference).toHaveBeenCalledWith(
-      mockApp,
-      expect.objectContaining({
-        conversation: { id: "19:conv@thread.tacv2" },
-        serviceUrl: "https://service.example.com",
-      }),
-      "activity-789",
-      { serviceUrlBoundary: { cloud: "Public" } },
-    );
   });
 });

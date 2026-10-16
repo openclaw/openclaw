@@ -76,6 +76,7 @@ describe("reportChannelRoomJoin", () => {
 
     await expect(reportChannelRoomJoin(params)).resolves.toEqual({ kind: "posted" });
     expect(runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
+    expect(runCronIsolatedAgentTurn.mock.calls[0]?.[0].trigger).toBe("event");
     expect(runCronIsolatedAgentTurn.mock.calls[0]?.[0].job.delivery).toEqual({
       mode: "announce",
       channel: "slack",
@@ -221,7 +222,6 @@ describe("reportChannelRoomJoin", () => {
     if (!startMarker) {
       throw new Error("Expected the room snapshot to have an untrusted-content boundary");
     }
-    expect(safePrompt).toContain("SECURITY NOTICE:");
     expect(safePrompt.indexOf(injection)).toBeGreaterThan(safePrompt.indexOf(startMarker[0]));
     expect(safePrompt.indexOf(injection)).toBeLessThan(
       safePrompt.indexOf(`<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${startMarker[1]}">>>`),

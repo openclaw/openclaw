@@ -1,14 +1,27 @@
 import fs from "node:fs";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { createDirectChatContext } from "../../../gateway/server-chat.agent-events.test-helpers.js";
+import {
+  bindSessionRowProjection,
+  getSessionRowProjection,
+} from "../../../gateway/session-row-projection-access.js";
+import { createSessionRowProjection } from "../../../gateway/session-row-projection.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   runOpenClawAgentWriteTransaction,
 } from "../../../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { resolveRequesterToolPolicies } from "../../requester-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveStoredSubagentCapabilities,
@@ -17,6 +30,12 @@ import {
   resolveSubagentCapabilityStore,
 } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import {
+  createSubagentSessionStore,
+  prepareSessionCapabilityRead,
+  withPreparedSessionCapabilityRead,
+} from "./subagent-session-store.js";
+import { createSessionCapabilityLookup } from "./subagent-session-store.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -29,7 +48,112 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("persisted subagent capability lookups", () => {
-  it("memoizes exact reads and misses only within one capability resolution", () => {
+  it.each([false, true])(
+    "resolves current requester policy without session SQL (default store: %s)",
+    async (useDefault) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const storePath = useDefault
+          ? resolveSessionStorePathCore(undefined, { agentId: "main" })
+          : state.statePath("capabilities.sqlite");
+        const cfg = useDefault ? {} : { session: { store: storePath } };
+        const key = "agent:main:dashboard:resident-capabilities";
+        const scope = { agentId: "main", storePath, sessionKey: key };
+        await sessionAccessor.upsertSessionEntryCore(
+          { ...scope, sessionKey: "agent:main:main" },
+          { sessionId: "parent", updatedAt: 1 },
+        );
+        await sessionAccessor.upsertSessionEntryCore(scope, {
+          sessionId: "resident-child",
+          updatedAt: 1,
+          spawnedBy: "agent:main:main",
+          spawnDepth: 2,
+          inheritedToolPolicyVersion: 1,
+          inheritedToolAllow: ["read"],
+          inheritedToolDeny: ["exec"],
+        });
+        const projection = await createSessionRowProjection({ cfg });
+        try {
+          await projection.ensureMaterialized();
+          const context = bindSessionRowProjection(
+            createDirectChatContext({ getRuntimeConfig: () => cfg }),
+            () => projection,
+          );
+          const copied = { ...context };
+          let retired = false;
+          await withPluginRuntimeGatewayContextResolver(
+            () => {
+              if (retired) {
+                throw new Error("Gateway owner retired");
+              }
+              return copied;
+            },
+            async () => {
+              const resolve = () =>
+                resolveRequesterToolPolicies({ config: cfg, agentId: "main", sessionKey: key });
+              expect(resolve().inheritedToolPolicy).toEqual({ allow: ["read"], deny: ["exec"] });
+              const queries = observeSqliteReadSql(StatementSync.prototype);
+              try {
+                for (let turn = 0; turn < 50; turn += 1) {
+                  const policy = resolve();
+                  expect(policy.inheritedToolPolicy).toEqual({ allow: ["read"], deny: ["exec"] });
+                  expect(
+                    resolveStoredSubagentCapabilities(key, { cfg, store: policy.subagentStore })
+                      .depth,
+                  ).toBe(2);
+                }
+                expect(queries.queries).toHaveLength(0);
+              } finally {
+                queries.restore();
+              }
+              await sessionAccessor.patchSessionEntryCore(scope, () => ({
+                spawnDepth: 3,
+                inheritedToolDeny: ["exec", "write"],
+              }));
+              const current = resolve();
+              expect(current.inheritedToolPolicy).toEqual({
+                allow: ["read"],
+                deny: ["exec", "write"],
+              });
+              expect(
+                resolveStoredSubagentCapabilities(key, { cfg, store: current.subagentStore }).depth,
+              ).toBe(3);
+              const retained = createSubagentSessionStore(storePath, "main");
+              const createdKey = "agent:main:subagent:created";
+              expect(retained.get(createdKey)).toBeUndefined();
+              expect(retained.getById("created-child")).toBeUndefined();
+              await sessionAccessor.upsertSessionEntryCore(
+                { ...scope, sessionKey: createdKey },
+                { sessionId: "created-child", updatedAt: 2, spawnDepth: 4 },
+              );
+              expect(retained.get(createdKey)?.spawnDepth).toBe(4);
+              expect(retained.getById("created-child")?.spawnDepth).toBe(4);
+
+              // Rebinding a context updates its copies; rebinding a copy creates a separate owner.
+              bindSessionRowProjection(context, () => undefined);
+              expect(getSessionRowProjection(copied)).toBeUndefined();
+              bindSessionRowProjection(copied, () => projection);
+              expect(getSessionRowProjection(context)).toBeUndefined();
+              expect(getSessionRowProjection(copied)).toBe(projection);
+
+              expect(createSubagentSessionStore(storePath, "main").get("main")).toBeUndefined();
+              expect(
+                resolveRequesterToolPolicies({
+                  config: { session: { store: state.statePath("absent.sqlite") } },
+                  sessionKey: key,
+                }).delegated,
+              ).toBe(false);
+              retired = true;
+              expect(resolve).toThrow("Gateway owner retired");
+            },
+          );
+        } finally {
+          projection.dispose();
+        }
+      });
+    },
+  );
+
+  it("prepares requested capability rows and observes the next committed policy", async () => {
     const storePath = path.join(tempDirs.make("subagent-capability-memo-"), "sessions.sqlite");
     const cfg = { session: { store: storePath } };
     const key = "agent:main:subagent:child";
@@ -46,34 +170,71 @@ describe("persisted subagent capability lookups", () => {
         { agentId: "main", path: storePath },
       );
     write(2);
-    const exact = vi.spyOn(sessionAccessor, "loadExactSessionEntryReadOnly");
-    const byId = vi.spyOn(sessionAccessor, "loadSessionEntryByIdReadOnly");
     const store = resolveSubagentCapabilityStore(key, { cfg });
-    expect(exact).not.toHaveBeenCalled();
-    for (let i = 0; i < 2; i++) {
+    await withPreparedSessionCapabilityRead(() => {
       expect(resolveStoredSubagentCapabilities(key, { cfg, store }).depth).toBe(2);
       expect(resolveStoredSubagentInheritedToolDenylist(key, { cfg, store })).toEqual(["exec"]);
       expect(
         resolveStoredSubagentCapabilities("agent:main:subagent:missing", { cfg, store }).depth,
       ).toBe(1);
-    }
-    expect(exact).toHaveBeenCalledTimes(2);
-    expect(byId).toHaveBeenCalledTimes(1);
+    });
+    let entryReads = 0;
+    const run = projectionLane.pool.run.bind(projectionLane.pool);
+    vi.spyOn(projectionLane.pool, "run").mockImplementation(async (input, controls) => {
+      const request = typeof input === "function" ? await input() : input;
+      if (request.kind === "session-exact-entries") {
+        entryReads += 1;
+      }
+      return run(request, controls);
+    });
     write(4);
-    expect(resolveStoredSubagentCapabilities(key, { cfg }).depth).toBe(4);
-    expect(exact).toHaveBeenCalledTimes(3);
+    expect(
+      await withPreparedSessionCapabilityRead(
+        () => resolveStoredSubagentCapabilities(key, { cfg }).depth,
+      ),
+    ).toBe(4);
+    expect(entryReads).toBe(0);
+    expect(
+      await withPreparedSessionCapabilityRead(
+        () =>
+          resolveStoredSubagentCapabilities(key, {
+            cfg,
+            store: { [key]: { spawnedBy: "agent:main:main" } },
+          }).depth,
+      ),
+    ).toBe(4);
+    const retained = await prepareSessionCapabilityRead(
+      () => resolveStoredSubagentCapabilities(key, { cfg }).depth,
+    );
+    try {
+      expect(retained.read()).toBe(4);
+      write(5);
+      expect(() => retained.read()).toThrow("Session capability metadata changed");
+    } finally {
+      retained.release();
+    }
+    await sessionAccessor.patchSessionEntryCore(
+      { storePath, agentId: "main", sessionKey: key },
+      () => ({ spawnDepth: 6, inheritedToolDeny: ["exec", "write"] }),
+      { workerGuard: {}, skipMaintenance: true },
+    );
+    entryReads = 0;
+    await withPreparedSessionCapabilityRead(() => {
+      expect(resolveStoredSubagentCapabilities(key, { cfg }).depth).toBe(6);
+      expect(resolveStoredSubagentInheritedToolDenylist(key, { cfg })).toEqual(["exec", "write"]);
+    });
+    expect(entryReads).toBe(0);
   });
 
   it.each([true, false])(
     "binds prepared facts to the exact session key (matching=%s)",
-    (matching) => {
+    async (matching) => {
       const storePath = path.join(
         tempDirs.make("subagent-capability-prepared-"),
         "sessions.sqlite",
       );
       const cfg = { session: { store: storePath } };
       const key = "agent:main:subagent:child";
-      const exact = vi.spyOn(sessionAccessor, "loadExactSessionEntryReadOnly");
       const store = resolveSubagentCapabilityStore(key, {
         cfg,
         preparedSessionEntry: {
@@ -81,36 +242,23 @@ describe("persisted subagent capability lookups", () => {
           entry: { sessionId: "child", spawnDepth: 3, inheritedToolDeny: ["exec"] },
         },
       });
-      expect(resolveStoredSubagentCapabilities(key, { cfg, store }).depth).toBe(matching ? 3 : 1);
-      expect(resolveStoredSubagentInheritedToolDenylist(key, { cfg, store })).toEqual(
-        matching ? ["exec"] : [],
-      );
-      expect(exact).toHaveBeenCalledTimes(matching ? 0 : 1);
+      expect(
+        await withPreparedSessionCapabilityRead(
+          () => resolveStoredSubagentCapabilities(key, { cfg, store }).depth,
+        ),
+      ).toBe(matching ? 3 : 1);
+      expect(
+        await withPreparedSessionCapabilityRead(() =>
+          resolveStoredSubagentInheritedToolDenylist(key, { cfg, store }),
+        ),
+      ).toEqual(matching ? ["exec"] : []);
       expect(fs.existsSync(storePath)).toBe(false);
     },
   );
 
-  it("keeps canonical depth fallback for a partial explicit record", () => {
-    const storePath = path.join(tempDirs.make("subagent-capability-partial-"), "sessions.sqlite");
-    const cfg = { session: { store: storePath } };
-    const key = "agent:main:subagent:child";
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        writeSessionEntry(database, key, { sessionId: "child", updatedAt: 1, spawnDepth: 3 });
-      },
-      { agentId: "main", path: storePath },
-    );
-    expect(
-      resolveStoredSubagentCapabilities(key, {
-        cfg,
-        store: { [key]: { spawnedBy: "agent:main:main" } },
-      }).depth,
-    ).toBe(3);
-  });
-
-  it.each(["", " ", "\t\r\n", "\u00a0\u2003\u2028\ufeff"])(
+  it.each(["", " \t\r\n\u00a0\u2003\u2028\ufeff"])(
     "matches explicit stores for nested and by-id lineage without listing unrelated sessions (padding=%j)",
-    (padding) => {
+    async (padding) => {
       const storePath = path.join(tempDirs.make("subagent-capability-lookup-"), "sessions.sqlite");
       const cfg = { session: { store: storePath } };
       const root = "agent:main:main";
@@ -120,7 +268,7 @@ describe("persisted subagent capability lookups", () => {
       const dashboard = "agent:main:dashboard:spawned";
       const byId = "agent:main:subagent:by-id";
       const cycle = "agent:main:acp:cycle-one";
-      const store: Record<string, SessionEntry> = {
+      const entries: Record<string, SessionEntry> = {
         [root]: { sessionId: "root", updatedAt: 1, spawnDepth: 0 },
         [parent]: { sessionId: "parent-id", updatedAt: 1, spawnedBy: root },
         [child]: { sessionId: `${padding}child-id${padding}`, updatedAt: 1, spawnedBy: parent },
@@ -144,7 +292,7 @@ describe("persisted subagent capability lookups", () => {
       };
       runOpenClawAgentWriteTransaction(
         (database) => {
-          for (const [key, entry] of Object.entries(store)) {
+          for (const [key, entry] of Object.entries(entries)) {
             writeSessionEntry(database, key, entry);
           }
           for (let i = 0; i < 64; i++) {
@@ -158,30 +306,42 @@ describe("persisted subagent capability lookups", () => {
         { agentId: "main", path: storePath },
       );
       const listing = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+      const explicit = {
+        ...entries,
+        "agent:main:subagent:later": { sessionId: "child-id", updatedAt: 1, spawnDepth: 4 },
+      };
+      expect(getSubagentDepthFromSessionStore(" child-id ", { store: explicit })).toBe(2);
+      const stores = [explicit, createSessionCapabilityLookup(entries)];
       for (const key of [parent, child, acp, dashboard, byId, "child-id", cycle]) {
         const persisted = resolveSubagentCapabilityStore(key, { cfg });
-        expect(resolveStoredSubagentCapabilities(key, { cfg, store: persisted })).toEqual(
-          resolveStoredSubagentCapabilities(key, { store }),
-        );
-        expect(getSubagentDepthFromSessionStore(key, { cfg, store: persisted })).toBe(
-          getSubagentDepthFromSessionStore(key, { store }),
-        );
-        if (key !== "child-id") {
-          expect(isSubagentEnvelopeSession(key, { cfg, store: persisted })).toBe(
-            isSubagentEnvelopeSession(key, { store }),
-          );
-          expect(
-            resolveStoredSubagentInheritedToolAllowlist(key, { cfg, store: persisted }),
-          ).toEqual(resolveStoredSubagentInheritedToolAllowlist(key, { store }));
-          expect(
-            resolveStoredSubagentInheritedToolDenylist(key, { cfg, store: persisted }),
-          ).toEqual(resolveStoredSubagentInheritedToolDenylist(key, { store }));
-        }
+        await withPreparedSessionCapabilityRead(() => {
+          for (const store of stores) {
+            expect(resolveStoredSubagentCapabilities(key, { cfg, store: persisted })).toEqual(
+              resolveStoredSubagentCapabilities(key, { store }),
+            );
+            expect(getSubagentDepthFromSessionStore(key, { cfg, store: persisted })).toBe(
+              getSubagentDepthFromSessionStore(key, { store }),
+            );
+            if (key !== "child-id") {
+              expect(isSubagentEnvelopeSession(key, { cfg, store: persisted })).toBe(
+                isSubagentEnvelopeSession(key, { store }),
+              );
+              expect(
+                resolveStoredSubagentInheritedToolAllowlist(key, { cfg, store: persisted }),
+              ).toEqual(resolveStoredSubagentInheritedToolAllowlist(key, { store }));
+              expect(
+                resolveStoredSubagentInheritedToolDenylist(key, { cfg, store: persisted }),
+              ).toEqual(resolveStoredSubagentInheritedToolDenylist(key, { store }));
+            }
+          }
+        });
       }
       expect(
-        resolveStoredSubagentCapabilities("child-id", {
-          cfg: { ...cfg, agents: { defaults: { subagents: { maxSpawnDepth: 2 } } } },
-        }),
+        await withPreparedSessionCapabilityRead(() =>
+          resolveStoredSubagentCapabilities("child-id", {
+            cfg: { ...cfg, agents: { defaults: { subagents: { maxSpawnDepth: 2 } } } },
+          }),
+        ),
       ).toMatchObject({ depth: 2, role: "leaf", canSpawn: false, canControlChildren: false });
       expect(listing).not.toHaveBeenCalled();
     },

@@ -21,7 +21,6 @@ const baseEnv: NodeJS.ProcessEnv = {
   OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
   OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(collectionArgs),
   OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1",
-  OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1",
   // The final Node UI collection prunes both roots after all producers join.
   OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "0",
   OPENCLAW_NODE_COMPILE_CACHE_WRITER: "0",

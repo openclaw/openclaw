@@ -29,16 +29,22 @@ export function scopeCodexRunBindingStore(params: {
       ? { ...owner, sessionId: mapped.sessionId }
       : owner;
   };
-  const readMany = params.bindingStore.readMany?.bind(params.bindingStore);
   return {
     ...params.bindingStore,
     read: (identity) => params.bindingStore.read(mapIdentity(identity)),
-    ...(readMany
-      ? {
-          readMany: (identities: readonly CodexAppServerBindingIdentity[]) =>
-            readMany(identities.map(mapIdentity)),
-        }
-      : {}),
+    readAsync: (identity) => params.bindingStore.readAsync(mapIdentity(identity)),
+    readMany: (identities) => params.bindingStore.readMany(identities.map(mapIdentity)),
+    readNativeSubagentAssignments: async (identity, owner) =>
+      (
+        (await params.bindingStore.readNativeSubagentAssignments?.(
+          mapIdentity(identity),
+          mapHistoryOwner(identity, owner),
+        )) ?? []
+      ).map((assignment) =>
+        Object.assign({}, assignment, {
+          owner: { ...assignment.owner, sessionId: owner.sessionId },
+        }),
+      ),
     readNativeSubagentSubmissions: (identity, owner) =>
       params.bindingStore.readNativeSubagentSubmissions(
         mapIdentity(identity),
@@ -49,22 +55,34 @@ export function scopeCodexRunBindingStore(params: {
         threadId,
         identity ? mapIdentity(identity) : undefined,
       ),
-    mutate: (identity, mutation, assertCurrent) =>
+    mutate: (identity, mutation, assertCurrent, authority) =>
       params.bindingStore.mutate(
         mapIdentity(identity),
-        mutation.kind === "record-native-subagent-submission" ||
-          mutation.kind === "consume-native-subagent-submission"
-          ? { ...mutation, owner: mapHistoryOwner(identity, mutation.owner) }
-          : mutation,
+        mutation.kind === "record-native-subagent-assignment" ||
+          mutation.kind === "consume-native-subagent-assignment"
+          ? {
+              ...mutation,
+              owner: mapHistoryOwner(identity, mutation.owner),
+              assignment: {
+                ...mutation.assignment,
+                owner: mapHistoryOwner(identity, mutation.assignment.owner),
+              },
+            }
+          : mutation.kind === "record-native-subagent-submission" ||
+              mutation.kind === "consume-native-subagent-submission"
+            ? { ...mutation, owner: mapHistoryOwner(identity, mutation.owner) }
+            : mutation,
         assertCurrent,
+        authority,
       ),
     prepareSessionGenerationReclaim: (identity) =>
       params.bindingStore.prepareSessionGenerationReclaim(mapSessionIdentity(identity)),
-    adoptSessionGeneration: (identity, expectedPreviousSessionId, assertCurrent) =>
+    adoptSessionGeneration: (identity, expectedPreviousSessionId, assertCurrent, authority) =>
       params.bindingStore.adoptSessionGeneration(
         mapSessionIdentity(identity),
         expectedPreviousSessionId,
         assertCurrent,
+        authority,
       ),
     resetSessionGeneration: (identity) =>
       params.bindingStore.resetSessionGeneration(mapSessionIdentity(identity)),
@@ -73,6 +91,7 @@ export function scopeCodexRunBindingStore(params: {
     withSessionDeletion: (identity, assertCurrent, run) =>
       params.bindingStore.withSessionDeletion(mapSessionIdentity(identity), assertCurrent, run),
     withThreadArchiveFence: (run) => params.bindingStore.withThreadArchiveFence(run),
-    withLease: (identity, run) => params.bindingStore.withLease(mapIdentity(identity), run),
+    withLease: (identity, run, options) =>
+      params.bindingStore.withLease(mapIdentity(identity), run, options),
   };
 }

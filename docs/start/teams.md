@@ -9,6 +9,9 @@ title: "Team setup"
 
 This guide sets up one OpenClaw gateway that a whole team uses: a bot in the workspace chat you already have, shared sessions everyone can open and steer in the Control UI, and roles that bound what each person can do. It is the same product as the [personal assistant setup](/start/openclaw) - team operation is configuration, not a separate edition.
 
+For an always-on Linux deployment with Cloudflare Access, GitHub identity sync,
+role bootstrap, and operations, follow [Deploy a team server](/gateway/team-server).
+
 ## Before you begin
 
 - A host for the Gateway that stays on: a small VPS, an office Mac, or any [supported install target](/install).
@@ -21,7 +24,7 @@ This guide sets up one OpenClaw gateway that a whole team uses: a bot in the wor
 
 A gateway is one trust domain. Everyone who can message a tool-enabled agent shares that agent's delegated tool authority, and everyone with operator access shares one control plane. That is the right model for a team whose members already trust each other - session ownership, presence, and [roles](/gateway/operator-scopes#named-operator-roles) are collaboration guardrails inside the boundary, not isolation between adversaries.
 
-If you need to serve mutually untrusted people or organizations, run one gateway per tenant instead: [Multi-tenant hosting](/gateway/multi-tenant-hosting).
+If you need to serve mutually untrusted people or organizations, run one gateway per tenant instead: [Security trust model](/gateway/security/trust-model).
 
 ## Step 1: Give the team access to the Gateway
 
@@ -92,7 +95,7 @@ Named operator roles bind authenticated profiles to a policy: which sessions the
         guest: {
           sessions: { others: "view" },
           agents: ["roboclaw"],
-          scopes: ["operator.read", "operator.write"],
+          scopes: ["operator.sessions.write"],
           sandbox: "required",
         },
       },
@@ -101,7 +104,9 @@ Named operator roles bind authenticated profiles to a policy: which sessions the
 }
 ```
 
-Assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture.
+Give guests the session-only `operator.sessions.write` scope, which also permits reading. `operator.read` and `operator.write` are Gateway-wide: they add channel sends, node and computer control, logs, the user directory, and other shared surfaces that a guest does not need. With `sessions.others: "view"`, guests can still read every shared session, including tool output. Keep sensitive work in draft sessions.
+
+Assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](/gateway/team-server#invite-guests).
 
 ### Coding as a guest
 
@@ -137,6 +142,16 @@ requests to destinations reachable from the container, so use a restricted
 container network when that access needs tighter controls. See
 [Sandboxing](/gateway/sandboxing#workspace-access) for workspace and network policy.
 
+Guests publish through **Publish PR** from sessions they created. Publication
+uses the shared GitHub account and opens a draft pull request; OpenClaw never
+merges. Protect the base branch with GitHub rules so the shared account cannot
+merge or bypass review. If the checkout's `origin` is the upstream repository,
+guest branches live in that repository and its pull request workflows receive
+repository secrets. Point `origin` at a fork owned by the shared account so
+guest pull requests come from the fork, where GitHub withholds secrets from
+`pull_request` workflows by default. See
+[Workflow and CI changes](/gateway/config-tools/github-identity#workflow-and-ci-changes).
+
 ## Verify
 
 - Mention the bot in the allowed team channel and confirm it replies there.
@@ -146,7 +161,7 @@ container network when that access needs tighter controls. See
 ## When to split things up
 
 - **Separate workspaces or personas** (projects that must not share memory or files): use multiple agents on one gateway - see [Multi-agent routing](/concepts/multi-agent).
-- **Mutually untrusted users, customers, or organizations:** separate gateways, ideally separate OS users or hosts - see [Multi-tenant hosting](/gateway/multi-tenant-hosting) and [Security](/gateway/security).
+- **Mutually untrusted users, customers, or organizations:** separate gateways, ideally separate OS users or hosts - see [Security trust model](/gateway/security/trust-model) and [Security](/gateway/security).
 
 ## Related
 

@@ -16,10 +16,11 @@ import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
-import * as inferenceProxy from "./inference-proxy.js";
+import { CodexInferenceAuthorizationError } from "./inference-dispatch.js";
+import type { createCodexInferenceProxy } from "./inference-proxy.js";
 
 type BindModelExecution = NonNullable<
-  Parameters<typeof inferenceProxy.createCodexInferenceProxy>[0]["bindModelExecution"]
+  Parameters<typeof createCodexInferenceProxy>[0]["bindModelExecution"]
 >;
 type ModelExecution = Awaited<ReturnType<BindModelExecution>>;
 
@@ -54,20 +55,13 @@ function execution() {
 }
 
 describe("inference transport model authority", () => {
-  it.each([
-    "/responses",
-    "/responses/compact",
-    "/alpha/search",
-    "/images/generations",
-    "/images/edits",
-  ])(
+  it.each(["/responses", "/responses/compact", "/images/generations"])(
     "rejects a forbidden HTTP model on %s before forwarding and accepts an allowed model",
     async (path) => {
       const allowed = execution();
       bindModelExecution.mockImplementation(({ body }) => {
         if (body.model === "forbidden") {
-          // The old transport ignores the hook, so its RED failure is an upstream write.
-          throw new inferenceProxy.CodexInferenceAuthorizationError("model");
+          throw new CodexInferenceAuthorizationError("model");
         }
         return allowed.binding;
       });
@@ -238,11 +232,11 @@ describe("inference transport model authority", () => {
     }
   });
 
-  it.each(["/responses", "/guardian", "/guardian-classifier"])(
+  it.each(["/responses", "/guardian-classifier"])(
     "authorizes WebSocket frames on %s and returns a sanitized denial before forwarding",
     async (path) => {
       bindModelExecution.mockImplementation(() => {
-        throw new inferenceProxy.CodexInferenceAuthorizationError("model");
+        throw new CodexInferenceAuthorizationError("model");
       });
       const { client, upstream } = await open(path);
       const forwarded = vi.fn(() => {

@@ -15,7 +15,7 @@ import {
   windowsPathSchema,
 } from "./extension-windows-contract.js";
 
-type WindowsIdentity = { localAppData: string; sid: string };
+type WindowsIdentity = z.infer<typeof identitySchema>;
 export type WindowsNativePlatform = {
   identity(this: void): Promise<WindowsIdentity>;
   assertPath(

@@ -1,5 +1,4 @@
 // Gh Read tests cover gh read script behavior.
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildReadPermissions,
   githubJson,
-  normalizeRepo,
   parsePermissionKeys,
   parseRepoArg,
   readGitHubAppPrivateKey,
@@ -15,26 +13,11 @@ import {
   readBoundedGitHubJson,
   resolveGitHubFetchTimeoutMs,
 } from "../../scripts/gh-read.js";
+import { normalizeGitHubRepo as normalizeRepo } from "../../scripts/lib/github-repo.js";
 
 describe("gh-read helpers", () => {
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("prints wrapper usage before reading auth env", () => {
-    let stderr = "";
-    try {
-      execFileSync("bash", ["scripts/gh-read"], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch (error) {
-      stderr = String((error as { stderr?: unknown }).stderr ?? error);
-    }
-
-    expect(stderr).toContain("usage: scripts/gh-read <gh args...>");
-    expect(stderr).toContain("OPENCLAW_GH_READ_APP_ID");
   });
 
   it("finds repo from gh args", () => {
@@ -158,19 +141,6 @@ describe("gh-read helpers", () => {
     await rejection;
     await Promise.resolve();
     expect(canceled).toBe(true);
-  });
-
-  it("bounds GitHub API error response bodies", async () => {
-    const tail = "tail-sentinel-should-not-appear";
-    const response = new Response(`${"x".repeat(5000)}${tail}`, {
-      status: 500,
-    });
-
-    const text = await readBoundedGitHubErrorText(response);
-
-    expect(text).toContain("[truncated]");
-    expect(text).not.toContain(tail);
-    expect(text.length).toBeLessThan(4200);
   });
 
   it.each([

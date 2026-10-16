@@ -11,14 +11,15 @@ read_when:
 
 ## Availability
 
-The tool registers only when OpenClaw can resolve a PDF-capable model for the agent. Resolution order:
+The agent can register the tool before automatic model selection completes. On execution, model resolution follows this order:
 
 1. `agents.defaults.pdfModel` (explicit primary/fallbacks)
 2. `agents.defaults.imageModel` (explicit primary/fallbacks)
-3. The agent's resolved session/default model, if its provider supports native PDF input (Anthropic, Google) or already has a configured vision model
-4. Auto-detected image/vision-capable providers with usable auth, preferring native-PDF providers first
+3. A vision model from the default model's provider, if that provider supports native PDF input (Anthropic, Google)
+4. Automatic candidates with usable auth: native-PDF providers first, then image/vision-capable providers and providers declaring PDF text-extraction support. A default provider's declared text-extraction model takes precedence over generic image candidates.
+5. The active session model, if no earlier candidate resolves, it supports images, its provider has usable auth, and its provider does not disable PDF image extraction (`documentModels.pdf.image: false`). This includes vision-capable OpenRouter models without separate `pdfModel` or `imageModel` configuration.
 
-Every fallback candidate is auth-checked before use, so a configured `provider/model` only counts if OpenClaw can authenticate that provider for the agent. If no usable model resolves, the `pdf` tool is not exposed.
+Automatic candidates are auth-checked before selection. Explicit PDF/image settings retain their configured precedence and are authenticated at execution. If deferred resolution finds no usable model, the call fails with `No PDF model configured.` before opening the PDF.
 
 PDF analysis uses the selected model's configured provider credentials or connected account. It does not require a separate PDF API key.
 

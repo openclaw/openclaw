@@ -1,11 +1,16 @@
 // Render contract between the transcript projection and the per-session
 // virtualizer host owned by ChatTranscriptController.
-import type { TemplateResult } from "lit";
+import type { Virtualizer } from "@tanstack/virtual-core";
+import type { ApplicationContext } from "../../../app/context.ts";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
+import type { PresentationValue } from "../../../lit/presentation-binding.ts";
+import type { SolidController, SolidControllerHost } from "../../../lit/solid-controller-host.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
-import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
+import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
+import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
 /** A reader-position restoration that is waiting for measurable transcript geometry. */
@@ -18,8 +23,8 @@ export type ChatTranscriptPendingScrollOffset = {
 };
 
 export type TranscriptCallbacks = {
-  /** Retained panes can remain measurable while visually hidden. */
-  visuallyPresented?: () => boolean;
+  /** Sidebar commits originate on the pane element, separate from its state owner. */
+  geometryEventTarget?: HTMLElement;
   onViewportResize?: () => void;
   onReaderScroll?: (towardEnd?: boolean) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
@@ -42,6 +47,7 @@ export type TranscriptHeader = {
 };
 
 export type ChatTranscriptSession = {
+  readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending">;
   readonly entryAnimations: ChatMessageEntryAnimations;
   readonly expandedAssistantMessages: Map<string, AssistantMessageExpansionState>;
   readonly liveAnnouncementText: string;
@@ -53,7 +59,9 @@ export type ChatTranscriptSession = {
     announce: boolean,
     overlay?: unknown,
     header?: TranscriptHeader | null,
-  ): TemplateResult;
+    presented?: PresentationValue,
+    applicationContext?: ApplicationContext,
+  ): HTMLDivElement;
   syncMessageRows(
     messageRowKeysById: ReadonlyMap<string, string>,
     messageRowsByKey: ReadonlyMap<string, string>,
@@ -64,16 +72,6 @@ export type ChatTranscriptSession = {
   setContentReady(ready: boolean): void;
   handleFocusIn(event: FocusEvent): void;
   handleFocusOut(event: FocusEvent): void;
-};
-
-/** Presentation contract produced by the chat-item projection. */
-export type ChatTranscriptProjection = {
-  positionIndex: ChatPositionIndex;
-  isDirectThread: boolean;
-  isEmpty: boolean;
-  showLoadingSkeleton: boolean;
-  searchOpen: boolean;
-  renderRows: (overlay?: unknown, header?: TranscriptHeader | null) => TemplateResult;
 };
 
 /** Rows and lookup identities that must be promoted as one rendered projection. */
@@ -87,4 +85,47 @@ export type TranscriptRenderSnapshot<T> = {
   messageRows: ReadonlyMap<string, string>;
   renderKeyRows: ReadonlyMap<string, string>;
   entryKeys: ChatMessageEntryAnimations["projectedKeys"];
+  presented: PresentationValue;
+  applicationContext?: ApplicationContext;
 };
+
+/** Session-owned deferred measurements after width changes and smooth scrolling. */
+export class TranscriptPresentation implements SolidController {
+  constructor(
+    private readonly host: SolidControllerHost & {
+      readonly scrollElement: HTMLDivElement | null;
+    },
+    private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+    private readonly beforeMeasure: () => void,
+  ) {
+    host.addController(this);
+  }
+
+  private readConnectedRows(): (() => boolean) | null {
+    const apply = readConnectedTranscriptRows(this.host.scrollElement, this.virtualizer);
+    return apply
+      ? () => {
+          this.beforeMeasure();
+          return apply();
+        }
+      : null;
+  }
+
+  measureRows(): boolean {
+    return this.readConnectedRows()?.() ?? false;
+  }
+
+  queueRowMeasure(): void {
+    const element = this.host.scrollElement;
+    scheduleLayout(this, () => {
+      if (element === this.host.scrollElement) {
+        return this.readConnectedRows() ?? undefined;
+      }
+      return undefined;
+    });
+  }
+
+  hostDisconnected(): void {
+    cancelLayout(this);
+  }
+}

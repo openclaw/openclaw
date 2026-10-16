@@ -3,11 +3,53 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { MsgContext } from "../auto-reply/templating.js";
+import { prepareAttachment } from "../media/attachment-processor.runtime.js";
 import { renderInboundDocumentContext } from "./file-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("renderInboundDocumentContext", () => {
+  it.each(["", "application/octet-stream"])(
+    "retains inferred legacy encoding through prepared content type %j",
+    async (mime) => {
+      const workspaceDir = tempDirs.make("openclaw-prepared-document-");
+      const mediaPath = path.join(workspaceDir, "notes.txt");
+      const text = "Café notes: résumé et météo pour demain.";
+      const buffer = Buffer.from(text, "latin1");
+      const prepared = await prepareAttachment({
+        base64: buffer.toString("base64"),
+        label: "notes.txt",
+        mime,
+      });
+      await fs.writeFile(mediaPath, buffer);
+      const ctx: MsgContext = {
+        media: [{ path: mediaPath, contentType: prepared.mime, fileName: "notes.txt" }],
+      };
+
+      const context = await renderInboundDocumentContext({ ctx, cfg: {}, workspaceDir });
+
+      expect(prepared.mime).toBe("text/plain; charset=windows-1252");
+      expect(context.text).toContain(text);
+      expect(context.text).not.toContain("\uFFFD");
+    },
+  );
+
+  it.each([
+    { encoding: "utf8", mime: "", expectedMime: "text/plain" },
+    { encoding: "latin1", mime: "text/plain", expectedMime: "text/plain" },
+    { encoding: "latin1", mime: "text/plain; charset=utf-8", expectedMime: "text/plain" },
+  ] as const)("keeps existing prepared MIME for $encoding with $mime", async (input) => {
+    const prepared = await prepareAttachment({
+      base64: Buffer.from("Café notes: résumé et météo pour demain.", input.encoding).toString(
+        "base64",
+      ),
+      label: "notes.txt",
+      mime: input.mime,
+    });
+
+    expect(prepared.mime).toBe(input.expectedMime);
+  });
+
   it.each([
     {
       text: "document body for the steered run",

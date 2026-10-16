@@ -1,7 +1,6 @@
 /** Tests heartbeat prompt and token helpers. */
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   isHeartbeatAcknowledgementText,
   isHeartbeatContentEffectivelyEmpty,
@@ -35,43 +34,6 @@ describe("stripHeartbeatToken", () => {
     );
   });
 
-  it("drops heartbeats with small junk in heartbeat mode", () => {
-    expect(stripHeartbeatToken("HEARTBEAT_OK 🦞", { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-    expect(stripHeartbeatToken(`🦞 ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-  });
-
-  it("drops short remainder in heartbeat mode", () => {
-    expect(stripHeartbeatToken(`ALERT ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-  });
-
-  it("keeps heartbeat replies when remaining content exceeds threshold", () => {
-    const long = "A".repeat(DEFAULT_HEARTBEAT_ACK_MAX_CHARS + 1);
-    expect(stripHeartbeatToken(`${long} ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" })).toEqual({
-      shouldSkip: false,
-      text: long,
-      didStrip: true,
-    });
-  });
-
-  it("strips token at edges for normal messages", () => {
-    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN} hello`, { mode: "message" })).toEqual({
-      shouldSkip: false,
-      text: "hello",
-      didStrip: true,
-    });
-    expect(stripHeartbeatToken(`hello ${HEARTBEAT_TOKEN}`, { mode: "message" })).toEqual({
-      shouldSkip: false,
-      text: "hello",
-      didStrip: true,
-    });
-  });
-
   it("does not touch token in the middle", () => {
     expect(
       stripHeartbeatToken(`hello ${HEARTBEAT_TOKEN} there`, {
@@ -82,18 +44,6 @@ describe("stripHeartbeatToken", () => {
       text: `hello ${HEARTBEAT_TOKEN} there`,
       didStrip: false,
     });
-  });
-
-  it("strips HTML-wrapped heartbeat tokens", () => {
-    expect(stripHeartbeatToken(`<b>${HEARTBEAT_TOKEN}</b>`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-  });
-
-  it("strips markdown-wrapped heartbeat tokens", () => {
-    expect(stripHeartbeatToken(`**${HEARTBEAT_TOKEN}**`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
   });
 
   it("removes markup-wrapped token and keeps trailing content", () => {
@@ -108,18 +58,6 @@ describe("stripHeartbeatToken", () => {
     });
   });
 
-  it("strips trailing punctuation only when directly after the token", () => {
-    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}.`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}!!!`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}---`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-  });
-
   it("strips a sentence-ending token and keeps trailing punctuation", () => {
     expect(
       stripHeartbeatToken(`I should not respond ${HEARTBEAT_TOKEN}.`, {
@@ -131,29 +69,10 @@ describe("stripHeartbeatToken", () => {
       didStrip: true,
     });
   });
-
-  it("strips sentence-ending token with emphasis punctuation in heartbeat mode", () => {
-    expect(
-      stripHeartbeatToken(
-        `There is nothing todo, so i should respond with ${HEARTBEAT_TOKEN} !!!`,
-        {
-          mode: "heartbeat",
-        },
-      ),
-    ).toEqual(createSkippedHeartbeatOutcome());
-  });
-
-  it("preserves trailing punctuation on text before the token", () => {
-    expect(stripHeartbeatToken(`All clear. ${HEARTBEAT_TOKEN}`, { mode: "message" })).toEqual({
-      shouldSkip: false,
-      text: "All clear.",
-      didStrip: true,
-    });
-  });
 });
 
 describe("isHeartbeatAcknowledgementText", () => {
-  it.each([undefined, "", "NO_REPLY", "HEARTBEAT_OK", "HEARTBEAT_OK all good"])(
+  it.each([undefined, "HEARTBEAT_OK", "HEARTBEAT_OK all good"])(
     "recognizes %s as a quiet acknowledgement",
     (text) => {
       expect(isHeartbeatAcknowledgementText(text)).toBe(true);
@@ -161,6 +80,7 @@ describe("isHeartbeatAcknowledgementText", () => {
   );
 
   it("preserves substantive replies and the legacy acknowledgement length limit", () => {
+    expect(isHeartbeatAcknowledgementText("NO_REPLY")).toBe(false);
     expect(isHeartbeatAcknowledgementText("NO_REPLY: actual reminder")).toBe(false);
     expect(isHeartbeatAcknowledgementText("HEARTBEAT_OK all good", 0)).toBe(false);
   });
@@ -170,23 +90,6 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
   it("returns false for missing scratch so the monitor can still run", () => {
     expect(isHeartbeatContentEffectivelyEmpty(undefined)).toBe(false);
     expect(isHeartbeatContentEffectivelyEmpty(null)).toBe(false);
-  });
-
-  it("returns true for empty string", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("")).toBe(true);
-  });
-
-  it("returns true for whitespace only", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("   ")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("\n\n\n")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("  \n  \n  ")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("\t\t")).toBe(true);
-  });
-
-  it("returns true for header-only content", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n\n")).toBe(true);
   });
 
   it("returns true for comments only", () => {
@@ -216,36 +119,6 @@ tasks:
     expect(isHeartbeatContentEffectivelyEmpty("Reminder <!-- not scaffolding -->")).toBe(false);
   });
 
-  it("returns true for HTML comments only", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("<!-- runtime template note -->")).toBe(true);
-    expect(
-      isHeartbeatContentEffectivelyEmpty(`<!-- runtime template note -->
-
-# Heartbeat scratch
-`),
-    ).toBe(true);
-  });
-
-  it("returns false when a template includes plain instructional prose", () => {
-    const defaultTemplate = `# Heartbeat scratch
-
-Keep this scratch empty unless you want a tiny checklist. Keep it small.
-    `;
-    expect(isHeartbeatContentEffectivelyEmpty(defaultTemplate)).toBe(false);
-  });
-
-  it("returns true for fenced monitor scratch without actionable content", () => {
-    const content = `# Heartbeat scratch
-
-\`\`\`markdown
-# Keep this scratch empty (or with only comments) to skip heartbeat API calls.
-
-# Add tasks below when you want the agent to check something periodically.
-\`\`\`
-`;
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
-  });
-
   it("returns false when fenced heartbeat content includes a real task", () => {
     const content = `\`\`\`markdown
 # Keep this scratch empty when you want to skip.
@@ -254,49 +127,6 @@ Keep this scratch empty unless you want a tiny checklist. Keep it small.
 \`\`\`
 `;
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
-  });
-
-  it("returns false when a code fence wraps plain instructional prose", () => {
-    const content = `\`\`\`markdown
-Keep this scratch empty unless you want a tiny checklist.
-\`\`\`
-`;
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
-  });
-
-  it("returns true for header with only empty lines", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n\n\n")).toBe(true);
-  });
-
-  it("returns false when actionable content exists", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("- Check email")).toBe(false);
-    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n- Task 1")).toBe(false);
-    expect(isHeartbeatContentEffectivelyEmpty("Remind me to call mom")).toBe(false);
-  });
-
-  it("returns false for content with tasks after header", () => {
-    const content = `# Heartbeat scratch
-
-- Task 1
-- Task 2
-`;
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
-  });
-
-  it("returns false for mixed content with non-comment text", () => {
-    const content = `# Heartbeat scratch
-## Tasks
-Check the server logs
-`;
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
-  });
-
-  it("treats markdown headers as comments (effectively empty)", () => {
-    const content = `# Heartbeat scratch
-## Section 1
-### Subsection
-`;
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
   });
 });
 

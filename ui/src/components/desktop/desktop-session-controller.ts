@@ -4,33 +4,22 @@ import type {
   EnvironmentSummary,
 } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
+import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { PollController } from "../../lit/poll-controller.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { SubscriptionsController } from "../../lib/subscriptions-controller.ts";
 import { resolveChatPaneDesktopTarget } from "../../pages/chat/chat-pane-placement.ts";
+import type { SolidPanelController } from "../solid-panel-controller.ts";
 import { loadDesktopEnvironments } from "./desktop-source.ts";
 
-// Keep the chat placement dependency in this lazily loaded desktop owner, outside the boot chunk.
-async function resolveDesktopDocumentSessionTarget(
-  client: Pick<GatewayBrowserClient, "request">,
-  sessionKey: string,
-): Promise<string | null> {
-  // `sessions.describe` is the exact-key lookup; a paged list cannot rule out a later match.
-  const session = (
-    await client.request<{ session?: GatewaySessionRow | null }>("sessions.describe", {
-      key: sessionKey,
-    })
-  ).session;
-  return resolveChatPaneDesktopTarget(session ?? undefined);
-}
-
-type DesktopSessionHost = ReactiveControllerHost & {
+type DesktopSessionHost = Pick<
+  SolidPanelController,
+  "addController" | "removeController" | "requestUpdate" | "updateComplete"
+> & {
   isConnected: boolean;
   client: GatewayBrowserClient | null;
+  sessions: Pick<SessionCapability, "describe">;
   available: boolean;
   documentMode: boolean;
   embedded: boolean;
@@ -61,7 +50,7 @@ export class DesktopSessionController {
   private availabilitySnapshot: NodeAvailability | null = null;
   private startup: DesktopStartup | undefined;
   startupEnvironment: EnvironmentSummary | undefined;
-  private readonly startupPoll: PollController;
+  private startupTimer: ReturnType<typeof globalThis.setInterval> | undefined;
 
   constructor(
     private readonly host: DesktopSessionHost,
@@ -71,7 +60,6 @@ export class DesktopSessionController {
     private readonly requestedAvailabilityTarget: () => string | null,
     private readonly onTargetError: (error: unknown) => void,
   ) {
-    this.startupPoll = new PollController(host, 2_000, () => void this.refreshStartup(), false);
     new SubscriptionsController(host).effect(
       () => (host.available && host.suppliedEnvironments === null ? host.client : null),
       (client) =>
@@ -140,8 +128,23 @@ export class DesktopSessionController {
     this.stopStartup()?.resolve(undefined);
   }
 
+  targetChanged(changed: ReadonlyMap<PropertyKey, unknown>, automaticSource: boolean): boolean {
+    return (
+      changed.has("client") ||
+      changed.has("available") ||
+      changed.has("sessions") ||
+      changed.has("embedded") ||
+      changed.has("documentMode") ||
+      (changed.has("requestedSource") &&
+        (!this.host.embedded || this.host.suppliedEnvironments !== null || automaticSource)) ||
+      changed.has("sessionKey") ||
+      changed.has("documentControl")
+    );
+  }
+
   private stopStartup(): DesktopStartup | undefined {
-    this.startupPoll.stop();
+    globalThis.clearInterval(this.startupTimer);
+    this.startupTimer = undefined;
     const startup = this.startup;
     this.startup = undefined;
     if (this.startupEnvironment) {
@@ -200,19 +203,20 @@ export class DesktopSessionController {
       );
       this.host.requestUpdate();
       this.startup = { load, isCurrent, resolve, reject, busy: false };
-      this.startupPoll.start();
+      this.startupTimer = globalThis.setInterval(() => void this.refreshStartup(), 2_000);
     });
   }
 
   loadInventory(options: {
     automatic: boolean;
     target: string | null | undefined;
+    refresh?: boolean;
     isCurrent: () => boolean;
   }) {
     this.invalidate();
     const client = this.host.client;
     const resolution = options.automatic
-      ? this.resolveTarget(options.target)
+      ? this.resolveTarget(options.target, options.refresh)
       : { target: Promise.resolve(options.target), isCurrent: () => true };
     const isCurrent = () =>
       this.host.isConnected &&
@@ -308,8 +312,8 @@ export class DesktopSessionController {
     }
   }
 
-  resolveTarget(resolvedSessionTarget?: string | null) {
-    const { client, sessionKey, requestedSource, documentMode } = this.host;
+  resolveTarget(resolvedSessionTarget?: string | null, refresh = false) {
+    const { client, sessions, sessionKey, requestedSource, documentMode } = this.host;
     if (!client) {
       return undefined;
     }
@@ -318,6 +322,7 @@ export class DesktopSessionController {
       refreshId === this.refreshId &&
       this.host.isConnected &&
       client === this.host.client &&
+      sessions === this.host.sessions &&
       sessionKey === this.host.sessionKey &&
       documentMode === this.host.documentMode &&
       this.host.available &&
@@ -327,7 +332,9 @@ export class DesktopSessionController {
     return {
       target:
         target === undefined && documentMode && sessionKey !== null
-          ? resolveDesktopDocumentSessionTarget(client, sessionKey)
+          ? sessions
+              .describe({ key: sessionKey }, { client, refresh })
+              .then(({ session }) => resolveChatPaneDesktopTarget(session ?? undefined))
           : Promise.resolve(target ?? (sessionKey !== null ? null : undefined)),
       // Carry this owner across both target resolution and the selected status request.
       isCurrent,

@@ -10,7 +10,7 @@ import {
 import { createMatrixSetupWizardProxy, matrixSetupContract } from "./setup-core.js";
 
 const matrixSetupWizard = createMatrixSetupWizardProxy(async () => ({
-  matrixSetupWizard: (await import("./setup-surface.js")).matrixSetupWizard,
+  matrixSetupWizard: (await import("./onboarding.js")).matrixOnboardingAdapter,
 }));
 
 export const matrixPluginBase = {
@@ -54,7 +54,8 @@ export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   ...matrixPluginBase,
   config: {
     ...matrixPluginBase.config,
-    hasConfiguredState: ({ cfg }) => resolveMatrixAccount({ cfg }).configured,
+    /** @deprecated Use hasConfiguredStateAsync. Final compatibility day: 2026-12-31. */
+    hasConfiguredState: ({ cfg, env }) => resolveMatrixAccount({ cfg, env }).configured,
     hasConfiguredStateAsync: async ({ cfg, env }) =>
       (await resolveMatrixAccountAsync({ cfg, env })).configured,
   },

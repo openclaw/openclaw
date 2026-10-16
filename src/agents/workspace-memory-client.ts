@@ -11,8 +11,8 @@ export function createWorkspaceMemoryFileClient(options: {
   /** POSIX workspace path on the remote host. */
   remoteWorkspaceDir: string;
   signal: AbortSignal;
-  /** Deliver one JSON request on stdin and return stdout; reject incomplete replies. */
-  request: (request: string, signal: AbortSignal) => Promise<string>;
+  /** Recheck supplied caller authority at dispatch; reject incomplete replies. */
+  request: (request: string, signal: AbortSignal, assertCurrent?: () => void) => Promise<string>;
   /** Deliver one JSON line, stream reply lines, and close the remote worker on abort. */
   subscribe: (
     request: string,
@@ -40,14 +40,15 @@ export function createWorkspaceMemoryFileClient(options: {
       return typeof entry === "string" ? mapped(entry) : { ...entry, path: mapped(entry.path) };
     });
 
-  async function call<T>(request: Record<string, unknown>): Promise<T> {
+  async function call<T>(request: Record<string, unknown>, assertCurrent?: () => void): Promise<T> {
     options.signal.throwIfAborted();
+    assertCurrent?.();
     let response: {
       result: T;
       error?: { message: string; code?: string; name?: string; publication?: string };
     };
     try {
-      const reply = await options.request(JSON.stringify(request), options.signal);
+      const reply = await options.request(JSON.stringify(request), options.signal, assertCurrent);
       options.signal.throwIfAborted();
       // SAFETY: The same-version Memory worker serializes this operation's result or error envelope.
       response = JSON.parse(reply) as typeof response;
@@ -85,9 +86,17 @@ export function createWorkspaceMemoryFileClient(options: {
         maintain("commitContent", { ...params, filePath: host(params.filePath) }),
       resolveDreamsPath: async () => gateway(await maintain("resolveDreamsPath")),
       readDreams: (file) => maintain("readDreams", host(file)),
-      writeDreams: (file, content) => maintain("writeDreams", host(file), content),
+      writeDreams: (file, content, assertCurrent) =>
+        call(
+          { operation: "maintenance", method: "writeDreams", args: [host(file), content] },
+          assertCurrent,
+        ),
       replaceReport: (file, content) => maintain("replaceReport", host(file), content),
-      appendCorpus: (file, content) => maintain("appendCorpus", host(file), content),
+      appendCorpus: (file, content, assertCurrent) =>
+        call(
+          { operation: "maintenance", method: "appendCorpus", args: [host(file), content] },
+          assertCurrent,
+        ),
     },
     assertCurrent: () => options.signal.throwIfAborted(),
     async listFiles(_workspace, extraPaths, multimodal, skipped) {

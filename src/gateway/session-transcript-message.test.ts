@@ -14,6 +14,84 @@ const message = {
 };
 
 describe("trusted transcript display metadata", () => {
+  it.each([false, true])(
+    "keeps plugin steering audience-specific in live and delta payloads (delta=%s)",
+    (historyDelta) => {
+      const raw = {
+        role: "user",
+        display: false,
+        content: "Model instructions: be concise",
+        provenance: { kind: "internal_system", sourceTool: "plugin:reviewer" },
+        __openclaw: {
+          pluginSteering: {
+            pluginId: "reviewer",
+            pluginName: "Reviewer",
+            displayText: "Be concise",
+          },
+        },
+      };
+      const original = structuredClone(raw);
+      const params = {
+        message: raw,
+        sessionKey: "agent:main:main",
+        messageId: "steer",
+        historyDelta,
+      };
+      expect(projectSessionMessagePayload(params).payload).toBeUndefined();
+      expect(
+        projectSessionMessagePayload({ ...params, includePluginSteering: true }).payload,
+      ).toMatchObject({
+        messageId: "steer",
+        message: {
+          display: true,
+          content: [{ type: "text", text: "Be concise" }],
+          __openclaw: { pluginSteering: { pluginId: "reviewer", pluginName: "Reviewer" } },
+        },
+      });
+      expect(projectSessionMessagePayload(params).payload).toBeUndefined();
+      expect(raw).toEqual(original);
+    },
+  );
+
+  it.each([
+    { content: [], __openclaw: { runId: "recovering-run" }, pending: true },
+    {
+      content: [{ type: "text", text: "Useful partial answer" }],
+      __openclaw: { runId: "recovering-run" },
+      pending: false,
+    },
+    {
+      content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+      __openclaw: { runId: "recovering-run" },
+      pending: false,
+    },
+    { content: [], __openclaw: { runId: "other-run" }, pending: true },
+  ])(
+    "defers attempt diagnostics without inferring terminal settlement: %j",
+    ({ pending, ...failure }) => {
+      const raw = {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "context exceeded",
+        ...failure,
+      };
+      const original = structuredClone(raw);
+      const result = projectSessionMessagePayload({
+        message: raw,
+        sessionKey: "agent:main:main",
+      });
+      expect(result.deferredAssistantError === true).toBe(pending);
+      expect(Boolean(result.payload)).toBe(!pending);
+      expect(result.projectionState.assistantErrorPending).toBe(true);
+      if (failure["__openclaw"].runId === "recovering-run" && result.payload) {
+        expect(result.payload.message).not.toHaveProperty("openclawRunError");
+        expect(result.payload.message).not.toHaveProperty("stopReason");
+        expect(result.payload.message).not.toHaveProperty("errorMessage");
+      }
+      expect(raw).toEqual(original);
+    },
+  );
+
   it("keeps nested activity run ownership distinct from entry deduplication in history and live events", () => {
     const activity = {
       ...createNestedToolActivity({

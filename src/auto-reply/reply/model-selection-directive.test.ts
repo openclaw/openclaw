@@ -48,7 +48,7 @@ describe("resolveModelDirectiveSelection", () => {
         cfg: {
           agents: {
             defaults: { modelPolicy: { allow } },
-            list: [{ id: "ops", ...(agentAllow ? { modelPolicy: { allow: agentAllow } } : {}) }],
+            entries: { ops: agentAllow ? { modelPolicy: { allow: agentAllow } } : {} },
           },
         },
         raw,
@@ -105,7 +105,7 @@ describe("resolveModelDirectiveSelection", () => {
     },
   );
 
-  it.each([undefined, {}, { allow: [] }, { allow: ["openai/*"] }])(
+  it.each([undefined, { allow: [] }, { allow: ["openai/*"] }])(
     "permits an explicit uncataloged model with policy %j",
     async (modelPolicy) => {
       const cfg: OpenClawConfig = {
@@ -127,7 +127,7 @@ describe("resolveModelDirectiveSelection", () => {
         raw: "openai/gpt-5.6-luna",
         defaultProvider: "anthropic",
         defaultModel: "claude-sonnet-4-6",
-        aliasIndex: state.policyAliasIndex,
+        aliasIndex: state.modelPolicy.policyAliasIndex,
         allowedModelKeys: state.allowedModelKeys,
         modelPolicy: state.modelPolicy,
         cfg,

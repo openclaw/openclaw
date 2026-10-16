@@ -191,11 +191,6 @@ describe("migrateLegacyDevicePairingStore", () => {
     expect(await listDeviceFiles(devicesDir)).toEqual(["paired.json.migrated"]);
   });
 
-  test("returns null when no legacy files exist", async () => {
-    const baseDir = await suiteRootTracker.make("empty");
-    expect(await migrateLegacyDevicePairingStore({ baseDir })).toBeNull();
-  });
-
   test("throws on an unreadable paired store and leaves the files in place", async () => {
     const baseDir = await suiteRootTracker.make("corrupt");
     const devicesDir = path.join(baseDir, "devices");

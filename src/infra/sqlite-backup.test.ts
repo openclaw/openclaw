@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
@@ -15,6 +16,9 @@ describe("node SQLite backup completion", () => {
     const root = dirs.make("sqlite-backup-completion-");
     const target = path.join(root, "backup.sqlite");
     const owner = path.join(root, "sqlite-backup.mjs");
+    for (const schema of ["openclaw-agent-schema.sql", "openclaw-state-schema.sql"]) {
+      await fs.copyFile(new URL(`../state/${schema}`, import.meta.url), path.join(root, schema));
+    }
     // Loader/cache I/O would supply the unrelated callback this regression must exclude.
     await build({
       entryPoints: [fileURLToPath(new URL("./sqlite-backup.ts", import.meta.url))],
@@ -50,9 +54,15 @@ describe("node SQLite backup completion", () => {
              assert.equal(copy.prepare("SELECT SUM(length(payload)) AS bytes FROM records").get().bytes, 1048576);
            }
            finally { copy.close(); }
+           const progress = [];
+           const expectedPages = database.prepare("PRAGMA page_count").get().page_count;
+           assert.equal(await backupNodeSqliteDatabase(database, ${JSON.stringify(`${target}.progress`)}, info => progress.push(info)), expectedPages);
+           assert.deepEqual(progress.at(-1), { totalPages: expectedPages, remainingPages: 0 });
            database.exec("ROLLBACK;");
            database.close();
-           await assert.rejects(backupNodeSqliteDatabase(database, ${JSON.stringify(target)}), { code: "ERR_INVALID_STATE" });
+           const failureProgress = [];
+           await assert.rejects(backupNodeSqliteDatabase(database, ${JSON.stringify(target)}, info => failureProgress.push(info)), { code: "ERR_INVALID_STATE" });
+           assert.deepEqual(failureProgress, []);
 
            let nativeFailure;
            sqlite.backup = async (...args) => {

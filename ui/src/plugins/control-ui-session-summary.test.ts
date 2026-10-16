@@ -8,11 +8,12 @@ import {
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
-import "./control-ui-session-summary.ts";
+import "./control-ui-session-summary.tsx";
 
 const gateways: ApplicationGateway[] = [];
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
   for (const gateway of gateways.splice(0)) {
     gateway.stop();
   }
@@ -98,6 +99,9 @@ describe("plugin session summary freshness", () => {
       requests[0]!.resolve(history("Previous owner transcript"));
       await vi.waitFor(() => expect(element.textContent).toContain("Previous owner transcript"));
       await element.updateComplete;
+      const committedText: string[] = [];
+      const observer = new MutationObserver(() => committedText.push(element.textContent ?? ""));
+      observer.observe(element, { childList: true, characterData: true, subtree: true });
       let nextRequests = requests;
       if (change === "gateway") {
         const replacement = setup();
@@ -112,13 +116,10 @@ describe("plugin session summary freshness", () => {
         current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
         current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
       }
-      const committedText: string[] = [];
-      element.addController({
-        hostUpdated: () => committedText.push(element.textContent ?? ""),
-      });
       await vi.waitFor(() => expect(nextRequests).toHaveLength(2));
       expect(committedText.length).toBeGreaterThan(0);
       expect(committedText.every((text) => !text.includes("Previous owner transcript"))).toBe(true);
+      observer.disconnect();
       nextRequests[1]!.resolve(history("Current owner transcript"));
       await vi.waitFor(() => expect(element.textContent).toContain("Current owner transcript"));
     },
@@ -209,7 +210,7 @@ describe("plugin session summary freshness", () => {
       current().request.mock.calls.filter(([method]) => method === "progressCard.get");
     expect(progressRequests()).toHaveLength(1);
 
-    element.requestUpdate();
+    element.session = { ...element.session! };
     element.remove();
     await element.updateComplete;
     current().opts.onEvent?.(
@@ -220,7 +221,7 @@ describe("plugin session summary freshness", () => {
     expect(requests).toHaveLength(1);
 
     document.body.append(element);
-    element.requestUpdate();
+    element.session = { ...element.session! };
     await element.updateComplete;
     await vi.waitFor(() => expect(progressRequests()).toHaveLength(2));
     await vi.waitFor(() => expect(requests).toHaveLength(2));

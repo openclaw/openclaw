@@ -10,16 +10,9 @@ import {
   stringFlag,
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mts";
+import { sleep as delay } from "./lib/sleep.mjs";
 
-type Options = {
-  beta: string;
-  model: string;
-  providerMode: string;
-  ref: string;
-  repo: string;
-  skipParallels: boolean;
-  skipTelegram: boolean;
-};
+type Options = ReturnType<typeof parseArgs>;
 
 export type RunOptions = {
   capture?: boolean;
@@ -56,11 +49,11 @@ Options:
 `;
 }
 
-export function parseArgs(argv: string[]): Options {
+export function parseArgs(argv: string[]) {
   const args = stripLeadingPackageManagerSeparator(argv);
   const terminatorIndex = args.indexOf("--");
   const cliArgs = terminatorIndex === -1 ? args : args.slice(0, terminatorIndex);
-  const options: Options = {
+  const options = {
     beta: "beta",
     model: "openai/gpt-5.4",
     providerMode: "mock-openai",
@@ -300,12 +293,7 @@ export async function pollRun(
   const started = (options.now ?? Date.now)();
   const timeoutMs = Math.max(1, options.timeoutMs ?? TELEGRAM_POLL_TIMEOUT_MS);
   const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? TELEGRAM_POLL_INTERVAL_MS);
-  const sleep =
-    options.sleep ??
-    ((ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const sleep = options.sleep ?? delay;
   const readRun =
     options.readRun ??
     ((currentRepo: string, currentRunId: string) =>

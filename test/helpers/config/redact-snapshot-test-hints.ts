@@ -6,7 +6,7 @@ type ConfigUiHints = NonNullable<
 
 export const redactSnapshotTestHints: ConfigUiHints = {
   "memory.search.remote.apiKey": { sensitive: true },
-  "agents.list[].memory.search.remote.apiKey": { sensitive: true },
+  "agents.entries.*.memory.search.remote.apiKey": { sensitive: true },
   "broadcast.apiToken[]": { sensitive: true },
   "env.GROQ_API_KEY": { sensitive: true },
   "gateway.auth.password": { sensitive: true },

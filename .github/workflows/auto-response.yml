@@ -15,9 +15,8 @@ permissions: {}
 
 jobs:
   auto-response:
-    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
     if: >-
-      ${{ (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (
+      ${{ (
         !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association || github.event.pull_request.author_association) &&
         (github.event_name != 'issue_comment' || github.event.comment.user.type != 'Bot') &&
         (github.event.action != 'edited' || !github.event.changes ||

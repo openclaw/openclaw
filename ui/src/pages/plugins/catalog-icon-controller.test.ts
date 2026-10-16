@@ -54,7 +54,9 @@ describe("catalog icon lifecycle", () => {
     const published: Array<Record<string, string>> = [];
     const controller = createController((urls) => published.push(urls));
 
-    controller.syncCatalog([entry]);
+    controller.syncCatalog([entry], [], new Set());
+    expect(fetchIcon).not.toHaveBeenCalled();
+    controller.syncCatalog([entry], [], new Set([entry.id]));
     expect(controller.isLoading(entry.catalog.imageUrl)).toBe(true);
     await vi.waitFor(() =>
       expect(published.at(-1)).toEqual({
@@ -63,6 +65,10 @@ describe("catalog icon lifecycle", () => {
     );
 
     expect(controller.isLoading(entry.catalog.imageUrl)).toBe(false);
+    controller.syncCatalog([entry], [], new Set());
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    controller.syncCatalog([entry], [], new Set([entry.id]));
+    expect(fetchIcon).toHaveBeenCalledOnce();
     controller.syncCatalog([]);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:test-icon");
     expect(published.at(-1)).toEqual({});

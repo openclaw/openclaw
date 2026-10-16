@@ -4,27 +4,22 @@ import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withCurrentDevicePairingSnapshot } from "../infra/device-pairing-worker.js";
 import {
-  WEB_PUSH_USER_PREFERENCES_KEY,
   isWebPushQuietHours,
   normalizeWebPushDisplayLabel,
-  resolveEffectiveWebPushPreferences,
   webPushAgentAllowed,
   webPushCategoryEnabled,
 } from "../infra/push-web-preferences.js";
 import {
   deleteWebPushApprovalDeliveryTargets,
   hasBoundWebPushSubscriptions,
-  listBoundWebPushSubscriptions,
   listTerminalWebPushApprovalDeliveryIds,
   listWebPushApprovalDeliveryTargets,
   prepareWebPushApprovalDeliveries,
   prepareWebPushNotificationSender,
   type BoundWebPushSubscription,
 } from "../infra/push-web.js";
-import { getUserPreferences } from "../state/user-preferences.js";
-import { resolveUserProfileId } from "../state/user-profiles.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import { APPROVALS_SCOPE } from "./method-scopes.js";
@@ -38,7 +33,10 @@ import {
 import {
   listCurrentWebPushTargets,
   webPushTargetClient,
+  webPushSessionAccess,
   withCurrentWebPushAuthority,
+  type CurrentWebPushTarget,
+  type WebPushAuthority,
 } from "./web-push-authority.js";
 
 const WEB_PUSH_APPROVAL_TIMEOUT_MS = 10_000;
@@ -53,54 +51,25 @@ type ApprovalRequestWebPushDelivery = {
   sender: PreparedWebPushNotificationSender;
 };
 
-function approvalPreferences(params: {
-  subscription: BoundWebPushSubscription;
-  stateDir?: string;
-}) {
-  const profileId = params.subscription.userProfileId
-    ? resolveUserProfileId(params.subscription.userProfileId)
-    : undefined;
-  const storedUser = profileId
-    ? getUserPreferences(
-        profileId,
-        [WEB_PUSH_USER_PREFERENCES_KEY],
-        params.stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } } : {},
-      )[WEB_PUSH_USER_PREFERENCES_KEY]
-    : undefined;
-  return resolveEffectiveWebPushPreferences({
-    user: storedUser,
-    device: params.subscription.devicePreferences,
-  });
-}
-
 function approvalNotificationCopy(params: {
   terminal: boolean;
-  preferences: ReturnType<typeof approvalPreferences>;
+  preferences: CurrentWebPushTarget["preferences"];
   agentLabel?: string;
 }) {
   const label = params.preferences.label ? `${params.preferences.label} · ` : "";
   const agent = params.agentLabel ? ` for ${params.agentLabel}` : "";
-  if (params.terminal) {
-    return {
-      title: `${label}OpenClaw approval updated`,
-      body:
-        params.preferences.detailLevel === "private"
-          ? "This approval is no longer pending."
-          : `Approval${agent} is no longer pending.`,
-    };
-  }
+  const privateCopy = params.preferences.detailLevel === "private";
   return {
-    title: `${label}OpenClaw approval requested`,
-    body:
-      params.preferences.detailLevel === "private"
+    title: `${label}OpenClaw approval ${params.terminal ? "updated" : "requested"}`,
+    body: params.terminal
+      ? privateCopy
+        ? "This approval is no longer pending."
+        : `Approval${agent} is no longer pending.`
+      : privateCopy
         ? "Open OpenClaw to review this request."
         : `Open OpenClaw to review an approval${agent}.`,
   };
 }
-
-type ApprovalWebPushDeliveryState = {
-  requestPushPromise: Promise<ApprovalRequestWebPushDelivery | null>;
-};
 
 function approvalWebPushTag(approvalId: string): string {
   return `openclaw-approval-${approvalId}`;
@@ -111,6 +80,42 @@ function approvalWebPushTopic(approvalId: string): string {
     .update(`openclaw-approval:${approvalId}`)
     .digest("base64url")
     .slice(0, 32);
+}
+
+type ApprovalNotificationGroup = {
+  copy: ReturnType<typeof approvalNotificationCopy>;
+  subscriptions: BoundWebPushSubscription[];
+};
+
+function sendApprovalNotificationGroups(params: {
+  sender: PreparedWebPushNotificationSender;
+  cfg: OpenClawConfig;
+  approvalId: string;
+  ttlSeconds: number;
+  groups: Iterable<ApprovalNotificationGroup>;
+}) {
+  return Promise.all(
+    [...params.groups].map(({ copy, subscriptions }) =>
+      params.sender({
+        subscriptions,
+        payload: {
+          ...copy,
+          renotify: false,
+          tag: approvalWebPushTag(params.approvalId),
+          url: resolveControlUiWebPushUrl(
+            params.cfg,
+            `approve/${encodeURIComponent(params.approvalId)}`,
+          ),
+        },
+        deliveryOptions: {
+          TTL: params.ttlSeconds,
+          urgency: "high",
+          timeout: WEB_PUSH_APPROVAL_TIMEOUT_MS,
+          topic: approvalWebPushTopic(params.approvalId),
+        },
+      }),
+    ),
+  );
 }
 
 async function deliverBoundApprovalWebPush<TPayload>(params: {
@@ -125,49 +130,33 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
     return null;
   }
   const sendWebPushNotifications = await prepareWebPushNotificationSender(params.stateDir);
-  const initialSubscriptions = await listBoundWebPushSubscriptions(params.stateDir);
-  const initialAuthority = await withCurrentDevicePairingSnapshot(
-    params.stateDir,
-    (pairedDevices) => ({
-      start: () => {
-        const cfg = params.getRuntimeConfig();
-        return {
-          cfg,
-          targets: listCurrentWebPushTargets({
-            cfg,
-            subscriptions: initialSubscriptions,
-            requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
-            pairedDevices,
-          }),
-        };
-      },
-    }),
-  );
-  if (!initialAuthority) {
-    return null;
-  }
-  const eligibleSubscriptions = (
-    candidates: ReturnType<typeof listCurrentWebPushTargets>,
-    cfg: OpenClawConfig,
-  ) =>
-    candidates.flatMap((target) => {
-      const subscription = target.subscription;
-      const preferences = approvalPreferences({ subscription, stateDir: params.stateDir });
-      const source = isRecord(params.record.request) ? params.record.request : undefined;
-      const agentId = normalizeOptionalString(source?.agentId);
-      return webPushCategoryEnabled(preferences, "approval-requested") &&
+  const source = isRecord(params.record.request) ? params.record.request : undefined;
+  const agentId = normalizeOptionalString(source?.agentId);
+  const sessionKey = normalizeOptionalString(source?.sessionKey);
+  const preparation = { ...params, agentId, sessionKeys: sessionKey ? [sessionKey] : [] };
+  const eligibleTargets = (authority: WebPushAuthority) =>
+    listCurrentWebPushTargets({
+      ...authority,
+      requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
+    }).filter((target) => {
+      const { preferences } = target;
+      const client = webPushTargetClient(target);
+      return (
+        webPushCategoryEnabled(preferences, "approval-requested") &&
         !isWebPushQuietHours(preferences) &&
         webPushAgentAllowed(preferences, agentId) &&
         isApprovalRecordVisibleToClient({
           record: params.record,
-          client: webPushTargetClient(target),
-          cfg,
+          client,
+          cfg: authority.cfg,
+          prepared: webPushSessionAccess(authority, client),
         })
-        ? [subscription]
-        : [];
+      );
     });
-  const subscriptions = eligibleSubscriptions(initialAuthority.targets, initialAuthority.cfg);
-  if (subscriptions.length === 0) {
+  const subscriptions = await withCurrentWebPushAuthority(preparation, (authority) => ({
+    start: () => eligibleTargets(authority).map((target) => target.subscription),
+  }));
+  if (!subscriptions?.length) {
     return null;
   }
 
@@ -187,81 +176,49 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
       .filter((subscription) => preparedIds.has(subscription.subscriptionId))
       .map((subscription) => [subscription.subscriptionId, subscription]),
   );
-  const groupedResults = await withCurrentWebPushAuthority(
-    params.stateDir,
-    (currentSubscriptions, pairedDevices) => {
-      const cfg = params.getRuntimeConfig();
-      const currentEligibleSubscriptions = eligibleSubscriptions(
-        listCurrentWebPushTargets({
+  const groupedResults = await withCurrentWebPushAuthority(preparation, (authority) => {
+    const { cfg } = authority;
+    const currentEligibleTargets = eligibleTargets({
+      ...authority,
+      subscriptions: authority.subscriptions.filter((subscription) => {
+        const prepared = preparedById.get(subscription.subscriptionId);
+        return (
+          prepared?.deviceId === subscription.deviceId &&
+          prepared.userProfileId === subscription.userProfileId
+        );
+      }),
+    });
+    // Receipt persistence can yield. Recheck recipients and approval lifetime in
+    // the network continuation so revoked or resolved requests never dispatch.
+    const now = Date.now();
+    if (
+      currentEligibleTargets.length === 0 ||
+      params.record.resolvedAtMs !== undefined ||
+      params.record.expiresAtMs <= now
+    ) {
+      return undefined;
+    }
+    const ttlSeconds = Math.ceil((params.record.expiresAtMs - now) / 1_000);
+    const agentLabel = normalizeWebPushDisplayLabel(agentId);
+    const requestGroups = new Map<string, ApprovalNotificationGroup>();
+    for (const { subscription, preferences } of currentEligibleTargets) {
+      const copy = approvalNotificationCopy({ terminal: false, preferences, agentLabel });
+      const key = JSON.stringify(copy);
+      const group = requestGroups.get(key) ?? { copy, subscriptions: [] };
+      group.subscriptions.push(subscription);
+      requestGroups.set(key, group);
+    }
+    return {
+      start: () =>
+        sendApprovalNotificationGroups({
+          sender: sendWebPushNotifications,
           cfg,
-          requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
-          pairedDevices,
-          subscriptions: currentSubscriptions.filter((subscription) => {
-            const prepared = preparedById.get(subscription.subscriptionId);
-            return (
-              prepared?.deviceId === subscription.deviceId &&
-              prepared.userProfileId === subscription.userProfileId
-            );
-          }),
+          approvalId: params.record.id,
+          ttlSeconds,
+          groups: requestGroups.values(),
         }),
-        cfg,
-      );
-      // Receipt persistence can yield. Recheck recipients and approval lifetime in
-      // the network continuation so revoked or resolved requests never dispatch.
-      const now = Date.now();
-      if (
-        currentEligibleSubscriptions.length === 0 ||
-        params.record.resolvedAtMs !== undefined ||
-        params.record.expiresAtMs <= now
-      ) {
-        return undefined;
-      }
-      const ttlSeconds = Math.ceil((params.record.expiresAtMs - now) / 1_000);
-      const source = isRecord(params.record.request) ? params.record.request : undefined;
-      const agentId = normalizeOptionalString(source?.agentId);
-      const agentLabel = normalizeWebPushDisplayLabel(agentId);
-      const requestGroups = new Map<
-        string,
-        {
-          copy: ReturnType<typeof approvalNotificationCopy>;
-          subscriptions: BoundWebPushSubscription[];
-        }
-      >();
-      for (const subscription of currentEligibleSubscriptions) {
-        const preferences = approvalPreferences({ subscription, stateDir: params.stateDir });
-        const copy = approvalNotificationCopy({ terminal: false, preferences, agentLabel });
-        const key = JSON.stringify(copy);
-        const group = requestGroups.get(key) ?? { copy, subscriptions: [] };
-        group.subscriptions.push(subscription);
-        requestGroups.set(key, group);
-      }
-      return {
-        start: () =>
-          Promise.all(
-            [...requestGroups.values()].map(({ copy, subscriptions: groupedSubscriptions }) =>
-              sendWebPushNotifications({
-                subscriptions: groupedSubscriptions,
-                payload: {
-                  ...copy,
-                  renotify: false,
-                  tag: approvalWebPushTag(params.record.id),
-                  url: resolveControlUiWebPushUrl(
-                    cfg,
-                    `approve/${encodeURIComponent(params.record.id)}`,
-                  ),
-                },
-                deliveryOptions: {
-                  TTL: ttlSeconds,
-                  urgency: "high",
-                  timeout: WEB_PUSH_APPROVAL_TIMEOUT_MS,
-                  topic: approvalWebPushTopic(params.record.id),
-                },
-              }),
-            ),
-          ),
-      };
-    },
-  );
+    };
+  });
   if (!groupedResults) {
     return null;
   }
@@ -274,12 +231,7 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
     subscriptionIds: definitelyRejectedSubscriptionIds,
     stateDir: params.stateDir,
   });
-  const possibleDeliverySubscriptionIds = new Set(
-    results
-      .filter((result) => result.ok || result.statusCode === undefined)
-      .map((result) => result.subscriptionId),
-  );
-  return possibleDeliverySubscriptionIds.size > 0
+  return results.some((result) => result.ok || result.statusCode === undefined)
     ? { record: params.record, sender: sendWebPushNotifications }
     : null;
 }
@@ -290,180 +242,156 @@ export function createApprovalWebPushDelivery(params: {
   log?: { warn?: (message: string) => void };
   stateDir?: string;
 }) {
-  const deliveriesByApprovalId = new Map<string, ApprovalWebPushDeliveryState>();
+  const deliveriesByApprovalId = new Map<string, Promise<ApprovalRequestWebPushDelivery | null>>();
   const terminalDeliveriesByApprovalId = new Map<string, Promise<void>>();
 
-  const handleTerminal = (approval: { id: string }): Promise<void> => {
-    const active = terminalDeliveriesByApprovalId.get(approval.id);
-    if (active) {
-      return active;
-    }
-    const terminalDelivery = (async () => {
-      const deliveryState = deliveriesByApprovalId.get(approval.id);
-      deliveriesByApprovalId.delete(approval.id);
-      const requestDelivery = deliveryState ? await deliveryState.requestPushPromise : null;
-      const sender =
-        requestDelivery?.sender ?? (await prepareWebPushNotificationSender(params.stateDir));
-      const durableLookup = requestDelivery
-        ? null
-        : await getOperatorApprovalDetailed({
-            id: approval.id,
-            databaseOptions: params.stateDir
-              ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } }
-              : undefined,
-          });
-      const durableRecord = durableLookup?.outcome === "found" ? durableLookup.record : null;
-      const recordedSubscriptions = await listWebPushApprovalDeliveryTargets({
-        approvalId: approval.id,
-        stateDir: params.stateDir,
-      });
-      if (recordedSubscriptions.length === 0) {
-        return;
-      }
-      const subscriptions = recordedSubscriptions;
-      const suppressedSubscriptionIds: string[] = [];
-      const groupedResults = await withCurrentWebPushAuthority(
-        params.stateDir,
-        (currentSubscriptions, pairedDevices) => {
-          const cfg = params.getRuntimeConfig();
-          const currentTargets = listCurrentWebPushTargets({
-            cfg,
-            requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
-            pairedDevices,
-            subscriptions: currentSubscriptions,
-          });
-          const currentTargetsBySubscriptionId = new Map(
-            currentTargets.map((target) => [target.subscription.subscriptionId, target]),
-          );
-          const terminalGroups = new Map<
-            string,
-            {
-              copy: ReturnType<typeof approvalNotificationCopy>;
-              subscriptions: BoundWebPushSubscription[];
-            }
-          >();
-          for (const subscription of subscriptions) {
-            const current = currentTargetsBySubscriptionId.get(subscription.subscriptionId);
-            const target =
-              current?.subscription.deviceId === subscription.deviceId &&
-              current.subscription.userProfileId === subscription.userProfileId
-                ? current
-                : undefined;
-            const client = target ? webPushTargetClient(target) : null;
-            const visible = requestDelivery
-              ? Boolean(
-                  client &&
-                  isApprovalRecordVisibleToClient({
-                    record: requestDelivery.record,
-                    client,
-                    cfg,
-                  }),
-                )
-              : Boolean(
-                  client &&
-                  durableRecord &&
-                  canAccessOperatorApproval({
-                    client,
-                    binding: { reviewerDeviceIds: durableRecord.reviewerDeviceIds },
-                  }) &&
-                  canAccessApprovalSession({
-                    cfg,
-                    client,
-                    sessionKey: durableRecord.source.sessionKey,
-                    agentId: durableRecord.source.agentId,
-                  }),
-                );
-            const preferences = approvalPreferences({
-              subscription: target?.subscription ?? subscription,
-              stateDir: params.stateDir,
+  const handleTerminal = (approval: { id: string }): Promise<void> =>
+    getOrCreatePromise(
+      terminalDeliveriesByApprovalId,
+      approval.id,
+      async () => {
+        const requestPush = deliveriesByApprovalId.get(approval.id);
+        deliveriesByApprovalId.delete(approval.id);
+        const requestDelivery = requestPush ? await requestPush : null;
+        const sender =
+          requestDelivery?.sender ?? (await prepareWebPushNotificationSender(params.stateDir));
+        const durableLookup = requestDelivery
+          ? null
+          : await getOperatorApprovalDetailed({
+              id: approval.id,
+              databaseOptions: params.stateDir
+                ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } }
+                : undefined,
             });
-            if (!target || !visible) {
-              suppressedSubscriptionIds.push(subscription.subscriptionId);
-              continue;
+        const durableRecord = durableLookup?.outcome === "found" ? durableLookup.record : null;
+        const subscriptions = await listWebPushApprovalDeliveryTargets({
+          approvalId: approval.id,
+          stateDir: params.stateDir,
+        });
+        if (subscriptions.length === 0) {
+          return;
+        }
+        const suppressedSubscriptionIds: string[] = [];
+        const source =
+          requestDelivery && isRecord(requestDelivery.record.request)
+            ? requestDelivery.record.request
+            : durableRecord?.source;
+        const sessionKey = normalizeOptionalString(source?.sessionKey);
+        const groupedResults = await withCurrentWebPushAuthority(
+          {
+            ...params,
+            sessionKeys: sessionKey ? [sessionKey] : [],
+            agentId: normalizeOptionalString(source?.agentId),
+          },
+          (authority) => {
+            const { cfg } = authority;
+            const currentTargets = listCurrentWebPushTargets({
+              ...authority,
+              requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
+            });
+            const currentTargetsBySubscriptionId = new Map(
+              currentTargets.map((target) => [target.subscription.subscriptionId, target]),
+            );
+            const terminalGroups = new Map<string, ApprovalNotificationGroup>();
+            for (const subscription of subscriptions) {
+              const current = currentTargetsBySubscriptionId.get(subscription.subscriptionId);
+              const target =
+                current?.subscription.deviceId === subscription.deviceId &&
+                current.subscription.userProfileId === subscription.userProfileId
+                  ? current
+                  : undefined;
+              const client = target ? webPushTargetClient(target) : null;
+              const visible = requestDelivery
+                ? Boolean(
+                    client &&
+                    isApprovalRecordVisibleToClient({
+                      record: requestDelivery.record,
+                      client,
+                      cfg,
+                      prepared: webPushSessionAccess(authority, client),
+                    }),
+                  )
+                : Boolean(
+                    client &&
+                    durableRecord &&
+                    canAccessOperatorApproval({
+                      client,
+                      binding: { reviewerDeviceIds: durableRecord.reviewerDeviceIds },
+                    }) &&
+                    canAccessApprovalSession({
+                      cfg,
+                      client,
+                      sessionKey: durableRecord.source.sessionKey,
+                      agentId: durableRecord.source.agentId,
+                      prepared: webPushSessionAccess(authority, client),
+                    }),
+                  );
+              if (!target || !visible) {
+                suppressedSubscriptionIds.push(subscription.subscriptionId);
+                continue;
+              }
+              const copy = approvalNotificationCopy({
+                terminal: true,
+                preferences: target.preferences,
+              });
+              const key = JSON.stringify(copy);
+              const group = terminalGroups.get(key) ?? { copy, subscriptions: [] };
+              group.subscriptions.push(target.subscription);
+              terminalGroups.set(key, group);
             }
-            const copy = approvalNotificationCopy({ terminal: true, preferences });
-            const key = JSON.stringify(copy);
-            const group = terminalGroups.get(key) ?? { copy, subscriptions: [] };
-            group.subscriptions.push(target.subscription);
-            terminalGroups.set(key, group);
-          }
-          return {
-            start: () =>
-              Promise.all(
-                [...terminalGroups.values()].map(({ copy, subscriptions: groupedSubscriptions }) =>
-                  sender({
-                    subscriptions: groupedSubscriptions,
-                    payload: {
-                      ...copy,
-                      renotify: false,
-                      tag: approvalWebPushTag(approval.id),
-                      url: resolveControlUiWebPushUrl(
-                        cfg,
-                        `approve/${encodeURIComponent(approval.id)}`,
-                      ),
-                    },
-                    deliveryOptions: {
-                      TTL: WEB_PUSH_TERMINAL_TTL_SECONDS,
-                      urgency: "high",
-                      timeout: WEB_PUSH_APPROVAL_TIMEOUT_MS,
-                      topic: approvalWebPushTopic(approval.id),
-                    },
-                  }),
-                ),
-              ),
-          };
-        },
-      );
-      if (!groupedResults) {
-        return;
-      }
-      const results = groupedResults.flat();
-      const successfulSubscriptionIds = results
-        .filter((result) => result.ok)
-        .map((result) => result.subscriptionId);
-      await deleteWebPushApprovalDeliveryTargets({
-        approvalId: approval.id,
-        subscriptionIds: [...successfulSubscriptionIds, ...suppressedSubscriptionIds],
-        stateDir: params.stateDir,
-      });
-      const completedSubscriptionCount =
-        successfulSubscriptionIds.length + suppressedSubscriptionIds.length;
-      if (completedSubscriptionCount < subscriptions.length) {
-        params.log?.warn?.(
-          `approval Web Push terminal replacement reached ${successfulSubscriptionIds.length}/${subscriptions.length - suppressedSubscriptionIds.length} eligible browsers approvalId=${approval.id}`,
+            return {
+              start: () =>
+                sendApprovalNotificationGroups({
+                  sender,
+                  cfg,
+                  approvalId: approval.id,
+                  ttlSeconds: WEB_PUSH_TERMINAL_TTL_SECONDS,
+                  groups: terminalGroups.values(),
+                }),
+            };
+          },
         );
-      }
-    })();
-    terminalDeliveriesByApprovalId.set(approval.id, terminalDelivery);
-    const releaseTerminalDelivery = () => {
-      if (terminalDeliveriesByApprovalId.get(approval.id) === terminalDelivery) {
-        terminalDeliveriesByApprovalId.delete(approval.id);
-      }
-    };
-    void terminalDelivery.then(releaseTerminalDelivery, releaseTerminalDelivery);
-    return terminalDelivery;
-  };
+        if (!groupedResults) {
+          return;
+        }
+        const results = groupedResults.flat();
+        const successfulSubscriptionIds = results
+          .filter((result) => result.ok)
+          .map((result) => result.subscriptionId);
+        await deleteWebPushApprovalDeliveryTargets({
+          approvalId: approval.id,
+          subscriptionIds: [...successfulSubscriptionIds, ...suppressedSubscriptionIds],
+          stateDir: params.stateDir,
+        });
+        const completedSubscriptionCount =
+          successfulSubscriptionIds.length + suppressedSubscriptionIds.length;
+        if (completedSubscriptionCount < subscriptions.length) {
+          params.log?.warn?.(
+            `approval Web Push terminal replacement reached ${successfulSubscriptionIds.length}/${subscriptions.length - suppressedSubscriptionIds.length} eligible browsers approvalId=${approval.id}`,
+          );
+        }
+      },
+      { evictOnSettled: true },
+    );
 
   return {
     /** Sends a request notification only when at least one browser has a durable binding. */
     handleRequested<TPayload>(record: ExecApprovalRecord<TPayload>): Promise<boolean> {
-      const deliveryState: ApprovalWebPushDeliveryState = {
-        requestPushPromise: deliverBoundApprovalWebPush({
-          record,
-          getRuntimeConfig: params.getRuntimeConfig,
-          stateDir: params.stateDir,
-        }),
-      };
-      deliveriesByApprovalId.set(record.id, deliveryState);
-      return deliveryState.requestPushPromise.then(
+      const requestPush = deliverBoundApprovalWebPush({
+        record,
+        getRuntimeConfig: params.getRuntimeConfig,
+        stateDir: params.stateDir,
+      });
+      deliveriesByApprovalId.set(record.id, requestPush);
+      return requestPush.then(
         (delivery) => {
-          if (!delivery && deliveriesByApprovalId.get(record.id) === deliveryState) {
+          if (!delivery && deliveriesByApprovalId.get(record.id) === requestPush) {
             deliveriesByApprovalId.delete(record.id);
           }
           return Boolean(delivery);
         },
         (error: unknown) => {
-          if (deliveriesByApprovalId.get(record.id) === deliveryState) {
+          if (deliveriesByApprovalId.get(record.id) === requestPush) {
             deliveriesByApprovalId.delete(record.id);
           }
           throw error;

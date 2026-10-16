@@ -1,10 +1,10 @@
-// Document Extract plugin module implements document extractor behavior.
 import type { PdfDocument, PdfEngine, RenderOptions } from "clawpdf";
 import type {
   DocumentExtractedImage,
   DocumentExtractionRequest,
   DocumentExtractionResult,
 } from "openclaw/plugin-sdk/document-extractor";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WorkerTaskControl } from "openclaw/plugin-sdk/worker-task-server";
 
@@ -74,38 +74,23 @@ function pageRenderOptions(
   };
 }
 
-function isPdfPasswordError(err: unknown): boolean {
-  return err !== null && typeof err === "object" && "code" in err && err.code === "password";
-}
-
-async function openPdfDocument(params: {
-  engine: PdfEngine;
-  input: Uint8Array;
-  password?: string;
-}): Promise<PdfDocument> {
-  try {
-    return params.password
-      ? await params.engine.open(params.input, { password: params.password })
-      : await params.engine.open(params.input);
-  } catch (err) {
-    if (isPdfPasswordError(err)) {
-      throw new Error("PDF requires a password or password is incorrect.", { cause: err });
-    }
-    throw err;
-  }
-}
-
 export async function extractPdfContent(
   request: DocumentExtractionRequest,
   control: WorkerTaskControl,
 ): Promise<DocumentExtractionResult> {
   const engine = await loadPdfEngine();
   control.throwIfCancelled();
-  const pdf = await openPdfDocument({
-    engine,
-    input: request.buffer,
-    ...(request.password ? { password: request.password } : {}),
-  });
+  let pdf: PdfDocument;
+  try {
+    pdf = request.password
+      ? await engine.open(request.buffer, { password: request.password })
+      : await engine.open(request.buffer);
+  } catch (err) {
+    if (extractErrorCode(err) === "password") {
+      throw new Error("PDF requires a password or password is incorrect.", { cause: err });
+    }
+    throw err;
+  }
   try {
     control.throwIfCancelled();
     const pages = request.pageNumbers
@@ -154,6 +139,9 @@ export async function extractPdfContent(
     // Share the aggregate pixel budget only across pages needing image fallback.
     try {
       const { encodePng, PdfError } = await import("clawpdf");
+      if (!Number.isFinite(request.maxPixels)) {
+        throw new PdfError("budget", "maxPixels must be a finite positive number");
+      }
       const images: DocumentExtractedImage[] = [];
       let remainingPixels = request.maxPixels;
       for (const [index, pageNumber] of imagePages.entries()) {
@@ -164,9 +152,6 @@ export async function extractPdfContent(
         }
         const pagesRemaining = imagePages.length - index;
         const maxPixelsPerPage = Math.max(1, Math.ceil(remainingPixels / pagesRemaining));
-        if (!Number.isFinite(maxPixelsPerPage)) {
-          throw new PdfError("budget", "maxPixels must be a finite positive number");
-        }
         const page = pdf.page(pageNumber);
         const plan = pageRenderOptions(page.width, page.height, maxPixelsPerPage);
         if (!plan) {

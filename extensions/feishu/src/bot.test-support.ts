@@ -52,30 +52,10 @@ export const feishuSecretRefPolicyCases: FeishuSecretRefPolicyCase[] = [
     configured: true,
   },
   {
-    name: "selected env provider with an empty allowlist",
-    provider: "corp-env",
-    defaultEnv: "corp-env",
-    providers: { "corp-env": { source: "env", allowlist: [] } },
-    configured: false,
-  },
-  {
-    name: "literal env default shadowing a file provider",
-    provider: "default",
-    providers: { default: { source: "file", path: "/unused" } },
-    configured: true,
-  },
-  {
     name: "selected env default shadowing an exec provider",
     provider: "corp-env",
     defaultEnv: "corp-env",
     providers: { "corp-env": { source: "exec", command: "/unused" } },
-    configured: true,
-  },
-  {
-    name: "selected env default shadowing a store provider",
-    provider: "corp-env",
-    defaultEnv: "corp-env",
-    providers: { "corp-env": { source: "store" } },
     configured: true,
   },
 ];

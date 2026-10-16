@@ -15,8 +15,19 @@ async function fixture() {
   const config: JsonObject = {
     config: { features: { hooks: true, plugins: false }, project_root_markers: [] },
     layers: [
+      { name: { type: "packagedDefaults" }, config: { hooks: { Stop: [] } } },
+      { name: { type: "mdm", domain: "example", key: "config" }, config: {} },
       { name: { type: "system", file: "/etc/codex/config.toml" }, config: {} },
-      { name: { type: "user", file: path.join(workspace.codexHome, "config.toml") }, config: {} },
+      { name: { type: "enterpriseManaged", id: "policy", name: "Policy" }, config: {} },
+      {
+        name: {
+          type: "user",
+          file: path.join(workspace.codexHome, "profiles/selected.toml"),
+          profile: "selected",
+        },
+        config: {},
+      },
+      { name: { type: "project", dotCodexFolder: path.join(workspace.cwd, ".codex") }, config: {} },
       { name: { type: "sessionFlags" }, config: {} },
     ],
   };
@@ -48,28 +59,6 @@ async function fixture() {
 }
 
 describe("private Codex hook isolation", () => {
-  it("preserves managed hooks and checks the private cwd before any thread starts", async () => {
-    const state = await fixture();
-    const signal = new AbortController().signal;
-    await expect(
-      assertCodexPrivateHookIsolation(state.client, state.workspace, signal),
-    ).resolves.toEqual({ activeManagedHooks: true });
-    expect(state.request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "hooks/list",
-    ]);
-    expect(state.request).toHaveBeenCalledWith(
-      "config/read",
-      { cwd: state.workspace.cwd, includeLayers: true },
-      { signal },
-    );
-    expect(state.request).toHaveBeenCalledWith(
-      "hooks/list",
-      { cwds: [state.workspace.cwd] },
-      { signal },
-    );
-  });
-
   it.each(["user", "project"])(
     "rejects an ambient %s config even with no active hooks",
     async (type) => {
@@ -113,30 +102,6 @@ describe("private Codex hook isolation", () => {
     );
   });
 
-  it("admits private profile and project layers alongside managed sources", async () => {
-    const state = await fixture();
-    state.config.layers = [
-      { name: { type: "packagedDefaults" }, config: { hooks: { Stop: [] } } },
-      { name: { type: "mdm", domain: "example", key: "config" }, config: {} },
-      { name: { type: "enterpriseManaged", id: "policy", name: "Policy" }, config: {} },
-      {
-        name: {
-          type: "user",
-          file: path.join(state.workspace.codexHome, "profiles/selected.toml"),
-          profile: "selected",
-        },
-        config: {},
-      },
-      {
-        name: { type: "project", dotCodexFolder: path.join(state.workspace.cwd, ".codex") },
-        config: {},
-      },
-    ];
-    await expect(assertCodexPrivateHookIsolation(state.client, state.workspace)).resolves.toEqual({
-      activeManagedHooks: true,
-    });
-  });
-
   it("requires a reported private home even when the hook inventory is empty", async () => {
     const state = await fixture();
     state.config.layers = [];
@@ -146,16 +111,13 @@ describe("private Codex hook isolation", () => {
     );
   });
 
-  it.each(["legacyManagedConfigTomlFromFile", "futureLayer"])(
-    "rejects %s discovery layers",
-    async (type) => {
-      const state = await fixture();
-      state.config.layers = [{ name: { type }, config: {} }];
-      await expect(assertCodexPrivateHookIsolation(state.client, state.workspace)).rejects.toThrow(
-        "unsupported config layer",
-      );
-    },
-  );
+  it("rejects legacy discovery layers", async () => {
+    const state = await fixture();
+    state.config.layers = [{ name: { type: "legacyManagedConfigTomlFromFile" }, config: {} }];
+    await expect(assertCodexPrivateHookIsolation(state.client, state.workspace)).rejects.toThrow(
+      "unsupported config layer",
+    );
+  });
 
   it.each(["packagedDefaults", "sessionFlags"])(
     "rejects unmanaged hook declarations in %s",

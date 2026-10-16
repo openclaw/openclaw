@@ -43,6 +43,8 @@ export function restoreEmptyV21StorageForHistoricalFixture(database: DatabaseSyn
     "memory_index_chunks",
     "memory_embedding_cache",
     "session_transcript_fts_rows",
+    "session_entry_snapshots",
+    "context_engine_turn_outbox",
   ];
   for (const table of tables) {
     if (database.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get()) {
@@ -55,6 +57,12 @@ export function restoreEmptyV21StorageForHistoricalFixture(database: DatabaseSyn
     for (const table of tables) {
       database.exec(`DROP TABLE ${table}`);
     }
+    // Dropping the snapshot table also removes its revision triggers.
+    database.exec("ALTER TABLE session_nodes DROP COLUMN snapshot_revision");
+    database.exec(`
+      ALTER TABLE session_nodes DROP COLUMN session_started_at;
+      ALTER TABLE session_nodes DROP COLUMN has_optional_references;
+    `);
     database.exec(OPENCLAW_AGENT_SCHEMA_V21_SQL);
     database.exec("COMMIT");
   } catch (error) {

@@ -10,10 +10,8 @@ export function resolveDiscordVoiceAgentRoute(params: {
   voiceConfig: DiscordAccountConfig["voice"];
 }) {
   const voiceRoute = resolveAgentRoute({
-    cfg: params.cfg,
+    ...params,
     channel: "discord",
-    accountId: params.accountId,
-    guildId: params.guildId,
     peer: { kind: "channel", id: params.sessionChannelId },
   });
   const agentSession = params.voiceConfig?.agentSession;
@@ -34,10 +32,8 @@ export function resolveDiscordVoiceAgentRoute(params: {
     throw new Error(`Invalid Discord voice agent session target "${target}"`);
   }
   const route = resolveAgentRoute({
-    cfg: params.cfg,
+    ...params,
     channel: "discord",
-    accountId: params.accountId,
-    guildId: params.guildId,
     peer: {
       kind: parsed.kind === "user" ? "direct" : "channel",
       id: parsed.id,

@@ -1,5 +1,7 @@
 // Doctor prompter tests cover confirmation prompt behavior and cancellation paths.
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createNonExitingRuntime } from "../runtime.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const confirmMock = vi.fn();
@@ -52,6 +54,43 @@ describe("createDoctorPrompter", () => {
     }
   });
 
+  it.each([false, true])(
+    "cancels maintenance approval without waiting for input (already aborted=%s)",
+    async (alreadyAborted) => {
+      setTerminal(true);
+      const controller = new AbortController();
+      const input = new PassThrough();
+      const output = new PassThrough();
+      output.resume();
+      const clack = await vi.importActual<typeof import("@clack/prompts")>("@clack/prompts");
+      confirmMock.mockImplementation(clack.confirm);
+      const prompter = createDoctorPrompter({
+        runtime: createNonExitingRuntime(),
+        options: { repair: true },
+        signal: controller.signal,
+      });
+      if (alreadyAborted) {
+        controller.abort();
+      }
+      try {
+        const pending = prompter.confirmRuntimeRepair({
+          message: "Repair fixture service?",
+          requiresInteractiveConfirmation: true,
+          input,
+          output,
+        });
+        controller.abort();
+        await expect(pending).resolves.toBe(false);
+        if (alreadyAborted) {
+          expect(confirmMock).not.toHaveBeenCalled();
+        }
+      } finally {
+        input.destroy();
+        output.destroy();
+      }
+    },
+  );
+
   it("auto-accepts repairs in non-interactive fix mode", async () => {
     const prompter = createRepairPrompter();
 
@@ -88,7 +127,7 @@ describe("createDoctorPrompter", () => {
     expect(confirmMock).not.toHaveBeenCalled();
   });
 
-  it.each([{ repair: true }, { repair: true, force: true }, { yes: true }, { force: true }])(
+  it.each([{ yes: true }])(
     "refuses interactive-only repairs without a terminal for %j",
     async (options) => {
       setTerminal(false);

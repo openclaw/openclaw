@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { recordClientPresenceActivity } from "./client-presence.js";
+import { GatewayClientRegistry } from "./client-registry.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
 describe("person activity after clock rollback", () => {
@@ -30,7 +31,7 @@ describe("person activity after clock rollback", () => {
       },
       personPresence: { onlineSince: started - 120_000 },
     }));
-    const clients = new Set(tabs);
+    const clients = new GatewayClientRegistry(tabs);
     expect(recordClientPresenceActivity(clients, tabs[0]!)).toBe(true);
     clock.mockReturnValue(started - 60_000);
     expect(recordClientPresenceActivity(clients, tabs[0]!)).toBe(true);

@@ -1,4 +1,3 @@
-import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 // Best-effort legacy approval resolution events after durable CAS wins.
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type {
@@ -9,7 +8,10 @@ import type {
   PluginApprovalRequestPayload,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
-import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import type {
+  SystemAgentApprovalRequestPayload,
+  SystemAgentApprovalResolved,
+} from "../../infra/system-agent-approvals.js";
 import type { ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.js";
 import { broadcastApprovalResolvedEvent } from "./approval-shared.js";
@@ -28,35 +30,6 @@ export type PluginApprovalIosPushDelivery = {
   handleResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
 };
 
-async function runSideEffect(params: {
-  context: GatewayRequestContext;
-  approvalKind: "exec" | "plugin" | "system-agent";
-  effect: "broadcast" | "forwarder" | "ios-push" | "web-push";
-  run: () => void | Promise<void>;
-}): Promise<void> {
-  try {
-    await params.run();
-  } catch (error) {
-    params.context.logGateway?.error?.(
-      `${params.approvalKind} approvals: unified resolve ${params.effect} failed: ${String(error)}`,
-    );
-  }
-}
-
-function runSynchronousSideEffect(params: {
-  context: GatewayRequestContext;
-  approvalKind: ChannelApprovalKind;
-  run: () => void;
-}): void {
-  try {
-    params.run();
-  } catch (error) {
-    params.context.logGateway?.error?.(
-      `${params.approvalKind} approvals: unified resolve internal-subscriber failed: ${String(error)}`,
-    );
-  }
-}
-
 export async function publishAppliedApprovalResolution(params: {
   record: OperatorApprovalRecord;
   liveRecord: ExecApprovalRecord<ApprovalRequest>;
@@ -65,6 +38,19 @@ export async function publishAppliedApprovalResolution(params: {
   iosPushDelivery?: ExecApprovalIosPushDelivery;
   pluginIosPushDelivery?: PluginApprovalIosPushDelivery;
 }): Promise<void> {
+  const runSideEffect = async (
+    effect: "broadcast" | "forwarder" | "ios-push" | "web-push",
+    run: () => void | Promise<void>,
+  ) => {
+    const approvalKind = params.record.kind;
+    try {
+      await run();
+    } catch (error) {
+      params.context.logGateway?.error?.(
+        `${approvalKind} approvals: unified resolve ${effect} failed: ${String(error)}`,
+      );
+    }
+  };
   const decision = params.record.decision ?? "deny";
   const resolvedBy = params.liveRecord.resolvedBy ?? null;
   const ts = params.record.resolvedAtMs ?? Date.now();
@@ -79,76 +65,63 @@ export async function publishAppliedApprovalResolution(params: {
       ? { terminalStatus: params.record.status }
       : {}),
   };
-  await runSideEffect({
-    context: params.context,
-    approvalKind: params.record.kind,
-    effect: "broadcast",
-    run: () =>
-      broadcastApprovalResolvedEvent({
-        approvalKind: params.record.kind,
-        context: params.context,
-        event,
-        record: params.liveRecord,
-      }),
-  });
+  await runSideEffect("broadcast", () =>
+    broadcastApprovalResolvedEvent({
+      approvalKind: params.record.kind,
+      context: params.context,
+      event,
+      record: params.liveRecord,
+    }),
+  );
   const nativeApprovalKind = params.record.kind;
-  if (
-    nativeApprovalKind === "exec" ||
-    nativeApprovalKind === "plugin" ||
-    nativeApprovalKind === "system-agent"
-  ) {
-    // Native approval routes are instance-local, so publish the canonical CAS
-    // winner directly instead of reconnecting to the Gateway over WebSocket.
-    if (nativeApprovalKind !== "system-agent" || params.record.status !== "allowed") {
-      runSynchronousSideEffect({
-        context: params.context,
-        approvalKind: nativeApprovalKind,
-        run: () => params.context.approvalEvents?.publishResolved(nativeApprovalKind, event),
-      });
+  // Native approval routes are instance-local, so publish the canonical CAS
+  // winner directly instead of reconnecting to the Gateway over WebSocket.
+  if (nativeApprovalKind !== "system-agent" || params.record.status !== "allowed") {
+    try {
+      params.context.approvalEvents?.publishResolved(nativeApprovalKind, event);
+    } catch (error) {
+      params.context.logGateway?.error?.(
+        `${nativeApprovalKind} approvals: unified resolve internal-subscriber failed: ${String(error)}`,
+      );
     }
-    const webPushDelivery = params.context.approvalWebPushDelivery;
-    if (webPushDelivery && (nativeApprovalKind === "exec" || nativeApprovalKind === "plugin")) {
-      await runSideEffect({
-        context: params.context,
-        approvalKind: nativeApprovalKind,
-        effect: "web-push",
-        run: () =>
-          params.record.status === "expired"
-            ? webPushDelivery.handleExpired(params.liveRecord)
-            : webPushDelivery.handleResolved(event),
-      });
-    }
+  }
+  const webPushDelivery = params.context.approvalWebPushDelivery;
+  if (webPushDelivery && (nativeApprovalKind === "exec" || nativeApprovalKind === "plugin")) {
+    await runSideEffect("web-push", () =>
+      params.record.status === "expired"
+        ? webPushDelivery.handleExpired(params.liveRecord)
+        : webPushDelivery.handleResolved(event),
+    );
   }
   if (params.record.kind === "exec" && params.forwarder) {
-    await runSideEffect({
-      context: params.context,
-      approvalKind: "exec",
-      effect: "forwarder",
-      run: () => params.forwarder!.handleResolved(event as ExecApprovalResolved),
-    });
+    await runSideEffect("forwarder", () =>
+      params.forwarder!.handleResolved(event as ExecApprovalResolved),
+    );
   }
   if (params.record.kind === "exec" && params.iosPushDelivery?.handleResolved) {
-    await runSideEffect({
-      context: params.context,
-      approvalKind: "exec",
-      effect: "ios-push",
-      run: () => params.iosPushDelivery!.handleResolved!(event as ExecApprovalResolved),
-    });
+    await runSideEffect("ios-push", () =>
+      params.iosPushDelivery!.handleResolved!(event as ExecApprovalResolved),
+    );
   }
   if (params.record.kind === "plugin" && params.forwarder?.handlePluginApprovalResolved) {
-    await runSideEffect({
-      context: params.context,
-      approvalKind: "plugin",
-      effect: "forwarder",
-      run: () => params.forwarder!.handlePluginApprovalResolved!(event as PluginApprovalResolved),
-    });
+    await runSideEffect("forwarder", () =>
+      params.forwarder!.handlePluginApprovalResolved!(event as PluginApprovalResolved),
+    );
   }
   if (params.record.kind === "plugin" && params.pluginIosPushDelivery?.handleResolved) {
-    await runSideEffect({
-      context: params.context,
-      approvalKind: "plugin",
-      effect: "ios-push",
-      run: () => params.pluginIosPushDelivery!.handleResolved!(event as PluginApprovalResolved),
-    });
+    await runSideEffect("ios-push", () =>
+      params.pluginIosPushDelivery!.handleResolved!(event as PluginApprovalResolved),
+    );
+  }
+  // Decisions (allowed or denied) report their outcome from the system-agent owner.
+  if (
+    params.record.kind === "system-agent" &&
+    (params.record.status === "expired" || params.record.status === "cancelled") &&
+    params.forwarder?.handleSystemAgentApprovalResolved
+  ) {
+    await runSideEffect("forwarder", () =>
+      // SAFETY: a system-agent record's live request is a system-agent payload.
+      params.forwarder!.handleSystemAgentApprovalResolved!(event as SystemAgentApprovalResolved),
+    );
   }
 }

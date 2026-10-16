@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   inspectPersistedAuthProfileStateRaw,
@@ -11,6 +10,7 @@ import {
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../../src/agents/auth-profiles/sqlite.js";
+import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../src/state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -75,7 +75,7 @@ describe("stage-live-auth-profiles", () => {
       const sourceStateDir = createStateDir("openclaw-live-auth-partial-source-");
       const targetStateDir = createStateDir("openclaw-live-auth-partial-target-");
       const sourceAgentDir = createAuthSource(sourceStateDir);
-      const database = new DatabaseSync(resolveAuthProfileDatabasePath(sourceAgentDir));
+      const database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(sourceAgentDir));
       database.exec(`DROP TABLE ${missingTable};`);
       database.close();
 
@@ -94,7 +94,7 @@ describe("stage-live-auth-profiles", () => {
     const sourceStateDir = createStateDir("openclaw-live-auth-legacy-source-");
     const targetStateDir = createStateDir("openclaw-live-auth-legacy-target-");
     const sourceAgentDir = createAuthSource(sourceStateDir);
-    const database = new DatabaseSync(resolveAuthProfileDatabasePath(sourceAgentDir));
+    const database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(sourceAgentDir));
     database.exec("DROP TABLE auth_profile_store; DROP TABLE auth_profile_state;");
     database.close();
 
@@ -112,7 +112,7 @@ describe("stage-live-auth-profiles", () => {
     const sourceStateDir = createStateDir("openclaw-live-auth-row-source-");
     const targetStateDir = createStateDir("openclaw-live-auth-row-target-");
     const sourceAgentDir = createAuthSource(sourceStateDir);
-    const database = new DatabaseSync(resolveAuthProfileDatabasePath(sourceAgentDir));
+    const database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(sourceAgentDir));
     database.exec("DELETE FROM auth_profile_state;");
     database.close();
 

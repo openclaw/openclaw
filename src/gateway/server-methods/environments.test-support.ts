@@ -1,6 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
+import { prepareDevicePairingBinding } from "../../infra/device-pairing-binding.js";
+import type {
+  DevicePairingBinding,
+  DevicePairingNodeSnapshot,
+} from "../../infra/device-pairing-read.types.js";
 import type { PairedDevice, PairedDeviceNodeSurface } from "../../infra/device-pairing.types.js";
+import { NodeRegistry } from "../node-registry.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerEnvironmentServiceRecord,
@@ -9,6 +15,19 @@ import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
 import { environmentsHandlers } from "./environments.js";
 
 export type TestWorkerRecord = WorkerEnvironmentRecord & WorkerEnvironmentServiceRecord;
+
+export function createDevicePairingNodeSnapshot(
+  paired: readonly PairedDevice[],
+): DevicePairingNodeSnapshot {
+  const bindings = new Map<string, DevicePairingBinding>();
+  for (const device of paired) {
+    const { binding } = prepareDevicePairingBinding(device.deviceId, device);
+    if (binding) {
+      bindings.set(device.deviceId, binding);
+    }
+  }
+  return { paired, bindings };
+}
 
 export function pairedNodeDevice(
   deviceId: string,
@@ -45,6 +64,7 @@ export function mockContext(
     {
       nodeId: "node-live",
       connId: "conn-live",
+      client: { invalidated: false },
       displayName: "Live Node",
       platform: "ios",
       caps: ["camera"],
@@ -57,9 +77,9 @@ export function mockContext(
     logGateway: {
       warn: vi.fn(),
     },
-    nodeRegistry: {
+    nodeRegistry: Object.assign(new NodeRegistry(), {
       listConnectedForPairingStates: () => connectedNodes,
-    },
+    }),
     workerEnvironmentService,
     getRuntimeConfig: () => ({
       cloudWorkers: {
@@ -104,6 +124,8 @@ export function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWor
     updatedAtMs: 1_000,
     stateChangedAtMs: 1_000,
     idleSinceAtMs: null,
+    destroyRequestedAtMs: null,
+    preparation: null,
     lastError: null,
     tunnelStatus: "stopped",
     desktopAvailable: false,
@@ -134,6 +156,8 @@ export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
     throw new Error("No attached portal fixture");
   }),
   list: vi.fn(() => []),
+  readPreparedPoolSummary: vi.fn(() => ({ maxTotal: 4, reservedEnvironmentIds: [] })),
+  readReadyWorkerTarget: vi.fn(() => 1),
   get: vi.fn(() => undefined),
   inventoryVersion: vi.fn(() => 0),
   readMachineShape: () => undefined,
@@ -177,12 +201,14 @@ export async function callEnvironmentMethod(
       onCleanupError?: (error: unknown) => void,
     ) => Promise<TestWorkerRecord>;
     connectedNodes?: unknown[];
+    scopes?: string[];
   } = {},
 ) {
   const respond = vi.fn();
   await environmentsHandlers[method]?.({
     params: params as Record<string, unknown>,
     respond,
+    ...(options.scopes ? { client: { connect: { scopes: options.scopes } } } : {}),
     context: mockContext(
       options.service,
       options.reconcileActive,

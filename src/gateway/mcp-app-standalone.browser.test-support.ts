@@ -15,7 +15,12 @@ export async function createStandaloneHostBrowserHarness(
   const listeners = new Map<string, (event: unknown) => void>();
   const timers: Array<{ run: () => void; delayMs: number }> = [];
   const postMessage = vi.fn();
-  const frame = { contentWindow: { postMessage }, setAttribute: vi.fn(), remove: vi.fn() };
+  const frame = {
+    contentWindow: { postMessage },
+    setAttribute: vi.fn(),
+    remove: vi.fn(),
+    style: { height: "" },
+  };
   const replaceChildren = vi.fn();
   const timeout = vi.fn(() => new AbortController().signal);
   const reload = vi.fn();
@@ -63,6 +68,7 @@ export async function createStandaloneHostBrowserHarness(
     document: { createElement: () => frame, getElementById: () => ({ replaceChildren }) },
     fetch,
     innerWidth: 800,
+    innerHeight: 900,
     location: { hash: `#${ticket}`, origin: "http://127.0.0.1:18789", reload },
     matchMedia: () => ({ matches: false }),
     navigator: { language: "en" },

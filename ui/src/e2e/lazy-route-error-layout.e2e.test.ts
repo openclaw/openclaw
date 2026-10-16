@@ -1,4 +1,6 @@
+import path from "node:path";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -38,22 +40,24 @@ suite.define(() => {
             __mockError: { code: "UNAVAILABLE", message: gatewayError },
           });
           const pathname = controlUiSessionPath(failedSessionKey);
-          await page.evaluate((targetPathname) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: {
-                context: {
-                  navigate: (routeId: string, options: { pathname: string }) => void;
-                };
-              };
-            };
-            if (!app.runtime) {
-              throw new Error("OpenClaw application runtime is unavailable");
-            }
-            app.runtime.context.navigate("chat", { pathname: targetPathname });
-          }, pathname);
+          await evaluateControlUiContext(
+            page,
+            (context, targetPathname) => {
+              context.navigate("chat", { pathname: targetPathname });
+            },
+            pathname,
+          );
 
           const error = page.locator(".lazy-view-error");
           await error.getByText("Panel failed to load", { exact: true }).waitFor();
+          expect(await error.getByText(gatewayError, { exact: true }).isVisible()).toBe(false);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, `panel-error-${viewport.name}.png`),
+              animations: "disabled",
+            });
+          }
+          await error.locator("summary").click();
           await error.getByText(gatewayError, { exact: true }).waitFor();
           const layout = await error.evaluate((node) => {
             const content = [

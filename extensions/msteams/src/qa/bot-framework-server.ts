@@ -102,13 +102,3 @@ export async function startMSTeamsQaBotFrameworkServer(options: ServerOptions) {
     },
   };
 }
-
-export async function reserveMSTeamsQaWebhookPort(): Promise<number> {
-  const server = createServer();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const { port } = server.address() as AddressInfo;
-  server.close();
-  await once(server, "close");
-  return port;
-}

@@ -1,16 +1,19 @@
-import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
 import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
-import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
-import { t } from "../../../i18n/index.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { emptyLegacyContent, type LegacyDirectiveResult } from "../../../lit/solid-content.tsx";
+import { renderHtmlPreview, renderHtmlPreviewSourceFallback } from "./chat-html-preview-view.tsx";
 import type { SidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
-import type { FileViewControls } from "./chat-sidebar-file-view.ts";
+export type FileHtmlPreviewControls = {
+  source: boolean;
+  presentation: LegacyDirectiveResult | typeof emptyLegacyContent;
+  sourceFallback?: LegacyDirectiveResult;
+  onToggle: () => void;
+};
 
-registerFilePreviewEnglish();
-
-export { LazyCustomElementRequestController };
+registerEnglishCatalog(registerFilePreviewEnglish);
 
 export function isHtmlDocument(mimeType: string, filename: string): boolean {
   return (
@@ -23,54 +26,21 @@ export const htmlPreviewElement = {
   get label() {
     return t("chat.detailPanel.renderPreview");
   },
-  loadModule: () => import("./chat-html-preview-element.ts"),
+  loadModule: () => import("./chat-html-preview-element.tsx"),
 };
 
-export function renderHtmlPreview(
-  loader: LazyCustomElementRequestController,
-  content: string,
-  sourceIdentity: string,
-  title: string,
-  embedSandboxMode: EmbedSandboxMode,
-) {
-  loader.requestWhileActive(htmlPreviewElement, true);
-  const state = loader.visibleState;
-  // Registration is globally deduplicated, while this owner keeps the same DOM
-  // through unrelated parent renders and presents an explicit load retry.
-  return html`
-    ${
-      state?.status === "error"
-        ? renderLazyViewError({
-            error: state.error,
-            stale: state.stale,
-            onRetry: () => loader.retry(),
-          })
-        : state
-          ? html`<div role="status">${t("common.loading")}</div>`
-          : nothing
-    }
-    <openclaw-chat-html-preview
-      .html=${content}
-      .sourceIdentity=${sourceIdentity}
-      .title=${title}
-      .embedSandboxMode=${embedSandboxMode}
-    ></openclaw-chat-html-preview>
-  `;
-}
-
 /** Owns file HTML presentation while the detail panel owns its editor and draft. */
-export class FileHtmlPreviewController implements ReactiveController {
+export class FileHtmlPreviewController {
   private source = false;
   private preview: string | null = null;
   private readonly loader: LazyCustomElementRequestController;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: { requestUpdate(): void; readonly updateComplete?: Promise<unknown> },
     private readonly content: () => SidebarContent | null,
     private readonly text: () => string,
   ) {
     this.loader = new LazyCustomElementRequestController(host);
-    host.addController(this);
   }
 
   get file() {
@@ -110,7 +80,7 @@ export class FileHtmlPreviewController implements ReactiveController {
     }
   }
 
-  hostDisconnected(): void {
+  dispose(): void {
     this.loader.requestWhileActive(htmlPreviewElement, false);
   }
 
@@ -120,35 +90,43 @@ export class FileHtmlPreviewController implements ReactiveController {
     onToggle: () => void;
     runtime: AttachmentSidebarRuntime;
     mode: EmbedSandboxMode;
-  }): FileViewControls["htmlPreview"] {
+  }): FileHtmlPreviewControls | undefined {
     const file = this.file;
     if (!file) {
       return undefined;
+    }
+    if (this.preview !== null) {
+      this.loader.requestWhileActive(htmlPreviewElement, true);
     }
     return {
       source: this.source,
       onToggle: options.onToggle,
       presentation:
         this.preview === null
-          ? nothing
-          : renderHtmlPreview(
-              this.loader,
-              this.preview,
-              file.draftKey ??
+          ? emptyLegacyContent
+          : renderHtmlPreview({
+              state: this.loader.visibleState,
+              onRetry: () => this.loader.retry(),
+              content: this.preview,
+              sourceIdentity:
+                file.draftKey ??
                 [
                   options.runtime.sessionKey ?? "",
                   options.runtime.agentId ?? "",
                   file.root ?? "",
                   file.path,
                 ].join(String.fromCharCode(0)),
-              file.name,
-              options.mode,
-            ),
+              title: file.name,
+              embedSandboxMode: options.mode,
+              sessionFileSource: file.sessionFileSource,
+            }),
       sourceFallback: options.error
-        ? html`
-            ${renderLazyViewError({ error: options.error, stale: isStaleChunkImportError(options.error), onRetry: options.onRetry })}
-            <pre class="sidebar-attachment-preview__text">${this.text()}</pre>
-          `
+        ? renderHtmlPreviewSourceFallback({
+            error: options.error,
+            stale: isStaleChunkImportError(options.error),
+            onRetry: options.onRetry,
+            text: this.text(),
+          })
         : undefined,
     };
   }

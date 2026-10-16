@@ -6,20 +6,34 @@ const source = (name: string) => normalizeModuleId(path.resolve(import.meta.dirn
 const agentSource = source("src/state/openclaw-agent-db-lifecycle.ts");
 const agentKey = Symbol.for("openclaw.agentDatabaseLifecycle");
 const brokerKey = Symbol.for("openclaw.sqliteWorkerBroker");
-const coordinatorPoolKey = Symbol.for("openclaw.sqliteCoordinatorPool");
+const diskBudgetKey = Symbol.for("openclaw.sessionDiskBudgetWorkers");
+const sessionStateNoticesKey = Symbol.for("openclaw.sessionStateNotices");
 const resetKey = Symbol.for("openclaw.globalSingletonLifecycleResets");
 const retainedCustodyKey = Symbol.for("openclaw.sqliteTestRetainedCustody");
 
 // These owners retain module closures and each other's lifecycle callbacks.
 // Keep their native custody intact through drainage, then retire the whole generation.
 export const sqliteTestSingletonPublications: ReadonlyMap<string, symbol> = new Map([
+  [source("src/sessions/session-state-notices.ts"), sessionStateNoticesKey],
   [
-    source("src/state/openclaw-state-worker-store.ts"),
+    source("src/cron/store/receipt-authority-owner.ts"),
+    Symbol.for("openclaw.cron.receiptAuthority"),
+  ],
+  [
+    source("src/state/openclaw-state-worker-owner.ts"),
     Symbol.for("openclaw.sharedStateWorkerOwner"),
   ],
   [source("src/infra/sqlite-worker-store.ts"), brokerKey],
-  [source("src/infra/sqlite-coordinator.ts"), coordinatorPoolKey],
+  [source("src/config/sessions/disk-budget-runtime.ts"), diskBudgetKey],
+  [
+    source("src/infra/device-pairing-publication.ts"),
+    Symbol.for("openclaw.devicePairingPublications"),
+  ],
   [source("src/state/openclaw-state-db-cache.ts"), Symbol.for("openclaw.stateDatabaseLifecycle")],
+  [
+    source("src/state/openclaw-state-db-snapshot-owner.ts"),
+    Symbol.for("openclaw.stateSnapshotOwners"),
+  ],
   [source("src/state/openclaw-state-read-worker.ts"), Symbol.for("openclaw.stateReadWorkers")],
   [source("src/gateway/session-group-catalog.ts"), Symbol.for("openclaw.sessionGroupCatalog")],
   [agentSource, agentKey],
@@ -29,6 +43,9 @@ type AgentLifecycleModule = Pick<
   typeof import("../src/state/openclaw-agent-db-lifecycle.js"),
   "agentDatabaseLifecycle" | "closeOpenClawAgentDatabasesAsync"
 >;
+type DiskBudgetOwner = {
+  pool: Pick<import("../src/infra/worker-task-pool.js").WorkerTaskPool<string, unknown>, "close">;
+};
 type AgentOwner = AgentLifecycleModule["agentDatabaseLifecycle"];
 const agentClosers = new WeakMap<AgentOwner, () => Promise<void>>();
 
@@ -57,6 +74,7 @@ export function retainSqliteTestCustody(): void {
 /** Settle independent owners before shared storage; a failure retains its dependent family. */
 export async function drainSqliteTestSingletons(
   onError: (phase: string, error: unknown) => void,
+  canRetireSource?: (key: symbol) => boolean,
 ): Promise<void> {
   const resets = (globalThis as Record<PropertyKey, unknown>)[resetKey] as
     | Map<symbol, SingletonReset>
@@ -65,7 +83,10 @@ export async function drainSqliteTestSingletons(
   const entries = [...(resets ?? [])].filter(
     ([, reset]) => reset.lifecycle !== "plugin-registry" && !failedResets.has(reset),
   );
-  const sqliteKeys = new Set(sqliteTestSingletonPublications.values());
+  // Notice callbacks retain their module graph, but must drain before the storage they use.
+  const sqliteKeys = new Set(
+    [...sqliteTestSingletonPublications.values()].filter((key) => key !== sessionStateNoticesKey),
+  );
   await Promise.all(
     entries
       .filter(([key]) => !sqliteKeys.has(key))
@@ -78,8 +99,8 @@ export async function drainSqliteTestSingletons(
         }
       }),
   );
-  // Native and broker retirement can return a coordinator to the idle pool.
-  const closeOrder = (key: symbol) => (key === coordinatorPoolKey ? 2 : Number(key === brokerKey));
+  // Native resources finish their accepted work before the shared broker closes.
+  const closeOrder = (key: symbol) => Number(key === brokerKey);
   const sqlite = entries
     .filter(([key]) => sqliteKeys.has(key))
     .toSorted(([left], [right]) => closeOrder(left) - closeOrder(right));
@@ -89,6 +110,13 @@ export async function drainSqliteTestSingletons(
     }
     try {
       await reset.reset();
+      if (key === diskBudgetKey && canRetireSource?.(key)) {
+        const owner = (globalThis as Record<PropertyKey, unknown>)[key] as
+          | DiskBudgetOwner
+          | undefined;
+        // Rotation joins scans; closing also releases the pool's captured module generation.
+        await owner?.pool.close();
+      }
     } catch (error) {
       retainSqliteTestCustody();
       onError(`singleton ${key.description}`, error);
@@ -164,6 +192,40 @@ export async function drainSqliteTestAgentOwner(
     throw new Error(
       `SQLite test teardown cannot retire agent owners with unsettled database custody from ${testFiles}: ${JSON.stringify(custody())}`,
     );
+  }
+}
+
+/**
+ * Wait for agent database closes a finished test scheduled without awaiting. The
+ * synchronous test closer only schedules Worker retirement; left running, a lease release
+ * overlaps the next test, and a Vitest thread cannot retire an escaped lease afterwards.
+ * A failed close stays in its owner's custody (logged, retried by the file drain).
+ */
+export async function settleSqliteTestAgentCloses(): Promise<void> {
+  const resources = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.agentDatabaseAsyncResources")
+  ] as
+    | {
+        closing: Map<unknown, Promise<void> | undefined>;
+        selections: Map<unknown, Promise<void>>;
+      }
+    | undefined;
+  if (!resources) {
+    return;
+  }
+  const joined = new Set<Promise<void>>();
+  // A settled close can start dependent retirement; wait until nothing new is pending.
+  while (true) {
+    const pending = [...resources.closing.values(), ...resources.selections.values()].filter(
+      (operation): operation is Promise<void> => operation !== undefined && !joined.has(operation),
+    );
+    if (pending.length === 0) {
+      return;
+    }
+    for (const operation of pending) {
+      joined.add(operation);
+    }
+    await Promise.allSettled(pending);
   }
 }
 

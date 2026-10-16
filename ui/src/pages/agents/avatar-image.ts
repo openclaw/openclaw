@@ -1,5 +1,6 @@
-// Control UI helper converts picked avatar images into compact data URLs.
 import { AVATAR_MAX_BYTES } from "../../../../src/shared/avatar-limits.js";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
+import { assertUploadsEnabled } from "../../lib/uploads.ts";
 
 /** Uploaded avatars also mirror into prompt-injected IDENTITY.md. Keep their
     encoded form below the per-file bootstrap limit with room for identity text. */
@@ -25,7 +26,11 @@ function boundAvatarDataUrl(value: string | null): AvatarDataUrlResult {
     : TOO_DETAILED;
 }
 
-function readFileAsDataUrl(file: File): Promise<AvatarDataUrlResult> {
+function readFileAsDataUrl(
+  file: File,
+  config?: ApplicationConfigCapability,
+): Promise<AvatarDataUrlResult> {
+  assertUploadsEnabled(config);
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.addEventListener("load", () =>
@@ -53,7 +58,11 @@ function isOpaque(context: CanvasRenderingContext2D, width: number, height: numb
 /** Convert a picked image file into a data URL bounded for identity storage.
     Distinguishes files that cannot be used at all from images whose resized
     encoding still exceeds the identity budget. */
-export async function fileToAvatarDataUrl(file: File): Promise<AvatarDataUrlResult> {
+export async function fileToAvatarDataUrl(
+  file: File,
+  config?: ApplicationConfigCapability,
+): Promise<AvatarDataUrlResult> {
+  assertUploadsEnabled(config);
   if (!file.type.startsWith("image/") || file.size > AVATAR_MAX_BYTES) {
     return UNUSABLE;
   }
@@ -63,7 +72,7 @@ export async function fileToAvatarDataUrl(file: File): Promise<AvatarDataUrlResu
       const canvas = document.createElement("canvas");
       const context = canvas.getContext("2d");
       if (!context) {
-        return await readFileAsDataUrl(file);
+        return await readFileAsDataUrl(file, config);
       }
       const draw = (edge: number) => {
         const scale = Math.min(1, edge / Math.max(bitmap.width, bitmap.height));
@@ -100,6 +109,6 @@ export async function fileToAvatarDataUrl(file: File): Promise<AvatarDataUrlResu
   } catch {
     // Non-rasterizable images (e.g. SVG without intrinsic size) pass through
     // unscaled; the size gate above still bounds the persisted payload.
-    return readFileAsDataUrl(file);
+    return readFileAsDataUrl(file, config);
   }
 }

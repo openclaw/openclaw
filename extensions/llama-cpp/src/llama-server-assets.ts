@@ -13,6 +13,8 @@ export type LlamaServerArchive = {
   archiveRoot: string;
   name: string;
   sha256: string;
+  sizeBytes?: number;
+  url?: string;
   regularFileAliases: RegularFileAliases;
   limits?: ArchiveExtractLimits;
 };
@@ -22,8 +24,24 @@ export type LlamaServerAsset = LlamaServerArchive & {
   arch: string;
   backend: "metal" | "cpu" | "cuda";
   executable: string;
-  dependencies?: ReadonlyArray<LlamaServerArchive & { files: readonly string[] }>;
+  dependencies?: readonly LlamaServerDependency[];
 };
+
+export type WindowsVcRuntimeDependency = {
+  archive: "vc-redist";
+  containerOffset: number;
+  containerSize: number;
+  files: ReadonlyArray<{ source: string; target: string }>;
+  name: string;
+  nestedCabinet: string;
+  sha256: string;
+  size: number;
+  url: string;
+};
+
+export type LlamaServerDependency =
+  | (LlamaServerArchive & { files: readonly string[] })
+  | WindowsVcRuntimeDependency;
 
 const MEBIBYTE = 1024 * 1024;
 const CUDA_ARCHIVE_LIMITS = {
@@ -31,6 +49,42 @@ const CUDA_ARCHIVE_LIMITS = {
   maxExtractedBytes: 600 * MEBIBYTE,
   maxEntryBytes: 521 * MEBIBYTE,
 };
+
+// llama.cpp's Windows release binaries dynamically link the Visual C++ runtime.
+// Keep the current supported runtime app-local because managed llama-server runs
+// outside any MSIX package graph, including Store-installed OpenClaw. The pinned
+// Burn container metadata selects only the imported runtime DLLs from Microsoft's
+// signed 14.51.36247 redistributable bundles.
+const WINDOWS_X64_VC_RUNTIME = {
+  archive: "vc-redist",
+  name: "VC_redist.x64.exe",
+  url: "https://download.visualstudio.microsoft.com/download/pr/ebdab8e5-1d7b-4d9f-a11b-cbb1720c3b12/843068991DAAA1F73AD9F6239BCE4D0F6A07A51F18C37EA2A867E9BECA71295C/VC_redist.x64.exe",
+  sha256: "843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c",
+  size: 18_731_856,
+  containerOffset: 630_000,
+  containerSize: 18_091_661,
+  nestedCabinet: "a4",
+  files: [
+    { source: "msvcp140.dll_amd64", target: "msvcp140.dll" },
+    { source: "vcruntime140.dll_amd64", target: "vcruntime140.dll" },
+    { source: "vcruntime140_1.dll_amd64", target: "vcruntime140_1.dll" },
+  ],
+} as const satisfies WindowsVcRuntimeDependency;
+
+const WINDOWS_ARM64_VC_RUNTIME = {
+  archive: "vc-redist",
+  name: "VC_redist.arm64.exe",
+  url: "https://download.visualstudio.microsoft.com/download/pr/ece44298-3977-4f73-ab91-c13fe79cfea8/B70EF586669A620A0A30A1156969C05C6A3831DC8F8BC992DA75779D2A92F944/VC_redist.arm64.exe",
+  sha256: "b70ef586669a620a0a30a1156969c05c6a3831dc8f8bc992da75779d2a92f944",
+  size: 11_870_816,
+  containerOffset: 684_112,
+  containerSize: 11_176_508,
+  nestedCabinet: "a1",
+  files: [
+    { source: "msvcp140.dll_arm64", target: "msvcp140.dll" },
+    { source: "vcruntime140.dll_arm64", target: "vcruntime140.dll" },
+  ],
+} as const satisfies WindowsVcRuntimeDependency;
 
 // These basenames are authenticated by the adjacent release checksum. Archive-provided
 // links are ignored; update this manifest together with each pinned llama.cpp release.
@@ -67,6 +121,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-macos-arm64.tar.gz`,
     sha256: "7d692df9e1e386e62f1c12b843903218041e6cd74c9415aa39a7ed3176f9eaa2",
+    sizeBytes: 11_123_196,
     executable: "llama-server",
     regularFileAliases: MACOS_METAL_ALIASES,
   },
@@ -78,6 +133,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-macos-x64.tar.gz`,
     sha256: "13b34aa8a5d87341a21065a83f54a8167e1aaa6fe0d66065de01632a1ed64be6",
+    sizeBytes: 11_175_330,
     executable: "llama-server",
     regularFileAliases: MACOS_ALIASES,
   },
@@ -89,6 +145,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-ubuntu-arm64.tar.gz`,
     sha256: "f2b7333971e1b7b42e9268bfdbfa30f5f56e2897156084d2251385df94aec358",
+    sizeBytes: 13_380_118,
     executable: "llama-server",
     regularFileAliases: LINUX_ALIASES,
   },
@@ -100,6 +157,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-ubuntu-x64.tar.gz`,
     sha256: "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941",
+    sizeBytes: 16_734_586,
     executable: "llama-server",
     regularFileAliases: LINUX_ALIASES,
   },
@@ -111,6 +169,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: ".",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cuda-12.4-x64.zip`,
     sha256: "c77bfcd9ed8d91e8721a2d6a290b907fddd4fa5412a47b21c6fa1709116b85f9",
+    sizeBytes: 253_938_543,
     executable: "llama-server.exe",
     regularFileAliases: [],
     limits: CUDA_ARCHIVE_LIMITS,
@@ -120,10 +179,12 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
         archiveRoot: ".",
         name: "cudart-llama-bin-win-cuda-12.4-x64.zip",
         sha256: "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+        sizeBytes: 391_443_627,
         regularFileAliases: [],
         files: ["cublas64_12.dll", "cublasLt64_12.dll", "cudart64_12.dll"],
         limits: { ...CUDA_ARCHIVE_LIMITS, maxEntries: 3 },
       },
+      WINDOWS_X64_VC_RUNTIME,
     ],
   },
   {
@@ -134,8 +195,10 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: ".",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cpu-arm64.zip`,
     sha256: "c1058fe5764a687275c8d20d6bbc1454e787cdbb8ebb8c37a2f959f2b144dc77",
+    sizeBytes: 11_974_499,
     executable: "llama-server.exe",
     regularFileAliases: [],
+    dependencies: [WINDOWS_ARM64_VC_RUNTIME],
   },
   {
     platform: "win32",
@@ -145,8 +208,10 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: ".",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cpu-x64.zip`,
     sha256: "9df3158ed228a641a4b127942d7f459f24c9e13f04682659d05c00c80099b6b5",
+    sizeBytes: 18_407_457,
     executable: "llama-server.exe",
     regularFileAliases: [],
+    dependencies: [WINDOWS_X64_VC_RUNTIME],
   },
 ];
 
@@ -209,4 +274,18 @@ export function resolveManagedLlamaServerPaths(asset = selectLlamaServerAsset())
     command: path.join(installDir, asset.executable),
     presetPath: path.join(resolveLlamaCppDataDir(), "models.ini"),
   };
+}
+
+export function findManagedLlamaServerAsset(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): LlamaServerAsset | undefined {
+  // Recover only this host's pinned installation, including its selected backend.
+  return LLAMA_SERVER_ASSETS.find(
+    (asset) =>
+      asset.platform === platform &&
+      asset.arch === arch &&
+      resolveManagedLlamaServerPaths(asset).command === command,
+  );
 }

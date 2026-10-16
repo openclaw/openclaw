@@ -1,581 +1,278 @@
-import type {
-  CloseSessionRequest,
-  InitializeRequest,
-  ListSessionsRequest,
-  NewSessionRequest,
-  PromptRequest,
-  PromptResponse,
-  ResumeSessionRequest,
-} from "@agentclientprotocol/sdk";
-import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+/** Tests ACP session lifecycle, pagination, lineage, and terminal acknowledgements. */
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
-/** Tests ACP translator initialize/session lifecycle and prompt bridge behavior. */
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
-import type { AcpGatewayAgent } from "./translator.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
+import {
+  createLoadSessionRequest,
+  createNewSessionRequest,
+  createPromptRequest,
+} from "./translator.bridge-test-helpers.js";
 import {
   createAcpConnection,
   createAcpGateway,
   createAcpGatewayAgent,
 } from "./translator.test-helpers.js";
 
-vi.mock("./commands.js", () => ({
-  getAvailableCommands: () => [],
-}));
+vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
 
-function createInitializeRequest(): InitializeRequest {
+type RequestHandler = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+const sessionKey = "agent:main:work";
+const cwd = "/tmp/openclaw";
+const lineage = {
+  parentSessionKey: "agent:main:main",
+  spawnedBy: "agent:main:main",
+  spawnDepth: 1,
+  subagentRole: "leaf",
+  subagentControlScope: "none",
+} as const;
+const lineageMeta = {
+  parentSessionId: "agent:main:main",
+  spawnedBy: "agent:main:main",
+  spawnDepth: 1,
+  subagentRole: "leaf",
+  subagentControlScope: "none",
+};
+function row(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return {
-    protocolVersion: PROTOCOL_VERSION,
-    clientCapabilities: {
-      fs: { readTextFile: false, writeTextFile: false },
-      terminal: false,
-    },
-  } as InitializeRequest;
-}
-
-function createListSessionsRequest(params: {
-  cwd?: string;
-  cursor?: string | null;
-  limit?: number;
-}): ListSessionsRequest {
-  const request: ListSessionsRequest = {
-    _meta: {},
+    key,
+    kind: "direct",
+    updatedAt: 1_710_000_000_000,
+    thinkingLevel: "adaptive",
+    ...fields,
   };
-  if (params.cwd) {
-    request.cwd = params.cwd;
-  }
-  if (params.cursor !== undefined) {
-    request.cursor = params.cursor;
-  }
-  if (params.limit !== undefined) {
-    request["_meta"] = { limit: params.limit };
-  }
-  return request;
 }
-
-function createResumeSessionRequest(
-  sessionId: string,
-  cwd = "/tmp/openclaw",
-): ResumeSessionRequest {
+function sessions(rows: GatewaySessionRow[]) {
   return {
-    sessionId,
-    cwd,
-    mcpServers: [],
-    _meta: {},
-  } as ResumeSessionRequest;
-}
-
-function createCloseSessionRequest(sessionId: string): CloseSessionRequest {
-  return {
-    sessionId,
-    _meta: {},
-  } as CloseSessionRequest;
-}
-
-function createPromptRequest(sessionId: string): PromptRequest {
-  return {
-    sessionId,
-    prompt: [{ type: "text", text: "hello" }],
-    _meta: {},
-  } as PromptRequest;
-}
-
-function createNewSessionRequest(): NewSessionRequest {
-  return {
-    cwd: "/tmp/openclaw",
-    mcpServers: [],
-    _meta: {},
-  } as NewSessionRequest;
-}
-
-function createGatewaySessions(rows: GatewaySessionRow[]) {
-  return {
-    ts: Date.now(),
+    ts: 1,
     path: "/tmp/sessions.json",
     count: rows.length,
     totalCount: rows.length,
     limitApplied: rows.length,
     hasMore: false,
-    defaults: {
-      modelProvider: null,
-      model: null,
-      contextTokens: null,
-    },
+    defaults: { modelProvider: null, model: null, contextTokens: null },
     sessions: rows,
   };
 }
-
-function createSessionRow(params: {
-  key: string;
-  cwd?: string;
-  title?: string;
-  updatedAt?: number;
-}): GatewaySessionRow {
-  return {
-    key: params.key,
-    kind: "direct",
-    spawnedWorkspaceDir: params.cwd,
-    derivedTitle: params.title,
-    updatedAt: params.updatedAt ?? 1_710_000_000_000,
-    thinkingLevel: "adaptive",
-    modelProvider: "openai",
-    model: "gpt-5.4",
-  };
-}
-
-async function settlePromptQuickly<T>(promise: Promise<T>): Promise<T | "pending"> {
-  return await Promise.race([
-    promise,
-    new Promise<"pending">((resolve) => {
-      setTimeout(() => resolve("pending"), 50);
-    }),
-  ]);
-}
-
-async function startPendingPrompt(params: {
-  agent: AcpGatewayAgent;
-  sentRunIds: string[];
-  sessionId: string;
-}): Promise<{ promptPromise: Promise<PromptResponse>; runId: string }> {
-  const before = params.sentRunIds.length;
-  const promptPromise = params.agent.prompt(createPromptRequest(params.sessionId));
-  await vi.waitFor(() => {
-    expect(params.sentRunIds.length).toBe(before + 1);
-  });
-  return {
-    promptPromise,
-    runId: expectDefined(params.sentRunIds[before], "params.sentRunIds[before] test invariant"),
-  };
+function fixture(rows: GatewaySessionRow[] = [], handler?: RequestHandler) {
+  const request = vi.fn(
+    handler ?? (async (method) => (method === "sessions.list" ? sessions(rows) : { ok: true })),
+  );
+  const connection = createAcpConnection();
+  const sessionStore = createInMemorySessionStore();
+  const agent = createAcpGatewayAgent(
+    connection,
+    createAcpGateway(request as GatewayClient["request"]),
+    { sessionStore },
+  );
+  return { agent, request, connection, sessionStore };
 }
 
 describe("acp translator stable lifecycle handlers", () => {
-  it("advertises only session capabilities backed by bridge handlers", async () => {
-    const sessionStore = createInMemorySessionStore();
-    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
-      sessionStore,
-    });
-
-    const result = await agent.initialize(createInitializeRequest());
-    const capabilities = result.agentCapabilities;
-    if (!capabilities) {
-      throw new Error("initialize response did not include agent capabilities");
-    }
-
-    expect(capabilities.loadSession).toBe(true);
-    expect(typeof agent.loadSession).toBe("function");
-    expect(capabilities.sessionCapabilities?.list).toStrictEqual({});
-    expect(typeof agent.listSessions).toBe("function");
-    expect(capabilities.sessionCapabilities?.resume).toStrictEqual({});
-    expect(typeof agent.resumeSession).toBe("function");
-    expect(capabilities.sessionCapabilities?.close).toStrictEqual({});
-    expect(typeof agent.closeSession).toBe("function");
-    expect(capabilities.sessionCapabilities?.fork).toBeUndefined();
-    expect("unstable_listSessions" in agent).toBe(false);
-  });
-
-  it("lists Gateway sessions through the stable handler with opaque cursors and cwd filtering", async () => {
-    const allRows = [
-      createSessionRow({ key: "agent:main:a1", cwd: "/work/a", title: "A1" }),
-      createSessionRow({ key: "agent:main:a2", cwd: "/work/a", title: "A2" }),
-      createSessionRow({ key: "agent:main:a3", cwd: "/work/a", title: "A3" }),
-      createSessionRow({ key: "agent:main:b1", cwd: "/work/b", title: "B1" }),
-      createSessionRow({ key: "agent:main:a4", cwd: "/work/a", title: "A4" }),
+  it("paginates cwd-filtered sessions with lineage, safe timestamps, and filter-bound cursors", async () => {
+    const rows = [
+      row("child", {
+        ...lineage,
+        channel: "telegram",
+        derivedTitle: "Child",
+        spawnedWorkspaceDir: "/work/a",
+        updatedAt: Infinity,
+      }),
+      row("unknown"),
+      row("a2", { channel: "telegram", displayName: "Main", spawnedWorkspaceDir: "/work/a" }),
+      row("b1", { spawnedWorkspaceDir: "/work/b" }),
+      row("a3", { spawnedWorkspaceDir: "/work/a" }),
+      row("a4", { spawnedWorkspaceDir: "/work/a" }),
     ];
-    const request = vi.fn(async (method: string, params?: { limit?: number }) => {
-      if (method === "sessions.list") {
-        const limit = params?.limit ?? allRows.length;
-        return {
-          ...createGatewaySessions(allRows.slice(0, limit)),
-          totalCount: allRows.length,
-          hasMore: limit < allRows.length,
-        };
+    const { agent, request } = fixture([], async (method, params) => {
+      if (method !== "sessions.list") {
+        return { ok: true };
       }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-      sessionStore,
+      const limit = typeof params?.limit === "number" ? params.limit : rows.length;
+      return {
+        ...sessions(rows.slice(0, limit)),
+        totalCount: rows.length,
+        hasMore: limit < rows.length,
+      };
     });
-
-    const first = await agent.listSessions(createListSessionsRequest({ cwd: "/work/a", limit: 2 }));
-    const second = await agent.listSessions(
-      createListSessionsRequest({ cwd: "/work/a", limit: 2, cursor: first.nextCursor }),
-    );
-
-    expect(first.sessions.map((session) => session.sessionId)).toEqual([
-      "agent:main:a1",
-      "agent:main:a2",
-    ]);
+    const first = await agent.listSessions({ cwd: "/work/a", _meta: { limit: 2 } });
+    const second = await agent.listSessions({
+      cwd: "/work/a",
+      cursor: first.nextCursor,
+      _meta: { limit: 2 },
+    });
+    expect(first.sessions.map((session) => session.sessionId)).toEqual(["child", "a2"]);
     expect(first.sessions.map((session) => session.cwd)).toEqual(["/work/a", "/work/a"]);
+    expect(first.sessions[0]?.updatedAt).toBeUndefined();
+    expect(first.sessions[0]?._meta).toEqual({
+      sessionKey: "child",
+      kind: "direct",
+      channel: "telegram",
+      ...lineageMeta,
+      spawnedWorkspaceDir: "/work/a",
+    });
+    expect(first.sessions[1]?._meta).toEqual({
+      sessionKey: "a2",
+      kind: "direct",
+      channel: "telegram",
+      spawnedWorkspaceDir: "/work/a",
+    });
     expect(first.nextCursor).toBeTypeOf("string");
     expect(first.nextCursor).not.toBe("");
-    expect(second.sessions.map((session) => session.sessionId)).toEqual([
-      "agent:main:a3",
-      "agent:main:a4",
-    ]);
+    expect(second.sessions.map((session) => session.sessionId)).toEqual(["a3", "a4"]);
     expect(second.sessions.map((session) => session.cwd)).toEqual(["/work/a", "/work/a"]);
     expect(second.nextCursor).toBeNull();
+    expect(request.mock.calls).toEqual(
+      [3, 6, 5, 10].map((limit) => ["sessions.list", { limit, includeDerivedTitles: true }]),
+    );
     await expect(
-      agent.listSessions(
-        createListSessionsRequest({ cwd: "/work/a", cursor: ` ${first.nextCursor} ` }),
-      ),
+      agent.listSessions({ cwd: "/work/a", cursor: ` ${first.nextCursor} ` }),
     ).rejects.toThrow("Invalid ACP session list cursor.");
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
-      limit: 3,
-      includeDerivedTitles: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
-      limit: 5,
-      includeDerivedTitles: true,
-    });
-  });
-
-  it("does not include sessions without workspace metadata in cwd-filtered lists", async () => {
-    const allRows = [
-      createSessionRow({ key: "agent:main:unknown", title: "Unknown workspace" }),
-      createSessionRow({ key: "agent:main:a1", cwd: "/work/a", title: "A1" }),
-      createSessionRow({ key: "agent:main:b1", cwd: "/work/b", title: "B1" }),
-    ];
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return createGatewaySessions(allRows);
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-      sessionStore,
-    });
-
-    const result = await agent.listSessions(createListSessionsRequest({ cwd: "/work/a" }));
-
-    expect(result.sessions.map((session) => session.sessionId)).toEqual(["agent:main:a1"]);
-    expect(result.sessions.map((session) => session.cwd)).toEqual(["/work/a"]);
-  });
-
-  it("lists Gateway sessions with invalid updated timestamps", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return createGatewaySessions([
-          createSessionRow({
-            key: "agent:main:work",
-            cwd: "/tmp/openclaw",
-            title: "Work session",
-            updatedAt: Number.POSITIVE_INFINITY,
-          }),
-        ]);
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-      sessionStore,
-    });
-
-    const result = await agent.listSessions(createListSessionsRequest({ cwd: "/tmp/openclaw" }));
-
-    expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0]?.updatedAt).toBeUndefined();
-  });
-
-  it("rejects session/list cursors when the cwd filter changes", async () => {
-    const allRows = [
-      createSessionRow({ key: "agent:main:a1", cwd: "/work/a", title: "A1" }),
-      createSessionRow({ key: "agent:main:a2", cwd: "/work/a", title: "A2" }),
-      createSessionRow({ key: "agent:main:b1", cwd: "/work/b", title: "B1" }),
-    ];
-    const request = vi.fn(async (method: string, params?: { limit?: number }) => {
-      if (method === "sessions.list") {
-        const limit = params?.limit ?? allRows.length;
-        return {
-          ...createGatewaySessions(allRows.slice(0, limit)),
-          totalCount: allRows.length,
-          hasMore: limit < allRows.length,
-        };
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-      sessionStore,
-    });
-
-    const unfiltered = await agent.listSessions(createListSessionsRequest({ limit: 1 }));
+    await expect(agent.listSessions({ cursor: first.nextCursor })).rejects.toThrow(
+      /cursor does not match the cwd filter/i,
+    );
+    const unfiltered = await agent.listSessions({ _meta: { limit: 1 } });
     expect(unfiltered.nextCursor).toBeTypeOf("string");
     expect(unfiltered.nextCursor).not.toBe("");
     await expect(
-      agent.listSessions(
-        createListSessionsRequest({ cwd: "/work/a", cursor: unfiltered.nextCursor }),
-      ),
-    ).rejects.toThrow(/cursor does not match the cwd filter/i);
-
-    const filtered = await agent.listSessions(
-      createListSessionsRequest({ cwd: "/work/a", limit: 1 }),
-    );
-    expect(filtered.nextCursor).toBeTypeOf("string");
-    expect(filtered.nextCursor).not.toBe("");
-    await expect(
-      agent.listSessions(createListSessionsRequest({ cursor: filtered.nextCursor })),
+      agent.listSessions({ cwd: "/work/a", cursor: unfiltered.nextCursor }),
     ).rejects.toThrow(/cursor does not match the cwd filter/i);
   });
 
   it("rejects relative cwd filters for session/list", async () => {
-    const sessionStore = createInMemorySessionStore();
-    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
-      sessionStore,
-    });
-
-    await expect(
-      agent.listSessions(createListSessionsRequest({ cwd: "relative/path" })),
-    ).rejects.toThrow(/requires an absolute cwd/i);
+    await expect(fixture().agent.listSessions({ cwd: "relative/path" })).rejects.toThrow(
+      /requires an absolute cwd/i,
+    );
   });
 
   it("resumes an existing Gateway session without replaying transcript history", async () => {
-    const connection = createAcpConnection();
-    const sessionUpdate = connection["__sessionUpdateMock"];
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return createGatewaySessions([
-          createSessionRow({
-            key: "agent:main:work",
-            cwd: "/tmp/openclaw",
-            title: "Work session",
-          }),
-        ]);
-      }
-      if (method === "sessions.get") {
-        throw new Error("resume must not load transcript history");
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
-      sessionStore,
-    });
-
-    const result = await agent.resumeSession(createResumeSessionRequest("agent:main:work"));
-
+    const { agent, request, connection, sessionStore } = fixture([
+      row(sessionKey, { spawnedWorkspaceDir: cwd, derivedTitle: "Work session" }),
+    ]);
+    const result = await agent.resumeSession({ sessionId: sessionKey, cwd, mcpServers: [] });
     expect(result.modes?.currentModeId).toBe("adaptive");
-    if (!result.configOptions) {
-      throw new Error("expected resume session config options");
-    }
-    const thoughtLevelOption = result.configOptions.find((option) => option.id === "thought_level");
-    expect(thoughtLevelOption?.currentValue).toBe("adaptive");
-    expect(sessionStore.getSession("agent:main:work")?.sessionKey).toBe("agent:main:work");
-    const requestCalls = (request as unknown as { mock: { calls: Array<[string]> } }).mock.calls;
-    expect(requestCalls.map((call) => call[0])).not.toContain("sessions.get");
-    expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "agent:main:work",
+    expect(
+      result.configOptions?.find((option) => option.id === "thought_level")?.currentValue,
+    ).toBe("adaptive");
+    expect(sessionStore.getSession(sessionKey)?.sessionKey).toBe(sessionKey);
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("sessions.get");
+    expect(connection["__sessionUpdateMock"]).toHaveBeenCalledWith({
+      sessionId: sessionKey,
       update: {
         sessionUpdate: "session_info_update",
         title: "Work session",
         updatedAt: "2024-03-09T16:00:00.000Z",
-        _meta: {
-          sessionKey: "agent:main:work",
-          kind: "direct",
-          spawnedWorkspaceDir: "/tmp/openclaw",
-        },
+        _meta: { sessionKey, kind: "direct", spawnedWorkspaceDir: cwd },
       },
     });
   });
 
   it("rejects resume for a missing Gateway session without creating bridge state", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return createGatewaySessions([]);
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-      sessionStore,
-    });
-
+    const { agent, sessionStore } = fixture();
     await expect(
-      agent.resumeSession(createResumeSessionRequest("missing-session")),
-    ).rejects.toThrow(/Session missing-session not found/i);
-
-    expect(sessionStore.hasSession("missing-session")).toBe(false);
+      agent.resumeSession({ sessionId: "missing", cwd, mcpServers: [] }),
+    ).rejects.toThrow(/Session missing not found/i);
+    expect(sessionStore.hasSession("missing")).toBe(false);
   });
 
-  it("resolves prompts when chat send returns a terminal timeout ack", async () => {
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "chat.send") {
-        return { runId: params?.idempotencyKey, status: "timeout" };
-      }
-      if (method === "sessions.list") {
-        return createGatewaySessions([createSessionRow({ key: "agent:main:work" })]);
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    sessionStore.createSession({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      cwd: "/tmp/openclaw",
+  it("keeps snapshot lineage in the Gateway session key namespace", async () => {
+    const { agent, connection } = fixture([
+      row(sessionKey, {
+        ...lineage,
+        channel: "discord",
+        displayName: "Child",
+        spawnedWorkspaceDir: "/workspace/child",
+        updatedAt: 1_710_000_020_000,
+      }),
+    ]);
+    await agent.loadSession({
+      ...createLoadSessionRequest("client-local-session"),
+      _meta: { sessionKey },
     });
-    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-      sessionStore,
-    });
-
-    await expect(
-      settlePromptQuickly(agent.prompt(createPromptRequest("session-1"))),
-    ).resolves.toEqual({
-      stopReason: "cancelled",
+    expect(connection["__sessionUpdateMock"]).toHaveBeenCalledWith({
+      sessionId: "client-local-session",
+      update: {
+        sessionUpdate: "session_info_update",
+        title: "Child",
+        updatedAt: "2024-03-09T16:00:20.000Z",
+        _meta: {
+          sessionKey,
+          kind: "direct",
+          channel: "discord",
+          ...lineageMeta,
+          spawnedWorkspaceDir: "/workspace/child",
+        },
+      },
     });
   });
 
-  it("rejects prompts when chat send returns a terminal error ack", async () => {
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "chat.send") {
-        return { runId: params?.idempotencyKey, status: "error" };
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    sessionStore.createSession({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      cwd: "/tmp/openclaw",
-    });
-    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-      sessionStore,
-    });
-
-    await expect(
-      settlePromptQuickly(agent.prompt(createPromptRequest("session-1"))),
-    ).rejects.toThrow("Chat failed before the run started; try again.");
-  });
-
-  it("resolves prompts when chat send returns a terminal ok ack", async () => {
-    const requestMock = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "chat.send") {
-        return { runId: params?.idempotencyKey, status: "ok" };
-      }
-      return { ok: true };
-    });
-    const request = requestMock as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    sessionStore.createSession({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      cwd: "/tmp/openclaw",
-    });
-    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-      sessionStore,
-    });
-
-    await expect(
-      settlePromptQuickly(agent.prompt(createPromptRequest("session-1"))),
-    ).resolves.toEqual({
-      stopReason: "end_turn",
-    });
-    expect(requestMock.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
-  });
-
-  it("closes sessions by aborting active work, resolving pending prompts, and deleting bridge state", async () => {
-    const sentRunIds: string[] = [];
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "chat.send") {
-        const runId = params?.idempotencyKey;
-        if (typeof runId === "string") {
-          sentRunIds.push(runId);
+  it.each([
+    { status: "timeout", stopReason: "cancelled" },
+    { status: "ok", stopReason: "end_turn" },
+    { status: "error", stopReason: undefined },
+  ] as const)(
+    "settles prompts on a terminal $status acknowledgement",
+    async ({ status, stopReason }) => {
+      const { agent, request, sessionStore } = fixture([], async (method, params) => {
+        if (method === "chat.send") {
+          return { runId: params?.idempotencyKey, status };
         }
-        return new Promise<never>(() => {});
+        return method === "sessions.list" ? sessions([row(sessionKey)]) : { ok: true };
+      });
+      sessionStore.createSession({ sessionId: "session-1", sessionKey, cwd });
+      const prompt = agent.prompt(createPromptRequest("session-1", "hello"));
+      if (status === "error") {
+        await expect(prompt).rejects.toThrow("Chat failed before the run started; try again.");
+      } else {
+        await expect(prompt).resolves.toEqual({ stopReason });
       }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    sessionStore.createSession({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      cwd: "/tmp/openclaw",
-    });
-    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-      sessionStore,
-    });
-    const pending = await startPendingPrompt({ agent, sentRunIds, sessionId: "session-1" });
-
-    await expect(agent.closeSession(createCloseSessionRequest("session-1"))).resolves.toStrictEqual(
-      {},
-    );
-
-    expect(request).toHaveBeenCalledWith("chat.abort", {
-      sessionKey: "agent:main:work",
-      runId: pending.runId,
-    });
-    await expect(pending.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
-    expect(sessionStore.hasSession("session-1")).toBe(false);
-  });
+      expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    },
+  );
 
   it("drains only its own pending work and sessions during shutdown", async () => {
-    const sentRunIds: string[] = [];
-    const requestA = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "chat.send") {
-        const runId = params?.idempotencyKey;
-        if (typeof runId === "string") {
-          sentRunIds.push(runId);
-        }
-        return { runId, status: "started" };
-      }
-      if (method === "sessions.list") {
-        return createGatewaySessions([]);
-      }
-      return { ok: true };
+    const ledger = createTestAcpEventLedger();
+    const recorded = createDeferredCore();
+    const recordUserPrompt = ledger.recordUserPrompt.bind(ledger);
+    vi.spyOn(ledger, "recordUserPrompt").mockImplementation(async (params) => {
+      await recordUserPrompt(params);
+      recorded.resolve();
     });
-    const requestB = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return createGatewaySessions([]);
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        return { runId: params?.idempotencyKey, status: "started" };
       }
-      return { ok: true };
+      return method === "sessions.list" ? sessions([]) : { ok: true };
     });
     const agentA = createAcpGatewayAgent(
       createAcpConnection(),
-      createAcpGateway(requestA as GatewayClient["request"]),
+      createAcpGateway(request as GatewayClient["request"]),
+      { eventLedger: ledger },
     );
     const agentB = createAcpGatewayAgent(
       createAcpConnection(),
-      createAcpGateway(requestB as GatewayClient["request"]),
+      createAcpGateway(request as GatewayClient["request"]),
     );
-    const sessionA = await agentA.newSession(createNewSessionRequest());
-    const sessionB = await agentB.newSession(createNewSessionRequest());
-    const pending = await startPendingPrompt({
-      agent: agentA,
-      sentRunIds,
-      sessionId: sessionA.sessionId,
-    });
-
+    const sessionA = await agentA.newSession(createNewSessionRequest(cwd));
+    const sessionB = await agentB.newSession(createNewSessionRequest(cwd));
+    const pending = agentA.prompt(createPromptRequest(sessionA.sessionId, "hello"));
+    await recorded.promise;
+    const send = request.mock.calls.find(([method]) => method === "chat.send");
+    expect(send?.[1]?.idempotencyKey).toBeTypeOf("string");
     await agentA.shutdown();
-
-    await expect(settlePromptQuickly(pending.promptPromise)).resolves.toEqual({
-      stopReason: "cancelled",
-    });
-    const abortCall = requestA.mock.calls.find(([method]) => method === "chat.abort");
-    expect(abortCall?.[1]).toEqual({
+    await expect(pending).resolves.toEqual({ stopReason: "cancelled" });
+    expect(request.mock.calls.find(([method]) => method === "chat.abort")?.[1]).toEqual({
       sessionKey: `acp-bridge:${sessionA.sessionId}`,
-      runId: pending.runId,
+      runId: send?.[1]?.idempotencyKey,
     });
-    await expect(
-      agentA.closeSession(createCloseSessionRequest(sessionA.sessionId)),
-    ).rejects.toThrow(`Session ${sessionA.sessionId} not found`);
-    await expect(
-      agentB.closeSession(createCloseSessionRequest(sessionA.sessionId)),
-    ).rejects.toThrow(`Session ${sessionA.sessionId} not found`);
-    await expect(
-      agentB.closeSession(createCloseSessionRequest(sessionB.sessionId)),
-    ).resolves.toEqual({});
-  });
-
-  it("rejects close for missing sessions", async () => {
-    const sessionStore = createInMemorySessionStore();
-    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
-      sessionStore,
-    });
-
-    await expect(agent.closeSession(createCloseSessionRequest("missing-session"))).rejects.toThrow(
-      /Session missing-session not found/i,
+    await expect(agentA.closeSession({ sessionId: sessionA.sessionId })).rejects.toThrow(
+      `Session ${sessionA.sessionId} not found`,
     );
+    await expect(agentB.closeSession({ sessionId: sessionA.sessionId })).rejects.toThrow(
+      `Session ${sessionA.sessionId} not found`,
+    );
+    await expect(agentB.closeSession({ sessionId: sessionB.sessionId })).resolves.toEqual({});
   });
 });

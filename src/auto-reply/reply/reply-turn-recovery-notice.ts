@@ -1,12 +1,13 @@
 import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
-import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { loadSessionStoreEntry } from "./dispatch-from-config.runtime.js";
 
 type RecoveryNotice = {
   agentId: string;
@@ -42,8 +43,13 @@ export async function sendReplyRestartRecoveryNotice(params: {
   deliver: (text: string) => Promise<boolean>;
 }): Promise<void> {
   try {
+    const currentAcpSession = await readAcpSessionEntryAsync({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    });
     // Admission may have waited while reset or deletion changed the session.
-    const entry: InternalSessionEntry | undefined = loadSessionStoreEntry({
+    const entry: InternalSessionEntry | undefined = await readSessionEntryReadOnlyInWorker({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
@@ -53,11 +59,6 @@ export async function sendReplyRestartRecoveryNotice(params: {
     if (!entry || !recovery?.tombstone) {
       return;
     }
-    const currentAcpSession = readAcpSessionEntry({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    });
     if (
       isParentOwnedBackgroundAcpSession(
         currentAcpSession?.entry
@@ -91,12 +92,7 @@ export async function sendReplyRestartRecoveryNotice(params: {
       return;
     }
     notices.entries.delete(key);
-    if (notices.entries.size >= MAX_RECOVERY_NOTICES) {
-      const oldestKey = notices.entries.keys().next().value;
-      if (oldestKey !== undefined) {
-        notices.entries.delete(oldestKey);
-      }
-    }
+    pruneMapToMaxSize(notices.entries, MAX_RECOVERY_NOTICES - 1);
     // Claim before awaiting delivery; ambiguous failures must not produce a notice storm.
     notices.entries.set(key, {
       agentId: params.agentId,
@@ -106,8 +102,8 @@ export async function sendReplyRestartRecoveryNotice(params: {
     });
     const hint =
       entry.modelSelectionLocked === true
-        ? "Open it in WebChat and use Resume in new session."
-        : "Use /reset or /new to start a replacement session.";
+        ? "Open it in WebChat and use Resume."
+        : "Use Resume in WebChat, or /reset or /new to start a replacement session.";
     if (!(await params.deliver(`My session in this room ended during restart recovery. ${hint}`))) {
       log.warn(
         `restart recovery notice delivery was not confirmed for session ${params.sessionKey}`,

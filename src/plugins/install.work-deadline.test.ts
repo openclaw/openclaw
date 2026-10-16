@@ -3,6 +3,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandOptions } from "../process/exec.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -24,9 +25,9 @@ describe("plugin update work deadlines", () => {
     runCommand.mockReset();
     runCommand.mockImplementation(async (argv: string[], options: CommandOptions) => {
       let stdout = "";
-      if (argv[1] === "view") {
+      if (npmCommandArgs(argv)?.[0] === "view") {
         stdout = JSON.stringify({ name: "deadline-fixture", version: "1.0.0" });
-      } else if (argv[1] === "install") {
+      } else if (npmCommandArgs(argv)?.[0] === "install") {
         const cwd = options.cwd!;
         const packageDir = path.join(cwd, "node_modules", "deadline-fixture");
         await fs.mkdir(packageDir, { recursive: true });
@@ -95,11 +96,16 @@ describe("plugin update work deadlines", () => {
       );
       const calls = runCommand.mock.calls as [string[], CommandOptions][];
       expect(
-        calls.filter(([argv]) => argv[1] === "view").map(([, opts]) => opts.timeoutMs),
+        calls
+          .filter(([argv]) => npmCommandArgs(argv)?.[0] === "view")
+          .map(([, opts]) => opts.timeoutMs),
       ).toEqual([metadata]);
       expect(
         calls
-          .filter(([argv]) => argv[1] === "install" && !argv.includes("--package-lock-only"))
+          .filter(
+            ([argv]) =>
+              npmCommandArgs(argv)?.[0] === "install" && !argv.includes("--package-lock-only"),
+          )
           .map(([, opts]) => opts.timeoutMs),
       ).toEqual([work]);
       const plans = calls.filter(([argv]) => argv.includes("--package-lock-only"));

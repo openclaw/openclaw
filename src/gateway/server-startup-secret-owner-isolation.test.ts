@@ -72,7 +72,8 @@ const { webSearchProviders } = vi.hoisted(() => {
   };
 });
 
-vi.mock("../secrets/runtime-web-tools-manifest.runtime.js", () => ({
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-registry.js")>()),
   resolveManifestContractPluginIds: ({ contract }: { contract: string }) =>
     contract === "webSearchProviders" ? ["google"] : [],
   resolveManifestContractOwnerPluginId: ({ value }: { value: string }) =>
@@ -84,7 +85,8 @@ vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: () => [],
 }));
 
-vi.mock("../secrets/runtime-web-tools-public-artifacts.runtime.js", () => ({
+vi.mock("../plugins/web-provider-public-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/web-provider-public-artifacts.js")>()),
   resolveBundledWebSearchProvidersFromPublicArtifacts: () => webSearchProviders,
   resolveBundledWebFetchProvidersFromPublicArtifacts: () => [],
 }));
@@ -154,8 +156,9 @@ describe("Gateway startup SecretRef owner isolation", () => {
       await writeConfig({
         ...baseConfig(),
         agents: {
+          ownership: "explicit",
           defaults: { systemAgent: { agentId: "ops" } },
-          entries: { main: { default: true }, ops: {} },
+          entries: { main: {}, ops: {} },
         },
         session: { scope: "global" },
         secrets: { providers: { default: { source: "env" } } },
@@ -445,7 +448,9 @@ describe("Gateway startup SecretRef owner isolation", () => {
             },
           },
           agents: {
+            ownership: "explicit",
             defaults: {
+              systemAgent: { agentId: "main" },
               sandbox: {
                 mode: "all",
                 backend: "ssh",
@@ -461,7 +466,6 @@ describe("Gateway startup SecretRef owner isolation", () => {
             },
             entries: {
               main: {
-                default: true,
                 sandbox: {
                   ssh: {
                     identityData: {

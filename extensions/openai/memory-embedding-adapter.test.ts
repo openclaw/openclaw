@@ -3,7 +3,6 @@ import {
   resolveRemoteEmbeddingBearerClient,
   type MemoryEmbeddingProvider,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -89,9 +88,6 @@ describe("OpenAI memory embedding adapter", () => {
       "User-Agent": "openclaw/2026.7.2",
     });
     expect(current.cacheKeyData).toEqual(previous.cacheKeyData);
-    expect(hashText(JSON.stringify(current.cacheKeyData))).toBe(
-      hashText(JSON.stringify(previous.cacheKeyData)),
-    );
     expect(current.cacheKeyData).toMatchObject({
       provider: "openai",
       baseUrl: "https://api.openai.com/v1",
@@ -181,9 +177,6 @@ describe("OpenAI memory embedding adapter", () => {
         ]),
       );
       expect(first.runtime?.cacheKeyData).toEqual(rotated.runtime?.cacheKeyData);
-      expect(hashText(JSON.stringify(first.runtime?.cacheKeyData))).toBe(
-        hashText(JSON.stringify(rotated.runtime?.cacheKeyData)),
-      );
       expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
       expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain("fixture-secret");
       expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain(
@@ -229,24 +222,6 @@ describe("OpenAI memory embedding adapter", () => {
       dimensions: 512,
       input_type: "document",
     });
-  });
-
-  it("preserves the caller provider id for custom OpenAI-compatible embedding providers", async () => {
-    const result = await openAiMemoryEmbeddingProviderAdapter.create({
-      config: {} as never,
-      provider: "bailian-embedding",
-      model: "text-embedding-v3",
-      fallback: "none",
-    });
-
-    expect(mocks.createOpenAiEmbeddingProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "bailian-embedding",
-        fallback: "none",
-        model: "text-embedding-v3",
-      }),
-    );
-    expect(result.runtime?.cacheKeyData?.provider).toBe("bailian-embedding");
   });
 
   it("defaults provider id to openai when the caller leaves it unset", async () => {

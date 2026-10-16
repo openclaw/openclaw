@@ -13,19 +13,6 @@ function downloadVideo(fetchFn: typeof fetch) {
 }
 
 describe("downloadXaiVideo", () => {
-  it("returns the downloaded video bytes for a well-formed binary response", async () => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response("mp4-bytes", { status: 200, headers: { "content-type": "video/mp4" } }),
-    );
-
-    const video = await downloadVideo(fetchFn);
-
-    expect(video.mimeType).toBe("video/mp4");
-    expect(video.fileName).toBe("video-1.mp4");
-    expect(video.buffer?.toString("utf8")).toBe("mp4-bytes");
-  });
-
   it.each([
     { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
     { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },

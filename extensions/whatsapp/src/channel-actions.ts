@@ -1,11 +1,8 @@
-import {
-  listWhatsAppAccountIds,
-  resolveWhatsAppAccount,
-  createActionGate,
-  type ChannelMessageActionName,
-  type OpenClawConfig,
-  resolveWhatsAppReactionLevel,
-} from "./channel-actions.runtime.js";
+import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
+import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { listWhatsAppAccountIds, resolveWhatsAppAccount } from "./accounts.js";
+import { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 
 function resolveEnabledWhatsAppAgentReactions(params: { cfg: OpenClawConfig; accountId?: string }) {
   if (!params.cfg.channels?.whatsapp) {
@@ -55,7 +52,7 @@ export function describeWhatsAppMessageActions(params: {
     return null;
   }
   const gate = createActionGate(params.cfg.channels.whatsapp.actions);
-  const actions = new Set<ChannelMessageActionName>();
+  const actions: ChannelMessageActionName[] = [];
   const canReact =
     params.accountId != null
       ? Boolean(
@@ -66,11 +63,11 @@ export function describeWhatsAppMessageActions(params: {
         )
       : hasAnyWhatsAppAccountWithAgentReactionsEnabled(params.cfg);
   if (canReact) {
-    actions.add("react");
+    actions.push("react");
   }
   if (gate("polls")) {
-    actions.add("poll");
+    actions.push("poll");
   }
-  actions.add("upload-file");
-  return { actions: Array.from(actions) };
+  actions.push("upload-file");
+  return { actions };
 }

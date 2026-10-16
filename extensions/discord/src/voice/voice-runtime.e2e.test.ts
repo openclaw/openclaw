@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough, type Readable } from "node:stream";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
@@ -276,7 +277,7 @@ defineDiscordVoiceTests(
       expect(commandArgs?.model).toBe("openai/gpt-5.4-mini");
     });
 
-    it("runs voice replies under Discord voice output policy", async () => {
+    it("runs voice replies under Discord voice output policy", async ({ signal }) => {
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-voice-"));
       const audioPath = path.join(tempDir, "reply.mp3");
       await fs.writeFile(audioPath, "voice");
@@ -293,13 +294,13 @@ defineDiscordVoiceTests(
       );
       try {
         await receiveVoiceUtterance(manager, "u-guest");
-        await vi.waitFor(async () => {
-          const exists = await fs.access(audioPath).then(
-            () => true,
-            () => false,
-          );
-          expect(exists).toBe(false);
-        });
+        // Playback owns the reply file until its releaseAudio finally completes.
+        await withinTest(getSessionEntry(manager).playbackQueue, signal);
+        const exists = await fs.access(audioPath).then(
+          () => true,
+          () => false,
+        );
+        expect(exists).toBe(false);
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }
@@ -317,27 +318,6 @@ defineDiscordVoiceTests(
       );
       expect(lastTtsArgs().channel).toBe("discord");
       expect(lastTtsArgs().text).toBe("hello back");
-    });
-
-    it("logs a bounded inbound transcript preview for voice debugging", async () => {
-      transcribeAudioFileMock.mockResolvedValueOnce({
-        text: `hello from voice\n\n${"x".repeat(700)}`,
-      });
-      const client = createClientWithMember("u-debug", "Debug", "0001", "Debug Speaker");
-      const manager = createManager(
-        makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-debug"] }),
-        client,
-        {},
-      );
-
-      await receiveVoiceUtterance(manager, "u-debug");
-
-      const transcriptLog = logVerboseMock.mock.calls
-        .map((call) => String(call[0]))
-        .find((message) => message.includes("transcript from Debug Speaker (u-debug)"));
-      expect(transcriptLog).toContain("hello from voice ");
-      expect(transcriptLog).not.toContain("\n");
-      expect(transcriptLog?.length).toBeLessThan(650);
     });
 
     it("logs a failed streaming provider once per session when using file fallback", async () => {

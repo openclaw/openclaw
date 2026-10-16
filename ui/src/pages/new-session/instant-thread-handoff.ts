@@ -5,6 +5,7 @@ import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import type { CreationComposer } from "./creation-composer.ts";
 import { beginInstantThreadNavigation } from "./instant-thread-navigation.ts";
 import {
   retainInstantThreadRestore,
@@ -23,6 +24,7 @@ export function prepareInstantThreadHandoff(options: {
   agentId: string;
   retainDraft: (() => RetainedNewSessionDraft | undefined) | undefined;
   message: Parameters<ApplicationContext["chatSubmissions"]["beginCreate"]>[0]["message"];
+  composer?: CreationComposer;
 }): (() => InstantThreadHandoff | undefined) | undefined {
   const { context, params, agentId, retainDraft } = options;
   if (!options.enabled || !context.gateway.snapshot.hello?.auth?.recoveryScope || !retainDraft) {
@@ -37,7 +39,15 @@ export function prepareInstantThreadHandoff(options: {
   return () => {
     const draft = retainDraft();
     return draft
-      ? new InstantThreadHandoff(context, key, agentId, draft, options.message)
+      ? new InstantThreadHandoff(
+          context,
+          key,
+          agentId,
+          draft,
+          options.message,
+          options.composer,
+          params.displayName,
+        )
       : undefined;
   };
 }
@@ -71,6 +81,8 @@ export class InstantThreadHandoff {
     agentId: string,
     private readonly draft: RetainedNewSessionDraft,
     message: Parameters<ApplicationContext["chatSubmissions"]["beginCreate"]>[0]["message"],
+    composer?: CreationComposer,
+    displayName?: string,
   ) {
     this.creation = { sessionKey: key, admitted: false };
     this.client = context.gateway.snapshot.client;
@@ -100,15 +112,19 @@ export class InstantThreadHandoff {
     const target = { pathname: options.pathname, search: "", hash: "" };
     // The route renders the provisional key, but saved/global selection stays
     // on the last admitted session until StartedSessionNavigation adopts it.
-    this.transition = beginInstantThreadNavigation(context, "chat", target);
+    // A cached preview can notify the shell synchronously on reconnect. Publish
+    // its admission owner first so that navigation cannot select an unadmitted key.
     this.clearPendingCreate = context.chatSubmissions.beginCreate({
       creation: this.creation,
       message,
+      composer,
+      displayName,
       // This transaction owns live identity/navigation authority. The display store
       // consumes that decision instead of maintaining a second authentication snapshot.
       canDisplay: () => this.canDisplay(),
     });
-    this.transition.signal.addEventListener("abort", this.onLeave, { once: true });
+    this.transition = beginInstantThreadNavigation(context, "chat", target);
+    this.transition.signal.addEventListener("abort", () => this.dispose(), { once: true });
     this.stopGateway = context.gateway.subscribe(() => {
       const snapshot = context.gateway.snapshot;
       if (
@@ -165,10 +181,6 @@ export class InstantThreadHandoff {
       this.context.agentSelection.state.selectedId === agentId
     );
   }
-
-  private readonly onLeave = () => {
-    this.dispose();
-  };
 
   async waitForReady() {
     // A preview load failure is not a newer navigation. The create can still

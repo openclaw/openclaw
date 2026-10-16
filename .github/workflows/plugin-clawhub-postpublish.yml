@@ -1,7 +1,7 @@
 name: Plugin ClawHub Postpublish
 
 on:
-  workflow_run: # zizmor: ignore[dangerous-triggers] read-only verifier; authenticates exact successful parent/child attempts and immutable receipt/artifact tuples; never executes downloaded content
+  workflow_run: # zizmor: ignore[dangerous-triggers] read-only verifier; authenticates exact sealed parent/child attempts and immutable receipt/artifact tuples; never executes downloaded content
     workflows: [OpenClaw Release Publish]
     types: [completed]
 
@@ -22,8 +22,8 @@ jobs:
       github.repository == 'openclaw/openclaw' &&
       github.event.workflow_run.repository.full_name == 'openclaw/openclaw' &&
       github.event.workflow_run.event == 'workflow_dispatch' &&
-      github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+      (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure')
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     timeout-minutes: 60
     steps:
       - name: Checkout trusted verification tooling
@@ -34,19 +34,20 @@ jobs:
           fetch-depth: 1
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
 
       - name: Verify terminal publication and canonical registry bytes
         env:
           GH_TOKEN: ${{ github.token }}
+          PARENT_STATE_POLICY: ${{ github.event.workflow_run.conclusion == 'failure' && 'sealed-producer' || 'completed-success' }}
           VERIFIER_SHA: ${{ github.workflow_sha }}
         run: node scripts/clawhub-postpublish.mjs
 
       - name: Retain publication verification evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: clawhub-postpublish-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
           path: ${{ runner.temp }}/clawhub-postpublish/evidence.json

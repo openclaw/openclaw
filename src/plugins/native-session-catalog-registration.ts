@@ -85,6 +85,12 @@ export function createNativeSessionCatalogGate(params: {
         openTerminal,
         checkUpstreamActivity,
       } = provider;
+      const guard =
+        <Args extends unknown[], Result>(operation: (...args: Args) => Promise<Result>) =>
+        async (...args: Args): Promise<Result> => {
+          assertEnabled();
+          return operation.apply(provider, args);
+        };
       return {
         ...provider,
         list: async (query) => (enabled() ? provider.list(query) : []),
@@ -103,34 +109,22 @@ export function createNativeSessionCatalogGate(params: {
         },
         ...(continueSession
           ? {
-              continueSession: async (request) => {
-                assertEnabled();
-                return continueSession.call(provider, request);
-              },
+              continueSession: guard(continueSession),
             }
           : {}),
         ...(copyToGatewaySession
           ? {
-              copyToGatewaySession: async (request) => {
-                assertEnabled();
-                return copyToGatewaySession.call(provider, request);
-              },
+              copyToGatewaySession: guard(copyToGatewaySession),
             }
           : {}),
         ...(archive
           ? {
-              archive: async (request) => {
-                assertEnabled();
-                return archive.call(provider, request);
-              },
+              archive: guard(archive),
             }
           : {}),
         ...(openTerminal
           ? {
-              openTerminal: async (request) => {
-                assertEnabled();
-                return openTerminal.call(provider, request);
-              },
+              openTerminal: guard(openTerminal),
             }
           : {}),
         ...(checkUpstreamActivity

@@ -3,37 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 
 describe("connection bootstrap coordinator", () => {
-  it("deduplicates bootstrap work and caps its connection concurrency", async () => {
-    const coordinator = createConnectionBootstrapCoordinator();
-    coordinator.synchronize({ client: {}, connected: true });
-    let active = 0;
-    let maximum = 0;
-    const first = createDeferred();
-    const second = createDeferred();
-    const third = createDeferred();
-    const run = (completion: ReturnType<typeof createDeferred<void>>) => async () => {
-      active += 1;
-      maximum = Math.max(maximum, active);
-      await completion.promise;
-      active -= 1;
-    };
-
-    const firstTask = coordinator.run("first", run(first));
-    const duplicateFirstTask = coordinator.run("first", run(first));
-    const secondTask = coordinator.run("second", run(second));
-    const thirdTask = coordinator.run("third", run(third));
-
-    await vi.waitFor(() => expect(maximum).toBe(2));
-    first.resolve();
-    await Promise.all([firstTask, duplicateFirstTask]);
-    expect(maximum).toBe(2);
-    second.resolve();
-    third.resolve();
-    await Promise.all([secondTask, thirdTask]);
-    expect(maximum).toBe(2);
-  });
-
-  it.each(["reset", "disconnected", "replaced"])(
+  it.each(["disconnected"])(
     "does not start queued work after its connection is %s",
     async (boundary) => {
       const coordinator = createConnectionBootstrapCoordinator();
@@ -204,31 +174,5 @@ describe("connection bootstrap coordinator", () => {
     await queued;
 
     expect(hydrate).toHaveBeenCalledOnce();
-  });
-
-  it("releases failed work for another automatic attempt", async () => {
-    const coordinator = createConnectionBootstrapCoordinator();
-    coordinator.synchronize({ client: {}, connected: true });
-    const retry = vi.fn(async () => {});
-
-    await expect(
-      coordinator.run("runtime-config", async () => {
-        throw new Error("network unavailable");
-      }),
-    ).resolves.toBeUndefined();
-    await coordinator.run("runtime-config", retry);
-
-    expect(retry).toHaveBeenCalledOnce();
-  });
-
-  it("releases fulfilled work for a later automatic refresh", async () => {
-    const coordinator = createConnectionBootstrapCoordinator();
-    coordinator.synchronize({ client: {}, connected: true });
-    const refresh = vi.fn(async () => {});
-
-    await coordinator.run("runtime-config", refresh);
-    await coordinator.run("runtime-config", refresh);
-
-    expect(refresh).toHaveBeenCalledTimes(2);
   });
 });

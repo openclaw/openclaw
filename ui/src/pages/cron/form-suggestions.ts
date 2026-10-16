@@ -1,12 +1,15 @@
 import type { ConversationListItem } from "@openclaw/gateway-protocol";
-import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeSortedUniqueTrimmedStringList,
+  normalizeTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import type { AgentsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { getCronJobPayload, resolveConfiguredCronModelSuggestions } from "../../lib/cron/index.ts";
 import type { CronState } from "../../lib/cron/types.ts";
-import { resolveCronTimezoneSuggestions } from "./timezone-suggestions.ts";
+import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
 
 export const THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
 
@@ -75,27 +78,26 @@ export function buildCronSuggestions(params: {
     ...savedDeliveryTargets,
     ...(params.cron.cronForm.deliveryMode === "announce" ? (params.conversationTargets ?? []) : []),
   ]);
-  const accountTargets = (
-    channel === "last"
+  const accountTargets = normalizeTrimmedStringList(
+    (channel === "last"
       ? Object.values(params.channels.channelsSnapshot?.channelAccounts ?? {}).flat()
       : (params.channels.channelsSnapshot?.channelAccounts?.[channel] ?? [])
-  )
-    .flatMap((account) => [account.accountId, account.name])
-    .filter((value): value is string => typeof value === "string")
-    .map((value) => value.trim())
-    .filter(Boolean);
+    ).map((account) => account.accountId),
+  );
+  const forDeliveryMode = (targets: string[]) =>
+    params.cron.cronForm.deliveryMode === "webhook"
+      ? targets.filter((value) => /^https?:\/\//i.test(value))
+      : targets;
   return {
     agentSuggestions,
     modelSuggestions,
-    timezoneSuggestions: resolveCronTimezoneSuggestions(params.cron.cronJobs),
+    timezoneSuggestions: resolveTimezoneSuggestions(
+      params.cron.cronJobs.map((job) =>
+        job.schedule.kind === "cron" ? (job.schedule.tz ?? "") : "",
+      ),
+    ),
     accountTargets,
-    failureAlertToSuggestions:
-      params.cron.cronForm.deliveryMode === "webhook"
-        ? savedDeliveryTargets.filter((value) => /^https?:\/\//i.test(value))
-        : savedDeliveryTargets,
-    deliveryToSuggestions:
-      params.cron.cronForm.deliveryMode === "webhook"
-        ? deliveryTargets.filter((value) => /^https?:\/\//i.test(value))
-        : deliveryTargets,
+    failureAlertToSuggestions: forDeliveryMode(savedDeliveryTargets),
+    deliveryToSuggestions: forDeliveryMode(deliveryTargets),
   };
 }

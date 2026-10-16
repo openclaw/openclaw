@@ -1,6 +1,7 @@
-import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createBedrockAwsSdkConfig } from "./auth-profiles/config-fixtures.test-support.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -9,23 +10,20 @@ import {
 } from "./model-catalog-auth-labels.js";
 
 const envKey = vi.hoisted(() => vi.fn());
-vi.mock("./model-auth.js", () => ({
+vi.mock("./model-auth-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth-env.js")>()),
   resolveEnvApiKey: envKey,
-  resolveUsableCustomProviderApiKey: () => null,
 }));
-vi.mock("./auth-profiles.js", async () => ({
-  isConfiguredAwsSdkAuthProfileForProvider: (await import("./auth-profiles/order.js"))
-    .isConfiguredAwsSdkAuthProfileForProvider,
-  isProfileInCooldown: (await import("./auth-profiles/usage-state.js")).isProfileInCooldown,
-  resolveAuthProfileDisplayLabel: (await import("./auth-profiles/display.js"))
-    .resolveAuthProfileDisplayLabel,
-  resolveAuthStorePathForDisplay: () => "/tmp/catalog-auth/auth-profiles.json",
+vi.mock("./model-auth-provider-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth-provider-config.js")>()),
+  resolveUsableCustomProviderApiKey: () => null,
 }));
 const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig = {}) => {
   const capturedStore = structuredClone(store);
   const labels = prepareModelCatalogAuthLabels({
     config: cfg,
     agentDir: "/tmp/catalog-auth",
+    authStorePath: "/tmp/catalog-auth/auth-profiles.json",
     env: {},
     store: capturedStore,
     providers: [provider],
@@ -36,45 +34,6 @@ const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig 
 
 describe("captured catalog auth labels", () => {
   beforeEach(() => envKey.mockReset().mockReturnValue(null));
-
-  it.each([
-    {
-      name: "API key reference",
-      profile: {
-        type: "api_key",
-        provider: "openai",
-        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-      },
-      label: "default=ref",
-    },
-    {
-      name: "token reference",
-      profile: {
-        type: "token",
-        provider: "openai",
-        tokenRef: { source: "env", provider: "default", id: "OPENAI_TOKEN" },
-      },
-      label: "default=token:ref",
-    },
-    {
-      name: "invalid token expiry",
-      profile: {
-        type: "token",
-        provider: "openai",
-        token: "gho-test",
-        expires: MAX_DATE_TIMESTAMP_MS + 1,
-      },
-      label: "default=token:gh...st",
-    },
-  ] satisfies { name: string; profile: AuthProfileStore["profiles"][string]; label: string }[])(
-    "retains the $name label after the source changes",
-    ({ profile, label }) => {
-      const store: AuthProfileStore = { version: 1, profiles: { default: profile } };
-      const captured = capture("openai", store);
-      store.profiles = {};
-      expect(captured.labels.get("openai")?.all).toMatchObject({ profiles: { default: label } });
-    },
-  );
 
   it("preserves provider-specific placeholders and independently owned profile labels", () => {
     const config = createBedrockAwsSdkConfig();
@@ -113,6 +72,7 @@ describe("captured catalog auth labels", () => {
       config,
       store,
       agentDir: "/tmp/catalog-auth",
+      authStorePath: "/tmp/catalog-auth/auth-profiles.json",
       env: {},
       providers: ["OPENAI", "amazon-bedrock", "anthropic", "openai"],
     });
@@ -149,6 +109,7 @@ describe("captured catalog auth labels", () => {
       config,
       store,
       agentDir: "/tmp/catalog-auth",
+      authStorePath: "/tmp/catalog-auth/auth-profiles.json",
       env: {},
       providers: ["openai"],
     });
@@ -213,6 +174,45 @@ describe("captured catalog auth labels", () => {
     }
   });
 
+  it.each([
+    [true, "rate_limit", "billing", "10m"],
+    [true, "overloaded", "auth_permanent", "10m"],
+    [false, "rate_limit", "billing", "1h"],
+  ] as const)(
+    "shows the enforced mixed-window deadline (managed=%s, %s, %s)",
+    (managesOwnAvailability, cooldownReason, disabledReason, expected) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+      try {
+        const snapshot = createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "gateway", providers: ["my-gateway"], managesOwnAvailability }],
+        });
+        const captured = capture("my-gateway", {
+          version: 1,
+          profiles: { primary: { type: "api_key", provider: "my-gateway", key: "synthetic-key" } },
+          usageStats: {
+            primary: {
+              cooldownUntil: 1_700_003_600_000,
+              cooldownReason,
+              disabledUntil: 1_700_000_600_000,
+              disabledReason,
+            },
+          },
+        });
+        withPluginMetadataSnapshotScope(snapshot, () => {
+          expect(captured.read()).toContain(`(next, cooldown ${expected})`);
+          now.mockReturnValue(1_700_000_600_000);
+          if (managesOwnAvailability) {
+            expect(captured.read()).not.toContain("cooldown");
+          } else {
+            expect(captured.read()).toContain("(next, cooldown 50m)");
+          }
+        });
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
+
   it("captures workspace environment labels before later environment changes", () => {
     const config: OpenClawConfig = { plugins: { allow: ["workspace-auth-label"] } };
     const env = { WORKSPACE_CREDENTIAL: "workspace-local-credentials" };
@@ -221,6 +221,7 @@ describe("captured catalog auth labels", () => {
     const labels = prepareModelCatalogAuthLabels({
       config,
       agentDir: "/tmp/catalog-auth",
+      authStorePath: "/tmp/catalog-auth/auth-profiles.json",
       workspaceDir: "/tmp/workspace",
       env,
       store,

@@ -117,33 +117,38 @@ it("retires an authored question intent when the operator changes on the same pl
   expect(request.mock.calls.every(([, params]) => params.message === undefined)).toBe(true);
 });
 
-it("keeps required hosted input visible instead of replacing it with starters", async () => {
-  const request = vi.fn().mockResolvedValue({
-    sessionId: greeting.sessionId,
-    reply: "Connect the provider.",
-    action: "none",
-    wizardInputPending: true,
-    sensitive: true,
-    step: { id: "key", type: "text", message: "Provider API key", sensitive: true },
-  });
-  const { page } = await mountPluginHelp(request);
-  expect(page.querySelector(".custodian__plugin-intro")).toBeNull();
-  expect(page.querySelector(".custodian__wizard-step")?.textContent).toContain("Provider API key");
-  expect(page.querySelector('input[type="password"]')).not.toBeNull();
-  expect(request).toHaveBeenCalledOnce();
-});
-
-it("keeps a Gateway welcome notice visible alongside plugin starters", async () => {
-  const request = vi.fn().mockResolvedValue({
-    ...greeting,
-    optionalWelcome: false,
-    reply: "A manual configuration edit needs your attention.",
-  });
-  const { page } = await mountPluginHelp(request);
-  expect(page.textContent).toContain("A manual configuration edit needs your attention.");
-  expect(page.querySelector(".custodian__plugin-intro")).not.toBeNull();
-  expect(request).toHaveBeenCalledOnce();
-});
+it.each([false, true])(
+  "keeps required Gateway content visible (hosted input=%s)",
+  async (hosted) => {
+    const reply = hosted
+      ? "Connect the provider."
+      : "A manual configuration edit needs your attention.";
+    const request = vi.fn().mockResolvedValue(
+      hosted
+        ? {
+            sessionId: greeting.sessionId,
+            reply,
+            action: "none",
+            wizardInputPending: true,
+            sensitive: true,
+            step: { id: "key", type: "text", message: "Provider API key", sensitive: true },
+          }
+        : { ...greeting, optionalWelcome: false, reply },
+    );
+    const { page } = await mountPluginHelp(request);
+    expect(page.textContent).toContain(reply);
+    if (hosted) {
+      expect(page.querySelector(".custodian__plugin-intro")).toBeNull();
+      expect(page.querySelector(".custodian__wizard-step")?.textContent).toContain(
+        "Provider API key",
+      );
+      expect(page.querySelector('input[type="password"]')).not.toBeNull();
+    } else {
+      expect(page.querySelector(".custodian__plugin-intro")).not.toBeNull();
+    }
+    expect(request).toHaveBeenCalledOnce();
+  },
+);
 
 it("keeps failed inference visible and starter drafts editable without admitting a send", async () => {
   const request = vi.fn().mockRejectedValue(new Error("Inference is unavailable."));

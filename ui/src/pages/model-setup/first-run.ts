@@ -80,17 +80,23 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
           if (localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")) {
             const ownerRevision = context.gateway.connectionRevision;
             // Crypto stays lazy; only an existing receipt suspends startup.
-            void import("./model-setup-page.ts")
-              .then(({ resumeFirstRunActivation }) =>
-                resumeFirstRunActivation(
-                  { context, isStillDefaultLanding, redirect },
-                  snapshot,
-                  ownerRevision,
-                  selectedAgentId,
-                  () => initialDecisionSettled,
-                  settleInitialDecision,
-                ),
-              )
+            void import("./first-run-activation-receipt.ts")
+              .then(({ readFirstRunActivationReceipt }) => {
+                const current = context.gateway.snapshot;
+                if (
+                  !initialDecisionSettled &&
+                  current.phase === "connected" &&
+                  current.client === snapshot.client &&
+                  current.hello === snapshot.hello &&
+                  context.gateway.connectionRevision === ownerRevision &&
+                  (context.agentSelection.state.selectedId?.trim() || null) === selectedAgentId &&
+                  isStillDefaultLanding() &&
+                  readFirstRunActivationReceipt(context) !== null
+                ) {
+                  redirect();
+                }
+                settleInitialDecision();
+              })
               .catch(settleInitialDecision);
             return;
           }

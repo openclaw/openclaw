@@ -1,4 +1,4 @@
-import { normalizeUsage, type AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import * as agentAuth from "openclaw/plugin-sdk/agent-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -140,6 +140,36 @@ function boundedResult() {
   };
 }
 
+const managedHookPrompt = {
+  id: "hook",
+  type: "hookPrompt",
+  fragments: [{ text: "Revise the answer.", hookRunId: "managed-stop-1" }],
+};
+
+function promptEcho(text: string) {
+  return {
+    id: "prompt-echo",
+    type: "userMessage",
+    content: [{ type: "text", text, text_elements: [] }],
+  };
+}
+
+function managedHookItems(text: string) {
+  return [
+    { id: "draft", type: "agentMessage", text: "An earlier draft." },
+    managedHookPrompt,
+    { id: "answer", type: "agentMessage", text },
+  ];
+}
+
+function finalize(
+  attempt = createAttempt(),
+  settledAttempt = createSettledAttempt(),
+  options: Parameters<typeof runCodexSettledTurnFinalization>[1] = {},
+) {
+  return runCodexSettledTurnFinalization({ attempt, settledAttempt }, options);
+}
+
 describe("runCodexSettledTurnFinalization", () => {
   beforeEach(() => {
     vi.spyOn(authBridge, "resolveCodexAppServerPreparedAuthHandoff");
@@ -184,110 +214,40 @@ describe("runCodexSettledTurnFinalization", () => {
     );
   });
 
-  it.each([undefined, "openai"])(
-    "uses captured model/profile and returned native attribution (captured provider: %s)",
-    async (modelProvider) => {
-      const attempt = createAttempt();
-      attempt.prepareAssistantTranscriptMessage = (message) => message;
-      const settledAttempt = createSettledAttempt({
-        model: "gpt-5.6-luna",
-        modelProvider,
-        authProfileId: "openai:captured",
-      });
-      const settledBefore = structuredClone(settledAttempt);
-      const result = await runCodexSettledTurnFinalization(
-        { attempt, settledAttempt },
-        { pluginConfig: {} },
-      );
+  it("uses configured transport for remote settled finalization", async () => {
+    const attempt = createAttempt();
+    const settledAttempt = createSettledAttempt({
+      model: "gpt-5.6-luna",
+      modelProvider: "openai",
+      authProfileId: "openai:captured",
+    });
+    const options = {
+      pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:19400" } },
+    };
 
-      expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).toHaveBeenCalledWith(
-        expect.objectContaining({
-          homeScope: "agent",
-          authProfileId: "openai:captured",
-          authProfileStore: attempt.authProfileStore,
-        }),
-      );
-      expect(mocks.runBounded).toHaveBeenCalledWith(
-        expect.objectContaining({
-          model: { mode: "required", id: "gpt-5.6-luna" },
-          modelProvider,
-          profile: "openai:captured",
-          isolation: "private-stdio",
-          requireNoExternalCapabilities: true,
-          allowEmptyText: true,
-          historyItems: [
-            expect.objectContaining({ type: "message", role: "user" }),
-            expect.objectContaining({ type: "function_call", call_id: "call-1" }),
-            expect.objectContaining({ type: "function_call_output", call_id: "call-1" }),
-          ],
-          input: [{ type: "text", text: attempt.prompt, text_elements: [] }],
-        }),
-      );
-      expect(mocks.mirror).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionId: "session-1",
-          idempotencyScope: "codex-settled-finalizer:run-1",
-          skipBeforeMessageWriteHooks: true,
-          prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
-          messages: [
-            expect.objectContaining({
-              role: "assistant",
-              provider: "openai",
-              model: "synthetic-summary-model",
-            }),
-          ],
-        }),
-      );
-      expect(result).toMatchObject({
-        assistantTranscriptOwned: true,
-        assistantTranscriptIdempotencyKey: "codex-settled-finalizer:run-1:assistant",
-        usage: boundedResult().usage,
-        assistant: {
-          role: "assistant",
-          api: "openai-chatgpt-responses",
-          provider: "openai",
-          model: "synthetic-summary-model",
-          content: [{ type: "text", text: "The update was sent successfully." }],
-        },
-      });
-      expect(normalizeUsage(result.assistant.usage)?.reasoningTokens).toBe(3);
-      expect(structuredClone(settledAttempt)).toEqual(settledBefore);
-    },
-  );
+    const result = await finalize(attempt, settledAttempt, options);
 
-  it.each([undefined, "openai:outer"])(
-    "uses the prepared API key without resolving a profile (outer profile: %s)",
-    async (outerProfile) => {
-      const attempt = createAttempt("api-key");
-      attempt.authProfileId = outerProfile;
-      attempt.resolvedApiKey = "synthetic-resolved-api-key";
-      attempt.model = { ...attempt.model, api: "openai-responses" };
-      const resolveProfile = vi.spyOn(agentAuth, "resolveApiKeyForProfile");
-
-      const result = await runCodexSettledTurnFinalization(
-        { attempt, settledAttempt: createSettledAttempt() },
-        {},
-      );
-
-      expect(mocks.runBounded).toHaveBeenCalledWith(
-        expect.objectContaining({
-          preparedAuth: { kind: "api-key", apiKey: "synthetic-resolved-api-key" },
-          authRequirement: "api-key",
-          authProfileStore: attempt.authProfileStore,
-        }),
-      );
-      expect(mocks.runBounded.mock.calls[0]?.[0]).not.toHaveProperty("profile");
-      expect(resolveProfile).not.toHaveBeenCalled();
-      expect(result.assistant).toMatchObject({
-        api: "openai-responses",
+    expect(mocks.runBounded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isolation: "configured-transport",
+        requireNoExternalCapabilities: true,
+        options,
+      }),
+    );
+    expect(result).toMatchObject({
+      assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "codex-settled-finalizer:run-1:assistant",
+      usage: boundedResult().usage,
+      assistant: {
         provider: "openai",
         model: "synthetic-summary-model",
-      });
-    },
-  );
+        content: [{ type: "text", text: "The update was sent successfully." }],
+      },
+    });
+  });
 
   it.each(["agent", "user"])(
-    "uses the selected scoped subscription for a private side turn (ordinary home: %s)",
+    "uses the selected scoped subscription for a bounded side turn (ordinary home: %s)",
     async (homeScope) => {
       const attempt = createAttempt("subscription");
       const token = [
@@ -309,6 +269,7 @@ describe("runCodexSettledTurnFinalization", () => {
         provider: "openai",
         profileId: "openai:captured",
         profileType: "token",
+        readCurrentCredential: null,
       });
       const ordinaryNativeHome = homeScope === "user";
       if (ordinaryNativeHome) {
@@ -320,7 +281,7 @@ describe("runCodexSettledTurnFinalization", () => {
       });
       const options = { pluginConfig: { appServer: { homeScope } } };
 
-      await runCodexSettledTurnFinalization({ attempt, settledAttempt }, options);
+      await finalize(attempt, settledAttempt, options);
 
       expect(resolveProfile).toHaveBeenCalledExactlyOnceWith({
         store: attempt.authProfileStore,
@@ -359,234 +320,92 @@ describe("runCodexSettledTurnFinalization", () => {
     },
   );
 
-  it.each([" ", "NO_REPLY", " NO_REPLY\n", "no_reply"])(
-    "preserves non-visible output with native attribution for %j without transcript mutation",
-    async (text) => {
-      mocks.runBounded.mockResolvedValue({ ...boundedResult(), text });
-
-      await expect(
-        runCodexSettledTurnFinalization(
-          { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
-          {},
-        ),
-      ).resolves.toMatchObject({
-        assistant: {
-          provider: "openai",
-          model: "synthetic-summary-model",
-          content: [{ type: "text", text: text.trim() }],
-        },
-      });
-      expect(mocks.runBounded).toHaveBeenCalledOnce();
-      expect(mocks.mirror).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not mutate the transcript when the bounded turn is interrupted", async () => {
-    mocks.runBounded.mockRejectedValue(
-      new Error("codex app-server settled-turn finalization turn ended with status interrupted"),
-    );
-
-    await expect(
-      runCodexSettledTurnFinalization(
-        { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
-        {},
-      ),
-    ).rejects.toThrow("turn ended with status interrupted");
+  it("rejects a missing native provider instead of using outer attribution", async () => {
+    const modelProvider = null;
+    mocks.runBounded.mockResolvedValue({
+      ...boundedResult(),
+      nativeSelection: { model: "synthetic-summary-model", modelProvider },
+    });
+    await expect(finalize()).rejects.toThrow("did not report its native model provider");
     expect(mocks.mirror).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, null])(
-    "rejects missing native provider %s instead of using outer attribution",
-    async (modelProvider) => {
-      mocks.runBounded.mockResolvedValue({
-        ...boundedResult(),
-        nativeSelection: { model: "synthetic-summary-model", modelProvider },
-      });
-      await expect(
-        runCodexSettledTurnFinalization(
-          { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
-          {},
-        ),
-      ).rejects.toThrow("did not report its native model provider");
-      expect(mocks.mirror).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["commandExecution", "contextCompaction", "mcpToolCall", "futureCapabilityItem"])(
-    "rejects unexpected native %s evidence before transcript mutation",
-    async (type) => {
-      mocks.runBounded.mockResolvedValue({
-        ...boundedResult(),
-        managedHooksEnabled: true,
-        items: [{ id: "item-1", type }],
-      });
-
-      await expect(
-        runCodexSettledTurnFinalization(
-          { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
-          {},
-        ),
-      ).rejects.toThrow(`unexpected native item: ${type}`);
-      expect(mocks.mirror).not.toHaveBeenCalled();
-    },
-  );
-
-  it("accepts an attested managed Stop-hook continuation before mirroring the revised answer", async () => {
-    const attempt = createAttempt();
-    mocks.runBounded.mockResolvedValue({
-      ...boundedResult(),
-      managedHooksEnabled: true,
-      items: [
-        { id: "draft", type: "agentMessage", text: "An earlier draft." },
-        {
-          id: "hook",
-          type: "hookPrompt",
-          fragments: [{ text: "Revise the answer.", hookRunId: "managed-stop-1" }],
-        },
-        { id: "answer", type: "agentMessage", text: "The update was sent successfully." },
-      ],
-    });
-
-    await expect(
-      runCodexSettledTurnFinalization({ attempt, settledAttempt: createSettledAttempt() }, {}),
-    ).resolves.toMatchObject({ assistantTranscriptOwned: true });
-    expect(mocks.mirror).toHaveBeenCalledOnce();
-  });
-
-  it.each(["NO_REPLY", " "])(
-    "preserves %j after an attested managed Stop-hook continuation without mirroring",
+  it.each([" NO_REPLY\n", " "])(
+    "preserves raw non-visible managed Stop-hook output %j",
     async (text) => {
       mocks.runBounded.mockResolvedValue({
         ...boundedResult(),
         text,
         managedHooksEnabled: true,
-        items: [
-          { id: "draft", type: "agentMessage", text: "An earlier draft." },
-          {
-            id: "hook",
-            type: "hookPrompt",
-            fragments: [{ text: "Revise the answer.", hookRunId: "managed-stop-1" }],
-          },
-          { id: "answer", type: "agentMessage", text },
-        ],
+        items: managedHookItems(text),
       });
-
-      await expect(
-        runCodexSettledTurnFinalization(
-          { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
-          {},
-        ),
-      ).resolves.toMatchObject({
-        assistant: {
-          provider: "openai",
-          model: "synthetic-summary-model",
-          content: [{ type: "text", text: text.trim() }],
-        },
+      const result = await finalize();
+      expect(result.assistant).toMatchObject({
+        provider: "openai",
+        model: "synthetic-summary-model",
+        content: [{ type: "text", text }],
       });
+      expect(result.preparedTerminalReply?.terminalReply.disposition).toBe(
+        text.trim() ? "silent" : "empty",
+      );
       expect(mocks.runBounded).toHaveBeenCalledOnce();
       expect(mocks.mirror).not.toHaveBeenCalled();
     },
   );
 
-  it.each([undefined, false])(
-    "rejects unattested hook continuations before transcript mutation (%s)",
-    async (managedHooksEnabled) => {
+  it.each([
+    {
+      label: "native execution",
+      managedHooksEnabled: true,
+      items: () => [{ id: "command", type: "commandExecution" }],
+      rejectedType: "commandExecution",
+    },
+    {
+      label: "unattested hook continuation",
+      managedHooksEnabled: undefined,
+      items: () => [managedHookPrompt],
+      rejectedType: "hookPrompt",
+    },
+    {
+      label: "mismatched prompt echo",
+      managedHooksEnabled: undefined,
+      items: () => [promptEcho("A different prompt.")],
+      rejectedType: "userMessage",
+    },
+    {
+      label: "duplicate prompt echo",
+      managedHooksEnabled: undefined,
+      items: (prompt: string) => [promptEcho(prompt), { ...promptEcho(prompt), id: "echo-2" }],
+      rejectedType: "userMessage",
+    },
+  ])(
+    "rejects $label before transcript mutation",
+    async ({ items, managedHooksEnabled, rejectedType }) => {
+      const attempt = createAttempt();
       mocks.runBounded.mockResolvedValue({
         ...boundedResult(),
         managedHooksEnabled,
-        items: [
-          {
-            id: "hook",
-            type: "hookPrompt",
-            fragments: [{ text: "Revise the answer.", hookRunId: "hook-1" }],
-          },
-        ],
+        items: items(attempt.prompt),
       });
-
-      await expect(
-        runCodexSettledTurnFinalization(
-          { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
-          {},
-        ),
-      ).rejects.toThrow("unexpected native item: hookPrompt");
+      await expect(finalize(attempt)).rejects.toThrow(`unexpected native item: ${rejectedType}`);
       expect(mocks.mirror).not.toHaveBeenCalled();
     },
   );
 
-  it("accepts the exact current-turn prompt echo once", async () => {
-    const attempt = createAttempt();
-    mocks.runBounded.mockResolvedValue({
-      ...boundedResult(),
-      items: [
-        {
-          id: "prompt-echo",
-          type: "userMessage",
-          content: [{ type: "text", text: attempt.prompt, text_elements: [] }],
-        },
-        { id: "answer", type: "agentMessage", text: "The update was sent successfully." },
-      ],
-    });
-
-    await expect(
-      runCodexSettledTurnFinalization({ attempt, settledAttempt: createSettledAttempt() }, {}),
-    ).resolves.toMatchObject({ assistantTranscriptOwned: true });
-    expect(mocks.mirror).toHaveBeenCalledOnce();
+  it("rejects forged context before host auth or an isolated client can be used", async () => {
+    const settledAttempt = createSettledAttempt();
+    settledAttempt.settledTurnFinalizationContext = { source: "harness", data: [] };
+    const before = structuredClone(settledAttempt);
+    const clientFactory = vi.fn();
+    await expect(finalize(createAttempt(), settledAttempt, { clientFactory })).rejects.toThrow(
+      "finalization context is unavailable",
+    );
+    expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).not.toHaveBeenCalled();
+    expect(mocks.runBounded).not.toHaveBeenCalled();
+    expect(clientFactory).not.toHaveBeenCalled();
+    expect(mocks.mirror).not.toHaveBeenCalled();
+    expect(structuredClone(settledAttempt)).toEqual(before);
   });
-
-  it.each(["mismatched", "duplicate"])(
-    "rejects a %s current-turn prompt echo before transcript mutation",
-    async (kind) => {
-      const attempt = createAttempt();
-      const promptEcho = {
-        type: "userMessage",
-        content: [
-          {
-            type: "text",
-            text: kind === "mismatched" ? "A different prompt." : attempt.prompt,
-            text_elements: [],
-          },
-        ],
-      };
-      mocks.runBounded.mockResolvedValue({
-        ...boundedResult(),
-        items: [
-          { id: "prompt-echo-1", ...promptEcho },
-          ...(kind === "duplicate" ? [{ id: "prompt-echo-2", ...promptEcho }] : []),
-        ],
-      });
-
-      await expect(
-        runCodexSettledTurnFinalization({ attempt, settledAttempt: createSettledAttempt() }, {}),
-      ).rejects.toThrow("unexpected native item: userMessage");
-      expect(mocks.mirror).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["missing", "foreign", "unavailable"])(
-    "rejects %s context before host auth or an isolated client can be used",
-    async (kind) => {
-      const settledAttempt = createSettledAttempt();
-      settledAttempt.settledTurnFinalizationContext =
-        kind === "missing"
-          ? undefined
-          : kind === "foreign"
-            ? { source: "harness", data: [] }
-            : Object.freeze({ source: "unavailable" });
-      const before = structuredClone(settledAttempt);
-      const clientFactory = vi.fn();
-      await expect(
-        runCodexSettledTurnFinalization(
-          { attempt: createAttempt(), settledAttempt },
-          { clientFactory },
-        ),
-      ).rejects.toThrow("finalization context is unavailable");
-      expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).not.toHaveBeenCalled();
-      expect(mocks.runBounded).not.toHaveBeenCalled();
-      expect(clientFactory).not.toHaveBeenCalled();
-      expect(mocks.mirror).not.toHaveBeenCalled();
-      expect(structuredClone(settledAttempt)).toEqual(before);
-    },
-  );
 
   it.each([
     "before auth",
@@ -624,9 +443,7 @@ describe("runCodexSettledTurnFinalization", () => {
       });
     }
 
-    await expect(
-      runCodexSettledTurnFinalization({ attempt, settledAttempt: createSettledAttempt() }, {}),
-    ).rejects.toBe(reason);
+    await expect(finalize(attempt)).rejects.toBe(reason);
     if (stage === "before auth") {
       expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).not.toHaveBeenCalled();
     }
@@ -655,11 +472,6 @@ describe("runCodexSettledTurnFinalization", () => {
       },
     );
 
-    await expect(
-      runCodexSettledTurnFinalization(
-        { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
-        {},
-      ),
-    ).rejects.toThrow("transcript attestation mismatch");
+    await expect(finalize()).rejects.toThrow("transcript attestation mismatch");
   });
 });

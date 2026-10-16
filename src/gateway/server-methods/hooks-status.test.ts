@@ -93,7 +93,7 @@ describe("hooks.status", () => {
       agents: {
         ownership: "explicit",
         defaults: { workspace: workspaceDir },
-        list: [{ id: "ops" }, { id: "research", workspace: workspaceDir }],
+        entries: { ops: {}, research: { workspace: workspaceDir } },
       },
     };
 

@@ -14,6 +14,7 @@ export type MantisCrabboxReportSummary = {
     createdLease: boolean;
     id: string;
     provider: string;
+    recoveryLeaseCandidates?: string[];
     slug?: string;
     state?: string;
     vncCommand: string;
@@ -24,6 +25,9 @@ export type MantisCrabboxReportSummary = {
   startedAt: string;
   status: "pass" | "fail";
 };
+
+export type MantisCrabboxRunResult = MantisCrabboxReportSummary["artifacts"] &
+  Pick<MantisCrabboxReportSummary, "outputDir" | "status">;
 
 export function renderMantisCrabboxReport(params: {
   afterArtifacts?: MantisReportLine[];
@@ -51,6 +55,11 @@ export function renderMantisCrabboxReport(params: {
     `- Lease: ${crabbox.id}${crabbox.slug ? ` (${crabbox.slug})` : ""}`,
     `- Created by run: ${crabbox.createdLease}`,
     `- State: ${crabbox.state ?? "unknown"}`,
+    ...(crabbox.recoveryLeaseCandidates?.length
+      ? [
+          `- Recovery candidates (inspect before cleanup): ${crabbox.recoveryLeaseCandidates.join(", ")}`,
+        ]
+      : []),
     `- VNC: \`${crabbox.vncCommand}\``,
     ...(params.crabboxRows ?? []),
     "",

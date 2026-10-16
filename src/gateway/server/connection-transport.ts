@@ -8,11 +8,14 @@ export type GatewayConnectionTransport = {
   /** Uses the WebSocket ready-state values; 1 means open. */
   readonly readyState: number;
   readonly bufferedAmount: number;
+  /** Combine writes until the next tick without changing frame order or callbacks. */
+  batchWrites?(): void;
   /**
-   * Accept frames in order. The optional callback settles after transport
+   * Accept JSON text frames in order, including byte-backed text. The optional callback settles after transport
    * delivery or with an error; it is not a peer acknowledgement.
    */
   send(frame: string, callback?: (error?: Error) => void): void;
+  send(frame: Buffer, options: { binary: false }, callback?: (error?: Error) => void): void;
   close(code?: number, reason?: string): void;
   terminate(): void;
   on(event: "message", listener: (data: GatewayConnectionFrame) => void): unknown;

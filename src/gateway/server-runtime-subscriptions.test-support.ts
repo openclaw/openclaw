@@ -3,6 +3,7 @@ import {
   bindTestChannelParticipantAdmissionEvidence,
   createChannelParticipantAdmissionEvidence,
 } from "../../test/helpers/channel-admission-evidence.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   enqueueExecutionIdentityContextAtAdmission,
   hasExecutionIdentityAdmissionSink,
@@ -14,8 +15,18 @@ import {
   recordChannelAdmissionDecision,
 } from "../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { emitAgentAuditEvent, emitAgentEvent } from "../infra/agent-events.js";
+import {
+  type AgentEventPayload,
+  emitAgentAuditEvent,
+  emitAgentEvent,
+  emitAgentEventForOwner,
+  getAgentEventLifecycleGeneration,
+  onAgentRuntimeEvent,
+} from "../infra/agent-events.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   createChatRunState,
@@ -44,6 +55,7 @@ export function createSubscriptionTestFixture() {
     createParams: (): Parameters<typeof startGatewayEventSubscriptions>[0] => {
       const chatRunState = createChatRunState();
       return {
+        scheduler: createTestGatewayScheduler(),
         signal: new AbortController().signal,
         log,
         broadcast: vi.fn(),
@@ -57,7 +69,6 @@ export function createSubscriptionTestFixture() {
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
         chatAbortControllers: new Map(),
         restartRecoveryCandidates: new Map(),
-        terminalSessions: { closeTaskSessions: vi.fn() },
         refreshConnectedUserProfiles: vi.fn(),
       };
     },
@@ -240,7 +251,6 @@ export function registerAuditSubscriptionTests(params: {
     unsubs.heartbeatUnsub();
     unsubs.transcriptUnsub();
     unsubs.lifecycleUnsub();
-    await unsubs.taskUnsub();
     const restarted = start();
     expect(
       consumeChannelAdmissionEvidence(
@@ -364,4 +374,175 @@ export function registerAuditSubscriptionTests(params: {
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
   });
+}
+
+export function registerSubscriptionRegistrationTests(
+  start: typeof startGatewayEventSubscriptions,
+) {
+  const { createParams } = createSubscriptionTestFixture();
+  it("does not mark a reentrant replacement terminal from the previous claim", () => {
+    const params = createParams();
+    const runId = "replaced-terminal-claim";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const identity = {
+      sessionKey: "agent:main:replaced",
+      sessionId: "replaced-session",
+      lifecycleGeneration,
+    };
+    let registration = registerSubscriptionChatRun(params, { runId, ...identity });
+    const ownership = { exclusive: true, ownsContext: true, trackOwner: true };
+    const originalClaim = claimAgentRunContext(runId, identity, ownership);
+    if (!originalClaim) {
+      throw new Error("Missing original claim");
+    }
+    let replacementClaim: string | undefined;
+    const removeListener = onAgentRuntimeEvent((event) => {
+      if (event.runId !== runId) {
+        return;
+      }
+      releaseAgentRunContext(runId, originalClaim);
+      registration.cleanup();
+      registration = registerSubscriptionChatRun(params, { runId, ...identity });
+      replacementClaim = claimAgentRunContext(runId, identity, ownership);
+    });
+    start(params);
+    try {
+      emitAgentEventForOwner({ runId, stream: "lifecycle", data: { phase: "end" } }, originalClaim);
+      expect(replacementClaim).toBeTruthy();
+      expect(registration.entry.terminalOutcomeObserved).toBeUndefined();
+      expect(readLifecycleState(registration.entry)).toEqual(lifecycleState(true));
+    } finally {
+      removeListener();
+      registration.cleanup();
+      releaseAgentRunContext(runId, replacementClaim ?? originalClaim);
+    }
+  });
+
+  it("does not attach a missing-key terminal to a registration created during deferred preparation", async () => {
+    const params = createParams();
+    const runId = "late-terminal-registration";
+    const unsubs = start(params);
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+    const registration = registerSubscriptionChatRun(params, {
+      runId,
+      sessionKey: "agent:main:main",
+      sessionId: "late-terminal-session",
+    });
+    try {
+      await unsubs.agentUnsub();
+      expect(readLifecycleState(registration.entry)).toEqual(lifecycleState(true));
+      expect(registration.entry.terminalOutcomeObserved).toBeUndefined();
+    } finally {
+      registration.cleanup();
+    }
+  });
+}
+
+export function registerAssistantTailSubscriptionTests({
+  createParams,
+  installHandlerFactory,
+  start,
+}: {
+  createParams: ReturnType<typeof createSubscriptionTestFixture>["createParams"];
+  installHandlerFactory: (
+    factory: typeof import("./server-chat.js").createAgentEventHandler,
+  ) => void;
+  start: (params: Parameters<typeof startGatewayEventSubscriptions>[0]) => void;
+}): void {
+  it.each([
+    { source: "plain", committed: ["Saved paragraph."], initial: "Saved paragraph." },
+    {
+      source: "native raw directive",
+      committed: ["[[reply_to_current]]Saved paragraph."],
+      initial: "[[reply_to_current]]Saved paragraph.",
+    },
+    {
+      source: "native partial before directive",
+      committed: ["Saved[[reply_to_current]] paragraph."],
+      initial: "Saved",
+    },
+    { source: "before first bytes", committed: ["Saved paragraph."], initial: undefined },
+    {
+      source: "identical receipts before first bytes",
+      committed: ["Saved paragraph.", "Saved paragraph."],
+      initial: undefined,
+    },
+  ])(
+    "retires $source by identity before queued continuation without session subscribers",
+    async ({ committed, initial }) => {
+      const actual = await vi.importActual<typeof import("./server-chat.js")>("./server-chat.js");
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const params = createParams();
+      const runId = "run-persisted-tail";
+      const sessionKey = "agent:main:main";
+      const sessionId = "session-persisted-tail";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const registration = registerSubscriptionChatRun(params, {
+        runId,
+        sessionId,
+        sessionKey,
+        lifecycleGeneration,
+      });
+      claimAgentRunContext(runId, { lifecycleGeneration, sessionId, sessionKey });
+      const delivered = createDeferred();
+      installHandlerFactory((options) => {
+        const handler = actual.createAgentEventHandler(options);
+        return Object.assign(async (event: AgentEventPayload) => {
+          await handler(event);
+          if (
+            typeof event.data.text === "string" &&
+            event.data.text.endsWith("Unpersisted tail.")
+          ) {
+            delivered.resolve();
+          }
+        }, handler);
+      });
+      try {
+        start(params);
+        emitAgentEvent(
+          initial === undefined
+            ? { runId, stream: "lifecycle", data: { phase: "start", startedAt: Date.now() } }
+            : {
+                runId,
+                stream: "assistant",
+                data: { itemId: "saved-paragraph-0", text: initial, delta: initial },
+              },
+        );
+        for (const [index, text] of committed.entries()) {
+          emitSessionTranscriptUpdate({
+            sessionKey,
+            target: { agentId: "main", sessionId, sessionKey },
+            messageId: `saved-paragraph-${index}`,
+            messageSeq: index * 2 + 2,
+            message: {
+              role: "assistant",
+              idempotencyKey: `saved-paragraph-${index}`,
+              content: [{ type: "text", text }],
+              __openclaw: { runId },
+            },
+          });
+        }
+        for (const [index, text] of committed.entries()) {
+          emitAgentEvent({
+            runId,
+            stream: "assistant",
+            data: { itemId: `saved-paragraph-${index}`, text },
+          });
+        }
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { itemId: "new-paragraph", text: "Unpersisted tail." },
+        });
+        await delivered.promise;
+        expect(params.chatRunState.resolveBuffer(runId).text.trim()).toBe("Unpersisted tail.");
+        expect(params.chatRunState.resolveBuffer(runId, { final: true }).text).toBe(
+          `${"Saved paragraph.\n\n".repeat(committed.length)}Unpersisted tail.`,
+        );
+      } finally {
+        params.chatRunState.clear();
+        registration.cleanup();
+      }
+    },
+  );
 }

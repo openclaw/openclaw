@@ -59,7 +59,7 @@ suite.define(() => {
 
   async function collapseNative(page: Page): Promise<Box> {
     const toolbar = page.locator(".macos-titlebar-controls");
-    await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
+    await page.locator(".sidebar-session-toolbar__collapse").click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
@@ -183,13 +183,13 @@ suite.define(() => {
     await page.evaluate(() => {
       document.documentElement.dir = "rtl";
     });
-    await page.locator(".sidebar-brand__collapse").click();
+    await page.locator('[data-navigation-view][aria-pressed="true"]').click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
     const header = page.locator(".content .content-header").first();
     const title = header.locator(".page-title");
-    await expectOnCenterline(title, 26);
+    await expectOnCenterline(title, 24);
     await expectCenteredIn(title, header);
     const controls = header.page().locator(".shell-chrome-controls button:visible");
     const controlRight = Math.max(
@@ -201,7 +201,7 @@ suite.define(() => {
     const buttons = header.locator(".page-header-actions .btn");
     expect(await buttons.count()).toBeGreaterThan(0);
     for (let index = 0; index < (await buttons.count()); index += 1) {
-      await expectOnCenterline(buttons.nth(index), 26);
+      await expectOnCenterline(buttons.nth(index), 24);
       const box = (await buttons.nth(index).boundingBox())!;
       // Actions sit at the physical right, past the title, never under the cluster.
       expect(box.x).toBeGreaterThan(titleBox.x + titleBox.width);
@@ -222,11 +222,16 @@ suite.define(() => {
         }
       });
     });
-    await page.locator(".sidebar-brand__collapse").click();
+    await page.locator('[data-navigation-view][aria-pressed="true"]').click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
     const controls = (await page.locator(".shell-chrome-controls").boundingBox())!;
+    expect(
+      await page
+        .locator(".shell-chrome-controls button, .shell-chrome-controls a")
+        .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))),
+    ).toEqual(["Expand sidebar", "Open command palette"]);
     expect(controls.y + controls.height).toBeGreaterThan(52);
     const header = page.locator(".content .content-header").first();
     await expectOnCenterline(header.locator(".page-title"), 25);

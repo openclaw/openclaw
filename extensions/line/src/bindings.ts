@@ -46,20 +46,6 @@ export const lineBindingsAdapter = {
       matchPriority: 2,
     };
   },
-  resolveCommandConversation: ({
-    originatingTo,
-    commandTo,
-    fallbackTo,
-  }: {
-    originatingTo?: string;
-    commandTo?: string;
-    fallbackTo?: string;
-  }) =>
-    resolveLineCommandConversation({
-      originatingTo,
-      commandTo,
-      fallbackTo,
-    }),
-  resolveInboundConversation: ({ to, conversationId }: { to?: string; conversationId?: string }) =>
-    resolveLineInboundConversation({ to, conversationId }),
+  resolveCommandConversation: resolveLineCommandConversation,
+  resolveInboundConversation: resolveLineInboundConversation,
 };

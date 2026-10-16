@@ -1,8 +1,10 @@
 import { spawnSync as realSpawnSync } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { assertRealOutputRoot } from "../../scripts/lib/output-root-guard.mjs";
 import { resolveRuntimePostBuildRequirement } from "../../scripts/run-node.mts";
 import {
   BUILD_STAMP,
@@ -16,6 +18,7 @@ import {
   touchProjectFiles,
   trackProjectWithGit,
 } from "../../test/scripts/run-node.test-support.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { expectRuntime, writeRuntime } from "./update-runner-git-candidate.test-support.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
@@ -60,102 +63,364 @@ describe("Git runtime promotion", () => {
     return candidateRoot;
   }
 
-  async function activate(candidateRoot: string) {
-    const cleanupRoot = path.dirname(candidateRoot);
-    const promotion = await prepareGitRuntimePromotion(
+  function preparePromotion(candidateRoot: string, validateDestination?: (path: string) => void) {
+    return prepareGitRuntimePromotion(
       root,
       candidateRoot,
       runCommandWithTimeout,
       5000,
-      cleanupRoot,
+      path.dirname(candidateRoot),
+      validateDestination,
     );
+  }
+
+  async function activate(candidateRoot: string) {
+    const promotion = await preparePromotion(candidateRoot);
     // Activation must stand alone after the disposable candidate has gone.
-    await fs.rm(cleanupRoot, { recursive: true, force: true });
+    await fs.rm(path.dirname(candidateRoot), { recursive: true, force: true });
     await promotion.activate();
     await promotion.cleanup();
   }
 
-  it.each(["dependency", "cache-link", "parent-link"] as const)(
-    "preserves tool cache paths owned by a %s",
-    async (layout) => {
-      const candidateRoot = await createCandidate();
-      const modules = path.join(candidateRoot, "node_modules");
-      const payload = path.join(modules, layout === "dependency" ? ".vite" : "payload");
-      await fs.mkdir(payload, { recursive: true });
-      await fs.writeFile(path.join(payload, "index.cjs"), "module.exports = 'retained';\n");
-      if (layout === "dependency") {
-        await fs.symlink(payload, path.join(modules, "linked-runtime"), "junction");
-        // Once retained, this cache's own link must keep the second cache too.
-        await fs.mkdir(path.join(modules, ".cache", "jiti"), { recursive: true });
-        await fs.writeFile(
-          path.join(modules, ".cache", "jiti", "value.cjs"),
-          "module.exports = 'nested';\n",
-        );
-        await fs.symlink(
-          path.join(modules, ".cache", "jiti"),
-          path.join(payload, "nested"),
-          "junction",
-        );
-      } else if (layout === "cache-link") {
-        await fs.symlink(payload, path.join(modules, ".vite"), "junction");
-      } else {
-        await fs.mkdir(path.join(payload, "jiti"));
-        await fs.writeFile(
-          path.join(payload, "jiti", "index.cjs"),
-          "module.exports = 'retained';\n",
-        );
-        await fs.symlink(payload, path.join(modules, ".cache"), "junction");
+  it("stages a packaged plugin's checkout self-link without Windows symbolic-link privileges", async () => {
+    const candidateRoot = await createCandidate();
+    const relative = path.join("dist", "extensions", "x", "node_modules", "openclaw");
+    await fs.mkdir(path.dirname(path.join(candidateRoot, relative)), { recursive: true });
+    await fs.symlink(candidateRoot, path.join(candidateRoot, relative), "junction");
+    const copy = fs.cp.bind(fs);
+    const copySpy = vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
+      // Windows' native directory copy can expand junctions despite verbatimSymlinks.
+      expect(options?.filter).toBeTypeOf("function");
+      return copy(source, destination, {
+        ...options,
+        filter: async (sourceEntry, destinationEntry) => {
+          if (!(await options?.filter?.(sourceEntry, destinationEntry))) {
+            return false;
+          }
+          if (
+            (await fs.lstat(sourceEntry)).isSymbolicLink() &&
+            (await fs.stat(sourceEntry)).isDirectory()
+          ) {
+            throw Object.assign(new Error("Directory symbolic-link privilege is unavailable"), {
+              code: "EPERM",
+            });
+          }
+          return true;
+        },
+      });
+    });
+    const symlink = fsSync.symlinkSync.bind(fsSync);
+    const junctionSpy = vi.spyOn(fsSync, "symlinkSync").mockImplementation((target, dest, type) => {
+      if (type !== "junction") {
+        throw Object.assign(new Error("Symbolic-link privilege is unavailable"), { code: "EPERM" });
       }
-      await activate(candidateRoot);
-      const relative =
-        layout === "dependency"
-          ? "linked-runtime"
-          : layout === "cache-link"
-            ? ".vite"
-            : ".cache/jiti";
-      const probe = await runCommandWithTimeout(
-        [
-          process.execPath,
-          "-e",
-          `console.log(require(${JSON.stringify(path.join(root, "node_modules", relative, "index.cjs"))}));`,
-        ],
-        { timeoutMs: 5000 },
+      symlink(target, dest, type);
+    });
+    const hostPlatform = process.platform;
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    let promotion: Awaited<ReturnType<typeof preparePromotion>>;
+    try {
+      promotion = await prepareGitRuntimePromotion(
+        root,
+        candidateRoot,
+        async (argv, options) => {
+          platform.mockReturnValue(hostPlatform);
+          try {
+            return await runCommandWithTimeout(argv, options);
+          } finally {
+            platform.mockReturnValue("win32");
+          }
+        },
+        5000,
+        path.dirname(candidateRoot),
       );
-      expect(probe.code, probe.stderr).toBe(0);
-      expect(probe.stdout.trim()).toBe("retained");
-      if (layout === "dependency") {
-        expect(
-          await fs.readFile(
-            path.join(root, "node_modules", "linked-runtime", "nested", "value.cjs"),
-            "utf8",
-          ),
-        ).toContain("nested");
+    } finally {
+      platform.mockRestore();
+      copySpy.mockRestore();
+      junctionSpy.mockRestore();
+    }
+    await fs.rm(path.dirname(candidateRoot), { recursive: true, force: true });
+    await promotion.activate();
+    expect((await fs.lstat(path.join(root, relative))).isSymbolicLink()).toBe(true);
+    expect(await fs.realpath(path.join(root, relative))).toBe(root);
+    await expectRuntime(root, "candidate");
+    await promotion.cleanup();
+  });
+
+  it.each([false, true])(
+    "does not repeat completed restoration after authority is lost (previous runtime: %s)",
+    async (previous) => {
+      const candidateRoot = await createCandidate();
+      const destination = path.join(root, "dist");
+      if (!previous) {
+        await fs.rm(destination, { recursive: true, force: true });
       }
-      await expectRuntime(root, "candidate");
+      const promotion = await preparePromotion(candidateRoot);
+      await promotion.activate();
+      let revoked = false;
+      const rename = fs.rename.bind(fs);
+      const remove = fs.rm.bind(fs);
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+        await rename(source, target);
+        if (previous && path.basename(String(source)) === "previous" && target === destination) {
+          revoked = true;
+        }
+      });
+      const removeSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        await remove(target, options);
+        if (!previous && target === destination) {
+          revoked = true;
+        }
+      });
+      try {
+        await expect(
+          promotion.restore(() => {
+            if (revoked) {
+              throw new Error("restoration authority lost");
+            }
+          }),
+        ).rejects.toThrow("restoration authority lost");
+      } finally {
+        renameSpy.mockRestore();
+        removeSpy.mockRestore();
+      }
+      // A completed destination is no longer rollback-owned, even if admission then fails.
+      if (!previous) {
+        await fs.mkdir(destination);
+        await fs.writeFile(path.join(destination, "subsequent-owner"), "preserve");
+      }
+      await promotion.restore();
+      if (previous) {
+        await expectRuntime(root, "original");
+      } else {
+        expect(await fs.readFile(path.join(destination, "subsequent-owner"), "utf8")).toBe(
+          "preserve",
+        );
+      }
+      await promotion.cleanup();
     },
   );
 
-  it.skipIf(process.platform === "win32").each(["missing", "cycle"])(
-    "preserves unresolved %s links without blocking runtime promotion",
-    async (layout) => {
+  function assertDestination(destination: string) {
+    let current = root;
+    assertRealOutputRoot(current);
+    for (const component of path.relative(root, destination).split(path.sep)) {
+      current = path.join(current, component);
+      assertRealOutputRoot(current);
+    }
+  }
+
+  it.each(["absent", "foreign", "authority-lost", "retained-replaced", "uncertain"] as const)(
+    "compensates only an owned partial activation (%s)",
+    async (outcome) => {
       const candidateRoot = await createCandidate();
-      const modules = path.join(candidateRoot, "node_modules");
+      let current = true;
+      const uncertainty = new CommandProcessCleanupError();
+      const promotion = await preparePromotion(candidateRoot, (destination) => {
+        if (!current) {
+          throw outcome === "uncertain" ? uncertainty : new Error("source authority lost");
+        }
+        assertDestination(destination);
+      });
+      const destination = path.join(root, "dist");
+      const original = await fs.lstat(destination, { bigint: true });
+      const rename = fs.rename.bind(fs);
+      const activationError = new Error("candidate rename refused");
+      let previous: string | undefined;
+      let renamedAtUncertainty = 0;
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+        if (source === destination) {
+          previous = String(target);
+        }
+        if (String(source).endsWith(`${path.sep}candidate`) && target === destination) {
+          if (outcome === "foreign") {
+            await fs.mkdir(destination);
+          }
+          if (outcome === "authority-lost") {
+            current = false;
+          }
+          if (outcome === "retained-replaced") {
+            await rename(previous!, `${previous!}.operator`);
+            await fs.mkdir(previous!);
+          }
+          throw activationError;
+        }
+        const result = await rename(source, target);
+        if (outcome === "uncertain" && source === destination) {
+          current = false;
+          renamedAtUncertainty = renameSpy.mock.calls.length;
+        }
+        return result;
+      });
+      try {
+        const failure: unknown = await promotion.activate().catch((error: unknown) => error);
+        expect(previous).toBeDefined();
+        if (outcome === "uncertain") {
+          expect(failure).toBe(uncertainty);
+          await expect(promotion.restore()).rejects.toBe(uncertainty);
+          await expect(promotion.cleanup()).rejects.toBe(uncertainty);
+          expect(renameSpy.mock.calls).toHaveLength(renamedAtUncertainty);
+          expect((await fs.lstat(previous!, { bigint: true })).ino).toBe(original.ino);
+          return;
+        }
+        if (outcome === "absent") {
+          expect(failure).toBe(activationError);
+          expect((await fs.lstat(destination, { bigint: true })).ino).toBe(original.ino);
+        } else {
+          const retained = outcome === "retained-replaced" ? `${previous!}.operator` : previous!;
+          expect((await fs.lstat(retained, { bigint: true })).ino).toBe(original.ino);
+          if (outcome === "retained-replaced") {
+            const foreign = await fs.lstat(previous!, { bigint: true });
+            await expect(promotion.restore()).rejects.toThrow();
+            await promotion.cleanup();
+            expect((await fs.lstat(retained, { bigint: true })).ino).toBe(original.ino);
+            expect((await fs.lstat(previous!, { bigint: true })).ino).toBe(foreign.ino);
+            await fs.rmdir(previous!);
+            await rename(retained, previous!);
+          } else if (outcome === "foreign") {
+            const foreign = await fs.lstat(destination, { bigint: true });
+            await expect(promotion.restore()).rejects.toThrow();
+            expect((await fs.lstat(destination, { bigint: true })).ino).toBe(foreign.ino);
+            await promotion.cleanup();
+            expect((await fs.lstat(previous!, { bigint: true })).ino).toBe(original.ino);
+            await fs.rmdir(destination);
+          } else {
+            await expect(promotion.restore()).rejects.toThrow("source authority lost");
+            await expect(promotion.cleanup()).rejects.toThrow("source authority lost");
+            await expect(fs.lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+            current = true;
+          }
+          expect(failure).toMatchObject({ errors: [activationError, expect.any(Error)] });
+        }
+        await promotion.restore();
+        await expectRuntime(root, "original");
+        await promotion.cleanup();
+      } finally {
+        renameSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["prepare", "activate", "restore", "cleanup"] as const)(
+    "retains originals when a source destination parent changes before %s",
+    async (phase) => {
+      const candidateRoot = await createCandidate();
+      const outside = path.join(directory, "outside-packages");
+      if (phase === "prepare") {
+        await fs.rename(path.join(root, "packages"), outside);
+        await fs.symlink(outside, path.join(root, "packages"), "junction");
+        const before = await fs.readdir(outside, { recursive: true });
+        await expect(preparePromotion(candidateRoot, assertDestination)).rejects.toThrow(
+          "symbolic link",
+        );
+        expect(await fs.readdir(outside, { recursive: true })).toEqual(before);
+        // Restore the fixture's physical depth before resolving its relative dependency links.
+        await fs.unlink(path.join(root, "packages"));
+        await fs.rename(outside, path.join(root, "packages"));
+        await expectRuntime(root, "original");
+        return;
+      }
+      const promotion = await preparePromotion(candidateRoot, assertDestination);
+      if (phase !== "activate") {
+        await promotion.activate();
+        await expectRuntime(root, "candidate");
+      }
+      const heldPackages = path.join(directory, "held-packages");
+      const outsideModules = path.join(outside, "runtime", "node_modules");
+      await fs.mkdir(outsideModules, { recursive: true });
+      await fs.writeFile(path.join(outsideModules, "operator.cjs"), "outside content\n");
+      await fs.rename(path.join(root, "packages"), heldPackages);
+      await fs.symlink(outside, path.join(root, "packages"), "junction");
+
+      await expect(promotion[phase]()).rejects.toThrow("symbolic link");
+      expect(await fs.readFile(path.join(outsideModules, "operator.cjs"), "utf8")).toBe(
+        "outside content\n",
+      );
+      expect(await fs.readdir(outsideModules)).toEqual(["operator.cjs"]);
+
+      await fs.unlink(path.join(root, "packages"));
+      await fs.rename(heldPackages, path.join(root, "packages"));
+      if (phase === "activate") {
+        await expectRuntime(root, "original");
+        await promotion.activate();
+      }
+      await promotion.restore();
+      await expectRuntime(root, "original");
+      await promotion.cleanup();
+    },
+  );
+
+  it.each([
+    "dependency",
+    "cache-link",
+    "parent-link",
+    ...(process.platform === "win32" ? [] : ["missing", "cycle"]),
+  ])("preserves tool cache paths owned by a %s", async (layout) => {
+    const candidateRoot = await createCandidate();
+    const modules = path.join(candidateRoot, "node_modules");
+    if (layout === "missing" || layout === "cycle") {
       await fs.mkdir(path.join(modules, ".vite"));
       await fs.writeFile(path.join(modules, ".vite", "content"), "retained");
-      await fs.symlink(
-        layout === "cycle" ? "unresolved" : "missing",
-        path.join(modules, "unresolved"),
-      );
+      const target = layout === "cycle" ? "unresolved" : "missing";
+      await fs.symlink(target, path.join(modules, "unresolved"));
       await activate(candidateRoot);
-      expect(await fs.readlink(path.join(root, "node_modules", "unresolved"))).toBe(
-        layout === "cycle" ? "unresolved" : "missing",
-      );
+      expect(await fs.readlink(path.join(root, "node_modules", "unresolved"))).toBe(target);
       expect(await fs.readFile(path.join(root, "node_modules", ".vite", "content"), "utf8")).toBe(
         "retained",
       );
       await expectRuntime(root, "candidate");
-    },
-  );
+      return;
+    }
+    const payload = path.join(modules, layout === "dependency" ? ".vite" : "payload");
+    await fs.mkdir(payload, { recursive: true });
+    await fs.writeFile(path.join(payload, "index.cjs"), "module.exports = 'retained';\n");
+    if (layout === "dependency") {
+      await fs.symlink(payload, path.join(modules, "linked-runtime"), "junction");
+      // Once retained, this cache's own link must keep the second cache too.
+      await fs.mkdir(path.join(modules, ".cache", "jiti"), { recursive: true });
+      await fs.writeFile(
+        path.join(modules, ".cache", "jiti", "value.cjs"),
+        "module.exports = 'nested';\n",
+      );
+      await fs.symlink(
+        path.join(modules, ".cache", "jiti"),
+        path.join(payload, "nested"),
+        "junction",
+      );
+    } else if (layout === "cache-link") {
+      await fs.symlink(payload, path.join(modules, ".vite"), "junction");
+    } else {
+      await fs.mkdir(path.join(payload, "jiti"));
+      await fs.writeFile(path.join(payload, "jiti", "index.cjs"), "module.exports = 'retained';\n");
+      await fs.symlink(payload, path.join(modules, ".cache"), "junction");
+    }
+    await activate(candidateRoot);
+    const relative =
+      layout === "dependency"
+        ? "linked-runtime"
+        : layout === "cache-link"
+          ? ".vite"
+          : ".cache/jiti";
+    const probe = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        `console.log(require(${JSON.stringify(path.join(root, "node_modules", relative, "index.cjs"))}));`,
+      ],
+      { timeoutMs: 5000 },
+    );
+    expect(probe.code, probe.stderr).toBe(0);
+    expect(probe.stdout.trim()).toBe("retained");
+    if (layout === "dependency") {
+      expect(
+        await fs.readFile(
+          path.join(root, "node_modules", "linked-runtime", "nested", "value.cjs"),
+          "utf8",
+        ),
+      ).toContain("nested");
+    }
+    await expectRuntime(root, "candidate");
+  });
 
   it.each([
     ".",
@@ -163,7 +428,6 @@ describe("Git runtime promotion", () => {
     "../checkout",
     ".artifacts/checkout",
     "live:node_modules",
-    "live:dist",
     "live:packages/runtime/node_modules",
     "link:node_modules",
   ])("refuses virtual store %s before promotion can replace a checkout", async (store) => {
@@ -198,9 +462,7 @@ describe("Git runtime promotion", () => {
         virtualStoreDir: path.relative(modules, storePath),
       }),
     );
-    await expect(
-      prepareGitRuntimePromotion(root, candidateRoot, runCommandWithTimeout, 5000, cleanupRoot),
-    ).rejects.toThrow(/virtual store/i);
+    await expect(preparePromotion(candidateRoot)).rejects.toThrow(/virtual store/i);
     await expectRuntime(root, "original");
   });
 });

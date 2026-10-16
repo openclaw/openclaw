@@ -6,8 +6,18 @@ import {
   type MockFn,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { GetReplyOptions, MsgContext, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeEach, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, vi } from "vitest";
+import { telegramDirectDeliveryDepsForTest } from "./bot-delivery-deps.test-support.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import {
+  readAmbientTranscriptWatermarkAsync,
+  resolveAmbientTranscriptWatermarkKey,
+} from "./bot-message-context.session.runtime.js";
 import {
   runTelegramChannelInboundEventWithHarness,
   type TelegramTestMiddleware,
@@ -29,7 +39,7 @@ type GetSessionEntryFn = typeof import("openclaw/plugin-sdk/session-store-runtim
 type ResolveStorePathFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
 type ReadSessionUpdatedAtFn =
-  typeof import("openclaw/plugin-sdk/session-store-runtime").readSessionUpdatedAt;
+  typeof import("openclaw/plugin-sdk/session-store-runtime").readSessionUpdatedAtAsync;
 type LoadWebMediaFn = typeof import("openclaw/plugin-sdk/web-media").loadWebMedia;
 type ResolveTelegramApprovalForTest = NonNullable<TelegramBotDeps["resolveApproval"]>;
 type DispatchReplyWithBufferedBlockDispatcherFn =
@@ -59,10 +69,6 @@ const { loadWebMedia } = vi.hoisted((): { loadWebMedia: MockFn<LoadWebMediaFn> }
   loadWebMedia: vi.fn<LoadWebMediaFn>(),
 }));
 
-export function getLoadWebMediaMock(): MockFn<LoadWebMediaFn> {
-  return loadWebMedia;
-}
-
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
@@ -86,7 +92,7 @@ const {
       (storePath?: string) => storePath ?? sessionStorePath,
     ),
     getSessionEntryMock: vi.fn<GetSessionEntryFn>(() => undefined),
-    readSessionUpdatedAtMock: vi.fn<ReadSessionUpdatedAtFn>(() => undefined),
+    readSessionUpdatedAtMock: vi.fn<ReadSessionUpdatedAtFn>(async () => undefined),
     recordInboundSessionMock: vi.fn(async () => undefined),
   }),
 );
@@ -121,7 +127,9 @@ export function getUpsertChannelPairingRequestMock(): MockFn<
 }
 
 const skillCommandListHoisted = vi.hoisted(() => ({
-  listSkillCommandsForAgents: vi.fn<TelegramBotDeps["listSkillCommandsForAgents"]>(() => []),
+  prepareSkillCommandsForAgents: vi.fn<TelegramBotDeps["prepareSkillCommandsForAgents"]>(
+    async () => [],
+  ),
 }));
 const modelProviderDataHoisted = vi.hoisted(() => ({
   buildModelsProviderData: vi.fn() as MockFn<TelegramBotDeps["buildModelsProviderData"]>,
@@ -188,7 +196,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
       ),
   };
 });
-export const listSkillCommandsForAgents = skillCommandListHoisted.listSkillCommandsForAgents;
+export const prepareSkillCommandsForAgents = skillCommandListHoisted.prepareSkillCommandsForAgents;
 const buildModelsProviderData = modelProviderDataHoisted.buildModelsProviderData;
 export const replySpy = replySpyHoisted.replySpy;
 const menuSyncHoisted = vi.hoisted(() => ({
@@ -247,9 +255,6 @@ const grammySpies = vi.hoisted(() => ({
   onSpy: vi.fn(),
   stopSpy: vi.fn(),
   commandSpy: vi.fn(),
-  botCtorSpy: vi.fn(
-    (_token: string, __?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => undefined,
-  ),
   answerCallbackQuerySpy: vi.fn(async () => undefined) as AnyAsyncMock,
   sendChatActionSpy: vi.fn(),
   editMessageTextSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
@@ -269,14 +274,11 @@ const grammySpies = vi.hoisted(() => ({
   getFileSpy: vi.fn(async () => ({ file_path: "media/file.jpg" })) as AnyAsyncMock,
 }));
 
-export const useSpy: MockFn<(arg: unknown) => void> = grammySpies.useSpy;
+const useSpy: MockFn<(arg: unknown) => void> = grammySpies.useSpy;
 export const middlewareUseSpy: AnyMock = grammySpies.middlewareUseSpy;
 export const onSpy: AnyMock = grammySpies.onSpy;
 const stopSpy: AnyMock = grammySpies.stopSpy;
 export const commandSpy: AnyMock = grammySpies.commandSpy;
-export const botCtorSpy: MockFn<
-  (token: string, options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => void
-> = grammySpies.botCtorSpy;
 export const answerCallbackQuerySpy: AnyAsyncMock = grammySpies.answerCallbackQuerySpy;
 const sendChatActionSpy: AnyMock = grammySpies.sendChatActionSpy;
 export const editMessageTextSpy: AnyAsyncMock = grammySpies.editMessageTextSpy;
@@ -321,18 +323,10 @@ function getRichMessageText(params: RichMessageParams): string {
   return rich.markdown ?? rich.html ?? "";
 }
 
-const runnerHoisted = vi.hoisted(() => ({
-  sequentializeMiddleware: vi.fn(async (_ctx: unknown, next?: () => Promise<void>) => {
-    if (typeof next === "function") {
-      await next();
-    }
-  }),
-  sequentializeSpy: vi.fn(() => runnerHoisted.sequentializeMiddleware),
+const throttlerHoisted = vi.hoisted(() => ({
   throttlerSpy: vi.fn(() => "throttler"),
 }));
-export const sequentializeSpy: AnyMock = runnerHoisted.sequentializeSpy;
-export let sequentializeKey: ((ctx: unknown) => string | string[] | undefined) | undefined;
-export const throttlerSpy: AnyMock = runnerHoisted.throttlerSpy;
+export const throttlerSpy: AnyMock = throttlerHoisted.throttlerSpy;
 const telegramBotRuntimeForTest = {
   Bot: class {
     api = {
@@ -395,31 +389,27 @@ const telegramBotRuntimeForTest = {
     constructor(
       public token: string,
       public options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown },
-    ) {
-      (grammySpies.botCtorSpy as unknown as (token: string, options?: unknown) => void)(
-        token,
-        options,
-      );
-    }
+    ) {}
   } as unknown as TelegramBotRuntimeForTest["Bot"],
-  sequentialize: ((keyFn: (ctx: unknown) => string | string[] | undefined) => {
-    sequentializeKey = keyFn;
-    return (
-      runnerHoisted.sequentializeSpy as unknown as () => ReturnType<
-        TelegramBotRuntimeForTest["sequentialize"]
-      >
-    )();
-  }) as unknown as TelegramBotRuntimeForTest["sequentialize"],
   apiThrottler: (() =>
     (
-      runnerHoisted.throttlerSpy as unknown as () => unknown
+      throttlerHoisted.throttlerSpy as unknown as () => unknown
     )()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
 export const telegramBotDepsForTest: TelegramBotDeps = {
-  getRuntimeConfig,
-  getSessionEntry: getSessionEntryMock,
+  ...telegramDirectDeliveryDepsForTest,
+  getRuntimeConfig: () => {
+    const config = getRuntimeConfig();
+    if (getRuntimeConfigSnapshot() !== config) {
+      setRuntimeConfigSnapshot(config);
+    }
+    return config;
+  },
+  getSessionEntryAsync: async (params) => getSessionEntryMock(params),
   resolveStorePath: resolveStorePathMock,
-  readSessionUpdatedAt: readSessionUpdatedAtMock,
+  readSessionUpdatedAtAsync: readSessionUpdatedAtMock,
+  readAmbientTranscriptWatermarkAsync,
+  resolveAmbientTranscriptWatermarkKey,
   recordInboundSession: recordInboundSessionMock as TelegramBotDeps["recordInboundSession"],
   recordChannelActivity: vi.fn() as TelegramBotDeps["recordChannelActivity"],
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
@@ -434,8 +424,8 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   dispatchReplyWithBufferedBlockDispatcher,
   loadWebMedia: loadWebMedia as TelegramBotDeps["loadWebMedia"],
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
-  listSkillCommandsForAgents:
-    listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
+  prepareSkillCommandsForAgents:
+    prepareSkillCommandsForAgents as TelegramBotDeps["prepareSkillCommandsForAgents"],
   syncTelegramMenuCommands: syncTelegramMenuCommands as TelegramBotDeps["syncTelegramMenuCommands"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
   resolveApproval: resolveExecApprovalSpy,
@@ -444,7 +434,9 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
 vi.doMock("./bot.runtime.js", () => telegramBotRuntimeForTest);
 
 export const getOnHandler = (event: string) => {
-  const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];
+  const handler = onSpy.mock.calls.find(([filter]) =>
+    Array.isArray(filter) ? filter.includes(event) : filter === event,
+  )?.[1];
   if (!handler) {
     throw new Error(`Missing handler for event: ${event}`);
   }
@@ -464,6 +456,7 @@ const DEFAULT_TELEGRAM_TEST_CONFIG: OpenClawConfig = {
 };
 
 beforeEach(() => {
+  clearRuntimeConfigSnapshot();
   resetTelegramMessageCacheForTest();
   setTelegramPluginStateRuntimeForTests();
   getRuntimeConfig.mockReset();
@@ -474,7 +467,7 @@ beforeEach(() => {
   getSessionEntryMock.mockReset();
   getSessionEntryMock.mockReturnValue(undefined);
   readSessionUpdatedAtMock.mockReset();
-  readSessionUpdatedAtMock.mockReturnValue(undefined);
+  readSessionUpdatedAtMock.mockResolvedValue(undefined);
   recordInboundSessionMock.mockReset();
   recordInboundSessionMock.mockResolvedValue(undefined);
   loadWebMedia.mockReset();
@@ -557,8 +550,8 @@ beforeEach(() => {
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);
-  listSkillCommandsForAgents.mockReset();
-  listSkillCommandsForAgents.mockReturnValue([]);
+  prepareSkillCommandsForAgents.mockReset();
+  prepareSkillCommandsForAgents.mockResolvedValue([]);
   buildModelsProviderData.mockReset();
   buildModelsProviderData.mockResolvedValue({
     byProvider: new Map([["openai", new Set(["gpt-5.4"])]]),
@@ -568,14 +561,8 @@ beforeEach(() => {
     modelCatalog: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: false }],
   });
   middlewareUseSpy.mockReset();
-  runnerHoisted.sequentializeMiddleware.mockReset();
-  runnerHoisted.sequentializeMiddleware.mockImplementation(async (_ctx, next) => {
-    if (typeof next === "function") {
-      await next();
-    }
-  });
-  sequentializeSpy.mockReset();
-  sequentializeSpy.mockImplementation(() => runnerHoisted.sequentializeMiddleware);
-  botCtorSpy.mockReset();
-  sequentializeKey = undefined;
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });

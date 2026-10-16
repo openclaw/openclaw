@@ -1,5 +1,4 @@
-// Fetches and normalizes Z.ai provider usage records.
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asDateTimestampMs, asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -9,6 +8,8 @@ import {
 } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
+
+const WINDOW_UNITS: Partial<Record<number, string>> = { 1: "d", 3: "h", 5: "mo", 6: "w" };
 
 export async function fetchZaiUsage(
   apiKey: string,
@@ -44,30 +45,17 @@ export async function fetchZaiUsage(
       continue;
     }
     const type = normalizeOptionalString(limit.type);
-    const percent = clampPercent(asFiniteNumber(limit.percentage) ?? 0);
-    const unit = asFiniteNumber(limit.unit);
     const number = asFiniteNumber(limit.number);
-    const nextReset = parseUsageResetAt(normalizeOptionalString(limit.nextResetTime));
-    let windowLabel = "Limit";
-    if (unit === 1 && number !== undefined) {
-      windowLabel = `${number}d`;
-    } else if (unit === 3 && number !== undefined) {
-      windowLabel = `${number}h`;
-    } else if (unit === 5 && number !== undefined) {
-      windowLabel = `${number}m`;
-    }
+    const suffix = WINDOW_UNITS[asFiniteNumber(limit.unit) ?? 0];
+    const windowLabel = suffix && number !== undefined ? `${number}${suffix}` : "Limit";
 
-    if (type === "TOKENS_LIMIT") {
+    if (type === "TOKENS_LIMIT" || type === "TIME_LIMIT") {
       windows.push({
-        label: `Tokens (${windowLabel})`,
-        usedPercent: percent,
-        resetAt: nextReset,
-      });
-    } else if (type === "TIME_LIMIT") {
-      windows.push({
-        label: "Monthly",
-        usedPercent: percent,
-        resetAt: nextReset,
+        label: type === "TOKENS_LIMIT" ? `Tokens (${windowLabel})` : "Monthly",
+        usedPercent: clampPercent(asFiniteNumber(limit.percentage) ?? 0),
+        resetAt:
+          asDateTimestampMs(limit.nextResetTime) ??
+          parseUsageResetAt(normalizeOptionalString(limit.nextResetTime)),
       });
     }
   }

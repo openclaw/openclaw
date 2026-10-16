@@ -22,6 +22,10 @@ const currentDmContext = {
   currentMessagingTarget: "user:222",
 } satisfies DiscordActionContext["toolContext"];
 
+function dmContext(overrides: Partial<NonNullable<DiscordActionContext["toolContext"]>>) {
+  return { toolContext: { ...currentDmContext, ...overrides } };
+}
+
 function readReactions(overrides: Partial<DiscordActionContext> = {}) {
   return handleDiscordMessageAction({
     action: "reactions",
@@ -59,71 +63,39 @@ describe("Discord reaction read target resolution", () => {
     await loopback.close();
   });
 
-  it.each(["user:222", "<@222>"])(
-    "reads reactions for current DM target %s without creating it",
-    async (to) => {
-      const result = await readReactions({ params: { to, messageId: "444" } });
+  it("reads reactions for the current DM user mention without creating it", async () => {
+    const result = await readReactions({ params: { to: "<@222>", messageId: "444" } });
 
-      expect(result.details).toEqual({ ok: true, reactions: [] });
-      expect(loopback.requests.map(({ method, path }) => [method, path])).toEqual([
-        ["GET", "/v10/channels/111"],
-        ["GET", "/v10/channels/111/messages/444"],
-      ]);
-    },
-  );
+    expect(result.details).toEqual({ ok: true, reactions: [] });
+    expect(loopback.requests.map(({ method, path }) => [method, path])).toEqual([
+      ["GET", "/v10/channels/111"],
+      ["GET", "/v10/channels/111/messages/444"],
+    ]);
+  });
 
-  it.each([
-    {
-      name: "a user outside the current conversation",
-      overrides: { params: { to: "user:999", messageId: "444" } },
-    },
-    {
-      name: "another account's current conversation",
-      overrides: { requesterAccountId: "other" },
-    },
-    {
-      name: "another provider's current conversation",
-      overrides: {
-        toolContext: { ...currentDmContext, currentChannelProvider: "slack" },
-      },
-    },
-    {
-      name: "a group conversation",
-      overrides: {
-        toolContext: { ...currentDmContext, currentChatType: "group" },
-      },
-    },
-    {
-      name: "a context without the native channel ID",
-      overrides: {
-        toolContext: { ...currentDmContext, currentChannelId: "user:222" },
-      },
-    },
-    {
-      name: "a context without the current user target",
-      overrides: {
-        toolContext: { ...currentDmContext, currentMessagingTarget: undefined },
-      },
-    },
-    {
-      name: "an unattested user target",
-      overrides: {
+  it.each<[string, Partial<DiscordActionContext>]>([
+    ["a user outside the current conversation", { params: { to: "user:999", messageId: "444" } }],
+    ["another account's current conversation", { requesterAccountId: "other" }],
+    ["another provider's current conversation", dmContext({ currentChannelProvider: "slack" })],
+    ["a group conversation", dmContext({ currentChatType: "group" })],
+    ["a context without the native channel ID", dmContext({ currentChannelId: "user:222" })],
+    ["a context without the current user target", dmContext({ currentMessagingTarget: undefined })],
+    [
+      "an unattested user target",
+      {
         conversationReadOrigin: undefined,
         requesterAccountId: undefined,
         toolContext: undefined,
       },
-    },
-  ] satisfies Array<{ name: string; overrides: Partial<DiscordActionContext> }>)(
-    "rejects $name before resolving a Discord DM",
-    async ({ overrides }) => {
-      const error = await readReactions(overrides).catch((caught: unknown) => caught);
-      expect(loopback.requests).toEqual([]);
-      expect(error).toBeInstanceOf(Error);
-      expect(error).toMatchObject({
-        message: "Discord channel id is required (use channel:<id>).",
-      });
-    },
-  );
+    ],
+  ])("rejects %s before resolving a Discord DM", async (_name, overrides) => {
+    const error = await readReactions(overrides).catch((caught: unknown) => caught);
+    expect(loopback.requests).toEqual([]);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      message: "Discord channel id is required (use channel:<id>).",
+    });
+  });
 
   it("applies disabled-DM policy after resolving the current user target", async () => {
     await expect(

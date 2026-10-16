@@ -104,6 +104,13 @@ export default definePluginEntry({
   list operation below closes. Prepare the facts needed by late host mapping
   before that boundary.
 
+  `sessionEntries.revision`, when present, is an opaque token for immutable local
+  entry facts, including configuration and selection scope. Providers may weakly
+  cache derived metadata by that token, together with their own query and config
+  inputs. A new token invalidates those facts; an absent token requires reading
+  the entries again. Do not retain the snapshot or entry objects after listing,
+  or use this token as current authorization or as a revision of native host data.
+
   Providers with a multi-step fill can implement the optional
   `SessionCatalogProvider.createListOperation(params)` hook. Its synchronous
   factory returns `{ next, close }` without starting source work. The Gateway
@@ -199,7 +206,7 @@ export default definePluginEntry({
 
   `routeSegment` must not use the first segment of a built-in Control UI route
   or alias, and it must be unique across active session catalogs. Invalid,
-  unsupported, reserved, or multiply owned descriptors fail closed; catalog
+  unsupported, reserved, or multiply owned descriptors are rejected; catalog
   sessions remain available through the generic
   `/chat/<agent>?catalog=...&host=...&thread=...` URL. The shared session URL
   contract owns the built-in reservation decision: its share-path builder
@@ -209,7 +216,7 @@ export default definePluginEntry({
   those obligations cannot drift.
 
   CLI-backed catalogs that expose the same local-plus-paired-node shape can use
-  `createSessionCatalogFamily(...)`. The family composer owns canonical cursor
+  `createSessionCatalogFamily(...)`. The family composer owns shared cursor
   validation, node payload validation, host projection, adopted-session
   projection, per-host publication, read routing, single-flight continuation
   per resolved agent and source, and terminal plan routing. Different agents

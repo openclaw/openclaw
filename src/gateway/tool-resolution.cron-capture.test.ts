@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
+import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { resolveExecTarget } from "../agents/bash-tools.exec-runtime.js";
 import * as pluginTools from "../agents/openclaw-plugin-tools.js";
 import { resolveScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
@@ -22,7 +23,8 @@ import {
 } from "../infra/agent-run-registry.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
@@ -47,8 +49,8 @@ describe("MCP automation creator capture", () => {
     setRuntimeConfigSnapshot(cfg);
     let current = true;
     const effect = vi.fn();
-    vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptions").mockImplementation(
-      ({ options }) => {
+    vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptionsAsync").mockImplementation(
+      async ({ options }) => {
         const assertCurrent = expectDefined(
           options?.assertInvocationCurrent,
           "standalone grant guard",
@@ -98,7 +100,6 @@ describe("MCP automation creator capture", () => {
   }> = [
     { label: "inherited native", toolsAllow: undefined, nativeExec: true, unreadableSchema: false },
     { label: "finite native", toolsAllow: ["exec"], nativeExec: true, unreadableSchema: false },
-    { label: "restricted MCP", toolsAllow: undefined, nativeExec: false, unreadableSchema: false },
     {
       label: "schema-filtered MCP",
       toolsAllow: undefined,
@@ -109,12 +110,15 @@ describe("MCP automation creator capture", () => {
     { label: "native excluded", nativeExec: true, nativeRestriction: "allow" },
   ];
   it.each(cases)(
-    "persists the final $label creator surface",
+    "persists the $label creator authority",
     async ({ toolsAllow, nativeExec, unreadableSchema, nativeRestriction }) => {
       const root = tempDirs.make("openclaw-cli-cron-capture-");
       const storePath = path.join(root, "cron", "jobs.json");
       const cfg: OpenClawConfig = {
-        agents: { entries: { main: {} }, defaults: { sandbox: { mode: "non-main" } } },
+        agents: {
+          entries: { main: {} },
+          defaults: { model: "openai/gpt-4.1", sandbox: { mode: "non-main" } },
+        },
         tools: {
           allow: [
             "automations",
@@ -128,6 +132,19 @@ describe("MCP automation creator capture", () => {
         plugins: { enabled: false },
       };
       vi.stubEnv("OPENCLAW_STATE_DIR", root);
+      await persistAuthProfileBatch({
+        stateDir: root,
+        profiles: [
+          {
+            profileId: "openai:creator-fixture",
+            credential: {
+              type: "api_key",
+              provider: "openai",
+              key: "synthetic-creator-inference-key",
+            },
+          },
+        ],
+      });
       setRuntimeConfigSnapshot(cfg);
       if (unreadableSchema) {
         // Plugin admission accepts this schema object; MCP cannot serialize it.
@@ -144,9 +161,13 @@ describe("MCP automation creator capture", () => {
             throw new Error("plugin schema is unavailable");
           },
         });
-        vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptions").mockReturnValue([tool]);
+        vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptionsAsync").mockResolvedValue([
+          tool,
+        ]);
       }
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: false,
         defaultAgentId: "main",
@@ -229,9 +250,7 @@ describe("MCP automation creator capture", () => {
           execTarget: stored.toolsAllowExecTarget,
         });
         const capturesNativeExec = nativeExec && !nativeRestriction;
-        expect(stored.payload.toolsAllow).toEqual(
-          toolsAllow ?? ["automations", ...(capturesNativeExec ? ["exec"] : [])],
-        );
+        expect(stored.payload.toolsAllow).toEqual(toolsAllow ?? ["*"]);
         expect(stored.toolsAllowExecTarget).toEqual(
           capturesNativeExec ? { version: 1, host: "gateway" } : undefined,
         );

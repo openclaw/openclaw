@@ -1,10 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
+import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import {
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 
 type TranscriptFtsDatabase = Pick<DB, "session_transcript_fts_rows"> & {
@@ -24,6 +29,12 @@ type TranscriptFtsEntry = {
 /** Insert both projection records in the caller's synchronous write transaction. */
 export function createSessionTranscriptFtsInserter(db: DatabaseSync, sessionId: string) {
   const kysely = getNodeSqliteKysely<TranscriptFtsDatabase>(db);
+  const search = admitStoreSearch(db, {
+    text: { transcript: { table: "session_transcript_fts", fields: ["text"] } },
+  });
+  if (!search.fullText) {
+    throw new Error(search.diagnostics.join("; "));
+  }
   const insertIdentity = prepareSqliteQuerySync<TranscriptFtsEntry>(db, (parameter) =>
     kysely.insertInto("session_transcript_fts_rows").values({
       session_id: sessionId,
@@ -33,7 +44,7 @@ export function createSessionTranscriptFtsInserter(db: DatabaseSync, sessionId: 
   const insertContent = prepareSqliteQuerySync<TranscriptFtsEntry>(db, (parameter) =>
     kysely.insertInto("session_transcript_fts").values({
       // Keep the allocated 64-bit identity inside SQLite, including above JS's safe integer range.
-      rowid: kysely.fn<number>("last_insert_rowid", []),
+      rowid: search.fullText!.allocatedIdentity(search.text.transcript!),
       text: parameter((entry) => entry.text),
       session_id: sessionId,
       message_id: parameter((entry) => entry.messageId),
@@ -42,8 +53,10 @@ export function createSessionTranscriptFtsInserter(db: DatabaseSync, sessionId: 
     }),
   );
   return (entry: TranscriptFtsEntry): void => {
-    insertIdentity(entry);
-    insertContent(entry);
+    withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => {
+      insertIdentity(entry);
+      insertContent(entry);
+    });
   };
 }
 
@@ -70,10 +83,15 @@ export function deleteSessionTranscriptFtsRowsInTransaction(
     selected = selected.limit(options.maxRows);
   }
   return Number(
-    executeSqliteQuerySync(
+    withSqliteDatabaseWriteScope(
       db,
-      kysely.deleteFrom("session_transcript_fts_rows").where("id", "in", selected),
-    ).numAffectedRows ?? 0n,
+      (typeof sessionIds === "string" ? [sessionIds] : sessionIds).map(sqliteSessionIdWriteScope),
+      () =>
+        executeSqliteQuerySync(
+          db,
+          kysely.deleteFrom("session_transcript_fts_rows").where("id", "in", selected),
+        ).numAffectedRows,
+    ) ?? 0n,
   );
 }
 

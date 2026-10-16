@@ -4,8 +4,8 @@ import type { ChannelInboundEventRunnerParams } from "openclaw/plugin-sdk/channe
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TwitchConfigSchema } from "./config-schema.js";
 import { BASE_TWITCH_TEST_ACCOUNT } from "./test-fixtures.js";
 import type { TwitchChatMessage } from "./types.js";
@@ -64,7 +64,7 @@ type InboundRunInput = {
 };
 
 describe("monitorTwitchProvider", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "twitch-prefix-");
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getClient.mockResolvedValue({});
@@ -156,7 +156,7 @@ describe("monitorTwitchProvider", () => {
         }),
       ).toMatchObject({ ok: true });
       const config: OpenClawConfig = {
-        session: { store: join(tempDirs.make("twitch-prefix-"), "sessions.json") },
+        session: { store: join(sessionDirs.make(), "sessions.json") },
         messages: { responsePrefix: "[global]" },
         channels: { twitch: channelConfig },
       };
@@ -197,7 +197,7 @@ describe("monitorTwitchProvider", () => {
         abortSignal: new AbortController().signal,
       });
       try {
-        const onMessage = mocks.onMessage.mock.calls[0]?.[1];
+        const onMessage = mocks.onMessage.mock.calls[0]?.[0];
         onMessage({
           id: `prefix-${name}`,
           username: "viewer",
@@ -288,17 +288,18 @@ describe("monitorTwitchProvider", () => {
         turn.delivery.onDelivered(payload, { kind: "final" }, result);
       });
       let onMessage: ((message: TwitchChatMessage) => void) | undefined;
-      mocks.onMessage.mockImplementation(
-        (_account: unknown, handler: (message: TwitchChatMessage) => void) => {
-          onMessage = handler;
-          return mocks.unregister;
-        },
-      );
+      mocks.onMessage.mockImplementation((handler: (message: TwitchChatMessage) => void) => {
+        onMessage = handler;
+        return mocks.unregister;
+      });
       const account = { ...BASE_TWITCH_TEST_ACCOUNT, accessToken: "oauth:test-token" };
+      const config: OpenClawConfig = {
+        session: { store: join(sessionDirs.make(), "sessions.json") },
+      };
       const monitor = await monitorTwitchProvider({
         account,
         accountId: "default",
-        config: {},
+        config,
         channelRuntime: mocks.getRuntime().channel,
         runtime: { error: runtimeError },
         abortSignal: new AbortController().signal,
@@ -322,7 +323,7 @@ describe("monitorTwitchProvider", () => {
           account,
           "testchannel",
           expectedText,
-          {},
+          config,
           "default",
         );
       } else {

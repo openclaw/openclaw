@@ -1,9 +1,10 @@
 /** Caches plugin module loaders and native-load stats for runtime/source module imports. */
 import fs from "node:fs";
-import Module from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
+import type { NodePath } from "@babel/traverse";
+import type { CallExpression, Program, Statement } from "@babel/types";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
 import {
@@ -11,6 +12,7 @@ import {
   resolvePluginLoaderTryNative,
   tryNativeRequireJavaScriptModule,
   tryNativeRequireModule,
+  useNodeModuleHooks,
 } from "./native-module-require.js";
 import { isPathInside, openPluginRootFileSync } from "./path-safety.js";
 import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
@@ -21,6 +23,7 @@ import {
   getPluginCacheSource,
   withPluginCache,
 } from "./plugin-cache.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { installOpenClawInternalCorePackageNativeResolver } from "./plugin-sdk-native-resolver.js";
@@ -33,6 +36,7 @@ import {
   isPluginSdkAliasSpecifier,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
+import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
 export type PluginModuleLoaderFactory = typeof createJiti;
 type ResolvePluginModuleLoaderCacheEntryParams = {
@@ -107,33 +111,15 @@ function resolveAutomaticJitiTsconfig(loaderFilename: string): string | undefine
   }
 }
 
-type BabelImportCallPath = {
-  node: {
-    callee: { type: string; name?: string };
-    arguments: unknown[];
-  };
-  scope: { getBinding(name: string): unknown };
-  replaceWith(node: unknown): void;
-};
-
-type BabelProgramPath = {
-  scope: { generateUidIdentifier(name: string): { name: string } };
-  traverse(visitor: { CallExpression(call: BabelImportCallPath): void }): void;
-  unshiftContainer(name: "body", nodes: unknown): void;
-};
-
 function createBunJitiImportCachePlugin(babel: {
-  types: {
-    callExpression(callee: unknown, args: unknown[]): unknown;
-    identifier(name: string): unknown;
-  };
-  template: { statements: { ast(source: string): unknown } };
+  types: Pick<typeof import("@babel/types"), "callExpression" | "identifier">;
+  template: { statements: { ast(source: string): Statement[] } };
 }) {
   return {
     visitor: {
       Program: {
-        exit(program: BabelProgramPath) {
-          const calls: BabelImportCallPath[] = [];
+        exit(program: NodePath<Program>) {
+          const calls: NodePath<CallExpression>[] = [];
           program.traverse({
             CallExpression(call) {
               if (
@@ -220,7 +206,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
         pluginSdkResolution: params.pluginSdkResolution,
       });
   const moduleConfigCacheKey = `${tryNative ? "native" : "transform"}\0${aliases.cacheKey}`;
-  const lazyNativeAliasFallback = tryNative && typeof Module.registerHooks !== "function";
+  const lazyNativeAliasFallback = tryNative && !useNodeModuleHooks();
   const scopedCacheKey = `${loaderFilename}::${params.cacheScopeKey ? `${params.cacheScopeKey}::` : ""}${moduleConfigCacheKey}`;
   return {
     loaderFilename,
@@ -241,6 +227,14 @@ function createPluginModuleLoader(
   },
 ): PluginModuleLoader {
   let loadWithSourceTransform: PluginModuleLoader | undefined;
+  const resolveNativeAlias = (specifier: string, parent?: string) => {
+    const target = params.resolveAlias(specifier);
+    const instance = target && pluginInstanceInvocation.getStore()?.instance;
+    if (instance && parent && instance.hasModuleSource(parent)) {
+      recordPluginSdkDeprecatedImport(instance.pluginId, specifier);
+    }
+    return target;
+  };
   const getLoadWithSourceTransform = () => {
     if (loadWithSourceTransform) {
       return loadWithSourceTransform;
@@ -279,6 +273,10 @@ function createPluginModuleLoader(
                 `Unable to load host Plugin SDK natively: ${target}. Use a supported native TypeScript loader for a source host, or rebuild the host SDK.`,
               );
             }
+            const instance = pluginInstanceInvocation.getStore()?.instance;
+            if (instance && typeof key === "string") {
+              recordPluginSdkDeprecatedImport(instance.pluginId, key);
+            }
             return native.moduleExport;
           },
         },
@@ -302,7 +300,7 @@ function createPluginModuleLoader(
       pluginModuleLoaderStats.calls += 1;
       if (params.tryNative) {
         const native = tryNativeRequireJavaScriptModule(target, {
-          aliasMap: params.resolveAlias,
+          aliasMap: resolveNativeAlias,
           fallbackOnMissingDependency: true,
         });
         if (native.ok) {
@@ -404,7 +402,7 @@ export function preparePluginModule(params: PluginModuleBoundaryParams) {
     throw new Error(`Unable to open ${params.surfaceLabel}`, { cause: opened.error });
   }
   fs.closeSync(opened.fd);
-  if (!sameFileIdentity(opened.stat, fs.statSync(opened.path))) {
+  if (!sameFileIdentity(opened.exactIdentity, fs.statSync(opened.path, { bigint: true }))) {
     throw new Error(`${params.surfaceLabel} changed after validation`);
   }
   const root = bindPluginCacheRoot(params.boundaryRoot, opened.rootRealPath);
@@ -425,9 +423,10 @@ export function preparePluginModule(params: PluginModuleBoundaryParams) {
 export function loadPluginPublicSurfaceModuleSync(
   params: PluginModuleBoundaryParams & {
     loadModule: (modulePath: string) => unknown;
+    capturedSource?: true;
   },
 ): object {
-  const instance = resolvePublicSurfaceInstance(params);
+  const instance = params.capturedSource ? undefined : resolvePublicSurfaceInstance(params);
   if (instance) {
     // SAFETY: Public-surface entrypoints have object exports; the instance owns this exact source.
     return instance.loadModule(params.modulePath) as object;

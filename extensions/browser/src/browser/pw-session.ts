@@ -14,14 +14,12 @@ export {
   ensureContextState,
   getPageForTargetId,
   hasCachedPlaywrightBrowserConnection,
-  retirePlaywrightBrowserConnection,
   retirePlaywrightBrowserConnectionExact,
 } from "./pw-session-connection.js";
 export {
   armObservedDialogResponseOnPage,
   createObservedDialogAbortSignalForPage,
   ensurePageState,
-  getObservedBrowserStateForPage,
   markObservedDialogsHandledRemotelyForPage,
   respondToObservedDialogOnPage,
   restoreRoleRefsForTarget,

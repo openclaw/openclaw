@@ -3,10 +3,10 @@ import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { ApplicationContext } from "../app/context.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { SessionRowObservation } from "../lib/sessions/session-capability.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
@@ -112,17 +112,12 @@ suite.define(() => {
           row,
         });
         const expectedPathname = await page.evaluate((options) => {
-          // SAFETY: The fixture selects the registered application and its public runtime.
-          const app = document.querySelector("openclaw-app") as
-            | (HTMLElement & {
-                runtime?: { context: Pick<ApplicationContext, "basePath" | "navigate"> };
-              })
-            | null;
-          if (!app?.runtime) {
-            throw new Error("OpenClaw application runtime is unavailable");
+          const app = window.openclawControlUi;
+          if (!app) {
+            throw new Error("Control UI readiness hook is unavailable");
           }
-          const pathname = `${app.runtime.context.basePath}${options.pathname}`;
-          app.runtime.context.navigate("chat", { ...options, pathname });
+          const pathname = `${app.snapshot().basePath}${options.pathname}`;
+          app.navigate("chat", { ...options, pathname });
           return pathname;
         }, target.options);
         await page.waitForURL((url) => url.pathname === expectedPathname);
@@ -145,7 +140,7 @@ suite.define(() => {
           await navigate(foreign);
           await expect.poll(() => composer.isDisabled()).toBe(true);
         }
-        const newSession = page.locator(".sidebar-brand__new-thread");
+        const newSession = page.locator(".sidebar-rail .sidebar-new-session");
         await expect.poll(() => newSession.isEnabled()).toBe(true);
         await newSession.click();
         const draft = page.locator(".new-session-page__message");
@@ -162,10 +157,15 @@ suite.define(() => {
           .poll(() => page.locator(".chat-thread").textContent())
           .toContain("Help me plan my own work.");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        const listCount = (await gateway.getRequests("sessions.list")).length;
         await gateway.deferNext("sessions.list");
+        // Creation must preserve its first turn while an earlier roster read is still pending.
+        await evaluateControlUiContext(page, (application) => {
+          void application.sessions.refreshList({ force: true });
+        });
+        await gateway.waitForRequest("sessions.list", { after: listCount });
         await gateway.deferNext("chat.startup", { sessionKey: key });
         await gateway.deferNext("sessions.describe", { key });
-        const listCount = (await gateway.getRequests("sessions.list")).length;
         await gateway.resolveDeferred("sessions.create", {
           key,
           entry: { sessionId },
@@ -174,7 +174,6 @@ suite.define(() => {
             : { runStarted: false, runError: { message: "Initial turn refused" } }),
         });
         await waitForCommittedChatRoute(page);
-        await gateway.waitForRequest("sessions.list", { after: listCount });
         const initialMessage = pane.locator(".chat-group.user", {
           hasText: "Help me plan my own work.",
         });
@@ -242,11 +241,16 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.patch", { match: { key, model: "openai/model-b" } });
         await pane.locator("[data-chat-thinking-select]").click();
         const slider = pane.locator("[data-chat-thinking-slider]");
+        await expect.poll(() => slider.isVisible()).toBe(true);
+        await expect.poll(() => slider.isEnabled()).toBe(true);
         await slider.press("End");
         await gateway.waitForRequest("sessions.patch", { match: { key, thinkingLevel: "high" } });
+        await page.keyboard.press("Escape");
+        await model.click();
         const contextWindow = pane.locator("[data-chat-context-window-toggle]");
+        await expect.poll(() => contextWindow.isVisible()).toBe(true);
         await expect.poll(() => contextWindow.isDisabled()).toBe(true);
-        await capture("safe-controls", pane.locator("[data-chat-thinking-select]"));
+        await capture("safe-controls", pane.locator(".chat-controls__model-menu"));
         await page.keyboard.press("Escape");
         const permission = pane.locator("[data-chat-permission-select]");
         await permission.click();

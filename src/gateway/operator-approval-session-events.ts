@@ -16,10 +16,11 @@ import {
   canAccessOperatorApproval,
   canReviewOperatorApproval,
 } from "./operator-approval-authorization.js";
+import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-reviewer-binding.js";
 import { projectOperatorApprovalSnapshot } from "./operator-approval-snapshot.js";
 import {
-  expireDueOperatorApprovals,
   listPendingOperatorApprovals,
+  prepareOperatorApprovalReplay,
   type OperatorApprovalRecord,
 } from "./operator-approval-store.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
@@ -27,7 +28,14 @@ import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import type { GatewayClient, PreparedSessionApprovalReplay } from "./server-methods/types.js";
 
 const MAX_SESSION_APPROVAL_REPLAY = 1_000;
-type ApprovalSessionClient = GatewayClient & { invalidated?: boolean };
+type ApprovalReplaySnapshot = Omit<PreparedSessionApprovalReplay, "release">;
+type ApprovalReplayScope = {
+  sessionKey: string;
+  reviewerDeviceId: string | undefined;
+  references: number;
+  revision: number;
+  preparation?: Promise<ApprovalReplaySnapshot>;
+};
 
 type OperatorApprovalSessionEventRuntime = {
   publish: (event: OperatorApprovalLifecycleEvent) => void;
@@ -48,7 +56,7 @@ function resolveApprovalSourceStreamKeyForRecord(record: OperatorApprovalRecord)
 
 /** Project durable approval truth to exact, explicitly opted-in session audiences. */
 export function createOperatorApprovalSessionEventRuntime(params: {
-  clients: Iterable<ApprovalSessionClient>;
+  clients: Iterable<GatewayClient>;
   sessionMessageSubscribers: Pick<SessionMessageSubscriberRegistry, "getApprovals">;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   controlUiBasePath?: string;
@@ -62,14 +70,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
 }): OperatorApprovalSessionEventRuntime {
   const controlUiBasePath = normalizeControlUiBasePath(params.controlUiBasePath);
   const now = params.now ?? Date.now;
-  let publicationRevision = 0;
-  const preparations = new Map<string, Promise<PreparedSessionApprovalReplay>>();
-
-  const canAccessRecord = (client: GatewayClient | null, record: OperatorApprovalRecord): boolean =>
-    canAccessOperatorApproval({
-      client,
-      binding: { reviewerDeviceIds: record.reviewerDeviceIds },
-    });
+  const replayScopes = new Map<string, ApprovalReplayScope>();
 
   const authorizedRecipients = (
     sessionKey: string,
@@ -86,7 +87,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         !client.invalidated &&
         connId &&
         subscribed.has(connId) &&
-        canAccessRecord(client, record)
+        canAccessOperatorApproval({ client, binding: record })
       ) {
         recipients.add(connId);
       }
@@ -95,8 +96,16 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   };
 
   const publish = (event: OperatorApprovalLifecycleEvent): void => {
-    publicationRevision += 1;
-    preparations.clear();
+    for (const scope of replayScopes.values()) {
+      if (
+        event.record.audienceSessionKeys.includes(scope.sessionKey) &&
+        (scope.reviewerDeviceId === undefined ||
+          matchesOperatorApprovalReviewerBinding(event.record, scope.reviewerDeviceId))
+      ) {
+        scope.revision += 1;
+        scope.preparation = undefined;
+      }
+    }
     const source = event.record.source;
     const pending = event.phase === "pending" && event.record.status === "pending";
     const manager = params.getLiveManager?.(event.record.kind);
@@ -163,35 +172,35 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     }
   };
 
-  const prepareReplay = async (
-    sessionKey: string,
-    reviewerDeviceId: string | undefined,
-  ): Promise<PreparedSessionApprovalReplay> => {
+  const prepareReplay = async (scope: ApprovalReplayScope): Promise<ApprovalReplaySnapshot> => {
+    const { sessionKey, reviewerDeviceId } = scope;
     const snapshotAtMs = now();
-    const expired = await expireDueOperatorApprovals({
-      nowMs: snapshotAtMs,
-      databaseOptions: params.databaseOptions,
-    });
-    // A replay read can be the first observer after a suspended timer. Emit
-    // the durable timeout tombstone before returning the authoritative set.
-    for (const record of expired.records) {
-      const reconciled = await params.reconcileTerminal?.(record);
-      if (reconciled !== true) {
-        publish({ phase: "terminal", record });
-      }
-    }
-    if (params.isCurrent?.() === false) {
-      throw new Error("Operator approval replay authority is no longer current");
-    }
-    const revision = publicationRevision;
-    const records = await listPendingOperatorApprovals({
+    const input = {
       audienceSessionKey: sessionKey,
       reviewerDeviceId,
       limit: MAX_SESSION_APPROVAL_REPLAY + 1,
       nowMs: snapshotAtMs,
       databaseOptions: params.databaseOptions,
-    });
-    const isCurrent = () => revision === publicationRevision;
+    };
+    const readRevision = scope.revision;
+    const prepared = await prepareOperatorApprovalReplay(input);
+    // A replay read can be the first observer after a suspended timer. Emit
+    // the durable timeout tombstone before returning the authoritative set.
+    if (prepared.outcome === "expired") {
+      for (const record of prepared.records) {
+        const reconciled = await params.reconcileTerminal?.(record);
+        if (reconciled !== true) {
+          publish({ phase: "terminal", record });
+        }
+      }
+    }
+    if (params.isCurrent?.() === false) {
+      throw new Error("Operator approval replay authority is no longer current");
+    }
+    const revision = prepared.outcome === "expired" ? scope.revision : readRevision;
+    const records =
+      prepared.outcome === "expired" ? await listPendingOperatorApprovals(input) : prepared.records;
+    const isCurrent = () => revision === scope.revision;
     const approvals: PendingApprovalSnapshot[] = [];
     const truncated = records.length > MAX_SESSION_APPROVAL_REPLAY;
     for (const record of records) {
@@ -220,6 +229,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         return {
           replay: { sessionKey, updatedAtMs: now(), approvals: [], truncated: false },
           isCurrent: () => !canReviewOperatorApproval(client),
+          release: () => {},
         };
       }
       const scopes = [...(client?.connect.scopes ?? [])];
@@ -240,24 +250,48 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       // Only share unsettled work. Lifecycle publications fence replies but are
       // not a durable store revision suitable for retaining completed snapshots.
       const key = JSON.stringify([sessionKey, reviewerDeviceId]);
-      let preparation = preparations.get(key);
-      if (!preparation) {
-        preparation = prepareReplay(sessionKey, reviewerDeviceId).finally(() => {
-          if (preparations.get(key) === preparation) {
-            preparations.delete(key);
-          }
-        });
-        preparations.set(key, preparation);
+      let scope = replayScopes.get(key);
+      if (!scope) {
+        scope = { sessionKey, reviewerDeviceId, references: 0, revision: 0 };
+        replayScopes.set(key, scope);
       }
-      const prepared = await preparation;
-      assertCurrent();
-      return {
-        replay: prepared.replay,
-        isCurrent: () => {
-          assertCurrent();
-          return prepared.isCurrent();
-        },
+      const retained = scope;
+      retained.references += 1;
+      let released = false;
+      const release = () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        retained.references -= 1;
+        if (retained.references === 0) {
+          replayScopes.delete(key);
+        }
       };
+      try {
+        let preparation = retained.preparation;
+        if (!preparation) {
+          preparation = prepareReplay(retained).finally(() => {
+            if (retained.preparation === preparation) {
+              retained.preparation = undefined;
+            }
+          });
+          retained.preparation = preparation;
+        }
+        const prepared = await preparation;
+        assertCurrent();
+        return {
+          replay: prepared.replay,
+          isCurrent: () => {
+            assertCurrent();
+            return !released && prepared.isCurrent();
+          },
+          release,
+        };
+      } catch (error) {
+        release();
+        throw error;
+      }
     },
   };
 }

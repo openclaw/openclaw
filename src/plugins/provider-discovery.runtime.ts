@@ -6,9 +6,9 @@ import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { isJavaScriptModulePath } from "./native-module-require.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "./plugin-cache.js";
 import { withProfile } from "./plugin-load-profile.js";
-import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
 import {
@@ -102,6 +102,8 @@ function loadProviderDiscoveryProviders(manifest: PluginManifestRecord): Provide
       Object.assign({}, provider, { pluginId: manifest.id, pluginRoot: rootDir }),
     );
   if (
+    // Native bundled libraries do not bind callbacks; their setup inventory owns SDK resolution.
+    !(manifest.origin === "bundled" && isJavaScriptModulePath(source)) &&
     registry &&
     getPluginRegistryForContext() === registry &&
     resolvePluginRuntimeRecord({ pluginRoot: rootDir, pluginId: manifest.id })?.status === "loaded"
@@ -212,17 +214,9 @@ function prepareManifestCatalogDiscovery(
   return { providers, runtimeManifestCatalogPluginIds };
 }
 
-function resolveProviderDiscoveryEntryPlugins(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  onlyPluginIds?: string[];
-  includeUntrustedWorkspacePlugins?: boolean;
-  requireCompleteDiscoveryEntryCoverage?: boolean;
-  discoveryEntriesOnly?: boolean;
-  includeManifestModelCatalogProviders?: boolean;
-  pluginMetadataSnapshot?: PluginMetadataRegistryView;
-}): ProviderDiscoveryEntryResult {
+function resolveProviderDiscoveryEntryPlugins(
+  params: Omit<ResolveRuntimePluginDiscoveryProvidersParams, "includeSyntheticAuthProviders">,
+): ProviderDiscoveryEntryResult {
   const metadataSnapshot =
     params.pluginMetadataSnapshot ??
     loadManifestMetadataSnapshot({
@@ -375,10 +369,9 @@ export function planPluginDiscoveryRuntime(
         providers: retainSyntheticAuthProviders(runtimeEntryProviders, authProviders),
       };
     }
-    const fullPluginIdSet = new Set(fullPluginIds);
-    retainedProviders = runtimeEntryProviders.filter(
-      (provider) => !provider.pluginId || !fullPluginIdSet.has(provider.pluginId),
-    );
+    // Replace catalogs by provider id below, not by plugin: a mixed owner can
+    // expose a native discovery entry alongside a different runtime provider.
+    retainedProviders = runtimeEntryProviders;
   } else if (entryProviders.length > 0) {
     const entryPluginIds = sortUniqueStrings(
       entryProviders
@@ -419,7 +412,9 @@ export function resolvePluginDiscoveryProvidersRuntime(
       // Runtime owns catalog replacement and its auth pair. A lightweight-only
       // auth contribution survives without keeping a superseded catalog hook.
       providers[index] =
-        provider.resolveSyntheticAuth || provider.prepareSyntheticAuth
+        !params.includeSyntheticAuthProviders ||
+        provider.resolveSyntheticAuth ||
+        provider.prepareSyntheticAuth
           ? provider
           : {
               ...provider,

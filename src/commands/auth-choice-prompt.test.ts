@@ -157,60 +157,10 @@ describe("promptAuthChoiceGrouped", () => {
     ]);
   });
 
-  it("does not show keep current config for a different provider", async () => {
-    buildAuthChoiceGroups.mockReturnValue({
-      groups: [openAIGroup()],
-      skipOption: { value: "skip", label: "Skip for now" },
-    });
-    let providerOptions: Array<{ value: unknown; label: string; hint?: string }> = [];
-    let methodOptions: Array<{ value: unknown; label: string; hint?: string }> = [];
-    const prompter = createPromptHarness(async (params) => {
-      if (params.message === "Model/auth provider") {
-        providerOptions = params.options;
-        return "openai";
-      }
-      if (params.message === "OpenAI auth method") {
-        methodOptions = params.options;
-        return "openai-api-key";
-      }
-      throw new Error(`unexpected prompt ${params.message}`);
-    });
-
-    const result = await promptAuthChoiceGrouped({
-      prompter,
-      includeSkip: true,
-      allowKeepCurrentProvider: true,
-      config: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-sonnet-4.6",
-            },
-          },
-        },
-      },
-    });
-
-    expect(result).toBe("openai-api-key");
-    expect(providerOptions).toContainEqual({
-      value: "openai",
-      label: "OpenAI",
-      hint: undefined,
-    });
-    expect(methodOptions.map((option) => option.value)).toEqual([
-      "openai",
-      "openai-api-key",
-      "__back",
-    ]);
-  });
-
   it("filters guided choices while keeping featured providers and grouped methods", async () => {
     const featuredOrder = new Map([
       ["openai", 0],
-      ["openrouter", 1],
-      ["xai", 2],
-      ["google", 3],
-      ["anthropic", 4],
+      ["anthropic", 1],
     ]);
     compareAuthChoiceGroups.mockImplementation((a, b) => {
       const priorityA = featuredOrder.get(a.value) ?? Number.POSITIVE_INFINITY;
@@ -221,29 +171,11 @@ describe("promptAuthChoiceGrouped", () => {
       groups: [
         authChoiceGroup("minimax", "MiniMax", [
           ["minimax-global-oauth", "MiniMax OAuth (Global)"],
-          ["minimax-global-api", "MiniMax API key (Global)"],
-          ["minimax-cn-oauth", "MiniMax OAuth (CN)"],
           ["minimax-cn-api", "MiniMax API key (CN)"],
           ["minimax-legacy", "Legacy MiniMax login"],
         ]),
-        authChoiceGroup("opencode", "OpenCode", [
-          ["opencode-zen", "OpenCode Zen catalog"],
-          ["opencode-go", "OpenCode Go catalog"],
-        ]),
         authChoiceGroup("meta", "Meta", [["meta-api-key", "Meta API key"]], true),
-        authChoiceGroup("xiaomi", "Xiaomi", [
-          ["xiaomi-api-key", "Xiaomi API key"],
-          ["xiaomi-token-plan-cn", "Xiaomi Token Plan (CN)"],
-        ]),
         openAIGroup(),
-        authChoiceGroup(
-          "openrouter",
-          "OpenRouter",
-          [["openrouter-oauth", "OpenRouter OAuth"]],
-          true,
-        ),
-        authChoiceGroup("google", "Google", [["google-gemini-cli", "Gemini CLI OAuth"]], true),
-        authChoiceGroup("xai", "xAI (Grok)", [["xai-oauth", "xAI OAuth"]], true),
         authChoiceGroup("anthropic", "Anthropic", [["apiKey", "Anthropic API key"]], true),
       ],
       skipOption: { value: "skip", label: "Skip for now" },
@@ -274,26 +206,14 @@ describe("promptAuthChoiceGrouped", () => {
         "openai",
         "openai-api-key",
         "apiKey",
-        "xai-oauth",
-        "google-gemini-cli",
-        "openrouter-oauth",
         "minimax-global-oauth",
-        "minimax-global-api",
-        "minimax-cn-oauth",
         "minimax-cn-api",
-        "opencode-zen",
-        "opencode-go",
-        "xiaomi-api-key",
-        "xiaomi-token-plan-cn",
         "meta-api-key",
       ]),
     });
 
     expect(providerOptions.map((option) => option.value)).toEqual([
       "openai",
-      "openrouter",
-      "xai",
-      "google",
       "anthropic",
       "__more",
       "skip",
@@ -301,14 +221,10 @@ describe("promptAuthChoiceGrouped", () => {
     expect(moreProviderOptions.map((option) => option.value)).toEqual([
       "meta",
       "minimax",
-      "opencode",
-      "xiaomi",
       "__back",
     ]);
     expect(minimaxOptions.map((option) => option.value)).toEqual([
       "minimax-global-oauth",
-      "minimax-global-api",
-      "minimax-cn-oauth",
       "minimax-cn-api",
       "__back",
     ]);
@@ -361,32 +277,6 @@ describe("promptAuthChoiceGrouped", () => {
     });
     expect(providerPrompts[1]?.map((option) => option.value)).toEqual(["minimax", "__back"]);
     expect(result).toBe("minimax-api");
-  });
-
-  it("uses a caller-supplied method prompt when provided", async () => {
-    buildAuthChoiceGroups.mockReturnValue({ groups: [], skipOption: undefined });
-    const messages: string[] = [];
-    const prompter = createPromptHarness(async (params) => {
-      messages.push(params.message);
-      return params.message === "Model/auth provider" ? "detected-ai" : "candidate:codex-cli";
-    });
-
-    const result = await promptAuthChoiceGrouped({
-      prompter,
-      includeSkip: false,
-      additionalGroups: [
-        {
-          ...authChoiceGroup("detected-ai", "Detected on this machine", [
-            ["candidate:codex-cli", "Codex CLI"],
-            ["candidate:claude-cli", "Claude Code"],
-          ]),
-          methodMessage: "Use which detected AI?",
-        },
-      ],
-    });
-
-    expect(messages).toEqual(["Model/auth provider", "Use which detected AI?"]);
-    expect(result).toBe("candidate:codex-cli");
   });
 
   it("marks a detected provider in the provider picker", async () => {

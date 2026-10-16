@@ -43,7 +43,7 @@ export class DebugOverlayLayout {
 
   update(mode: Mode): void {
     const element = this.element;
-    if (this.mode && (this.mode !== mode || this.animation)) {
+    if (this.mode && this.mode !== mode) {
       this.transitionFrom ??= element.getBoundingClientRect();
       this.cancelAnimation();
     }
@@ -51,7 +51,7 @@ export class DebugOverlayLayout {
     if (this.frame) {
       return;
     }
-    // This directive precedes the class binding: capture the old box above, then
+    // The mode memo precedes the class binding: capture the old box above, then
     // coalesce loading/live updates without losing the pending transition.
     this.frame = requestAnimationFrame(() => {
       this.frame = 0;
@@ -59,31 +59,41 @@ export class DebugOverlayLayout {
         return;
       }
       this.connect();
+      if (this.animation) {
+        // Body-size changes during the 160ms transition settle at its finish.
+        return;
+      }
       this.place();
       const before = this.transitionFrom;
       this.transitionFrom = undefined;
-      if (!before || matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        return;
+      if (before) {
+        this.animate(before, element.getBoundingClientRect());
       }
-      const after = element.getBoundingClientRect();
-      const keyframe = (box: DOMRect) => ({
-        left: box.x + "px",
-        top: box.y + "px",
-        width: box.width + "px",
-        height: box.height + "px",
-        right: "auto",
-        bottom: "auto",
-        maxHeight: "none",
-      });
-      this.animation = element.animate([keyframe(before), keyframe(after)], {
-        duration: 160,
-        easing: "cubic-bezier(0.2, 0, 0, 1)",
-      });
-      this.animation.onfinish = () => {
-        this.animation = undefined;
-        this.place();
-      };
     });
+  }
+
+  private animate(before: DOMRect, after: DOMRect): void {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      return;
+    }
+    const keyframe = (box: DOMRect) => ({
+      left: box.x + "px",
+      top: box.y + "px",
+      width: box.width + "px",
+      height: box.height + "px",
+      right: "auto",
+      bottom: "auto",
+      maxHeight: "none",
+    });
+    const animation = this.element.animate([keyframe(before), keyframe(after)], {
+      duration: 160,
+      easing: "cubic-bezier(0.2, 0, 0, 1)",
+    });
+    this.animation = animation;
+    animation.onfinish = () => {
+      this.animation = undefined;
+      this.place();
+    };
   }
 
   private connect(): void {
@@ -241,23 +251,10 @@ export class DebugOverlayLayout {
       return;
     }
     const step = event.shiftKey ? 40 : 10;
-    let dx = 0;
-    let dy = 0;
-    switch (event.key) {
-      case "ArrowLeft":
-        dx = -step;
-        break;
-      case "ArrowRight":
-        dx = step;
-        break;
-      case "ArrowUp":
-        dy = -step;
-        break;
-      case "ArrowDown":
-        dy = step;
-        break;
-      default:
-        return;
+    const dx = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
+    const dy = event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0;
+    if (dx === 0 && dy === 0) {
+      return;
     }
     event.preventDefault();
     this.cancelAnimation();
@@ -283,10 +280,5 @@ export class DebugOverlayLayout {
     element?.removeEventListener("keydown", this.keyDown);
     window.removeEventListener("resize", this.resize);
     window.removeEventListener("blur", this.cancelDrag);
-  }
-
-  reconnect(): void {
-    this.connect();
-    this.place();
   }
 }

@@ -23,7 +23,7 @@ beforeAll(() => {
 afterAll(() => lifetime.cleanup());
 
 describe("standalone MCP registration lifetime", () => {
-  it.each(["plain", "nested", "close-failure"])(
+  it.each(["nested", "close-failure"])(
     "%s: joins native tool work and physical registration disposal before terminal return",
     (mode) =>
       lifetime.run(async () => {

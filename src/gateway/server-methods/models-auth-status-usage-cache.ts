@@ -1,4 +1,3 @@
-// Stale-while-revalidate cache for models.authStatus provider usage enrichment.
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
@@ -24,30 +23,27 @@ export type ProviderUsageStatus = Pick<
   "windows" | "summary" | "plan" | "billing" | "accountEmail"
 >;
 
-type ProviderUsageCacheEntry = {
+type ProviderUsageCacheIdentity = {
   agentDir: string;
   configRef: OpenClawConfig;
   credentialKey: string;
   providerKey: string;
+};
+
+type ProviderUsageCacheEntry = ProviderUsageCacheIdentity & {
   refreshedAt: number;
   summary: UsageSummary;
   usageByProvider: Map<string, ProviderUsageStatus>;
 };
 
-type ProviderUsageRefresh = {
-  agentDir: string;
-  configRef: OpenClawConfig;
-  credentialKey: string;
-  providerKey: string;
+type ProviderUsageRefresh = ProviderUsageCacheIdentity & {
   promise: Promise<UsageSummary>;
 };
 
 const usageCacheByAgentId = new Map<string, ProviderUsageCacheEntry>();
 const usageRefreshByAgentId = new Map<string, ProviderUsageRefresh>();
-let cacheGeneration = 0;
 
 export function clearModelAuthStatusUsageCache(): void {
-  cacheGeneration += 1;
   usageCacheByAgentId.clear();
   usageRefreshByAgentId.clear();
   clearProviderUsageRuntimeSnapshot();
@@ -113,16 +109,14 @@ function retainLastGoodOnTimeout(
   };
 }
 
-function scheduleProviderUsageRefresh(params: {
-  agentId: string;
-  agentDir: string;
-  authStore?: AuthProfileStore;
-  configRef: OpenClawConfig;
-  credentialKey: string;
-  providerIds: UsageProviderId[];
-  providerKey: string;
-  lastGood?: UsageSummary;
-}): Promise<UsageSummary> {
+function scheduleProviderUsageRefresh(
+  params: ProviderUsageCacheIdentity & {
+    agentId: string;
+    authStore?: AuthProfileStore;
+    providerIds: UsageProviderId[];
+    lastGood?: UsageSummary;
+  },
+): Promise<UsageSummary> {
   const active = usageRefreshByAgentId.get(params.agentId);
   if (
     active?.agentDir === params.agentDir &&
@@ -132,7 +126,6 @@ function scheduleProviderUsageRefresh(params: {
   ) {
     return active.promise;
   }
-  const publishGeneration = cacheGeneration;
   // SWR replies and invalidation must retain publication and finalization ownership.
   const promise = trackAsyncWork(() =>
     loadProviderUsageSummary({
@@ -144,10 +137,7 @@ function scheduleProviderUsageRefresh(params: {
     })
       .then((freshUsage) => {
         const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
-        if (
-          publishGeneration === cacheGeneration &&
-          usageRefreshByAgentId.get(params.agentId) === refresh
-        ) {
+        if (usageRefreshByAgentId.get(params.agentId) === refresh) {
           usageCacheByAgentId.set(params.agentId, {
             agentDir: params.agentDir,
             configRef: params.configRef,
@@ -214,7 +204,20 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
     params.forceRefresh === true ||
     !matching ||
     params.now - matching.refreshedAt >= USAGE_CACHE_TTL_MS;
-  return { credentialKey, matching, needsRefresh, providerIds, providerKey };
+  return {
+    matching,
+    needsRefresh,
+    refreshParams: {
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      authStore: params.authStore,
+      configRef: params.configRef,
+      credentialKey,
+      providerIds,
+      providerKey,
+      lastGood: matching?.summary,
+    },
+  };
 }
 
 export function readProviderUsageStaleWhileRevalidate(
@@ -224,21 +227,11 @@ export function readProviderUsageStaleWhileRevalidate(
     usageCacheByAgentId.delete(params.agentId);
     return new Map();
   }
-  const { credentialKey, matching, needsRefresh, providerIds, providerKey } =
-    resolveProviderUsageCacheRead(params);
+  const { matching, needsRefresh, refreshParams } = resolveProviderUsageCacheRead(params);
   if (needsRefresh) {
     // Never couple the RPC deadline to provider HTTP. A cold call returns auth
     // without usage; stale calls return the last snapshot while one refresh runs.
-    void scheduleProviderUsageRefresh({
-      agentId: params.agentId,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-      configRef: params.configRef,
-      credentialKey,
-      providerIds,
-      providerKey,
-      lastGood: matching?.summary,
-    }).catch(() => {});
+    void scheduleProviderUsageRefresh(refreshParams).catch(() => {});
   }
   return matching?.usageByProvider ?? new Map();
 }
@@ -249,7 +242,7 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
   coldRead?: "refresh-marker";
   now?: number;
 }): Promise<UsageSummary> {
-  const snapshot = getProviderUsageRuntimeSnapshot({ config: options.config });
+  const snapshot = await getProviderUsageRuntimeSnapshot({ config: options.config });
   const params: ProviderUsageCacheParams = {
     agentId: snapshot.agentId,
     agentDir: snapshot.agentDir,
@@ -264,21 +257,11 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
     usageCacheByAgentId.delete(params.agentId);
     return { updatedAt: params.now, providers: [] };
   }
-  const { credentialKey, matching, needsRefresh, providerIds, providerKey } =
-    resolveProviderUsageCacheRead(params);
+  const { matching, needsRefresh, refreshParams } = resolveProviderUsageCacheRead(params);
   if (matching && !needsRefresh) {
     return matching.summary;
   }
-  const refresh = scheduleProviderUsageRefresh({
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    configRef: params.configRef,
-    credentialKey,
-    providerIds,
-    providerKey,
-    lastGood: matching?.summary,
-  });
+  const refresh = scheduleProviderUsageRefresh(refreshParams);
   if (matching) {
     void refresh.catch(() => {});
     return matching.summary;

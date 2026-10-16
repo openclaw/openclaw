@@ -2,6 +2,7 @@
 // the already-parallel main package graph.
 import type { UserConfig } from "tsdown";
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
+import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
 
 const externalDependencies = [
   "@anthropic-ai/sdk",
@@ -13,7 +14,10 @@ const externalDependencies = [
 
 const config = {
   clean: true,
-  dts: process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== "1",
+  dts:
+    process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1"
+      ? false
+      : { tsconfig: "tsconfig.packages.json" },
   hooks: createDeclarationBoundaryHooks(),
   entry: {
     index: "packages/ai/src/index.ts",
@@ -49,4 +53,4 @@ const config = {
   },
 } satisfies UserConfig;
 
-export default config;
+export default cacheTsdownRuntimeConfigs([config])[0]!;

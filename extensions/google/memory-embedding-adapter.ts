@@ -1,4 +1,3 @@
-// Google plugin module implements memory embedding adapter behavior.
 import {
   hasNonTextEmbeddingParts,
   isMissingEmbeddingApiKeyError,

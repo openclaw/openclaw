@@ -14,11 +14,7 @@ import {
   normalizeExtraMemoryPathEntries,
 } from "./internal.js";
 import { getAgentWorkspaceAccess } from "./openclaw-runtime-workspace.js";
-import {
-  buildMemoryReadResult,
-  DEFAULT_MEMORY_READ_LINES,
-  type MemoryReadResult,
-} from "./read-file-shared.js";
+import { buildMemoryReadResult, type MemoryReadResult } from "./read-file-shared.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryExtraPath } from "./types.js";
 
@@ -28,19 +24,6 @@ function memoryPathNotAllowed(): Error {
   return Object.assign(new Error("path is not an allowed Markdown memory file"), {
     code: "MEMORY_PATH_NOT_ALLOWED",
   });
-}
-
-/** Return true when a file vanished after path validation but before content read. */
-function isFileDisappearedDuringReadError(err: unknown): boolean {
-  return (
-    isFileMissingError(err) ||
-    Boolean(
-      err &&
-      typeof err === "object" &&
-      "code" in err &&
-      (err as { code?: unknown }).code === "path-mismatch",
-    )
-  );
 }
 
 /** Read a validated memory markdown file from workspace or configured extra paths. */
@@ -99,7 +82,7 @@ export async function readMemoryFile(params: {
         throw new Error("path must be a regular file", { cause: err });
       }
       // Missing leaves return not_found; non-directory extra-path parents are not authorized.
-      if (code !== "ENOTDIR" && isFileDisappearedDuringReadError(err)) {
+      if (code !== "ENOTDIR" && (isFileMissingError(err) || code === "path-mismatch")) {
         return notFound();
       }
       throw err;
@@ -109,7 +92,7 @@ export async function readMemoryFile(params: {
       relPath,
       from: params.from,
       lines: params.lines,
-      defaultLines: params.defaultLines ?? DEFAULT_MEMORY_READ_LINES,
+      defaultLines: params.defaultLines,
       maxChars: params.maxChars,
       suggestReadFallback: allowedWorkspace,
     });

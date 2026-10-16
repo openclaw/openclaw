@@ -1,8 +1,5 @@
 // Line tests cover setup surface plugin behavior.
-import {
-  createStartAccountContext,
-  installChannelDmPolicyContractSuite,
-} from "openclaw/plugin-sdk/channel-test-helpers";
+import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginSetupWizardConfigure,
@@ -12,7 +9,7 @@ import {
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { lineGatewayAdapter } from "./gateway.js";
@@ -20,9 +17,21 @@ import { stubLineApiFetch } from "./probe.test-support.js";
 import { setLineRuntime } from "./runtime.js";
 import { lineSetupWizard } from "./setup-surface.js";
 
+const monitorLineProviderMock = vi.hoisted(() =>
+  vi.fn<
+    (opts: Parameters<typeof import("./monitor.js").monitorLineProvider>[0]) => Promise<void>
+  >(),
+);
+vi.mock("./monitor.js", () => ({ monitorLineProvider: monitorLineProviderMock }));
+
 afterEach(() => {
+  monitorLineProviderMock.mockReset();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+afterAll(() => {
+  vi.doUnmock("./monitor.js");
+  vi.resetModules();
 });
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
@@ -54,18 +63,36 @@ describe("line setup wizard", () => {
     expect(result.cfg.channels?.line?.channelSecret).toBe("line-secret");
   });
 
-  installChannelDmPolicyContractSuite({
-    dmPolicy: lineSetupWizard.dmPolicy!,
-    cases: [
-      {
-        name: "LINE named accounts",
-        channel: "line",
-        accountId: "work",
-        accountConfig: { channelAccessToken: "token", channelSecret: "secret" },
-        inheritedAllowFrom: ["Uroot"],
-        defaultAccount: { rootAllowFrom: ["Uroot"] },
+  it("uses defaultAccount for policy reads and writes without changing root policy", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        line: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["Uroot"],
+          accounts: {
+            work: {
+              channelAccessToken: "token",
+              channelSecret: "secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
       },
-    ],
+    };
+    const policy = lineSetupWizard.dmPolicy!;
+    expect(policy.getCurrent(cfg)).toBe("allowlist");
+    expect(policy.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.line.accounts.work.dmPolicy",
+      allowFromKey: "channels.line.accounts.work.allowFrom",
+    });
+    const next = policy.setPolicy(cfg, "open");
+    expect(next.channels?.line?.dmPolicy).toBe("disabled");
+    expect(next.channels?.line?.allowFrom).toEqual(["Uroot"]);
+    expect(next.channels?.line?.accounts?.work).toMatchObject({
+      dmPolicy: "open",
+      allowFrom: ["Uroot", "*"],
+    });
   });
 
   it("uses configured defaultAccount for omitted setup configured state", async () => {
@@ -135,30 +162,22 @@ describe("linePlugin status.probeAccount", () => {
 
 function createRuntime() {
   const providerStarted = createDeferred<void>();
-  const monitorLineProvider = vi.fn(
-    async (opts: Parameters<typeof import("./monitor.js").monitorLineProvider>[0]) => {
-      providerStarted.resolve();
-      await waitForAbortSignal(opts.abortSignal);
-      return {
-        account: { accountId: "default" },
-        handleWebhook: async () => {},
-        stop: async () => {},
-      };
-    },
-  );
+  monitorLineProviderMock.mockImplementation(async (opts) => {
+    providerStarted.resolve();
+    await waitForAbortSignal(opts.abortSignal);
+  });
 
   const runtime = {
-    channel: {
-      line: {
-        monitorLineProvider,
-      },
-    },
     logging: {
       shouldLogVerbose: () => false,
     },
   } as unknown as PluginRuntime;
 
-  return { runtime, monitorLineProvider, providerStarted: providerStarted.promise };
+  return {
+    runtime,
+    monitorLineProvider: monitorLineProviderMock,
+    providerStarted: providerStarted.promise,
+  };
 }
 
 function createAccount(params: { token: string; secret: string }): ResolvedLineAccount {

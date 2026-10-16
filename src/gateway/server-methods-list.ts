@@ -9,14 +9,9 @@ import {
 } from "./events.js";
 import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-method-policy.js";
 
-type GatewayMethodChannelPlugin = {
-  gatewayMethods?: readonly string[];
-  gatewayMethodDescriptors?: readonly { name: string }[];
-};
-
 function listChannelGatewayMethods(): string[] {
   const methods: string[] = [];
-  for (const plugin of listLoadedChannelPlugins() as GatewayMethodChannelPlugin[]) {
+  for (const plugin of listLoadedChannelPlugins()) {
     // Plugins may still expose legacy names while newer plugins expose descriptors.
     // Merge both so method discovery stays compatible during descriptor adoption.
     methods.push(...(plugin.gatewayMethods ?? []));
@@ -38,20 +33,24 @@ export function listGatewayMethods(): string[] {
 export const GATEWAY_EVENTS = [
   "connect.challenge",
   "agent",
+  "agent.identity.changed",
   "chat",
   "chat.metadata.changed",
   "models.snapshot",
   "ui.command",
   "session.approval",
   "session.message",
+  "session.narration",
   "session.observer",
   "session.operation",
   "session.sharing",
   "session.sharing.evidence",
   "session.suggestion",
+  "session.reaction",
   "session.typing",
   "session.tool",
   "sessions.changed",
+  "socket.drain",
   "controlUi.sessionPullRequests.changed",
   "plugins.controlUi.changed",
   "presence",
@@ -64,7 +63,6 @@ export const GATEWAY_EVENTS = [
   "health",
   "heartbeat",
   "cron",
-  "task",
   "task.suggestion",
   "node.pair.requested",
   "node.pair.resolved",

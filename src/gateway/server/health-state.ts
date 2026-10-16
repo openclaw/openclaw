@@ -1,4 +1,3 @@
-// Gateway health state builds snapshots, caches health probes, and broadcasts health/presence version changes.
 import type { Snapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentEffectiveModelPrimary } from "../../agents/agent-scope.js";
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
@@ -28,27 +27,12 @@ let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
 type HealthAudience = "public" | "admin";
 type HealthRefreshStrength = "passive" | "probe";
-type HealthRefreshOperation = {
-  generation: number;
-  promise: Promise<HealthSummary>;
-};
-type HealthRefreshState = {
-  nextGeneration: number;
-  committedGeneration: number;
-  inFlight: Record<HealthRefreshStrength, HealthRefreshOperation | null>;
-};
-
-const healthRefreshStates: Record<HealthAudience, HealthRefreshState> = {
-  public: {
-    nextGeneration: 0,
-    committedGeneration: 0,
-    inFlight: { passive: null, probe: null },
-  },
-  admin: {
-    nextGeneration: 0,
-    committedGeneration: 0,
-    inFlight: { passive: null, probe: null },
-  },
+const healthRefreshStates: Record<
+  HealthAudience,
+  Record<HealthRefreshStrength, Promise<HealthSummary> | null>
+> = {
+  public: { passive: null, probe: null },
+  admin: { passive: null, probe: null },
 };
 
 export function buildGatewaySnapshot(opts: {
@@ -56,6 +40,7 @@ export function buildGatewaySnapshot(opts: {
   includeSensitive?: boolean;
   includeUpdateDetails?: boolean;
   revisionProjector: GatewayConfigRevisionProjector;
+  sessionRowProjection?: SessionRowProjection;
 }): Snapshot {
   const cfg = getRuntimeConfig();
   const selection = resolveGatewayAgentSelectionState(cfg);
@@ -64,21 +49,22 @@ export function buildGatewaySnapshot(opts: {
   const scope = cfg.session?.scope ?? "per-sender";
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: defaultAgentId });
-  const presence = createPresenceRecipientProjection({ cfg, presence: listSystemPresence() })(
-    opts.client,
-  );
+  const presence = createPresenceRecipientProjection({
+    cfg,
+    presence: listSystemPresence({ includeConnectionId: opts.client?.connId }),
+    projection: opts.sessionRowProjection,
+  })(opts.client);
   const uptimeMs = Math.round(process.uptime() * 1000);
-  const includeUpdateDetails = opts?.includeUpdateDetails === true;
+  const includeUpdateDetails = opts.includeUpdateDetails === true;
   const updateAvailable =
     projectUpdateAvailable(getUpdateAvailable(), includeUpdateDetails) ?? undefined;
   const updateSchedule = includeUpdateDetails ? (getUpdateSchedule() ?? undefined) : undefined;
   const appliedConfigHash = getRuntimeConfigAppliedHash();
-  // Health is async; the caller replaces this with the collected snapshot.
-  const emptyHealth: Snapshot["health"] = {};
   const snapshot: Snapshot = {
     suspension: { phase: getGatewaySuspendAdmissionPhase() },
     presence,
-    health: emptyHealth,
+    // Health is async; the caller replaces this with the collected snapshot.
+    health: {},
     stateVersion: { presence: presenceVersion, health: healthVersion },
     uptimeMs,
     appliedConfigHash: appliedConfigHash
@@ -96,7 +82,7 @@ export function buildGatewaySnapshot(opts: {
     updateAvailable,
     updateSchedule,
   };
-  if (opts?.includeSensitive === true) {
+  if (opts.includeSensitive === true) {
     const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
     // Surface resolved paths only to admin callers that already have broader gateway access.
     snapshot.configPath = createConfigIO().configPath;
@@ -141,16 +127,11 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   const strength: HealthRefreshStrength = opts?.probe === false ? "passive" : "probe";
   // Passive callers can reuse a stronger probe, but an explicit probe must not
   // inherit a passive refresh that deliberately skipped live channel checks.
-  const existing =
-    strength === "passive"
-      ? (state.inFlight.probe ?? state.inFlight.passive)
-      : state.inFlight.probe;
+  const existing = strength === "passive" ? (state.probe ?? state.passive) : state.probe;
   if (existing) {
-    return existing.promise;
+    return existing;
   }
 
-  const generation = state.nextGeneration + 1;
-  state.nextGeneration = generation;
   const promise = (async () => {
     const { collectGatewayHealthSnapshot } = await import("../health/collector.js");
     let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
@@ -175,19 +156,8 @@ export async function refreshGatewayHealthSnapshot(opts?: {
     if (eventLoop) {
       snap.eventLoop = eventLoop;
     }
-    if (
-      strength === "probe" &&
-      state.inFlight.passive &&
-      state.inFlight.passive.generation < generation
-    ) {
-      // Existing passive waiters may finish, but new callers must not join
-      // weaker work after this newer live probe has succeeded.
-      state.inFlight.passive = null;
-    }
-    // Concurrent passive/probe refreshes can finish out of order. Only a
-    // generation newer than the published cache may advance version/broadcast.
-    if (!includeSensitive && generation > state.committedGeneration) {
-      state.committedGeneration = generation;
+    // Diagnostic snapshots publish in completion order; the next refresh replaces them.
+    if (!includeSensitive) {
       healthCache = snap;
       healthVersion += 1;
       if (broadcastHealthUpdate) {
@@ -196,10 +166,8 @@ export async function refreshGatewayHealthSnapshot(opts?: {
     }
     return snap;
   })().finally(() => {
-    if (state.inFlight[strength]?.generation === generation) {
-      state.inFlight[strength] = null;
-    }
+    state[strength] = null;
   });
-  state.inFlight[strength] = { generation, promise };
+  state[strength] = promise;
   return promise;
 }

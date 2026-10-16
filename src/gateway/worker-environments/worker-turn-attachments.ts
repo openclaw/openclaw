@@ -1,15 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
-import { sanitizeUntrustedFileName } from "../../infra/fs-safe-advanced.js";
 import { readPersistedMediaFacts } from "../../media/media-facts.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { readMediaBuffer } from "../../media/store.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
-import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import {
   WORKER_ATTACHMENT_DIRECTORY_PATTERN,

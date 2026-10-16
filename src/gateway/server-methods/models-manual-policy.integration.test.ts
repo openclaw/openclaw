@@ -39,7 +39,11 @@ it.each([true, false])(
             auth: "api-key",
             apiKey: authenticated ? "synthetic-policy-key" : undefined,
             baseUrl: "https://policy.example.invalid/v1",
-            models: ["manual", "automatic", "fallback"].map((id) => ({ id, name: id })),
+            models: ["manual", "automatic", "fallback"].map((id) => ({
+              id,
+              name: id,
+              contextWindow: 32_768,
+            })),
           },
         },
       },
@@ -60,6 +64,7 @@ it.each([true, false])(
           view: "configured",
         });
         expect(legacy.models.map((model) => model.id)).toEqual(["automatic", "fallback", "manual"]);
+        expect(legacy.models.map((model) => model.contextWindow)).toEqual([32_768, 32_768, 32_768]);
         expect(
           legacy.models.every((model) => !Object.hasOwn(model, "manualSelectionAllowed")),
         ).toBe(true);

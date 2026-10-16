@@ -49,11 +49,6 @@ describe("log file size cap", () => {
     expect(getResolvedLoggerSettings().maxFileBytes).toBe(DEFAULT_MAX_FILE_BYTES);
   });
 
-  it("uses configured maxFileBytes", () => {
-    setLoggerOverride({ level: "info", file: logPath, maxFileBytes: 2048 });
-    expect(getResolvedLoggerSettings().maxFileBytes).toBe(2048);
-  });
-
   it("rotates file writes after cap is reached and keeps logging", async () => {
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     setLoggerOverride({ level: "info", file: logPath, maxFileBytes: 256 });

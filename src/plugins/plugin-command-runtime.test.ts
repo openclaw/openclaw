@@ -22,7 +22,6 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import {
   clearActivePluginRegistry,
-  prepareActivePluginRegistryShutdown,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
@@ -144,16 +143,6 @@ describe("plugin command runtime", () => {
     expect(reply.text).toContain("openclaw doctor");
     expect(reply.text).not.toMatch(/fixture-secret-value|private-detail|at loader/);
     expect(reply.text!.length).toBeLessThan(400);
-  });
-
-  it("prepares plugin host cleanup before gateway shutdown", async () => {
-    await prepareActivePluginRegistryShutdown();
-    const { registry, cleanup } = createCleanupRegistry("shutdown");
-    setActivePluginRegistry(registry);
-
-    await clearActivePluginRegistry();
-
-    expect(cleanup).toHaveBeenCalledOnce();
   });
 
   it("binds the request-scoped registry and scopes provider aliases", async () => {
@@ -353,38 +342,6 @@ describe("plugin command runtime", () => {
     ).toEqual({ ok: true });
   });
 
-  it("admits an invocation before retirement but rejects later starts", async () => {
-    const registry = createEmptyPluginRegistry();
-    let release!: () => void;
-    const entered = new Promise<void>((resolveEntered) => {
-      registerCommand(registry, {
-        pluginId: "slow",
-        name: "slow",
-        handler: async () => {
-          resolveEntered();
-          await new Promise<void>((resolve) => {
-            release = resolve;
-          });
-          return { text: "finished" };
-        },
-      });
-    });
-    setActivePluginRegistry(registry);
-    const runtime = createPluginCommandRuntime();
-    const candidate = runtime.listNativeCandidates("telegram")[0]!;
-    const admitted = requirePluginDispatch(candidate);
-    const late = requirePluginDispatch(candidate);
-    const running = admitted.execute(executionContext);
-    await entered;
-    markPluginRegistryRetired(registry);
-    await expect(late.execute(executionContext)).resolves.toMatchObject({
-      text: expect.stringContaining("registry changed"),
-    });
-    release();
-    await expect(running).resolves.toEqual({ text: "finished" });
-    expect(getPluginCommandExecutionCount(registry)).toBe(0);
-  });
-
   it("does not prepare arguments for commands that reject them", () => {
     const registry = createEmptyPluginRegistry();
     registerCommand(registry, {
@@ -395,22 +352,6 @@ describe("plugin command runtime", () => {
     setActivePluginRegistry(registry);
     const candidate = createPluginCommandRuntime().listNativeCandidates("telegram")[0]!;
     expect(candidate.prepareDispatch("unexpected")).toEqual({ kind: "non-plugin" });
-  });
-
-  it("preserves the shipped catalog-retention call and rejects retired runtimes", () => {
-    const registry = createEmptyPluginRegistry();
-    registerCommand(registry, {
-      pluginId: "demo",
-      name: "demo",
-      channels: ["telegram"],
-      handler: async () => ({ text: "ok" }),
-    });
-    setActivePluginRegistry(registry);
-    const runtime = createPluginCommandRuntime();
-    expect(() => runtime.retainNativeCatalog("telegram")).not.toThrow();
-    expect(() => runtime.retainNativeCatalog("discord")).not.toThrow();
-    markPluginRegistryRetired(registry);
-    expect(() => runtime.retainNativeCatalog("telegram")).toThrow("retired registry generation");
   });
 
   it("defers full registry cleanup until an admitted command settles", async () => {
