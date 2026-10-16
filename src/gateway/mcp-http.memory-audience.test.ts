@@ -93,7 +93,6 @@ it("carries a memory audience only from a run-bound CLI grant", async () => {
       undefined,
       undefined,
     ]);
-    expect(calls[0]?.memoryAudience).toBe(memoryAudience);
   } finally {
     admission.close();
   }

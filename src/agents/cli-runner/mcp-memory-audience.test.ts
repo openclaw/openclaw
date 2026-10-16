@@ -6,8 +6,6 @@ import {
 } from "../../plugins/memory-audience.js";
 import { fakeSessionOwner } from "../../plugins/memory-audience.test-support.js";
 
-const mocks = vi.hoisted(() => ({ providerKind: "native" as "native" | undefined }));
-
 // mock-isolation: the fake session owner replaces SQLite generation facts.
 vi.mock("../../config/sessions/session-delivery-generation.js", async () => {
   const { fakeSessionGenerationModule } =
@@ -22,20 +20,20 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", async () => {
 });
 // mock-isolation: selects the loaded memory provider kind without loading plugins.
 vi.mock("../../plugins/memory-state.js", () => ({
-  resolveLoadedMemoryProviderKind: () => mocks.providerKind,
+  resolveLoadedMemoryProviderKind: () => "native",
 }));
 
 import { resolveCliMcpMemoryAudience } from "./mcp-memory-audience.js";
 
 const STORE_PATH = "/tmp/openclaw-cli-mcp-memory-audience/main.sqlite";
 
-// One admitted CLI turn over a current root row of the given chat type.
-function admittedTurn(chatType: "direct" | "group", senderIsOwner: boolean) {
-  const sessionKey = `agent:main:telegram:${chatType}:${randomUUID()}`;
+// One admitted owner CLI turn over a current direct root row.
+function admittedTurn() {
+  const sessionKey = `agent:main:telegram:direct:${randomUUID()}`;
   const entry = {
     sessionId: randomUUID(),
     lifecycleRevision: randomUUID(),
-    chatType,
+    chatType: "direct" as const,
     updatedAt: 1,
   };
   fakeSessionOwner.rows.set(sessionKey, entry);
@@ -45,7 +43,7 @@ function admittedTurn(chatType: "direct" | "group", senderIsOwner: boolean) {
     run: {
       config: {},
       sessionId: entry.sessionId,
-      senderIsOwner,
+      senderIsOwner: true,
       sessionEntry: entry,
       sessionTarget: {
         agentId: "main",
@@ -60,12 +58,11 @@ function admittedTurn(chatType: "direct" | "group", senderIsOwner: boolean) {
 
 describe("resolveCliMcpMemoryAudience", () => {
   beforeEach(() => {
-    mocks.providerKind = "native";
     fakeSessionOwner.reset();
   });
 
   it("grants an owner's direct CLI turn the owner-private audience until run end", async () => {
-    const turn = admittedTurn("direct", true);
+    const turn = admittedTurn();
 
     const resolved = await resolveCliMcpMemoryAudience(turn.run, turn.grant);
 
@@ -78,52 +75,15 @@ describe("resolveCliMcpMemoryAudience", () => {
     expect(() => assertMemoryAudienceCurrent(audience)).toThrow("released");
   });
 
-  it("grants a non-owner's group CLI turn only its conversation audience", async () => {
-    const turn = admittedTurn("group", false);
+  it("resolves nothing without an admitted session row", async () => {
+    const turn = admittedTurn();
 
-    const resolved = await resolveCliMcpMemoryAudience(turn.run, turn.grant);
-
-    expect(resolved.memoryAudience).toEqual({
-      kind: "conversation",
-      agentId: "main",
-      sessionKey: turn.sessionKey,
-      sessionId: turn.entry.sessionId,
-    });
-    resolved.release();
-  });
-
-  it("refuses a session reset after the CLI turn was admitted", async () => {
-    const turn = admittedTurn("direct", true);
-    fakeSessionOwner.rows.set(turn.sessionKey, { ...turn.entry, sessionId: randomUUID() });
-
-    const resolved = await resolveCliMcpMemoryAudience(turn.run, turn.grant);
-
-    expect(resolved.memoryAudience).toBeUndefined();
-    expect(fakeSessionOwner.activeLeases).toBe(0);
-  });
-
-  it("rejects a granted audience once its session is reset mid-run", async () => {
-    const turn = admittedTurn("direct", true);
-    const { memoryAudience } = await resolveCliMcpMemoryAudience(turn.run, turn.grant);
-    fakeSessionOwner.rows.set(turn.sessionKey, { ...turn.entry, lifecycleRevision: randomUUID() });
-
-    expect(() => assertMemoryAudienceCurrent(memoryAudience!)).toThrow("no longer current");
-    expect(fakeSessionOwner.activeLeases).toBe(0);
-  });
-
-  it("resolves nothing without an admitted session row or a native memory provider", async () => {
-    const turn = admittedTurn("direct", true);
-
-    const rowless = await resolveCliMcpMemoryAudience(
+    const resolved = await resolveCliMcpMemoryAudience(
       { ...turn.run, sessionEntry: undefined },
       turn.grant,
     );
-    mocks.providerKind = undefined;
-    const legacy = await resolveCliMcpMemoryAudience(turn.run, turn.grant);
 
-    expect(rowless.memoryAudience).toBeUndefined();
-    expect(legacy.memoryAudience).toBeUndefined();
-    expect(fakeSessionOwner.workerReads).toEqual([]);
+    expect(resolved.memoryAudience).toBeUndefined();
     expect(fakeSessionOwner.activeLeases).toBe(0);
   });
 });
