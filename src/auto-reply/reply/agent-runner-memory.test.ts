@@ -14,7 +14,7 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   createAdmittedRunOperatorAuthority,
@@ -170,15 +170,6 @@ function createFlushSessionEntry(overrides: Partial<SessionEntry> = {}): Session
   return createFreshSessionEntry({ totalTokens: 80_000, compactionCount: 1, ...overrides });
 }
 
-function compactionResult(result = { tokensAfter: 42 }) {
-  return { ok: true, compacted: true, result };
-}
-
-function expectedSession(entry: SessionEntry) {
-  const { sessionId, lifecycleRevision, activeWriterRunId } = entry;
-  return { sessionId, lifecycleRevision, activeWriterRunId };
-}
-
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
 }
@@ -282,13 +273,6 @@ describe("runMemoryFlushIfNeeded", () => {
     };
   }
 
-  async function storedFlush(overrides: Partial<SessionEntry> = {}) {
-    const { sessionKey, storePath } = sessionScope();
-    const sessionEntry = createFlushSessionEntry(overrides);
-    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
-    return { sessionEntry, sessionKey, storePath, sessionStore: { main: sessionEntry } };
-  }
-
   async function writeTranscript(
     events: Parameters<typeof replaceTranscriptEvents>[1],
     sessionKey = "main",
@@ -299,31 +283,22 @@ describe("runMemoryFlushIfNeeded", () => {
     await waitForSessionTranscriptProjection(scope);
   }
 
-  function defaultRunParams(
-    sessionEntry: SessionEntry | undefined,
-    overrides: Partial<PreflightCompactionTestParams>,
-  ) {
-    const sessionKey = overrides.sessionKey ?? "main";
-    return {
-      cfg: compactionConfig({ memoryFlush: {} }),
-      defaultModel: "anthropic/claude-opus-4-6",
-      modelContextTokens: 100_000,
-      sessionEntry,
-      sessionStore: sessionEntry ? { [sessionKey]: sessionEntry } : undefined,
-      sessionKey,
-      storePath: path.join(rootDir, "sessions.json"),
-      isHeartbeat: false,
-    };
-  }
-
   async function runDefaultMemoryFlush(
     sessionEntry: SessionEntry,
     overrides: Partial<MemoryFlushTestParams> = {},
   ) {
+    const sessionKey = overrides.sessionKey ?? "main";
     return await runMemoryFlushIfNeeded({
-      ...defaultRunParams(sessionEntry, overrides),
+      cfg: compactionConfig({ memoryFlush: {} }),
       followupRun: createTestFollowupRun(),
+      defaultModel: "anthropic/claude-opus-4-6",
+      modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
       replyOperation: createReplyOperation(),
       ...overrides,
     });
@@ -333,10 +308,17 @@ describe("runMemoryFlushIfNeeded", () => {
     sessionEntry: SessionEntry | undefined,
     overrides: Partial<PreflightCompactionTestParams> = {},
   ) {
-    const defaults = defaultRunParams(sessionEntry, overrides);
+    const sessionKey = overrides.sessionKey ?? "main";
     return await runSessionCompactionIfNeeded({
-      ...defaults,
-      followupRun: createTestFollowupRun({ sessionId: "session", sessionKey: defaults.sessionKey }),
+      cfg: compactionConfig({ memoryFlush: {} }),
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      modelContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: sessionEntry ? { [sessionKey]: sessionEntry } : undefined,
+      sessionKey,
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
       ...createCompactionLifecycle(createReplyOperation()),
       ...overrides,
     });
@@ -389,7 +371,11 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 0,
     });
     await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, sessionEntry);
-    return { sessionEntry, storePath };
+    const run = async (entry: SessionEntry, maxActiveTranscriptBytes = "10b") =>
+      await runDefaultPreflight(entry, {
+        cfg: compactionConfig({ maxActiveTranscriptBytes }),
+      });
+    return { run, sessionEntry, storePath };
   }
 
   beforeAll(async () => {
@@ -423,7 +409,11 @@ describe("runMemoryFlushIfNeeded", () => {
         ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPluginMock,
       }),
     );
-    compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue(compactionResult());
+    compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: { tokensAfter: 42 },
+    });
     runEmbeddedAgentMock.mockReset().mockResolvedValue({ payloads: [], meta: {} });
     refreshQueuedFollowupSessionMock.mockReset();
     ensureSelectedAgentHarnessPluginMock.mockReset().mockResolvedValue(undefined);
@@ -455,9 +445,11 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("reuses its private buffer and admitted lifecycle across a model fallback", async () => {
-    const { sessionEntry, sessionKey, sessionStore, storePath } = await storedFlush({
-      lifecycleRevision: "memory-generation",
-    });
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = createFlushSessionEntry({ lifecycleRevision: "memory-generation" });
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
     const primaryError = new Error("primary failed after private compaction");
     let memorySession: SessionManager | undefined;
     let admission: PreparedAgentRunAdmission | undefined;
@@ -516,9 +508,6 @@ describe("runMemoryFlushIfNeeded", () => {
         model: "fallback",
         attempts: [],
       };
-      sessionStore,
-      sessionKey,
-      storePath,
     });
     const result = await runDefaultMemoryFlush(sessionEntry, {
       followupRun: {
@@ -530,6 +519,9 @@ describe("runMemoryFlushIfNeeded", () => {
         }),
         operatorAuthority,
       },
+      sessionStore,
+      sessionKey,
+      storePath,
     });
     expect(result.outcome).toBe("completed");
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
@@ -597,23 +589,28 @@ describe("runMemoryFlushIfNeeded", () => {
   );
 
   it("counts resolved error payloads as failed memory flushes", async () => {
-    const { sessionEntry, sessionStore, storePath } = await storedFlush();
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [
-        { text: "normal silent maintenance reply" },
-        {
-          text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
-          isError: true,
-        },
-      ],
-      meta: {},
-      sessionStore,
-      storePath,
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry = createFlushSessionEntry();
+    const sessionStore = { main: sessionEntry };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      return {
+        payloads: [
+          { text: "normal silent maintenance reply" },
+          {
+            text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+            isError: true,
+          },
+        ],
+        meta: {},
+      };
     });
     const followupRun = createTestFollowupRun();
 
     const result = await runDefaultMemoryFlush(sessionEntry, {
       followupRun,
+      sessionStore,
+      storePath,
     });
 
     expect(requireModelFallbackCall().userLockedAuthProfileId).toBeUndefined();
@@ -626,12 +623,15 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(result.sessionEntry?.sessionId).toBe("session");
     expect(followupRun.run.sessionId).toBe("session");
     const persisted = loadMainSessionEntry(storePath);
-    expect(persisted).toMatchObject({ sessionId: "session", compactionCount: 1 });
+    expect(persisted.sessionId).toBe("session");
+    expect(persisted.compactionCount).toBe(1);
     expect(persisted.memoryFlush).toEqual({ kind: "failed", failureCount: 1 });
   });
 
   it("does not increment memory-flush failures for user aborts (regression: #80755)", async () => {
-    const { sessionEntry, storePath } = await storedFlush();
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry = createFlushSessionEntry();
+    await writeTestSessionStore(storePath, "main", sessionEntry);
     const abortErr = new Error("operation aborted by user");
     abortErr.name = "AbortError";
     runWithModelFallbackMock.mockRejectedValueOnce(abortErr);
@@ -679,7 +679,10 @@ describe("runMemoryFlushIfNeeded", () => {
       },
     },
   ])("records a failed $stage attempt, cleans up, and retries", async (failure) => {
-    const { sessionEntry, sessionStore, storePath } = await storedFlush();
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry = createFlushSessionEntry();
+    const sessionStore = { main: sessionEntry };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
     const message = `${failure.stage} failed`;
     const error = new Error(message);
     const cleanup = failure.setup(error);
@@ -721,14 +724,16 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("marks flush as completed after MAX_FLUSH_FAILURES to break retry loop", async () => {
-    const { sessionEntry, storePath } = await storedFlush({
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry = createFlushSessionEntry({
       memoryFlush: { kind: "failed", failureCount: TEST_MAX_FLUSH_FAILURES - 1 },
-      storePath,
     });
+    await writeTestSessionStore(storePath, "main", sessionEntry);
     runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider crashed during flush"));
 
     const result = await runDefaultMemoryFlush(sessionEntry, {
       defaultModel: "anthropic/claude-opus-4-7",
+      storePath,
     });
 
     const persisted = loadMainSessionEntry(storePath);
@@ -999,11 +1004,16 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     compactEmbeddedAgentSessionMock.mockImplementationOnce(async () => {
       events.push("compactor started");
-      return compactionResult();
+      return { ok: true, compacted: true, result: { tokensAfter: 42 } };
     });
     const pending = runDefaultPreflight(sessionEntry, { beforeCompaction });
     try {
-      await awaitGateBeforeSettlement(entered.promise, pending, "returned before checkpoint");
+      await expect(
+        Promise.race([
+          entered.promise.then(() => "checkpoint"),
+          pending.then(() => "returned before checkpoint"),
+        ]),
+      ).resolves.toBe("checkpoint");
       expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
       release.resolve();
       await pending;
@@ -1049,7 +1059,12 @@ describe("runMemoryFlushIfNeeded", () => {
       abortSignal: controller.signal,
     });
     try {
-      await awaitGateBeforeSettlement(entered.promise, pending, "returned before checkpoint");
+      await expect(
+        Promise.race([
+          entered.promise.then(() => "checkpoint"),
+          pending.then(() => "returned before checkpoint"),
+        ]),
+      ).resolves.toBe("checkpoint");
       controller.abort(new Error("cancelled during checkpoint"));
       const rejection = expect(pending).rejects.toThrow("cancelled during checkpoint");
       release.resolve();
@@ -1079,7 +1094,11 @@ describe("runMemoryFlushIfNeeded", () => {
     compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
       const accepted = await acceptCompactionSuccessor({
         currentTarget: scope,
-        expectedEntry: expectedSession(sessionEntry),
+        expectedEntry: {
+          sessionId: sessionEntry.sessionId,
+          lifecycleRevision: sessionEntry.lifecycleRevision,
+          activeWriterRunId: sessionEntry.activeWriterRunId,
+        },
         assertActive: () => admitted.operation.abortSignal.throwIfAborted(),
         result: {
           ok: true,
@@ -1681,7 +1700,11 @@ describe("runMemoryFlushIfNeeded", () => {
       });
       const accepted = await acceptCompactionSuccessor({
         currentTarget: scope,
-        expectedEntry: expectedSession(sessionEntry),
+        expectedEntry: {
+          sessionId: sessionEntry.sessionId,
+          lifecycleRevision: sessionEntry.lifecycleRevision,
+          activeWriterRunId: sessionEntry.activeWriterRunId,
+        },
         assertActive: () => {},
         result: {
           ok: true,
@@ -1764,7 +1787,11 @@ describe("runMemoryFlushIfNeeded", () => {
     compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
       const accepted = await acceptCompactionSuccessor({
         currentTarget: scope,
-        expectedEntry: expectedSession(sessionEntry),
+        expectedEntry: {
+          sessionId: sessionEntry.sessionId,
+          lifecycleRevision: sessionEntry.lifecycleRevision,
+          activeWriterRunId: sessionEntry.activeWriterRunId,
+        },
         assertActive: () => {},
         result: {
           ok: true,
@@ -1921,7 +1948,6 @@ describe("runMemoryFlushIfNeeded", () => {
       model: "claude-opus-4-6",
       sessionId: "session",
       sessionKey,
-      replyOperation: createReplyOperation(),
     });
 
     const flushResult = await runDefaultMemoryFlush(sessionEntry, {
@@ -1929,6 +1955,7 @@ describe("runMemoryFlushIfNeeded", () => {
       followupRun,
       sessionKey,
       storePath,
+      replyOperation: createReplyOperation(),
     });
     const preflightEntry = await runDefaultPreflight(sessionEntry, {
       cfg,

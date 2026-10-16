@@ -177,7 +177,20 @@ describe("buildInboundMediaNote", () => {
       {
         MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
         MediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
-        MediaUnderstandingDecisions: [{ capability: "image", outcome: "skipped", attachments: [] }],
+        MediaUnderstandingDecisions: [
+          {
+            capability: "image",
+            outcome: "skipped",
+            attachmentDispositions: { 0: { kind: "failed" } },
+            nativeVisionActive: false,
+            attachments: [
+              {
+                attachmentIndex: 0,
+                attempts: [{ type: "provider", outcome: "skipped", reason: "maxBytes: too large" }],
+              },
+            ],
+          },
+        ],
       },
       [
         "[media attached: 2 files]",

@@ -217,7 +217,13 @@ function installRuntime(
     deliver: (payload: ReplyPayload, info: { kind: "tool" | "block" | "final" }) => Promise<void>;
   };
   mockState.createReplyDispatcherWithTyping.mockImplementation(
-    (options: ReplyDispatcherOptions) => ({ options }),
+    (options: ReplyDispatcherOptions) => ({
+      dispatcher: {},
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+      options,
+    }),
   );
   type RecordInboundSessionInput = Parameters<
     PluginRuntime["channel"]["session"]["recordInboundSession"]
@@ -251,17 +257,25 @@ function installRuntime(
         updateLastRoute: turn.record?.updateLastRoute,
         onRecordError: turn.record?.onRecordError ?? (() => undefined),
       });
-      mockState.createReplyDispatcherWithTyping({
+      const prepared = mockState.createReplyDispatcherWithTyping({
         ...turn.dispatcherOptions,
         deliver: turn.delivery.deliver,
         onError: turn.delivery.onError,
       });
-      await mockState.dispatchInboundMessage({
+      const dispatchResult = await mockState.dispatchInboundMessage({
         ctx: turn.ctxPayload,
         cfg: turn.cfg,
-        replyOptions: turn.replyOptions,
+        dispatcher: prepared.dispatcher,
+        replyOptions: { ...prepared.replyOptions, ...turn.replyOptions },
         onSettled: turn.dispatcherOptions?.onSettled,
       });
+      return {
+        admission: { kind: "dispatch" as const },
+        dispatched: true,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.route.sessionKey,
+        dispatchResult,
+      };
     },
   );
   return (mockState.runtimeCore = {

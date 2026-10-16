@@ -151,9 +151,9 @@ describe("message lifecycle primitives", () => {
     const deliverSupplemental = vi.fn(async () => true);
 
     const result = await deliverWithFinalizableLivePreviewAdapter<
-      LivePreviewMediaPayload,
+      MediaPayload,
       string,
-      LivePreviewMediaEdit
+      { text?: string }
     >({
       kind: "final",
       payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
@@ -178,9 +178,9 @@ describe("message lifecycle primitives", () => {
     const deliverSupplemental = vi.fn(async () => false);
 
     const result = await deliverWithFinalizableLivePreviewAdapter<
-      LivePreviewMediaPayload,
+      MediaPayload,
       string,
-      LivePreviewMediaEdit
+      { text?: string }
     >({
       kind: "final",
       payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },

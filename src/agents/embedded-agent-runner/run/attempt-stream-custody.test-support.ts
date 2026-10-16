@@ -11,6 +11,7 @@ import {
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
+import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import type { StreamFn } from "../../runtime/index.js";
 import {
@@ -189,7 +190,10 @@ export async function createStreamCustodyFixture(
       if (!managerTarget) {
         throw new Error("Fixture manager lost its durable target");
       }
-      const database = toDatabaseOptions(resolveSqliteReadScope(managerTarget));
+      const database = toDatabaseOptions(resolveSqliteReadScope(target));
+      expect(resolveOpenClawAgentSqlitePath(database)).toBe(
+        resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteReadScope(managerTarget))),
+      );
       const work = runOpenClawAgentWorkerWrite(database, async () => {
         entered.resolve();
         await release.promise;
