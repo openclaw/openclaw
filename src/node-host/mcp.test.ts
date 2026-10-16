@@ -6,6 +6,7 @@ import { OpenClawSchema } from "../config/zod-schema.js";
 import { GatewayClient } from "../gateway/client.js";
 import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 import { handleInvoke } from "./invoke.js";
+import { startNodeHostMcpManager } from "./mcp.js";
 import { callTool, createClient, okResult, startManager, transport } from "./mcp.test-support.js";
 
 afterEach(useRealTime);

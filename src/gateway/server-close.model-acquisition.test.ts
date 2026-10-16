@@ -74,7 +74,7 @@ function holdAcquisition(accept: () => boolean, start = () => async () => {}) {
     finish: createDeferredCore(),
     signal: undefined as AbortSignal | undefined,
     joined: false,
-    async run(signal: AbortSignal | undefined) {
+    run: async (signal: AbortSignal | undefined) => {
       if (!accept()) {
         return;
       }

@@ -81,7 +81,7 @@ function harness(
     rows: (expected: GatewaySessionRow[]) =>
       expect(sessions.state.result?.sessions).toEqual(expected),
     calls: (count: number) => expect(request).toHaveBeenCalledTimes(count),
-    async afterTick(count: number, ms = 5_000) {
+    afterTick: async (count: number, ms = 5_000) => {
       await tick(ms);
       expect(request).toHaveBeenCalledTimes(count);
     },
@@ -112,7 +112,7 @@ function heldReads() {
     ...fixture,
     firstList,
     secondList,
-    async advanceRead() {
+    advanceRead: async () => {
       firstList.resolve(sessionsResult([], 1));
       await secondListStarted.promise;
     },

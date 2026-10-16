@@ -45,7 +45,7 @@ function buildProviderMetadataOwners(
   };
 }
 
-const requestConfig = (overrides: Parameters<typeof resolveProviderRequestConfig>[0]) =>
+const requestConfig = (overrides: Partial<Parameters<typeof resolveProviderRequestConfig>[0]>) =>
   resolveProviderRequestConfig({
     provider: "custom-openai",
     baseUrl: "https://proxy.example.com/v1",

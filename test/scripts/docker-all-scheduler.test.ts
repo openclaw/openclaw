@@ -488,7 +488,7 @@ describe("scripts/test-docker-all scheduler", () => {
           resources: ["npm"],
           weight: 4,
         },
-        activePool(),
+        { count: 0, weight: 0, resources: new Map<string, number>() },
         2,
         limits,
       ),

@@ -9,6 +9,7 @@ import {
   createAgentHarnessHostCapabilitiesForTest,
   createMockPluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
@@ -17,13 +18,13 @@ import {
 } from "./heartbeat-tool-fallback.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 
-const tool = (name = "message", execute = vi.fn()) =>
-  ({
-    name,
-    description: "Test tool",
-    parameters: { type: "object", properties: {}, additionalProperties: true },
-    execute,
-  }) as AnyAgentTool;
+const tool = (name = "message", execute = vi.fn()): AnyAgentTool => ({
+  name,
+  label: name,
+  description: "Test tool",
+  parameters: Type.Object({}, { additionalProperties: true }),
+  execute,
+});
 
 const specNames = (specs: readonly CodexDynamicToolSpec[]): string[] =>
   specs.flatMap((spec) =>

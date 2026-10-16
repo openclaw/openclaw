@@ -173,8 +173,12 @@ describe("node worker output framing", () => {
     expect(harness.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
   });
 
-  const retained = { ...resultFrame("first"), retainWorker: true, retention: "background" };
-  const idle = { type: "idle-ready", turnId: "first" };
+  const retained = {
+    ...resultFrame("first"),
+    retainWorker: true,
+    retention: "background",
+  } satisfies WorkerProcessMessage;
+  const idle = { type: "idle-ready", turnId: "first" } satisfies WorkerProcessMessage;
   const unicode = encodeResult("first", "hello 漢😀");
   const split = unicode.indexOf(Buffer.from("😀"));
   const largeLeaf = "x".repeat(

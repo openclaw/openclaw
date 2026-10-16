@@ -113,7 +113,9 @@ async function prepareNative(context: TestContext, prefix: string) {
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
   vi.stubEnv("HOME", native.env.HOME);
   vi.stubEnv("CODEX_HOME", native.codexHome);
-  context.onTestFinished(() => vi.unstubAllEnvs());
+  context.onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
   return native;
 }
 
