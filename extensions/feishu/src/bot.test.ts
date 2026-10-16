@@ -244,7 +244,7 @@ function inboundContext(): BuiltChannelInboundEventContext {
 
 vi.mock(import("openclaw/plugin-sdk/channel-inbound"), async (importOriginal) => {
   const actual = await importOriginal();
-  const finalize: NonNullable<BuildChannelInboundEventContextParams["finalize"]> = (ctx) => {
+  const capture = (ctx: BuiltChannelInboundEventContext) => {
     buildInboundContext(ctx);
     return ctx;
   };
@@ -258,13 +258,12 @@ vi.mock(import("openclaw/plugin-sdk/channel-inbound"), async (importOriginal) =>
     params: BuildChannelInboundEventContextParams &
       Partial<ChannelInboundSupplementalResolutionOptions>,
   ): BuiltChannelInboundEventContext | Promise<BuiltChannelInboundEventContext> {
+    const input = { ...params, finalize: (ctx: Record<string, unknown>) => ctx };
     return params.resolveSupplementalMedia
-      ? actual.buildChannelInboundEventContext({
-          ...params,
-          finalize,
-          resolveSupplementalMedia: true,
-        })
-      : actual.buildChannelInboundEventContext({ ...params, finalize });
+      ? actual
+          .buildChannelInboundEventContext({ ...input, resolveSupplementalMedia: true })
+          .then(capture)
+      : capture(actual.buildChannelInboundEventContext(input));
   }
   return {
     ...actual,
@@ -1595,7 +1594,7 @@ describe("handleFeishuMessage command authorization", () => {
       const runtime = await receive({
         messageId: threadId ? "om_dm_child" : "om_dm_unthreaded_child",
         senderOpenId: "ou-dm-sender",
-        chatId: "oc-dm",
+        chatId: threadId ? "oc-dm-threaded" : "oc-dm-unthreaded",
         text,
         message: {
           root_id: "om_dm_root",

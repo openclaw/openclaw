@@ -158,7 +158,7 @@ it.each([
     ],
     "Conflicting migration backup resource kinds",
   ],
-] as const)("still refuses a declared %s", async (_label, collect, message) => {
+] as const)("still refuses a declared %s", async (_label, collect, message?: string) => {
   const invalid = {
     ...fixtureMigration,
     collectBackupResources: collect as PluginDoctorStateMigration["collectBackupResources"],
