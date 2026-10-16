@@ -42,6 +42,38 @@ function createHistoryRequest(
 }
 
 describe("chat history request byte budgets", () => {
+  it("keeps the requested text cap when catching up from a cursor", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:text-cap",
+        sessionId: "text-cap",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await appendTranscriptMessage(scope, {
+        eventId: "initial",
+        message: { role: "user", content: "Initial prompt" },
+      });
+      const history = createHistoryRequest(
+        "chat.history",
+        scope.sessionKey,
+        await createHistoryReadContext(),
+      );
+      const tail = await history({ maxChars: 12_000 });
+      const text = "Long visible reply. ".repeat(500);
+      await appendTranscriptMessage(scope, {
+        eventId: "reply",
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      });
+      const delta = await history({ cursor: tail.deltaCursor, maxChars: 12_000 });
+      expect(delta).toMatchObject({
+        kind: "delta",
+        messages: [{ message: { content: [{ type: "text", text }] } }],
+      });
+    });
+  });
+
   it("opts into smaller tool previews without changing text, paging, or full output", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await captureRuntimeConfigAsyncReader()();

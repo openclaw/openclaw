@@ -498,6 +498,7 @@ export async function handleChatHistoryRequest({
             };
             delta = await readChatHistoryDelta(
               {
+                maxChars: effectiveMaxChars,
                 toolResultMaxChars,
                 includePluginSteering,
                 agentId: sessionAgentId,
