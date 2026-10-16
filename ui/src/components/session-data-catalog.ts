@@ -53,7 +53,7 @@ export interface SessionDataInputs {
   samePresence(previous: PresencePayload | undefined, next: PresencePayload | undefined): boolean;
   getRouteSessionKey(): string;
   childSessionParents(): Set<string>;
-  readonly sessionDataContext: ApplicationContext | undefined;
+  readonly sessionDataContext: ApplicationContext;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;
   promoteCreatedSession(sessionKey: string): void;

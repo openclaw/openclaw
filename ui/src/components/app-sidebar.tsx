@@ -190,14 +190,15 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     sidebarOwners.set(host, owner);
     if (host.isConnected && !owner.isConnected) {
       owner.attach();
+    } else {
+      owner.sessionData.connect();
     }
-    const stopSessionData = owner.sessionData.connect();
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => owner.classList.add("sidebar-r"));
     });
     return () => {
       cancelAnimationFrame(frame);
-      stopSessionData();
+      owner.sessionData.disconnect(owner.isConnected);
     };
   });
   onCleanup(() => disconnectSidebarOwner(host));

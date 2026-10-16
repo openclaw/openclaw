@@ -101,7 +101,6 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   childSessionScope = {};
   private childSessionCanonicalListRevision: number | null = null;
   private readonly childSessionQueries = new Map<string, SidebarChildSessionQuery>();
-  private stopCatalogBrowserEvents: (() => void) | null = null;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayConnectionRevision = 0;
   private gatewayClient: GatewayBrowserClient | null = null;
@@ -127,11 +126,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   }
 
   private connectSources(): () => void {
-    const context = this.context;
-    if (!context) {
-      return () => {};
-    }
-    const { gateway, sessions, agents, agentSelection } = context;
+    const { gateway, sessions, agents, agentSelection } = this.context;
     const onGateway = () => {
       this.synchronizeGateway(gateway);
       this.requestSessionDataUpdate();
@@ -144,18 +139,24 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     const stops = [gateway.subscribe(onGateway)];
     onGateway();
     stops.push(sessions.subscribe(onSessions));
-    onSessions();
+    if (sessions !== this.sessionsSource) {
+      onSessions();
+    }
     stops.push(
       sessions.subscribeCreated((key) => this.inputs.promoteCreatedSession(key)),
       subscribeSessionDataGatewayEvents(gateway, this),
       subscribeSidebarAgentSessionCaches(agents, this, this.requestSessionDataUpdate),
       agentSelection.subscribe(() => this.synchronizeSessionScope()),
+      subscribeSessionCatalogBrowserEvents(
+        this.handleCatalogSessionContinued as EventListener,
+        this.handleSessionCatalogPageActivation,
+      ),
     );
     this.synchronizeSessionScope();
     return () => stops.forEach((stop) => stop());
   }
 
-  get context(): ApplicationContext | undefined {
+  get context(): ApplicationContext {
     return this.inputs.sessionDataContext;
   }
 
@@ -216,15 +217,16 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   sessionListQuery = (agentId: string) => sidebarSessionListQuery(this.inputs, agentId);
 
   connect(): () => void {
+    this.disconnect(true);
     // The Solid component owns one application context for this mount.
     this.stopSources = this.connectSources();
     this.active = true;
-    this.stopCatalogBrowserEvents = subscribeSessionCatalogBrowserEvents(
-      this.handleCatalogSessionContinued as EventListener,
-      this.handleSessionCatalogPageActivation,
-    );
     this.synchronize();
-    this.requestSessionDataUpdate();
+    // Initial owner facets must settle before the first attached query observes them.
+    this.synchronizePresentedSessions();
+    if (this.inputs.navigationVisible && this.inputs.shouldPublishSessionData()) {
+      this.notify();
+    }
     return () => this.disconnect();
   }
 
@@ -282,7 +284,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     scheduleSidebarChildSessions(this, () => this.inputs.childSessionParents());
   }
 
-  disconnect(): void {
+  disconnect(retainOwner = false): void {
     this.active = false;
     if (this.renderFrame !== undefined) {
       cancelAnimationFrame(this.renderFrame);
@@ -293,11 +295,14 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     this.stopRoster?.();
     this.stopRoster = undefined;
     this.roster = undefined;
+    // A provider replacement releases the view while retaining its sidebar owner.
+    if (retainOwner) {
+      return;
+    }
     this.ownerCounts.dispose();
     this.resetChildSessionState();
     this.retireFilteredSessions();
-    this.stopCatalogBrowserEvents?.();
-    this.stopCatalogBrowserEvents = null;
+    this.sessionsSource = null;
     this.inputs.dismissTransientMenus();
     this.invalidateSessionMutations();
     this.gatewaySource = null;
