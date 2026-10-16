@@ -186,7 +186,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
                 expect(readCanonicalSessionMainKey(reader.database)).toBe("main");
               }, options);
             },
-            writer.db,
+            requireNativeSqliteDatabase(writer.db),
           );
           expect(fixtureWriteStarted).toBe(false);
         },
@@ -210,7 +210,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
           }, options),
         ).toThrow("rollback main key");
       },
-      writer.db,
+      requireNativeSqliteDatabase(writer.db),
     );
     expect((await worker.execute({ type: "mainKey", input: undefined })).mainKey).toBe(
       "configured",
@@ -272,7 +272,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
               updatedAt: 1,
               label: "current",
             }),
-          writer.db,
+          requireNativeSqliteDatabase(writer.db),
         );
         expect(publications).toEqual([
           {
