@@ -11,6 +11,58 @@ import type {
   SandboxBackendCommandResult,
 } from "./backend-handle.types.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
+import { createSandboxTestContext } from "./test-fixtures.js";
+
+async function withLocalBridge(
+  run: (fixture: {
+    workspaceDir: string;
+    stateDir: string;
+    createBridge: () => ReturnType<typeof createSandboxFsBridge>;
+    scripts: string[];
+  }) => Promise<void>,
+  workspaceAccess: "rw" | "ro" | "none" = "rw",
+) {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fsbridge-e2e-"));
+  try {
+    const workspacePath = path.join(stateDir, "workspace");
+    await fs.mkdir(workspacePath);
+    const workspaceDir = await fs.realpath(workspacePath);
+    const scripts: string[] = [];
+    const backend: SandboxBackendHandle = {
+      id: "local-test",
+      runtimeId: "local-backend-fsbridge",
+      runtimeLabel: "local-backend-fsbridge",
+      workdir: workspaceDir,
+      buildExecSpec: async ({ command, env }) => ({
+        argv: ["sh", "-c", command],
+        env,
+        stdinMode: "pipe-closed",
+      }),
+      runShellCommand: async (params) => {
+        scripts.push(params.script);
+        return runLocalShellCommand(params);
+      },
+    };
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        workspaceDir,
+        agentWorkspaceDir: workspaceAccess === "none" ? path.join(stateDir, "agent") : workspaceDir,
+        workspaceAccess,
+        containerName: backend.runtimeId,
+        containerWorkdir: workspaceDir,
+        backend,
+      },
+    });
+    await run({
+      workspaceDir,
+      stateDir,
+      scripts,
+      createBridge: () => createSandboxFsBridge({ sandbox: { ...sandbox, backend } }),
+    });
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
 
 async function runLocalShellCommand(
   params: SandboxBackendCommandParams,
@@ -84,48 +136,13 @@ describe("sandbox fs bridge local backend e2e", () => {
   ] as const)(
     "enforces $workspaceAccess workspace writes and protects skills from $mutation",
     async ({ workspaceAccess, mutation }) => {
-      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fsbridge-e2e-"));
-      const workspacePath = path.join(stateDir, "workspace");
-      await fs.mkdir(workspacePath, { recursive: true });
-      const workspaceDir = await fs.realpath(workspacePath);
-      const skillRelativePath =
-        mutation === "write" ? "skills/demo/SKILL.md" : ".agents/skills/demo/SKILL.md";
-      const skillPath = path.join(workspaceDir, skillRelativePath);
-      await fs.mkdir(path.dirname(skillPath), { recursive: true });
-      await fs.writeFile(skillPath, "managed instructions");
-      const scripts: string[] = [];
-      const backend: SandboxBackendHandle = {
-        id: "local-test",
-        runtimeId: "local-backend-fsbridge",
-        runtimeLabel: "local-backend-fsbridge",
-        workdir: workspaceDir,
-        buildExecSpec: async ({ command, env }) => ({
-          argv: ["sh", "-c", command],
-          env,
-          stdinMode: "pipe-closed",
-        }),
-        runShellCommand: async (params) => {
-          scripts.push(params.script);
-          return await runLocalShellCommand(params);
-        },
-      };
-
-      try {
-        const { createSandboxTestContext } = await import("./test-fixtures.js");
-
-        const sandbox = createSandboxTestContext({
-          overrides: {
-            workspaceDir,
-            agentWorkspaceDir:
-              workspaceAccess === "none" ? path.join(stateDir, "agent") : workspaceDir,
-            workspaceAccess,
-            containerName: "local-backend-fsbridge",
-            containerWorkdir: workspaceDir,
-            backend,
-          },
-        });
-
-        const bridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
+      await withLocalBridge(async ({ workspaceDir, stateDir, scripts, createBridge }) => {
+        const skillRelativePath =
+          mutation === "write" ? "skills/demo/SKILL.md" : ".agents/skills/demo/SKILL.md";
+        const skillPath = path.join(workspaceDir, skillRelativePath);
+        await fs.mkdir(path.dirname(skillPath), { recursive: true });
+        await fs.writeFile(skillPath, "managed instructions");
+        const bridge = createBridge();
         if (!bridge.readDirectory) {
           throw new Error("The mounted bridge must support directory discovery.");
         }
@@ -169,59 +186,26 @@ describe("sandbox fs bridge local backend e2e", () => {
         await expect(mutate).rejects.toThrow("read-only");
         await expect(fs.readFile(skillPath, "utf8")).resolves.toBe("managed instructions");
         expect(scripts.some((script) => script.includes("operation = sys.argv[1]"))).toBe(true);
-      } finally {
-        await fs.rm(stateDir, { recursive: true, force: true });
-      }
+      }, workspaceAccess);
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "streams a large file through the pinned copy helper",
     async () => {
-      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fsbridge-copy-e2e-"));
-      const workspacePath = path.join(stateDir, "workspace");
-      await fs.mkdir(workspacePath, { recursive: true });
-      const workspaceDir = await fs.realpath(workspacePath);
-      const sourcePath = path.join(workspaceDir, "large-source.bin");
-      const destinationPath = path.join(workspaceDir, "nested", "large-copy.bin");
-      const largeFileBytes = 64 * 1024 * 1024 + 17;
-      const source = await fs.open(sourcePath, "w");
-      try {
-        await source.truncate(largeFileBytes);
-        await source.write(Buffer.from("head"), 0, 4, 0);
-        await source.write(Buffer.from("tail"), 0, 4, largeFileBytes - 4);
-      } finally {
-        await source.close();
-      }
-      const backend: SandboxBackendHandle = {
-        id: "local-test",
-        runtimeId: "local-backend-fsbridge-copy",
-        runtimeLabel: "local-backend-fsbridge-copy",
-        workdir: workspaceDir,
-        buildExecSpec: async ({ command, env }) => ({
-          argv: ["sh", "-c", command],
-          env,
-          stdinMode: "pipe-closed",
-        }),
-        runShellCommand: runLocalShellCommand,
-      };
-
-      try {
-        const { createSandboxTestContext } = await import("./test-fixtures.js");
-        const bridge = createSandboxFsBridge({
-          sandbox: {
-            ...createSandboxTestContext({
-              overrides: {
-                workspaceDir,
-                agentWorkspaceDir: workspaceDir,
-                containerName: "local-backend-fsbridge-copy",
-                containerWorkdir: workspaceDir,
-              },
-            }),
-            backend,
-          },
-        });
-
+      await withLocalBridge(async ({ workspaceDir, createBridge }) => {
+        const sourcePath = path.join(workspaceDir, "large-source.bin");
+        const destinationPath = path.join(workspaceDir, "nested", "large-copy.bin");
+        const largeFileBytes = 64 * 1024 * 1024 + 17;
+        const source = await fs.open(sourcePath, "w");
+        try {
+          await source.truncate(largeFileBytes);
+          await source.write(Buffer.from("head"), 0, 4, 0);
+          await source.write(Buffer.from("tail"), 0, 4, largeFileBytes - 4);
+        } finally {
+          await source.close();
+        }
+        const bridge = createBridge();
         const copyFile = bridge.copyFile?.bind(bridge);
         expect(copyFile).toBeTypeOf("function");
         await copyFile!({
@@ -241,47 +225,15 @@ describe("sandbox fs bridge local backend e2e", () => {
           await copied.close();
         }
         await expect(fs.stat(destinationPath)).resolves.toMatchObject({ size: largeFileBytes });
-      } finally {
-        await fs.rm(stateDir, { recursive: true, force: true });
-      }
+      });
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "authorizes canonical destinations through aliases with observed final effects",
     async () => {
-      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fsbridge-pin-e2e-"));
-      const workspacePath = path.join(stateDir, "workspace");
-      await fs.mkdir(workspacePath, { recursive: true });
-      const workspaceDir = await fs.realpath(workspacePath);
-      const backend: SandboxBackendHandle = {
-        id: "local-test",
-        runtimeId: "local-backend-fsbridge-pinned",
-        runtimeLabel: "local-backend-fsbridge-pinned",
-        workdir: workspaceDir,
-        buildExecSpec: async ({ command, env }) => ({
-          argv: ["sh", "-c", command],
-          env,
-          stdinMode: "pipe-closed",
-        }),
-        runShellCommand: runLocalShellCommand,
-      };
-
-      try {
-        const { createSandboxTestContext } = await import("./test-fixtures.js");
-
-        const sandbox = createSandboxTestContext({
-          overrides: {
-            workspaceDir,
-            agentWorkspaceDir: workspaceDir,
-            workspaceAccess: "rw",
-            containerName: "local-backend-fsbridge-pinned",
-            containerWorkdir: workspaceDir,
-            backend,
-          },
-        });
-
-        const bridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
+      await withLocalBridge(async ({ workspaceDir, createBridge }) => {
+        const bridge = createBridge();
         const realDir = path.join(workspaceDir, "real");
         const decoyDir = path.join(workspaceDir, "decoy");
         await fs.mkdir(realDir);
@@ -378,9 +330,7 @@ describe("sandbox fs bridge local backend e2e", () => {
           action: "mkdir",
         });
         await bridge.mkdirp({ filePath: ".", pinnedPath: rootTarget.pinnedPath });
-      } finally {
-        await fs.rm(stateDir, { recursive: true, force: true });
-      }
+      });
     },
   );
 });

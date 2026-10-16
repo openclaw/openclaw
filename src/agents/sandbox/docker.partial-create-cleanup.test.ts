@@ -55,27 +55,6 @@ function config(workspaceDir: string, setupCommand?: string): SandboxConfig {
   };
 }
 
-async function expectPartialRuntimeCleanup(params: {
-  workspaceDir: string;
-  cfg: SandboxConfig;
-  expectedError: string;
-}) {
-  await expect(
-    ensureSandboxContainer({
-      ...containerParams(params.workspaceDir),
-      cfg: params.cfg,
-    }),
-  ).rejects.toThrow(params.expectedError);
-  expect(containerMocks.execContainer).toHaveBeenCalledWith(
-    expect.anything(),
-    ["rm", "-f", "a".repeat(64)],
-    { allowFailure: true },
-  );
-  expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("oc-test-shared", {
-    preserveRemovalIntent: true,
-  });
-}
-
 function containerParams(workspaceDir: string, setupCommand?: string) {
   return {
     engine: DOCKER_SANDBOX_ENGINE,
@@ -126,39 +105,33 @@ describe("fresh sandbox container cleanup", () => {
     },
   );
 
-  it.each([true])(
-    "preserves unallocated custody after create failure (managed=%s)",
-    async (managed) => {
-      const workspaceDir = tempDirs.make("openclaw-create-failure-");
-      const error = managed ? "allocation response lost" : "container name already in use";
-      containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
-        if (args[0] === "inspect") {
-          return { code: 1, stdout: "", stderr: managed ? "No such object" : "inspection failed" };
-        }
-        if (args[0] === "create") {
-          if (managed) {
-            expect(registryMocks.updateRegistry).toHaveBeenLastCalledWith(
-              expect.objectContaining({ workspaceDir }),
-            );
-          }
-          throw new Error(error);
-        }
-        return { code: 0, stdout: "a".repeat(64), stderr: "" };
-      });
-      await expect(
-        ensureSandboxContainer({
-          ...containerParams(workspaceDir),
-          ...(managed
-            ? { scopeKey: "managed-custody", workspaceSource: "managed-worktree" as const }
-            : {}),
-        }),
-      ).rejects.toThrow(error);
-      expect(containerMocks.execContainer.mock.calls.some(([, args]) => args[0] === "rm")).toBe(
-        false,
-      );
-      expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
-    },
-  );
+  it("preserves unallocated custody after managed create failure", async () => {
+    const workspaceDir = tempDirs.make("openclaw-create-failure-");
+    const error = "allocation response lost";
+    containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
+      if (args[0] === "inspect") {
+        return { code: 1, stdout: "", stderr: "No such object" };
+      }
+      if (args[0] === "create") {
+        expect(registryMocks.updateRegistry).toHaveBeenLastCalledWith(
+          expect.objectContaining({ workspaceDir }),
+        );
+        throw new Error(error);
+      }
+      return { code: 0, stdout: "a".repeat(64), stderr: "" };
+    });
+    await expect(
+      ensureSandboxContainer({
+        ...containerParams(workspaceDir),
+        scopeKey: "managed-custody",
+        workspaceSource: "managed-worktree",
+      }),
+    ).rejects.toThrow(error);
+    expect(containerMocks.execContainer.mock.calls.some(([, args]) => args[0] === "rm")).toBe(
+      false,
+    );
+    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+  });
 
   it("never allocates a managed writer if its durable binding cannot be saved", async () => {
     const workspaceDir = tempDirs.make("openclaw-managed-binding-failure-");
@@ -182,10 +155,16 @@ describe("fresh sandbox container cleanup", () => {
     if (!setup) {
       registryMocks.updateRegistry.mockRejectedValueOnce(new Error(expectedError));
     }
-    await expectPartialRuntimeCleanup({
-      workspaceDir,
-      cfg: config(workspaceDir, setup ? "exit 1" : undefined),
-      expectedError,
+    await expect(
+      ensureSandboxContainer(containerParams(workspaceDir, setup ? "exit 1" : undefined)),
+    ).rejects.toThrow(expectedError);
+    expect(containerMocks.execContainer).toHaveBeenCalledWith(
+      expect.anything(),
+      ["rm", "-f", "a".repeat(64)],
+      { allowFailure: true },
+    );
+    expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("oc-test-shared", {
+      preserveRemovalIntent: true,
     });
     if (setup) {
       expect(registryMocks.updateRegistry).toHaveBeenCalledWith(

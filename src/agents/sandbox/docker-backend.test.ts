@@ -84,6 +84,65 @@ async function createDockerExecBackend() {
   });
 }
 
+function bind(source: string, target: string, writable: boolean) {
+  return { source, target, writable };
+}
+
+function engineResult(stdout: string) {
+  return { code: 0, stdout, stderr: "" };
+}
+
+async function mountedBridge(
+  binds: ReturnType<typeof bind>[],
+  tmpfs: Record<string, string>,
+  table: string[],
+  extraMounts: { Type: string; Source: string; Destination: string; RW: boolean }[] = [],
+) {
+  dockerMocks.execContainer
+    .mockResolvedValueOnce(
+      engineResult(
+        JSON.stringify({
+          Mounts: [
+            { Type: "bind", Source: "/host/project", Destination: "/workspace", RW: true },
+            ...extraMounts,
+            ...binds.map(({ source, target, writable }) => ({
+              Type: "bind",
+              Source: source,
+              Destination: target,
+              RW: writable,
+            })),
+          ],
+          Tmpfs: tmpfs,
+        }),
+      ),
+    )
+    .mockResolvedValueOnce(
+      engineResult(
+        [
+          "1 1 0:1 / / rw - overlay overlay rw",
+          "2 1 8:1 /project /workspace rw - ext4 /dev/root rw",
+          ...table,
+        ].join("\n"),
+      ),
+    );
+  const backend = await createDockerExecBackend();
+  return backend.createFsBridge!({
+    sandbox: {
+      workspaceDir: "/host/project",
+      agentWorkspaceDir: "/host/project",
+      workspaceAccess: "rw",
+      containerName: backend.runtimeId,
+      containerWorkdir: "/workspace",
+      docker: {
+        binds: binds.map(
+          ({ source, target, writable }) => `${source}:${target}:${writable ? "rw" : "ro"}`,
+        ),
+      },
+      backend,
+    },
+  });
+}
+
 function runtimeEntry(backendId = "docker") {
   const containerName = backendId === "podman" ? "sandbox-podman" : "sandbox-1";
   return {
@@ -242,46 +301,15 @@ describe("docker sandbox backend manager", () => {
   );
 
   it("captures image-volume masks once for the filesystem bridge after provisioning", async () => {
-    dockerMocks.execContainer
-      .mockResolvedValueOnce({
-        code: 0,
-        stderr: "",
-        stdout: JSON.stringify({
-          Mounts: [
-            { Type: "bind", Source: "/host/project", Destination: "/workspace", RW: true },
-            { Type: "volume", Source: "/engine/volume", Destination: "/workspace/cache", RW: true },
-            {
-              Type: "bind",
-              Source: "/host/export",
-              Destination: "/workspace/cache/export",
-              RW: false,
-            },
-          ],
-          Tmpfs: { "/tmp": "rw" },
-        }),
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        stderr: "",
-        stdout: [
-          "1 1 0:1 / / rw - overlay overlay rw",
-          "2 1 8:1 /project /workspace rw - ext4 /dev/root rw",
-          "3 2 8:1 /volume /workspace/cache rw - ext4 /dev/root rw",
-          "4 3 8:1 /export /workspace/cache/export ro - ext4 /dev/root rw",
-        ].join("\n"),
-      });
-    const backend = await createDockerExecBackend();
-    const bridge = backend.createFsBridge!({
-      sandbox: {
-        workspaceDir: "/host/project",
-        agentWorkspaceDir: "/host/project",
-        workspaceAccess: "rw",
-        containerName: backend.runtimeId,
-        containerWorkdir: "/workspace",
-        docker: { binds: ["/host/export:/workspace/cache/export:ro"] },
-        backend,
-      },
-    });
+    const bridge = await mountedBridge(
+      [bind("/host/export", "/workspace/cache/export", false)],
+      { "/tmp": "rw" },
+      [
+        "3 2 8:1 /volume /workspace/cache rw - ext4 /dev/root rw",
+        "4 3 8:1 /export /workspace/cache/export ro - ext4 /dev/root rw",
+      ],
+      [{ Type: "volume", Source: "/engine/volume", Destination: "/workspace/cache", RW: true }],
+    );
     expect(() => bridge.resolvePath({ filePath: "cache/marker" })).toThrow("container-only");
     expect(() => bridge.resolvePath({ filePath: "/workspace/cache/marker" })).toThrow(
       "container-only",
@@ -307,9 +335,9 @@ describe("docker sandbox backend manager", () => {
     {
       name: "different backing stacked on a declared bind",
       binds: [
-        { source: "/host/cache", target: "/workspace/cache", writable: true },
-        { source: "/host/hidden", target: "/workspace/cache/hidden", writable: true },
-        { source: "/host/live", target: "/workspace/cache/live", writable: true },
+        bind("/host/cache", "/workspace/cache", true),
+        bind("/host/hidden", "/workspace/cache/hidden", true),
+        bind("/host/live", "/workspace/cache/live", true),
       ],
       tmpfs: { "/workspace/aliases/link": "rw" },
       table: [
@@ -323,7 +351,7 @@ describe("docker sandbox backend manager", () => {
     },
     {
       name: "intervening tmpfs hides an older sibling bind",
-      binds: [{ source: "/host/export", target: "/workspace/cache/export", writable: true }],
+      binds: [bind("/host/export", "/workspace/cache/export", true)],
       tmpfs: { "/workspace/aliases/deep/link": "rw" },
       table: [
         "3 2 8:1 /export /workspace/cache/export rw - ext4 /dev/root rw",
@@ -334,7 +362,7 @@ describe("docker sandbox backend manager", () => {
     },
     {
       name: "bind attached inside the intervening tmpfs remains visible",
-      binds: [{ source: "/host/export", target: "/workspace/cache/export", writable: true }],
+      binds: [bind("/host/export", "/workspace/cache/export", true)],
       tmpfs: { "/workspace/aliases/deep/link": "rw" },
       table: [
         "3 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
@@ -345,7 +373,7 @@ describe("docker sandbox backend manager", () => {
     },
     {
       name: "identical recursive bind backing with a readonly top",
-      binds: [{ source: "/host/export", target: "/workspace/export", writable: false }],
+      binds: [bind("/host/export", "/workspace/export", false)],
       tmpfs: {},
       table: [
         "3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw",
@@ -356,7 +384,7 @@ describe("docker sandbox backend manager", () => {
     },
     {
       name: "readonly bind with mismatched realized access",
-      binds: [{ source: "/host/export", target: "/workspace/export", writable: false }],
+      binds: [bind("/host/export", "/workspace/export", false)],
       tmpfs: {},
       table: ["3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw"],
       masked: ["/workspace/export/marker"],
@@ -364,7 +392,7 @@ describe("docker sandbox backend manager", () => {
     },
     {
       name: "escaped whitespace in realized bind paths",
-      binds: [{ source: "/host/export ", target: "/workspace/export ", writable: false }],
+      binds: [bind("/host/export ", "/workspace/export ", false)],
       tmpfs: {},
       table: ["3 2 8:1 /export\\040 /workspace/export\\040 ro - ext4 /dev/root rw"],
       masked: [],
@@ -372,7 +400,7 @@ describe("docker sandbox backend manager", () => {
     },
     {
       name: "visible recursive child above a hidden older child",
-      binds: [{ source: "/host/export", target: "/workspace/export", writable: false }],
+      binds: [bind("/host/export", "/workspace/export", false)],
       tmpfs: {},
       table: [
         "3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw",
@@ -385,7 +413,7 @@ describe("docker sandbox backend manager", () => {
     },
     {
       name: "different backing above a hidden older bind",
-      binds: [{ source: "/host/cache", target: "/workspace/cache", writable: true }],
+      binds: [bind("/host/cache", "/workspace/cache", true)],
       tmpfs: { "/workspace/aliases/link": "rw" },
       table: [
         "3 2 8:1 /cache /workspace/cache rw - ext4 /dev/root rw",
@@ -397,55 +425,14 @@ describe("docker sandbox backend manager", () => {
     },
     {
       name: "bind destination alias without a realized lexical mount",
-      binds: [{ source: "/host/export", target: "/workspace/link", writable: true }],
+      binds: [bind("/host/export", "/workspace/link", true)],
       tmpfs: {},
       table: ["3 2 8:1 /export /workspace/cache rw - ext4 /dev/root rw"],
       masked: ["/workspace/link/marker", "/workspace/cache/marker"],
       readable: ["/workspace/other/marker"],
     },
   ])("captures realized masks for $name", async ({ binds, tmpfs, table, masked, readable }) => {
-    dockerMocks.execContainer
-      .mockResolvedValueOnce({
-        code: 0,
-        stderr: "",
-        stdout: JSON.stringify({
-          Mounts: [
-            { Type: "bind", Source: "/host/project", Destination: "/workspace", RW: true },
-            ...binds.map((bind) => ({
-              Type: "bind",
-              Source: bind.source,
-              Destination: bind.target,
-              RW: bind.writable,
-            })),
-          ],
-          Tmpfs: tmpfs,
-        }),
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        stderr: "",
-        stdout: [
-          "1 1 0:1 / / rw - overlay overlay rw",
-          "2 1 8:1 /project /workspace rw - ext4 /dev/root rw",
-          ...table,
-        ].join("\n"),
-      });
-    const backend = await createDockerExecBackend();
-    const bridge = backend.createFsBridge!({
-      sandbox: {
-        workspaceDir: "/host/project",
-        agentWorkspaceDir: "/host/project",
-        workspaceAccess: "rw",
-        containerName: backend.runtimeId,
-        containerWorkdir: "/workspace",
-        docker: {
-          binds: binds.map(
-            (bind) => `${bind.source}:${bind.target}:${bind.writable ? "rw" : "ro"}`,
-          ),
-        },
-        backend,
-      },
-    });
+    const bridge = await mountedBridge(binds, tmpfs, table);
     for (const filePath of masked) {
       expect(() => bridge.resolvePath({ filePath })).toThrow("container-only");
     }
@@ -729,11 +716,7 @@ process.stdout.write(JSON.stringify({
   ])(
     "matches the configured image for registry label $configLabelKind",
     async ({ configLabelKind, image }) => {
-      dockerMocks.execContainer.mockResolvedValueOnce({
-        code: 0,
-        stdout: `${image}\n`,
-        stderr: "",
-      });
+      dockerMocks.execContainer.mockResolvedValueOnce(engineResult(`${image}\n`));
       await expect(
         dockerSandboxBackendManager.describeRuntime({
           entry: { ...runtimeEntry(), image: "stale-entry-image", configLabelKind },
@@ -828,27 +811,14 @@ process.stdout.write(JSON.stringify({
 
   it("matches canonical Podman image identity when Podman expands a short name", async () => {
     dockerMocks.execContainer
-      .mockResolvedValueOnce({
-        code: 0,
-        stdout: "localhost/openclaw-sandbox:bookworm-slim\tsha256:abc123\n",
-        stderr: "",
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        stdout: "abc123\n",
-        stderr: "",
-      });
+      .mockResolvedValueOnce(
+        engineResult("localhost/openclaw-sandbox:bookworm-slim\tsha256:abc123\n"),
+      )
+      .mockResolvedValueOnce(engineResult("abc123\n"));
 
     const result = await podmanSandboxBackendManager.describeRuntime({
       entry: {
-        containerName: "sandbox-podman",
-        backendId: "podman",
-        backendTarget: { key: "local", globalArgs: [] },
-        runtimeLabel: "sandbox-podman",
-        sessionKey: "agent:coder:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "openclaw-sandbox:bookworm-slim",
+        ...runtimeEntry("podman"),
         configLabelKind: "Image",
       },
       config: createConfig(),

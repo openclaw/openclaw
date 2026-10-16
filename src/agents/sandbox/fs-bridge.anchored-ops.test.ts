@@ -31,6 +31,24 @@ function requireDockerCall(call: DockerRawCall | undefined, label: string): Dock
   return call;
 }
 
+async function createStatBridge(
+  stateDir: string,
+  stat: (script: string) => ReturnType<typeof dockerExecResult>,
+) {
+  const workspaceDir = path.join(stateDir, "workspace");
+  await fs.mkdir(workspaceDir, { recursive: true });
+  mockedExecDockerRaw.mockImplementation(async (args) => {
+    const script = getDockerScript(args);
+    if (script.includes('readlink -n -f -- "$cursor"')) {
+      return dockerExecResult(`${getDockerArg(args, 1)}\n`);
+    }
+    return script.includes('stat -c "%F|%s|%y"') ? stat(script) : dockerExecResult("");
+  });
+  return createSandboxFsBridge({
+    sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+  });
+}
+
 describe("sandbox fs bridge anchored ops", () => {
   let readGate: ((fd: number) => Promise<void>) | undefined;
   installFsBridgeTestHarness({
@@ -203,33 +221,15 @@ describe("sandbox fs bridge anchored ops", () => {
 
   it("runs stat under the C locale so missing-file errors return null", async () => {
     await withTempDir("openclaw-fs-bridge-stat-missing-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      await fs.mkdir(workspaceDir, { recursive: true });
-
-      mockedExecDockerRaw.mockImplementation(async (args) => {
-        const script = getDockerScript(args);
-        if (script.includes('readlink -n -f -- "$cursor"')) {
-          return dockerExecResult(`${getDockerArg(args, 1)}\n`);
-        }
-        if (script.includes('stat -c "%F|%s|%y"')) {
-          const stderr = script.includes('LC_ALL=C stat -c "%F|%s|%y"')
+      const bridge = await createStatBridge(stateDir, (script) => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.from(
+          script.includes('LC_ALL=C stat -c "%F|%s|%y"')
             ? "stat: cannot stat 'note.txt': No such file or directory\n"
-            : "stat: der Aufruf von statx für 'note.txt' ist nicht möglich: Datei oder Verzeichnis nicht gefunden\n";
-          return {
-            stdout: Buffer.alloc(0),
-            stderr: Buffer.from(stderr),
-            code: 1,
-          };
-        }
-        return dockerExecResult("");
-      });
-
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-      });
+            : "stat: der Aufruf von statx für 'note.txt' ist nicht möglich: Datei oder Verzeichnis nicht gefunden\n",
+        ),
+        code: 1,
+      }));
 
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toBeNull();
       await expect(
@@ -246,30 +246,11 @@ describe("sandbox fs bridge anchored ops", () => {
 
   it("keeps non-missing stat failures as errors", async () => {
     await withTempDir("openclaw-fs-bridge-stat-error-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      await fs.mkdir(workspaceDir, { recursive: true });
-
-      mockedExecDockerRaw.mockImplementation(async (args) => {
-        const script = getDockerScript(args);
-        if (script.includes('readlink -n -f -- "$cursor"')) {
-          return dockerExecResult(`${getDockerArg(args, 1)}\n`);
-        }
-        if (script.includes('stat -c "%F|%s|%y"')) {
-          return {
-            stdout: Buffer.alloc(0),
-            stderr: Buffer.from("stat: cannot stat 'note.txt': Permission denied\n"),
-            code: 1,
-          };
-        }
-        return dockerExecResult("");
-      });
-
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-      });
+      const bridge = await createStatBridge(stateDir, () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.from("stat: cannot stat 'note.txt': Permission denied\n"),
+        code: 1,
+      }));
 
       await expect(bridge.stat({ filePath: "note.txt" })).rejects.toThrow("Permission denied");
 
@@ -289,26 +270,9 @@ describe("sandbox fs bridge anchored ops", () => {
 
   it("saturates unsafe stat size output", async () => {
     await withTempDir("openclaw-fs-bridge-stat-parse-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      await fs.mkdir(workspaceDir, { recursive: true });
-
-      mockedExecDockerRaw.mockImplementation(async (args) => {
-        const script = getDockerScript(args);
-        if (script.includes('readlink -n -f -- "$cursor"')) {
-          return dockerExecResult(`${getDockerArg(args, 1)}\n`);
-        }
-        if (script.includes('stat -c "%F|%s|%y"')) {
-          return dockerExecResult("regular file|9007199254740992|8640000000001\n");
-        }
-        return dockerExecResult("");
-      });
-
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-      });
+      const bridge = await createStatBridge(stateDir, () =>
+        dockerExecResult("regular file|9007199254740992|8640000000001\n"),
+      );
 
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toMatchObject({
         type: "file",
