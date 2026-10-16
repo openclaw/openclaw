@@ -17,6 +17,14 @@ import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-sup
 import { prepareLegacyConfigMigrationRuntime } from "./doctor/shared/legacy-config-migrate.test-support.js";
 
 const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
+const noBundledPlugins = { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+const updating = {
+  ...noBundledPlugins,
+  OPENCLAW_UPDATE_IN_PROGRESS: "1",
+  OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+  OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+};
+const binding = '{"binding":"retained"}\n';
 const doctorOptions = {
   migrateLegacyConfig: false,
   invalidConfigNote: false,
@@ -41,6 +49,30 @@ function createPluginConfig(pluginId: string, config?: Record<string, string>, p
   };
 }
 
+function writeJson(file: string, value: unknown) {
+  return fs.writeFile(file, JSON.stringify(value));
+}
+
+async function installFixture(
+  root: string,
+  name: string,
+  manifest: Record<string, unknown>,
+  setup = false,
+  entry = "module.exports = {};\n",
+) {
+  await fs.mkdir(root, { recursive: true });
+  await writeJson(path.join(root, "package.json"), {
+    name,
+    version: "1.0.0",
+    openclaw: {
+      extensions: ["./index.cjs"],
+      ...(setup ? { setupEntry: "./setup-entry.cjs" } : {}),
+    },
+  });
+  await fs.writeFile(path.join(root, "index.cjs"), entry);
+  await writeJson(path.join(root, "openclaw.plugin.json"), manifest);
+}
+
 async function installMigrationFixture(params: {
   root: string;
   pluginId: string;
@@ -49,30 +81,15 @@ async function installMigrationFixture(params: {
   stale?: boolean;
   phase?: "after-session-repair";
 }) {
-  await fs.mkdir(params.root, { recursive: true });
-  await fs.writeFile(
-    path.join(params.root, "package.json"),
-    JSON.stringify({
-      name: "@example/deferred-fixture",
-      version: "1.0.0",
-      openclaw: { extensions: ["./index.cjs"] },
-    }),
-  );
-  await fs.writeFile(path.join(params.root, "index.cjs"), "module.exports = {};\n");
-  await fs.writeFile(
-    path.join(params.root, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: params.pluginId,
-      configSchema: { type: "object", properties: {}, additionalProperties: false },
-      doctorContract: {
-        configRepair: true,
-        stateMigrations: [
-          { id: "legacy-binding", ...(params.phase ? { phase: params.phase } : {}) },
-        ],
-      },
-      configContracts: { compatibilityMigrationPaths: ["legacyFixture"] },
-    }),
-  );
+  await installFixture(params.root, "@example/deferred-fixture", {
+    id: params.pluginId,
+    configSchema: { type: "object", properties: {}, additionalProperties: false },
+    doctorContract: {
+      configRepair: true,
+      stateMigrations: [{ id: "legacy-binding", ...(params.phase ? { phase: params.phase } : {}) }],
+    },
+    configContracts: { compatibilityMigrationPaths: ["legacyFixture"] },
+  });
   await fs.writeFile(
     path.join(params.root, "doctor-contract-api.cjs"),
     `
@@ -118,27 +135,10 @@ async function installStatelessFixture(
   channel = false,
 ) {
   const setup = contract === "public-setup-full-detector";
-  await fs.mkdir(root, { recursive: true });
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({
-      name: "@example/stateless-fixture",
-      version: "1.0.0",
-      openclaw: {
-        extensions: ["./index.cjs"],
-        ...(setup ? { setupEntry: "./setup-entry.cjs" } : {}),
-      },
-    }),
-  );
-  await fs.writeFile(
-    path.join(root, "index.cjs"),
-    contract === "public-setup-full-detector"
-      ? `module.exports = { plugin: { id: ${JSON.stringify(pluginId)}, lifecycle: { detectLegacyStateMigrations: () => [] } } };\n`
-      : "module.exports = {};\n",
-  );
-  await fs.writeFile(
-    path.join(root, "openclaw.plugin.json"),
-    JSON.stringify({
+  await installFixture(
+    root,
+    "@example/stateless-fixture",
+    {
       id: pluginId,
       ...(setup || channel
         ? {
@@ -159,7 +159,11 @@ async function installStatelessFixture(
         properties: { region: { type: "string" }, legacyBinding: { type: "string" } },
         additionalProperties: false,
       },
-    }),
+    },
+    setup,
+    setup
+      ? `module.exports = { plugin: { id: ${JSON.stringify(pluginId)}, lifecycle: { detectLegacyStateMigrations: () => [] } } };\n`
+      : undefined,
   );
   if (contract !== "absent" && !setup) {
     await fs.writeFile(
@@ -178,8 +182,8 @@ async function installStatelessFixture(
 }
 
 describe("configured plugin migration deferral", () => {
-  it("keeps a present config-path Doctor contract available during an update rehearsal", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
+  it("keeps a present config-path Doctor contract available during an update rehearsal", () =>
+    withDoctorConfigPreflightHome(async (home) => {
       const rehearsalRoot = path.join(home, ".openclaw");
       const pluginRoot = path.join(rehearsalRoot, "copied-custom-plugin");
       const pluginId = "copied-custom-fixture";
@@ -203,18 +207,17 @@ describe("configured plugin migration deferral", () => {
           expect(readDeferredPluginMigrations()).toEqual([]);
         },
       );
-    });
-  });
+    }));
 
   it.each(["linked", "unrecorded"] as const)(
     "keeps a %s config-path plugin available only when package convergence skips it",
-    async (install) => {
-      await withDoctorConfigPreflightHome(async (home) => {
+    (install) =>
+      withDoctorConfigPreflightHome(async (home) => {
         const pluginRoot = path.join(home, "linked-plugin");
         const pluginId = "linked-fixture";
         const source = path.join(home, "legacy-binding.json");
         const migrated = path.join(home, "migrated-binding.json");
-        await fs.writeFile(source, '{"binding":"retained"}\n');
+        await fs.writeFile(source, binding);
         await installMigrationFixture({ root: pluginRoot, pluginId, source, migrated });
         const config = createPluginConfig(pluginId, undefined, [pluginRoot]);
         await writeOpenClawConfig(home, config);
@@ -225,39 +228,28 @@ describe("configured plugin migration deferral", () => {
           );
         }
 
-        await withEnvAsync(
-          {
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-            OPENCLAW_UPDATE_IN_PROGRESS: "1",
-            OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
-            OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
-          },
-          async () => {
-            await runDoctorConfigPreflight(doctorOptions);
-            expect(readDeferredPluginMigrations()).toEqual(
-              install === "linked"
-                ? []
-                : [
-                    expect.objectContaining({
-                      pluginId,
-                      reason: expect.stringContaining("Package convergence must wait"),
-                    }),
-                  ],
-            );
-            expect(await fs.readFile(install === "linked" ? migrated : source, "utf8")).toBe(
-              '{"binding":"retained"}\n',
-            );
-            await expect(fs.stat(install === "linked" ? source : migrated)).rejects.toMatchObject({
-              code: "ENOENT",
-            });
-          },
-        );
-      });
-    },
+        await withEnvAsync(updating, async () => {
+          await runDoctorConfigPreflight(doctorOptions);
+          expect(readDeferredPluginMigrations()).toEqual(
+            install === "linked"
+              ? []
+              : [
+                  expect.objectContaining({
+                    pluginId,
+                    reason: expect.stringContaining("Package convergence must wait"),
+                  }),
+                ],
+          );
+          expect(await fs.readFile(install === "linked" ? migrated : source, "utf8")).toBe(binding);
+          await expect(fs.stat(install === "linked" ? source : migrated)).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        });
+      }),
   );
 
-  it("preserves a newer migration obligation after an ordinary Doctor observed a stateless plugin", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
+  it("preserves a newer migration obligation after an ordinary Doctor observed a stateless plugin", () =>
+    withDoctorConfigPreflightHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const pluginRoot = path.join(home, "upgraded-plugin");
       const source = path.join(home, "legacy-binding.json");
@@ -265,8 +257,8 @@ describe("configured plugin migration deferral", () => {
       const pluginId = "upgraded-fixture";
       const config = createPluginConfig(pluginId, { legacyBinding: source });
       await writeOpenClawConfig(home, config);
-      await fs.writeFile(source, '{"binding":"retained"}\n');
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await fs.writeFile(source, binding);
+      await withEnvAsync(noBundledPlugins, async () => {
         await runDoctorConfigPreflight(doctorOptions);
         expect(readDeferredPluginMigrations()).toEqual([expect.objectContaining({ pluginId })]);
         await installStatelessFixture(pluginRoot, pluginId);
@@ -308,16 +300,15 @@ describe("configured plugin migration deferral", () => {
           `plugins.entries.${pluginId}.config.legacyBinding`,
           source,
         );
-        expect(await fs.readFile(source, "utf8")).toBe('{"binding":"retained"}\n');
+        expect(await fs.readFile(source, "utf8")).toBe(binding);
         await expect(fs.stat(migrated)).rejects.toMatchObject({ code: "ENOENT" });
       });
-    });
-  });
+    }));
 
   it.each([false, true])(
     "honors the allowlist for ambient channel credentials (Discord allowed: %s)",
-    async (allowDiscord) => {
-      await withDoctorConfigPreflightHome(async (home) => {
+    (allowDiscord) =>
+      withDoctorConfigPreflightHome(async (home) => {
         const pluginId = "missing-fixture";
         const config = createPluginConfig(pluginId);
         if (allowDiscord) {
@@ -352,17 +343,16 @@ describe("configured plugin migration deferral", () => {
             ).toBe(allowDiscord);
           },
         );
-      });
-    },
+      }),
   );
 
-  it("keeps an existing obligation when only the full entry declares a detector", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
+  it("keeps an existing obligation when only the full entry declares a detector", () =>
+    withDoctorConfigPreflightHome(async (home) => {
       const pluginId = "full-entry-detector-fixture";
       const pluginRoot = path.join(home, pluginId);
       const config = createPluginConfig(pluginId, { region: "us-en" }, [pluginRoot]);
       await writeOpenClawConfig(home, config);
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await withEnvAsync(noBundledPlugins, async () => {
         await writeOpenClawConfig(home, {
           ...config,
           plugins: { ...config.plugins, load: { paths: [] } },
@@ -390,16 +380,15 @@ describe("configured plugin migration deferral", () => {
           region: "us-en",
         });
       });
-    });
-  });
+    }));
 
-  it("confirms an installed stateless plugin with a retained disabled-channel obligation", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
+  it("confirms an installed stateless plugin with a retained disabled-channel obligation", () =>
+    withDoctorConfigPreflightHome(async (home) => {
       const pluginId = "retained-fixture";
       const pluginRoot = path.join(home, pluginId);
       const config = createPluginConfig(pluginId, { region: "us-en" });
       await writeOpenClawConfig(home, config);
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await withEnvAsync(noBundledPlugins, async () => {
         await runDoctorConfigPreflight(doctorOptions);
         expect(readDeferredPluginMigrations()).toEqual([expect.objectContaining({ pluginId })]);
         await installStatelessFixture(pluginRoot, pluginId, "absent", true);
@@ -433,8 +422,7 @@ describe("configured plugin migration deferral", () => {
         expect(checked.sourceConfig.plugins).toEqual(installedConfig.plugins);
         expect(checked.sourceConfig.channels).toEqual(installedConfig.channels);
       });
-    });
-  });
+    }));
 
   it("settles inspection-only debt when the installed plugin has no migration contract", async () => {
     const note = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
@@ -448,7 +436,7 @@ describe("configured plugin migration deferral", () => {
         ...doctorOptions,
         preparePluginMetadataSnapshot: true,
       } as const;
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await withEnvAsync(noBundledPlugins, async () => {
         await runDoctorConfigPreflight(options);
         await installStatelessFixture(pluginRoot, pluginId, "broken");
         await writeOpenClawConfig(home, {
@@ -492,20 +480,20 @@ describe("configured plugin migration deferral", () => {
     });
   });
 
-  it("retires same-Doctor deferral inputs with prepared metadata", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
+  it("retires same-Doctor deferral inputs with prepared metadata", () =>
+    withDoctorConfigPreflightHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const pluginRoot = path.join(home, "fixture-plugin");
       const source = path.join(home, "legacy-binding.json");
       const migrated = path.join(home, "migrated-binding.json");
       const pluginId = "deferred-fixture";
-      await fs.writeFile(source, '{"binding":"retained"}\n');
+      await fs.writeFile(source, binding);
       await writeOpenClawConfig(
         home,
         createPluginConfig(pluginId, { legacyBinding: source }, [pluginRoot]),
       );
       let installed = false;
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await withEnvAsync(noBundledPlugins, async () => {
         const completed = await runDoctorConfigPreflight({
           ...doctorOptions,
           preparePluginMetadataSnapshot: true,
@@ -520,7 +508,7 @@ describe("configured plugin migration deferral", () => {
         });
         expect(installed).toBe(true);
         expect(completed.snapshot.issues).toEqual([]);
-        expect(await fs.readFile(migrated, "utf8")).toBe('{"binding":"retained"}\n');
+        expect(await fs.readFile(migrated, "utf8")).toBe(binding);
         expect(completed.snapshot.valid).toBe(true);
         expect(readDeferredPluginMigrations()).toEqual([]);
         expect(JSON.parse(await fs.readFile(configPath, "utf8"))).not.toHaveProperty(
@@ -528,13 +516,12 @@ describe("configured plugin migration deferral", () => {
         );
         expect((await readConfigFileSnapshot()).valid).toBe(true);
       });
-    });
-  });
+    }));
 
   it.each(["doctor", "stale-candidate", "published-candidate"] as const)(
     "%s preserves pending inputs and retries after the package becomes available",
-    async (entry) => {
-      await withDoctorConfigPreflightHome(async (home) => {
+    (entry) =>
+      withDoctorConfigPreflightHome(async (home) => {
         const configPath = path.join(home, ".openclaw", "openclaw.json");
         const pluginRoot = path.join(home, "fixture-plugin");
         const currentPluginRoot = path.join(home, "fixture-plugin-current");
@@ -560,7 +547,7 @@ describe("configured plugin migration deferral", () => {
           });
         }
         await writeOpenClawConfig(home, config);
-        await fs.writeFile(source, '{"binding":"retained"}\n');
+        await fs.writeFile(source, binding);
         const databasePath = path.join(home, ".openclaw", "state", "openclaw.sqlite");
         if (entry === "published-candidate") {
           await fs.mkdir(path.dirname(databasePath), { recursive: true });
@@ -607,7 +594,7 @@ describe("configured plugin migration deferral", () => {
               expect.objectContaining({ pluginId, command: "openclaw update repair" }),
             ]);
             expect(await fs.readFile(configPath, "utf8")).toBe(original);
-            expect(await fs.readFile(source, "utf8")).toBe('{"binding":"retained"}\n');
+            expect(await fs.readFile(source, "utf8")).toBe(binding);
             if (entry === "published-candidate") {
               await closeOpenClawStateDatabaseByPathAsync(databasePath);
               expect(readDeferredPluginMigrations()).toEqual([
@@ -671,10 +658,10 @@ describe("configured plugin migration deferral", () => {
               load: { paths: [currentPluginRoot] },
             },
           });
-          await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          await withEnvAsync(noBundledPlugins, async () => {
             await runDoctorConfigPreflight(options);
             expect(readDeferredPluginMigrations()).toEqual([expect.objectContaining({ pluginId })]);
-            expect(await fs.readFile(source, "utf8")).toBe('{"binding":"retained"}\n');
+            expect(await fs.readFile(source, "utf8")).toBe(binding);
           });
         }
         await writeOpenClawConfig(home, {
@@ -699,12 +686,12 @@ describe("configured plugin migration deferral", () => {
                 "module.exports = { stateMigrations: [], normalizeCompatibilityConfig: ({cfg}) => ({config: cfg, changes: []}) };\n",
               );
             }
-            await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+            await withEnvAsync(noBundledPlugins, async () => {
               const unfinished = await runDoctorConfigPreflight(options);
               expect(readDeferredPluginMigrations()).toEqual([
                 expect.objectContaining({ pluginId }),
               ]);
-              expect(await fs.readFile(source, "utf8")).toBe('{"binding":"retained"}\n');
+              expect(await fs.readFile(source, "utf8")).toBe(binding);
               expect(unfinished.stateMigrationStepReceipts).toContainEqual(
                 expect.objectContaining({ id: `plugin:${pluginId}`, outcome: "deferred" }),
               );
@@ -726,7 +713,7 @@ describe("configured plugin migration deferral", () => {
           },
           async () => {
             const completed = await runDoctorConfigPreflight(options);
-            expect(await fs.readFile(migrated, "utf8")).toBe('{"binding":"retained"}\n');
+            expect(await fs.readFile(migrated, "utf8")).toBe(binding);
             expect(readDeferredPluginMigrations()).toEqual([]);
             expect(
               completed.stateMigrationStepReceipts?.filter(
@@ -735,7 +722,6 @@ describe("configured plugin migration deferral", () => {
             ).toEqual([]);
           },
         );
-      });
-    },
+      }),
   );
 });

@@ -16,7 +16,7 @@ import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-su
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
-function withMigrationHome(run: (home: string) => Promise<void>) {
+function withMigrationHome(run: (home: string) => Promise<void>, env: NodeJS.ProcessEnv = {}) {
   return withDoctorConfigPreflightHome((home) =>
     withEnvAsync(
       {
@@ -25,14 +25,23 @@ function withMigrationHome(run: (home: string) => Promise<void>) {
         OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: undefined,
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: undefined,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        ...env,
       },
       () => run(home),
     ),
   );
 }
 
-it("backs up and persists inherited Talk SecretRefs for an unmarked published updater", async () => {
-  await withMigrationHome(async (home) => {
+async function runDoctor(configPath: string, nonInteractive = false, repair?: boolean) {
+  const ctx = await prepareDoctorContext(
+    configPath,
+    nonInteractive ? { options: { nonInteractive, repair } } : undefined,
+  );
+  await ctx[Symbol.asyncDispose]();
+}
+
+it("backs up and persists inherited Talk SecretRefs for an unmarked published updater", () =>
+  withMigrationHome(async (home) => {
     const apiKey = { source: "env", provider: "default", id: "TALK_MIGRATION_TEST_KEY" } as const;
     const raw = {
       gateway: { mode: "local" as const },
@@ -60,11 +69,7 @@ it("backs up and persists inherited Talk SecretRefs for an unmarked published up
       message: expect.stringContaining("talk.realtime"),
     });
 
-    await (
-      await prepareDoctorContext(configPath, {
-        options: { nonInteractive: true },
-      })
-    )[Symbol.asyncDispose]();
+    await runDoctor(configPath, true);
 
     const saved = await readConfigFileSnapshot();
     expect(saved.valid).toBe(true);
@@ -77,61 +82,53 @@ it("backs up and persists inherited Talk SecretRefs for an unmarked published up
       raw.plugins.entries["voice-call"].config,
     );
     expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
-    await (
-      await prepareDoctorContext(configPath, {
-        options: { nonInteractive: true },
-      })
-    )[Symbol.asyncDispose]();
+    await runDoctor(configPath, true);
     expect((await readConfigFileSnapshot()).raw).toBe(saved.raw);
     expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
-  });
-});
+  }));
 
 it.each([
   { extra: "session_status", repaired: true },
   { extra: "exec", repaired: false },
-])(
-  "persists only a permission-preserving agent profile repair ($extra)",
-  async ({ extra, repaired }) => {
-    await withMigrationHome(async (home) => {
-      const raw: OpenClawConfig = {
-        gateway: { mode: "local", port: await getFreePort() },
-        plugins: { enabled: false },
-        tools: { alsoAllow: ["exec"] },
-        agents: {
-          ownership: "explicit",
-          entries: {
-            restricted: {
-              tools: {
-                profile: "minimal",
-                allow: ["session_status", "exec"],
-                alsoAllow: [extra],
-              },
+])("persists only a permission-preserving agent profile repair ($extra)", ({ extra, repaired }) =>
+  withMigrationHome(async (home) => {
+    const raw: OpenClawConfig = {
+      gateway: { mode: "local", port: await getFreePort() },
+      plugins: { enabled: false },
+      tools: { alsoAllow: ["exec"] },
+      agents: {
+        ownership: "explicit",
+        entries: {
+          restricted: {
+            tools: {
+              profile: "minimal",
+              allow: ["session_status", "exec"],
+              alsoAllow: [extra],
             },
           },
         },
-      };
-      const configPath = await writeOpenClawConfig(home, raw);
-      const original = await fs.readFile(configPath, "utf8");
+      },
+    };
+    const configPath = await writeOpenClawConfig(home, raw);
+    const original = await fs.readFile(configPath, "utf8");
 
-      await (await prepareDoctorContext(configPath))[Symbol.asyncDispose]();
+    await runDoctor(configPath);
 
-      const saved = await readConfigFileSnapshot();
-      expect(saved.valid).toBe(repaired);
-      expect(saved.sourceConfig.agents?.entries?.restricted?.tools?.alsoAllow).toEqual(
-        repaired ? [] : [extra],
-      );
-      if (repaired) {
-        expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
-      } else {
-        expect(saved.raw).toBe(original);
-      }
-    });
-  },
+    const saved = await readConfigFileSnapshot();
+    expect(saved.valid).toBe(repaired);
+    expect(saved.sourceConfig.agents?.entries?.restricted?.tools?.alsoAllow).toEqual(
+      repaired ? [] : [extra],
+    );
+    if (repaired) {
+      expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
+    } else {
+      expect(saved.raw).toBe(original);
+    }
+  }),
 );
 
-it("preserves sandbox override bytes and effective permissions during Doctor repair", async () => {
-  await withMigrationHome(async (home) => {
+it("preserves sandbox override bytes and effective permissions during Doctor repair", () =>
+  withMigrationHome(async (home) => {
     const raw: OpenClawConfig = {
       gateway: { mode: "local", port: await getFreePort() },
       plugins: { enabled: false },
@@ -152,7 +149,7 @@ it("preserves sandbox override bytes and effective permissions during Doctor rep
     const before = resolveSandboxToolPolicyForAgent(raw, "restricted");
     expect(isToolAllowed(before, "exec")).toBe(false);
 
-    await (await prepareDoctorContext(configPath))[Symbol.asyncDispose]();
+    await runDoctor(configPath);
 
     const saved = await readConfigFileSnapshot();
     const after = resolveSandboxToolPolicyForAgent(saved.sourceConfig, "restricted");
@@ -160,11 +157,10 @@ it("preserves sandbox override bytes and effective permissions during Doctor rep
     expect(after).toStrictEqual(before);
     expect(saved.raw).toBe(original);
     expect(saved.valid).toBe(false);
-  });
-});
+  }));
 
-it("normalizes retired metadata and Code Mode config for an unmarked npm updater without repair flags", async () => {
-  await withMigrationHome(async (home) => {
+it("normalizes retired metadata and Code Mode config for an unmarked npm updater without repair flags", () =>
+  withMigrationHome(async (home) => {
     const configPath = await writeOpenClawConfig(home, {
       meta: { lastTouchedVersion: "2026.3.31", lastTouchedAt: "2026-03-31T00:00:00.000Z" },
       gateway: { mode: "local", port: 19092 },
@@ -195,8 +191,7 @@ it("normalizes retired metadata and Code Mode config for an unmarked npm updater
       timeoutMs: 2500,
     });
     expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
-  });
-});
+  }));
 
 it.each([
   {
@@ -222,68 +217,54 @@ it.each([
     invalidPlugin: true,
     env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
   },
-])("preserves config bytes with $name during ordinary Doctor", async (fixture) => {
-  await withDoctorConfigPreflightHome(async (home) => {
-    await withEnvAsync(
-      {
-        OPENCLAW_UPDATE_IN_PROGRESS: undefined,
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
-        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: undefined,
-        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: undefined,
-        OPENCLAW_CONFIG_READONLY: undefined,
-        OPENCLAW_NIX_MODE: undefined,
-        OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        ...fixture.env,
-      },
-      async () => {
-        const canonical = { source: "path" as const, installPath: path.join(home, "canonical") };
-        if (fixture.legacy) {
-          await seedInstalledPluginIndex(
-            { existing: canonical },
-            { config: { plugins: { enabled: false } } },
-          );
-        }
-        const configPath = await writeOpenClawConfig(home, {
-          ...(fixture.legacy
-            ? { agents: { list: [{ id: "main", name: "Operator" }, { id: "helper" }] } }
-            : {}),
-          meta: {
-            lastTouchedAt: fixture.legacy ? "2026-02-15T00:00:00.000Z" : "2026-03-31T00:00:00.000Z",
-            lastTouchedVersion: fixture.legacy
-              ? "2026.2.15"
-              : fixture.future
-                ? "9999.1.1"
-                : "2026.3.31",
-            ...(fixture.invalid ? { unknownSetting: true } : {}),
-          },
-          gateway: fixture.include ? { $include: "gateway.json" } : { mode: "local" },
-          plugins: fixture.invalidPlugin
-            ? { load: { paths: [path.join(home, "missing-plugin")] } }
-            : { enabled: false },
+])("preserves config bytes with $name during ordinary Doctor", (fixture) =>
+  withMigrationHome(
+    async (home) => {
+      const canonical = { source: "path" as const, installPath: path.join(home, "canonical") };
+      if (fixture.legacy) {
+        await seedInstalledPluginIndex(
+          { existing: canonical },
+          { config: { plugins: { enabled: false } } },
+        );
+      }
+      const configPath = await writeOpenClawConfig(home, {
+        ...(fixture.legacy
+          ? { agents: { list: [{ id: "main", name: "Operator" }, { id: "helper" }] } }
+          : {}),
+        meta: {
+          lastTouchedAt: fixture.legacy ? "2026-02-15T00:00:00.000Z" : "2026-03-31T00:00:00.000Z",
+          lastTouchedVersion: fixture.legacy
+            ? "2026.2.15"
+            : fixture.future
+              ? "9999.1.1"
+              : "2026.3.31",
+          ...(fixture.invalid ? { unknownSetting: true } : {}),
+        },
+        gateway: fixture.include ? { $include: "gateway.json" } : { mode: "local" },
+        plugins: fixture.invalidPlugin
+          ? { load: { paths: [path.join(home, "missing-plugin")] } }
+          : { enabled: false },
+      });
+      if (fixture.include) {
+        await fs.writeFile(path.join(path.dirname(configPath), "gateway.json"), '{"mode":"local"}');
+      }
+      const original = await fs.readFile(configPath, "utf8");
+
+      await runDoctor(configPath, true, fixture.repair);
+
+      expect(await fs.readFile(configPath, "utf8")).toBe(original);
+      await expect(fs.access(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
+      if (fixture.legacy) {
+        expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual({
+          existing: canonical,
         });
-        if (fixture.include) {
-          await fs.writeFile(
-            path.join(path.dirname(configPath), "gateway.json"),
-            '{"mode":"local"}',
-          );
-        }
-        const original = await fs.readFile(configPath, "utf8");
-
-        await (
-          await prepareDoctorContext(configPath, {
-            options: { nonInteractive: true, repair: fixture.repair },
-          })
-        )[Symbol.asyncDispose]();
-
-        expect(await fs.readFile(configPath, "utf8")).toBe(original);
-        await expect(fs.access(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
-        if (fixture.legacy) {
-          expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual({
-            existing: canonical,
-          });
-        }
-      },
-    );
-  });
-});
+      }
+    },
+    {
+      OPENCLAW_CONFIG_READONLY: undefined,
+      OPENCLAW_NIX_MODE: undefined,
+      OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: undefined,
+      ...fixture.env,
+    },
+  ),
+);

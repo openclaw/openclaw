@@ -54,6 +54,26 @@ function createDoctorEnv(root: string, stateDir: string, configPath: string): No
   return env;
 }
 
+function createDoctorFixture(name: string, configInState = false) {
+  const root = fs.realpathSync(tempDirs.createTempDir(`openclaw-${name}-`));
+  const stateDir = path.join(root, "state");
+  const configPath = path.join(configInState ? stateDir : root, "openclaw.json");
+  return { root, stateDir, configPath, env: createDoctorEnv(root, stateDir, configPath) };
+}
+
+function writeJson(file: string, value: unknown) {
+  fs.writeFileSync(file, JSON.stringify(value));
+}
+
+function readDatabase<T>(file: string, read: (db: DatabaseSync) => T): T {
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    return read(db);
+  } finally {
+    db.close();
+  }
+}
+
 describe("doctor invalid config process exit", () => {
   it(
     "repairs the v17 additive schema through doctor --fix",
@@ -156,67 +176,61 @@ describe("doctor invalid config process exit", () => {
   it(
     "migrates legacy exec approvals before repairing a partially valid config",
     async () => {
-      const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-legacy-approvals-"));
-      const stateDir = path.join(root, "state");
-      const configPath = path.join(stateDir, "openclaw.json");
+      const { root, stateDir, configPath, env } = createDoctorFixture(
+        "doctor-legacy-approvals",
+        true,
+      );
       const approvalsPath = path.join(stateDir, "exec-approvals.json");
       const knowledgePath = path.join(root, "knowledge");
-      const env = createDoctorEnv(root, stateDir, configPath);
 
       fs.mkdirSync(stateDir, { recursive: true });
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          agents: {
-            list: [
+      writeJson(configPath, {
+        agents: {
+          list: [
+            {
+              id: "jup",
+              memorySearch: {
+                enabled: true,
+                provider: "auto",
+                sources: ["memory", "sessions"],
+                extraPaths: [knowledgePath],
+                experimental: { sessionMemory: true },
+                store: { vector: { enabled: false } },
+                query: { maxResults: 8 },
+              },
+              memory: {
+                search: {
+                  enabled: false,
+                  experimental: { sessionMemory: false },
+                  query: { minScore: 0.25 },
+                },
+              },
+              tools: { message: { allowCrossContextSend: true } },
+            },
+          ],
+        },
+      });
+      writeJson(approvalsPath, {
+        version: 1,
+        agents: {
+          jup: {
+            allowlist: [
               {
-                id: "jup",
-                memorySearch: {
-                  enabled: true,
-                  provider: "auto",
-                  sources: ["memory", "sessions"],
-                  extraPaths: [knowledgePath],
-                  experimental: { sessionMemory: true },
-                  store: { vector: { enabled: false } },
-                  query: { maxResults: 8 },
-                },
-                memory: {
-                  search: {
-                    enabled: false,
-                    experimental: { sessionMemory: false },
-                    query: { minScore: 0.25 },
-                  },
-                },
-                tools: { message: { allowCrossContextSend: true } },
+                pattern: "/usr/bin/rg",
+                source: "allow-always",
+                lastUsedAt: null,
+                lastUsedCommand: null,
+              },
+              {
+                pattern: "=command:durable",
+                source: "allow-always",
+                lastUsedAt: null,
+                lastUsedCommand: null,
               },
             ],
           },
-        }),
-      );
-      fs.writeFileSync(
-        approvalsPath,
-        JSON.stringify({
-          version: 1,
-          agents: {
-            jup: {
-              allowlist: [
-                {
-                  pattern: "/usr/bin/rg",
-                  source: "allow-always",
-                  lastUsedAt: null,
-                  lastUsedCommand: null,
-                },
-                {
-                  pattern: "=command:durable",
-                  source: "allow-always",
-                  lastUsedAt: null,
-                  lastUsedCommand: null,
-                },
-              ],
-            },
-          },
-        }),
-      );
+        },
+      });
       const runtimeRoot = createBuiltRuntime(root);
       const result = await tempDirs.track(
         runBuiltRuntime(
@@ -270,28 +284,15 @@ describe("doctor invalid config process exit", () => {
   );
 
   it("exits after a complete best-effort report for an unparseable config", async () => {
-    const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-invalid-config-exit-"));
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_NO_RESPAWN: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_TEST_FAST: "1",
-      NO_COLOR: "1",
-    };
-    delete env.NODE_ENV;
+    const { root, stateDir, configPath, env } = createDoctorFixture(
+      "doctor-invalid-config-exit",
+      true,
+    );
+    Object.assign(env, { OPENCLAW_NO_RESPAWN: "1", OPENCLAW_SKIP_CHANNELS: "1" });
     delete env.NODE_OPTIONS;
     delete env.OPENCLAW_GATEWAY_PASSWORD;
     delete env.OPENCLAW_GATEWAY_TOKEN;
     delete env.OPENCLAW_GATEWAY_URL;
-    delete env.OPENCLAW_HOME;
-    delete env.VITEST;
     delete env.VITEST_POOL_ID;
     delete env.VITEST_WORKER_ID;
 
@@ -364,20 +365,14 @@ describe("Doctor repair followed by gateway readiness", () => {
       seedPluginStateSidecar(stateDir, 2_000);
       const sidecarPath = path.join(stateDir, "plugin-state", "state.sqlite");
       const preservedSidecar = fs.readFileSync(sidecarPath);
-      const readCanonicalPluginState = () => {
-        const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
-          readOnly: true,
-        });
-        try {
-          return database
+      const readCanonicalPluginState = () =>
+        readDatabase(databasePath, (database) =>
+          database
             .prepare(
               "SELECT value_json, created_at FROM plugin_state_entries WHERE plugin_id = 'discord' AND namespace = 'components' AND entry_key = 'interaction:1'",
             )
-            .get();
-        } finally {
-          database.close();
-        }
-      };
+            .get(),
+        );
       const job = {
         name: "SQLite automation",
         enabled: true,
@@ -435,21 +430,13 @@ describe("Doctor repair followed by gateway readiness", () => {
         .readdirSync(path.dirname(databasePath))
         .filter((name) => name.startsWith("openclaw.sqlite.doctor-cron-") && name.endsWith(".bak"));
       expect(backupNames.length).toBeGreaterThan(0);
-      const backup = new DatabaseSync(
-        path.join(path.dirname(databasePath), backupNames.toSorted()[0]!),
-        {
-          readOnly: true,
-        },
-      );
-      try {
+      readDatabase(path.join(path.dirname(databasePath), backupNames.toSorted()[0]!), (backup) => {
         expect(backup.prepare("SELECT job_id FROM cron_jobs ORDER BY sort_order").all()).toEqual([
           { job_id: "valid-job" },
           { job_id: "invalid-state-job" },
           { job_id: "invalid-trigger-job" },
         ]);
-      } finally {
-        backup.close();
-      }
+      });
 
       try {
         await instance.startGateway();
@@ -489,11 +476,7 @@ describe("Doctor repair followed by gateway readiness", () => {
   }, 45_000);
 
   it("admits stable upgrade state after Doctor repairs config, schema, and device identity", async () => {
-    const root = await fs.promises.realpath(
-      tempDirs.createTempDir("openclaw-stable-upgrade-ready-"),
-    );
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(root, "openclaw.json");
+    const { stateDir, configPath, env } = createDoctorFixture("stable-upgrade-ready");
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     const stableConfig = {
       meta: {
@@ -503,10 +486,9 @@ describe("Doctor repair followed by gateway readiness", () => {
       agents: { defaults: { heartbeat: { skipWhenBusy: true } }, list: [{ id: "main" }] },
       gateway: { mode: "local", auth: { mode: "none" } },
     };
-    const env = createDoctorEnv(root, stateDir, configPath);
 
     fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify(stableConfig));
+    writeJson(configPath, stableConfig);
     seedPluginStateSidecar(stateDir, 4_000);
     // Initialization and repair must share the same database module instance.
     const preflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.preflight).href;
@@ -658,7 +640,7 @@ describe("Doctor repair followed by gateway readiness", () => {
     }
 
     fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify(config));
+    writeJson(configPath, config);
     const configUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configIO).href;
     const preflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.preflight).href;
     const startupUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.startup).href;
@@ -725,7 +707,7 @@ describe("Doctor repair followed by gateway readiness", () => {
   }, 75_000);
 
   it("preserves legacy state and orphan sidecars when a live gateway owns the state directory", async () => {
-    const root = fs.realpathSync(tempDirs.createTempDir("openclaw-live-owner-ready-"));
+    const { root, stateDir, configPath, env } = createDoctorFixture("live-owner-ready");
     // Live owner fixture with gateway-shaped argv: on Windows no file-lock start
     // time exists, so the lock reader validates the owner through process argv
     // (isGatewayArgv); the Vitest process itself would read as a dead owner there.
@@ -734,21 +716,15 @@ describe("Doctor repair followed by gateway readiness", () => {
       ["-e", "setTimeout(() => {}, 120_000)", "src/entry.ts", "gateway"],
       { cwd: path.resolve("."), stdio: "ignore" },
     );
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(root, "openclaw.json");
-    const env = createDoctorEnv(root, stateDir, configPath);
 
     try {
       fs.mkdirSync(stateDir, { recursive: true });
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({ gateway: { mode: "local", auth: { mode: "none" } } }),
-      );
+      writeJson(configPath, { gateway: { mode: "local", auth: { mode: "none" } } });
       // A retired agent file remains owned by Doctor while the Gateway is live.
       const legacyAgentDir = path.join(stateDir, "agent");
       const legacyArtifactPath = path.join(legacyAgentDir, "auth-profiles.json");
       fs.mkdirSync(legacyAgentDir, { recursive: true });
-      fs.writeFileSync(legacyArtifactPath, JSON.stringify({ profiles: {} }));
+      writeJson(legacyArtifactPath, { profiles: {} });
       // A pending state write admission side effect: a nonempty WAL beside a
       // missing main database gets copied to an .orphaned-* quarantine file by
       // sidecar quarantine unless the live-owner refusal runs first.
@@ -761,18 +737,15 @@ describe("Doctor repair followed by gateway readiness", () => {
       const lockDir = resolveGatewayLockDir(stateDir);
       fs.mkdirSync(lockDir, { recursive: true });
       const startTime = getFileLockProcessStartTime(ownerChild.pid!);
-      fs.writeFileSync(
-        path.join(lockDir, "gateway.state.lock"),
-        JSON.stringify({
-          pid: ownerChild.pid,
-          ownerId: "live-owner-refusal-test",
-          createdAt: new Date().toISOString(),
-          configPath,
-          port: 18720,
-          stateDir,
-          ...(startTime !== null ? { startTime } : {}),
-        }),
-      );
+      writeJson(path.join(lockDir, "gateway.state.lock"), {
+        pid: ownerChild.pid,
+        ownerId: "live-owner-refusal-test",
+        createdAt: new Date().toISOString(),
+        configPath,
+        port: 18720,
+        stateDir,
+        ...(startTime !== null ? { startTime } : {}),
+      });
       const runtimeRoot = createBuiltRuntime(root);
 
       const result = await tempDirs.track(
@@ -799,11 +772,7 @@ describe("Doctor repair followed by gateway readiness", () => {
   }, 45_000);
 
   it("reloads tool ownership after updater-managed manifest repair", async () => {
-    const root = await fs.promises.realpath(
-      tempDirs.createTempDir("openclaw-updater-manifest-repair-"),
-    );
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(root, "openclaw.json");
+    const { root, configPath, env } = createDoctorFixture("updater-manifest-repair");
     const pluginId = "updater-tool-owner";
     const pluginDir = path.join(root, "plugins", pluginId);
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
@@ -814,42 +783,23 @@ describe("Doctor repair followed by gateway readiness", () => {
         entries: { [pluginId]: { enabled: true } },
       },
     } satisfies OpenClawConfig;
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_TEST_FAST: "1",
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      NO_COLOR: "1",
-    };
-    delete env.NODE_ENV;
-    delete env.OPENCLAW_HOME;
-    delete env.VITEST;
+    env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
     delete env.VITEST_POOL_ID;
     delete env.VITEST_WORKER_ID;
 
     fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify(config));
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: `@openclaw/${pluginId}`,
-        version: "1.0.0",
-        openclaw: { extensions: ["./index.js"] },
-      }),
-    );
+    writeJson(configPath, config);
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: `@openclaw/${pluginId}`,
+      version: "1.0.0",
+      openclaw: { extensions: ["./index.js"] },
+    });
     fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n");
-    fs.writeFileSync(
-      manifestPath,
-      JSON.stringify({
-        id: pluginId,
-        tools: ["updater_tool"],
-        configSchema: { type: "object" },
-      }),
-    );
+    writeJson(manifestPath, {
+      id: pluginId,
+      tools: ["updater_tool"],
+      configSchema: { type: "object" },
+    });
 
     // Repair and observation must use the same metadata scope and invalidation owner.
     const configFlowUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configFlow).href;

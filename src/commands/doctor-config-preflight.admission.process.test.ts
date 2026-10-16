@@ -68,25 +68,22 @@ function inspectDatabaseCopy<T>(databasePath: string, read: (database: DatabaseS
   }
 }
 
-function schemaMetadata(databasePath: string, workspacePath?: string) {
+function writeJson(file: string, value: unknown) {
+  fs.writeFileSync(file, JSON.stringify(value));
+}
+
+function schemaMetadata(databasePath: string) {
   return inspectDatabaseCopy(databasePath, (db) => ({
     userVersion: db.prepare("PRAGMA user_version").get()?.user_version,
     schemaMeta: db.prepare("SELECT * FROM schema_meta ORDER BY rowid").all(),
-    workspaceSetup: workspacePath
-      ? db
-          .prepare(
-            "SELECT version, bootstrap_seeded_at, setup_completed_at FROM workspace_setup_state WHERE workspace_path = ?",
-          )
-          .get(workspacePath)
-      : undefined,
   }));
 }
 
 describe("startup admission before persistent writes", () => {
   it.each<{
     name: string;
-    workspace: boolean;
-    repairable: boolean;
+    workspace?: boolean;
+    repairable?: boolean;
     config: "clobbered" | "local" | "absent";
     reason: string;
     consolidated?: boolean;
@@ -98,8 +95,6 @@ describe("startup admission before persistent writes", () => {
   }>([
     {
       name: "clobbered config with a healthy backup",
-      workspace: false,
-      repairable: false,
       config: "clobbered",
       restored: true,
       reason: "Config auto-restored from backup",
@@ -107,37 +102,28 @@ describe("startup admission before persistent writes", () => {
     {
       name: "clobbered config with a legacy workspace in its backup",
       workspace: true,
-      repairable: false,
       config: "clobbered",
       reason: "Legacy workspace setup state requires migration",
     },
     {
       name: "session store selected by canonical agent ID",
-      workspace: false,
       selectedSession: true,
-      repairable: false,
       config: "local",
       reason: "Legacy session store requires migration",
     },
     {
       name: "missing config",
-      workspace: false,
-      repairable: false,
       config: "absent",
       reason: "Missing config",
     },
     {
       name: "missing config without an existing WAL",
-      workspace: false,
-      repairable: false,
       config: "absent",
       consolidated: true,
       reason: "Missing config",
     },
     {
       name: "unavailable plugin without an existing WAL",
-      workspace: false,
-      repairable: false,
       config: "local",
       consolidated: true,
       unavailablePlugin: true,
@@ -145,7 +131,6 @@ describe("startup admission before persistent writes", () => {
     },
     {
       name: "unavailable plugin with legacy-invalid config",
-      workspace: false,
       repairable: true,
       config: "local",
       consolidated: true,
@@ -154,8 +139,6 @@ describe("startup admission before persistent writes", () => {
     },
     {
       name: "pending identity device.json",
-      workspace: false,
-      repairable: false,
       config: "local",
       identityFile: "device.json",
       canonicalIdentity: false,
@@ -163,8 +146,6 @@ describe("startup admission before persistent writes", () => {
     },
     {
       name: "canonical identity with stale retired source",
-      workspace: false,
-      repairable: false,
       config: "local",
       identityFile: "device.json",
       canonicalIdentity: true,
@@ -173,8 +154,8 @@ describe("startup admission before persistent writes", () => {
   ])(
     "admits or preserves shipped state for $name",
     async ({
-      workspace,
-      repairable,
+      workspace = false,
+      repairable = false,
       config,
       reason,
       consolidated,
@@ -263,27 +244,24 @@ describe("startup admission before persistent writes", () => {
           prepared.close();
         }
         if (config !== "absent") {
-          fs.writeFileSync(
-            configPath,
-            JSON.stringify({
-              gateway: { mode: "local" },
-              plugins: unavailablePlugin
-                ? { load: { paths: [path.join(root, "missing-plugin")] } }
-                : { enabled: false },
-              agents: selectedSession
-                ? { entries: { agent: { workspace: workspaceDir } } }
-                : { defaults: { workspace: workspaceDir } },
-              ...(selectedSession
-                ? {
-                    session: {
-                      store: path.join(stateDir, "external", "{agentId}", "sessions.json"),
-                    },
-                  }
-                : repairable
-                  ? { session: { idleMinutes: 45 } }
-                  : {}),
-            }),
-          );
+          writeJson(configPath, {
+            gateway: { mode: "local" },
+            plugins: unavailablePlugin
+              ? { load: { paths: [path.join(root, "missing-plugin")] } }
+              : { enabled: false },
+            agents: selectedSession
+              ? { entries: { agent: { workspace: workspaceDir } } }
+              : { defaults: { workspace: workspaceDir } },
+            ...(selectedSession
+              ? {
+                  session: {
+                    store: path.join(stateDir, "external", "{agentId}", "sessions.json"),
+                  },
+                }
+              : repairable
+                ? { session: { idleMinutes: 45 } }
+                : {}),
+          });
           if (config === "clobbered") {
             fs.copyFileSync(configPath, `${configPath}.bak`);
             fs.writeFileSync(
@@ -295,16 +273,13 @@ describe("startup admission before persistent writes", () => {
         if (selectedSession) {
           const legacyStore = path.join(stateDir, "external", "agent", "sessions.json");
           fs.mkdirSync(path.dirname(legacyStore), { recursive: true });
-          fs.writeFileSync(
-            legacyStore,
-            JSON.stringify({
-              "agent:agent:retained": {
-                sessionId: "retained-session",
-                sessionFile: "retained-session.jsonl",
-                updatedAt: 1,
-              },
-            }),
-          );
+          writeJson(legacyStore, {
+            "agent:agent:retained": {
+              sessionId: "retained-session",
+              sessionFile: "retained-session.jsonl",
+              updatedAt: 1,
+            },
+          });
           fs.writeFileSync(
             path.join(path.dirname(legacyStore), "retained-session.jsonl"),
             [
@@ -324,14 +299,11 @@ describe("startup admission before persistent writes", () => {
           );
         }
         if (workspace) {
-          fs.writeFileSync(
-            legacyWorkspacePath,
-            JSON.stringify({
-              version: 1,
-              bootstrapSeededAt: "2026-07-02T00:00:00.000Z",
-              setupCompletedAt: "2026-07-02T00:00:00.000Z",
-            }),
-          );
+          writeJson(legacyWorkspacePath, {
+            version: 1,
+            bootstrapSeededAt: "2026-07-02T00:00:00.000Z",
+            setupCompletedAt: "2026-07-02T00:00:00.000Z",
+          });
         }
         const identityPath = identityFile ? path.join(stateDir, "identity", identityFile) : null;
         const legacyIdentityRaw = '{"retiredIdentity":"leave for Doctor"}\n';
@@ -556,16 +528,17 @@ describe("startup legacy store classification", () => {
       delete env.VITEST;
 
       fs.mkdirSync(path.join(stateDir, "agent"), { recursive: true });
-      fs.writeFileSync(configPath, JSON.stringify(config));
+      writeJson(configPath, config);
       const legacyPath = database
         ? await seedMalformedDatabase(stateDir, mutation, shared)
         : path.join(stateDir, "agent", "settings.json");
       if (!database) {
         fs.writeFileSync(legacyPath, '{"legacy":true}\n');
-        fs.writeFileSync(
-          path.join(stateDir, "exec-approvals.json"),
-          JSON.stringify({ version: 1, defaults: {}, agents: {} }),
-        );
+        writeJson(path.join(stateDir, "exec-approvals.json"), {
+          version: 1,
+          defaults: {},
+          agents: {},
+        });
       }
       const before = fs.readFileSync(legacyPath);
       const configBefore = fs.readFileSync(configPath);
