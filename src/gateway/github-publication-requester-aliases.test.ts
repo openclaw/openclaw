@@ -198,7 +198,7 @@ it.each(forBackends(["captured alias", "later alias"] as const))(
     const other = await ensureCanonicalUserProfileForEmail(recipient);
     await using visitors = await startVisitors(f);
     const grant = (await visitors.store.lookup(email))!;
-    const { original, claim, queued } = await queueGuest(f, "interrupted-visitor-identity");
+    const { original, claim, input, queued } = await queueGuest(f, "interrupted-visitor-identity");
     const staff =
       change === "captured alias"
         ? await f.coordinator.requestForSessionV2(f.request("independent-maintainer", f.maintainer))

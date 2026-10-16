@@ -26,6 +26,7 @@ import {
 } from "./github-publication-requester.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import type { OperatorScope } from "./operator-scopes.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -208,7 +209,7 @@ it.each([
           : actor === "narrowed"
             ? { ...client, connect: { ...client.connect, scopes: guestScopes } }
             : client;
-      const scopes =
+      const scopes: OperatorScope[] =
         route === "gateway-empty"
           ? []
           : route === "gateway-write"

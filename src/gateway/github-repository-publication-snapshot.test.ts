@@ -69,12 +69,13 @@ const indexPath = (f: Fixture) => path.resolve(f.cwd, f.git("rev-parse", "--git-
 const remoteSnapshot = async (f: Fixture, base = f.base) =>
   (await f.metadata(f.capture(base))).snapshot;
 const local = (f: Fixture) => captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd });
-const state = (f: Fixture, names: string[] = []) =>
-  Promise.all([
-    f.git("rev-parse", "HEAD"),
+const state = async (f: Fixture, names: string[] = []) => [
+  f.git("rev-parse", "HEAD"),
+  ...(await Promise.all([
     fs.readFile(indexPath(f)),
     ...names.map((name) => fs.readFile(f.file(name))),
-  ]);
+  ])),
+];
 
 it("preserves committed CRLF bytes when capturing clean and edited workspaces", async () => {
   const f = await fixture();
