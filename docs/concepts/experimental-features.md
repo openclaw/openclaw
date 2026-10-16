@@ -214,13 +214,11 @@ approvals remain action requests, while a conversational acknowledgment can omit
 optional tools on later turns. It uses the existing host tool policy, preserves
 already-required tools without granting denied tools, and keeps submitted schemas,
 discovery, and callability aligned.
-Each subsequent turn starts from its own normal tool baseline. Opt-out does not
-withdraw a restriction from an already-dispatched Decision evaluation. Changed
-model selection still prevents applying an awaited restriction and is rechecked
-at foreground primary-model dispatch after awaited preparation. That change
-withdraws only the optional restriction and restores the current permitted tool
-surface while retaining independent hook caps and required tools. No historical
-transcript is rewritten and no native thread is recreated.
+Each subsequent turn starts from its own normal tool baseline. Opt-out or a changed
+Decision model does not withdraw a restriction from an already-dispatched
+evaluation. Those settings apply to the next evaluation; live permissions still
+govern the current turn. No historical transcript is rewritten and no native
+thread is recreated.
 
 With DEBUG logging enabled for the embedded runner, a safe record at the first
 foreground primary dispatch reports decision status/reason, decision latency,

@@ -17,7 +17,7 @@ import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import "../../styles/chat/startup-layout.css";
 import "../../styles/chat/grouped.css";
@@ -175,19 +175,11 @@ export type CustodianSurfaceProps = {
 
 function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
   const context = useApplication();
-  const projection = projectSource(
+  const projection = projectOwner(
     untrack(() => props.store),
-    {
-      read: (store) => store,
-      subscribe: (store, notify) => store.subscribe(notify),
-      equality: "revision",
-    },
+    (store) => store,
   );
-  const alerts = projectSource(custodianAlertStore, {
-    read: (store) => store.alert,
-    subscribe: (store, notify) => store.subscribe(notify),
-    equality: "revision",
-  });
+  const alerts = projectOwner(custodianAlertStore, (store) => store.alert);
   const store = () => projection.read();
   const currentAlert = createMemo(() => {
     // Alert admission derives from the session's current authority as well as the alert store.

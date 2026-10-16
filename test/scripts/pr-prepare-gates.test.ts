@@ -580,9 +580,9 @@ pr_git() {
     "merge-base ${mainSha} ${reusedHead}") printf '%s\\n' ${reusedBase} ;;
     "merge-base ${mainSha} ${currentHead}") printf '%s\\n' ${currentBase} ;;
     "cat-file -e ${reusedBase}^{commit}"|"cat-file -e ${reusedHead}^{commit}") return 0 ;;
-    "diff --name-only ${reusedBase}..${mainSha}") cat main-paths.txt; return ${readable ? 0 : 1} ;;
-    "diff --name-only ${reusedBase}..${currentBase}") cat incorporated-paths.txt; return ${readable ? 0 : 1} ;;
-    "diff --name-only ${reusedBase}..${reusedHead}") cat prepared-paths.txt ;;
+    "diff --name-only --no-renames ${reusedBase}..${mainSha}") cat main-paths.txt; return ${readable ? 0 : 1} ;;
+    "diff --name-only --no-renames ${reusedBase}..${currentBase}") cat incorporated-paths.txt; return ${readable ? 0 : 1} ;;
+    "diff --name-only --no-renames ${reusedBase}..${reusedHead}") cat prepared-paths.txt ;;
     *) echo "unexpected fixture Git query: $*" >&2; return 99 ;;
   esac
 }

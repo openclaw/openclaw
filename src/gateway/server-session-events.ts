@@ -64,7 +64,7 @@ function hasCompleteTranscriptTarget(update: InternalSessionTranscriptUpdate): b
   );
 }
 
-/** Creates a serialized transcript-update broadcaster for session websocket clients. */
+/** Creates a serialized broadcaster; false reports a temporary canonical-read failure. */
 export function createTranscriptUpdateBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   sessionEventSubscribers: SessionEventSubscribers;
@@ -87,7 +87,7 @@ export function createTranscriptUpdateBroadcastHandler(params: {
     }
   >();
   const unresolvedQueueKeys = new Set<string>();
-  return (update: InternalSessionTranscriptUpdate): Promise<void> => {
+  return (update: InternalSessionTranscriptUpdate): Promise<false | void> => {
     const projection = params.getSessionRowProjection?.();
     // Capture legacy ownership before the async queue can cross a same-id reset;
     // committed producer ownership always wins over a later session-store read.
@@ -207,7 +207,7 @@ export function createTranscriptUpdateBroadcastHandler(params: {
         if (sessionKey) {
           await joinQueue(laneKey);
         }
-        await handleTranscriptUpdateBroadcast(
+        return await handleTranscriptUpdateBroadcast(
           params,
           queuedUpdate,
           agentScope,
@@ -263,7 +263,7 @@ async function handleTranscriptUpdateBroadcast(
   projection: SessionRowProjection | undefined,
   markerCaptured: ReturnType<SessionRowProjection["capture"]>,
   joinQueue?: (key: string) => Promise<void>,
-): Promise<void> {
+): Promise<false | void> {
   const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
   const targetAgentId = normalizeOptionalString(update.target?.agentId);
   const targetSessionId = normalizeOptionalString(update.target?.sessionId);
@@ -343,7 +343,6 @@ async function handleTranscriptUpdateBroadcast(
     }
   }
   const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = agentScope;
-  const privateBroadcastScope = resolvePrivateSessionEventBroadcastScope(sessionKey, agentScope);
   const connIds = new Set(params.sessionEventSubscribers.getAll());
   const broadcastKeys = routingAgentId
     ? resolveSessionSubscriptionKeys(sessionKey, routingAgentId, compatibilityOwnerAgentId)
@@ -382,13 +381,14 @@ async function handleTranscriptUpdateBroadcast(
       { sessionKey, phase: "message", ts: Date.now() },
       connIds,
       {
-        ...privateBroadcastScope,
+        ...resolvePrivateSessionEventBroadcastScope(sessionKey, agentScope),
         dropIfSlow: true,
       },
     );
     return;
   }
   let message = update.message;
+  let publicationFailed = false;
   let messageSeq = asPositiveSafeInteger(update.messageSeq);
   let transcriptPosition: TranscriptDisplayPosition | undefined;
   if (message !== undefined && update.messageId && completeTarget && targetSessionId) {
@@ -417,25 +417,25 @@ async function handleTranscriptUpdateBroadcast(
         throw error;
       }
       message = undefined;
+      publicationFailed = true;
     }
   } else if (message !== undefined && messageSeq === undefined) {
     // Updates from raw transcript events may not carry seq; fall back to the
     // current transcript line count for cursor-compatible live history.
-    const updateStorePath = publicationStorePath;
     do {
       await projection?.prepareMembership();
     } while (projection?.needsMembershipPreparation());
     const fallbackTarget = projection?.selectEntries({
       agentId: routingAgentId,
       key: sessionKey,
-      storePath: updateStorePath,
+      storePath: publicationStorePath,
     })[0];
     const entry = fallbackTarget?.entry;
     const messageSessionId =
       compatibleLegacyMarker?.sessionId ??
       normalizeOptionalString(update.target?.sessionId) ??
       entry?.sessionId;
-    const storePath = updateStorePath ?? fallbackTarget?.storeTarget.storePath;
+    const storePath = publicationStorePath ?? fallbackTarget?.storeTarget.storePath;
     try {
       messageSeq = messageSessionId
         ? asPositiveSafeInteger(
@@ -453,6 +453,7 @@ async function handleTranscriptUpdateBroadcast(
         throw error;
       }
       message = undefined;
+      publicationFailed = true;
     }
   }
   const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
@@ -582,6 +583,7 @@ async function handleTranscriptUpdateBroadcast(
       );
     },
   );
+  return publicationFailed ? false : undefined;
 }
 
 /** Creates a lifecycle-event broadcaster for session list refreshes. */

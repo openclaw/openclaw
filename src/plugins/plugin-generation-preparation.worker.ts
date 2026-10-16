@@ -1,6 +1,6 @@
 import { receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
-import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";

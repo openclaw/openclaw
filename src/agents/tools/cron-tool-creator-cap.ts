@@ -360,8 +360,11 @@ export function planCronJobUpdatePatch(params: {
   creatorAuthorityComplete?: boolean;
   creatorHoldsRuntimeAuthority?: boolean;
 }): CronJobUpdatePatchPlan {
-  const patch = structuredClone(params.patch);
-  const payload = isRecord(patch.payload) ? patch.payload : undefined;
+  const patch = { ...params.patch };
+  const payload = isRecord(patch.payload) ? { ...patch.payload } : undefined;
+  if (payload) {
+    patch.payload = payload;
+  }
   const explicitPayloadKind = readCronPayloadKind(payload);
   const explicitToolsAllow = classifyExplicitToolsAllow(payload);
   if (payload === undefined && !Object.hasOwn(patch, "trigger")) {

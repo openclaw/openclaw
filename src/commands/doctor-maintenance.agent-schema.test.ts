@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { recordAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -144,7 +145,9 @@ it.each([
     } else {
       await expect(ready).resolves.toEqual({ schemaPublicationDeferred: false });
       using migrated = new DatabaseSync(pathname, { readOnly: true });
-      expect(migrated.prepare("PRAGMA user_version").get()).toEqual({ user_version: 27 });
+      expect(migrated.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
       expect(migrated.prepare("SELECT event_json FROM transcript_events").all()).toEqual(
         empty ? [] : [{ event_json: transcript }],
       );

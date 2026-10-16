@@ -12,7 +12,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { VoiceWakeEditorState } from "./talk-device.tsx";
 import {
   isTalkGptLiveModel,
@@ -564,11 +564,7 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
   const settings = createTalkSettings(context, props);
   const runtime = projectRuntimeConfig(context.runtimeConfig);
   const voiceWake = voiceWakeOwner(context.gateway);
-  const voiceWakeState = projectSource(voiceWake, {
-    read: (owner) => owner.state,
-    subscribe: (owner, notify) => owner.subscribe(notify),
-    equality: "revision",
-  });
+  const voiceWakeState = projectOwner(voiceWake, (owner) => owner.state);
   const device = context.nativeDeviceSettings
     ? projectNativeDeviceSettings(context.nativeDeviceSettings)
     : undefined;

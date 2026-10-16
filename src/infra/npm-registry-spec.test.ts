@@ -78,7 +78,7 @@ describe("npm prerelease resolution policy", () => {
   });
 
   it.each([
-    ["@openclaw/voice-call", "1.2.3-beta.1", `Use "@openclaw/voice-call@beta"`],
+    ["@openclaw/voice-call", "1.2.3-beta.1", `Use "npm:@openclaw/voice-call@beta"`],
     [
       "@openclaw/voice-call@beta",
       "1.2.3-rc.1",
