@@ -10,7 +10,15 @@ import { captureSandboxStateOwner } from "./state-owner.js";
 
 describe("managed browser workspace custody", () => {
   const harness = createSandboxBrowserTestHarness();
-  const { dockerMocks, registryMocks, buildConfig, ensureTestSandboxBrowser } = harness;
+  const {
+    dockerMocks,
+    registryMocks,
+    bridgeMocks,
+    buildConfig,
+    ensureTestSandboxBrowser,
+    bridgeFixture,
+    envValue,
+  } = harness;
 
   const browserParams = () => ({
     scopeKey: "session:managed",
@@ -19,8 +27,8 @@ describe("managed browser workspace custody", () => {
     cfg: buildConfig(false),
   });
 
-  it.each(["startup", "publication", "publication rejection"] as const)(
-    "cleans up a newly started bridge after %s",
+  it.each(["startup", "publication", "publication rejection", "CDP readiness"] as const)(
+    "rejects lost custody or failed publication at %s",
     async (phase) => {
       const root = harness.testWorkspaceDir;
       await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
@@ -33,10 +41,8 @@ describe("managed browser workspace custody", () => {
             role: "gateway",
           },
         });
-        const assertCurrent = await captureSandboxStateOwner();
         const entered = createDeferred();
         const resume = createDeferred();
-        const server = createServer();
         const publicationError = new Error("synthetic registry publication failure");
         const waitForRelease = async () => {
           entered.resolve();
@@ -45,36 +51,57 @@ describe("managed browser workspace custody", () => {
             throw publicationError;
           }
         };
-        harness.bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(
-          async ({ resolved }) => {
-            if (phase === "startup") {
-              await waitForRelease();
-            }
-            return { server, port: 19000, baseUrl: "http://127.0.0.1:19000", state: { resolved } };
-          },
-        );
-        if (phase !== "startup") {
-          registryMocks.updateBrowserRegistry.mockImplementationOnce(waitForRelease);
-        }
-        const preparation = ensureTestSandboxBrowser({ ...browserParams(), assertCurrent });
+        const server = createServer();
+        const assertCurrent = await captureSandboxStateOwner();
+        let preparation: Promise<unknown> | undefined;
         try {
+          if (phase === "CDP readiness") {
+            await ensureTestSandboxBrowser({ ...browserParams(), assertCurrent });
+            dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
+            vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+              await waitForRelease();
+              return new Response("{}");
+            });
+            preparation = Promise.resolve(
+              harness.requireValue(
+                bridgeMocks.startBrowserBridgeServer.mock.calls[0]?.[0].onEnsureAttachTarget,
+                "browser attach callback",
+              )({}),
+            );
+          } else {
+            bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async ({ resolved }) => {
+              if (phase === "startup") {
+                await waitForRelease();
+              }
+              return {
+                server,
+                port: 19000,
+                baseUrl: "http://127.0.0.1:19000",
+                state: { resolved },
+              };
+            });
+            if (phase !== "startup") {
+              registryMocks.updateBrowserRegistry.mockImplementationOnce(waitForRelease);
+            }
+            preparation = ensureTestSandboxBrowser({ ...browserParams(), assertCurrent });
+          }
           await awaitGateBeforeSettlement(
             entered.promise,
             preparation,
-            "Bridge lifecycle barrier not reached",
+            "Browser lifecycle barrier not reached",
           );
           if (phase !== "publication rejection") {
             owner.release();
           }
           resume.resolve();
           const error = await preparation.catch((failure: unknown) => failure);
-          expect(harness.bridgeMocks.stopBrowserBridgeServer).toHaveBeenCalledExactlyOnceWith(
-            server,
-          );
-          expect(harness.BROWSER_BRIDGES.size).toBe(0);
-          expect(registryMocks.updateBrowserRegistry).toHaveBeenCalledTimes(
-            phase === "startup" ? 0 : 1,
-          );
+          if (phase !== "CDP readiness") {
+            expect(bridgeMocks.stopBrowserBridgeServer).toHaveBeenCalledExactlyOnceWith(server);
+            expect(harness.BROWSER_BRIDGES.size).toBe(0);
+            expect(registryMocks.updateBrowserRegistry).toHaveBeenCalledTimes(
+              phase === "startup" ? 0 : 1,
+            );
+          }
           if (phase === "publication rejection") {
             expect(error).toBe(publicationError);
           } else {
@@ -82,7 +109,7 @@ describe("managed browser workspace custody", () => {
           }
         } finally {
           resume.resolve();
-          await preparation.catch(() => {});
+          await preparation?.catch(() => {});
           owner.release();
         }
       });
@@ -118,8 +145,7 @@ describe("managed browser workspace custody", () => {
       const starts = dockerMocks.execDocker.mock.calls.filter(
         ([args]) => args[0] === "start",
       ).length;
-      const callback =
-        harness.bridgeMocks.startBrowserBridgeServer.mock.calls[0]?.[0].onEnsureAttachTarget;
+      const callback = bridgeMocks.startBrowserBridgeServer.mock.calls[0]?.[0].onEnsureAttachTarget;
       expect(callback).toBeTypeOf("function");
       dockerMocks.dockerContainerState.mockImplementation(async () => {
         expect(owned).toBe(true);
@@ -140,58 +166,12 @@ describe("managed browser workspace custody", () => {
     },
   );
 
-  it("rejects hosted custody lost while waiting for CDP readiness", async () => {
-    const root = harness.testWorkspaceDir;
-    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      const owner = acquireGatewayStateOwner({
-        databasePath: resolveOpenClawStateSqlitePath(),
-        payload: {
-          pid: process.pid,
-          createdAt: new Date().toISOString(),
-          configPath: path.join(root, "openclaw.json"),
-          role: "gateway",
-        },
-      });
-      const assertCurrent = await captureSandboxStateOwner();
-      const entered = createDeferred();
-      const resume = createDeferred();
-      try {
-        await ensureTestSandboxBrowser({ ...browserParams(), assertCurrent });
-        const callback = harness.requireValue(
-          harness.bridgeMocks.startBrowserBridgeServer.mock.calls[0]?.[0].onEnsureAttachTarget,
-          "browser attach callback",
-        );
-        dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
-        vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
-          entered.resolve();
-          await resume.promise;
-          return new Response("{}");
-        });
-        const attaching = callback({});
-        try {
-          await awaitGateBeforeSettlement(entered.promise, attaching, "CDP readiness not reached");
-          owner.release();
-          resume.resolve();
-          await expect(attaching).rejects.toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
-        } finally {
-          resume.resolve();
-          await attaching.catch(() => {});
-        }
-      } finally {
-        owner.release();
-      }
-    });
-  });
-
   it.each([true, false])(
     "replaces guarded browser restart callbacks (managed workspace=%s)",
     async (managed) => {
-      harness.bridgeMocks.startBrowserBridgeServer.mockImplementation(async (params) => ({
-        server: { listening: true },
-        port: 19000,
-        baseUrl: "http://127.0.0.1:19000",
-        state: { server: null, port: 19000, resolved: params.resolved, profiles: new Map() },
-      }));
+      bridgeMocks.startBrowserBridgeServer.mockImplementation(async ({ resolved }) =>
+        bridgeFixture(resolved),
+      );
       const input = browserParams();
       let firstCurrent = true;
       const assertCurrent = () => {
@@ -210,10 +190,7 @@ describe("managed browser workspace custody", () => {
             }
           : { assertCurrent }),
       });
-      const token = harness
-        .requireDockerCreateEnvEntries()
-        .find((entry) => entry.startsWith("OPENCLAW_BROWSER_CDP_AUTH_TOKEN="))!
-        .split("=")[1]!;
+      const token = envValue("OPENCLAW_BROWSER_CDP_AUTH_TOKEN");
       const recorded = registryMocks.updateBrowserRegistry.mock.calls.at(-1)?.[0];
       dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
       dockerMocks.readDockerContainerEnvVar.mockResolvedValue(token);
@@ -226,12 +203,10 @@ describe("managed browser workspace custody", () => {
           ? { withWorkspace: async <T>(run: () => Promise<T>) => await run() }
           : { assertCurrent: () => {} }),
       });
-      expect(harness.bridgeMocks.stopBrowserBridgeServer).toHaveBeenCalledOnce();
-      expect(harness.bridgeMocks.startBrowserBridgeServer).toHaveBeenCalledTimes(2);
+      expect(bridgeMocks.stopBrowserBridgeServer).toHaveBeenCalledOnce();
+      expect(bridgeMocks.startBrowserBridgeServer).toHaveBeenCalledTimes(2);
       vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
-      await harness.bridgeMocks.startBrowserBridgeServer.mock.calls[1]?.[0].onEnsureAttachTarget(
-        {},
-      );
+      await bridgeMocks.startBrowserBridgeServer.mock.calls[1]?.[0].onEnsureAttachTarget({});
     },
   );
 

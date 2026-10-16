@@ -12,6 +12,7 @@ import { DOCKER_SANDBOX_ENGINE, ensureSandboxContainer } from "./docker.js";
 import type { SandboxRegistryEntry } from "./registry.types.js";
 
 type Container = { id: string; name: string; hash: string; running: boolean };
+type Inspection = { code: number; stdout: string; stderr: string };
 const fixture = vi.hoisted(() => ({
   containers: new Map<string, Container>(),
   registry: new Map<string, SandboxRegistryEntry>(),
@@ -23,30 +24,31 @@ const fixture = vi.hoisted(() => ({
   setup: undefined as undefined | ((signal: AbortSignal | undefined) => Promise<void>),
   inspectState: undefined as
     | undefined
-    | ((
-        container: Container,
-        format: string,
-      ) => Promise<{ code: number; stdout: string; stderr: string }>),
-  logError: vi.fn(),
+    | ((container: Container, format: string) => Promise<Inspection>),
+  inspect: (container: Container, paused = false, pid = 123) =>
+    JSON.stringify({
+      Running: container.running,
+      Paused: paused,
+      Pid: container.running || paused ? pid : 0,
+    }),
+  save: (entry: SandboxRegistryEntry): void => {
+    fixture.registry.set(entry.containerName, {
+      ...fixture.registry.get(entry.containerName),
+      ...structuredClone(entry),
+    });
+  },
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: fixture.logError }),
+  createSubsystemLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock("./registry.js", () => ({
   readRegistryEntry: vi.fn(async (name: string) => fixture.registry.get(name) ?? null),
   updateRegistry: vi.fn(async (entry: SandboxRegistryEntry) => {
-    fixture.registry.set(entry.containerName, {
-      ...fixture.registry.get(entry.containerName),
-      ...structuredClone(entry),
-    });
+    fixture.save(entry);
   }),
   completeSandboxRegistryReservation: vi.fn(async (entry: SandboxRegistryEntry) => {
-    fixture.registry.set(entry.containerName, {
-      ...fixture.registry.get(entry.containerName),
-      ...structuredClone(entry),
-      runtimeState: "ready",
-    });
+    fixture.save({ ...entry, runtimeState: "ready" });
   }),
   removeRegistryEntry: vi.fn(
     async (name: string, options?: { preserveRemovalIntent?: boolean }) => {
@@ -112,13 +114,7 @@ vi.mock("./container-engine.js", () => ({
         if (fixture.terminalState === "unreachable") {
           return { code: 125, stdout: "", stderr: "engine connection refused" };
         }
-        return ok(
-          JSON.stringify({
-            Running: container.running,
-            Paused: fixture.terminalState === "paused",
-            Pid: container.running || fixture.terminalState === "paused" ? 123 : 0,
-          }),
-        );
+        return ok(fixture.inspect(container, fixture.terminalState === "paused"));
       }
       return ok(container.hash);
     }
@@ -138,16 +134,16 @@ vi.mock("./container-engine.js", () => ({
   }),
 }));
 
-function source(params?: {
-  source?: object;
+type SourceOptions = {
   profileId?: string;
   grantId?: string;
   grantSignal?: AbortSignal;
   retain?: boolean;
   signal?: boolean;
-}) {
+};
+function source(params: SourceOptions = {}) {
   const controller = new AbortController();
-  const signal = params?.grantSignal
+  const signal = params.grantSignal
     ? AbortSignal.any([controller.signal, params.grantSignal])
     : controller.signal;
   let references = 1;
@@ -158,48 +154,73 @@ function source(params?: {
       throw new Error("source released");
     }
   };
+  const retain = () => {
+    assertCurrent();
+    references++;
+    return release;
+  };
   const authority = createAdmittedRunOperatorAuthority({
-    profileId: params?.profileId ?? "guest",
+    profileId: params.profileId ?? "guest",
     scopes: ["operator.write"],
-    gatewayAccessGrant: { pluginId: "fixture-access", grantId: params?.grantId ?? "original" },
-    source: params?.source ?? {},
-    signal: params?.signal === false ? undefined : signal,
+    gatewayAccessGrant: { pluginId: "fixture-access", grantId: params.grantId ?? "original" },
+    source: {},
+    signal: params.signal === false ? undefined : signal,
     assertCurrent,
-    retain:
-      params?.retain === false
-        ? undefined
-        : () => {
-            assertCurrent();
-            references++;
-            return release;
-          },
+    retain: params.retain === false ? undefined : retain,
   });
   return { authority, controller, release, closeForeground: () => references-- };
 }
 
-function provision(owner: ReturnType<typeof source> | undefined, scopeKey = "guest") {
+const sandboxConfig = resolveSandboxConfigForAgent({
+  agents: {
+    defaults: { sandbox: { mode: "all", scope: "session", docker: { setupCommand: "setup" } } },
+  },
+});
+function provision(owner?: ReturnType<typeof source>, scopeKey = "guest") {
   return {
     engine: DOCKER_SANDBOX_ENGINE,
     operatorAuthority: owner?.authority,
     scopeKey,
     workspaceDir: "/workspace",
     agentWorkspaceDir: "/workspace",
-    cfg: resolveSandboxConfigForAgent({
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            scope: "session",
-            docker: { setupCommand: "setup" },
-          },
-        },
-      },
-    }),
+    cfg: structuredClone(sandboxConfig),
   };
+}
+async function start(owner = source()) {
+  const params = provision(owner);
+  const { containerName: name, containerId: id } = await ensureSandboxContainer(params);
+  return { owner, params, name, id };
 }
 
 const calls = (name: string) => fixture.calls.filter(([operation]) => operation === name);
+const ensure = (owner = source(), scopeKey?: string) =>
+  ensureSandboxContainer(provision(owner, scopeKey));
 const drain = (name: string) => withSandboxContainerLifecycle(name, undefined, async () => {});
+async function revoke(owner: ReturnType<typeof source>, name: string) {
+  owner.controller.abort();
+  await drain(name);
+}
+function barrier() {
+  const entered = createDeferred();
+  const finish = createDeferred();
+  return {
+    entered: entered.promise,
+    ...finish,
+    wait: () => {
+      entered.resolve();
+      return finish.promise;
+    },
+  };
+}
+function expectCounts(counts: Record<string, number>) {
+  expect(Object.fromEntries(Object.keys(counts).map((op) => [op, calls(op).length]))).toEqual(
+    counts,
+  );
+}
+function allocated() {
+  expect(fixture.containers.size).toBe(1);
+  return [...fixture.containers.values()][0]!;
+}
 function expectProtected(name: string, priorKills = 0) {
   expect(fixture.containers.get(name)?.running).toBe(true);
   expect(calls("kill")).toHaveLength(priorKills);
@@ -211,20 +232,14 @@ async function restartAndRevoke(name: string, params?: ReturnType<typeof provisi
     ...(params ?? provision(later)),
     operatorAuthority: later.authority,
   });
-  later.controller.abort();
-  await drain(name);
+  await revoke(later, name);
 }
 
 beforeEach(() => {
   fixture.calls.length = 0;
   fixture.registry.clear();
   fixture.imageFails = false;
-  fixture.terminalState = "stopped";
-  fixture.setup = undefined;
-  fixture.inspectState = undefined;
   vi.mocked(execContainerRaw).mockReset();
-  fixture.removalFails = false;
-  fixture.logError.mockClear();
 });
 
 afterEach(async () => {
@@ -238,14 +253,9 @@ afterEach(async () => {
 });
 
 it("retains original access after foreground close and stops only its private generation", async () => {
-  const owner = source();
+  const { owner, params, name, id } = await start();
   const independent = source({ grantId: "independent" });
-  const params = provision(owner);
-  const { containerName: name } = await ensureSandboxContainer(params);
-  const { containerName: otherName } = await ensureSandboxContainer(
-    provision(independent, "independent"),
-  );
-  const id = fixture.containers.get(name)!.id;
+  const { containerName: otherName } = await ensure(independent, "independent");
   owner.closeForeground();
   await ensureSandboxContainer(params);
   expect(calls("create")).toHaveLength(2);
@@ -253,7 +263,7 @@ it("retains original access after foreground close and stops only its private ge
 
   owner.controller.abort(new Error("original access revoked"));
   const replacement = source();
-  await ensureSandboxContainer(provision(replacement));
+  await ensure(replacement);
   expect(calls("kill")).toEqual([["kill", id]]);
   expect(calls("wait")).toEqual([["wait", id]]);
   expect(calls("rm")).toEqual([]);
@@ -263,64 +273,53 @@ it("retains original access after foreground close and stops only its private ge
   expect(owner.release).toHaveBeenCalledTimes(2);
   replacement.closeForeground();
   expect(() => replacement.authority.assertCurrent()).not.toThrow();
-  replacement.controller.abort();
-  await drain(name);
+  await revoke(replacement, name);
   expect(fixture.containers.get(name)?.running).toBe(false);
-  expect(calls("kill")).toEqual([
-    ["kill", id],
-    ["kill", id],
-  ]);
+  expect(calls("kill")).toEqual(Array.from({ length: 2 }, () => ["kill", id]));
 });
 
 it("preserves a valid same-grant source after device loss, then stops on full grant revocation", async () => {
   const grant = new AbortController();
   const first = source({ grantSignal: grant.signal });
   const second = source({ grantSignal: grant.signal });
-  const { containerName, containerId } = await ensureSandboxContainer(provision(first));
-  await ensureSandboxContainer(provision(second));
+  const { containerName, containerId } = await ensure(first);
+  await ensure(second);
   first.closeForeground();
   second.closeForeground();
 
   first.controller.abort(new Error("first device revoked"));
-  await ensureSandboxContainer(provision(second));
-  expect(fixture.containers.get(containerName)?.running).toBe(true);
-  expect(calls("kill")).toEqual([]);
+  await ensure(second);
+  expectProtected(containerName);
   expect(first.release).toHaveBeenCalledOnce();
 
   grant.abort(new Error("original invitation revoked"));
-  await ensureSandboxContainer(provision(source({ grantId: "replacement" })));
+  await ensure(source({ grantId: "replacement" }));
   expect(calls("kill")).toEqual([["kill", containerId]]);
   expect(calls("rm")).toEqual([]);
-  await expect(ensureSandboxContainer(provision(second))).rejects.toThrow(
-    "original invitation revoked",
-  );
+  await expect(ensure(second)).rejects.toThrow("original invitation revoked");
 });
 
 it("does not let a revoked queued caller discard another grant's private custody", async () => {
   const first = source();
-  const started = createDeferred();
-  const setup = createDeferred();
-  fixture.setup = () => {
-    started.resolve();
-    return setup.promise;
-  };
-  const creating = ensureSandboxContainer(provision(first));
-  await started.promise;
+  const setup = barrier();
+  fixture.setup = setup.wait;
+  const creating = ensure(first);
+  await setup.entered;
   const other = source({ grantId: "other" });
-  const queued = ensureSandboxContainer(provision(other));
+  const queued = ensure(other);
   const rejected = expect(queued).rejects.toThrow("queued access revoked");
   other.controller.abort(new Error("queued access revoked"));
   setup.resolve();
   const { containerId } = await creating;
   await rejected;
   first.controller.abort();
-  await ensureSandboxContainer(provision(source({ grantId: "replacement" })));
+  await ensure(source({ grantId: "replacement" }));
   expect(calls("kill")).toEqual([["kill", containerId]]);
 });
 
 it("retains a same-grant new source through cold replacement of the old generation", async () => {
   const first = source();
-  const { containerName, containerId: oldId } = await ensureSandboxContainer(provision(first));
+  const { containerName, containerId: oldId } = await ensure(first);
   fixture.containers.get(containerName)!.running = false;
   const second = source();
   const params = provision(second);
@@ -340,15 +339,11 @@ it("retains a same-grant new source through cold replacement of the old generati
 it.each(["staff", "different-grant", "unclassified"] as const)(
   "permanently protects a generation reused by %s",
   async (kind) => {
-    const owner = source();
-    const params = provision(owner);
-    const { containerName: name } = await ensureSandboxContainer(params);
+    const { owner, name } = await start();
     const other =
       kind === "unclassified"
         ? undefined
-        : source({
-            grantId: kind === "different-grant" ? "other" : "original",
-          });
+        : source({ grantId: kind === "different-grant" ? "other" : "original" });
     const otherParams = provision(other);
     if (kind === "staff" && other) {
       otherParams.operatorAuthority = createAdmittedRunOperatorAuthority({
@@ -359,8 +354,7 @@ it.each(["staff", "different-grant", "unclassified"] as const)(
     await ensureSandboxContainer(otherParams);
     owner.controller.abort();
     await ensureSandboxContainer(otherParams);
-    expect(fixture.containers.get(name)?.running).toBe(true);
-    expect(calls("kill")).toEqual([]);
+    expectProtected(name);
     expect(owner.release).toHaveBeenCalledOnce();
     await restartAndRevoke(name);
     expectProtected(name);
@@ -381,8 +375,7 @@ it.each(["preexisting", "shared", "no-signal", "no-retain"] as const)(
     const { containerName: name } = await ensureSandboxContainer(params);
     owner.controller.abort();
     await ensureSandboxContainer({ ...params, operatorAuthority: undefined });
-    expect(fixture.containers.get(name)?.running).toBe(true);
-    expect(calls("kill")).toEqual([]);
+    expectProtected(name);
     await restartAndRevoke(name, params);
     expectProtected(name);
   },
@@ -394,32 +387,25 @@ it.each([
 ])(
   "preserves mixed history after $timing reuse changes the $changed",
   async ({ timing, changed }) => {
-    const first = source();
-    const { containerName, containerId } = await ensureSandboxContainer(provision(first));
+    const { owner: first, name: containerName, id: containerId } = await start();
     const other = source({
       grantId: changed === "grant" ? "other" : "original",
       profileId: changed === "profile" ? "other" : "guest",
     });
     if (timing === "queued") {
-      const entered = createDeferred();
-      const release = createDeferred();
-      const blocked = withSandboxContainerLifecycle(containerName, undefined, async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      await entered.promise;
-      const queued = ensureSandboxContainer(provision(other));
+      const release = barrier();
+      const blocked = withSandboxContainerLifecycle(containerName, undefined, release.wait);
+      await release.entered;
+      const queued = ensure(other);
       first.controller.abort();
       release.resolve();
       await blocked;
       await queued;
     } else {
-      first.controller.abort();
-      await drain(containerName);
-      await ensureSandboxContainer(provision(other));
+      await revoke(first, containerName);
+      await ensure(other);
     }
-    other.controller.abort();
-    await drain(containerName);
+    await revoke(other, containerName);
     expect(fixture.containers.get(containerName)).toMatchObject({ id: containerId, running: true });
     expect(calls("kill")).toEqual([["kill", containerId]]);
 
@@ -439,24 +425,17 @@ it("retains interrupted setup and rejects queued or later reuse before restart",
       });
     });
   };
-  const creating = ensureSandboxContainer(provision(owner));
+  const creating = ensure(owner);
   const rejected = expect(creating).rejects.toThrow("setup access revoked");
   await started.promise;
-  const replacement = source();
-  const queued = ensureSandboxContainer(provision(replacement));
+  const queued = ensure();
   void queued.catch(() => {});
   owner.controller.abort(new Error("setup access revoked"));
   await rejected;
   await expect(queued).rejects.toThrow("setup did not complete");
-  const [container] = fixture.containers.values();
-  if (!container) {
-    throw new Error("Expected the retained partial container");
-  }
+  const container = allocated();
   await drain(container.name);
-  expect(calls("kill")).toHaveLength(1);
-  expect(calls("rm")).toEqual([]);
-  expect(calls("start")).toHaveLength(1);
-  expect(calls("exec")).toHaveLength(1);
+  expectCounts({ kill: 1, rm: 0, start: 1, exec: 1 });
   expect(container.running).toBe(false);
   expect(fixture.registry.get(container.name)?.runtimeState).toBe("pending");
 
@@ -473,7 +452,7 @@ it("retains interrupted setup and rejects queued or later reuse before restart",
 
 it("recovers a pending unallocated attempt when setup is removed", async () => {
   fixture.imageFails = true;
-  await expect(ensureSandboxContainer(provision(source()))).rejects.toThrow("image unavailable");
+  await expect(ensure()).rejects.toThrow("image unavailable");
   expect(fixture.containers.size).toBe(0);
   fixture.imageFails = false;
   const params = provision(source());
@@ -481,30 +460,20 @@ it("recovers a pending unallocated attempt when setup is removed", async () => {
   const created = await ensureSandboxContainer(params);
   await expect(ensureSandboxContainer(params)).resolves.toEqual(created);
   expect(fixture.registry.get(created.containerName)?.runtimeState).toBe("ready");
-  expect(calls("create")).toHaveLength(1);
-  expect(calls("exec")).toEqual([]);
+  expectCounts({ create: 1, exec: 0 });
 });
 
 it("preserves management removal intent across failed setup and queued reuse", async () => {
-  const entered = createDeferred();
-  const setup = createDeferred();
-  fixture.setup = () => {
-    entered.resolve();
-    return setup.promise;
-  };
-  const creating = ensureSandboxContainer(provision(source()));
+  const setup = barrier();
+  fixture.setup = setup.wait;
+  const creating = ensure();
   const failed = expect(creating).rejects.toThrow("setup failed");
-  await entered.promise;
+  await setup.entered;
   fixture.setup = undefined;
-  const [container] = fixture.containers.values();
-  if (!container) {
-    throw new Error("Expected the allocated setup container");
-  }
-  const entry = fixture.registry.get(container.name);
-  if (!entry) {
-    throw new Error("Expected pending setup custody");
-  }
-  const queued = ensureSandboxContainer(provision(source()));
+  const container = allocated();
+  const entry = fixture.registry.get(container.name)!;
+  expect(entry).toBeDefined();
+  const queued = ensure();
   void queued.catch(() => {});
   // Management publishes its removal fence before it waits for this owner queue.
   fixture.registry.set(container.name, { ...entry, runtimeState: "removing-pending" });
@@ -513,24 +482,19 @@ it("preserves management removal intent across failed setup and queued reuse", a
   await failed;
   await removing;
   await expect(queued).rejects.toThrow("is being removed");
-  expect(calls("create")).toHaveLength(1);
-  expect(calls("start")).toHaveLength(1);
+  expectCounts({ create: 1, start: 1 });
   expect(fixture.registry.get(container.name)?.runtimeState).toBe("removing-pending");
 });
 
 it("discards stopped custody when the generation was restarted outside its owner", async () => {
-  const first = source();
-  const { containerName } = await ensureSandboxContainer(provision(first));
-  first.controller.abort();
-  await drain(containerName);
+  const { owner: first, name: containerName } = await start();
+  await revoke(first, containerName);
   expect(fixture.containers.get(containerName)?.running).toBe(false);
   fixture.containers.get(containerName)!.running = true;
   const next = source();
-  await ensureSandboxContainer(provision(next));
-  next.controller.abort();
-  await drain(containerName);
-  expect(calls("kill")).toHaveLength(1);
-  expect(fixture.containers.get(containerName)?.running).toBe(true);
+  await ensure(next);
+  await revoke(next, containerName);
+  expectProtected(containerName, 1);
 });
 
 it("settles old targeted cleanup from its own termination receipt after same-ID restart", async () => {
@@ -541,24 +505,15 @@ it("settles old targeted cleanup from its own termination receipt after same-ID 
   };
   const backend = await createBackend(first);
   const cleanup = backend.prepareProcessCleanup!({});
-  const inspected = createDeferred();
-  const delayed = createDeferred();
+  const inspection = barrier();
   let inspections = 0;
   fixture.inspectState = async (container, format) => {
     if (++inspections === 1) {
-      inspected.resolve();
-      await delayed.promise;
+      await inspection.wait();
     }
     return {
       code: 0,
-      stdout:
-        format === "{{.Id}}"
-          ? container.id
-          : JSON.stringify({
-              Running: container.running,
-              Paused: false,
-              Pid: container.running ? 234 : 0,
-            }),
+      stdout: format === "{{.Id}}" ? container.id : fixture.inspect(container, false, 234),
       stderr: "",
     };
   };
@@ -570,17 +525,16 @@ it("settles old targeted cleanup from its own termination receipt after same-ID 
   const pending = cleanup.terminate();
   void pending.catch(() => {});
   try {
-    await inspected.promise;
-    first.controller.abort();
-    await drain(backend.runtimeId);
+    await inspection.entered;
+    await revoke(first, backend.runtimeId);
     const restarted = await createBackend(source());
     expect(restarted.runtimeId).toBe(backend.runtimeId);
     expect(fixture.containers.get(restarted.runtimeId)?.running).toBe(true);
-    delayed.resolve();
+    inspection.resolve();
     await expect(pending).resolves.toBeUndefined();
     await expect(restarted.prepareProcessCleanup!({}).terminate()).rejects.toThrow("exec failed");
   } finally {
-    delayed.resolve();
+    inspection.resolve();
     await pending.catch(() => {});
   }
 });
@@ -588,28 +542,24 @@ it("settles old targeted cleanup from its own termination receipt after same-ID 
 it.each(["paused", "unreachable"] as const)(
   "retains a failed stop and refuses reuse when terminal inspection is %s",
   async (terminalState) => {
-    const owner = source();
-    await ensureSandboxContainer(provision(owner));
+    const { owner } = await start();
     fixture.terminalState = terminalState;
     owner.controller.abort();
-    await expect(ensureSandboxContainer(provision(source()))).rejects.toThrow("Could not verify");
+    await expect(ensure()).rejects.toThrow("Could not verify");
     expect(owner.release).toHaveBeenCalledOnce();
     expect(calls("start")).toHaveLength(1);
   },
 );
 
 it("releases custody on removal so an old callback cannot stop a replacement generation", async () => {
-  const owner = source();
-  const { containerName: name } = await ensureSandboxContainer(provision(owner));
-  const id = fixture.containers.get(name)!.id;
+  const { owner, name, id } = await start();
   await removeSandboxContainerRuntime(DOCKER_SANDBOX_ENGINE, name);
   const replacement = source();
-  await ensureSandboxContainer(provision(replacement));
+  await ensure(replacement);
   owner.controller.abort();
-  await ensureSandboxContainer(provision(replacement));
+  await ensure(replacement);
   expect(fixture.containers.get(name)?.id).not.toBe(id);
-  expect(fixture.containers.get(name)?.running).toBe(true);
-  expect(calls("kill")).toEqual([]);
+  expectProtected(name);
   expect(owner.release).toHaveBeenCalledOnce();
 });
 
@@ -638,15 +588,8 @@ it.each(["partial-creation", "replacement", "manager"] as const)(
         ).rejects.toThrow("permission denied");
       } else {
         fixture.containers.get(containerName)!.running = false;
-        await expect(
-          ensureSandboxContainer({
-            ...params,
-            cfg: {
-              ...params.cfg,
-              docker: { ...params.cfg.docker, image: "different:image" },
-            },
-          }),
-        ).rejects.toThrow("Sandbox replacement failed");
+        params.cfg.docker.image = "different:image";
+        await expect(ensureSandboxContainer(params)).rejects.toThrow("Sandbox replacement failed");
       }
     }
     const retainedKills = [...fixture.containers.values()].map(({ id }) => ["kill", id]);

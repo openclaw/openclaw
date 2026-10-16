@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
-import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
+import { resolveSandboxBrowserDockerCreateConfig, resolveSandboxConfigForAgent } from "./config.js";
 import {
   SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH,
   SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
@@ -71,25 +71,11 @@ async function createEngineMock() {
 
 vi.mock("./container-engine.js", createEngineMock);
 
-function createRegistryMock() {
-  return registryMocks;
-}
+vi.mock("./registry.js", () => registryMocks);
 
-vi.mock("./registry.js", createRegistryMock);
+vi.mock("../../plugin-sdk/browser-bridge.js", () => bridgeMocks);
 
-function createBridgeMock() {
-  return bridgeMocks;
-}
-
-vi.mock("../../plugin-sdk/browser-bridge.js", createBridgeMock);
-
-function createRuntimeMock() {
-  return {
-    defaultRuntime: runtimeMocks,
-  };
-}
-
-vi.mock("../../runtime.js", createRuntimeMock);
+vi.mock("../../runtime.js", () => ({ defaultRuntime: runtimeMocks }));
 
 async function createProfilesMock() {
   const actual = await vi.importActual<typeof import("../../plugin-sdk/browser-profiles.js")>(
@@ -98,26 +84,19 @@ async function createProfilesMock() {
   return {
     ...actual,
     resolveProfile: (
-      resolved: { cdpHost: string; cdpIsLoopback: boolean; profiles?: Record<string, unknown> },
+      resolved: {
+        cdpHost: string;
+        profiles?: Record<string, { cdpPort?: number; cdpUrl?: string }>;
+      },
       profileName: string,
     ) => {
-      const profile = resolved.profiles?.[profileName] as {
-        cdpPort?: number;
-        cdpUrl?: string;
-        color?: string;
-      };
+      const profile = resolved.profiles?.[profileName];
       if (typeof profile?.cdpPort !== "number") {
         return null;
       }
       return {
-        name: profileName,
         cdpPort: profile.cdpPort,
         cdpUrl: profile.cdpUrl ?? `http://${resolved.cdpHost}:${profile.cdpPort}`,
-        cdpHost: resolved.cdpHost,
-        cdpIsLoopback: resolved.cdpIsLoopback,
-        color: profile.color ?? actual.DEFAULT_OPENCLAW_BROWSER_COLOR,
-        driver: "openclaw",
-        attachOnly: true,
       };
     },
   };
@@ -139,9 +118,9 @@ export function createSandboxBrowserTestHarness() {
     vi.doMock("./docker.js", createDockerMock);
     vi.doMock("./docker-mount-source.js", createNamespaceMock);
     vi.doMock("./container-engine.js", createEngineMock);
-    vi.doMock("./registry.js", createRegistryMock);
-    vi.doMock("../../plugin-sdk/browser-bridge.js", createBridgeMock);
-    vi.doMock("../../runtime.js", createRuntimeMock);
+    vi.doMock("./registry.js", () => registryMocks);
+    vi.doMock("../../plugin-sdk/browser-bridge.js", () => bridgeMocks);
+    vi.doMock("../../runtime.js", () => ({ defaultRuntime: runtimeMocks }));
     vi.doMock("../../plugin-sdk/browser-profiles.js", createProfilesMock);
     ({ prepareSandboxMountPlan } = await import("./mount-plan.js"));
     ({ BROWSER_BRIDGES } = await import("./browser-bridges.js"));
@@ -149,70 +128,27 @@ export function createSandboxBrowserTestHarness() {
   }
 
   function buildConfig(noVncEnabled: boolean): SandboxConfig {
+    const defaults = resolveSandboxConfigForAgent();
     return {
-      mode: "all",
-      backend: "docker",
+      ...defaults,
       scope: "session",
-      workspaceAccess: "none",
-      workspaceRoot: "/tmp/openclaw-sandboxes",
-      dockerTmpfsSource: "default",
-      docker: {
-        image: "openclaw-sandbox:bookworm-slim",
-        containerPrefix: "openclaw-sbx-",
-        workdir: "/workspace",
-        readOnlyRoot: true,
-        tmpfs: ["/tmp", "/var/tmp", "/run"],
-        network: "none",
-        capDrop: ["ALL"],
-        env: { LANG: "C.UTF-8" },
-      },
-      ssh: {
-        command: "ssh",
-        workspaceRoot: "/tmp/openclaw-sandboxes",
-        strictHostKeyChecking: true,
-        updateHostKeys: true,
-      },
-      browser: {
-        enabled: true,
-        image: "openclaw-sandbox-browser:bookworm-slim",
-        containerPrefix: "openclaw-sbx-browser-",
-        network: "openclaw-sandbox-browser",
-        cdpPort: 9222,
-        vncPort: 5900,
-        noVncPort: 6080,
-        headless: false,
-        noVncEnabled,
-        allowHostControl: false,
-        autoStart: true,
-        autoStartTimeoutMs: 12_000,
-      },
-      tools: {
-        allow: ["browser"],
-        deny: [],
-      },
-      prune: {
-        idleHours: 24,
-        maxAgeDays: 7,
-      },
+      browser: { ...defaults.browser, enabled: true, noVncEnabled },
+      tools: { allow: ["browser"], deny: [] },
     };
   }
 
   async function computeTestBrowserHash(params: {
     cfg: SandboxConfig;
     createArgsEpoch: string;
-    workspaceDir?: string;
-    agentWorkspaceDir?: string;
-    dockerEnvPolicyEpoch?: string;
   }): Promise<string> {
-    const workspaceDir = params.workspaceDir ?? testWorkspaceDir;
-    const agentWorkspaceDir = params.agentWorkspaceDir ?? workspaceDir;
+    const workspaceDir = testWorkspaceDir;
+    const agentWorkspaceDir = workspaceDir;
     const browserDockerCfg = resolveSandboxBrowserDockerCreateConfig({
       docker: params.cfg.docker,
       browser: params.cfg.browser,
     });
     return computeSandboxBrowserConfigHash({
       docker: browserDockerCfg,
-      dockerEnvPolicyEpoch: params.dockerEnvPolicyEpoch,
       browser: {
         cdpPort: params.cfg.browser.cdpPort,
         cdpSourceRange: params.cfg.browser.cdpSourceRange,
@@ -283,16 +219,27 @@ export function createSandboxBrowserTestHarness() {
     return value;
   }
 
+  function envValue(key: string, entries = requireDockerCreateEnvEntries()) {
+    return requireValue(
+      entries.find((entry) => entry.startsWith(`${key}=`)),
+      key,
+    ).slice(key.length + 1);
+  }
+
+  function bridgeFixture(resolved: unknown = { profiles: {} }) {
+    return {
+      server: { listening: true },
+      port: 19000,
+      baseUrl: "http://127.0.0.1:19000",
+      state: { server: null, port: 19000, resolved, profiles: new Map() },
+    };
+  }
+
   function latestBridgeResolved(): Record<string, unknown> {
-    const params = bridgeMocks.startBrowserBridgeServer.mock.calls.at(-1)?.[0];
-    if (!params || typeof params !== "object") {
-      throw new Error("expected browser bridge start params");
-    }
-    const resolved = params.resolved;
-    if (!resolved || typeof resolved !== "object") {
-      throw new Error("expected resolved browser bridge config");
-    }
-    return resolved;
+    return requireValue(
+      bridgeMocks.startBrowserBridgeServer.mock.calls.at(-1)?.[0].resolved,
+      "resolved browser config",
+    );
   }
 
   beforeAll(loadFreshBrowserModulesForTest);
@@ -343,23 +290,12 @@ export function createSandboxBrowserTestHarness() {
     });
     registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [] });
     registryMocks.updateBrowserRegistry.mockResolvedValue(undefined);
-    bridgeMocks.startBrowserBridgeServer.mockResolvedValue({
-      server: { listening: true } as never,
-      port: 19000,
-      baseUrl: "http://127.0.0.1:19000",
-      state: {
-        server: null,
-        port: 19000,
-        resolved: { profiles: {} },
-        profiles: new Map(),
-      },
-    });
+    bridgeMocks.startBrowserBridgeServer.mockResolvedValue(bridgeFixture());
     bridgeMocks.stopBrowserBridgeServer.mockResolvedValue(undefined);
   });
 
   return {
     execContainer: namespaceMocks.execContainer,
-    resolveDockerSourceNamespace: namespaceMocks.resolveDockerSourceNamespace,
     dockerMocks,
     registryMocks,
     bridgeMocks,
@@ -373,6 +309,8 @@ export function createSandboxBrowserTestHarness() {
     requireDockerCreateEnvEntries,
     requireValue,
     latestBridgeResolved,
+    envValue,
+    bridgeFixture,
     get BROWSER_BRIDGES() {
       return BROWSER_BRIDGES;
     },

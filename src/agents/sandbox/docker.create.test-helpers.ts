@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
+import { resolveSandboxConfigForAgent } from "./config.js";
 import { DOCKER_SANDBOX_ENGINE } from "./container-engine.js";
 import type { SandboxConfig } from "./types.js";
 
@@ -18,19 +19,22 @@ const namespaceMocks = vi.hoisted(() => ({
     .mockResolvedValue(undefined),
 }));
 
-const spawnState = vi.hoisted(() => ({
-  calls: [] as SpawnCall[],
-  containerExists: true,
-  inspectRunning: true,
-  inspectError: "",
-  createError: "",
-  labelHash: "",
-  mounts: "[]",
-  tmpfs: null as Record<string, string> | null,
-  podmanInfo: "true\tfalse\t\t5.0.0\n",
-  podmanConnections: "[]\n",
-  podmanMachines: "[]\n",
-}));
+const { spawnState, freshSpawnState } = vi.hoisted(() => {
+  const fresh = () => ({
+    calls: [] as SpawnCall[],
+    containerExists: true,
+    inspectRunning: true,
+    inspectError: "",
+    createError: "",
+    labelHash: "",
+    mounts: "[]",
+    tmpfs: null as Record<string, string> | null,
+    podmanInfo: "true\tfalse\t\t5.0.0\n",
+    podmanConnections: "[]\n",
+    podmanMachines: "[]\n",
+  });
+  return { spawnState: fresh(), freshSpawnState: fresh };
+});
 
 const registryMocks = vi.hoisted(() => ({
   readRegistryEntry: vi.fn(),
@@ -64,19 +68,9 @@ function usePodmanMachine() {
   ]);
 }
 
-function createRegistryMock() {
-  return registryMocks;
-}
+vi.mock("./registry.js", () => registryMocks);
 
-vi.mock("./registry.js", createRegistryMock);
-
-function createRuntimeMock() {
-  return {
-    defaultRuntime: runtimeMocks,
-  };
-}
-
-vi.mock("../../runtime.js", createRuntimeMock);
+vi.mock("../../runtime.js", () => ({ defaultRuntime: runtimeMocks }));
 
 async function createNamespaceMock() {
   const actual = await vi.importActual<typeof import("./docker-mount-source.js")>(
@@ -111,82 +105,77 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   }
   spawnState.calls.push(call);
 
-  let code = 0;
-  let stdout = "";
-  let stderr = "";
-  if (command !== "docker" && command !== "podman") {
-    code = 1;
-    stderr = `unexpected command: ${command}`;
-  } else if (args[0] === "inspect" && args[1] === "-f" && args[2] === "{{.State.Running}}") {
-    if (spawnState.inspectError) {
-      code = 125;
-      stderr = spawnState.inspectError;
-    } else if (!spawnState.containerExists) {
-      code = 1;
-      stderr = "No such object";
-    } else {
-      stdout = spawnState.inspectRunning ? "true\n" : "false\n";
-    }
-  } else if (args[0] === "inspect" && args[2] === "{{.Id}}") {
-    stdout = "c".repeat(64);
-  } else if (
-    args[0] === "inspect" &&
-    args[1] === "-f" &&
-    args[2]?.includes('index .Config.Labels "openclaw.configHash"')
-  ) {
-    if (!spawnState.containerExists) {
-      code = 1;
-      stderr = "No such object";
-    } else {
-      stdout = `${spawnState.labelHash}\n`;
-    }
-  } else if (
-    args[0] === "inspect" &&
-    args[2] === '{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}'
-  ) {
-    stdout = JSON.stringify({ Mounts: JSON.parse(spawnState.mounts), Tmpfs: spawnState.tmpfs });
-  } else if (command === "podman" && args[0] === "info") {
-    stdout = spawnState.podmanInfo;
-  } else if (command === "podman" && args[0] === "system") {
-    stdout = spawnState.podmanConnections;
-  } else if (command === "podman" && args[0] === "machine") {
-    stdout = spawnState.podmanMachines;
-  } else if (args[0] === "rm" && args[1] === "-f") {
-    spawnState.containerExists = false;
-    spawnState.inspectRunning = false;
-  } else if (args[0] === "image" && args[1] === "inspect") {
-    code = 0;
-  } else if (args[0] === "create") {
-    if (spawnState.createError) {
-      code = 125;
-      stderr = spawnState.createError;
-    } else if (spawnState.containerExists) {
-      code = 1;
-      stderr = "container name is already in use";
-    } else {
-      spawnState.containerExists = true;
-      stdout = "c".repeat(64);
-      spawnState.inspectRunning = false;
-      spawnState.labelHash =
-        args
-          .find((arg) => arg.startsWith("openclaw.configHash="))
-          ?.slice("openclaw.configHash=".length) ?? "";
-    }
-  } else if (args[0] === "start") {
-    spawnState.inspectRunning = true;
-  } else if (args[0] === "exec") {
-    code = 0;
-  } else {
-    code = 1;
-    stderr = `unexpected docker args: ${args.join(" ")}`;
-  }
-  return {
+  const result = (code = 0, stdout = "", stderr = "") => ({
     failed: code !== 0,
     isCanceled: false,
     exitCode: code,
     stdout: Buffer.from(stdout),
     stderr: Buffer.from(stderr),
-  };
+  });
+  const missing = () => result(1, "", "No such object");
+  if (command !== "docker" && command !== "podman") {
+    return result(1, "", `unexpected command: ${command}`);
+  }
+  if (args[0] === "inspect" && args[1] === "-f" && args[2] === "{{.State.Running}}") {
+    if (spawnState.inspectError) {
+      return result(125, "", spawnState.inspectError);
+    }
+    return spawnState.containerExists
+      ? result(0, spawnState.inspectRunning ? "true\n" : "false\n")
+      : missing();
+  }
+  if (args[0] === "inspect" && args[2] === "{{.Id}}") {
+    return result(0, "c".repeat(64));
+  }
+  if (
+    args[0] === "inspect" &&
+    args[1] === "-f" &&
+    args[2]?.includes('index .Config.Labels "openclaw.configHash"')
+  ) {
+    return spawnState.containerExists ? result(0, `${spawnState.labelHash}\n`) : missing();
+  }
+  if (
+    args[0] === "inspect" &&
+    args[2] === '{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}'
+  ) {
+    return result(
+      0,
+      JSON.stringify({ Mounts: JSON.parse(spawnState.mounts), Tmpfs: spawnState.tmpfs }),
+    );
+  }
+  if (command === "podman") {
+    if (args[0] === "info") {
+      return result(0, spawnState.podmanInfo);
+    }
+    if (args[0] === "system") {
+      return result(0, spawnState.podmanConnections);
+    }
+    if (args[0] === "machine") {
+      return result(0, spawnState.podmanMachines);
+    }
+  }
+  if (args[0] === "rm" && args[1] === "-f") {
+    spawnState.containerExists = spawnState.inspectRunning = false;
+  } else if (args[0] === "create") {
+    if (spawnState.createError) {
+      return result(125, "", spawnState.createError);
+    }
+    if (spawnState.containerExists) {
+      return result(1, "", "container name is already in use");
+    }
+    spawnState.containerExists = true;
+    spawnState.inspectRunning = false;
+    spawnState.labelHash =
+      args
+        .find((arg) => arg.startsWith("openclaw.configHash="))
+        ?.slice("openclaw.configHash=".length) ?? "";
+    return result(0, "c".repeat(64));
+  } else if (args[0] === "start") {
+    spawnState.inspectRunning = true;
+  } else if (args[0] !== "exec" && !(args[0] === "image" && args[1] === "inspect")) {
+    return result(1, "", `unexpected docker args: ${args.join(" ")}`);
+  }
+  return result();
 }
 
 async function createProcessMock() {
@@ -204,49 +193,21 @@ function createSandboxConfig(
   workspaceAccess: "rw" | "ro" | "none" = "rw",
   env: Record<string, string> = { LANG: "C.UTF-8" },
 ): SandboxConfig {
+  const defaults = resolveSandboxConfigForAgent();
   return {
-    mode: "all",
-    backend: "docker",
+    ...defaults,
     scope: "shared",
     workspaceAccess,
-    workspaceRoot: "~/.openclaw/sandboxes",
-    dockerTmpfsSource: "default",
     docker: {
+      ...defaults.docker,
       image: "openclaw-sandbox:test",
       containerPrefix: "oc-test-",
-      workdir: "/workspace",
-      readOnlyRoot: true,
-      tmpfs: ["/tmp", "/var/tmp", "/run"],
-      network: "none",
-      capDrop: ["ALL"],
       env,
       dns,
       extraHosts: ["host.docker.internal:host-gateway"],
       binds: binds ?? ["/tmp/workspace:/workspace:rw"],
       dangerouslyAllowReservedContainerTargets: true,
     },
-    ssh: {
-      command: "ssh",
-      workspaceRoot: "/tmp/openclaw-sandboxes",
-      strictHostKeyChecking: true,
-      updateHostKeys: true,
-    },
-    browser: {
-      enabled: false,
-      image: "openclaw-browser:test",
-      containerPrefix: "oc-browser-",
-      network: "openclaw-sandbox-browser",
-      cdpPort: 9222,
-      vncPort: 5900,
-      noVncPort: 6080,
-      headless: true,
-      noVncEnabled: false,
-      allowHostControl: false,
-      autoStart: false,
-      autoStartTimeoutMs: 5000,
-    },
-    tools: { allow: [], deny: [] },
-    prune: { idleHours: 24, maxAgeDays: 7 },
   };
 }
 
@@ -260,8 +221,8 @@ export function createSandboxContainerTestHarness() {
 
   beforeAll(async () => {
     vi.resetModules();
-    vi.doMock("./registry.js", createRegistryMock);
-    vi.doMock("../../runtime.js", createRuntimeMock);
+    vi.doMock("./registry.js", () => registryMocks);
+    vi.doMock("../../runtime.js", () => ({ defaultRuntime: runtimeMocks }));
     vi.doMock("./docker-mount-source.js", createNamespaceMock);
     vi.doMock("../../process/exec.js", createProcessMock);
     ({ prepareSandboxMountPlan } = await import("./mount-plan.js"));
@@ -306,18 +267,8 @@ export function createSandboxContainerTestHarness() {
   }
 
   beforeEach(() => {
-    spawnState.calls.length = 0;
-    spawnState.containerExists = true;
-    spawnState.inspectRunning = true;
-    spawnState.inspectError = "";
-    spawnState.createError = "";
-    spawnState.labelHash = "";
-    spawnState.mounts = "[]";
-    spawnState.tmpfs = null;
+    Object.assign(spawnState, freshSpawnState());
     namespaceMocks.resolveDockerSourceNamespace.mockResolvedValue(undefined);
-    spawnState.podmanInfo = "true\tfalse\t\t5.0.0\n";
-    spawnState.podmanConnections = "[]\n";
-    spawnState.podmanMachines = "[]\n";
     registryMocks.readRegistryEntry.mockClear();
     registryMocks.removeRegistryEntry.mockClear();
     registryMocks.removeRegistryEntry.mockResolvedValue(undefined);
