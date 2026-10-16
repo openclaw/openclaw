@@ -24,6 +24,31 @@ import {
 import type { ChannelMessageActionContext, ChannelPlugin } from "./types.public.js";
 
 const receipt = { content: [{ type: "text" as const, text: "delivered" }], details: { ok: true } };
+type Context = Parameters<typeof dispatchChannelMessageAction>[0];
+
+function scopedRegistry(plugin: ChannelPlugin, origin: "config" | "bundled") {
+  return createTestRegistry([{ pluginId: origin, source: origin, origin, plugin }]);
+}
+
+function pauseRead(fixture: {
+  handleAction: ReturnType<
+    typeof vi.fn<(ctx: ChannelMessageActionContext) => Promise<typeof receipt>>
+  >;
+}) {
+  const resume = createDeferred();
+  const entered = createDeferred();
+  const nextRequest = vi.fn();
+  fixture.handleAction.mockImplementation(async () => {
+    entered.resolve();
+    const assertCurrent = captureChannelReadAuthority();
+    expect(assertCurrent).toBeTypeOf("function");
+    await resume.promise;
+    assertCurrent?.();
+    nextRequest();
+    return receipt;
+  });
+  return { resume, entered, nextRequest };
+}
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -31,66 +56,45 @@ afterEach(() => {
 });
 
 describe("message action registration ownership", () => {
-  it.each([false])(
-    "uses only the selected scoped action capability (present=%s)",
-    async (present) => {
-      const handleRootAction = vi.fn(async () => receipt);
-      const handleScopedAction = vi.fn(async () => receipt);
-      const base = createChannelTestPluginBase({ id: "scoped-delivery" });
-      const root = { ...base, actions: { handleAction: handleRootAction } };
-      const scoped = {
-        ...base,
-        ...(present ? { actions: { handleAction: handleScopedAction } } : {}),
-      };
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "root", source: "root", origin: "bundled", plugin: root }]),
-      );
-      const registry = createTestRegistry([
-        { pluginId: "scoped", source: "scoped", origin: "config", plugin: scoped },
-      ]);
+  it("does not borrow a missing scoped action capability", async () => {
+    const handleRootAction = vi.fn(async () => receipt);
+    const base = createChannelTestPluginBase({ id: "scoped-delivery" });
+    const root = { ...base, actions: { handleAction: handleRootAction } };
+    setActivePluginRegistry(scopedRegistry(root, "bundled"));
+    const registry = scopedRegistry(base, "config");
 
-      const result = await withPluginRuntimeRegistryScope(registry, () =>
-        dispatchChannelMessageAction({
-          cfg: {},
-          channel: base.id,
-          action: "send",
-          params: { to: "recipient", message: "hello" },
-        }),
-      );
+    const result = await withPluginRuntimeRegistryScope(registry, () =>
+      dispatchChannelMessageAction({
+        cfg: {},
+        channel: base.id,
+        action: "send",
+        params: { to: "recipient", message: "hello" },
+      }),
+    );
 
-      expect(result).toEqual(present ? receipt : null);
-      expect(handleRootAction).not.toHaveBeenCalled();
-      expect(handleScopedAction).toHaveBeenCalledTimes(present ? 1 : 0);
-    },
-  );
+    expect(result).toBeNull();
+    expect(handleRootAction).not.toHaveBeenCalled();
+  });
   it("keeps scoped channel read authority external beside a bundled same-id registration", async () => {
     const handleRootAction = vi.fn(async () => receipt);
     const handleScopedAction = vi.fn(async () => receipt);
     const base = createChannelTestPluginBase({ id: "scoped-delivery" });
     setActivePluginRegistry(
-      createTestRegistry([
+      scopedRegistry(
         {
-          pluginId: "root",
-          source: "root",
-          origin: "bundled",
-          plugin: {
-            ...base,
-            actions: { providerOwnedReadGates: true, handleAction: handleRootAction },
-          },
-        },
-      ]),
-    );
-    const registry = createTestRegistry([
-      {
-        pluginId: "scoped",
-        source: "scoped",
-        origin: "config",
-        plugin: {
           ...base,
-          actions: { providerOwnedReadGates: true, handleAction: handleScopedAction },
+          actions: { providerOwnedReadGates: true, handleAction: handleRootAction },
         },
+        "bundled",
+      ),
+    );
+    const registry = scopedRegistry(
+      {
+        ...base,
+        actions: { providerOwnedReadGates: true, handleAction: handleScopedAction },
       },
-    ]);
+      "config",
+    );
     const context = { cfg: {}, channel: base.id, action: "read", params: { to: "recipient" } };
 
     await withPluginRuntimeRegistryScope(registry, async () => {
@@ -182,7 +186,11 @@ describe("official plugin read-only authority", () => {
       conversationReadOrigin: "delegated",
       toolContext: { currentChannelProvider: plugin.id, currentChannelId: "current" },
     };
-    return { owner, record, plugin, handleAction, register, context };
+    const dispatch = (overrides: Partial<Context> = {}) =>
+      dispatchChannelMessageAction({ ...context, ...overrides });
+    const prepare = (overrides: Partial<Context> = {}) =>
+      prepareExternalMessageActionTargetForResolution({ ...context, ...overrides });
+    return { owner, record, plugin, handleAction, register, context, dispatch, prepare };
   }
 
   it.each(["read", "download-file"] as const)(
@@ -200,9 +208,9 @@ describe("official plugin read-only authority", () => {
 
   it("does not enroll an existing reader into download authority", async () => {
     const fixture = registerReader();
-    await expect(
-      dispatchChannelMessageAction({ ...fixture.context, action: "download-file" }),
-    ).rejects.toThrow("exact current conversation");
+    await expect(fixture.dispatch({ action: "download-file" })).rejects.toThrow(
+      "exact current conversation",
+    );
     expect(fixture.handleAction).not.toHaveBeenCalled();
   });
 
@@ -256,41 +264,24 @@ describe("official plugin read-only authority", () => {
     const fixture = registerReader(options);
     Object.assign(fixture.plugin, { trustedOfficialInstall: true });
     fixture.context.params.trustedOfficialInstall = true;
-    await expect(prepareExternalMessageActionTargetForResolution(fixture.context)).rejects.toThrow(
-      "exact current conversation",
-    );
-    await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
-      "exact current conversation",
-    );
+    await expect(fixture.prepare()).rejects.toThrow("exact current conversation");
+    await expect(fixture.dispatch()).rejects.toThrow("exact current conversation");
     expect(fixture.handleAction).not.toHaveBeenCalled();
     // Existing exact-current and direct-operator behavior is unchanged.
     await expect(
-      dispatchChannelMessageAction({
-        ...fixture.context,
+      fixture.dispatch({
         requesterAccountId: undefined,
         toolContext: undefined,
         messageActionAuthorization: { assertDashboardReadCurrent: vi.fn() },
       }),
     ).rejects.toThrow("exact current conversation");
-    expect(
-      await dispatchChannelMessageAction({
-        ...fixture.context,
-        params: { to: "current" },
-      }),
-    ).toBe(receipt);
-    expect(
-      await dispatchChannelMessageAction({
-        ...fixture.context,
-        conversationReadOrigin: "direct-operator",
-      }),
-    ).toBe(receipt);
+    expect(await fixture.dispatch({ params: { to: "current" } })).toBe(receipt);
+    expect(await fixture.dispatch({ conversationReadOrigin: "direct-operator" })).toBe(receipt);
   });
 
   it.each(["react"] as const)("does not broaden %s authority", async (action) => {
     const fixture = registerReader({ readActions: [action] });
-    await expect(dispatchChannelMessageAction({ ...fixture.context, action })).rejects.toThrow(
-      "exact current conversation",
-    );
+    await expect(fixture.dispatch({ action })).rejects.toThrow("exact current conversation");
     expect(fixture.handleAction).not.toHaveBeenCalled();
   });
 
@@ -301,7 +292,7 @@ describe("official plugin read-only authority", () => {
     { toolContext: { currentChannelProvider: "other-provider", currentChannelId: "current" } },
   ])("retains originating provider/account context (%j)", async (mismatch) => {
     const fixture = registerReader();
-    await expect(dispatchChannelMessageAction({ ...fixture.context, ...mismatch })).rejects.toThrow(
+    await expect(fixture.dispatch(mismatch)).rejects.toThrow(
       "current provider and account context",
     );
     expect(fixture.handleAction).not.toHaveBeenCalled();
@@ -316,13 +307,11 @@ describe("official plugin read-only authority", () => {
       }
       const root = registerReader();
       await withPluginRuntimeRegistryScope(scope.owner.registry, async () => {
-        await expect(dispatchChannelMessageAction(root.context)).rejects.toThrow(
-          "exact current conversation",
-        );
+        await expect(root.dispatch()).rejects.toThrow("exact current conversation");
       });
       expect(root.handleAction).not.toHaveBeenCalled();
       expect(scope.handleAction).not.toHaveBeenCalled();
-      expect(await dispatchChannelMessageAction(root.context)).toBe(receipt);
+      expect(await root.dispatch()).toBe(receipt);
     },
   );
 
@@ -335,18 +324,8 @@ describe("official plugin read-only authority", () => {
     "retains an unchanged $origin registration across $change",
     async ({ change, origin }) => {
       const fixture = registerReader({ origin, trusted: origin !== "bundled" });
-      const resume = createDeferred();
-      const entered = createDeferred();
-      const nextRequest = vi.fn();
-      fixture.handleAction.mockImplementation(async () => {
-        entered.resolve();
-        const assertCurrent = captureChannelReadAuthority();
-        await resume.promise;
-        assertCurrent?.();
-        nextRequest();
-        return receipt;
-      });
-      const read = dispatchChannelMessageAction(fixture.context);
+      const { resume, entered, nextRequest } = pauseRead(fixture);
+      const read = fixture.dispatch();
       await entered.promise;
       if (change === "adopt") {
         const next = createEmptyPluginRegistry();
@@ -360,7 +339,7 @@ describe("official plugin read-only authority", () => {
       await expect(read).resolves.toBe(receipt);
       expect(nextRequest).toHaveBeenCalledOnce();
       // The retained registration can also admit a new invocation after publication.
-      await expect(dispatchChannelMessageAction(fixture.context)).resolves.toBe(receipt);
+      await expect(fixture.dispatch()).resolves.toBe(receipt);
       expect(nextRequest).toHaveBeenCalledTimes(2);
     },
   );
@@ -373,8 +352,7 @@ describe("official plugin read-only authority", () => {
       return receipt;
     });
     expect(
-      await dispatchChannelMessageAction({
-        ...fixture.context,
+      await fixture.dispatch({
         requesterAccountId: undefined,
         toolContext: undefined,
       }),
@@ -393,19 +371,10 @@ describe("official plugin read-only authority", () => {
       }
       const assertDenied = async () => {
         expect(shouldDeferExternalMessageActionTargetResolution(fixture.context)).toBe(true);
-        await expect(
-          prepareExternalMessageActionTargetForResolution(fixture.context),
-        ).rejects.toThrow("read authority is no longer active");
-        await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
-          "read authority is no longer active",
-        );
+        await expect(fixture.prepare()).rejects.toThrow("read authority is no longer active");
+        await expect(fixture.dispatch()).rejects.toThrow("read authority is no longer active");
         expect(fixture.handleAction).not.toHaveBeenCalled();
-        expect(
-          await dispatchChannelMessageAction({
-            ...fixture.context,
-            conversationReadOrigin: "direct-operator",
-          }),
-        ).toBe(receipt);
+        expect(await fixture.dispatch({ conversationReadOrigin: "direct-operator" })).toBe(receipt);
       };
       if (fallback === "scope") {
         await withPluginRuntimeRegistryScope(createTestRegistry([]), assertDenied);
@@ -419,19 +388,8 @@ describe("official plugin read-only authority", () => {
     "fences subsequent I/O and results after %s",
     async (change) => {
       const fixture = registerReader();
-      const resume = createDeferred();
-      const entered = createDeferred();
-      const nextRequest = vi.fn();
-      fixture.handleAction.mockImplementation(async () => {
-        entered.resolve();
-        const assertCurrent = captureChannelReadAuthority();
-        expect(assertCurrent).toBeTypeOf("function");
-        await resume.promise;
-        assertCurrent?.();
-        nextRequest();
-        return receipt;
-      });
-      const read = dispatchChannelMessageAction(fixture.context);
+      const { resume, entered, nextRequest } = pauseRead(fixture);
+      const read = fixture.dispatch();
       const rejected = expect(read).rejects.toThrow("read authority is no longer active");
       await entered.promise;
       switch (change) {
@@ -470,7 +428,7 @@ describe("official plugin read-only authority", () => {
         entered.resolve();
         return pending.promise;
       });
-      const read = dispatchChannelMessageAction(fixture.context);
+      const read = fixture.dispatch();
       const rejected = expect(read).rejects.toThrow("read authority is no longer active");
       await entered.promise;
       fixture.record.enabled = false;
@@ -485,13 +443,13 @@ describe("official plugin read-only authority", () => {
 
   it("does not refresh a captured route's authority after awaited target resolution", async () => {
     const first = registerReader();
-    const prepared = await prepareExternalMessageActionTargetForResolution(first.context);
+    const prepared = await first.prepare();
     let replacement: ReturnType<typeof registerReader> | undefined;
     await expect(
       withChannelReadAuthority(prepared.assertReadAuthorityCurrent, async () => {
         await Promise.resolve();
         replacement = registerReader();
-        return await dispatchChannelMessageAction(replacement.context);
+        return await replacement.dispatch();
       }),
     ).rejects.toThrow("read authority is no longer active");
     expect(first.handleAction).not.toHaveBeenCalled();

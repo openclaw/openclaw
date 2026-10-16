@@ -1,4 +1,3 @@
-// Read-only channel tests cover read-only plugin registration and runtime behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -36,24 +35,54 @@ function pluginIds(plugins: ReturnType<typeof listReadOnlyChannelPluginsForConfi
   return plugins.map((entry) => entry.id);
 }
 
-function createExternalChannelTestConfig(params: {
-  pluginDir: string;
-  pluginId?: string;
-  channels?: Record<string, Record<string, unknown>> | null;
-}): Parameters<typeof listReadOnlyChannelPluginsForConfig>[0] {
+function externalConfig(
+  pluginDir: string,
+  channels: Record<string, Record<string, unknown>> | null = {
+    "external-chat": { token: "configured" },
+  },
+  pluginId = "external-chat",
+): Parameters<typeof listReadOnlyChannelPluginsForConfig>[0] {
   return {
-    ...(params.channels === null
-      ? {}
-      : {
-          channels: params.channels ?? {
-            "external-chat": { token: "configured" },
-          },
-        }),
-    plugins: {
-      load: { paths: [params.pluginDir] },
-      allow: [params.pluginId ?? "external-chat"],
-    },
+    ...(channels === null ? {} : { channels }),
+    plugins: { load: { paths: [pluginDir] }, allow: [pluginId] },
   };
+}
+
+function coldOptions(includeSetupFallbackPlugins?: boolean, env = process.env) {
+  return {
+    env: { ...env },
+    includePersistedAuthState: false,
+    ...(includeSetupFallbackPlugins === undefined ? {} : { includeSetupFallbackPlugins }),
+  };
+}
+
+function manifestFixture(
+  channels?: Parameters<typeof externalConfig>[1],
+  options: Parameters<typeof writeExternalSetupChannelPlugin>[0] = {},
+  includeSetupFallbackPlugins?: boolean,
+) {
+  const fixture = writeExternalSetupChannelPlugin({
+    setupEntry: false,
+    pluginId: "external-chat-plugin",
+    manifestChannelConfig: true,
+    ...options,
+  });
+  const cfg = externalConfig(fixture.pluginDir, channels, "external-chat-plugin");
+  const plugins = listReadOnlyChannelPluginsForConfig(
+    cfg,
+    coldOptions(includeSetupFallbackPlugins),
+  );
+  return {
+    ...fixture,
+    cfg,
+    plugins,
+    plugin: plugins.find((entry) => entry.id === "external-chat"),
+  };
+}
+
+function expectMarkers(setupMarker: string, fullMarker: string, setupLoaded = false) {
+  expect(fs.existsSync(setupMarker)).toBe(setupLoaded);
+  expect(fs.existsSync(fullMarker)).toBe(false);
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -285,8 +314,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       });
       expect(account.config).toBe(cfg.channels[channelId]?.accounts.ops);
       expect(JSON.stringify(cfg)).toBe(originalConfig);
-      expect(fs.existsSync(setupMarker)).toBe(false);
-      expect(fs.existsSync(fullMarker)).toBe(false);
+      expectMarkers(setupMarker, fullMarker);
     },
   );
 
@@ -331,8 +359,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       }),
     ).toEqual(["Loaded Chat ops (Inspector name): configured"]);
     expect(resolveAccount).not.toHaveBeenCalled();
-    expect(fs.existsSync(setupMarker)).toBe(false);
-    expect(fs.existsSync(fullMarker)).toBe(false);
+    expectMarkers(setupMarker, fullMarker);
   });
 
   it("keeps explicitly supplied metadata inventories separate for the same config", () => {
@@ -340,7 +367,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       setupEntry: false,
       manifestChannelConfig: true,
     });
-    const cfg = createExternalChannelTestConfig({ pluginDir });
+    const cfg = externalConfig(pluginDir);
     const original = resolvePluginMetadataSnapshot({ config: cfg });
     const replacement = restorePluginMetadataSnapshot(
       rebasePluginMetadataSnapshotManifestRegistry(original, {
@@ -377,14 +404,13 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     const { pluginDir, setupMarker, fullMarker } = writeExternalSetupChannelPlugin({
       manifestChannelConfig: true,
     });
-    const cfg = createExternalChannelTestConfig({ pluginDir });
+    const cfg = externalConfig(pluginDir);
     const metadataSnapshot = resolvePluginMetadataSnapshot({ config: cfg });
     const first = listReadOnlyChannelPluginsForConfig(cfg, { metadataSnapshot }).find(
       (plugin) => plugin.id === "external-chat",
     );
-    const changed = createExternalChannelTestConfig({
-      pluginDir,
-      channels: { "external-chat": { accounts: { ops: { token: "changed" } } } },
+    const changed = externalConfig(pluginDir, {
+      "external-chat": { accounts: { ops: { token: "changed" } } },
     });
     const second = listReadOnlyChannelPluginsForConfig(changed, { metadataSnapshot }).find(
       (plugin) => plugin.id === "external-chat",
@@ -404,13 +430,10 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       [false, true, false],
       [undefined, false, false],
     ] as const) {
-      const current = createExternalChannelTestConfig({
-        pluginDir,
-        channels: {
-          "external-chat": {
-            enabled: channelEnabled,
-            accounts: { ops: { enabled: accountEnabled } },
-          },
+      const current = externalConfig(pluginDir, {
+        "external-chat": {
+          enabled: channelEnabled,
+          accounts: { ops: { enabled: accountEnabled } },
         },
       });
       const account = second?.config.resolveAccount(current, "ops");
@@ -462,12 +485,9 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       },
     });
     const plugins = listReadOnlyChannelPluginsForConfig(
-      createExternalChannelTestConfig({
-        pluginDir,
-        channels: {
-          "external-chat": { token: "configured" },
-          "sibling-chat": { token: "configured" },
-        },
+      externalConfig(pluginDir, {
+        "external-chat": { token: "configured" },
+        "sibling-chat": { token: "configured" },
       }),
       { includePersistedAuthState: false },
     );
@@ -492,15 +512,10 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
   it("uses activation source config to discover channel setup metadata after secret stripping", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin();
     const plugins = listReadOnlyChannelPluginsForConfig(
-      createExternalChannelTestConfig({
-        pluginDir,
-        channels: { "external-chat": {} },
-      }),
+      externalConfig(pluginDir, { "external-chat": {} }),
       {
-        activationSourceConfig: createExternalChannelTestConfig({ pluginDir }),
-        env: { ...process.env },
-        includePersistedAuthState: false,
-        includeSetupFallbackPlugins: true,
+        activationSourceConfig: externalConfig(pluginDir),
+        ...coldOptions(true),
       },
     );
 
@@ -551,7 +566,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       .replace('blurb: "setup entry",', 'blurb: require("./setup-dependency.cjs"),');
     fs.writeFileSync(dependencyPath, 'module.exports = "before";\n', "utf8");
     fs.writeFileSync(setupPath, initialSource, "utf8");
-    const cfg = createExternalChannelTestConfig({ pluginDir });
+    const cfg = externalConfig(pluginDir);
     const options = {
       includePersistedAuthState: false,
       includeSetupFallbackPlugins: true,
@@ -598,19 +613,15 @@ Object.assign(module.exports.plugin.config, {
       "utf8",
     );
     const plugins = listReadOnlyChannelPluginsForConfig(
-      createExternalChannelTestConfig({
+      externalConfig(
         pluginDir,
-        pluginId: "external-chat-plugin",
-        channels: {
+        {
           "alpha-chat": { token: "configured" },
           "beta-chat": { token: "configured" },
         },
-      }),
-      {
-        env: { ...process.env },
-        includePersistedAuthState: false,
-        includeSetupFallbackPlugins: true,
-      },
+        "external-chat-plugin",
+      ),
+      coldOptions(true),
     );
 
     const alphaPlugin = plugins.find((entry) => entry.id === "alpha-chat");
@@ -663,16 +674,8 @@ Object.assign(module.exports.plugin.config, {
       setupChannelId: "alpha-chat",
     });
     const plugins = listReadOnlyChannelPluginsForConfig(
-      createExternalChannelTestConfig({
-        pluginDir,
-        pluginId: "external-chat-plugin",
-        channels: { "beta-chat": { token: "beta-token" } },
-      }),
-      {
-        env: { ...process.env },
-        includePersistedAuthState: false,
-        includeSetupFallbackPlugins: true,
-      },
+      externalConfig(pluginDir, { "beta-chat": { token: "beta-token" } }, "external-chat-plugin"),
+      coldOptions(true),
     );
 
     expect(pluginIds(plugins)).not.toContain("alpha-chat");
@@ -695,16 +698,8 @@ Object.assign(module.exports.plugin.config, {
   });
 
   it("uses manifest channel configs when no setup entry exists", () => {
-    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
-      setupEntry: false,
-      pluginId: "external-chat-plugin",
-      channelId: "external-chat",
-      manifestChannelConfig: true,
-    });
-    const cfg = createExternalChannelTestConfig({
-      pluginDir,
-      pluginId: "external-chat-plugin",
-      channels: {
+    const { cfg, plugin, fullMarker, setupMarker } = manifestFixture(
+      {
         "external-chat": {
           defaultAccount: "Ops Team",
           accounts: {
@@ -713,14 +708,9 @@ Object.assign(module.exports.plugin.config, {
           },
         },
       },
-    });
-    const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
-      env: { ...process.env },
-      includePersistedAuthState: false,
-      includeSetupFallbackPlugins: true,
-    });
-
-    const plugin = plugins.find((entry) => entry.id === "external-chat");
+      {},
+      true,
+    );
     expect(plugin?.meta.blurb).toBe("manifest config");
     expect(plugin?.config.defaultAccountId?.(cfg)).toBe("ops-team");
     expect(fs.existsSync(setupMarker)).toBe(false);
@@ -739,7 +729,7 @@ Object.assign(module.exports.plugin.config, {
         channelId: "external-chat",
         manifestChannelConfig: true,
       });
-      const cfg = createExternalChannelTestConfig({ pluginDir, pluginId: "external-chat-plugin" });
+      const cfg = externalConfig(pluginDir, undefined, "external-chat-plugin");
       if (origin === "bundled") {
         vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
         vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", fixtureRoot);
@@ -778,11 +768,8 @@ Object.assign(module.exports.plugin.config, {
           accountId: "default",
         });
         expectRecordFields(accountFields.config, { token: "configured" });
-        const namedCfg = createExternalChannelTestConfig({
-          pluginDir,
-          channels: {
-            "external-chat": { defaultAccount: "ops", accounts: { ops: {}, alerts: {} } },
-          },
+        const namedCfg = externalConfig(pluginDir, {
+          "external-chat": { defaultAccount: "ops", accounts: { ops: {}, alerts: {} } },
         });
         expect(plugin?.config.listAccountIds(namedCfg)).toEqual(["alerts", "ops"]);
         expect(plugin?.config.defaultAccountId?.(namedCfg)).toBe("ops");
@@ -798,23 +785,10 @@ Object.assign(module.exports.plugin.config, {
   );
 
   it("sanitizes terminal control sequences from manifest channel metadata", () => {
-    const { pluginDir } = writeExternalSetupChannelPlugin({
-      setupEntry: false,
-      pluginId: "external-chat-plugin",
-      channelId: "external-chat",
-      manifestChannelConfig: true,
+    const { plugin } = manifestFixture(undefined, {
       manifestChannelLabel: "External\u001b[31m Chat\u001b[0m",
       manifestChannelDescription: "manifest\u001b[2K config",
     });
-    const plugins = listReadOnlyChannelPluginsForConfig(
-      createExternalChannelTestConfig({ pluginDir, pluginId: "external-chat-plugin" }),
-      {
-        env: { ...process.env },
-        includePersistedAuthState: false,
-      },
-    );
-
-    const plugin = plugins.find((entry) => entry.id === "external-chat");
     expect(plugin?.meta.label).toBe("External Chat");
     expect(plugin?.meta.selectionLabel).toBe("External Chat");
     expect(plugin?.meta.blurb).toBe("manifest config");
@@ -822,23 +796,9 @@ Object.assign(module.exports.plugin.config, {
 
   it("ignores manifest channel configs with unsafe channel ids", () => {
     const unsafeChannelId = "__proto__";
-    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
-      setupEntry: false,
-      pluginId: "external-chat-plugin",
-      channelId: unsafeChannelId,
-      manifestChannelIds: [unsafeChannelId],
-      manifestChannelConfig: true,
-    });
-    const plugins = listReadOnlyChannelPluginsForConfig(
-      createExternalChannelTestConfig({
-        pluginDir,
-        pluginId: "external-chat-plugin",
-        channels: Object.fromEntries([[unsafeChannelId, { token: "configured" }]]),
-      }),
-      {
-        env: { ...process.env },
-        includePersistedAuthState: false,
-      },
+    const { plugins, fullMarker, setupMarker } = manifestFixture(
+      Object.fromEntries([[unsafeChannelId, { token: "configured" }]]),
+      { channelId: unsafeChannelId, manifestChannelIds: [unsafeChannelId] },
     );
 
     expect(pluginIds(plugins)).not.toContain(unsafeChannelId);
@@ -847,26 +807,12 @@ Object.assign(module.exports.plugin.config, {
   });
 
   it("uses own normalized account ids for manifest channel account config", () => {
-    const { pluginDir } = writeExternalSetupChannelPlugin({
-      setupEntry: false,
-      pluginId: "external-chat-plugin",
-      channelId: "external-chat",
-      manifestChannelConfig: true,
-    });
     const inheritedAccounts = Object.create({
       inherited: { token: "prototype-token" },
     }) as Record<string, unknown>;
     inheritedAccounts.default = { token: "default-token" };
     inheritedAccounts.named = { token: "named-token" };
-    const cfg = createExternalChannelTestConfig({
-      pluginDir,
-      pluginId: "external-chat-plugin",
-      channels: { "external-chat": { accounts: inheritedAccounts } },
-    });
-    const plugin = listReadOnlyChannelPluginsForConfig(cfg, {
-      env: { ...process.env },
-      includePersistedAuthState: false,
-    }).find((entry) => entry.id === "external-chat");
+    const { cfg, plugin } = manifestFixture({ "external-chat": { accounts: inheritedAccounts } });
 
     expect(plugin?.config.listAccountIds(cfg)).toEqual(["default", "named"]);
     const defaultAccount = plugin?.config.resolveAccount(cfg, "__proto__");
@@ -881,25 +827,9 @@ Object.assign(module.exports.plugin.config, {
   });
 
   it("ignores manifest account keys that normalize to blocked object keys", () => {
-    const { pluginDir } = writeExternalSetupChannelPlugin({
-      setupEntry: false,
-      pluginId: "external-chat-plugin",
-      channelId: "external-chat",
-      manifestChannelConfig: true,
+    const { cfg, plugin } = manifestFixture({
+      "external-chat": { accounts: { "constructor ": { token: "blocked-token" } } },
     });
-    const cfg = createExternalChannelTestConfig({
-      pluginDir,
-      pluginId: "external-chat-plugin",
-      channels: {
-        "external-chat": {
-          accounts: { "constructor ": { token: "blocked-token" } },
-        },
-      },
-    });
-    const plugin = listReadOnlyChannelPluginsForConfig(cfg, {
-      env: { ...process.env },
-      includePersistedAuthState: false,
-    }).find((entry) => entry.id === "external-chat");
 
     expect(plugin?.config.listAccountIds(cfg)).toEqual([]);
     const account = plugin?.config.resolveAccount(cfg, "default");
@@ -916,15 +846,8 @@ Object.assign(module.exports.plugin.config, {
       channelId: "external-chat",
     });
     const plugins = listReadOnlyChannelPluginsForConfig(
-      createExternalChannelTestConfig({
-        pluginDir,
-        pluginId: "external-chat-plugin",
-        channels: { "external-chat": { enabled: false } },
-      }),
-      {
-        env: { ...process.env, EXTERNAL_CHAT_TOKEN: "configured" },
-        includePersistedAuthState: false,
-      },
+      externalConfig(pluginDir, { "external-chat": { enabled: false } }, "external-chat-plugin"),
+      coldOptions(undefined, { ...process.env, EXTERNAL_CHAT_TOKEN: "configured" }),
     );
 
     expect(pluginIds(plugins)).not.toContain("external-chat");
@@ -1038,8 +961,7 @@ Object.assign(module.exports.plugin.config, {
       const plugin = plugins.find((entry) => entry.id === "external-chat");
       const accepted = policy === "trusted";
       expect(plugin?.meta.blurb).toBe(accepted ? "setup entry" : undefined);
-      expect(fs.existsSync(setupMarker)).toBe(accepted);
-      expect(fs.existsSync(fullMarker)).toBe(false);
+      expectMarkers(setupMarker, fullMarker, accepted);
     },
   );
 
@@ -1051,7 +973,7 @@ Object.assign(module.exports.plugin.config, {
       setupChannelId: "spoofed-chat",
     });
     const plugins = listReadOnlyChannelPluginsForConfig(
-      createExternalChannelTestConfig({ pluginDir, pluginId: "external-chat-plugin" }),
+      externalConfig(pluginDir, undefined, "external-chat-plugin"),
       {
         env: { ...process.env },
         includeSetupFallbackPlugins: true,
@@ -1071,10 +993,7 @@ Object.assign(module.exports.plugin.config, {
         pluginId: "external-chat-plugin",
         channelId: "external-chat",
       });
-      const cfg = createExternalChannelTestConfig({
-        pluginDir,
-        pluginId: "external-chat-plugin",
-      });
+      const cfg = externalConfig(pluginDir, undefined, "external-chat-plugin");
       const options = { env: { ...process.env }, includePersistedAuthState: false };
       const initial = resolveReadOnlyChannelPluginsForConfig(cfg, options);
       expect(pluginIds(initial.plugins)).toContain("external-chat");
@@ -1138,7 +1057,7 @@ Object.assign(module.exports.plugin.config, {
       );
 
       const result = resolveReadOnlyChannelPluginsForConfig(
-        createExternalChannelTestConfig({ pluginDir, pluginId: "external-chat-plugin" }),
+        externalConfig(pluginDir, undefined, "external-chat-plugin"),
         {
           env: { ...process.env },
           includeSetupFallbackPlugins: true,

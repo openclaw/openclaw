@@ -31,6 +31,27 @@ const handleAction = vi.fn(async (_ctx: ChannelMessageActionContext) => jsonResu
 const supportsAction = vi.fn(() => true);
 const requiresTrustedRequesterSender = vi.fn(() => false);
 
+function currentContext(
+  currentChannelProvider: string,
+  currentChannelId: string,
+  extra: DispatchContext["toolContext"] = {},
+) {
+  return { currentChannelProvider, currentChannelId, ...extra };
+}
+
+async function expectAllowed(context: Partial<DispatchContext>) {
+  await dispatch(context);
+  expect(handleAction).toHaveBeenCalledOnce();
+}
+
+function schemaProperties(
+  options: Omit<Parameters<typeof resolveChannelMessageToolSchemaPropertiesSteps>[0], "cfg">,
+) {
+  return runMessageActionDiscoveryAsync(
+    resolveChannelMessageToolSchemaPropertiesSteps({ cfg: {}, ...options }),
+  );
+}
+
 function activate(...plugins: ChannelPlugin[]) {
   setActivePluginRegistry(
     createTestRegistry(plugins.map((plugin) => ({ pluginId: plugin.id, source: "test", plugin }))),
@@ -149,8 +170,7 @@ describe("message action authorization", () => {
     async ({ context, allowed }) => {
       register();
       if (allowed) {
-        await dispatch(context);
-        expect(handleAction).toHaveBeenCalledOnce();
+        await expectAllowed(context);
       } else {
         await expectDenied(context);
       }
@@ -171,47 +191,35 @@ describe("message action authorization", () => {
     {
       name: "conflicting trusted kinds",
       params: { target: "current" },
-      toolContext: {
-        currentChannelProvider: "discord",
-        currentChannelId: "channel:current",
+      toolContext: currentContext("discord", "channel:current", {
         currentMessagingTarget: "user:current",
-      },
+      }),
     },
     {
       name: "bare trusted sibling hiding a kind mismatch",
       params: { target: "channel:current", channelId: "current" },
-      toolContext: {
-        currentChannelProvider: "discord",
-        currentChannelId: "current",
-        currentMessagingTarget: "user:current",
-      },
+      toolContext: currentContext("discord", "current", { currentMessagingTarget: "user:current" }),
     },
     {
       name: "provider prefix hiding a user kind",
       params: { target: "user:current", to: "nextcloud-talk:current" },
-      toolContext: {
-        currentChannelProvider: "nextcloud-talk",
-        currentChannelId: "nextcloud-talk:current",
+      toolContext: currentContext("nextcloud-talk", "nextcloud-talk:current", {
         currentChatType: "group",
-      },
+      }),
     },
     {
       name: "typed room without a canonical sibling",
       params: { target: "room:current" },
-      toolContext: {
-        currentChannelProvider: "nextcloud-talk",
-        currentChannelId: "nextcloud-talk:current",
+      toolContext: currentContext("nextcloud-talk", "nextcloud-talk:current", {
         currentChatType: "group",
-      },
+      }),
     },
     {
       name: "group target in a channel context",
       params: { target: "group:current", to: "nextcloud-talk:current" },
-      toolContext: {
-        currentChannelProvider: "nextcloud-talk",
-        currentChannelId: "nextcloud-talk:current",
+      toolContext: currentContext("nextcloud-talk", "nextcloud-talk:current", {
         currentChatType: "channel",
-      },
+      }),
     },
   ] satisfies {
     name: string;
@@ -228,33 +236,33 @@ describe("message action authorization", () => {
   });
 
   it.each([
-    {
-      name: "case-sensitive mismatch",
-      target: "room:CURRENT",
-      current: "nextcloud-talk:current",
-      normalized: "nextcloud-talk:current",
-      expected: undefined,
-      origin: "delegated",
-    },
-    {
-      name: "direct operator",
-      target: "room:other",
-      current: "nextcloud-talk:current",
-      normalized: undefined,
-      expected: "room:other",
-      origin: "direct-operator",
-    },
-    {
-      name: "normalization mirror",
-      target: "room:current",
-      current: "nc:current",
-      normalized: "nextcloud-talk:other",
-      expected: "nc:current",
-      origin: "delegated",
-    },
+    [
+      "case-sensitive mismatch",
+      "room:CURRENT",
+      "nextcloud-talk:current",
+      "nextcloud-talk:current",
+      undefined,
+      "delegated",
+    ],
+    [
+      "direct operator",
+      "room:other",
+      "nextcloud-talk:current",
+      undefined,
+      "room:other",
+      "direct-operator",
+    ],
+    [
+      "normalization mirror",
+      "room:current",
+      "nc:current",
+      "nextcloud-talk:other",
+      "nc:current",
+      "delegated",
+    ],
   ] as const)(
-    "uses host target authority for $name",
-    async ({ target, current, normalized, expected, origin }) => {
+    "uses host target authority for %s",
+    async (_name, target, current, normalized, expected, origin) => {
       const normalizeTarget = vi.fn(() => normalized);
       register({
         channel: "nextcloud-talk",
@@ -268,17 +276,12 @@ describe("message action authorization", () => {
         channel: "nextcloud-talk",
         conversationReadOrigin: origin,
         params: { target, to: target },
-        toolContext: {
-          currentChannelProvider: "nextcloud-talk",
-          currentChannelId: current,
-          currentChatType: "group",
-        },
+        toolContext: currentContext("nextcloud-talk", current, { currentChatType: "group" }),
       };
       if (expected === undefined) {
         await expectDenied(context);
       } else {
-        await dispatch(context);
-        expect(handleAction).toHaveBeenCalledOnce();
+        await expectAllowed(context);
         expect(handleAction.mock.calls[0]?.[0].params).toEqual({ target: expected, to: expected });
       }
       expect(normalizeTarget).not.toHaveBeenCalled();
@@ -299,8 +302,7 @@ describe("message action authorization", () => {
       register({ origin, actions: { providerOwnedReadGates } });
       const context = { params: { channelId: "configured" }, toolContext: undefined };
       if (allowed) {
-        await dispatch(context);
-        expect(handleAction).toHaveBeenCalledOnce();
+        await expectAllowed(context);
       } else {
         await expectDenied(context);
       }
@@ -312,11 +314,9 @@ const aliasContext: Partial<DispatchContext> = {
   channel: "imessage",
   action: "react",
   params: { chatId: 42, messageId: "current-message" },
-  toolContext: {
-    currentChannelProvider: "imessage",
-    currentChannelId: "current-handle",
+  toolContext: currentContext("imessage", "current-handle", {
     currentMessageId: "current-message",
-  },
+  }),
 };
 
 function registerAlias({
@@ -403,8 +403,7 @@ describe("message action delivery alias authority", () => {
         params: { ...aliasContext.params, target: "chat_id:42", to: "chat_id:42" },
       };
       if (matches) {
-        await dispatch(context);
-        expect(handleAction).toHaveBeenCalledOnce();
+        await expectAllowed(context);
       } else {
         await expectDenied(context);
       }
@@ -528,10 +527,7 @@ describe("message action delivery alias authority", () => {
     await expectDenied({
       channel: "imessage",
       params,
-      toolContext: {
-        currentChannelProvider: "imessage",
-        currentChannelId: "chat_guid:iMessage;+;current",
-      },
+      toolContext: currentContext("imessage", "chat_guid:iMessage;+;current"),
     });
   });
 
@@ -576,8 +572,7 @@ describe("bundled targetless cache reads", () => {
     "checks cache-read authority with $name",
     async ({ override, allowed }) => {
       if (allowed) {
-        await dispatch({ ...context, ...override });
-        expect(handleAction).toHaveBeenCalledOnce();
+        await expectAllowed({ ...context, ...override });
       } else {
         await expectDenied({ ...context, ...override });
       }
@@ -636,15 +631,9 @@ describe("message action discovery", () => {
     });
     expect(schema.properties).not.toHaveProperty("presentation");
     expect(schema.properties).not.toHaveProperty("delivery");
-    expect(
-      await runMessageActionDiscoveryAsync(
-        resolveChannelMessageToolSchemaPropertiesSteps({
-          cfg: {},
-          channel: "demo-buttons",
-          preparedMessageToolCatalog,
-        }),
-      ),
-    ).toEqual({});
+    expect(await schemaProperties({ channel: "demo-buttons", preparedMessageToolCatalog })).toEqual(
+      {},
+    );
   });
 
   it("evaluates prepared discovery against each account context", async () => {
@@ -691,13 +680,7 @@ describe("message action discovery", () => {
       ),
       discoveryPlugin("slack", () => ({ actions: [] })),
     );
-    const properties = await runMessageActionDiscoveryAsync(
-      resolveChannelMessageToolSchemaPropertiesSteps({
-        cfg: {},
-        channel: "slack",
-        accountId: "slack-workspace",
-      }),
-    );
+    const properties = await schemaProperties({ channel: "slack", accountId: "slack-workspace" });
     expect(properties).toHaveProperty("components");
     expect(properties).not.toHaveProperty("emoji");
   });
@@ -716,12 +699,7 @@ describe("message action discovery", () => {
         },
       })),
     );
-    const properties = await runMessageActionDiscoveryAsync(
-      resolveChannelMessageToolSchemaPropertiesSteps({
-        cfg: {},
-        channel: "demo-contrib",
-      }),
-    );
+    const properties = await schemaProperties({ channel: "demo-contrib" });
     expect(Type.Object({ action: Type.String(), ...properties }).required).toEqual(["action"]);
   });
 
