@@ -3,10 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  buildPluginBindingApprovalCustomId,
-  resolvePluginConversationBindingApproval,
-} from "openclaw/plugin-sdk/conversation-runtime";
+import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { expectDefined as requireValue } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -2645,7 +2642,10 @@ describe("createTelegramBot", () => {
     const runMiddlewareChain = (ctx: Record<string, unknown>) =>
       runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
-    const resolvePluginBindingApprovalSpy = vi.mocked(resolvePluginConversationBindingApproval);
+    const resolvePluginBindingApprovalSpy = vi.spyOn(
+      conversationRuntime,
+      "resolvePluginConversationBindingApproval",
+    );
     resolvePluginBindingApprovalSpy.mockRejectedValueOnce(new Error("binding boom"));
 
     const ctx = makeCallbackRetryContext({
