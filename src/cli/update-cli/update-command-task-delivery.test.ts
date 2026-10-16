@@ -69,11 +69,9 @@ function seededOrphans() {
     rows,
     createRun: () => createUpdateRun({ trigger: "cli" }, { env }),
     exec: (sql: string) => inspect(filename, (connection) => connection.exec(sql)),
-    all: (sql: string) => inspect(filename, (connection) => connection.prepare(sql).all()),
-    count: (table: string) =>
-      inspect(filename, (connection) =>
-        connection.prepare(`SELECT count(*) AS count FROM ${table}`).get(),
-      ),
+    all: (sql: string, source = filename) =>
+      inspect(source, (connection) => connection.prepare(sql).all()),
+    count: (table: string) => queryOne(filename, `SELECT count(*) AS count FROM ${table}`),
   };
 }
 
@@ -85,6 +83,8 @@ function inspect<T>(filename: string, run: (db: DatabaseSync) => T): T {
     db.close();
   }
 }
+const queryOne = (filename: string, sql: string) =>
+  inspect(filename, (db) => db.prepare(sql).get());
 
 function recoveryDirectories(filename: string) {
   return fs
@@ -92,11 +92,9 @@ function recoveryDirectories(filename: string) {
     .filter((name) => name.startsWith("openclaw-task-delivery-recovery-"));
 }
 
-function expectUnadmitted(filename: string) {
-  inspect(filename, (db) => {
-    expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
-    expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
-  });
+function expectUnadmitted(f: ReturnType<typeof seededOrphans>) {
+  expect(f.all("PRAGMA foreign_key_check")).toHaveLength(18);
+  expect(f.count("update_runs")).toEqual({ count: 0 });
 }
 
 it("keeps repairable task-delivery state unchanged during update preview", async () => {
@@ -104,7 +102,7 @@ it("keeps repairable task-delivery state unchanged during update preview", async
   await expect(
     admitUpdateCommandRun({ opts: { dryRun: true }, root: f.root }).then(() => "admitted"),
   ).rejects.toThrow(/repairable[\s\S]*openclaw doctor --fix/iu);
-  expectUnadmitted(f.filename);
+  expectUnadmitted(f);
   expect(recoveryDirectories(f.filename)).toEqual([]);
 });
 
@@ -127,14 +125,12 @@ it("admits cascade-owned task-delivery orphans with preservation and a durable r
       }),
     ),
   );
-  inspect(path.join(directory, "database.sqlite"), (db) => {
-    expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
-  });
+  expect(f.all("PRAGMA foreign_key_check", path.join(directory, "database.sqlite"))).toHaveLength(
+    18,
+  );
   expect(f.all("SELECT task_id FROM task_delivery_state")).toEqual([{ task_id: "kept-task" }]);
   expect(f.all("PRAGMA foreign_key_check")).toEqual([]);
-  inspect(f.filename, (db) =>
-    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" }),
-  );
+  expect(queryOne(f.filename, "PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
   expect(f.count("update_runs")).toEqual({ count: 1 });
   completeUpdateCommandRun({ status: "ok", mode: "npm", durationMs: 1, steps: [] }, run);
   const record = getUpdateRun(run.runId, { env: f.env });
@@ -207,7 +203,7 @@ it("reports repairable orphans and Doctor next action for foreign-gateway admiss
   });
   try {
     expect(f.createRun).toThrow(/repairable[\s\S]*openclaw doctor --fix/iu);
-    expectUnadmitted(f.filename);
+    expectUnadmitted(f);
   } finally {
     owner?.release();
   }

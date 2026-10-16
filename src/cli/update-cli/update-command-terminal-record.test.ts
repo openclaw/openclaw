@@ -70,8 +70,8 @@ function fixture(
   const result = resultFixture(root, { mode: "git", runId, after, durationMs: 1 });
   return {
     params,
+    run,
     result,
-    assertCurrent,
     release: () => {
       current = false;
     },
@@ -95,20 +95,13 @@ function fixture(
 }
 
 function setVerification(f: ReturnType<typeof fixture>, key: string, value: unknown) {
-  if (value === undefined) {
-    f.write(
-      "UPDATE update_runs SET verification_json = json_remove(verification_json, ?) WHERE run_id = ?",
-      `$.${key}`,
-      f.result.runId!,
-    );
-  } else {
-    f.write(
-      "UPDATE update_runs SET verification_json = json_set(verification_json, ?, json(?)) WHERE run_id = ?",
-      `$.${key}`,
-      JSON.stringify(value),
-      f.result.runId!,
-    );
-  }
+  const remove = value === undefined;
+  f.write(
+    `UPDATE update_runs SET verification_json = ${remove ? "json_remove(verification_json, ?)" : "json_set(verification_json, ?, json(?))"} WHERE run_id = ?`,
+    `$.${key}`,
+    ...(remove ? [] : [JSON.stringify(value)]),
+    f.run.runId,
+  );
 }
 
 type CaptureRejection = {
@@ -119,28 +112,24 @@ type CaptureRejection = {
   verification?: [key: string, value: unknown];
 };
 
+const verificationRejections: [string, string, unknown, UpdateRunResult["after"]?][] = [
+  ["missing observed build", "runningBuildId", undefined],
+  ["missing observed version", "runningVersion", undefined, { version: after.version }],
+  ["conflicting omitted build", "runningBuildId", "unrelated-build", { version: after.version }],
+  ["conflicting omitted version", "runningVersion", "2026.1.1", { buildId: after.buildId }],
+  ["missing plugin error list", "pluginErrors", undefined],
+  ["plugin failure", "pluginErrors", ["synthetic plugin failure"]],
+];
+
 const captureRejections: CaptureRejection[] = [
   ...["serviceRunning", "versionMatch", "channelsReady", "readyz", "settled"].map<CaptureRejection>(
     (key) => ({ name: `unverified ${key}`, verification: [key, false] }),
   ),
-  { name: "missing observed build", verification: ["runningBuildId", undefined] },
-  {
-    name: "missing observed version",
-    expected: { version: after.version },
-    verification: ["runningVersion", undefined],
-  },
-  {
-    name: "conflicting build omitted from result",
-    expected: { version: after.version },
-    verification: ["runningBuildId", "unrelated-build"],
-  },
-  {
-    name: "conflicting version omitted from result",
-    expected: { buildId: after.buildId },
-    verification: ["runningVersion", "2026.1.1"],
-  },
-  { name: "missing plugin error list", verification: ["pluginErrors", undefined] },
-  { name: "plugin failure", verification: ["pluginErrors", ["synthetic plugin failure"]] },
+  ...verificationRejections.map<CaptureRejection>(([name, key, value, expected]) => ({
+    name,
+    expected,
+    verification: [key, value],
+  })),
   { name: "running history", terminal: "running" },
   { name: "failed history", terminal: "failed" },
   ...["buildId", "sha"].map<CaptureRejection>((key) => ({
@@ -202,7 +191,7 @@ describe("owned completed update publication", () => {
       .mockImplementation(() => {
         throw new Error("live database is changing");
       });
-    const reportPath = path.join(root, "update-reports", `${f.params.opts.run.runId}.md`);
+    const reportPath = path.join(root, "update-reports", `${f.run.runId}.md`);
     let savedAtPublication: string | undefined;
     const captureReport = () => {
       savedAtPublication ??= fs.readFileSync(reportPath, "utf8");
@@ -226,7 +215,7 @@ describe("owned completed update publication", () => {
     );
     expect(jsonOutput.mock.calls[0]?.[0]).not.toHaveProperty("captured");
     // A historical report is not permission for the next update to skip admission.
-    await expect(assertUpdateRecoveryAdmission({ env: f.params.opts.run.env })).rejects.toThrow(
+    await expect(assertUpdateRecoveryAdmission({ env: f.run.env })).rejects.toThrow(
       "live database is changing",
     );
   });
@@ -245,12 +234,12 @@ describe("owned completed update publication", () => {
     if (kind === "failed cleanup") {
       cleanupError = new Error("release failed");
     } else if (kind === "retarget") {
-      f.params.opts.run.env.OPENCLAW_STATE_DIR = dirs.make("update-terminal-other-");
+      f.run.env.OPENCLAW_STATE_DIR = dirs.make("update-terminal-other-");
     } else if (kind === "replace") {
       fs.renameSync(f.databasePath, `${f.databasePath}.retained`);
       fs.copyFileSync(`${f.databasePath}.retained`, f.databasePath);
     } else if (kind === "different-run") {
-      f.params.opts.run.runId = "unrelated-run";
+      f.run.runId = "unrelated-run";
     } else {
       f.result.after = { ...after, buildId: "different-candidate" };
     }
@@ -274,7 +263,7 @@ describe("owned completed update publication", () => {
       if (condition === "malformed recovery") {
         f.write(
           "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES(?, ?, ?)",
-          `update.recovery.${f.params.opts.run.runId}`,
+          `update.recovery.${f.run.runId}`,
           "{}",
           Date.now(),
         );

@@ -193,14 +193,11 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
       if (restartPrevious) {
         mocks.configSnapshot.mockResolvedValueOnce(undefined);
       }
-      const result: Parameters<typeof maybeRestartService>[0]["result"] = serviceUpdateResult(
-        replacementRoot,
-        {
-          mode,
-          before: { version: VERSION },
-          after: { version: VERSION, ...(mode === "git" ? { buildId: "target-build" } : {}) },
-        },
-      );
+      const result = serviceUpdateResult(replacementRoot, {
+        mode,
+        before: { version: VERSION },
+        after: { version: VERSION, ...(mode === "git" ? { buildId: "target-build" } : {}) },
+      });
       const activated = await maybeRestartService({
         ...restartOptions,
         result,
@@ -251,6 +248,7 @@ export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenan
     "delegates %s activation and post-handoff Doctor after newer config is stamped",
     async (mode) => {
       const { root, run, mocks, writeConfig } = getFixture();
+      const entry = path.join(root, "dist", "index.js");
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
         updateInstallKind: mode === "git" ? "git" : "package",
         root,
@@ -293,7 +291,7 @@ export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenan
       ]);
       const child = mocks.child.mock.calls[0];
       expect(child?.[0].slice(1)).toEqual([
-        path.join(root, "dist", "index.js"),
+        entry,
         "gateway",
         "restart",
         "--preserve-definition",
@@ -321,17 +319,10 @@ export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenan
         json: true,
         timeoutMs: 1000,
       });
+      const repairFlags = ["--repair", "--non-interactive", "--no-workspace-suggestions", "--yes"];
       expect(doctorRunner.mock.calls.filter(([argv]) => argv[2] === "doctor")).toEqual([
         [
-          [
-            process.execPath,
-            path.join(root, "dist", "index.js"),
-            "doctor",
-            "--repair",
-            "--non-interactive",
-            "--no-workspace-suggestions",
-            "--yes",
-          ],
+          [process.execPath, entry, "doctor", ...repairFlags],
           expect.objectContaining({ cwd: root }),
         ],
       ]);

@@ -145,58 +145,55 @@ async function scenario(
   preparedRecovery = false,
   completedByGateway = false,
 ) {
-  let swap;
-  let setupInjected = false;
+  const fixture = await createPackageSwapFixture(base);
+  let injected = false;
+  let publicationFailure: { mockRestore(): void } | undefined;
   if (kind === "unverified-completion") {
-    const fixture = await createPackageSwapFixture(base);
     const rename = fs.rename.bind(fs);
-    const effect = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+    publicationFailure = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
       if (String(args[0]) === fixture.packageRoot) {
-        setupInjected = true;
+        injected = true;
         throw Object.assign(new Error("fixture publication move denied"), { code: "EXDEV" });
       }
       return rename(...args);
     });
-    let transaction: PackageUpdateTransaction | undefined;
-    let result;
-    try {
-      result = await swapStagedPackageInstall({
-        ...fixture.params,
-        onTransaction: (value) => {
-          transaction = value;
-        },
-      });
-    } finally {
-      effect.mockRestore();
-    }
-    if (!transaction || result.status !== "failed") {
-      throw new Error("unverified fixture did not retain its failed transaction");
-    }
-    swap = { ...fixture, transaction, result };
   } else if (["link-retained", "link-changed", "transient-read"].includes(kind)) {
-    swap = await createRetainedPackageSwap(base, async (fixture) => {
-      const checkout = path.join(base, "operator-checkout");
-      await fs.rename(fixture.packageRoot, checkout);
-      await fs.symlink(
-        checkout,
-        fixture.packageRoot,
-        process.platform === "win32" ? "junction" : "dir",
-      );
-    });
+    const checkout = path.join(base, "operator-checkout");
+    await fs.rename(fixture.packageRoot, checkout);
+    await fs.symlink(
+      checkout,
+      fixture.packageRoot,
+      process.platform === "win32" ? "junction" : "dir",
+    );
   } else if (kind === "verified-report-read") {
-    swap = await createRetainedPackageSwap(base, async (fixture) => {
-      const candidate = fixture.params.stage.packageRoot;
-      const worker = path.join(candidate, "dist", "infra", "update-candidate-state.worker.js");
-      await fs.mkdir(path.dirname(worker), { recursive: true });
-      await fs.writeFile(
-        worker,
-        `void import(${JSON.stringify(resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState).href)});\n`,
-      );
-      await writePackageDistInventory(candidate);
-    });
-  } else {
-    swap = await createRetainedPackageSwap(base);
+    const candidate = fixture.params.stage.packageRoot;
+    const worker = path.join(candidate, "dist", "infra", "update-candidate-state.worker.js");
+    await fs.mkdir(path.dirname(worker), { recursive: true });
+    await fs.writeFile(
+      worker,
+      `void import(${JSON.stringify(resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState).href)});\n`,
+    );
+    await writePackageDistInventory(candidate);
   }
+  let transaction: PackageUpdateTransaction | undefined;
+  let swapResult: Awaited<ReturnType<typeof swapStagedPackageInstall>>;
+  try {
+    swapResult = await swapStagedPackageInstall({
+      ...fixture.params,
+      onTransaction: (value) => {
+        transaction = value;
+      },
+    });
+  } finally {
+    publicationFailure?.mockRestore();
+  }
+  if (
+    !transaction ||
+    swapResult.status !== (kind === "unverified-completion" ? "failed" : "committed")
+  ) {
+    throw new Error("Fixture did not retain the expected package transaction");
+  }
+  const swap = { ...fixture, transaction, result: swapResult };
   const cleanup =
     kind === "cleanup-deadline"
       ? {
@@ -245,7 +242,6 @@ async function scenario(
       db.close();
     }
   };
-  let injected = setupInjected;
   let failedRead: "state" | "lease" | undefined;
   const readPaths = {
     state: path.join(base, "state", "state", "openclaw.sqlite"),

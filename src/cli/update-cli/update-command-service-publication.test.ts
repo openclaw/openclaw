@@ -135,40 +135,36 @@ it("keeps Task Scheduler timeout details in the source-build failure report", ()
     expect(spawn).not.toHaveBeenCalled();
   }));
 
-it.each(["stale-profile"])(
-  "preserves the serving installation and points back to the original doctor command (profile=%s)",
-  (profile) =>
-    withRuntimePublicationFixture(async ({ root, env, service }) => {
-      vi.mocked(service.readRuntime).mockResolvedValue({
-        status: "running",
-        pid: 23456,
-        systemd: { managerUid: 2001 },
-      });
-      const entry = path.join(root, "dist", "entry.js");
-      const before = await fs.readFile(entry, "utf8");
-      const spawn = vi.fn(() => {
-        throw new Error("Automatic build started under the serving Gateway");
-      });
-      const attempt = runNodeMain({
-        cwd: root,
-        args: [...(profile ? ["--profile", profile] : []), "doctor"],
-        env: { ...env, OPENCLAW_RUNNER_LOG: "0" },
-        spawn,
-      });
-      await expect(attempt).rejects.toThrow(/affected Gateway.*running/);
-      await expect(attempt).rejects.toThrow(
-        `openclaw${profile ? ` --profile ${profile}` : ""} gateway stop`,
-      );
-      await expect(attempt).rejects.toThrow("retry the original command");
-      expect(spawn).not.toHaveBeenCalled();
-      expect(
-        vi
-          .mocked(service.readRuntime)
-          .mock.calls.some(([observedEnv]) => observedEnv?.OPENCLAW_PROFILE === profile),
-      ).toBe(true);
-      expect(await fs.readFile(entry, "utf8")).toBe(before);
-    }),
-);
+it("preserves the serving installation and the profiled doctor command", () =>
+  withRuntimePublicationFixture(async ({ root, env, service }) => {
+    const profile = "stale-profile";
+    vi.mocked(service.readRuntime).mockResolvedValue({
+      status: "running",
+      pid: 23456,
+      systemd: { managerUid: 2001 },
+    });
+    const entry = path.join(root, "dist", "entry.js");
+    const before = await fs.readFile(entry, "utf8");
+    const spawn = vi.fn(() => {
+      throw new Error("Automatic build started under the serving Gateway");
+    });
+    const attempt = runNodeMain({
+      cwd: root,
+      args: ["--profile", profile, "doctor"],
+      env: { ...env, OPENCLAW_RUNNER_LOG: "0" },
+      spawn,
+    });
+    await expect(attempt).rejects.toThrow(/affected Gateway.*running/);
+    await expect(attempt).rejects.toThrow(`openclaw --profile ${profile} gateway stop`);
+    await expect(attempt).rejects.toThrow("retry the original command");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(service.readRuntime)
+        .mock.calls.some(([observedEnv]) => observedEnv?.OPENCLAW_PROFILE === profile),
+    ).toBe(true);
+    expect(await fs.readFile(entry, "utf8")).toBe(before);
+  }));
 
 it("holds Gateway startup custody until the automatic source build exits", () =>
   withRuntimePublicationFixture(async ({ root, env, databasePath }) => {
@@ -199,13 +195,9 @@ it("holds Gateway startup custody until the automatic source build exits", () =>
     expect(builds).toBe(1);
   }));
 
-it.each([
-  { changed: true, sourceRuntimePrepared: undefined },
-  { changed: true, sourceRuntimePrepared: false },
-  { changed: true, sourceRuntimePrepared: true },
-])(
-  "parks before changed runtime publication (changed=$changed, prepared=$sourceRuntimePrepared)",
-  ({ changed, sourceRuntimePrepared }) =>
+it.each([undefined, false, true])(
+  "parks before changed runtime publication (prepared=%s)",
+  (sourceRuntimePrepared) =>
     withRuntimePublicationFixture(async ({ root, env, service }) => {
       vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("git");
       const scripts = path.join(root, "scripts");
@@ -217,7 +209,7 @@ it.each([
 export function prepareBundledPluginRuntime() {
   if (${sourceRuntimePrepared === true}) throw new Error("Prepared runtime must not be staged again");
   return {
-    changed: ${changed},
+    changed: true,
     async publish(assertCurrent) {
       await assertCurrent();
       await fs.writeFile(${JSON.stringify(artifact)}, "candidate");
@@ -292,8 +284,8 @@ export function prepareBundledPluginRuntime() {
             expect(readExpiry()).toBeGreaterThan(afterPublication + leaseMs * 3);
             return result;
           }),
-        ).resolves.toEqual({ changed: changed && sourceRuntimePrepared !== true });
-        const published = changed && sourceRuntimePrepared !== true;
+        ).resolves.toEqual({ changed: sourceRuntimePrepared !== true });
+        const published = sourceRuntimePrepared !== true;
         expect(park).toHaveBeenCalledTimes(published ? 1 : 0);
         expect(await fs.readFile(artifact, "utf8")).toBe(published ? "candidate" : "original");
         if (published) {
@@ -377,13 +369,7 @@ it.each([
       vi.mocked(gatewayLocks.readActiveGatewayLockIdentity).mockRejectedValue(new Error("unknown"));
     } else if (scenario === "explicit listener") {
       vi.mocked(service.readCommand).mockResolvedValue({
-        programArguments: [
-          process.execPath,
-          path.join(root, "dist", "entry.js"),
-          "gateway",
-          "--port",
-          "19420",
-        ],
+        programArguments: [...serviceCommand(root), "--port", "19420"],
       });
       vi.mocked(portProbe.probePortUsage).mockImplementation(async (port) =>
         port === 19420 ? "busy" : "free",
@@ -433,17 +419,16 @@ it.each(["shared SDK alias", "nested shared output"])(
       await writeRuntimeRoot(snapshot);
       const current = path.join(home, "current");
       await fs.symlink(snapshot, current, "junction");
-      if (scenario === "shared SDK alias") {
-        const aliasParent = path.join(snapshot, "dist", "extensions", "node_modules");
-        await fs.mkdir(aliasParent, { recursive: true });
-        await fs.symlink(root, path.join(aliasParent, "openclaw"), "junction");
-      } else if (scenario === "nested shared output") {
-        const nested = path.join(root, "dist-runtime", "extensions", "demo");
-        const aliasParent = path.join(snapshot, "dist", "extensions", "node_modules");
-        await fs.mkdir(nested, { recursive: true });
-        await fs.mkdir(aliasParent, { recursive: true });
-        await fs.symlink(nested, path.join(aliasParent, "openclaw"), "junction");
+      const aliasParent = path.join(snapshot, "dist", "extensions", "node_modules");
+      await fs.mkdir(aliasParent, { recursive: true });
+      const aliasTarget =
+        scenario === "shared SDK alias"
+          ? root
+          : path.join(root, "dist-runtime", "extensions", "demo");
+      if (scenario === "nested shared output") {
+        await fs.mkdir(aliasTarget, { recursive: true });
       }
+      await fs.symlink(aliasTarget, path.join(aliasParent, "openclaw"), "junction");
       vi.mocked(service.readCommand).mockResolvedValue({
         programArguments: serviceCommand(current),
         managedDefinition: { programArguments: serviceCommand(root) },
@@ -467,20 +452,16 @@ it.each(["shared SDK alias", "nested shared output"])(
 );
 
 it.each([
-  {
-    label: "discovered before the effect",
-    late: true,
-    output: "dist-runtime",
-    shared: "dist-runtime",
-  },
-  { label: "physically disjoint", late: false, output: "dist-runtime", shared: undefined },
-])("fences runtime-only publication against a sibling that is $label", ({ late, output, shared }) =>
+  { label: "discovered before the effect", late: true },
+  { label: "physically disjoint", late: false },
+])("fences runtime-only publication against a sibling that is $label", ({ late }) =>
   withRuntimePublicationFixture(async ({ home, root, service, publish }) => {
+    const output = "dist-runtime";
     const sibling = path.join(home, "sibling");
     await writeRuntimeRoot(sibling);
     await fs.mkdir(path.join(root, output), { recursive: true });
-    if (shared) {
-      await fs.symlink(path.join(root, shared), path.join(sibling, shared), "junction");
+    if (late) {
+      await fs.symlink(path.join(root, output), path.join(sibling, output), "junction");
     }
     const directory = path.join(home, ".config", "systemd", "user");
     await fs.mkdir(directory, { recursive: true });
@@ -516,13 +497,12 @@ it.each([
       },
       { outputPaths: [output] },
     );
-    const overlaps = shared === output;
-    if (overlaps) {
+    if (late) {
       await expect(publication).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
     } else {
       await expect(publication).resolves.toBeUndefined();
     }
-    expect(await fs.readFile(artifact, "utf8")).toBe(overlaps ? "original" : "candidate");
+    expect(await fs.readFile(artifact, "utf8")).toBe(late ? "original" : "candidate");
   }),
 );
 
