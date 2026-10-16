@@ -497,7 +497,16 @@ suite.define(() => {
           path: path.join(suite.artifactDir, `warm-${profile}-after-hello.png`),
         });
         if (profile === "large" || imported) {
-          const messages = [...olderMessages, rememberedMessage];
+          const messages = [
+            ...olderMessages,
+            {
+              ...rememberedMessage,
+              __openclaw: {
+                ...rememberedMessage.__openclaw,
+                senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2",
+              },
+            },
+          ];
           const firstPage = messages.slice(-1_000);
           const hasMore = messages.length > firstPage.length;
           await gateway.setMethodResponse("chat.history", {

@@ -617,6 +617,34 @@ it("prepends a strictly older page and exhausts", async () => {
   expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", olderRequest(state.sessionKey));
 });
 
+it("replaces cached source groups during a zero-offset refill without losing live rows", async () => {
+  const cached = nativeHistoryMessage(3);
+  const changed = {
+    ...cached,
+    __openclaw: { ...cached.__openclaw, senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2" },
+  };
+  const sibling = { ...changed, content: "Second projection from the same source" };
+  const unchanged = nativeHistoryMessage(4);
+  const live = nativeHistoryMessage(5);
+  const request = vi.fn(async () => ({
+    ...historyPage(),
+    messages: [nativeHistoryMessage(2), changed, sibling, { ...unchanged }],
+  }));
+  const { pane, state } = historyPane(request);
+  state.chatMessages = [cached, unchanged, live];
+  state.chatHistoryPagination = pagination(4, 0);
+
+  await pane.loadOlderMessages();
+
+  expect(state.chatMessages).toEqual([nativeHistoryMessage(2), changed, sibling, unchanged, live]);
+  expect(state.chatMessages[3]).toBe(unchanged);
+  expect(state.chatMessages[4]).toBe(live);
+  expect(request).toHaveBeenCalledExactlyOnceWith(
+    "chat.history",
+    olderRequest(state.sessionKey, 0),
+  );
+});
+
 it("refreshes the tail instead of mixing an older page from a replacement session", async () => {
   const extra = { totalMessages: 2, sessionInfo: { sessionId: "session-new" } };
   const request = vi

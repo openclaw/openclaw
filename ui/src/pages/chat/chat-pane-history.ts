@@ -502,7 +502,11 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
             new Set(pendingRunIds.filter((runId) => !remaining.has(runId))),
           );
         }
-        const nextMessages = prependUniqueNativeMessages(messages, state.chatMessages);
+        const nextMessages = prependUniqueNativeMessages(
+          messages,
+          state.chatMessages,
+          requestedOffset === 0,
+        );
         const grew = nextMessages.length > state.chatMessages.length;
         publishChatSessionProjectionMessages(state, nextMessages);
         state.chatHistoryPagination = exhausted
