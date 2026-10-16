@@ -16,6 +16,7 @@ import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
   const runtime = untrack(() => props.runtime);
   runtime.mountPanelActions();
+  runtime.mountToolIcons();
   const [presented, setPresented] = createSignal(runtime.presented);
   const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
   const visibilityChanged = () => runtime.requestUpdate();

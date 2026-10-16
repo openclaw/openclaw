@@ -52,6 +52,9 @@ export const zh_CN = {
       modelId: "模型 ID",
       modelIdPlaceholder: "例如 llama3、claude-3-7-sonnet",
       modelIdRequired: "模型 ID 必填",
+      noAuthConfirm: "未输入 API Key。是否将该端点设为免认证模式（请求不发送 Authorization 头）？",
+      noAuthCompatKeyRequired:
+        "免认证模式仅支持 OpenAI Chat Completions 端点。请输入 API Key（若服务器不校验密钥，可填入任意占位符）。",
       retryChoice: "你想修改哪一项？",
       verifying: "正在验证...",
       verificationFailedError: "验证失败：{error}",

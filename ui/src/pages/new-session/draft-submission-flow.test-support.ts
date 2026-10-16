@@ -151,7 +151,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     }),
     {
       readAgents: () => context.agents,
-      requestUpdate: vi.fn(),
+      changed: vi.fn(),
       updateComplete: () => Promise.resolve(),
       onInvalidate: vi.fn(),
       onVisibilityRetired: () => flow?.setVisibility("normal"),
@@ -171,7 +171,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       isAdmin: place?.isAdmin() ?? false,
     }),
     {
-      requestUpdate: vi.fn(),
+      changed: vi.fn(),
       updateComplete: () => Promise.resolve(),
       onProjectMissing: () => place?.clearProjectSelection(),
       onSelectProject: (projectId) => place?.selectProjectId(projectId),
@@ -191,27 +191,27 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       pendingPlacementSessionKey: flow?.pendingPlacement.sessionKey ?? "",
     }),
     {
-      requestUpdate: vi.fn(),
+      changed: vi.fn(),
       onError: (error) => flow?.setError(error),
       onClearError: (error) => flow?.clearError(error),
     },
   );
-  const requestUpdate = vi.fn();
+  const changed = vi.fn();
   const flow = new DraftSubmissionFlow(
     gateway,
     place,
     () => ({ context, data: options.data, isConnected: phase === "connected" }),
     {
-      requestUpdate,
+      changed,
       closeTransientUi: vi.fn(),
       takePreparedTitle: options.takePreparedTitle,
       retainForHandoff: options.retainForHandoff,
     },
   );
   gateway.synchronize(context.gateway);
-  place.setAgentsHydrated(true);
+  place.agentsHydrated = true;
   place.adoptAgentDefaults();
-  return { capabilities: flow.capabilities, context, flow, gateway, place, request, requestUpdate };
+  return { capabilities: flow.capabilities, context, flow, gateway, place, request, changed };
 }
 
 export function registerTextPayload(id: string) {

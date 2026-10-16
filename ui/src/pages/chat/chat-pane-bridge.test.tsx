@@ -56,6 +56,11 @@ it("exposes the current navigation face through the real pane host without a gat
 it("applies a route draft and its focus cue to an already mounted native pane", async () => {
   installTranscriptDomMocks();
   onTestFinished(resetTranscriptTestDom);
+  const renderProbe = vi.fn<(host: object, phase: "invalidate" | "commit") => void>();
+  vi.stubGlobal("openclawRenderLifecycleTestHook", renderProbe);
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
   const sessionKey = "agent:main:bridge-draft";
   const fixture = createMountedPanes([
     { key: sessionKey, kind: "direct", sessionId: "bridge-draft", updatedAt: 1 },
@@ -90,9 +95,20 @@ it("applies a route draft and its focus cue to an already mounted native pane", 
     view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
     "mounted native pane",
   );
+  const runtime = await waitForSolid(() =>
+    expectDefined(
+      renderProbe.mock.calls.find(
+        ([host, phase]) => phase === "commit" && Reflect.get(host, "element") === pane,
+      )?.[0],
+      "reported pane runtime",
+    ),
+  );
+  expect(Reflect.get(runtime, "state")).toMatchObject({ sessionKey });
+  expect(renderProbe).toHaveBeenCalledWith(pane, "commit");
   setDraft("What can you do?");
   setFocusComposer(true);
   await pane.updateComplete;
+  expect(renderProbe).toHaveBeenCalledWith(runtime, "invalidate");
   expect(textarea.value).toBe("What can you do?");
   expect(document.activeElement).toBe(textarea);
   expect(textarea.closest(".agent-chat__input")?.classList).toContain(

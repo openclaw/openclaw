@@ -10,6 +10,7 @@ import type { PluginManifestProviderEndpoint } from "./manifest-types.js";
 import {
   matchesPluginProviderEndpoint,
   normalizePluginProviderBaseUrl,
+  prepareProviderEndpoints,
 } from "./plugin-metadata-provider-facts.js";
 
 export function hasConfiguredModelProvider(params: {
@@ -47,7 +48,7 @@ export function isProviderCatalogSourceAllowed(params: {
     provider?.baseUrl,
     ...(provider?.models ?? []).map((model) => model.baseUrl),
   ].filter((baseUrl): baseUrl is string => Boolean(baseUrl));
-  const endpoints = params.plugin.providerEndpoints ?? [];
+  const endpoints = prepareProviderEndpoints(params.plugin.providerEndpoints);
   // Adapters without native declarations keep their existing discovery contract.
   // Authored rows do not pass through this implicit-source decision.
   if (baseUrls.length === 0 && endpoints.length === 0) {

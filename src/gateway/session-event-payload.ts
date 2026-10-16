@@ -177,6 +177,7 @@ export function buildGatewaySessionSnapshot(params: {
     runtimeSelectionLocked: sessionRow.runtimeSelectionLocked,
     status: status ?? sessionRow.status,
     lastRunError: sessionRow.lastRunError ?? null,
+    suppressErrorNotice: sessionRow.suppressErrorNotice ?? false,
     providerReview: sessionRow.providerReview ?? null,
     lastRunId: sessionRow.lastRunId ?? null,
     hasAutomation: sessionRow.hasAutomation ?? false,

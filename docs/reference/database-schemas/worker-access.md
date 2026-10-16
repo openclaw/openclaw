@@ -523,8 +523,14 @@ or index position. The index position also catches older imports that append whi
 preserving the supplied mtime. A cache miss uses one existing writer command to
 read a bounded tail and store its result, including an empty result. Unavailable
 or cold projections remain incomplete and are not marked as successfully backfilled.
-Usage-cost refresh reads a stale rollup body and its monthly partitions in one
-worker snapshot; discovery still reads only metadata. Transcript statistics use
+Usage-cost refresh holds the exclusive refresh lease while reading a stale rollup
+body and its monthly partitions by key, without revalidating their metadata.
+Discovery still reads only metadata, and body reads retain their payload bounds.
+Full refresh transfers stale row snapshots in batches of up to 64 rows or 1 MiB
+of JSON and key data, with oversized rows sent alone. A final prune request uses
+the existing worker transaction and checkpoint and timestamp comparisons.
+Targeted refreshes do not prune other keys. Selected month deletion uses bounded
+key batches within the rollup write transaction. Transcript statistics use
 the existing batched read directly, without registering per-session write scopes
 for a stats cache. Large inventories would otherwise repeatedly transfer a growing
 scope map while churning the bounded cache. The transcript statistics
@@ -1970,8 +1976,11 @@ Phase C entry readers share this bounded MAIN residency. Eligible exact-entry
 and ordered-cohort reads reuse complete actor state or its entry-only projection;
 a cold miss loads the requested entries in one existing worker batch. Retained
 entry facts are frozen and shared, including selected prompt snapshots and sharing
-records. Mutable turn and workspace owners make shallow working copies when they
-adopt these facts; the public SDK detaches its mutable result at its own boundary.
+records. Installation freezes this internally produced JSON without rechecking
+prototypes or property descriptors, and skips already frozen shared subtrees.
+Worker transfer detaches objects but does not freeze them. Mutable turn and
+workspace owners make shallow working copies when they adopt these facts; the
+public SDK detaches its mutable result at its own boundary.
 Complete entry commit receipts refresh the entry projection without claiming transcript,
 membership, or pending-input coverage. Missing ancillary facts still use the
 existing reader. Scoped receipt counters keep unrelated session writes from
@@ -6450,6 +6459,15 @@ Doctor, CLI discovery, and released synchronous coding-tool construction retain
 their native compatibility paths. Bundled callers prepare presence before
 invoking that factory. Schemas, stored bytes, retention, and update behavior are
 unchanged.
+
+Runtime auth discovery retains canonical credential and health rows in its existing
+Gateway cache. Auth-cell writes and generic machine-state writes to the two auth
+keys invalidate those rows through the database owner's committed admission
+receipts; unrelated writes leave them warm. Receipts carry no credential payload.
+Rollback retires staged facts, so the next discovery reloads durable rows once.
+A write overtaking a discovery read invalidates its cached result on the next
+lookup. Credential use still checks the live credential authority at the effect;
+canonical reads, maintenance, and pinned snapshots retain their existing paths.
 
 Question answer and cancellation authority composes fresh tool-policy classification
 with the question owner's final session-reader batch. The original physical store,

@@ -18,10 +18,10 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
-import { renderActivityGroup } from "./chat-message-group.test-support.ts";
+import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createMessageEntry, createToolGroup } from "./chat-message.test-support.ts";
 import { mountCard, mountPreview } from "./chat-tool-cards.test-support.tsx";
-import { renderToolFixture as render, settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 const canvas = { kind: "canvas", surface: "assistant_message", render: "url" } as const;
 
@@ -537,24 +537,24 @@ describe("tool-card outcomes", () => {
         activity: [{ messageId: "stored-call", items: [item] }],
       });
       const container = document.createElement("div");
+      const view = createActivityGroupHarness(container);
       for (const [message, runActive] of [
         [live, true],
         [history.messages[0], false],
       ] as const) {
         const group = createToolGroup("outcome", [createMessageEntry("call", message)]);
-        await render(renderActivityGroup([group], { showReasoning: false, runActive }), container);
+        view.render([group], { showReasoning: false, runActive });
+        await settleToolBridges(container);
         expect(container.querySelectorAll(".chat-tool-failure")).toHaveLength(
           status === "failed" ? 1 : 0,
         );
-        await render(
-          renderActivityGroup([group], {
-            showReasoning: false,
-            runActive,
-            isToolMessageExpanded: () => true,
-            isToolExpanded: () => true,
-          }),
-          container,
-        );
+        view.render([group], {
+          showReasoning: false,
+          runActive,
+          isToolMessageExpanded: () => true,
+          isToolExpanded: () => true,
+        });
+        await settleToolBridges(container);
         expect(textOf(container, ".chat-tool-card__outcome")).toBe(label);
         expect(container.querySelector(".chat-tool-row--running")).toBeNull();
         const card = extractToolCardsCached(message)[0]!;

@@ -8,14 +8,16 @@ import type {
 } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
 import "../../../plugins/control-ui-view.solid.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { MessageGroup, type NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
-import { renderActivityGroup } from "./chat-message-group.test-support.ts";
+import {
+  ActivityGroup,
+  MessageGroup,
+  type NativeMessageGroupOptions,
+} from "./chat-message-group-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
 it.each([false, true])(
@@ -210,7 +212,9 @@ it("retains aggregate disclosure and legacy card focus when options refresh", as
     showToolCalls: true,
     isToolMessageExpanded: () => true,
   });
-  const view = mountSolid(() => <LitContent value={renderActivityGroup([group], options())} />);
+  const view = mountSolid(() => (
+    <ActivityGroup groups={[group]} options={options()} presentation="standalone" />
+  ));
   await waitForSolid(() => {
     expect(
       view.container.querySelectorAll(".chat-tools-inline .chat-tool-msg-collapse"),

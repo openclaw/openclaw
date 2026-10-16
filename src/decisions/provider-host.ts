@@ -50,7 +50,6 @@ type Health = {
   config: PluginEntryConfig | undefined;
   failures: number;
   openUntil: number;
-  authFailed: boolean;
   trial: boolean;
   lastSuccessAt?: number;
 };
@@ -89,7 +88,6 @@ export class DecisionProviderHost {
         config: providerConfig,
         failures: 0,
         openUntil: 0,
-        authFailed: false,
         trial: false,
       };
     }
@@ -192,7 +190,6 @@ export class DecisionProviderHost {
         configured &&
         enabled &&
         credentialReady &&
-        !health.authFailed &&
         !health.trial &&
         health.openUntil <= performance.now() &&
         this.pending.size < MAX_CONCURRENT,
@@ -267,7 +264,7 @@ export class DecisionProviderHost {
     if (!instance.runInRegistry(registry, () => this.ready())) {
       return this.unavailable("credentials-unavailable");
     }
-    if (health.authFailed || health.openUntil > performance.now() || health.trial) {
+    if (health.openUntil > performance.now() || health.trial) {
       return this.unavailable("circuit-open");
     }
     if (this.pending.size >= MAX_CONCURRENT) {
@@ -310,7 +307,7 @@ export class DecisionProviderHost {
         performance.now() >= deadlineMonotonicMs
       ) {
         // The host deadline bounds this request; it is not a provider-reported outage.
-        // Genuine transport, rate-limit, and auth failures are accounted below.
+        // Genuine transport and rate-limit failures are accounted below.
         return this.unavailable("deadline");
       }
       if (observedInterruption) {
@@ -451,11 +448,13 @@ export class DecisionProviderHost {
     ) {
       return;
     }
-    if (reason === "authentication") {
-      health.authFailed = true;
-      return;
-    }
-    if (reason === "unsupported-input" || reason === "credentials-unavailable") {
+    // The provider resolves credentials per evaluation. Rejecting one credential
+    // must not block other agents or a replacement credential at this shared host.
+    if (
+      reason === "authentication" ||
+      reason === "unsupported-input" ||
+      reason === "credentials-unavailable"
+    ) {
       return;
     }
     health.failures++;

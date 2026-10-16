@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOperatorToolGatewayAuthority } from "../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
 import * as currentPluginMetadata from "../plugins/current-plugin-metadata-state.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
@@ -35,6 +36,164 @@ afterEach(() => {
 });
 
 describe("registered decision capability", () => {
+  it.each([
+    {
+      agentId: "specialist",
+      llm: { allowedCompletionModels: ["fixture/other"] },
+      reason: "not allowlisted",
+    },
+    {
+      agentId: undefined,
+      llm: { allowedCompletionModels: ["fixture/other"] },
+      reason: "not allowlisted",
+    },
+    { agentId: undefined, llm: { allowedCompletionModels: [] }, reason: "no valid models" },
+    {
+      agentId: undefined,
+      llm: { allowedCompletionModels: ["invalid"] },
+      reason: "no valid models",
+    },
+  ])("denies SDK policy before dispatch: $reason", async ({ agentId, llm, reason }) => {
+    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    const host = registered(evaluate);
+    setRuntimeConfigSnapshot({
+      ...config,
+      plugins: { entries: { owner: { llm } } },
+    });
+    await expect(
+      host.api.runtime.decisions.evaluate(batch, { ...options(), agentId }),
+    ).rejects.toThrow(reason);
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, ["fixture/fixture-v1"], ["*"]])(
+    "keeps global role selection independent of override-only policy (%j)",
+    async (allowedCompletionModels) => {
+      const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+      const host = registered(evaluate);
+      setRuntimeConfigSnapshot({
+        agents: {
+          defaults: {
+            decisionModel: "fixture/fixture-v1",
+            modelPolicy: { allow: ["fixture/conversation-only"] },
+          },
+          entries: { main: { decisionModel: "fixture/main-role" } },
+        },
+        plugins: {
+          entries: {
+            owner: {
+              llm: { allowModelOverride: false, allowedModels: [], allowedCompletionModels },
+            },
+          },
+        },
+      });
+      const result = await withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey: "agent:main:fixture" },
+        () => host.api.runtime.decisions.evaluate(batch, options()),
+      );
+      expect(result).toMatchObject({ status: "ok" });
+      expect(evaluate).toHaveBeenCalledOnce();
+      expect(evaluate.mock.calls[0]?.[1]).toMatchObject({ model: "fixture-v1" });
+      expect(evaluate.mock.calls[0]?.[1].agentId).toBeUndefined();
+    },
+  );
+
+  it.each([undefined, false, true])(
+    "preserves owner-agent SDK calls without requiring override permission (%j)",
+    async (allowAgentIdOverride) => {
+      const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+      const host = registered(evaluate);
+      setRuntimeConfigSnapshot({
+        agents: {
+          defaults: { model: "fixture/primary" },
+          entries: {
+            specialist: { decisionModel: "fixture/specialist-v1" },
+            disabled: { decisionModel: "" },
+          },
+        },
+        plugins: {
+          entries: {
+            owner: {
+              llm: {
+                allowAgentIdOverride,
+                allowedCompletionModels: ["fixture/specialist-v1"],
+              },
+            },
+          },
+        },
+      });
+      expect(
+        await withGatewayToolCallerIdentity(
+          { agentId: "specialist", sessionKey: "agent:specialist:fixture" },
+          () => host.api.runtime.decisions.evaluate(batch, { ...options(), agentId: "specialist" }),
+        ),
+      ).toMatchObject({ status: "ok" });
+      expect(evaluate.mock.calls[0]?.[1]).toMatchObject({
+        model: "specialist-v1",
+        agentId: "specialist",
+      });
+      for (const agentId of [undefined, "disabled"]) {
+        expect(await host.api.runtime.decisions.evaluate(batch, { ...options(), agentId })).toEqual(
+          {
+            status: "unavailable",
+            reason: "disabled",
+          },
+        );
+      }
+      expect(evaluate).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["consumer", "MixedConsumer"])(
+    "uses registered consumer %s policy, not provider, ambient plugin or option identity",
+    async (consumerId) => {
+      const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+      const host = registered(evaluate);
+      const consumer = createPluginRecord({
+        id: consumerId,
+        source: "/synthetic/consumer.ts",
+        origin: "global",
+        enabled: true,
+        configSchema: false,
+      });
+      const api = host.createApi(consumer, { config });
+      host.registry.plugins.push(consumer);
+      onTestFinished(async () => {
+        await getPluginInstance(consumer)?.dispose();
+      });
+      setRuntimeConfigSnapshot({
+        ...config,
+        plugins: {
+          entries: {
+            owner: { llm: { allowAgentIdOverride: true, allowedCompletionModels: ["*"] } },
+            [consumerId.toLowerCase()]: { llm: { allowedCompletionModels: ["fixture/other"] } },
+          },
+        },
+      });
+      const spoofed = {
+        ...options(),
+        consumerId: "owner",
+        pluginIdForPolicy: "owner",
+        caller: { kind: "context-engine", id: "owner" },
+        authority: { allowAgentIdOverride: true },
+      };
+      await expect(
+        withPluginRuntimeGatewayRequestScope(
+          { pluginId: "owner", isWebchatConnect: () => false },
+          () => api.runtime.decisions.evaluate(batch, spoofed),
+        ),
+      ).rejects.toThrow(`not allowlisted for completions for plugin "${consumerId}"`);
+      await expect(
+        api.runtime.decisions.evaluate(batch, { ...spoofed, agentId: "specialist" }),
+      ).rejects.toThrow(`not allowlisted for completions for plugin "${consumerId}"`);
+      expect(evaluate).not.toHaveBeenCalled();
+      // Provider configuration is not consumer authorization either.
+      expect(await host.api.runtime.decisions.evaluate(batch, options())).toMatchObject({
+        status: "ok",
+      });
+    },
+  );
+
   it("routes a configured custom TypeSafe model without requiring a catalog preset", async () => {
     const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
     const host = registered(evaluate, undefined, "typesafe");
@@ -474,31 +633,35 @@ describe("fault settlement and generation health", () => {
       }
     },
   );
-  it.each(["admission rollback"])(
-    "keeps auth failures across %s until provider configuration changes",
-    async (recovery) => {
-      const callback = vi
-        .fn<DecisionProviderV1["evaluate"]>()
-        .mockResolvedValueOnce({ status: "unavailable", reason: "authentication" })
-        .mockResolvedValue(answer);
-      const host = registered(callback);
-      expect(await host.run()).toMatchObject({ reason: "authentication" });
-      expect(await host.run()).toMatchObject({ reason: "circuit-open" });
-      const selected = config;
-      if (recovery === "admission rollback") {
-        const replacement = prepareDecisionProviderReload(host.registry, new Set([host.record.id]));
-        await replacement.rollback(new AbortController().signal);
-      }
-      expect(await host.run(options(), selected)).toMatchObject({ reason: "circuit-open" });
-      expect(callback).toHaveBeenCalledTimes(1);
-      expect(
-        await host.run(options(), {
-          ...selected,
-          plugins: { entries: { owner: { config: { endpoint: "updated" } } } },
-        }),
-      ).toMatchObject({ status: "ok" });
-    },
-  );
+  it("keeps rejected credentials from blocking another agent or later credential recovery", async () => {
+    let firstCredentialAccepted = false;
+    const callback = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, { agentId }) =>
+      agentId === "first" && !firstCredentialAccepted
+        ? { status: "unavailable", reason: "authentication", retryAfterMs: 60_000 }
+        : answer,
+    );
+    const host = registered(callback);
+    const providerHost = host.registry.decisionProviders[0]!.host;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      expect(await host.run({ ...options(), agentId: "first" })).toEqual({
+        status: "unavailable",
+        reason: "authentication",
+      });
+      expect(callback).toHaveBeenCalledTimes(attempt);
+    }
+    expect(await host.run({ ...options(), agentId: "second" })).toMatchObject({ status: "ok" });
+
+    firstCredentialAccepted = true;
+    expect(await host.run({ ...options(), agentId: "first" })).toMatchObject({ status: "ok" });
+    expect(callback).toHaveBeenCalledTimes(5);
+    expect(providerHost.inspect(config)).toMatchObject({
+      activeRequests: 0,
+      callable: true,
+      successCount: 2,
+      reasons: { authentication: 3 },
+    });
+  });
   it("bounds recovery to one half-open trial", async () => {
     let now = 0;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => now);

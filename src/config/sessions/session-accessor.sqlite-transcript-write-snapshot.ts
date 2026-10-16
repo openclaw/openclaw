@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { hasSqlitePostCommitScope } from "../../infra/sqlite-post-commit.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
@@ -39,7 +39,7 @@ import {
 
 export type TranscriptWriteViewGuard = {
   assertCurrent: () => void;
-  onPendingTransaction: (database: DatabaseSync) => void;
+  onPendingTransaction: (database: EngineConnection) => void;
 };
 
 /** Prepare without holding a transaction; fresh inserts recheck their original snapshot. */
@@ -116,7 +116,7 @@ export function runTranscriptWriteSnapshotSync<T>(
 ): Result<TranscriptWriteSnapshot<T>, TranscriptAppendRefusal> {
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
-  let connection: DatabaseSync | undefined;
+  let connection: EngineConnection | undefined;
   const write = (
     database: OpenClawAgentDatabase,
   ): Result<TranscriptWriteSnapshot<T>, TranscriptAppendRefusal> => {

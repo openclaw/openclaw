@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeScrollState } from "./scroll-state-observer.ts";
-import { SessionDataScrollController } from "./session-data-scroll-controller.ts";
 
 type Publish = Parameters<typeof observeScrollState>[1];
 
@@ -113,29 +112,25 @@ describe("scroll state observation", () => {
     expect(publish).toHaveBeenCalledTimes(2);
   });
 
-  it("shares a frame with the sidebar and never reads from its update entry point", () => {
+  it("shares geometry reads between observers of the same scroller", () => {
     const element = document.createElement("div");
-    element.className = "sidebar-shell__body";
     container.append(element);
     const reads: string[] = [];
     geometry(element, reads, "read");
-    watch(element, vi.fn());
-    const notify = vi.fn();
-    const sidebar = new SessionDataScrollController(notify);
-    try {
-      sidebar.synchronize(container);
-      sidebar.update(element);
-      expect(reads).toEqual([]);
-      vi.advanceTimersToNextFrame();
-      expect(reads).toEqual(["read"]);
-      expect(sidebar.state).toBe("top");
-      element.scrollTop = 50;
-      sidebar.update(element);
-      vi.advanceTimersToNextFrame();
-      expect(sidebar.state).toBe("middle");
-      expect(notify).toHaveBeenCalledTimes(2);
-    } finally {
-      sidebar.dispose();
+    const publishers = [vi.fn(), vi.fn()];
+    const observers = publishers.map((publish) => watch(element, publish));
+    for (const observation of observers) {
+      observation.schedule();
+    }
+    expect(reads).toEqual([]);
+    vi.advanceTimersToNextFrame();
+    expect(reads).toEqual(["read"]);
+    for (const publish of publishers) {
+      expect(publish).toHaveBeenCalledExactlyOnceWith({
+        scrollable: true,
+        atStart: true,
+        atEnd: false,
+      });
     }
   });
 });

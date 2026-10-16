@@ -9,6 +9,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptEvent,
@@ -135,7 +136,7 @@ describe("SQLite transcript history cache", () => {
         env: fixtureScope.env,
       });
       // The database closer retires its dependents before native close; replacement uses it too.
-      disposeNodeSqliteDependents(database.db, reason);
+      disposeNodeSqliteDependents(requireNativeSqliteDatabase(database.db), reason);
       const parse = vi.spyOn(JSON, "parse");
       const payloadReads = () => parse.mock.calls.filter(([json]) => json.includes(marker));
       expect(readRecentSessionTranscriptHistoryEvents(other, limits).events).toHaveLength(1);
@@ -250,7 +251,7 @@ describe("SQLite transcript history cache", () => {
       env: fixtureScope.env,
     });
     const replacementPath = `${database.path}.replacement.sqlite`;
-    await backup(database.db, replacementPath);
+    await backup(requireNativeSqliteDatabase(database.db), replacementPath);
     await appendTranscriptEvent(fixtureScope, {
       type: "reset",
       id: "old-reset",

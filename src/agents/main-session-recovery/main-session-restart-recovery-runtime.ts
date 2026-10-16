@@ -1,6 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { resolveStateDir } from "../../config/paths.js";
+import { hasMainSessionRecoveryClaim } from "../../config/sessions/restart-recovery-state.js";
+import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { waitForAbortSignal } from "../../infra/abort-signal.js";
@@ -117,6 +120,12 @@ export async function recoverRestartAbortedMainSessions(params: {
   const skipReasons = new Map<MainSessionRecoverySkipReason, number>();
   const handledSessionKeys = params.handledSessionKeys ?? new Set<string>();
 
+  const candidates: Array<{
+    storePath: string;
+    storeAgentId?: string;
+    sessionKey: string;
+    entry: SessionEntry;
+  }> = [];
   for (const target of await discoverRestartRecoveryStoreTargets(params)) {
     if (params.shouldContinue?.() === false) {
       break;
@@ -124,11 +133,40 @@ export async function recoverRestartAbortedMainSessions(params: {
     if (params.excludedStoreTargets?.has(restartRecoveryStoreTargetKey(target))) {
       continue;
     }
+    try {
+      const entries = await readSessionEntrySummariesInWorker({
+        agentId: target.agentId,
+        storePath: target.storePath,
+      });
+      for (const entry of entries) {
+        if (hasMainSessionRecoveryClaim(entry.entry)) {
+          candidates.push({ ...entry, storePath: target.storePath, storeAgentId: target.agentId });
+        }
+      }
+    } catch (error) {
+      mainSessionRecoveryLog.warn(
+        `failed to load session store ${target.storePath}: ${String(error)}`,
+      );
+      result.failed++;
+    }
+  }
+  // Preparation writes update updatedAt; the interruption's endedAt retains its FIFO position.
+  candidates.sort(
+    (a, b) =>
+      (a.entry.endedAt ?? a.entry.updatedAt) - (b.entry.endedAt ?? b.entry.updatedAt) ||
+      a.storePath.localeCompare(b.storePath) ||
+      a.sessionKey.localeCompare(b.sessionKey),
+  );
+  for (const candidate of candidates) {
+    if (params.shouldContinue?.() === false) {
+      break;
+    }
     const storeResult = await recoverStore({
       ...params,
       passId,
-      storePath: target.storePath,
-      storeAgentId: target.agentId,
+      storePath: candidate.storePath,
+      storeAgentId: candidate.storeAgentId,
+      preparedEntries: [candidate],
       handledSessionKeys,
       onSkipped: (reason) => {
         skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);

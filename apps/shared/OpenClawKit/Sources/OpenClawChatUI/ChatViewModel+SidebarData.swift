@@ -12,7 +12,7 @@ extension OpenClawChatViewModel {
             } else {
                 self.legacySessions = newValue
                 self.syncContextUsageFraction()
-                self.syncActiveSessionRunIDsFromCurrentSession()
+                self.syncActiveSessionMetadata()
             }
         }
     }
@@ -27,7 +27,7 @@ extension OpenClawChatViewModel {
         self.legacySwarmSessions = []
         owner.onChange = { [weak self] in
             self?.syncContextUsageFraction()
-            self?.syncActiveSessionRunIDsFromCurrentSession()
+            self?.syncActiveSessionMetadata()
             self?.updateSwarmProjection()
         }
         self.updateSidebarQuery()

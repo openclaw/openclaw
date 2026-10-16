@@ -10,8 +10,8 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
 import * as videoPosters from "../../lib/media/video-poster.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import { emptyLegacyContent, solidContent } from "../../lit/solid-content.tsx";
 import {
   createReviewFixture as createUnboundReviewFixture,
@@ -20,6 +20,7 @@ import {
 } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid as mountStatefulSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
@@ -29,7 +30,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
-import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
+import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
 import {
   releaseChatMediaResourceSubscriber,
   type AttachmentItem,
@@ -308,23 +309,29 @@ describe("chat pane embedded panels", () => {
           artifactId: `artifact_${attachmentId}`,
         },
       };
-      const rerender = () =>
-        renderPaneLegacyContent(
-          renderAssistantAttachments(
-            [attachment],
-            {
-              connectionEpoch: 1,
-              onRequestUpdate: rerender,
-              resolveArtifactDownload: firstResolver,
-            },
-            (content) => {
-              sidebarContent = content;
-            },
-            undefined,
-            false,
-          ),
-          container,
-        );
+      const props = () => ({
+        attachments: [attachment],
+        options: {
+          connectionEpoch: 1,
+          onRequestUpdate: rerender,
+          resolveArtifactDownload: firstResolver,
+        },
+        onOpenSidebar: (content: SidebarContent) => {
+          sidebarContent = content;
+        },
+        inlinePlayback: false,
+      });
+      let mounted: ReturnType<
+        typeof mountStatefulSolid<Parameters<typeof AssistantAttachments>[0]>
+      >;
+      const rerender = () => {
+        if (mounted) {
+          mounted.update(props());
+        } else {
+          mounted = mountStatefulSolid(AssistantAttachments, props(), container);
+        }
+      };
+      onTestFinished(() => mounted.dispose());
       onTestFinished(() => releaseChatMediaResourceSubscriber(rerender));
       rerender();
       const open = await vi.waitFor(() =>

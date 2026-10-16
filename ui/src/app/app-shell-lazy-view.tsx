@@ -9,7 +9,7 @@ import type { ShellNewSessionHost } from "./app-shell-new-session.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
 import {
   isOptionalElementDefined,
-  type LazyCustomElementRequestController,
+  type LazyCustomElementRequests,
   type OptionalCustomElement,
   DEBUG_OVERLAY_ELEMENT,
   KEYBOARD_SHORTCUTS_ELEMENT,
@@ -39,7 +39,7 @@ export interface ShellLazyOverlayHost extends DebugOverlayFrameHost, ShellNewSes
     typeof import("../pages/debug/debug-overlay-frame.ts").renderPendingDebugOverlay
   >;
   closePendingPalette(): void;
-  readonly lazyCustomElements: LazyCustomElementRequestController;
+  readonly lazyCustomElements: LazyCustomElementRequests;
   handleCommandPaletteSlashCommand(command: string): void;
   navigate(routeId: string, options?: ApplicationNavigationOptions): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;

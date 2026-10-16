@@ -69,9 +69,9 @@ function PictureInPictureButton(props: {
 }) {
   const label = () =>
     t(
-      props.controller.active
+      props.controller.feedback().active
         ? "desktop.exitPictureInPicture"
-        : props.controller.supported
+        : props.controller.supported()
           ? "desktop.enterPictureInPicture"
           : "desktop.pictureInPictureUnavailable",
     );
@@ -84,9 +84,11 @@ function PictureInPictureButton(props: {
       type="button"
       title={label()}
       aria-label={label()}
-      aria-pressed={props.controller.active ? "true" : "false"}
-      aria-busy={props.controller.pending ? "true" : "false"}
-      disabled={!props.controller.supported || !props.connected || props.controller.pending}
+      aria-pressed={props.controller.feedback().active ? "true" : "false"}
+      aria-busy={props.controller.feedback().pending ? "true" : "false"}
+      disabled={
+        !props.controller.supported() || !props.connected || props.controller.feedback().pending
+      }
       onClick={() => void props.controller.toggle()}
     >
       <svg
@@ -120,7 +122,7 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
         <>
           <DesktopNotice
             errorText={
-              props.view.pictureInPicture.errorText ??
+              props.view.pictureInPicture.feedback().errorText ??
               props.view.fullscreenMode.errorText() ??
               props.view.content.errorText
             }

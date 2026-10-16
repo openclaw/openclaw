@@ -14,6 +14,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -142,8 +143,10 @@ describe("SQLite session handle lifecycle", () => {
         withTranscriptWriteLock(scope, async (transcript) => {
           const count = messages.length;
           const keys = messages.map(({ message }) => message.idempotencyKey);
-          const counter = trackSqliteStatementExecutions(database.db, ["reads"], (query) =>
-            query.startsWith("select ") ? "reads" : null,
+          const counter = trackSqliteStatementExecutions(
+            requireNativeSqliteDatabase(database.db),
+            ["reads"],
+            (query) => (query.startsWith("select ") ? "reads" : null),
           );
           try {
             const facts = await transcript.readMessageFacts({ idempotencyKeys: keys });

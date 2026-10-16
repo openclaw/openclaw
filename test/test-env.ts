@@ -5,7 +5,6 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import JSON5 from "json5";
 import { resolveEffectiveHomeDir } from "../src/infra/home-dir.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../src/infra/supervisor-markers.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
@@ -365,6 +364,7 @@ function restoreClaudeConfigFromBackupIfNeeded(tempHome: string): void {
 }
 
 function sanitizeLiveConfig(raw: string): string {
+  const JSON5 = requireFromHere("json5") as typeof import("json5");
   try {
     const parsed: {
       agents?: {

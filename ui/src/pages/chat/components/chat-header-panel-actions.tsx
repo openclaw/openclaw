@@ -1,5 +1,4 @@
 import { createMemo, createSignal, Show } from "solid-js";
-import { icons } from "../../../components/icons.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
@@ -57,7 +56,7 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
       id: "focus",
       className: "chat-panel-focus",
       label: t(layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand"),
-      icon: layout.expanded ? icons.minimize : icons.maximize,
+      icon: layout.expanded ? "minimize" : "maximize",
       active: layout.expanded === true,
       onActivate: () =>
         props.onLayoutChange?.(
@@ -71,7 +70,7 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
       id: "swap",
       className: "chat-panel-swap",
       label: t("chat.sidePanel.swap", { main: mainDefinition.label, side: sideDefinition.label }),
-      icon: icons.arrowLeftRight,
+      icon: "arrowLeftRight",
       onActivate: () => props.onLayoutChange?.(promoteSidebarPanel(layout, side.id)),
     });
   }
@@ -87,7 +86,7 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
       id: "expand-side-panel",
       className: "side-panel__expand",
       label: t("chat.sidePanel.expandPanel", { panel: sideDefinition.label }),
-      icon: icons.maximize,
+      icon: "maximize",
       onActivate: () =>
         props.onLayoutChange?.(toggleSidebarPanelExpanded(layout, side.id), {
           dashboardPresentation: "personal",
@@ -98,7 +97,7 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
     actions.push({
       id: "close-side-panel",
       label: t("chat.sidebarColumns.close", { panel: sideDefinition.label }),
-      icon: icons.x,
+      icon: "x",
       onActivate: () => props.onCloseSidePanel?.(side.slot),
     });
   }
@@ -107,17 +106,17 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
       id: "side-panel",
       className: "chat-side-panel-toggle",
       label: t(split ? "chat.sidePanel.minimize" : "chat.sidePanel.label"),
-      icon: split ? icons.panelRightClose : icons.panelRightOpen,
+      icon: split ? "panelRightClose" : "panelRightOpen",
       active: split,
       onActivate: props.onToggleSidePanel,
     });
   }
   actions.push(...(props.layoutMenuActions ?? []));
   for (const [id, label, icon, callback] of [
-    ["open-split-view", "chat.splitView.open", icons.columns2, props.onOpenSplitView],
-    ["split-down", "chat.splitView.splitDown", icons.panelBottomOpen, props.onSplitDown],
-    ["split-right", "chat.splitView.splitRight", icons.panelRightOpen, props.onSplitRight],
-    ["close-pane", "chat.splitView.closePane", icons.x, props.onClosePane],
+    ["open-split-view", "chat.splitView.open", "columns2", props.onOpenSplitView],
+    ["split-down", "chat.splitView.splitDown", "panelBottomOpen", props.onSplitDown],
+    ["split-right", "chat.splitView.splitRight", "panelRightOpen", props.onSplitRight],
+    ["close-pane", "chat.splitView.closePane", "x", props.onClosePane],
   ] as const) {
     if (callback && (!props.narrow || (id !== "split-down" && id !== "split-right"))) {
       actions.push({
@@ -133,9 +132,9 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
   }
   if (layout && props.onLayoutChange && !props.narrow && split) {
     for (const [dock, label, icon] of [
-      ["left", "dockLeft", icons.panelLeftOpen],
-      ["right", "dockRight", icons.panelRightOpen],
-      ["bottom", "dockBottom", icons.panelBottomOpen],
+      ["left", "dockLeft", "panelLeftOpen"],
+      ["right", "dockRight", "panelRightOpen"],
+      ["bottom", "dockBottom", "panelBottomOpen"],
     ] as const) {
       actions.push({
         id: `dock-${dock}`,

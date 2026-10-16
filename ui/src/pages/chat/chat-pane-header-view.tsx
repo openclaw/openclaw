@@ -1,9 +1,9 @@
 import { onCleanup } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import type { PresentationValue } from "../../lib/presentation.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { PresentationValue } from "../../lit/presentation-binding.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
-import { usePanePresentation } from "./chat-pane-embedded-view.tsx";
+import { usePanePresentation } from "./chat-pane-presentation.ts";
 import type { ChatDetails } from "./components/chat-details.tsx";
 
 export type PaneDetailsProps = {

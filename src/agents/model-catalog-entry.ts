@@ -32,6 +32,7 @@ export function modelCatalogRowToEntry(
     provider: row.provider,
     ...(isCatalogModelApi(row.api) ? { api: row.api } : {}),
     ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
+    ...(row.inference ? { inference: row.inference } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(row.contextWindowSource ? { contextWindowSource: row.contextWindowSource } : {}),
     ...(row.contextCapacitySource ? { contextCapacitySource: row.contextCapacitySource } : {}),

@@ -201,43 +201,49 @@ describe("pending session placement recovery state", () => {
     expect(pending.createParams).toBeUndefined();
   });
 
-  it("restores the provisional row when canonical promotion cannot be written", () => {
-    const pending = new PendingSessionPlacementRecoveryState();
-    expect(stageCreate(pending)).not.toBeNull();
-    const storage = sessionStorage;
-    const provisionalSessionKey = pending.sessionKey;
-    const provisionalKey = sessionPlacementRecoveryExactStorageKey(
-      "ws://gateway.example",
-      "principal-a",
-      provisionalSessionKey,
-    );
-    const canonicalSessionKey = "agent:cloud:dashboard:server-key";
-    const canonicalKey = sessionPlacementRecoveryExactStorageKey(
-      "ws://gateway.example",
-      "principal-a",
-      canonicalSessionKey,
-    );
-    const raw = storage.getItem(provisionalKey);
-    vi.stubGlobal("sessionStorage", {
-      get length() {
-        return storage.length;
-      },
-      getItem: storage.getItem.bind(storage),
-      key: storage.key.bind(storage),
-      removeItem: storage.removeItem.bind(storage),
-      setItem(key: string, value: string) {
-        if (key === canonicalKey) {
-          throw new DOMException("quota exceeded", "QuotaExceededError");
-        }
-        storage.setItem(key, value);
-      },
-    });
+  it.each([false, true])(
+    "restores the provisional row when canonical promotion throws (committed=%s)",
+    (committed) => {
+      const pending = new PendingSessionPlacementRecoveryState();
+      expect(stageCreate(pending)).not.toBeNull();
+      const storage = sessionStorage;
+      const provisionalSessionKey = pending.sessionKey;
+      const provisionalKey = sessionPlacementRecoveryExactStorageKey(
+        "ws://gateway.example",
+        "principal-a",
+        provisionalSessionKey,
+      );
+      const canonicalSessionKey = "agent:cloud:dashboard:server-key";
+      const canonicalKey = sessionPlacementRecoveryExactStorageKey(
+        "ws://gateway.example",
+        "principal-a",
+        canonicalSessionKey,
+      );
+      const raw = storage.getItem(provisionalKey);
+      vi.stubGlobal("sessionStorage", {
+        get length() {
+          return storage.length;
+        },
+        getItem: storage.getItem.bind(storage),
+        key: storage.key.bind(storage),
+        removeItem: storage.removeItem.bind(storage),
+        setItem(key: string, value: string) {
+          if (key === canonicalKey) {
+            if (committed) {
+              storage.setItem(key, value);
+            }
+            throw new DOMException("quota exceeded", "QuotaExceededError");
+          }
+          storage.setItem(key, value);
+        },
+      });
 
-    expect(pending.promoteToDispatching(canonicalSessionKey)).toBe(false);
-    expect(storage.getItem(provisionalKey)).toBe(raw);
-    expect(storage.getItem(canonicalKey)).toBeNull();
-    expect(pending.sessionKey).toBe(provisionalSessionKey);
-  });
+      expect(pending.promoteToDispatching(canonicalSessionKey)).toBe(false);
+      expect(storage.getItem(provisionalKey)).toBe(raw);
+      expect(storage.getItem(canonicalKey)).toBeNull();
+      expect(pending.sessionKey).toBe(provisionalSessionKey);
+    },
+  );
 
   it("keeps incognito placement drafts in memory without writing recovery storage", () => {
     const pending = new PendingSessionPlacementRecoveryState();

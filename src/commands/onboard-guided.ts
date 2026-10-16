@@ -695,7 +695,7 @@ async function runGuidedOnboardingFlow(
       ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
       ...(opts.suppressGatewayTokenOutput ? { suppressTokenOutput: true } : {}),
     });
-    if (handoff.handedOff) {
+    if (handoff) {
       await prompter.outro(t("wizard.guided.browserHandoffReady"));
       return { workspace: hatchWorkspace, next: "browser" };
     }

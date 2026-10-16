@@ -173,6 +173,17 @@ describe("gateway multi-instance e2e", () => {
       let managerClient: GatewayClient | undefined;
       await runQaGatewayFixture(
         async () => {
+          // Creation captures a durable account; only the injected offline runner executes it.
+          await manager.state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              "openai:cron-passive-manager": {
+                type: "api_key",
+                provider: "openai",
+                key: "synthetic-cron-scheduler-key",
+              },
+            },
+          });
           await manager.startGateway();
           managerClient = await connectGatewayStatusClient(manager);
           const canary = await managerClient.request<{ id: string }>("cron.add", {
@@ -181,7 +192,12 @@ describe("gateway multi-instance e2e", () => {
             schedule: { kind: "every", everyMs: 3_600_000 },
             sessionTarget: "isolated",
             wakeMode: "now",
-            payload: { kind: "agentTurn", message: "run canary", toolsAllow: [] },
+            payload: {
+              kind: "agentTurn",
+              model: "openai/gpt-4.1@openai:cron-passive-manager",
+              message: "run canary",
+              toolsAllow: [],
+            },
             delivery: { mode: "none" },
           });
           const target = await managerClient.request<{ id: string }>("cron.add", {
