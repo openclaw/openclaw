@@ -1,25 +1,25 @@
 import { createServer } from "node:http";
+import { text as readText } from "node:stream/consumers";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createCommentTypingReactionLifecycle } from "./comment-reaction.js";
 import { registerFeishuDriveTools } from "./drive.js";
+import { listenLoopback } from "./feishu-loopback.test-support.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
-const config = {
-  channels: {
-    feishu: {
-      enabled: true,
-      appId: "loopback-test-app",
-      appSecret: "loopback-test-placeholder", // pragma: allowlist secret
-      tools: { drive: true },
-    },
-  },
+const credentials = {
+  appId: "loopback-test-app",
+  appSecret: "loopback-test-placeholder", // pragma: allowlist secret
 };
+const config = { channels: { feishu: { ...credentials, enabled: true, tools: { drive: true } } } };
 
 type DeliveryContext = { channel?: string; to?: string; threadId?: string | number };
 type WireRequest = { method: string; url: string; body: string };
 type ApiReply = { body: unknown; status?: number; wait?: Promise<void>; received?: () => void };
+function ok(data?: unknown): ApiReply {
+  return { body: { code: 0, ...(data === undefined ? {} : { data }) } };
+}
 
 const rawTarget = { token: " raw/+ ", file: "%20raw%2F%2B%20" };
 const ambientTarget = { token: " ", file: "ambient_file" };
@@ -42,10 +42,16 @@ function post(url: string, body: unknown): WireRequest {
   return { method: "POST", url, body: JSON.stringify(body) };
 }
 function emptyPage(replies: boolean) {
+  return { has_more: false, page_token: undefined, [replies ? "replies" : "comments"]: [] };
+}
+function normalizedComment(replies: unknown[]) {
+  const absent =
+    "user_id,create_time,update_time,is_solved,is_whole,quote,has_more_replies,replies_page_token";
   return {
-    has_more: false,
-    page_token: undefined,
-    ...(replies ? { replies: [] } : { comments: [] }),
+    ...Object.fromEntries(absent.split(",").map((key) => [key, undefined])),
+    comment_id: "c1",
+    text: "Reply text",
+    replies,
   };
 }
 function writeRequest(reply: boolean, file: string, type: string, comment: string, text: string) {
@@ -62,6 +68,11 @@ function metadataRequest(file: string, type: string, comment: string) {
     { comment_ids: [comment] },
   );
 }
+function listRequest(file: string, type: string, comment?: string) {
+  return get(
+    `/open-apis/drive/v1/files/${file}/comments${comment ? `/${comment}/replies` : ""}?file_type=${type}&user_id_type=open_id`,
+  );
+}
 
 async function createDriveLoopback(replies: ApiReply[], deliveryContext?: DeliveryContext) {
   const requests: WireRequest[] = [];
@@ -73,14 +84,10 @@ async function createDriveLoopback(replies: ApiReply[], deliveryContext?: Delive
   }
   const server = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
       requests.push({
         method: request.method ?? "",
         url: request.url ?? "",
-        body: Buffer.concat(chunks).toString("utf8"),
+        body: await readText(request),
       });
       const reply = replies[requests.length - 1];
       if (!reply) {
@@ -95,24 +102,9 @@ async function createDriveLoopback(replies: ApiReply[], deliveryContext?: Delive
       response.writeHead(500).end(String(error));
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  onTestFinished(async () => {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Missing loopback server address");
-  }
-  const origin = `http://127.0.0.1:${address.port}`;
   const client = new Lark.Client({
-    appId: config.channels.feishu.appId,
-    appSecret: config.channels.feishu.appSecret,
-    domain: origin,
+    ...credentials,
+    domain: await listenLoopback(server),
     disableTokenCache: true,
     loggerLevel: Lark.LoggerLevel.error,
   });
@@ -120,12 +112,11 @@ async function createDriveLoopback(replies: ApiReply[], deliveryContext?: Delive
   vi.spyOn(await import("./client.js"), "createFeishuClient").mockReturnValue(client);
   const harness = createToolFactoryHarness(config);
   registerFeishuDriveTools(harness.api);
-  const context = { agentAccountId: undefined, deliveryContext };
   return {
     requests,
     logs,
     sdkErrors,
-    tool: harness.resolveTool("feishu_drive", context),
+    tool: harness.resolveTool("feishu_drive", { agentAccountId: undefined, deliveryContext }),
   };
 }
 
@@ -149,34 +140,22 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
   it.each(["list_comments", "list_comment_replies"] as const)(
     "encodes %s pagination and retains its normalized result shape",
     async (action) => {
+      const ids = { reply_id: "r1", user_id: "u1", create_time: 10 };
       const reply = {
-        reply_id: "r1",
-        user_id: "u1",
-        create_time: 10,
+        ...ids,
         content: { elements: [{ type: "text_run", text_run: { text: "Reply text" } }] },
       };
-      const normalizedReply = {
-        reply_id: "r1",
-        user_id: "u1",
-        create_time: 10,
-        update_time: undefined,
-        text: "Reply text",
-      };
+      const normalizedReply = { ...ids, update_time: undefined, text: "Reply text" };
       const isReplies = action === "list_comment_replies";
       const fixture = await createDriveLoopback([
-        {
-          body: {
-            code: 0,
-            data: {
-              has_more: true,
-              page_token: "next + cursor",
-              items: isReplies
-                ? [reply]
-                : [{ comment_id: "c1", reply_list: { replies: [reply, reply] } }],
-            },
-          },
-        },
-        { body: { code: 0 } },
+        ok({
+          has_more: true,
+          page_token: "next + cursor",
+          items: isReplies
+            ? [reply]
+            : [{ comment_id: "c1", reply_list: { replies: [reply, reply] } }],
+        }),
+        ok(),
       ]);
       const params = {
         action,
@@ -195,23 +174,7 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
       );
       const items = isReplies
         ? { replies: [normalizedReply] }
-        : {
-            comments: [
-              {
-                comment_id: "c1",
-                user_id: undefined,
-                create_time: undefined,
-                update_time: undefined,
-                is_solved: undefined,
-                is_whole: undefined,
-                quote: undefined,
-                text: "Reply text",
-                has_more_replies: undefined,
-                replies_page_token: undefined,
-                replies: [normalizedReply],
-              },
-            ],
-          };
+        : { comments: [normalizedComment([normalizedReply])] };
       expectDriveOutcome(fixture, result, [request], {
         has_more: true,
         page_token: "next + cursor",
@@ -249,10 +212,7 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
   ])("resolves $action targets over HTTP ($type, $file)", async (testCase) => {
     const isReply = testCase.action === "reply_comment";
     const fixture = await createDriveLoopback(
-      [
-        ...(isReply ? [{ body: { code: 0, data: { items: [] } } }] : []),
-        { body: { code: 0, data: {} } },
-      ],
+      [...(isReply ? [ok({ items: [] })] : []), ok({})],
       testCase.ambient
         ? { channel: testCase.channel ?? "feishu", to: testCase.ambient }
         : undefined,
@@ -264,26 +224,18 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
       comment_id: " ",
       content: "Hello + 世界",
     });
-    const filePath = `/open-apis/drive/v1/files/${testCase.file}`;
     const commentId = testCase.defaulted ? "%20" : "ambient_comment";
     let requests: WireRequest[];
     let details: Record<string, unknown>;
-    if (testCase.action === "add_comment") {
-      requests = [writeRequest(false, testCase.file, testCase.type, commentId, "Hello + 世界")];
-      details = { success: true };
-    } else if (isReply) {
+    if (testCase.action === "add_comment" || isReply) {
       requests = [
-        metadataRequest(testCase.file, testCase.type, "ambient_comment"),
-        writeRequest(true, testCase.file, testCase.type, commentId, "Hello + 世界"),
+        ...(isReply ? [metadataRequest(testCase.file, testCase.type, "ambient_comment")] : []),
+        writeRequest(isReply, testCase.file, testCase.type, commentId, "Hello + 世界"),
       ];
-      details = { delivery_mode: "reply_comment", success: true };
+      details = { ...(isReply ? { delivery_mode: "reply_comment" } : {}), success: true };
     } else {
       const replies = testCase.action === "list_comment_replies";
-      requests = [
-        get(
-          `${filePath}/comments${replies ? `/${commentId}/replies` : ""}?file_type=${testCase.type}&user_id_type=open_id`,
-        ),
-      ];
+      requests = [listRequest(testCase.file, testCase.type, replies ? commentId : undefined)];
       details = emptyPage(replies);
     }
     expectDriveOutcome(fixture, result, requests, details);
@@ -307,8 +259,10 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
         { status: 403, body: { code: 9999, msg: "Denied by Drive" } },
       ]);
       const params = { action, file_token: "file", file_type: "docx", comment_id: "comment" };
-      const request = get(
-        `/open-apis/drive/v1/files/file/comments${action === "list_comment_replies" ? "/comment/replies" : ""}?file_type=docx&user_id_type=open_id`,
+      const request = listRequest(
+        "file",
+        "docx",
+        action === "list_comment_replies" ? "comment" : undefined,
       );
       expectDriveOutcome(fixture, await fixture.tool.execute("api-error", params), [request], {
         error: "Denied by Drive",
@@ -344,14 +298,10 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
       const isReply = action === "reply_comment";
       const fixture = await createDriveLoopback(
         [
-          { body: { code: 0 } },
-          ...(isReply ? [{ body: { code: 0, data: { items: [] } } }] : []),
-          {
-            body: failure
-              ? { code: 9999, msg: "Write denied" }
-              : { code: 0, data: { id: "written" } },
-          },
-          { body: { code: 0 }, wait: releaseDeletion.promise, received: deletionStarted.resolve },
+          ok(),
+          ...(isReply ? [ok({ items: [] })] : []),
+          failure ? { body: { code: 9999, msg: "Write denied" } } : ok({ id: "written" }),
+          { ...ok(), wait: releaseDeletion.promise, received: deletionStarted.resolve },
         ],
         { channel: "feishu", to: "comment:docx:file:comment", threadId: "typing_reply" },
       );

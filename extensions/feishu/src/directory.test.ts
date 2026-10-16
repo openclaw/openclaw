@@ -1,4 +1,3 @@
-// Feishu tests cover directory plugin behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -47,6 +46,10 @@ function makeConfiguredCfg(): ClawdbotConfig {
 function page<T>(items: T[], pageToken?: string, hasMore = Boolean(pageToken)) {
   return { code: 0, data: { items, has_more: hasMore, page_token: pageToken } };
 }
+
+const users = (...ids: string[]) => ids.map((id) => ({ kind: "user", id }));
+const groups = (...ids: string[]) => ids.map((id) => ({ kind: "group", id }));
+const expiredToken = () => Promise.reject(new Error("token expired"));
 
 function mockPeerList(list: ReturnType<typeof vi.fn>) {
   createFeishuClientMock.mockReturnValueOnce({ contact: { user: { list } } });
@@ -129,19 +132,13 @@ describe("feishu directory (config-backed)", () => {
       groupAllowFrom: [],
     });
 
-    const peers = await listFeishuDirectoryPeers({ cfg });
-    expect(peers).toEqual([
-      { kind: "user", id: "ou_alice" },
-      { kind: "user", id: "ou_carla" },
-    ]);
+    expect(await listFeishuDirectoryPeers({ cfg })).toEqual(users("ou_alice", "ou_carla"));
   });
 
   it("merges groups map + groupAllowFrom into group entries", async () => {
-    const groups = await listFeishuDirectoryGroups({ cfg: makeStaticCfg() });
-    expect(groups).toEqual([
-      { kind: "group", id: "chat-1" },
-      { kind: "group", id: "chat-2" },
-    ]);
+    expect(await listFeishuDirectoryGroups({ cfg: makeStaticCfg() })).toEqual(
+      groups("chat-1", "chat-2"),
+    );
   });
 
   it("lists only read-authorized static peers and enabled groups", async () => {
@@ -150,14 +147,12 @@ describe("feishu directory (config-backed)", () => {
       groupAllowFrom: ["chat-2", "chat-disabled"],
     });
 
-    await expect(listAuthorizedFeishuDirectoryPeers({ cfg })).resolves.toEqual([
-      { kind: "user", id: "alice" },
-      { kind: "user", id: "bob" },
-    ]);
-    await expect(listAuthorizedFeishuDirectoryGroups({ cfg })).resolves.toEqual([
-      { kind: "group", id: "chat-1" },
-      { kind: "group", id: "chat-2" },
-    ]);
+    await expect(listAuthorizedFeishuDirectoryPeers({ cfg })).resolves.toEqual(
+      users("alice", "bob"),
+    );
+    await expect(listAuthorizedFeishuDirectoryGroups({ cfg })).resolves.toEqual(
+      groups("chat-1", "chat-2"),
+    );
   });
 
   it("applies the static group limit after authorization filtering", async () => {
@@ -167,23 +162,14 @@ describe("feishu directory (config-backed)", () => {
       groupAllowFrom: [],
     });
 
-    await expect(listAuthorizedFeishuDirectoryGroups({ cfg, limit: 1 })).resolves.toEqual([
-      { kind: "group", id: "chat-allowed" },
-    ]);
+    await expect(listAuthorizedFeishuDirectoryGroups({ cfg, limit: 1 })).resolves.toEqual(
+      groups("chat-allowed"),
+    );
   });
 
   it("falls back to static peers on live lookup failure by default", async () => {
-    mockPeerList(
-      vi.fn(async () => {
-        throw new Error("token expired");
-      }),
-    );
-
-    const peers = await livePeers({ query: "a" });
-    expect(peers).toEqual([
-      { kind: "user", id: "alice" },
-      { kind: "user", id: "carla" },
-    ]);
+    mockPeerList(vi.fn(expiredToken));
+    await expect(livePeers({ query: "a" })).resolves.toEqual(users("alice", "carla"));
   });
 
   it("paginates live groups until the filtered result limit is reached", async () => {
@@ -217,13 +203,9 @@ describe("feishu directory (config-backed)", () => {
       );
     mockPeerList(list);
 
-    await expect(
-      livePeers({
-        query: "ALICE",
-        limit: 1,
-        fallbackToStatic: false,
-      }),
-    ).resolves.toEqual([{ kind: "user", id: "ou_alice", name: "Alice" }]);
+    await expect(livePeers({ query: "ALICE", limit: 1, fallbackToStatic: false })).resolves.toEqual(
+      [{ kind: "user", id: "ou_alice", name: "Alice" }],
+    );
     expect(list).toHaveBeenCalledTimes(2);
     expect(list).toHaveBeenLastCalledWith({
       params: { page_size: 50, page_token: "next/page+2=" },
@@ -254,9 +236,7 @@ describe("feishu directory (config-backed)", () => {
       .mockResolvedValueOnce(page([{ name: "Alice" }, { open_id: "ou_alice" }], "unused", false));
     mockPeerList(list);
 
-    await expect(livePeers({ query: "alice" })).resolves.toEqual([
-      { kind: "user", id: "ou_alice" },
-    ]);
+    await expect(livePeers({ query: "alice" })).resolves.toEqual(users("ou_alice"));
     expect(list).toHaveBeenCalledTimes(2);
   });
 
@@ -293,13 +273,9 @@ describe("feishu directory (config-backed)", () => {
       );
       mockPeerList(list);
 
-      const result = livePeers({
-        query: "alice",
-        limit: 1,
-        fallbackToStatic: false,
-      });
+      const result = livePeers({ query: "alice", limit: 1, fallbackToStatic: false });
       if (matchOnLastPage) {
-        await expect(result).resolves.toEqual([{ kind: "user", id: "ou_alice" }]);
+        await expect(result).resolves.toEqual(users("ou_alice"));
       } else {
         await expect(result).rejects.toThrow(
           "Feishu live peer directory pagination limit exceeded",
@@ -318,17 +294,11 @@ describe("feishu directory (config-backed)", () => {
         .mockResolvedValueOnce({ code: 40012, msg: "invalid page token" });
       mockPeerList(list);
 
-      const result = livePeers({
-        limit: 2,
-        fallbackToStatic,
-      });
+      const result = livePeers({ limit: 2, fallbackToStatic });
       if (fallbackToStatic === false) {
         await expect(result).rejects.toThrow("invalid page token");
       } else {
-        await expect(result).resolves.toEqual([
-          { kind: "user", id: "alice" },
-          { kind: "user", id: "bob" },
-        ]);
+        await expect(result).resolves.toEqual(users("alice", "bob"));
       }
       expect(list).toHaveBeenCalledTimes(2);
     },
@@ -351,11 +321,7 @@ describe("feishu directory (config-backed)", () => {
   });
 
   it("surfaces live peer lookup failures when fallback is disabled", async () => {
-    mockPeerList(
-      vi.fn(async () => {
-        throw new Error("token expired");
-      }),
-    );
+    mockPeerList(vi.fn(expiredToken));
 
     await expect(livePeers({ fallbackToStatic: false })).rejects.toThrow("token expired");
   });

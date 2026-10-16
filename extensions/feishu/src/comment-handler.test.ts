@@ -1,4 +1,3 @@
-// Feishu tests cover comment handler plugin behavior.
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,11 +52,8 @@ let currentRuntimeConfig = buildConfig();
 function buildResolvedRoute(matchedBy: "binding.channel" | "default" = "binding.channel") {
   return {
     agentId: "main",
-    channel: "feishu",
     accountId: "default",
     sessionKey: "agent:main:feishu:direct:ou_sender",
-    mainSessionKey: "agent:main:feishu",
-    lastRoutePolicy: "session" as const,
     matchedBy,
   };
 }
@@ -240,10 +236,7 @@ describe("handleFeishuCommentEvent", () => {
 
   it("allows comment senders matched by user_id allowlist entries", async () => {
     await handleComment({
-      cfg: buildConfig({
-        dmPolicy: "allowlist",
-        allowFrom: ["on_sender_user"],
-      }),
+      cfg: buildConfig({ dmPolicy: "allowlist", allowFrom: ["on_sender_user"] }),
     });
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
@@ -266,10 +259,7 @@ describe("handleFeishuCommentEvent", () => {
   });
 
   it("drops a comment denied by refreshed dynamic-agent policy", async () => {
-    const refreshedCfg = buildConfig({
-      dmPolicy: "allowlist",
-      allowFrom: ["ou_admin"],
-    });
+    const refreshedCfg = buildConfig({ dmPolicy: "allowlist", allowFrom: ["ou_admin"] });
     useRuntime(refreshedCfg);
     await handleComment();
 
@@ -297,10 +287,7 @@ describe("handleFeishuCommentEvent", () => {
     const log = vi.fn();
     await handleComment({
       runtime: { log, error: vi.fn(), exit: vi.fn() },
-      cfg: buildConfig({
-        dmPolicy: "pairing",
-        allowFrom: [],
-      }),
+      cfg: buildConfig({ dmPolicy: "pairing", allowFrom: [] }),
     });
 
     expect(deliverCommentThreadTextMock).toHaveBeenCalledTimes(1);

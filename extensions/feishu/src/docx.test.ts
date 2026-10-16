@@ -61,30 +61,18 @@ const imageBlock = { block_type: 27, block_id: "img_block_1" };
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
-function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
-  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
-  const call = calls.at(callIndex);
-  if (!call) {
-    throw new Error(`Expected ${label}`);
-  }
-  return call[argIndex];
-}
-
 function expectLoadWebMediaCall(fileName: string, localRoots: unknown[] | undefined) {
-  const source = callArg(loadWebMediaMock, 0, 0, "loadWebMedia source");
-  const options = requireRecord(
-    callArg(loadWebMediaMock, 0, 1, "loadWebMedia options"),
-    "loadWebMedia options",
-  );
+  const [source, input] = loadWebMediaMock.mock.calls[0] ?? [];
+  const options = requireRecord(input, "loadWebMedia options");
   expect(String(source)).toContain(fileName);
   expect(options.optimizeImages).toBe(false);
   expect(options.localRoots).toEqual(localRoots);
 }
 
-function mockLocalFileUpload() {
+function mockLocalFileUpload(fileName = "test-local.txt") {
   loadWebMediaMock.mockResolvedValueOnce({
     buffer: Buffer.from("hello from local file", "utf8"),
-    fileName: "test-local.txt",
+    fileName,
   });
 }
 
@@ -127,7 +115,6 @@ describe("feishu_doc image fetch hardening", () => {
     );
 
     blockListMock.mockResolvedValue(apiData({ items: [] }));
-
     blockChildrenCreateMock.mockResolvedValue(apiData({ children: [imageBlock] }));
 
     blockChildrenGetMock.mockResolvedValue(
@@ -163,6 +150,9 @@ describe("feishu_doc image fetch hardening", () => {
 
   const insertedChildren = async ({ data }: { data: { children_id: string[] } }) =>
     apiData({ children: data.children_id.map((block_id) => ({ block_id })) });
+  const textRun = (content: string, text_element_style: Record<string, unknown> = {}) => ({
+    text_run: { content, text_element_style },
+  });
 
   it("projects color markup directly to styled document text without consuming literal brackets", async () => {
     const result = await executeDoc({
@@ -176,15 +166,10 @@ describe("feishu_doc image fetch hardening", () => {
       data: {
         update_text_elements: {
           elements: [
-            { text_run: { content: "[", text_element_style: {} } },
-            { text_run: { content: "Q1]", text_element_style: {} } },
-            {
-              text_run: {
-                content: "profit",
-                text_element_style: { text_color: 1, background_color: 3, bold: true },
-              },
-            },
-            { text_run: { content: "plain", text_element_style: {} } },
+            textRun("["),
+            textRun("Q1]"),
+            textRun("profit", { text_color: 1, background_color: 3, bold: true }),
+            textRun("plain"),
           ],
         },
       },
@@ -196,12 +181,7 @@ describe("feishu_doc image fetch hardening", () => {
     { representation: "string IDs", children: ["cell_1", "cell_2", "cell_3", "cell_4"] },
     {
       representation: "nested blocks",
-      children: [
-        { block_id: "cell_1" },
-        { block_id: "cell_2" },
-        { block_id: "cell_3" },
-        { block_id: "cell_4" },
-      ],
+      children: ["cell_1", "cell_2", "cell_3", "cell_4"].map((block_id) => ({ block_id })),
     },
   ])("returns created table cell IDs in row order from $representation", async ({ children }) => {
     blockChildrenCreateMock.mockResolvedValueOnce({
@@ -273,13 +253,10 @@ describe("feishu_doc image fetch hardening", () => {
       }
       successChunkCount++;
       const blockId = `b_${successChunkCount}`;
-      return {
-        code: 0,
-        data: {
-          blocks: [{ block_type: 2, block_id: blockId }],
-          first_level_block_ids: [blockId],
-        },
-      };
+      return apiData({
+        blocks: [{ block_type: 2, block_id: blockId }],
+        first_level_block_ids: [blockId],
+      });
     });
 
     blockDescendantCreateMock.mockImplementation(insertedChildren);
@@ -398,9 +375,7 @@ describe("feishu_doc image fetch hardening", () => {
         file_path: "/tmp/openclaw-1000/test-local.txt",
         filename: "test-local.txt",
       },
-      {
-        fsPolicy: { workspaceOnly: true },
-      },
+      { fsPolicy: { workspaceOnly: true } },
     );
 
     expectLoadWebMediaCall("test-local.txt", []);
@@ -437,7 +412,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     expect(result.details.success).toBe(true);
     const remoteReadInput = requireRecord(
-      callArg(readRemoteMediaBufferMock, 0, 0, "remote media input"),
+      readRemoteMediaBufferMock.mock.calls[0]?.[0],
       "remote media input",
     );
     expect(remoteReadInput.url).toBe("https://cdn.test/remote.txt");
@@ -463,10 +438,7 @@ describe("feishu_doc image fetch hardening", () => {
     mkdirSync(fixtureDir, { recursive: true });
     writeFileSync(absoluteImagePath, "not-real-image");
 
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("hello from local file", "utf8"),
-      fileName: "absolute-image.png",
-    });
+    mockLocalFileUpload("absolute-image.png");
 
     try {
       await executeDoc(

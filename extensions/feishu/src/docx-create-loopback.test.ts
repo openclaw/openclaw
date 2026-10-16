@@ -1,8 +1,8 @@
 // Feishu tests prove the document create contract through the real Lark SDK.
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { Server } from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createLoopbackHttp, createLoopbackServer } from "./feishu-loopback.test-support.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -30,68 +30,10 @@ vi.spyOn(runtimeModule, "getFeishuRuntime").mockReturnValue({
 
 const { registerFeishuDocTools } = await import("./docx.js");
 
-type LoopbackRequest = { method: string; path: string; url: URL; rawBody: string };
-function createLoopbackServer(handle: (request: LoopbackRequest) => unknown) {
-  return createServer((request, response) => {
-    void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-      }
-      const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      const body = handle({
-        method: request.method ?? "",
-        path: url.pathname,
-        url,
-        rawBody: Buffer.concat(chunks).toString("utf8"),
-      });
-      response.writeHead(body === undefined ? 404 : 200, { "content-type": "application/json" });
-      response.end(JSON.stringify(body));
-    })().catch((error: unknown) => {
-      response.writeHead(500, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: String(error) }));
-    });
-  });
-}
 const ok = (data: unknown) => ({ code: 0, data });
 
-async function resolveLoopbackTool(
-  server: ReturnType<typeof createServer>,
-  context: Record<string, unknown> = {},
-) {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  onTestFinished(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  );
-  const address = server.address() as AddressInfo;
-  const loopbackHttp = Object.create(Lark.defaultHttpInstance) as Lark.HttpInstance;
-  loopbackHttp.request = async (options) => {
-    const upstream = new URL(options.url ?? "");
-    const target = new URL(
-      `${upstream.pathname}${upstream.search}`,
-      `http://127.0.0.1:${address.port}`,
-    );
-    for (const [key, value] of Object.entries(options.params ?? {})) {
-      if (value !== undefined && value !== null) {
-        target.searchParams.set(key, String(value));
-      }
-    }
-    const method = options.method ?? "GET";
-    const response = await fetch(target, {
-      method,
-      headers: { "content-type": "application/json" },
-      ...(method === "GET" || method === "HEAD"
-        ? {}
-        : { body: JSON.stringify(options.data ?? {}) }),
-    });
-    return response.json();
-  };
+async function resolveLoopbackTool(server: Server, context: Record<string, unknown> = {}) {
+  const loopbackHttp = await createLoopbackHttp(server);
   createFeishuClientMock.mockReturnValue(
     new Lark.Client({
       appId: "loopback-test-app",

@@ -1,8 +1,7 @@
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createLoopbackHttp, createLoopbackServer } from "./feishu-loopback.test-support.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -23,29 +22,26 @@ const { registerFeishuDocTools } = await import("./docx.js");
 type Patch = Lark.Client["docx"]["documentBlock"]["patch"];
 type PatchResponse = Awaited<ReturnType<Patch>>;
 const block = { block_id: "table_reply", block_type: 31 };
-function tableCase(
-  action: string,
-  fields: Record<string, number>,
-  patch: Record<string, number>,
-  counts: Record<string, number> = {},
-) {
+type Fields = Record<string, number>;
+function tableCase(action: string, fields: Fields, patch = fields, counts: Fields = {}) {
   return { action, fields, data: { [action]: patch }, counts };
 }
+function insertCase(axis: string, index: number, fields = { [`${axis}_index`]: index }) {
+  return tableCase(`insert_table_${axis}`, fields, { [`${axis}_index`]: index });
+}
+function deleteCase(axis: string, [start, count, end]: [number, number, number], fields?: Fields) {
+  return tableCase(
+    `delete_table_${axis}s`,
+    fields ?? { [`${axis}_start`]: start, [`${axis}_count`]: count },
+    { [`${axis}_start_index`]: start, [`${axis}_end_index`]: end },
+    { [`${axis}s_deleted`]: count },
+  );
+}
 const actions = [
-  tableCase("insert_table_row", { row_index: 2 }, { row_index: 2 }),
-  tableCase("insert_table_column", { column_index: 3 }, { column_index: 3 }),
-  tableCase(
-    "delete_table_rows",
-    { row_start: 2, row_count: 3 },
-    { row_start_index: 2, row_end_index: 5 },
-    { rows_deleted: 3 },
-  ),
-  tableCase(
-    "delete_table_columns",
-    { column_start: 3, column_count: 2 },
-    { column_start_index: 3, column_end_index: 5 },
-    { columns_deleted: 2 },
-  ),
+  insertCase("row", 2),
+  insertCase("column", 3),
+  deleteCase("row", [2, 3, 5]),
+  deleteCase("column", [3, 2, 5]),
   tableCase(
     "merge_table_cells",
     { row_start: 1, row_end: 3, column_start: 2, column_end: 5 },
@@ -154,10 +150,7 @@ describe("registered feishu_doc table patches", () => {
     const patch = vi.spyOn(client.docx.documentBlock, "patch").mockReturnValue(response.promise);
     const params = paramsFor(sample);
     const pending = resolveTool(client).execute("table-patch", params);
-    expect(patch).toHaveBeenCalledExactlyOnceWith({
-      path: patchPath,
-      data: sample.data,
-    });
+    expect(patch).toHaveBeenCalledExactlyOnceWith({ path: patchPath, data: sample.data });
     params.row_count = 99;
     response.resolve(successfulPatch);
     expectResult(await pending, { success: true, rows_deleted: 3, block });
@@ -172,61 +165,43 @@ describe("registered feishu_doc table patches", () => {
       const optional = (field: string): Record<string, number> =>
         Object.hasOwn(fields, "value") ? { [field]: fields.value! } : {};
       const cases = [
-        tableCase("insert_table_row", optional("row_index"), { row_index: index }),
-        tableCase("insert_table_column", optional("column_index"), { column_index: index }),
-        tableCase(
-          "delete_table_rows",
-          { row_start: 2, ...optional("row_count") },
-          { row_start_index: 2, row_end_index: end },
-          { rows_deleted: count },
-        ),
-        tableCase(
-          "delete_table_columns",
-          { column_start: 2, ...optional("column_count") },
-          { column_start_index: 2, column_end_index: end },
-          { columns_deleted: count },
-        ),
+        insertCase("row", index, optional("row_index")),
+        insertCase("column", index, optional("column_index")),
+        deleteCase("row", [2, count, end], { row_start: 2, ...optional("row_count") }),
+        deleteCase("column", [2, count, end], { column_start: 2, ...optional("column_count") }),
       ];
       const client = createClient();
       const patch = vi.spyOn(client.docx.documentBlock, "patch").mockResolvedValue({ code: 0 });
       const tool = resolveTool(client);
       for (const sample of cases) {
         const result = await tool.execute("default-value", paramsFor(sample));
-        expect(patch).toHaveBeenLastCalledWith({
-          path: patchPath,
-          data: sample.data,
-        });
+        expect(patch).toHaveBeenLastCalledWith({ path: patchPath, data: sample.data });
         expectResult(result, { success: true, ...sample.counts, block: undefined });
       }
       expect(patch).toHaveBeenCalledTimes(4);
     },
   );
 
-  it("rejects missing API status before inspecting response data", async () => {
-    const client = createClient();
-    vi.spyOn(client.docx.documentBlock, "patch").mockResolvedValue({
-      msg: "table denied",
-      get data(): never {
-        throw new Error("data read before code");
-      },
-    });
-    expectResult(await resolveTool(client).execute("api-error", paramsFor(actions[0]!)), {
-      error: "table denied",
-    });
-  });
-
-  it.each(["throw", "reject"] as const)(
-    "returns SDK %s failures as tool errors",
+  it.each(["missing status", "SDK throw", "SDK reject"])(
+    "returns %s as a tool error without inspecting invalid data",
     async (failure) => {
       const client = createClient();
       vi.spyOn(client.docx.documentBlock, "patch").mockImplementation(() => {
-        if (failure === "throw") {
+        if (failure === "SDK throw") {
           throw new Error("transport failed");
         }
-        return Promise.reject(new Error("transport failed"));
+        if (failure === "SDK reject") {
+          return Promise.reject(new Error("transport failed"));
+        }
+        return Promise.resolve({
+          msg: "table denied",
+          get data(): never {
+            throw new Error("data read before code");
+          },
+        });
       });
-      expectResult(await resolveTool(client).execute("sdk-error", paramsFor(actions[0]!)), {
-        error: "transport failed",
+      expectResult(await resolveTool(client).execute("api-error", paramsFor(actions[0]!)), {
+        error: failure === "missing status" ? "table denied" : "transport failed",
       });
     },
   );
@@ -235,67 +210,31 @@ describe("registered feishu_doc table patches", () => {
     const requests: Array<{ method: string | undefined; url: string | undefined; body: string }> =
       [];
     let reply: PatchResponse = successfulPatch;
-    const server = createServer((request, response) => {
-      void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.from(chunk));
-        }
-        requests.push({
-          method: request.method,
-          url: request.url,
-          body: Buffer.concat(chunks).toString("utf8"),
-        });
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify(reply));
-      })().catch(() => response.writeHead(500).end());
+    const server = createLoopbackServer(({ method, url, rawBody }) => {
+      requests.push({ method, url: `${url.pathname}${url.search}`, body: rawBody });
+      return reply;
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const address = server.address() as AddressInfo;
-      const transport = Object.create(Lark.defaultHttpInstance) as Lark.HttpInstance;
-      transport.request = async (options) => {
-        const upstream = new URL(options.url ?? "");
-        const target = new URL(
-          `${upstream.pathname}${upstream.search}`,
-          `http://127.0.0.1:${address.port}`,
-        );
-        const response = await fetch(target, {
-          method: options.method,
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(options.data),
-        });
-        return response.json();
-      };
-      const tool = resolveTool(createClient(transport));
-      for (const sample of actions) {
-        reply = successfulPatch;
-        expectResult(await tool.execute("http-patch", paramsFor(sample)), {
-          success: true,
-          ...sample.counts,
-          block,
-        });
-        reply = { code: 999, msg: "loopback table denied" };
-        expectResult(await tool.execute("http-error", paramsFor(sample)), {
-          error: "loopback table denied",
-        });
-      }
-      expect(requests).toEqual(
-        actions.flatMap((sample) =>
-          Array.from({ length: 2 }, () => ({
-            method: "PATCH",
-            url: "/open-apis/docx/v1/documents/doc_table/blocks/table_target",
-            body: JSON.stringify(sample.data),
-          })),
-        ),
-      );
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
+    const tool = resolveTool(createClient(await createLoopbackHttp(server)));
+    for (const sample of actions) {
+      reply = successfulPatch;
+      expectResult(await tool.execute("http-patch", paramsFor(sample)), {
+        success: true,
+        ...sample.counts,
+        block,
+      });
+      reply = { code: 999, msg: "loopback table denied" };
+      expectResult(await tool.execute("http-error", paramsFor(sample)), {
+        error: "loopback table denied",
       });
     }
+    expect(requests).toEqual(
+      actions.flatMap((sample) =>
+        Array.from({ length: 2 }, () => ({
+          method: "PATCH",
+          url: "/open-apis/docx/v1/documents/doc_table/blocks/table_target",
+          body: JSON.stringify(sample.data),
+        })),
+      ),
+    );
   });
 });
