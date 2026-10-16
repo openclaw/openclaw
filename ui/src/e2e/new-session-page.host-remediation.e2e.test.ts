@@ -34,6 +34,15 @@ suite.define(() => {
         "environments.list": {
           profiles: [],
           environments: [
+            // Fill the picker so unavailable rows require scrolling on phones.
+            ...Array.from({ length: 12 }, (_, index) => ({
+              id: `node:available-device-${index}`,
+              type: "node",
+              label: `Additional computer ${index + 1}`,
+              status: "available",
+              sessionHost: true,
+              workerSlots: { total: 1, available: 1 },
+            })),
             {
               id: "node:paired-device",
               type: "node",

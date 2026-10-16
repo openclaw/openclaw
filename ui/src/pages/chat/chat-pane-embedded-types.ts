@@ -8,7 +8,7 @@ import type {
   BrowserTabTarget,
 } from "../../components/browser/browser-target.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import type { PresentationValue } from "../../lit/presentation-binding.ts";
+import type { PresentationValue } from "../../lib/presentation.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
 import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import type {

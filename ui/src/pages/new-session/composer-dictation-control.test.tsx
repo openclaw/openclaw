@@ -109,7 +109,7 @@ describe("NewSessionDictationControl", () => {
       onMessage,
       onError: vi.fn(),
       onSubmit: vi.fn(),
-      requestUpdate: vi.fn(),
+      onChange: vi.fn(),
     });
 
     control.prepare("agent-a");
@@ -134,7 +134,7 @@ describe("NewSessionDictationControl", () => {
       onMessage: vi.fn(),
       onError,
       onSubmit: vi.fn(),
-      requestUpdate: vi.fn(),
+      onChange: vi.fn(),
     });
     const container = document.createElement("div");
     mountSolid(() => <NewSessionDictationView control={control} ownerKey="agent-a" />, {
@@ -172,7 +172,7 @@ describe("NewSessionDictationControl", () => {
       onMessage,
       onError: vi.fn(),
       onSubmit,
-      requestUpdate: vi.fn(),
+      onChange: vi.fn(),
     });
     const container = document.createElement("div");
     control.prepare("agent-a");
@@ -236,7 +236,7 @@ describe("NewSessionDictationControl", () => {
       onMessage: vi.fn(),
       onError: vi.fn(),
       onSubmit,
-      requestUpdate: vi.fn(),
+      onChange: vi.fn(),
     });
     onTestFinished(() => {
       control.dispose();
@@ -277,7 +277,7 @@ describe("NewSessionDictationControl", () => {
       onMessage,
       onError: vi.fn(),
       onSubmit: vi.fn(),
-      requestUpdate: vi.fn(),
+      onChange: vi.fn(),
     });
 
     control.prepare("agent-a");

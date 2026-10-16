@@ -477,6 +477,7 @@ export function prepareProjectedSessionPresentation(
         temporal.subagentOwner,
         temporal.fields.status,
         temporal.fields.lastRunError,
+        temporal.fields.suppressErrorNotice,
         temporal.fields.subagentRunState,
         temporal.fields.hasActiveSubagentRun,
         temporal.fields.startedAt,

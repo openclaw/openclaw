@@ -39,7 +39,7 @@ it.each(["last-used", "configured"] as const)(
     const controller = new NewSessionDraft(
       () => ({ context, data: undefined, isConnected: true }),
       {
-        requestUpdate: vi.fn(),
+        changed: vi.fn(),
         updateComplete: () => Promise.resolve(),
         closeTransientUi: vi.fn(),
         querySelector: () => null,
@@ -54,7 +54,7 @@ it.each(["last-used", "configured"] as const)(
       workspace: "/workspace",
       folder: "/workspace/remembered",
     });
-    controller.place.setAgentsHydrated(true);
+    controller.place.agentsHydrated = true;
     controller.place.adoptAgentDefaults();
     expect(directoryReads).toBe(1);
     expect(controller.place.folderSubmissionBlocked()).toBe(true);
@@ -86,7 +86,7 @@ it("wakes background discovery only while the draft is connected", async () => {
         : { profiles: [], environments: [] },
   });
   const draft = new NewSessionDraft(() => ({ context, data: undefined, isConnected: true }), {
-    requestUpdate: vi.fn(),
+    changed: vi.fn(),
     updateComplete: () => Promise.resolve(),
     closeTransientUi: vi.fn(),
     querySelector: () => null,

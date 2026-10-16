@@ -28,7 +28,7 @@ export type DraftPreferenceOptions = {
 export type DraftGatewayCallbacks = DraftPreferenceOptions & {
   // Read apart from the snapshot: the snapshot's place fields depend on this policy.
   readAgents: () => ApplicationContext["agents"] | undefined;
-  requestUpdate: () => void;
+  changed: () => void;
   updateComplete: () => Promise<unknown>;
   onInvalidate: (resetHostSelection: boolean, outcome: SubmissionOutcomeReason) => void;
   onVisibilityRetired: () => void;

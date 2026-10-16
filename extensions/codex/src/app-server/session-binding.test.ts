@@ -457,6 +457,49 @@ describe("Codex app-server binding store", () => {
     expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
+  it("retains restricted creation attestation and readable legacy rows after SQLite reopen", async () => {
+    const fixture = await createOpenClawTestState({
+      prefix: "codex-restricted-binding-reopen-",
+      layout: "state-only",
+      applyEnv: false,
+    });
+    const openStore = () =>
+      createCodexAppServerBindingStore(
+        createCodexSqliteTestBindingStateStore({
+          namespace: "restricted-reopen",
+          maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+          env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
+        }),
+      );
+    const legacy = {
+      threadId: "restricted-legacy",
+      cwd: "/repo",
+      nativeToolPolicyRestricted: true as const,
+    };
+    const attested = {
+      ...legacy,
+      threadId: "restricted-attested",
+      restrictedThreadConfigFingerprint: hashCodexAppServerBindingFingerprint("creation-policy"),
+    };
+    const legacyIdentity = { kind: "conversation" as const, bindingId: "restricted-legacy" };
+    const attestedIdentity = { kind: "conversation" as const, bindingId: "restricted-attested" };
+    try {
+      const store = openStore();
+      await store.mutate(legacyIdentity, { kind: "set", binding: legacy });
+      await store.mutate(attestedIdentity, { kind: "set", binding: attested });
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      const reopened = openStore();
+      expect(reopened.read(attestedIdentity)).toEqual(attested);
+      expect(reopened.read(legacyIdentity)).toEqual(legacy);
+      expect(reopened.read(legacyIdentity)?.restrictedThreadConfigFingerprint).toBeUndefined();
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      await fixture.cleanup();
+    }
+  });
+
   it("retains cleared legacy conversation provenance after normal tombstones expire", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
     try {

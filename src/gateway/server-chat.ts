@@ -514,6 +514,7 @@ export function createAgentEventHandler({
               abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
               yielded: yieldedWaiting ? true : undefined,
               errorObservation: evt.data?.errorObservation,
+              suppressErrorNotice: evt.data?.suppressErrorNotice === true,
               assistantTranscriptIdempotencyKey: readStringValue(
                 evt.data?.assistantTranscriptIdempotencyKey,
               ),
@@ -806,6 +807,7 @@ export function createAgentEventHandler({
       abortErrorMessage?: string;
       yielded?: true;
       errorObservation?: unknown;
+      suppressErrorNotice?: boolean;
       assistantTranscriptIdempotencyKey?: string;
       terminalPersistence?: Promise<void>;
       terminalReply?: AgentRunTerminalReplySnapshot;
@@ -905,6 +907,7 @@ export function createAgentEventHandler({
         ? (renderCodexAppServerFailureCopy(errorMessage) ?? errorMessage)
         : undefined,
       ...(errorKind && { errorKind }),
+      ...(opts?.suppressErrorNotice ? { suppressErrorNotice: true } : {}),
       ...(errorDetail ? { errorDetail } : {}),
       ...(stopReason && { stopReason }),
     };
