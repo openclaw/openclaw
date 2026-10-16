@@ -1,9 +1,11 @@
 .github/workflows/pr-crabbox-gate-publisher.yml
 cli-invocation.mjs
+cli-parent-lifetime.mjs
 cli-root-options.mjs
 config/ci-test-timings.json
 node-compile-cache.mjs
 gateway-prewarm.mjs
+gateway-shutdown-budget.mjs
 worker-heap-flag.mjs
 node-runtime-env.mjs
 node-sqlite.mjs

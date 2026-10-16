@@ -228,7 +228,7 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.authority.resolve"; profileId: string; includeProfile?: boolean }
   | { type: "userProfiles.aliases.resolve"; profileId: string }
   | ({ type: "userProfiles.githubIdentity.cached" } & CachedGitHubIdentityBinding)
-  | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
+  | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[]; host?: string }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
   | {

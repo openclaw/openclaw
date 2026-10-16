@@ -6,6 +6,7 @@ import type {
   UsersSetDisplayNameResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import {
+  GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,
   isGitCoauthorCreditEnabled,
 } from "../../../../packages/gateway-protocol/src/index.ts";
@@ -149,7 +150,8 @@ class ProfileState {
       this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
       this.gitCoauthorEnabled = true;
       this.publish();
-      if (profile.githubIdentity) {
+      // Consent belongs to the person, not to a display-primary GitHub account.
+      if (profile.id !== GATEWAY_OWNER_PROFILE_ID) {
         const { loadUserPreferences } = await import("../../app/user-prefs-request.ts");
         if (requestId !== this.identityRequestId) {
           return;
@@ -185,7 +187,7 @@ class ProfileState {
       !this.canWrite ||
       this.identityBusy ||
       this.identityLoading ||
-      (change.kind === "git-coauthor" && !profile.githubIdentity)
+      (change.kind === "git-coauthor" && profile.id === GATEWAY_OWNER_PROFILE_ID)
     ) {
       return;
     }

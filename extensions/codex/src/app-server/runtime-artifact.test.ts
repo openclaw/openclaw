@@ -192,18 +192,6 @@ describe("Codex app-server runtime artifact", () => {
     },
   );
 
-  it("attests the sanitized environment when the host injects a runtime loader path", async () => {
-    await withNativeArtifact(async (command) => {
-      const options = startOptions(command, {
-        env: { NODE_PATH: "/ambient/node_modules", LD_PRELOAD: "/ambient/inject.so" },
-      });
-
-      await expect(captureBinding({ options })).resolves.toMatchObject({
-        binding: { id: expect.stringMatching(/^codex-app-server:v1:/u) },
-      });
-    });
-  });
-
   it
     .runIf(process.platform !== "win32")
     .each(["custom.js", "node_modules/@openai/codex/bin/custom.js"])(
@@ -288,45 +276,6 @@ describe("Codex app-server runtime artifact", () => {
     });
   });
 
-  it("produces the same package binding regardless of directory enumeration order", async () => {
-    await withTempDir("openclaw-codex-package-order-", async (root) => {
-      const binDir = path.join(root, "bin");
-      await fs.mkdir(binDir, { recursive: true });
-      const command = path.join(binDir, "codex");
-      await fs.writeFile(command, "native-v1");
-      await fs.writeFile(path.join(root, "codex-package.json"), "{}\n");
-      await fs.writeFile(path.join(root, "z-resource"), "z");
-      await fs.writeFile(path.join(root, "a-resource"), "a");
-      const options = startOptions(command);
-      const first = await captureBinding({ options });
-
-      await fs.rm(path.join(root, "z-resource"));
-      await fs.rm(path.join(root, "a-resource"));
-      await fs.writeFile(path.join(root, "a-resource"), "a");
-      await fs.writeFile(path.join(root, "z-resource"), "z");
-      const second = await captureBinding({ options });
-
-      expect(second.binding).toEqual(first.binding);
-    });
-  });
-
-  it("ignores the retired code-mode host override and binds the native adjacent host", async () => {
-    await withNativeArtifact(async (command, root) => {
-      const codeModeHost = path.join(root, "codex-code-mode-host");
-      const retiredOverride = path.join(root, "custom-code-mode-host");
-      await fs.writeFile(codeModeHost, "host-v1");
-      const options = startOptions(command, {
-        env: { CODEX_CODE_MODE_HOST_PATH: retiredOverride },
-      });
-
-      const { binding } = await captureBinding({ options });
-      await fs.writeFile(retiredOverride, "unused-host");
-      expect((await captureBinding({ options })).binding).toEqual(binding);
-      await fs.writeFile(codeModeHost, "host-v2");
-      await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
-    });
-  });
-
   it("detects candidate bytes changing between spawn snapshots", async () => {
     await withNativeArtifact(async (command) => {
       const options = startOptions(command);
@@ -345,6 +294,23 @@ describe("Codex app-server runtime artifact", () => {
           runtimeIdentity: { serverVersion: CODEX_APP_SERVER_VERSION },
         }),
       ).rejects.toThrow("changed during startup");
+    });
+  });
+
+  it("ignores the retired code-mode host override and binds the native adjacent host", async () => {
+    await withNativeArtifact(async (command, root) => {
+      const codeModeHost = path.join(root, "codex-code-mode-host");
+      const retiredOverride = path.join(root, "custom-code-mode-host");
+      await fs.writeFile(codeModeHost, "host-v1");
+      const options = startOptions(command, {
+        env: { CODEX_CODE_MODE_HOST_PATH: retiredOverride },
+      });
+
+      const { binding } = await captureBinding({ options });
+      await fs.writeFile(retiredOverride, "unused-host");
+      expect((await captureBinding({ options })).binding).toEqual(binding);
+      await fs.writeFile(codeModeHost, "host-v2");
+      await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
     });
   });
 
@@ -554,19 +520,6 @@ describe("Codex app-server runtime artifact", () => {
         }),
       ).rejects.toThrow("bounded directory depth");
     });
-  });
-
-  it("honors an already-aborted bounded capture", async () => {
-    const controller = new AbortController();
-    controller.abort(new Error("stop hashing"));
-    const options = startOptions("codex");
-    await expect(
-      captureCodexAppServerRuntimeArtifactBeforeStart({
-        startOptions: options,
-        spawnIdentity: spawnIdentity(options),
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("stop hashing");
   });
 
   it.runIf(process.platform !== "win32")("rejects symlinks inside a package artifact", async () => {

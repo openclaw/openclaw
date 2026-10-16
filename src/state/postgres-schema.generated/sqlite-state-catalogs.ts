@@ -332,9 +332,9 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
 ];
 const fingerprints: Readonly<Record<string, CatalogReference>> = {
   // state
-  "83b19feebda9d8bc613e16751f0b0c18de65a54fd2572f2ca6ddc41e9c0b33e7": [
+  ccd6b6da52d363609ae24e699e8a753a0402f2dd788e97fc52063a9dcd13aff0: [
     "state",
-    "f073c89bc65b1fc285f9d085e7b3400f3a1103f1598d850247c69e4b6151968b",
+    "ddbdab9bb3ab7db46db7900e45bcfbbfa7766876d29c2899061ea5399fcc871e",
     [
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
       26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
@@ -346,16 +346,16 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // fragment-user_profiles
-  c46b3d1b7b80f69f7b87be0cd7ad0475b8a68244981d69ebc3c6a80c46c65210: [
+  bc86e378ea153c42527b6106b01ba4cb8285cca40378ffa0142656577309723e: [
     "fragment-user_profiles",
-    "db31165078e02fb6825ae32bfe34efc88d0c1e5942689d576dcb18fa4b5cdc93",
+    "268e6f3b53eb2048a3edf527da424f8df229a01166befc8137ea94dbb560227e",
     [131, 110, 132],
     [],
   ],
   // state-feature-user_profiles
-  "08076bc234ebe42c5e48bf637e2de1f7d9853f37a486e67ceb187abb8d7f50f2": [
+  f5b54f0fedd88d94c24add8a1fd987ac8592b05d4615424bab9dbc0d19c9cd4a: [
     "state-feature-user_profiles",
-    "80bf3b06484647e6997e9591d862ed4e82ef00a1a124f2343374616775272570",
+    "2c2611b7d0c64f467494ae3922f763dee7fc023a5ee6b92d5821639b18e825aa",
     [131, 133, 132],
     [],
   ],
@@ -367,9 +367,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // state-feature-user_profile_identities
-  "50da516f6454233a88444b3392c2f6190b00ea0b53d04a90767048da0c33235d": [
+  "45451969c6ea5bebf37bbfba310467e482af74731a7cb0f2affb316059e21528": [
     "state-feature-user_profile_identities",
-    "20d46bd4f7569b51df0c7173f26771993e9f3f90de4f0f81b29b47fbce354df7",
+    "3a24e89bd446dffbef50b7bd4b87288abc6eb470c290eaabcb1761fbe5244c06",
     [133],
     [],
   ],

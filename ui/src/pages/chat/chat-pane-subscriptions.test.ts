@@ -16,7 +16,8 @@ import {
 } from "./chat-pane.test-support.ts";
 
 const native = vi.hoisted(() => ({ capability: null as NativeGatewaysCapability | null }));
-vi.mock("../../app/native-gateways.runtime.ts", () => ({
+vi.mock("../../app/native-gateways.runtime.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../app/native-gateways.runtime.ts")>()),
   nativeGatewaysCapability: () => native.capability,
 }));
 

@@ -1223,10 +1223,17 @@ existing restart delivery and continuation behavior.
 - **Metrics:** recovery activity is exported via
   [Prometheus](/gateway/prometheus) as `openclaw_session_recovery_total` and
   `openclaw_session_recovery_age_seconds`.
-- **Startup timing:** set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` before starting the
-  Gateway to log the reader preparation, delivery recovery, exec recovery, and
-  registry activation spans inside `sidecars.subagent-recovery`. Normal startup
-  progress logs include only the outer recovery phase.
+- **Startup timing:** the `sidecars.subagent-recovery` completion line includes
+  `readersMs`, `deliveryMs`, `execMs`, `registryLoadMs`, and `registryActivationMs`
+  at the normal info level. These elapsed times include dependency loading and
+  waits for workers or database admission. Within `deliveryMs`,
+  `deliveryNoticesMs` measures blocked-notice selection and persistence, and
+  `retryWaitMs` measures retry backoff; these nested totals are not additional
+  phase time. Notice selection can wait for database writer admission even
+  when an unchanged notice does not need another write. Set
+  `OPENCLAW_GATEWAY_STARTUP_TRACE=1` to also log each individual span. The phase
+  runs after readiness; its duration does not measure time until the Gateway
+  can accept connections.
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `agents/subagent-registry`
   subsystems. Every startup pass includes bounded skip counts by reason such as

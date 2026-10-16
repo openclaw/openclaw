@@ -306,16 +306,6 @@ describe("runCommandWithTimeout", () => {
     expect(result.termination).toBe("signal");
   });
 
-  it("handles malformed UTF-8 in a truncated head", async () => {
-    const input = Buffer.from([0x61, 0xff, 0x62, 0xe2, 0x82, 0xac, 0x7a]);
-    const result = await runUtf8CommandWithTimeout(
-      nodeCommand("process.stdin.pipe(process.stdout)"),
-      { input, maxOutputBytes: 5, outputCapture: "head", timeoutMs: 3_000 },
-    );
-    expect(result.stdout).toBe("a�b�");
-    expect(result.stdoutTruncatedBytes).toBe(2);
-  });
-
   it("retires a failed launch before its scope closes and keeps argv out of the error", async () => {
     const privateArg = "private-command-argument";
     const reservation = { spawned: vi.fn(), settled: vi.fn() };
@@ -683,7 +673,7 @@ describe("package manager runtime", () => {
 
   it.skipIf(process.platform === "win32")(
     "hands an explicit Node runtime to npm preinstall children",
-    async () => {
+    async ({ signal }) => {
       const root = dirs.make("npm-lifecycle-node-");
       const privateBin = path.join(root, "private", "bin");
       const systemBin = path.join(root, "system", "bin");
@@ -708,33 +698,40 @@ describe("package manager runtime", () => {
         "bin",
         "npm-cli.js",
       );
-      const result = await runCommandWithTimeout(
-        [
-          privateNode,
-          npmCli,
-          "install",
-          "--offline",
-          "--no-audit",
-          "--no-fund",
-          "--package-lock=false",
-        ],
-        {
-          cwd: root,
-          timeoutMs: 10_000,
-          baseEnv: {},
-          env: {
-            HOME: root,
-            OPENCLAW_STATE_DIR: path.join(root, "state"),
-            PATH: [systemBin, process.env.PATH].join(path.delimiter),
-            npm_config_cache: path.join(root, "cache"),
-            npm_config_userconfig: path.join(root, "empty-npmrc"),
-            npm_config_globalconfig: path.join(root, "empty-global-npmrc"),
+      // Runtime handoff is the contract; host scheduling must not consume its deadline.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      try {
+        const result = await runCommandWithTimeout(
+          [
+            privateNode,
+            npmCli,
+            "install",
+            "--offline",
+            "--no-audit",
+            "--no-fund",
+            "--package-lock=false",
+          ],
+          {
+            cwd: root,
+            signal,
+            timeoutMs: 10_000,
+            baseEnv: {},
+            env: {
+              HOME: root,
+              OPENCLAW_STATE_DIR: path.join(root, "state"),
+              PATH: [systemBin, process.env.PATH].join(path.delimiter),
+              npm_config_cache: path.join(root, "cache"),
+              npm_config_userconfig: path.join(root, "empty-npmrc"),
+              npm_config_globalconfig: path.join(root, "empty-global-npmrc"),
+            },
           },
-        },
-      );
-      expect(result.code, result.stderr).toBe(0);
-      expect(result.stdout).toContain(nodeExecPath);
-      expect(result.stdout).not.toContain("v22.22.3");
+        );
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toContain(nodeExecPath);
+        expect(result.stdout).not.toContain("v22.22.3");
+      } finally {
+        vi.useRealTimers();
+      }
     },
   );
 

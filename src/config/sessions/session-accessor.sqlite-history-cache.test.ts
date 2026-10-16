@@ -22,9 +22,12 @@ import { readSessionTranscriptHistoryEventPage } from "./session-accessor.sqlite
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   historyEventId,
+  readSessionTranscriptHistoryEventById,
   readSessionTranscriptHistoryEventCount,
   useHistoryEventScope,
 } from "./session-accessor.sqlite-history.test-support.js";
+import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { rewriteTranscriptEventRowsExact } from "./session-accessor.sqlite-transcript-write.js";
 import {
   appendTranscriptEventSync,
   replaceTranscriptEvents,
@@ -148,6 +151,36 @@ describe("SQLite transcript history cache", () => {
       expect(payloadReads()).toHaveLength(0);
     },
   );
+
+  it("refreshes metadata-only rewrites without changing history positions or ignoring byte caps", async () => {
+    const event = {
+      type: "message",
+      id: "question",
+      parentId: null,
+      message: { role: "user", content: "question" },
+    };
+    await replaceTranscriptEvents(fixtureScope, [event]);
+    expect(read().events).toMatchObject([{ seq: 1, event }]);
+    const database = openOpenClawAgentDatabase(fixtureScope);
+    const generation = readTranscriptGenerationInTransaction(database, fixtureScope.sessionId)!;
+    const changed = {
+      ...event,
+      message: { ...event.message, __openclaw: { steerTargetRunId: "new-running-turn" } },
+    };
+    expect(
+      await rewriteTranscriptEventRowsExact(fixtureScope, {
+        expectedGeneration: generation,
+        rows: [{ seq: 0, event: changed, expectedEventJson: JSON.stringify(event) }],
+      }),
+    ).toEqual({ generation });
+    expect(read().events).toMatchObject([{ seq: 1, event: changed }]);
+    expect(
+      readSessionTranscriptHistoryEventById(fixtureScope, event.id, {
+        currentOnly: true,
+        maxBytes: Buffer.byteLength(JSON.stringify(event)) + 1,
+      }),
+    ).toBeUndefined();
+  });
 
   it.each(["rollback", "savepoint rollback"] as const)(
     "retains only committed recent windows after a nested writer %s",

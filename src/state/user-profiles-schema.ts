@@ -108,6 +108,7 @@ export function ensureUserProfilesSchema(
         ensureUserProfileTables(db);
       }
       ensureColumn(db, "user_profile_identities", "canonical_login TEXT");
+      ensureColumn(db, "user_profile_identities", "verified_email_json TEXT");
       ensureColumn(db, "user_profile_identities", "authorization_id TEXT");
       ensureColumn(db, "user_profile_identities", "authorization_basis_json TEXT");
       // Legacy identity tables need the authorization column before its index.

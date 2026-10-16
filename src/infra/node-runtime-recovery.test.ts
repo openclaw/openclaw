@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { CLI_PARENT_BOUND_PRELOAD } from "../../cli-parent-lifetime.mjs";
 import {
   findUsableNodeRuntime,
   isUsableNode,
@@ -859,9 +860,17 @@ describe("runtime recovery discovery", () => {
 
         expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
           candidate,
-          ["--trace-warnings", "/fixture/dist/index.js", "doctor", "--non-interactive", "--fix"],
+          [
+            "--import",
+            CLI_PARENT_BOUND_PRELOAD,
+            "--trace-warnings",
+            "/fixture/dist/index.js",
+            "doctor",
+            "--non-interactive",
+            "--fix",
+          ],
           {
-            stdio: "inherit",
+            stdio: ["inherit", "inherit", "inherit", "ipc"],
             env: { ...originalEnv, OPENCLAW_NODE_UPDATE_RESPAWNED: "1" },
             windowsHide: hide,
           },

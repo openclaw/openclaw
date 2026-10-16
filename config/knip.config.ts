@@ -8,6 +8,7 @@ import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
+import { compileViteConfigConsumers } from "./knip-vite-consumers.mjs";
 
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 
@@ -680,6 +681,10 @@ function workspacePackage(packageDir: string, extraEntries: readonly string[] = 
 }
 
 function compileDynamicMjsConsumers(source: string, filePath: string): string {
+  // A custom TS compiler disables Knip's declaration-to-source mapping.
+  if (path.resolve(filePath) === path.resolve("config/knip-vite-consumers.mjs")) {
+    return compileViteConfigConsumers(source, filePath);
+  }
   if (path.resolve(filePath) === path.resolve("scripts/ci-build-manifest.mjs")) {
     // The trusted manifest resolves this planner from the target checkout by file URL.
     return source.replace(
@@ -925,6 +930,7 @@ const config = {
         ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "apps/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "config/**/*.{ts,mts,cts}!",
+        "config/knip-vite-consumers.mjs!",
         "docs/**/*.js!",
         "security/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",

@@ -6,6 +6,7 @@ import {
 import { resolveConversationInDatabase } from "../config/sessions/session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
+import { resolveWorkerVisibleHistoryProjection } from "../config/sessions/session-accessor.sqlite-history-projection.worker.js";
 import {
   readSessionTranscriptHistoryEventPageFromProjection,
   readTranscriptDisplayDeltaFromProjection,
@@ -134,7 +135,10 @@ export function createReadonlySessionHistoryReader(
           databaseAgentId: target.database.agentId,
           path: target.database.path,
         },
-        read,
+        (projection) => {
+          projection.resolveVisibleHistory = resolveWorkerVisibleHistoryProjection;
+          return read(projection);
+        },
       ),
     );
     if (result.kind === "unavailable") {
