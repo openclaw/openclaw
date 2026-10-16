@@ -41,6 +41,34 @@ import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-genera
 import { makeMockHttpResponse } from "./test-http-response.js";
 import { withTempConfig } from "./test-temp-config.js";
 
+const requestPath = "/plugins/example/session";
+const tokenAuth = (token: string, allowTailscale = false) =>
+  ({ mode: "token", token, allowTailscale }) as const;
+const cookieRequest = (cookie: string): IncomingMessage =>
+  ({ method: "GET", headers: { cookie } }) as IncomingMessage;
+const cookieGeneration = (
+  auth: Parameters<typeof resolveSharedGatewaySessionGeneration>[0],
+  proxies?: string[],
+) =>
+  resolveControlUiPluginAuthCookieGeneration(
+    resolveSharedGatewaySessionGeneration(auth, proxies),
+    getRuntimeConfig(),
+  );
+type Admission = Parameters<typeof authorizePluginGatewayHttpRequestOrReply>[0];
+function admit(
+  params: Omit<Admission, "requestPath" | "resolveOperatorScopes"> &
+    Partial<Pick<Admission, "requestPath" | "resolveOperatorScopes">>,
+) {
+  return authorizePluginGatewayHttpRequestOrReply({
+    requestPath,
+    resolveOperatorScopes: () => [],
+    ...params,
+  });
+}
+function grants(req: IncomingMessage, generation: string | undefined) {
+  return resolveControlUiPluginAuthCookieGrants(req, { requestPath, generation });
+}
+
 function issueCookie(
   profileId?: string,
   {
@@ -70,13 +98,10 @@ function issueCookie(
 }
 
 function authorizeCookie(cookie: string, authGeneration = "generation") {
-  return authorizeControlUiPluginCookieRequest(
-    { method: "GET", headers: { cookie } } as IncomingMessage,
-    {
-      requestPath: "/plugins/example/session",
-      authGeneration,
-    },
-  );
+  return authorizeControlUiPluginCookieRequest(cookieRequest(cookie), {
+    requestPath,
+    authGeneration,
+  });
 }
 
 async function withRoleConfig(run: () => Promise<void>) {
@@ -109,16 +134,8 @@ describe("Control UI plugin auth cookie profile binding", () => {
     await withTempConfig({
       cfg: {},
       run: async () => {
-        const auth = {
-          mode: "token",
-          token: "synthetic-cookie-ceiling",
-          allowTailscale: false,
-        } as const;
-        const authGeneration = resolveSharedGatewaySessionGeneration(auth);
-        const generation = resolveControlUiPluginAuthCookieGeneration(
-          authGeneration,
-          getRuntimeConfig(),
-        );
+        const auth = tokenAuth("synthetic-cookie-ceiling");
+        const generation = cookieGeneration(auth);
         const signedScopes: OperatorScope[] = [
           "operator.admin",
           "operator.read",
@@ -127,10 +144,7 @@ describe("Control UI plugin auth cookie profile binding", () => {
           "operator.talk.secrets",
         ];
         for (const remote of [false, true]) {
-          const req = createGatewayRequest({
-            path: "/plugins/example/session",
-            headers: {},
-          });
+          const req = createGatewayRequest({ path: requestPath, headers: {} });
           if (remote) {
             markGatewayIngressTransport(req, {
               kind: "remote-forwarded",
@@ -146,49 +160,23 @@ describe("Control UI plugin auth cookie profile binding", () => {
           });
           req.headers.cookie = cookie;
           if (remote) {
-            const direct = createGatewayRequest({
-              path: "/plugins/example/session",
-              headers: { cookie },
-            });
-            expect(
-              resolveControlUiPluginAuthCookieGrants(direct, {
-                requestPath: "/plugins/example/session",
-                generation,
-              }),
-            ).toEqual([]);
-            direct.destroy();
-            const other = createGatewayRequest({
-              path: "/plugins/example/session",
-              headers: { cookie },
-            });
-            markGatewayIngressTransport(other, {
-              kind: "remote-forwarded",
-              context: createRemoteControlUiIngressTestContext(),
-            });
-            expect(
-              resolveControlUiPluginAuthCookieGrants(other, {
-                requestPath: "/plugins/example/session",
-                generation,
-              }),
-            ).toEqual([]);
-            other.destroy();
+            for (const forwarded of [false, true]) {
+              const other = createGatewayRequest({ path: requestPath, headers: { cookie } });
+              if (forwarded) {
+                markGatewayIngressTransport(other, {
+                  kind: "remote-forwarded",
+                  context: createRemoteControlUiIngressTestContext(),
+                });
+              }
+              expect(grants(other, generation)).toEqual([]);
+              other.destroy();
+            }
           }
           const expected = remote ? ["operator.read"] : signedScopes;
-          expect(
-            resolveControlUiPluginAuthCookieGrants(req, {
-              requestPath: "/plugins/example/session",
-              generation,
-            })[0]?.scopes,
-          ).toEqual(expected);
+          expect(grants(req, generation)[0]?.scopes).toEqual(expected);
           const res = new ServerResponse(req);
           try {
-            const admission = await authorizePluginGatewayHttpRequestOrReply({
-              req,
-              res,
-              auth,
-              requestPath: "/plugins/example/session",
-              resolveOperatorScopes: () => [],
-            });
+            const admission = await admit({ req, res, auth });
             expect(admission?.requestAuth.controlUiPluginGrants?.[0]?.scopes).toEqual(expected);
             expect(admission?.requestAuth.revalidate).toBeTypeOf("function");
             await admission?.requestAuth.revalidate?.();
@@ -206,27 +194,12 @@ describe("Control UI plugin auth cookie profile binding", () => {
     await withRoleConfig(async () => {
       const profile = ensureProfileForEmail("cold-reader@example.test");
       setUserProfileRole(profile.id, "writer");
-      const auth = {
-        mode: "token",
-        token: "synthetic-cookie-reader",
-        allowTailscale: false,
-      } as const;
-      const cookie = issueCookie(profile.id, {
-        generation: resolveControlUiPluginAuthCookieGeneration(
-          resolveSharedGatewaySessionGeneration(auth),
-          getRuntimeConfig(),
-        ),
-      });
+      const auth = tokenAuth("synthetic-cookie-reader");
+      const cookie = issueCookie(profile.id, { generation: cookieGeneration(auth) });
       const { res } = makeMockHttpResponse();
       const sql = observeHostDataSql();
       try {
-        const admitted = await authorizePluginGatewayHttpRequestOrReply({
-          req: { method: "GET", headers: { cookie } } as IncomingMessage,
-          res,
-          auth,
-          requestPath: "/plugins/example/session",
-          resolveOperatorScopes: () => [],
-        });
+        const admitted = await admit({ req: cookieRequest(cookie), res, auth });
         expect(admitted?.requestAuth).toMatchObject({
           authenticatedUserProfile: { profileId: profile.id },
           controlUiPluginGrants: [{ scopes: ["operator.read"] }],
@@ -263,26 +236,16 @@ describe("Control UI plugin auth cookie profile binding", () => {
         },
       });
       setActivePluginRegistry(registry.registry);
-      const auth = { mode: "token", token: "independent-owner", allowTailscale: false } as const;
-      const cookie = issueCookie(profile.id, {
-        generation: resolveControlUiPluginAuthCookieGeneration(
-          resolveSharedGatewaySessionGeneration(auth),
-          getRuntimeConfig(),
-        ),
-      });
+      const auth = tokenAuth("independent-owner");
+      const cookie = issueCookie(profile.id, { generation: cookieGeneration(auth) });
       const catalog = await prepareUserProfileCatalog();
       try {
         for (const authorization of [undefined, "Bearer independent-owner"]) {
           const { res } = makeMockHttpResponse();
-          const result = await authorizePluginGatewayHttpRequestOrReply({
-            req: createGatewayRequest({
-              path: "/plugins/example/session",
-              headers: { cookie },
-              authorization,
-            }),
+          const result = await admit({
+            req: createGatewayRequest({ path: requestPath, headers: { cookie }, authorization }),
             res,
             auth,
-            requestPath: "/plugins/example/session",
             resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
           });
           if (authorization) {
@@ -327,7 +290,7 @@ describe("Control UI plugin auth cookie profile binding", () => {
             handler: async () => true,
           });
           setActivePluginRegistry(registry);
-          const auth = { mode: "token" as const, token: "shared-secret", allowTailscale: true };
+          const auth = tokenAuth("shared-secret", true);
           const generation = resolveSharedGatewaySessionGeneration(auth);
           const profile = ensureProfileForEmail("tailscale-reader@example.test");
           const issued = makeMockHttpResponse();
@@ -358,13 +321,12 @@ describe("Control UI plugin auth cookie profile binding", () => {
           const request = { method: "GET", headers: { cookie: header } } as IncomingMessage;
           const authorize = async (allowTailscale: boolean) => {
             const response = makeMockHttpResponse();
-            const result = await authorizePluginGatewayHttpRequestOrReply({
+            const result = await admit({
               req: request,
               res: response.res,
               auth: { ...auth, allowTailscale },
               cfg: getRuntimeConfig(),
               requestPath: "/plugins/example/view",
-              resolveOperatorScopes: () => [],
             });
             return { result, response };
           };
@@ -402,26 +364,19 @@ describe("Control UI plugin auth cookie profile binding", () => {
             });
             expect(authorizeCookie(issueCookie("missing-profile"))).toBeNull();
             const auth = {
-              mode: "trusted-proxy" as const,
+              mode: "trusted-proxy",
               allowTailscale: false,
               trustedProxy: { userHeader: "x-user" },
-            };
+            } as const;
             const proxies = ["127.0.0.1"];
-            const cookie = issueCookie(profile.id, {
-              generation: resolveControlUiPluginAuthCookieGeneration(
-                resolveSharedGatewaySessionGeneration(auth, proxies),
-                getRuntimeConfig(),
-              ),
-            });
+            const cookie = issueCookie(profile.id, { generation: cookieGeneration(auth, proxies) });
             const { res } = makeMockHttpResponse();
             try {
-              const admitted = await authorizePluginGatewayHttpRequestOrReply({
-                req: { method: "GET", headers: { cookie } } as IncomingMessage,
+              const admitted = await admit({
+                req: cookieRequest(cookie),
                 res,
                 auth,
                 trustedProxies: proxies,
-                requestPath: "/plugins/example/session",
-                resolveOperatorScopes: () => [],
               });
               expect(admitted?.requestAuth.authenticatedUserProfile?.profileId).toBe(profile.id);
               expect(admitted?.requestAuth.hasCurrentClientAuthority?.()).toBe(true);
@@ -450,27 +405,15 @@ describe("Control UI plugin auth cookie profile binding", () => {
         profile ? ensureProfileForEmail(`${profile}-cookie-reader@example.test`).id : undefined,
       );
       expect(isUserProfileCatalogReady()).toBe(false);
-      const auth = {
-        mode: "token",
-        token: "synthetic-denial-token",
-        allowTailscale: false,
-      } as const;
-      const generation = resolveControlUiPluginAuthCookieGeneration(
-        resolveSharedGatewaySessionGeneration(auth),
-        getRuntimeConfig(),
-      );
+      const auth = tokenAuth("synthetic-denial-token");
+      const generation = cookieGeneration(auth);
       const cookie = profileIds
         .map((profile, index) =>
           issueCookie(profile, { pluginId: index ? "overlap" : "example", generation }),
         )
         .join("; ");
-      const req = { method: "GET", headers: { cookie } } as IncomingMessage;
-      expect(
-        resolveControlUiPluginAuthCookieGrants(req, {
-          requestPath: "/plugins/example/session",
-          generation,
-        }),
-      ).toHaveLength(profiles.length);
+      const req = cookieRequest(cookie);
+      expect(grants(req, generation)).toHaveLength(profiles.length);
       const { res } = makeMockHttpResponse();
       if (response !== "open") {
         res.statusCode = 204;
@@ -483,15 +426,7 @@ describe("Control UI plugin auth cookie profile binding", () => {
       const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
       const sql = observeHostDataSql();
       try {
-        await expect(
-          authorizePluginGatewayHttpRequestOrReply({
-            req,
-            res,
-            auth,
-            requestPath: "/plugins/example/session",
-            resolveOperatorScopes: () => [],
-          }),
-        ).resolves.toBeNull();
+        await expect(admit({ req, res, auth })).resolves.toBeNull();
         expect(res.statusCode).toBe(response === "open" ? 401 : 204);
         expect(sql.queries).toEqual([]);
         expect(reads).not.toHaveBeenCalled();
@@ -558,7 +493,7 @@ describe("Control UI plugin auth cookie profile binding", () => {
       const request = {
         headers: { cookie: issueCookie(profileId, { generation: "generation" }) },
       } as IncomingMessage;
-      const grants = [
+      const expectedGrants = [
         {
           pluginId: "example",
           path: "/plugins/example",
@@ -572,13 +507,13 @@ describe("Control UI plugin auth cookie profile binding", () => {
           requestPath: profileId ? "/plugins/example/session" : "/plugins/example",
           generation: "generation",
         }),
-      ).toEqual(grants);
+      ).toEqual(expectedGrants);
       if (!profileId) {
         await withTempConfig({
           cfg: {},
           run: async () => {
             expect(authorizeCookie(issueCookie())?.requestAuth.controlUiPluginGrants).toEqual(
-              grants,
+              expectedGrants,
             );
           },
         });

@@ -21,6 +21,21 @@ function requestUrl(input: Parameters<typeof fetch>[0]): string {
 function html(text: string) {
   return new Response(text, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
+const missing = () => new Response(null, { status: 404 });
+function mockFetch(reply: (url: string) => Response | Promise<Response>) {
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input) => reply(requestUrl(input)));
+  vi.stubGlobal("fetch", fetch);
+  return fetch;
+}
+function streamFetch(source: UnderlyingDefaultSource<Uint8Array>) {
+  mockFetch((url) =>
+    url.endsWith("/favicon.ico")
+      ? missing()
+      : new Response(new ReadableStream(source, { highWaterMark: 0 }), {
+          headers: { "content-type": "text/html" },
+        }),
+  );
+}
 const principal = {};
 function load(path: string, enabled = () => true, scope = principal, revision = 0) {
   return loadControlUiLinkPreview(
@@ -54,8 +69,7 @@ describe("public link previews", () => {
 
   it("uses redirected-page OG metadata, document base URLs, entity decoding and anonymous requests", async () => {
     encode.mockResolvedValue({ data: PNG });
-    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
-      const url = requestUrl(input);
+    const fetch = mockFetch((url) => {
       if (url.endsWith("/metadata")) {
         return new Response(null, {
           status: 302,
@@ -69,7 +83,6 @@ describe("public link previews", () => {
       }
       return new Response(PNG);
     });
-    vi.stubGlobal("fetch", fetch);
     expect(await load("/metadata#fragment")).toEqual({
       title: "A & B",
       imageDataUrl: pngUrl,
@@ -132,22 +145,20 @@ describe("public link previews", () => {
   ])(
     "extracts $name without decoding unsafe images",
     async ({ name, tags, expected, icon, body }) => {
-      const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
-        const url = requestUrl(input);
+      const fetch = mockFetch((url) => {
         if (url.endsWith("/favicon.ico")) {
           return icon
             ? new Response(
                 icon,
                 typeof icon === "string" ? { headers: { "content-type": "image/png" } } : undefined,
               )
-            : new Response(null, { status: 404 });
+            : missing();
         }
         if (body && url.endsWith("/huge.png")) {
           return new Response(new Uint8Array(2 * 1024 * 1024 + 1));
         }
         return html("<html><head>" + tags + "</head><body>" + (body ?? "") + "</body></html>");
       });
-      vi.stubGlobal("fetch", fetch);
       expect(await load("/metadata-" + encodeURIComponent(name))).toEqual(expected);
       expect(fetch).toHaveBeenCalledTimes(body ? 3 : 2);
       expect(encode).not.toHaveBeenCalled();
@@ -157,19 +168,17 @@ describe("public link previews", () => {
   it.each(["http://127.0.0.1/internal", "https://u:p@public.example/private"])(
     "guards page and image redirect %s before fetching it",
     async (destination) => {
-      const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
-        const url = requestUrl(input);
+      const fetch = mockFetch((url) => {
         if (url.includes("/page-redirect") || url.endsWith("/evil.png")) {
           return new Response(null, { status: 302, headers: { location: destination } });
         }
         if (url.endsWith("/favicon.ico")) {
-          return new Response(null, { status: 404 });
+          return missing();
         }
         return html(
           '<head><title>Good</title><meta property="og:image" content="/evil.png"></head>',
         );
       });
-      vi.stubGlobal("fetch", fetch);
       expect(await load("/page-redirect?target=" + encodeURIComponent(destination))).toEqual({});
       expect(await load("/image-redirect?target=" + encodeURIComponent(destination))).toEqual({
         title: "Good",
@@ -201,16 +210,7 @@ describe("public link previews", () => {
           controller.close();
         }
       });
-      vi.stubGlobal(
-        "fetch",
-        vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) =>
-          requestUrl(input).endsWith("/favicon.ico")
-            ? new Response(null, { status: 404 })
-            : new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
-                headers: { "content-type": "text/html" },
-              }),
-        ),
-      );
+      streamFetch({ pull, cancel });
       expect(await load("/streamed-" + encodeURIComponent(boundary))).toEqual({ title: "A & B" });
       expect(pull).toHaveBeenCalledTimes(3);
       expect(cancel).toHaveBeenCalledOnce();
@@ -228,16 +228,7 @@ describe("public link previews", () => {
     const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
       controller.enqueue(bytes);
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) =>
-        requestUrl(input).endsWith("/favicon.ico")
-          ? new Response(null, { status: 404 })
-          : new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
-              headers: { "content-type": "text/html" },
-            }),
-      ),
-    );
+    streamFetch({ pull, cancel });
     expect(await load("/unterminated-head")).toEqual({ title: "Early" });
     expect(pull).toHaveBeenCalledOnce();
     expect(cancel).toHaveBeenCalledOnce();
@@ -250,14 +241,11 @@ describe("public link previews", () => {
     "expires $name previews by URL while coalescing fragment variants",
     async ({ name, ttl, result }) => {
       const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-      const fetch = vi
-        .fn<typeof globalThis.fetch>()
-        .mockImplementation(async (input) =>
-          requestUrl(input).endsWith("/favicon.ico") || name === "unavailable"
-            ? new Response(null, { status: 404 })
-            : html("<head><title>Cached</title></head>"),
-        );
-      vi.stubGlobal("fetch", fetch);
+      const fetch = mockFetch((url) =>
+        url.endsWith("/favicon.ico") || name === "unavailable"
+          ? missing()
+          : html("<head><title>Cached</title></head>"),
+      );
       const path = "/cache-ttl-" + name;
       expect(await load(path)).toEqual(result);
       now.mockReturnValue(1_000 + ttl - 1);
@@ -272,18 +260,15 @@ describe("public link previews", () => {
   it("shares in-flight anonymous reads and caches unavailable results", async () => {
     const gate = createDeferred<Response>();
     const requested = createDeferred();
-    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+    const fetch = mockFetch((url) => {
       requested.resolve();
-      return requestUrl(input).endsWith("/favicon.ico")
-        ? new Response(null, { status: 404 })
-        : gate.promise;
+      return url.endsWith("/favicon.ico") ? missing() : gate.promise;
     });
-    vi.stubGlobal("fetch", fetch);
     const first = load("/shared");
     const second = load("/shared");
     await requested.promise;
     expect(fetch).toHaveBeenCalledTimes(1);
-    gate.resolve(new Response(null, { status: 404 }));
+    gate.resolve(missing());
     expect(await first).toEqual({});
     expect(await second).toEqual({});
     expect(await load("/shared")).toEqual({});
@@ -293,9 +278,9 @@ describe("public link previews", () => {
   it("does not share cached or in-flight previews across principals or revisions", async () => {
     const gate = createDeferred<Response>();
     const requested = createDeferred();
-    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
-      if (requestUrl(input).endsWith("/favicon.ico")) {
-        return new Response(null, { status: 404 });
+    const fetch = mockFetch((url) => {
+      if (url.endsWith("/favicon.ico")) {
+        return missing();
       }
       if (fetch.mock.calls.length === 1) {
         requested.resolve();
@@ -303,7 +288,6 @@ describe("public link previews", () => {
       }
       return html("<head><title>Current</title></head>");
     });
-    vi.stubGlobal("fetch", fetch);
     const first = load("/scoped");
     await requested.promise;
     const second = load("/scoped", () => true, {});
@@ -317,16 +301,13 @@ describe("public link previews", () => {
 
   it("fetches a shared social image and favicon only once while sizing each output", async () => {
     encode.mockResolvedValue({ data: PNG });
-    const fetch = vi
-      .fn<typeof globalThis.fetch>()
-      .mockImplementation(async (input) =>
-        requestUrl(input).endsWith("/shared-image")
-          ? html(
-              '<head><meta property="og:image" content="/image.png"><link rel="icon" href="/image.png"></head>',
-            )
-          : new Response(PNG),
-      );
-    vi.stubGlobal("fetch", fetch);
+    const fetch = mockFetch((url) =>
+      url.endsWith("/shared-image")
+        ? html(
+            '<head><meta property="og:image" content="/image.png"><link rel="icon" href="/image.png"></head>',
+          )
+        : new Response(PNG),
+    );
     expect(await load("/shared-image")).toEqual({ imageDataUrl: pngUrl, faviconDataUrl: pngUrl });
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(
@@ -344,14 +325,13 @@ describe("public link previews", () => {
     const gate = createDeferred();
     const started = createDeferred();
     let active = 0;
-    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => {
+    const fetch = mockFetch(async () => {
       if (++active === 4) {
         started.resolve();
       }
       await gate.promise;
-      return new Response(null, { status: 404 });
+      return missing();
     });
-    vi.stubGlobal("fetch", fetch);
     const pending = Array.from({ length: 4 }, (_, i) => load(`/busy-${i}`));
     await started.promise;
     let result: unknown;
@@ -373,11 +353,10 @@ describe("public link previews", () => {
 
   it("does no work while disabled, including cached previews; disabling during HTML stops images", async () => {
     let enabled = false;
-    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => {
+    const fetch = mockFetch(() => {
       enabled = false;
       return html('<head><meta property="og:image" content="/never.png"></head>');
     });
-    vi.stubGlobal("fetch", fetch);
     expect(await load("/disabled", () => enabled)).toEqual({});
     expect(fetch).not.toHaveBeenCalled();
     enabled = true;

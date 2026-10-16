@@ -74,6 +74,26 @@ function request(
     remoteAddress: "127.0.0.1",
   });
 }
+type Response = Awaited<ReturnType<typeof request>>;
+function page(response: Response, status: number, ...contents: string[]) {
+  expect(response.res.statusCode).toBe(status);
+  for (const content of contents) {
+    expect(response.getBody()).toContain(content);
+  }
+  return response.getBody();
+}
+function lanRequest(instance: Server, requestPath: string) {
+  return sendRequest(instance, {
+    path: requestPath,
+    host: "gateway.lan:18789",
+    remoteAddress: "192.168.1.25",
+  });
+}
+async function handoff(instance: Server, requestPath: string) {
+  const entry = `/control/__openclaw__/session-entry?path=${encodeURIComponent(requestPath)}`;
+  page(await request(instance, `${entry}&probe=1`), 401);
+  return page(await request(instance, entry), 200, "<openclaw-app>");
+}
 beforeEach(() => {
   setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
   projection = createSessionRowProjectionFixture({
@@ -107,9 +127,7 @@ afterEach(() => {
 describe("canonical anonymous HTTP entry", () => {
   it("keeps published text available when no token identity is present", async () => {
     mediaToken.mockResolvedValue(undefined);
-    const response = await request(server());
-    expect(response.res.statusCode).toBe(200);
-    expect(response.getBody()).toContain("Published answer");
+    page(await request(server()), 200, "Published answer");
   });
 
   it("reloads the exact Incognito address produced by in-app navigation", async () => {
@@ -121,13 +139,11 @@ describe("canonical anonymous HTTP entry", () => {
       fallbackAgentId: "main",
       basePath: "/control",
     });
-    const response = await sendRequest(server(), {
-      path: target.options.pathname + (target.options.search ?? ""),
-      host: "gateway.lan:18789",
-      remoteAddress: "192.168.1.25",
-    });
-    expect(response.res.statusCode).toBe(200);
-    expect(response.getBody()).toContain("<openclaw-app>");
+    page(
+      await lanRequest(server(), target.options.pathname + (target.options.search ?? "")),
+      200,
+      "<openclaw-app>",
+    );
     expect(resolveSession).not.toHaveBeenCalled();
     expect(reader).not.toHaveBeenCalled();
   });
@@ -146,22 +162,11 @@ describe("canonical anonymous HTTP entry", () => {
     resolveSession.mockResolvedValue(null);
     const instance = server();
     const privateChat = await request(instance, recoveryPath);
-    expect(privateChat.res.statusCode).toBe(404);
-    expect(privateChat.getBody()).toContain('data-gateway-path="/control"');
-    expect(privateChat.getBody()).not.toContain("Published answer");
-    const entry = `/control/__openclaw__/session-entry?${new URLSearchParams({ path: recoveryPath })}`;
-    expect((await request(instance, `${entry}&probe=1`)).res.statusCode).toBe(401);
-    const app = await request(instance, entry);
-    expect(app.res.statusCode).toBe(200);
-    expect(app.getBody()).toContain("<openclaw-app>");
-    expect(app.getBody()).toContain(JSON.stringify(recoveryPath));
-    const nonSecureApp = await sendRequest(instance, {
-      path: recoveryPath,
-      host: "gateway.lan:18789",
-      remoteAddress: "192.168.1.25",
-    });
-    expect(nonSecureApp.res.statusCode).toBe(200);
-    expect(nonSecureApp.getBody()).toContain("<openclaw-app>");
+    expect(page(privateChat, 404, 'data-gateway-path="/control"')).not.toContain(
+      "Published answer",
+    );
+    expect(await handoff(instance, recoveryPath)).toContain(JSON.stringify(recoveryPath));
+    page(await lanRequest(instance, recoveryPath), 200, "<openclaw-app>");
     expect(reader).not.toHaveBeenCalled();
   });
 
@@ -183,31 +188,25 @@ describe("canonical anonymous HTTP entry", () => {
           ? { "x-forwarded-proto": "https", "x-forwarded-for": "203.0.113.42" }
           : {},
       });
-      expect(response.res.statusCode).toBe(404);
-      expect(response.getBody()).toContain('data-gateway-path="/control"');
-      expect(response.getBody()).not.toContain("<openclaw-app>");
-      const entry = `/control/__openclaw__/session-entry?path=${encodeURIComponent(route)}`;
-      expect((await request(instance, `${entry}&probe=1`)).res.statusCode).toBe(401);
-      const app = await request(instance, entry);
-      expect(app.res.statusCode).toBe(200);
-      expect(app.getBody()).toContain("<openclaw-app>");
-      expect(app.getBody()).toContain(`history.replaceState(null,"","${route}"+location.hash)`);
+      expect(page(response, 404, 'data-gateway-path="/control"')).not.toContain("<openclaw-app>");
+      expect(await handoff(instance, route)).toContain(
+        `history.replaceState(null,"","${route}"+location.hash)`,
+      );
     },
   );
 
   it("retains an existing dashboard presentation link without mixing cached login destinations", async () => {
     const instance = server();
-    const ordinary = await request(instance);
-    expect(ordinary.res.statusCode).toBe(200);
-    expect(ordinary.getBody()).not.toContain("%3Fdashboard%3Dexpanded");
-    const dashboard = await request(instance, `${route}?dashboard=expanded`);
-    expect(dashboard.res.statusCode).toBe(200);
-    expect(dashboard.getBody()).toContain("%3Fdashboard%3Dexpanded");
+    expect(page(await request(instance), 200)).not.toContain("%3Fdashboard%3Dexpanded");
+    page(await request(instance, `${route}?dashboard=expanded`), 200, "%3Fdashboard%3Dexpanded");
     expect(reader).toHaveBeenCalledTimes(2);
-    const draft = await request(instance, `${route}?draft=Follow+up&offset=0`);
-    expect(draft.res.statusCode).toBe(200);
-    expect(draft.getBody()).toContain("%3Fdraft%3DFollow%2Bup");
-    expect(draft.getBody()).not.toContain("offset%3D");
+    expect(
+      page(
+        await request(instance, `${route}?draft=Follow+up&offset=0`),
+        200,
+        "%3Fdraft%3DFollow%2Bup",
+      ),
+    ).not.toContain("offset%3D");
   });
 
   it("serves a bounded reader, ignores forged identity, and probes only the protected entry", async () => {
@@ -215,20 +214,15 @@ describe("canonical anonymous HTTP entry", () => {
       "cf-access-authenticated-user-email": "forged@example.test",
       "x-openclaw-scopes": "operator.admin",
     });
-    expect(response.res.statusCode).toBe(200);
-    expect(response.getBody()).toContain("Published answer");
-    expect(response.getBody()).toContain(
+    const html = page(
+      response,
+      200,
+      "Published answer",
       `https://example.test/control/share/session/card.png?token=v1.${"a".repeat(96)}`,
-    );
-    expect(response.getBody()).toContain(
       'name="twitter:image:alt" content="Public launch notes · OpenClaw public session"',
-    );
-    expect(response.getBody()).toContain(
       "/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Flaunch-",
     );
-    expect(response.getBody()).not.toMatch(
-      /openclaw-app|new WebSocket|sessions.list|bootstrap-config/,
-    );
+    expect(html).not.toMatch(/openclaw-app|new WebSocket|sessions.list|bootstrap-config/);
     expect(resolveSession).toHaveBeenCalledWith(
       expect.objectContaining({ client: null, publicOnly: true }),
     );
@@ -239,7 +233,7 @@ describe("canonical anonymous HTTP entry", () => {
     const csp = response.setHeader.mock.calls.find(
       ([name]) => name === "Content-Security-Policy",
     )?.[1];
-    for (const hash of computeInlineScriptHashes(response.getBody())) {
+    for (const hash of computeInlineScriptHashes(html)) {
       expect(csp).toContain(hash);
     }
   });
@@ -251,11 +245,9 @@ describe("canonical anonymous HTTP entry", () => {
     resolveSession.mockResolvedValue({ key, agentId: "main" });
     active.mockReturnValue(false);
     const revoked = await request(instance);
-    expect(hidden.res.statusCode).toBe(404);
-    expect(hidden.getBody()).toBe(missing.getBody());
-    expect(hidden.getBody()).toBe(revoked.getBody());
-    expect(hidden.getBody()).toContain("Log in");
-    expect(hidden.getBody()).not.toContain("Public launch notes");
+    const html = page(hidden, 404, "Log in");
+    expect([missing.getBody(), revoked.getBody()]).toEqual([html, html]);
+    expect(html).not.toContain("Public launch notes");
   });
   it("revalidates publication before conditional reuse", async () => {
     const instance = server();

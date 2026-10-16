@@ -16,15 +16,18 @@ import {
   listControlUiPluginWidgetKinds,
 } from "./control-ui-plugin-tabs.js";
 
-function tabDescriptor(
-  overrides: Partial<PluginControlUiDescriptor> = {},
-): PluginControlUiDescriptor {
-  return {
+function tab(pluginId: string, overrides: Partial<PluginControlUiDescriptor> = {}) {
+  const descriptor: PluginControlUiDescriptor = {
     id: "logbook",
     surface: "tab",
     label: "Logbook",
     ...overrides,
   };
+  return { pluginId, descriptor };
+}
+
+function grant(pluginId: string, path = `/plugins/${pluginId}`, match = "prefix") {
+  return { pluginId, path, match, scopes: ["operator.read"] };
 }
 
 function activateDescriptors(
@@ -61,10 +64,7 @@ describe("listControlUiPluginTabs", () => {
 
   it("advertises a tab slug in the hello contract without altering its frame path", () => {
     activateDescriptors([
-      {
-        pluginId: "reports-fixture",
-        descriptor: tabDescriptor({ slug: "reports", path: "/plugins/reports-fixture" }),
-      },
+      tab("reports-fixture", { slug: "reports", path: "/plugins/reports-fixture" }),
     ]);
     const tabs = listControlUiPluginTabs(["operator.read"]);
     expect(tabs).toEqual([
@@ -81,10 +81,7 @@ describe("listControlUiPluginTabs", () => {
     ({ basePath, ...route }) => {
       setRuntimeConfigSnapshot({ gateway: { controlUi: { basePath } } });
       const registry = activateDescriptors([
-        {
-          pluginId: "reports-fixture",
-          descriptor: tabDescriptor({ slug: "reports", path: "/plugins/reports-fixture" }),
-        },
+        tab("reports-fixture", { slug: "reports", path: "/plugins/reports-fixture" }),
       ]);
       // HTTP registration after the descriptor must produce the same projection.
       registry.httpRoutes.push({
@@ -94,12 +91,12 @@ describe("listControlUiPluginTabs", () => {
         handler: async () => true,
       });
       for (let connect = 0; connect < 2; connect += 1) {
-        const [tab] = listControlUiPluginTabs(["operator.read"]);
-        expect(tab).toMatchObject({
+        const [projected] = listControlUiPluginTabs(["operator.read"]);
+        expect(projected).toMatchObject({
           pluginId: "reports-fixture",
           path: "/plugins/reports-fixture",
         });
-        expect(tab).not.toHaveProperty("slug");
+        expect(projected).not.toHaveProperty("slug");
       }
       expect(registry.diagnostics).toEqual([
         expect.objectContaining({
@@ -114,15 +111,12 @@ describe("listControlUiPluginTabs", () => {
 
   it("projects only tab descriptors", () => {
     activateDescriptors([
-      {
-        pluginId: "workboard",
-        descriptor: tabDescriptor({ placement: "route:workboard" }),
-      },
-      { pluginId: "other", descriptor: tabDescriptor({ id: "run-panel", surface: "run" }) },
+      tab("workboard", { placement: "route:workboard" }),
+      tab("other", { id: "run-panel", surface: "run" }),
     ]);
 
     const tabs = listControlUiPluginTabs(["operator.admin"]);
-    expect(tabs.map((tab) => tab.id)).toEqual(["logbook"]);
+    expect(tabs.map((row) => row.id)).toEqual(["logbook"]);
     expect(expectDefined(tabs[0], "tabs[0] test invariant")).toMatchObject({
       placement: "route:workboard",
       pluginId: "workboard",
@@ -131,27 +125,17 @@ describe("listControlUiPluginTabs", () => {
 
   it("hides tabs whose required scopes are not granted", () => {
     activateDescriptors([
-      {
-        pluginId: "logbook",
-        descriptor: tabDescriptor({ requiredScopes: ["operator.write"] }),
-      },
-      {
-        pluginId: "adminy",
-        descriptor: tabDescriptor({
-          id: "adminy",
-          label: "Admin",
-          requiredScopes: ["operator.admin"],
-        }),
-      },
+      tab("logbook", { requiredScopes: ["operator.write"] }),
+      tab("adminy", { id: "adminy", label: "Admin", requiredScopes: ["operator.admin"] }),
     ]);
 
     expect(listControlUiPluginTabs(["operator.read"])).toEqual([]);
     expect(listControlUiPluginDescriptors(["operator.read"])).toEqual([]);
-    expect(listControlUiPluginTabs(["operator.write"]).map((tab) => tab.id)).toEqual(["logbook"]);
+    expect(listControlUiPluginTabs(["operator.write"]).map((row) => row.id)).toEqual(["logbook"]);
     expect(listControlUiPluginDescriptors(["operator.write"]).map((entry) => entry.id)).toEqual([
       "logbook",
     ]);
-    expect(listControlUiPluginTabs(["operator.admin"]).map((tab) => tab.id)).toEqual([
+    expect(listControlUiPluginTabs(["operator.admin"]).map((row) => row.id)).toEqual([
       "adminy",
       "logbook",
     ]);
@@ -159,12 +143,12 @@ describe("listControlUiPluginTabs", () => {
 
   it("orders deterministically by order, label, then id", () => {
     activateDescriptors([
-      { pluginId: "b", descriptor: tabDescriptor({ id: "beta", label: "Beta" }) },
-      { pluginId: "a", descriptor: tabDescriptor({ id: "alpha", label: "Alpha", order: 5 }) },
-      { pluginId: "c", descriptor: tabDescriptor({ id: "zed", label: "Beta" }) },
+      tab("b", { id: "beta", label: "Beta" }),
+      tab("a", { id: "alpha", label: "Alpha", order: 5 }),
+      tab("c", { id: "zed", label: "Beta" }),
     ]);
 
-    expect(listControlUiPluginTabs([]).map((tab) => tab.id)).toEqual(["beta", "zed", "alpha"]);
+    expect(listControlUiPluginTabs([]).map((row) => row.id)).toEqual(["beta", "zed", "alpha"]);
     expect(listControlUiPluginDescriptors([]).map((entry) => entry.pluginId)).toEqual([
       "a",
       "b",
@@ -173,26 +157,14 @@ describe("listControlUiPluginTabs", () => {
   });
 
   it("merges the read-scoped core kind into deterministic plugin ordering", () => {
-    activateDescriptors([
-      {
-        pluginId: "workboard",
-        descriptor: tabDescriptor({
-          id: "card",
-          surface: "widget",
-          label: "Workboard card",
-          requiredScopes: ["operator.read"],
-        }),
-      },
-      {
-        pluginId: "workboard",
-        descriptor: tabDescriptor({
-          id: "mini",
-          surface: "widget",
-          label: "Workboard summary",
-          requiredScopes: ["operator.read"],
-        }),
-      },
-    ]);
+    activateDescriptors(
+      [
+        ["card", "Workboard card"],
+        ["mini", "Workboard summary"],
+      ].map(([id, label]) =>
+        tab("workboard", { id, label, surface: "widget", requiredScopes: ["operator.read"] }),
+      ),
+    );
 
     expect(listControlUiPluginWidgetKinds([])).toEqual([]);
     expect(listControlUiPluginWidgetKinds(["operator.read"])).toEqual([
@@ -207,22 +179,13 @@ describe("listControlUiPluginTabs", () => {
   it("grants only same-plugin gateway routes with least-privilege scopes", () => {
     activateDescriptors(
       [
-        {
-          pluginId: "logbook",
-          descriptor: tabDescriptor({ path: "/plugins/logbook/panel" }),
-        },
-        {
-          pluginId: "adminy",
-          descriptor: tabDescriptor({
-            id: "adminy",
-            path: "/plugins/adminy/panel",
-            requiredScopes: ["operator.admin"],
-          }),
-        },
-        {
-          pluginId: "publicish",
-          descriptor: tabDescriptor({ id: "publicish", path: "/plugins/publicish/panel" }),
-        },
+        tab("logbook", { path: "/plugins/logbook/panel" }),
+        tab("adminy", {
+          id: "adminy",
+          path: "/plugins/adminy/panel",
+          requiredScopes: ["operator.admin"],
+        }),
+        tab("publicish", { id: "publicish", path: "/plugins/publicish/panel" }),
       ],
       [
         { pluginId: "logbook", path: "/plugins/logbook", match: "prefix" },
@@ -237,47 +200,22 @@ describe("listControlUiPluginTabs", () => {
     );
 
     expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([
-      {
-        pluginId: "adminy",
-        path: "/plugins/adminy",
-        match: "prefix",
-        scopes: ["operator.read"],
-      },
-      {
-        pluginId: "logbook",
-        path: "/plugins/logbook",
-        match: "prefix",
-        scopes: ["operator.read"],
-      },
+      grant("adminy"),
+      grant("logbook"),
     ]);
     const adminTabs = listControlUiPluginTabs(["operator.admin"]);
     expect(adminTabs).toEqual([
-      expect.objectContaining({
-        pluginId: "adminy",
-        requiresGatewayAuth: true,
-      }),
-      expect.objectContaining({
-        pluginId: "logbook",
-        requiresGatewayAuth: true,
-      }),
-      expect.objectContaining({
-        pluginId: "publicish",
-      }),
+      expect.objectContaining({ pluginId: "adminy", requiresGatewayAuth: true }),
+      expect.objectContaining({ pluginId: "logbook", requiresGatewayAuth: true }),
+      expect.objectContaining({ pluginId: "publicish" }),
     ]);
     expect(adminTabs[2]).not.toHaveProperty("requiresGatewayAuth");
-    expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([
-      {
-        pluginId: "logbook",
-        path: "/plugins/logbook",
-        match: "prefix",
-        scopes: ["operator.read"],
-      },
-    ]);
+    expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([grant("logbook")]);
   });
 
   it("uses the first dispatched gateway route as descriptor owner", () => {
     activateDescriptors(
-      [{ pluginId: "outer", descriptor: tabDescriptor({ path: "/shared/panel" }) }],
+      [tab("outer", { path: "/shared/panel" })],
       [
         { pluginId: "nested", path: "/shared/panel", match: "exact" },
         { pluginId: "outer", path: "/shared", match: "prefix" },
@@ -290,54 +228,38 @@ describe("listControlUiPluginTabs", () => {
 
   it("does not require a cookie grant when gateway auth is disabled", () => {
     activateDescriptors(
-      [{ pluginId: "logbook", descriptor: tabDescriptor({ path: "/plugins/logbook/panel" }) }],
+      [tab("logbook", { path: "/plugins/logbook/panel" })],
       [{ pluginId: "logbook", path: "/plugins/logbook", match: "prefix" }],
     );
 
-    const [tab] = listControlUiPluginTabs(["operator.admin"], {
+    const [projected] = listControlUiPluginTabs(["operator.admin"], {
       requireGatewayAuthGrant: false,
     });
-    expect(tab).toMatchObject({ pluginId: "logbook" });
-    expect(tab).not.toHaveProperty("requiresGatewayAuth");
+    expect(projected).toMatchObject({ pluginId: "logbook" });
+    expect(projected).not.toHaveProperty("requiresGatewayAuth");
   });
 
   it("coalesces same-plugin tabs that share one read-only cookie path", () => {
     activateDescriptors(
       [
-        {
-          pluginId: "logbook",
-          descriptor: tabDescriptor({ path: "/plugins/logbook/read" }),
-        },
-        {
-          pluginId: "logbook",
-          descriptor: tabDescriptor({
-            id: "admin",
-            path: "/plugins/logbook/admin",
-            requiredScopes: ["operator.admin"],
-          }),
-        },
+        tab("logbook", { path: "/plugins/logbook/read" }),
+        tab("logbook", {
+          id: "admin",
+          path: "/plugins/logbook/admin",
+          requiredScopes: ["operator.admin"],
+        }),
       ],
       [{ pluginId: "logbook", path: "/plugins/logbook", match: "prefix" }],
     );
 
-    expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([
-      {
-        pluginId: "logbook",
-        path: "/plugins/logbook",
-        match: "prefix",
-        scopes: ["operator.read"],
-      },
-    ]);
+    expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([grant("logbook")]);
   });
 
   it("widens a shared exact cookie path when another visible tab needs prefix matching", () => {
     activateDescriptors(
       [
-        { pluginId: "logbook", descriptor: tabDescriptor({ path: "/plugins/logbook" }) },
-        {
-          pluginId: "logbook",
-          descriptor: tabDescriptor({ id: "child", path: "/plugins/logbook/child" }),
-        },
+        tab("logbook", { path: "/plugins/logbook" }),
+        tab("logbook", { id: "child", path: "/plugins/logbook/child" }),
       ],
       [
         { pluginId: "logbook", path: "/plugins/logbook", match: "exact" },
@@ -345,24 +267,14 @@ describe("listControlUiPluginTabs", () => {
       ],
     );
 
-    expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([
-      {
-        pluginId: "logbook",
-        path: "/plugins/logbook",
-        match: "prefix",
-        scopes: ["operator.read"],
-      },
-    ]);
+    expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([grant("logbook")]);
   });
 
   it("keeps separate grants for different plugins that share a cookie path", () => {
     activateDescriptors(
       [
-        { pluginId: "alpha", descriptor: tabDescriptor({ id: "alpha", path: "/shared" }) },
-        {
-          pluginId: "beta",
-          descriptor: tabDescriptor({ id: "beta", path: "/shared/child" }),
-        },
+        tab("alpha", { id: "alpha", path: "/shared" }),
+        tab("beta", { id: "beta", path: "/shared/child" }),
       ],
       [
         { pluginId: "alpha", path: "/shared", match: "exact" },
@@ -371,20 +283,10 @@ describe("listControlUiPluginTabs", () => {
     );
 
     expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([
-      {
-        pluginId: "alpha",
-        path: "/shared",
-        match: "exact",
-        scopes: ["operator.read"],
-      },
-      {
-        pluginId: "beta",
-        path: "/shared",
-        match: "prefix",
-        scopes: ["operator.read"],
-      },
+      grant("alpha", "/shared", "exact"),
+      grant("beta", "/shared"),
     ]);
-    expect(listControlUiPluginTabs(["operator.admin"]).map((tab) => tab.pluginId)).toEqual([
+    expect(listControlUiPluginTabs(["operator.admin"]).map((row) => row.pluginId)).toEqual([
       "alpha",
       "beta",
     ]);
