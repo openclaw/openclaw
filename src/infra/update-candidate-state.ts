@@ -436,6 +436,33 @@ async function discoverLegacyUpdateStateSchemaInspection(
   });
 }
 
+async function discoverStateSchema(params: Parameters<typeof runUpdateStateInspectionWorker>[0]) {
+  const result = await runUpdateStateInspectionWorker(params);
+  const legacyWorker =
+    result.code !== 0 && result.stderr.includes("Unknown update state inspection mode");
+  const discovery = legacyWorker
+    ? await discoverLegacyUpdateStateSchemaInspection(params)
+    : parseUpdateStateInspectionWorker(result, UpdateStateSchemaInspectionPlanSchema);
+  return { discovery, legacyWorker };
+}
+
+/** Pre-migration inventory reads raw registrations without admitting the source schema. */
+export async function readUpdateStateDatabaseInventory(input: StateInput) {
+  const sourceEnv = input.env ?? process.env;
+  const stagingParent = resolvePrivateSqliteSnapshotStagingRoot(sourceEnv);
+  const stagingRoot = await createSqliteSnapshotStagingDirectory(stagingParent);
+  return withStateInspectionCleanup(stagingRoot, async () => {
+    const worker = { nodeRunner: process.execPath, sourceEnv, stagingRoot };
+    const shared = path.join(input.stateDir, "state", "openclaw.sqlite");
+    const { discovery } = await discoverStateSchema({
+      ...worker,
+      input: { ...input, mode: "discover", stagingRoot },
+      databases: await readUpdateStateDatabaseSizes([shared], worker),
+    });
+    return new Map(discovery.files);
+  });
+}
+
 /** Raw fingerprint reads need their own process so descriptor closes cannot release caller locks. */
 export async function readUpdateDatabaseGenerationsIsolated(
   paths: readonly string[],
@@ -538,14 +565,8 @@ export async function readUpdateStateSchemaVersions({
       timeoutMs,
       databases: await readUpdateStateDatabaseSizes([shared], sizeOptions),
     };
-    const discoveryResult = await runUpdateStateInspectionWorker(discoveryParams);
-    const legacyWorker =
-      discoveryResult.code !== 0 &&
-      discoveryResult.stderr.includes("Unknown update state inspection mode");
     // Activation may replace the updater package. Both legacy subprocesses must use the candidate.
-    const discovery = legacyWorker
-      ? await discoverLegacyUpdateStateSchemaInspection({ ...discoveryParams, input })
-      : parseUpdateStateInspectionWorker(discoveryResult, UpdateStateSchemaInspectionPlanSchema);
+    const { discovery, legacyWorker } = await discoverStateSchema(discoveryParams);
     onInventory?.(new Map(discovery.files));
     const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
     // Legacy workers recopy the shared database and may inspect every raw alias.
