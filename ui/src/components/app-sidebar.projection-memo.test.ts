@@ -560,8 +560,8 @@ describe("sidebar projection memo", () => {
     sidebar.sidebarNarrationLines = new Map([[target.key, "Second activity"]]);
     await settleLitElement(sidebar);
     expect(row(target.key)?.textContent).toContain("First activity");
-    const parent = sidebar.parentElement!;
-    sidebar.remove();
+    const parent = sidebar.hostElement.parentElement!;
+    sidebar.hostElement.remove();
     parent.append(sidebar.hostElement);
     await settleLitElement(sidebar);
     projectRows.mockClear();
