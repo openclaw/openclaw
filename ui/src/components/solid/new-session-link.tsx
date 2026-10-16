@@ -3,13 +3,14 @@ import { createMemo, createSignal, createUniqueId, lazy, Loading, onSettled, Sho
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
-import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
+import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
 import type { AgentIdentity } from "../../lib/identity-avatar-view.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRosterActivity } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -149,24 +150,22 @@ function NewSessionMenuContent(props: NewSessionMenuProps) {
   const projection = projectRosterActivity(store);
   const id = createUniqueId();
   const [opened, setOpened] = createSignal(false, { ownedWrite: true });
-  const [avatarRevision, setAvatarRevision] = createSignal(0, { ownedWrite: true });
-  const avatars = new IdentityAvatarController(() => setAvatarRevision((value) => value + 1));
-  onSettled(() => {
-    avatars.hostConnected();
-    return () => avatars.hostDisconnected();
-  });
+  const avatars = createIdentityAvatars();
+  onSettled(avatars.connect);
+  const avatarSource = projectOwner(avatars, (owner) => owner);
   const cards = createMemo(() => {
     const snapshot = props.active ? projection.read() : store.snapshot;
     const cached = props.snapshotCards;
     if (cached) {
-      return avatars.withActiveRoutes(() => cached);
+      return avatarSource.read().withActiveRoutes(() => cached);
     }
-    avatarRevision();
-    return avatars.withActiveRoutes(() =>
-      snapshot.cards.map((card) =>
-        Object.assign({}, card, { avatar: card.avatar ? avatars.resolve(card.avatar) : null }),
-      ),
-    );
+    return avatarSource
+      .read()
+      .withActiveRoutes(() =>
+        snapshot.cards.map((card) =>
+          Object.assign({}, card, { avatar: card.avatar ? avatars.resolve(card.avatar) : null }),
+        ),
+      );
   });
   // Native rows stay resident; avatar contents wait for the first accepted open.
   const items = createMemo((): MenuItem[] =>
