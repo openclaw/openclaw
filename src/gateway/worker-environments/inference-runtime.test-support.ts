@@ -56,19 +56,18 @@ export const TOOL_CALL = { type: "toolCall" as const, id: "call-1", name: "looku
 const WORKSPACE_BASE = "/gateway-workspace";
 export const WORKSPACE = `${WORKSPACE_BASE}/runtime-agent`;
 
+const modelKey = `${PROVIDER}/${MODEL}`;
 export const config = {
   agents: {
     defaults: {
-      model: { primary: `${PROVIDER}/${MODEL}` },
-      models: { [`${PROVIDER}/${MODEL}`]: {} },
+      model: { primary: modelKey },
+      models: { [modelKey]: {} },
       workspace: WORKSPACE_BASE,
     },
     entries: {
       main: {},
       "runtime-agent": {
-        models: {
-          [`${PROVIDER}/${MODEL}`]: { alias: ALIAS, agentRuntime: { id: "openclaw" } },
-        },
+        models: { [modelKey]: { alias: ALIAS, agentRuntime: { id: "openclaw" } } },
         params: { temperature: 0.1 },
       },
     },
@@ -343,14 +342,11 @@ export function setup(
   };
 }
 
-export function params(
-  inferenceRequest: WorkerInferenceStartParams,
-  emit: Execution["emit"],
-): Execution {
+export function params(input: WorkerInferenceStartParams, emit: Execution["emit"]): Execution {
   return {
     identity,
     sessionTarget,
-    request: inferenceRequest,
+    request: input,
     signal: new AbortController().signal,
     emit,
     isCurrent: () => true,

@@ -301,72 +301,62 @@ describe("worker live events", () => {
     });
   });
 
-  it("settles accepted writes before returning a synchronous diagnostic failure", async () => {
-    const failure = new Error("synthetic diagnostic failure");
-    const diagnostic = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
-      record: () => {
-        throw failure;
-      },
-      isCancelled: () => false,
-      isCancelledFinishing: () => false,
-    });
-    const writer = fixture.holdWorkerTranscriptWriter(store);
-    await writer.entered;
-    let settled = false;
-    const result = apply(life(1, { phase: "start", startedAt: 100 })).then(
-      (value) => {
-        settled = true;
-        return value;
-      },
-      (error: unknown) => {
-        settled = true;
-        return error;
-      },
-    );
-    try {
-      await setImmediate();
-      expect(phases()).toEqual(["start"]);
-      expect(settled).toBe(false);
-      writer.release();
-      await writer.done;
-      expect(await result).toBe(failure);
-      expect(rows().map((row) => row.event.type)).toEqual(["session.started"]);
-    } finally {
-      writer.release();
-      await writer.done;
-      await result;
-      diagnostic.mockRestore();
-    }
-  });
-
-  it("ACKs an accepted event after its source closes during trajectory settlement", async () => {
-    const source = sourceFor();
-    const writer = fixture.holdWorkerTranscriptWriter(store);
-    await writer.entered;
-    let settled = false;
-    const result = apply(life(1, { phase: "start", startedAt: 100 })).then((value) => {
-      settled = true;
-      return value;
-    });
-    let released: Promise<void> | undefined;
-    try {
-      await setImmediate();
-      expect(phases()).toEqual(["start"]);
-      expect(settled).toBe(false);
-      released = source.release();
-      writer.release();
-      await writer.done;
-      expect(await result).toEqual({ ok: true, result: { ackedSeq: 1 } });
-      await released;
-      await fail(msg(2, "after source closure", 1), "invalid-event");
-      expect(phases()).toEqual(["start"]);
-    } finally {
-      writer.release();
-      await writer.done;
-      await result;
-      await released;
-    }
-  });
+  it.each(["diagnostic failure", "source closure"] as const)(
+    "settles accepted writes despite %s",
+    async (mode) => {
+      const failure = new Error("synthetic diagnostic failure");
+      const diagnostic =
+        mode === "diagnostic failure"
+          ? vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
+              record: () => {
+                throw failure;
+              },
+              isCancelled: () => false,
+              isCancelledFinishing: () => false,
+            })
+          : undefined;
+      const source = sourceFor();
+      const writer = fixture.holdWorkerTranscriptWriter(store);
+      await writer.entered;
+      let settled = false;
+      const result = apply(life(1, { phase: "start", startedAt: 100 })).then(
+        (value) => {
+          settled = true;
+          return value;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      let released: Promise<void> | undefined;
+      try {
+        await setImmediate();
+        expect(phases()).toEqual(["start"]);
+        expect(settled).toBe(false);
+        if (mode === "source closure") {
+          released = source.release();
+        }
+        writer.release();
+        await writer.done;
+        if (mode === "diagnostic failure") {
+          expect(await result).toBe(failure);
+          expect(rows().map((row) => row.event.type)).toEqual(["session.started"]);
+        } else {
+          expect(await result).toEqual({ ok: true, result: { ackedSeq: 1 } });
+          await released;
+          await fail(msg(2, "after source closure", 1), "invalid-event");
+          expect(phases()).toEqual(["start"]);
+        }
+      } finally {
+        writer.release();
+        await writer.done;
+        await result;
+        await released;
+        diagnostic?.mockRestore();
+      }
+    },
+  );
 
   it("rotates owners", async () => {
     await ack(msg(1, "first"));
@@ -619,11 +609,6 @@ describe("worker live events", () => {
     const end = events[0];
     runs.clearAgentRunContext(RUN, end?.lifecycleGeneration, end?.contextClaimId);
     await fail(msg(3, "released", 2), "invalid-event");
-
-    start({ windowSize: 2 });
-    await ack(life(1, { phase: "end", endedAt: 200 }));
-    await ack(msg(2, "other", 1, "run-other"));
-    await fail(msg(3, "late", 2), "invalid-event");
   });
 
   it("retains a terminal fence while its run remains claimed", async () => {

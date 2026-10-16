@@ -119,6 +119,25 @@ function toolStream({
   stream.push({ type: "done", reason, message: terminal });
   return stream;
 }
+function messageWithTool(tool: ToolCall) {
+  const message = finalMessage();
+  message.content[message.content.length - 1] = tool;
+  return message;
+}
+function mismatchedTools(ended: boolean, omitted = false, unidentified = false) {
+  const partial = messageWithTool(unidentified ? { ...TOOL_CALL, id: "", name: "" } : TOOL_CALL);
+  const terminal = messageWithTool({ ...TOOL_CALL, id: "call-2" });
+  if (omitted) {
+    terminal.content = terminal.content.slice(0, 1);
+  }
+  return {
+    partial,
+    terminal,
+    start: !unidentified,
+    ended,
+    reason: omitted ? ("stop" as const) : ("toolUse" as const),
+  };
+}
 
 const MODEL_ERROR = {
   type: "error",
@@ -665,88 +684,62 @@ describe("worker inference provider runtime", () => {
     expect(JSON.stringify(payloadEvents)).not.toContain(message.providerReplay.data);
   });
 
+  type ToolCase = {
+    name: string;
+    input: () => Parameters<typeof toolStream>[0];
+    done?: boolean;
+    deltas?: string[];
+    types?: string[];
+    noEnd?: boolean;
+  };
   it.each([
-    ["incomplete JSON", { query: "alpha" }, ['{"query":'], "error"],
-    ["oversized arguments", {}, ["x".repeat(1024 * 1024 + 1)], "error"],
-    ["fragmented valid JSON", {}, [...Array<string>(4096).fill(" "), "{}"], "done"],
-  ] as const)(
-    "validates %s in the final argument stream",
-    async (name, toolArguments, deltas, outcome) => {
-      const runtime = setup();
-      runtime.stream.mockImplementation(() => {
-        const message = finalMessage();
-        message.content = [
-          ...message.content.slice(0, -1),
-          { ...TOOL_CALL, arguments: toolArguments },
-        ];
-        return toolStream({ partial: message, deltas });
-      });
-      const emitted: Parameters<Execution["emit"]>[0][] = [];
-
-      await expect(
-        runtime.executor(params(request(), (event) => emitted.push(event))),
-      ).resolves.toMatchObject(
-        outcome === "done" ? { type: "done" } : { type: "error", reason: "provider-error" },
-      );
-      if (name === "incomplete JSON") {
-        expect(
-          emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
-        ).toEqual(deltas);
-        expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
-      } else if (name === "oversized arguments") {
-        expect(emitted.map((event) => event.type)).toEqual(["toolcall_start"]);
-      }
+    {
+      name: "incomplete JSON",
+      input: () => ({
+        partial: messageWithTool({ ...TOOL_CALL, arguments: { query: "alpha" } }),
+        deltas: ['{"query":'],
+      }),
+      deltas: ['{"query":'],
+      noEnd: true,
     },
-  );
-
-  it.each([
-    { ended: false, omitted: false, unidentified: false },
-    { ended: true, omitted: false, unidentified: false },
-    { ended: true, omitted: true, unidentified: false },
-    { ended: false, omitted: true, unidentified: true },
-  ])(
-    "rejects terminal tool identity mismatch (ended=$ended, omitted=$omitted, unidentified=$unidentified)",
-    async ({ ended, omitted, unidentified }) => {
-      const runtime = setup();
-      runtime.stream.mockImplementation(() => {
-        const partial = finalMessage();
-        const terminal = finalMessage();
-        terminal.content = omitted
-          ? terminal.content.slice(0, 1)
-          : [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
-        if (unidentified) {
-          partial.content = [...partial.content.slice(0, -1), { ...TOOL_CALL, id: "", name: "" }];
-        }
-        return toolStream({
-          partial,
-          terminal,
-          start: !unidentified,
-          ended,
-          reason: omitted ? "stop" : "toolUse",
-        });
-      });
-      const emitted: Parameters<Execution["emit"]>[0][] = [];
-
-      await expect(
-        runtime.executor(params(request(), (event) => emitted.push(event))),
-      ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
-      if (!ended) {
-        expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
-      }
+    {
+      name: "oversized arguments",
+      input: () => ({ deltas: ["x".repeat(1024 * 1024 + 1)] }),
+      types: ["toolcall_start"],
     },
-  );
-
-  it("rejects tool-call deltas after the end event", async () => {
+    {
+      name: "fragmented valid JSON",
+      input: () => ({ deltas: [...Array<string>(4096).fill(" "), "{}"] }),
+      done: true,
+    },
+    { name: "changed terminal id", input: () => mismatchedTools(false), noEnd: true },
+    { name: "changed id after end", input: () => mismatchedTools(true) },
+    { name: "omitted ended tool", input: () => mismatchedTools(true, true) },
+    {
+      name: "omitted unidentified tool",
+      input: () => mismatchedTools(false, true, true),
+      noEnd: true,
+    },
+    { name: "delta after end", input: () => ({ ended: true, afterEnd: [" "] }), deltas: ["{}"] },
+  ] satisfies ToolCase[])("validates $name in the tool stream", async (scenario: ToolCase) => {
     const runtime = setup();
-    runtime.stream.mockImplementation(() => toolStream({ ended: true, afterEnd: [" "] }));
+    runtime.stream.mockImplementation(() => toolStream(scenario.input()));
     const emitted: Parameters<Execution["emit"]>[0][] = [];
-
-    await expect(
-      runtime.executor(params(request(), (event) => emitted.push(event))),
-    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
-    expect(
-      emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
-    ).toEqual(["{}"]);
+    const outcome = await execute(runtime, request(), (event) => emitted.push(event));
+    expect(outcome).toMatchObject(
+      scenario.done ? { type: "done" } : { type: "error", reason: "provider-error" },
+    );
+    if (scenario.deltas) {
+      expect(
+        emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
+      ).toEqual(scenario.deltas);
+    }
+    if (scenario.types) {
+      expect(emitted.map((event) => event.type)).toEqual(scenario.types);
+    }
+    if (scenario.noEnd) {
+      expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
+    }
   });
 
   it("bounds nonempty streamed argument work and ignores empty fragments", () => {
