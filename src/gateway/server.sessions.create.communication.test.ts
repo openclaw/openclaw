@@ -30,8 +30,7 @@ import { testState, writeSessionStore } from "./test-helpers.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 import { getGatewayConfigModule, sessionStoreEntry } from "./test/server-sessions.test-helpers.js";
 
-// Hold the real worker command before SQLite starts writing; every command and
-// native receipt still comes from the production owner, including on refusal.
+// Pause before the real SQLite write; keep production commands and receipts.
 const replacementBoundary = vi.hoisted(() => ({
   key: undefined as string | undefined,
   entered: undefined as (() => void) | undefined,
@@ -72,50 +71,46 @@ async function createFixture(
   communication?: SessionEntry["communication"],
 ) {
   const { dir, storePath } = await createSessionStoreDir();
-  const creator = ensureProfileForEmail("communication-creator-" + suffix + "@example.test");
-  const collaborator = ensureProfileForEmail(
-    "communication-collaborator-" + suffix + "@example.test",
-  );
-  const admin = ensureProfileForEmail("communication-admin-" + suffix + "@example.test");
+  const makeProfile = (role: string) => ensureProfileForEmail(`${role}-${suffix}@example.test`);
+  const creator = makeProfile("creator");
+  const collaborator = makeProfile("collaborator");
+  const admin = makeProfile("admin");
   for (const profile of [creator, collaborator]) {
     setUserProfileRole(profile.id, "collaborator");
   }
   setUserProfileRole(admin.id, "administrator");
+  const base = getRuntimeConfig();
+  const role = (
+    others: "view" | "write",
+    scopes: ("operator.read" | "operator.write" | "operator.admin")[],
+  ) => ({ sessions: { others }, agents: ["main"], scopes });
   const cfg = {
-    ...getRuntimeConfig(),
-    session: { ...getRuntimeConfig().session, store: storePath, communication },
+    ...base,
+    session: { ...base.session, store: storePath, communication },
     gateway: {
-      ...getRuntimeConfig().gateway,
+      ...base.gateway,
       roles: {
         default: "collaborator",
         definitions: {
-          collaborator: {
-            sessions: { others: "view" as const },
-            agents: ["main"],
-            scopes: ["operator.read" as const, "operator.write" as const],
-          },
-          administrator: {
-            sessions: { others: "write" as const },
-            agents: ["main"],
-            scopes: ["operator.admin" as const],
-          },
+          collaborator: role("view", ["operator.read", "operator.write"]),
+          administrator: role("write", ["operator.admin"]),
         },
       },
     },
   };
-  const parentKey = "agent:main:dashboard:communication-parent-" + suffix;
-  const targetKey = "agent:main:dashboard:communication-target-" + suffix;
+  const parentKey = `agent:main:dashboard:parent-${suffix}`;
+  const targetKey = `agent:main:dashboard:target-${suffix}`;
   const creatorActor = { type: "human", source: "profile", id: creator.id } as const;
+  const entry = (id: string, fields: Partial<SessionEntry>) =>
+    sessionStoreEntry(id, {
+      createdActor: creatorActor,
+      visibility: "read-only",
+      ...fields,
+    });
   await writeSessionStore({
     entries: {
-      [parentKey]: sessionStoreEntry("communication-parent-" + suffix, {
-        createdActor: creatorActor,
-        visibility: "read-only",
-        communication: { receive: "always" },
-      }),
-      [targetKey]: sessionStoreEntry("communication-target-" + suffix, {
-        createdActor: creatorActor,
-        visibility: "read-only",
+      [parentKey]: entry(`parent-${suffix}`, { communication: { receive: "always" } }),
+      [targetKey]: entry(`target-${suffix}`, {
         communication: { receive: "never" },
         ...targetFields,
       }),
@@ -152,14 +147,18 @@ async function createFixture(
   const read = (sessionKey = targetKey) => loadSessionEntry({ sessionKey, storePath });
   const rpc = (client: GatewayClient, method: string, params = {}) =>
     request(context, client, method, { key: targetKey, ...params });
+  const success = async (client: GatewayClient, method: string, params = {}) =>
+    expectSuccess(await rpc(client, method, params));
   const describeReopened = async () => {
     await disposeSessionReadContexts();
     await releaseGatewaySessionStoreFixture(dir);
     testState.sessionStorePath = storePath;
     (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
-    return request(await makeContext(), identifiedClient(creator.id), "sessions.describe", {
-      key: targetKey,
-    });
+    return expectSuccess(
+      await request(await makeContext(), identifiedClient(creator.id), "sessions.describe", {
+        key: targetKey,
+      }),
+    );
   };
   return {
     creator,
@@ -171,14 +170,13 @@ async function createFixture(
     adminClient,
     read,
     rpc,
+    success,
     describeReopened,
     storePath,
   };
 }
 
-// The suite WS connector supports shared credentials, not selected profile
-// authentication. Use its real RPC router: directSessionReq calls core handlers
-// directly and would skip the creator/admin check this regression must prove.
+// The RPC router, unlike directSessionReq, enforces selected-profile authority.
 async function request(
   context: GatewayRequestContext,
   client: GatewayClient,
@@ -199,16 +197,20 @@ async function request(
   return { ok, payload, error };
 }
 
+function expectSuccess(result: Awaited<ReturnType<typeof request>>) {
+  expect(result.ok, JSON.stringify(result.error)).toBe(true);
+  return result.payload;
+}
+
 test("sessions.create inherits communication for a new explicit child, not an adopted collaborator target", async () => {
   const f = await createFixture("adoption");
   const childKey = "agent:main:dashboard:communication-new-child";
-  const child = await f.rpc(f.collaboratorClient, "sessions.create", {
+  const child = await f.success(f.collaboratorClient, "sessions.create", {
     agentId: "main",
     key: childKey,
     parentSessionKey: f.parentKey,
   });
-  expect(child.ok, JSON.stringify(child.error)).toBe(true);
-  expect(child.payload).toMatchObject({
+  expect(child).toMatchObject({
     key: childKey,
     entry: { parentSessionKey: f.parentKey, communication: { receive: "always" } },
   });
@@ -219,25 +221,26 @@ test("sessions.create inherits communication for a new explicit child, not an ad
   });
 
   const before = expectDefined(f.read(), "existing target");
-  const adopted = await f.rpc(f.collaboratorClient, "sessions.create", {
+  const adopted = await f.success(f.collaboratorClient, "sessions.create", {
     agentId: "main",
     key: f.targetKey,
     parentSessionKey: f.parentKey,
     label: "Adopted without changing communication",
   });
-  expect(adopted.ok, JSON.stringify(adopted.error)).toBe(true);
-  expect(adopted.payload).toMatchObject({ key: f.targetKey, sessionId: before.sessionId });
+  expect(adopted).toMatchObject({
+    key: f.targetKey,
+    sessionId: before.sessionId,
+    entry: { communication: { receive: "never" } },
+  });
   const after = expectDefined(f.read(), "adopted target");
-  // Parent linkage and the label prove that the existing-row write reached the
-  // old inherited spread, rather than being denied or returning a cached ACK.
+  // Parent and label prove adoption wrote the row, rather than returning a cached ACK.
   expect(after).toMatchObject({
     sessionId: before.sessionId,
     parentSessionKey: f.parentKey,
     label: "Adopted without changing communication",
     createdActor: before.createdActor,
+    communication: { receive: "never" },
   });
-  expect(after.communication?.receive).toBe("never");
-  expect(adopted.payload).toMatchObject({ entry: { communication: { receive: "never" } } });
 });
 
 test("communication writes require the creator or admin and existing creates cannot overwrite policy", async () => {
@@ -267,24 +270,20 @@ test("communication writes require the creator or admin and existing creates can
   });
   for (const client of [f.creatorClient, f.adminClient]) {
     const receive = client === f.creatorClient ? "ask" : "never";
-    const allowed = await f.rpc(client, "sessions.patch", {
+    await f.success(client, "sessions.patch", {
       communication: { receive },
     });
-    expect(allowed.ok, JSON.stringify(allowed.error)).toBe(true);
     expect(f.read()?.communication).toEqual({ receive });
   }
 
   const beforeReset = expectDefined(f.read(), "target before reset");
-  const reset = await f.rpc(f.adminClient, "sessions.reset");
-  expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
+  await f.success(f.adminClient, "sessions.reset");
   const resetEntry = expectDefined(f.read(), "reset target");
   expect(resetEntry.communication).toEqual({ receive: "never" });
   expect(resetEntry.sessionId).toBe(beforeReset.sessionId);
   expect(resetEntry.lifecycleRevision).not.toBe(beforeReset.lifecycleRevision);
 
-  const described = await f.describeReopened();
-  expect(described.ok, JSON.stringify(described.error)).toBe(true);
-  expect(described.payload).toMatchObject({
+  expect(await f.describeReopened()).toMatchObject({
     session: { sessionId: resetEntry.sessionId, communication: { receive: "never" } },
   });
   expect(f.read()?.communication).toEqual({ receive: "never" });
@@ -318,20 +317,16 @@ test.each([
     const before = expectDefined(f.read(), "pre-feature stored row");
     expect(before).not.toHaveProperty("communication");
 
-    const described = await f.rpc(f.creatorClient, "sessions.describe");
-    expect(described.ok, JSON.stringify(described.error)).toBe(true);
-    expect(described.payload).toMatchObject({
+    expect(await f.success(f.creatorClient, "sessions.describe")).toMatchObject({
       session: { ...metadata, sessionId: before.sessionId, effectiveCommunication: effective },
     });
     // Describing a sparse row projects defaults without backfilling stored overrides.
     expect(f.read()).toEqual(before);
-    expect(f.read()).not.toHaveProperty("communication");
 
-    const patched = await f.rpc(f.creatorClient, "sessions.patch", {
+    await f.success(f.creatorClient, "sessions.patch", {
       expectedSessionId: before.sessionId,
       communication: { send: "ask" },
     });
-    expect(patched.ok, JSON.stringify(patched.error)).toBe(true);
     const expected = {
       ...metadata,
       sessionId: before.sessionId,
@@ -341,9 +336,7 @@ test.each([
     expect(f.read()).toMatchObject(expected);
     expect(f.read()?.communication).toEqual({ send: "ask" });
 
-    const reloaded = await f.describeReopened();
-    expect(reloaded.ok, JSON.stringify(reloaded.error)).toBe(true);
-    expect(reloaded.payload).toMatchObject({
+    expect(await f.describeReopened()).toMatchObject({
       session: {
         ...expected,
         createdActor: { type: "human", id: f.creator.id },
@@ -384,10 +377,8 @@ test.for(["creator", "admin", "membership"] as const)(
       agentId: "main",
       key: childKey,
       parentSessionKey: f.parentKey,
-      // Revoke the creator of an existing protected target; creating a new child
-      // from a still-accessible parent does not require owning that parent.
+      // Only an existing target needs creator authority; a new child needs parent access.
       ...(authority === "creator" ? { label: "must-not-commit" } : {}),
-      // Membership exercises omitted policy inheritance through actual access.
       ...(authority === "membership" ? {} : { communication: { receive: "never" } }),
     });
     const settled = creating.then(
@@ -426,13 +417,13 @@ test.for(["creator", "admin", "membership"] as const)(
       expect(outcome.error).toMatchObject({ message: "Gateway requester authority changed" });
     } else {
       expect(outcome.error).toBeUndefined();
-      const denied = expectDefined(outcome.response, "live transport refusal");
-      expect(denied.ok).toBe(false);
-      expect(denied.error).toMatchObject(
-        authority === "membership"
-          ? { code: "INVALID_REQUEST", details: { code: "SESSION_PARTICIPATION_REQUIRED" } }
-          : { code: "FORBIDDEN", message: "Gateway requester authority changed" },
-      );
+      expect(outcome.response).toMatchObject({
+        ok: false,
+        error:
+          authority === "membership"
+            ? { code: "INVALID_REQUEST", details: { code: "SESSION_PARTICIPATION_REQUIRED" } }
+            : { code: "FORBIDDEN", message: "Gateway requester authority changed" },
+      });
     }
     const persisted = f.read(childKey);
     if (authority === "creator") {

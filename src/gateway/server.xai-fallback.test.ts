@@ -21,38 +21,27 @@ const prefix = "The answer is";
 const continuation = "The answer is 42.";
 const tokenGenerationError = "Internal error during token generation";
 const authError = `Incorrect API key provided. ${tokenGenerationError}`;
-const rejections = new Map<
-  string,
-  {
-    status?: number;
-    code?: string;
-    type?: string;
-    message: string;
-    reason: "auth" | "billing" | "rate_limit";
-  }
->([
+type Rejection = {
+  status?: number;
+  code?: string;
+  type?: string;
+  message: string;
+  reason: "auth" | "billing" | "rate_limit";
+};
+const makeRejection = (reason: Rejection["reason"], message: string, status = 403) => ({
+  reason,
+  message: `${message} ${tokenGenerationError}`,
+  status,
+});
+const rejections = new Map<string, Rejection>([
   ...[400, 401, 403, 404, 410, 422].map(
     (status) => [`auth-${status}`, { status, message: authError, reason: "auth" }] as const,
   ),
   ["auth-code", { code: "credential_rejected", message: authError, reason: "auth" }],
   ["auth-type", { type: "upstream_error", message: authError, reason: "auth" }],
   ["auth-text", { message: authError, reason: "auth" }],
-  [
-    "billing",
-    {
-      status: 403,
-      message: `You have run out of credits. ${tokenGenerationError}`,
-      reason: "billing",
-    },
-  ],
-  [
-    "rate-limit",
-    {
-      status: 403,
-      message: `Rate limit exceeded. ${tokenGenerationError}`,
-      reason: "rate_limit",
-    },
-  ],
+  ["billing", makeRejection("billing", "You have run out of credits.")],
+  ["rate-limit", makeRejection("rate_limit", "Rate limit exceeded.")],
 ]);
 const scenarios = [
   "fallback",
@@ -92,13 +81,21 @@ const responseEvent = (
   id: string,
   status: "failed" | "completed",
   output: OutputMessage[],
-  usage: { input_tokens: number; output_tokens: number; total_tokens: number },
+  input_tokens: number,
+  output_tokens: number,
   error?: { code: null; message: string },
 ) =>
   encodeEvent({
     type: `response.${status}`,
-    response: { id, status, output, usage, ...(error ? { error } : {}) },
+    response: {
+      id,
+      status,
+      output,
+      usage: { input_tokens, output_tokens, total_tokens: input_tokens + output_tokens },
+      ...(error ? { error } : {}),
+    },
   });
+const contains = (value: unknown) => expect.arrayContaining([expect.objectContaining(value)]);
 
 function messageText(message: unknown): string {
   if (!isRecord(message) || !Array.isArray(message.content)) {
@@ -115,9 +112,7 @@ function messageText(message: unknown): string {
 
 it(
   "chat.send preserves xAI rejection priority and recovers statusless failures",
-  {
-    timeout: 180_000,
-  },
+  { timeout: 180_000 },
   async ({ signal }) => {
     const root = tempDirs.make("openclaw-xai-fallback-");
     const state = path.join(root, "state");
@@ -152,7 +147,7 @@ it(
     let requests: string[] = [];
     const events: ChatEvent[] = [];
     const terminalEvents = new Map<string, (event: ChatEvent) => void>();
-    const publishedMessages = new Map<string, unknown[]>();
+    const publishedMessages = new Map<string, unknown>();
     const fallbackEvents: unknown[] = [];
     const provider = createServer((request, response) => {
       void (async () => {
@@ -161,8 +156,7 @@ it(
           response.end(JSON.stringify({ data: [{ id: primaryModel }, { id: fallbackModel }] }));
           return;
         }
-        expect(request.method).toBe("POST");
-        expect(request.url).toBe("/v1/responses");
+        expect(request).toMatchObject({ method: "POST", url: "/v1/responses" });
         let body = "";
         for await (const chunk of request) {
           body += chunk;
@@ -187,10 +181,15 @@ it(
         }
         response.writeHead(200, { "content-type": "text/event-stream" });
         const recovered = scenario === "continuation" && requests.length === 2;
-        if ((payload.model === primaryModel && !recovered) || scenario === "exhausted") {
-          const item = outputMessage(`failed-${requests.length}`, prefix);
-          if (scenario !== "fallback") {
-            response.write(itemEvent(item, true));
+        const failed = (payload.model === primaryModel && !recovered) || scenario === "exhausted";
+        const item = outputMessage(
+          failed ? `failed-${requests.length}` : "fallback",
+          failed ? prefix : recovered ? continuation : marker,
+        );
+        const output = failed && scenario === "fallback" ? [] : [item];
+        if (output.length) {
+          response.write(itemEvent(item, true));
+          if (failed) {
             response.write(
               encodeEvent({
                 type: "response.output_text.delta",
@@ -200,30 +199,18 @@ it(
                 delta: prefix,
               }),
             );
-            response.write(itemEvent(item));
           }
-          response.end(
-            responseEvent(
-              `failure-${requests.length}`,
-              "failed",
-              scenario === "fallback" ? [] : [item],
-              { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
-              { code: null, message: tokenGenerationError },
-            ),
-          );
-          return;
+          response.write(itemEvent(item));
         }
-        const message = outputMessage("fallback", recovered ? continuation : marker);
         response.end(
-          [
-            itemEvent(message, true),
-            itemEvent(message),
-            responseEvent("fallback-response", "completed", [message], {
-              input_tokens: 10,
-              output_tokens: 5,
-              total_tokens: 15,
-            }),
-          ].join(""),
+          responseEvent(
+            failed ? `failure-${requests.length}` : "fallback-response",
+            failed ? "failed" : "completed",
+            output,
+            failed ? 21 : 10,
+            failed ? 4 : 5,
+            failed ? { code: null, message: tokenGenerationError } : undefined,
+          ),
         );
       })().catch((error: unknown) => response.destroy(error instanceof Error ? error : undefined));
     });
@@ -294,9 +281,7 @@ it(
             isRecord(event.payload.message) &&
             event.payload.message.role === "assistant"
           ) {
-            const messages = publishedMessages.get(event.payload.sessionKey) ?? [];
-            messages.push(event.payload.message);
-            publishedMessages.set(event.payload.sessionKey, messages);
+            publishedMessages.set(event.payload.sessionKey, event.payload.message);
           }
           if (
             event.event === "agent" &&
@@ -346,16 +331,8 @@ it(
         }
         const completed = await gateway.client.request<{
           status: string;
-          error?: string;
           terminalReply?: { text?: string };
-        }>(
-          "agent.wait",
-          {
-            runId: started.runId,
-            timeoutMs: 60_000,
-          },
-          { timeoutMs: 65_000 },
-        );
+        }>("agent.wait", { runId: started.runId, timeoutMs: 60_000 }, { timeoutMs: 65_000 });
         expect(completed.status, scenario).not.toBe("timeout");
         // Status-notice finals do not settle the transcript-gated successful reply.
         await withinTest(terminalReceived.promise, signal);
@@ -365,71 +342,48 @@ it(
         }>("chat.history", { sessionKey, limit: 20 });
         const assistant = history.messages.findLast((message) => message.role === "assistant");
         const runEvents = events.filter((event) => event.runId === started.runId);
-        expect
-          .soft(
-            requests[0],
-            requests[0] === primaryModel
-              ? scenario
-              : JSON.stringify({
-                  scenario,
-                  completedError: completed.error?.slice(0, 1000),
-                  chatErrors: runEvents
-                    .filter((event) => event.state === "error")
-                    .slice(-3)
-                    .map((event) => ({
-                      errorKind: event.errorKind,
-                      errorMessage: event.errorMessage?.slice(0, 1000),
-                    })),
-                }),
-          )
-          .toBe(primaryModel);
+        expect.soft(requests[0], scenario).toBe(primaryModel);
         expect
           .soft(
             requests.filter((requested) => requested === primaryModel),
             scenario,
           )
           .toHaveLength(rejection && rejection.reason !== "rate_limit" ? 1 : 2);
-        const terminal = runEvents
-          .filter((event) => event.state === "final")
-          .filter((event) => event.stopReason === "stop");
+        const terminal = runEvents.filter(
+          (event) => event.state === "final" && event.stopReason === "stop",
+        );
+        expect
+          .soft(requests.includes(fallbackModel), scenario)
+          .toBe(scenario !== "continuation" && scenario !== "no-fallback");
         if (rejection || ["fallback", "continuation", "visible-fallback"].includes(scenario)) {
           const expected = scenario === "continuation" ? continuation : marker;
-          if (scenario === "continuation") {
-            expect.soft(requests, scenario).not.toContain(fallbackModel);
-          } else {
-            expect.soft(requests, scenario).toContain(fallbackModel);
-          }
-          expect.soft(completed.status, scenario).toBe("ok");
-          expect.soft(assistant?.stopReason, scenario).toBe("stop");
+          expect.soft(completed, scenario).toMatchObject({
+            status: "ok",
+            terminalReply: { text: expected },
+          });
+          expect.soft(assistant, scenario).toMatchObject({ stopReason: "stop" });
           expect.soft(messageText(assistant), scenario).toBe(expected);
-          expect.soft(completed.terminalReply?.text, scenario).toBe(expected);
           expect.soft(terminal, scenario).toHaveLength(1);
           expect.soft(messageText(terminal[0]?.message), scenario).toBe(expected);
           if (rejection) {
             expect.soft(fallbackEvents, scenario).toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({
-                  runId: started.runId,
-                  data: expect.objectContaining({
-                    attempts: expect.arrayContaining([
-                      expect.objectContaining({
-                        provider: "xai",
-                        model: primaryModel,
-                        reason: rejection.reason,
-                        ...(rejection.status === undefined ? {} : { status: rejection.status }),
-                      }),
-                    ]),
+              contains({
+                runId: started.runId,
+                data: expect.objectContaining({
+                  attempts: contains({
+                    provider: "xai",
+                    model: primaryModel,
+                    reason: rejection.reason,
+                    ...(rejection.status === undefined ? {} : { status: rejection.status }),
                   }),
                 }),
-              ]),
+              }),
             );
           }
         } else {
           expect.soft(completed.status, scenario).toBe("error");
           expect.soft(messageText(assistant), scenario).toBe(prefix);
-          expect
-            .soft(messageText(publishedMessages.get(sessionKey)?.at(-1)), scenario)
-            .toBe(prefix);
+          expect.soft(messageText(publishedMessages.get(sessionKey)), scenario).toBe(prefix);
           const deltas = runEvents.filter((event) => event.state === "delta");
           const liveMessage = deltas.reduce<unknown>(
             (previous, event) => mergeChatStreamMessage(previous, event),
@@ -437,11 +391,6 @@ it(
           );
           // Saved assistant content belongs to canonical publication, not the unsaved live tail.
           expect.soft(messageText(liveMessage), scenario).toBe("");
-          if (scenario === "no-fallback") {
-            expect.soft(requests, scenario).not.toContain(fallbackModel);
-          } else {
-            expect.soft(requests, scenario).toContain(fallbackModel);
-          }
         }
       }
     } finally {

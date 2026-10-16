@@ -8,12 +8,11 @@ import {
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
-import { runCommandWithTimeout, type CommandOptions, type SpawnResult } from "../process/exec.js";
+import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
@@ -36,7 +35,11 @@ import {
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 import type { WorkerSshRunner } from "./worker-environments/tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./worker-environments/tunnel.js";
-import { prepareLocalWorkspaceRsyncBoundary } from "./worker-environments/tunnel.test-support.js";
+import {
+  git as runGit,
+  localWorkspaceRunner,
+  success,
+} from "./worker-environments/tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-environments/worker-ssh-argv.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./worker-environments/workspace-recovery.test-support.js";
@@ -73,25 +76,6 @@ const SSH_ENDPOINT: WorkerSshEndpoint = {
   keyRef: { source: "file", provider: "worker-fixture", id: "/identity" },
 };
 
-function success(stdout = ""): SpawnResult {
-  return {
-    stdout,
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
-}
-
-function transportFailure(): SpawnResult {
-  return {
-    ...success(),
-    code: 255,
-    stderr: "primary transport unavailable",
-  };
-}
-
 function expectOrdered(actual: readonly string[], expected: readonly string[]): void {
   let previousIndex = -1;
   for (const event of expected) {
@@ -119,8 +103,11 @@ function argvPort(argv: readonly string[]): number {
 class OriginalOrderSshRunner implements WorkerSshRunner {
   readonly events: string[] = [];
   private bootstrapOperationToken: string | undefined;
+  private readonly workspace: WorkerSshRunner;
 
-  constructor(private readonly remoteHome: string) {}
+  constructor(private readonly remoteHome: string) {
+    this.workspace = localWorkspaceRunner(remoteHome).runner;
+  }
 
   setBootstrapOperationId(operationId: string): void {
     this.bootstrapOperationToken = createHash("sha256").update(operationId).digest("hex");
@@ -148,14 +135,14 @@ class OriginalOrderSshRunner implements WorkerSshRunner {
 
   async run(argv: string[], options: CommandOptions): Promise<SpawnResult> {
     if (argv[0] === "git") {
-      return await runCommandWithTimeout(argv, options);
+      return await this.workspace.run(argv, options);
     }
     const port = argvPort(argv);
     const input = typeof options.input === "string" ? options.input : "";
     if (argv[0] === "ssh" && input.includes("expected_receipt=$2")) {
       this.events.push(`bootstrap:preflight:${port}`);
       if (port === PRIMARY_PORT) {
-        return transportFailure();
+        return { ...success(), code: 255, stderr: "primary transport unavailable" };
       }
       await fs.mkdir(path.dirname(this.bootstrapUploadPath), { recursive: true });
       await fs.writeFile(this.bootstrapUploadPath, "");
@@ -179,49 +166,14 @@ class OriginalOrderSshRunner implements WorkerSshRunner {
     }
     if (argv[0] === "rsync") {
       this.events.push(`workspace:transfer:${port}`);
-      if (argv.some((arg) => arg.startsWith("--rsync-path="))) {
-        const boundary = await prepareLocalWorkspaceRsyncBoundary(this.remoteHome, argv);
-        return await runCommandWithTimeout(boundary.argv, {
-          ...options,
-          baseEnv: { ...options.baseEnv, HOME: this.remoteHome },
-        });
-      }
-      const localArgv = [...argv];
-      const remoteShellIndex = localArgv.indexOf("-e");
-      if (remoteShellIndex >= 0) {
-        localArgv.splice(remoteShellIndex, 2);
-      }
-      for (let index = 1; index < localArgv.length; index += 1) {
-        const candidate = localArgv[index];
-        const separator = candidate?.indexOf(":") ?? -1;
-        if (!candidate || separator < 0) {
-          continue;
-        }
-        const remotePath = candidate.slice(separator + 1);
-        localArgv[index] = path.isAbsolute(remotePath)
-          ? remotePath
-          : path.join(this.remoteHome, remotePath);
-      }
-      const destination = localArgv.at(-1);
-      if (!destination) {
-        throw new Error("workspace transfer has no destination");
-      }
-      await fs.mkdir(destination.endsWith("/") ? destination : path.dirname(destination), {
-        recursive: true,
-      });
-      return await runCommandWithTimeout(localArgv, options);
+      return await this.workspace.run(argv, options);
     }
     if (argv[0] === "ssh") {
       this.events.push(`workspace:command:${port}`);
-      const remoteCommand = argv.at(-1);
-      if (!remoteCommand) {
-        throw new Error("workspace command is missing its remote command");
-      }
-      return await runCommandWithTimeout(["sh", "-c", remoteCommand], {
+      return await this.workspace.run(argv, {
         ...options,
         baseEnv: {
           ...options.baseEnv,
-          HOME: this.remoteHome,
           PATH: `${path.join(this.remoteHome, "fixture-bin")}:${options.baseEnv?.PATH ?? ""}`,
         },
       });
@@ -273,16 +225,6 @@ async function destroyRemoteProcessFixture(remoteHome: string): Promise<void> {
   }
 }
 
-async function runGit(workspace: string, ...args: string[]): Promise<void> {
-  const result = await runCommandWithTimeout(["git", "-C", workspace, ...args], {
-    timeoutMs: 30_000,
-  });
-  if (result.code !== 0) {
-    throw new Error(result.stderr || result.stdout || `git ${args[0] ?? "command"} failed`);
-  }
-}
-
-let database: OpenClawStateDatabase | undefined;
 let root: string | undefined;
 let tunnelManager: ReturnType<typeof createWorkerTunnelManager> | undefined;
 let workerService: WorkerEnvironmentService | undefined;
@@ -294,7 +236,6 @@ afterEach(async () => {
   tunnelManager = undefined;
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
-  database = undefined;
   if (root) {
     await fs.rm(root, { recursive: true, force: true });
     root = undefined;
@@ -334,29 +275,19 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     },
   };
 
-  database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
   const environmentStore = await createWorkerEnvironmentStore({ database, now: () => 2_000 });
   const placements = createWorkerSessionPlacementStore({ database, now: () => 3_000 });
   tunnelManager = createWorkerTunnelManager({ runner });
+  const profiles = { [PROFILE_ID]: { provider: provider.id, settings: {} } };
   const environmentService = createWorkerEnvironmentService({
     scheduler: createTestGatewayScheduler(),
     store: environmentStore,
-    getConfig: () => ({
-      cloudWorkers: {
-        profiles: {
-          [PROFILE_ID]: { provider: provider.id, settings: {} },
-        },
-      },
-    }),
+    getConfig: () => ({ cloudWorkers: { profiles } }),
     resolveProvider: (providerId) => (providerId === provider.id ? provider : undefined),
     prepareInstallation: async () => INSTALLATION,
-    bootstrapWorker: async ({
-      operationId,
-      sshEndpoint,
-      installation,
-      resolveIdentity,
-      signal,
-    }) => {
+    bootstrapWorker: async (request) => {
+      const { operationId, sshEndpoint, installation, resolveIdentity, signal } = request;
       runner.setBootstrapOperationId(operationId);
       expect(environmentStore.get(ENVIRONMENT_ID)).toMatchObject({
         state: "bootstrapping",
@@ -442,7 +373,6 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
   await expect(fs.readFile(runner.bootstrapReceiptPath, "utf8")).resolves.toBe(
     `${JSON.stringify(RECEIPT)}\n`,
   );
-  expect(events).toContain(`bootstrap:cleanup:${FALLBACK_PORT}`);
   events.push("placement:active");
   await expect(
     dispatch.reclaim({ sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" }),
