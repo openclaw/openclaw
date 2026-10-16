@@ -3,11 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  ChatAttachment,
-  ChatQueueItem,
-  ChatSelectionAnnotation,
-} from "../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, ChatSelectionAnnotation } from "../../lib/chat/chat-types.ts";
 import * as payloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
 import {
   captureChatOutboxRecoveryDestination,
@@ -83,13 +79,7 @@ async function prepare(
   return {
     ...stored,
     attachments: item.attachments?.map(
-      ({ id: attachmentId, mimeType, fileName, sizeBytes, origin }) => {
-        const metadata: ChatAttachment = { id: attachmentId, mimeType, fileName, sizeBytes };
-        if (origin) {
-          metadata.origin = origin;
-        }
-        return metadata;
-      },
+      ({ dataUrl: _url, selectionAnnotation: _annotation, ...metadata }) => metadata,
     ),
   };
 }
@@ -130,6 +120,19 @@ async function expectBytes(host: ReturnType<typeof hostFor>, item: ChatQueueItem
   return attachments?.[0];
 }
 
+function destinationFor(
+  host: ReturnType<typeof hostFor>,
+  scope = { sessionKey: host.sessionKey, agentId: "main" },
+) {
+  return expectDefined(captureChatOutboxRecoveryDestination(host, scope), "empty destination");
+}
+async function expectUnavailable(
+  host: ReturnType<typeof hostFor>,
+  item: ChatQueueItem,
+  reason: "missing" | "unavailable",
+) {
+  expect(await prepareOutboxPayload(host, item, "handoff")).toEqual({ status: "failed", reason });
+}
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
   installOutboxBrowserStorage();
@@ -191,10 +194,7 @@ describe("Blob-preserving metadata migration", () => {
     };
     await expectBytes(reloaded, original);
     reloaded.client.retireOfflineRecoveryScope();
-    expect(await prepareOutboxPayload(reloaded, original, "handoff")).toEqual({
-      status: "failed",
-      reason: "unavailable",
-    });
+    await expectUnavailable(reloaded, original, "unavailable");
   });
 
   it.each(["agent:main:topic", "global"])(
@@ -213,18 +213,10 @@ describe("Blob-preserving metadata migration", () => {
       ];
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ draftRevision: 42, queue: [item] });
-      {
-        expect(listStoredChatOutboxes(host)).toEqual([]);
-        const entry = expectDefined(readChatOutboxRecovery(host).entries[0], "owned recovery");
-        const destination = expectDefined(
-          captureChatOutboxRecoveryDestination(host, {
-            sessionKey: host.sessionKey,
-            agentId: "main",
-          }),
-          "empty target",
-        );
-        expect(restoreChatOutboxRecovery(host, entry, destination)).toBe("restored");
-      }
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+      const entry = expectDefined(readChatOutboxRecovery(host).entries[0], "owned recovery");
+      const destination = destinationFor(host);
+      expect(restoreChatOutboxRecovery(host, entry, destination)).toBe("restored");
       const restored = expectDefined(listStoredChatOutboxes(host)[0]?.queue[0], "restored input");
       expect(restored).toMatchObject({
         id: item.id,
@@ -244,10 +236,7 @@ describe("Blob-preserving metadata migration", () => {
       await Promise.all(
         cleanup.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
       );
-      expect(await prepareOutboxPayload(host, restored, "handoff")).toEqual({
-        status: "failed",
-        reason: "missing",
-      });
+      await expectUnavailable(host, restored, "missing");
     },
   );
 
@@ -266,13 +255,7 @@ describe("Blob-preserving metadata migration", () => {
     write.mockRestore();
     const entry = expectDefined(readChatOutboxRecovery(host).entries[0], "migrated source");
     const before = sessionStorage.getItem(target.key);
-    const destination = expectDefined(
-      captureChatOutboxRecoveryDestination(host, {
-        sessionKey: host.sessionKey,
-        agentId: "main",
-      }),
-      "empty destination",
-    );
+    const destination = destinationFor(host);
     write = vi.spyOn(sessionStorage, "setItem").mockImplementation(fail);
     expect(restoreChatOutboxRecovery(host, entry, destination)).toBe("storage-failed");
     expect(sessionStorage.getItem(target.key)).toBe(before);
@@ -308,8 +291,7 @@ describe("Blob-preserving metadata migration", () => {
         "unscoped source",
       );
       const scope = { sessionKey: host.sessionKey, agentId: "main" };
-      const capture = () =>
-        expectDefined(captureChatOutboxRecoveryDestination(host, scope), "destination");
+      const capture = () => destinationFor(host, scope);
       const set = sessionStorage.setItem.bind(sessionStorage);
       const remove = sessionStorage.removeItem.bind(sessionStorage);
       const fail = () => {
@@ -367,20 +349,14 @@ describe("Blob-preserving metadata migration", () => {
       await settleCleanup();
       await expectBytes(host, item);
       expect(cleanup).toHaveBeenCalledExactlyOnceWith([unrelated.attachmentPayload]);
-      expect(await prepareOutboxPayload(host, unrelated, "handoff")).toEqual({
-        status: "failed",
-        reason: "missing",
-      });
+      await expectUnavailable(host, unrelated, "missing");
       expect(
         readChatOutboxRecovery(foreign).entries.every(
           (candidate) => !candidate.session.queue?.length,
         ),
       ).toBe(true);
       expect(listStoredChatOutboxes(foreign)).toEqual([]);
-      const foreignDestination = expectDefined(
-        captureChatOutboxRecoveryDestination(foreign, scope),
-        "foreign destination",
-      );
+      const foreignDestination = destinationFor(foreign, scope);
       expect(restoreChatOutboxRecovery(foreign, entry, foreignDestination)).toBe("conflict");
 
       // Another failed recovery/deletion must preserve the same source bytes too.
@@ -409,10 +385,7 @@ describe("Blob-preserving metadata migration", () => {
       await settleCleanup();
       expect(cleanup).toHaveBeenLastCalledWith([item.attachmentPayload]);
       expect(cleanup).toHaveBeenCalledTimes(2);
-      expect(await prepareOutboxPayload(host, item, "handoff")).toEqual({
-        status: "failed",
-        reason: "missing",
-      });
+      await expectUnavailable(host, item, "missing");
     },
   );
 
@@ -438,10 +411,7 @@ describe("Blob-preserving metadata migration", () => {
       entriesA.find((entry) => entry.session.queue?.[0]?.id === first.id),
       "A entry",
     );
-    const destination = expectDefined(
-      captureChatOutboxRecoveryDestination(a, { sessionKey: a.sessionKey, agentId: "main" }),
-      "A destination",
-    );
+    const destination = destinationFor(a);
     expect(restoreChatOutboxRecovery(b, ownedA, destination)).toBe("conflict");
     expect(restoreChatOutboxRecovery(a, ownedA, destination)).toBe("restored");
     const ownedTarget = storageTargetForComposer(a);

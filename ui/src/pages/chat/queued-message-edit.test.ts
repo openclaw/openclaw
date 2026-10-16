@@ -140,6 +140,23 @@ function rejectStoredGrowth(): void {
   });
 }
 
+function startEdit(host: ReturnType<typeof makeChatHost>, id: string, text: string) {
+  beginQueuedMessageEdit(host, id);
+  updateQueuedMessageEdit(host, text);
+}
+function historyRefreshFixture() {
+  const history = createDeferred<{ messages: unknown[] }>();
+  const historyRequest = vi.fn(() => history.promise);
+  const sendRequest = vi.fn(() => ({ status: "started" as const }));
+  const { host } = queueHost([{}], {
+    chatLoading: true,
+    currentSessionId: "queued-edit-session",
+    connected: true,
+    requestHandlers: { "chat.history": historyRequest, "chat.send": sendRequest },
+  });
+  startEdit(host, "queued-1", "message 1, corrected");
+  return { history, historyRequest, sendRequest, host };
+}
 async function submitQueuedEdit(host: ReturnType<typeof makeChatHost>): Promise<void> {
   const edit = host.chatQueuedEdit;
   if (!edit) {
@@ -160,8 +177,7 @@ describe("queued message edit round-trip", () => {
         sendAttempts: 0,
       },
     ]);
-    beginQueuedMessageEdit(host, "queued-1");
-    updateQueuedMessageEdit(host, "corrected while reconnecting");
+    startEdit(host, "queued-1", "corrected while reconnecting");
 
     markQueuedChatSendsWaitingForReconnect(host);
     await submitQueuedEdit(host);
@@ -178,8 +194,7 @@ describe("queued message edit round-trip", () => {
       const { host } = queueHost([{}, { workContext }, {}], {
         getWorkContext: () => ({ page: "chat", title: "Later work" }),
       });
-      beginQueuedMessageEdit(host, "queued-2");
-      updateQueuedMessageEdit(host, draft);
+      startEdit(host, "queued-2", draft);
       await submitQueuedEdit(host);
       expect(storedOrder(host)).toEqual(["message 1", draft, "message 3"]);
       expect(host.chatQueue[1]?.workContext).toEqual(
@@ -194,11 +209,7 @@ describe("queued message edit round-trip", () => {
     async (chatFollowUpMode) => {
       const sendRequest = vi.fn(() => ({ status: "started" as const }));
       const { host } = queueHost(
-        [
-          { sendState: "waiting-idle" },
-          { sendState: "waiting-idle" },
-          { sendState: "waiting-idle" },
-        ],
+        Array.from({ length: 3 }, () => ({ sendState: "waiting-idle" as const })),
         {
           connected: true,
           chatRunId: "run-active",
@@ -235,8 +246,7 @@ describe("queued message edit round-trip", () => {
         connected: true,
         requestHandlers: { "chat.send": sendRequest },
       });
-      beginQueuedMessageEdit(host as never, "queued-1");
-      updateQueuedMessageEdit(host as never, command);
+      startEdit(host, "queued-1", command);
 
       await submitQueuedEdit(host);
 
@@ -253,8 +263,7 @@ describe("queued message edit round-trip", () => {
     "retains a stale edit after peer $mutation (route round trip: $roundTrip)",
     async ({ roundTrip, mutation }) => {
       const { host } = queueHost([{}, {}]);
-      beginQueuedMessageEdit(host as never, "queued-1");
-      updateQueuedMessageEdit(host as never, "message 1, corrected");
+      startEdit(host, "queued-1", "message 1, corrected");
       const captured = host.chatQueuedEdit?.source;
       if (roundTrip) {
         host.sessionKey = "agent:main:elsewhere";
@@ -290,20 +299,7 @@ describe("queued message edit round-trip", () => {
   );
 
   it("aborts a replacement when its edit is cancelled during history refresh", async () => {
-    const history = createDeferred<{ messages: unknown[] }>();
-    const historyRequest = vi.fn(() => history.promise);
-    const sendRequest = vi.fn(() => ({ status: "started" as const }));
-    const { host } = queueHost([{}], {
-      chatLoading: true,
-      currentSessionId: "queued-edit-session",
-      connected: true,
-      requestHandlers: {
-        "chat.history": historyRequest,
-        "chat.send": sendRequest,
-      },
-    });
-    beginQueuedMessageEdit(host as never, "queued-1");
-    updateQueuedMessageEdit(host as never, "message 1, corrected");
+    const { history, historyRequest, sendRequest, host } = historyRefreshFixture();
 
     const send = submitQueuedEdit(host);
     await vi.waitFor(() => expect(historyRequest).toHaveBeenCalledOnce());
@@ -316,20 +312,7 @@ describe("queued message edit round-trip", () => {
   });
 
   it("aborts a replacement when its draft changes during history refresh", async () => {
-    const history = createDeferred<{ messages: unknown[] }>();
-    const historyRequest = vi.fn(() => history.promise);
-    const sendRequest = vi.fn(() => ({ status: "started" as const }));
-    const { host } = queueHost([{}], {
-      chatLoading: true,
-      currentSessionId: "queued-edit-session",
-      connected: true,
-      requestHandlers: {
-        "chat.history": historyRequest,
-        "chat.send": sendRequest,
-      },
-    });
-    beginQueuedMessageEdit(host as never, "queued-1");
-    updateQueuedMessageEdit(host as never, "message 1, corrected");
+    const { history, historyRequest, sendRequest, host } = historyRefreshFixture();
 
     const send = submitQueuedEdit(host);
     await vi.waitFor(() => expect(historyRequest).toHaveBeenCalledOnce());
@@ -345,8 +328,7 @@ describe("queued message edit round-trip", () => {
   it("preserves attachments and reply context on the replacement", async () => {
     const kept = stageQueuedImage("att-kept");
     const { host } = queueHost([{}, { attachments: [kept], replyToId: "reply-source" }, {}]);
-    beginQueuedMessageEdit(host as never, "queued-2");
-    updateQueuedMessageEdit(host as never, "message 2, corrected");
+    startEdit(host, "queued-2", "message 2, corrected");
     await submitQueuedEdit(host);
 
     expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
@@ -359,8 +341,7 @@ describe("queued message edit round-trip", () => {
 
   it("keeps the original queued when the replacement's stored write is rejected", async () => {
     const { host } = queueHost([{}, {}, {}]);
-    beginQueuedMessageEdit(host as never, "queued-2");
-    updateQueuedMessageEdit(host as never, "message 2, corrected");
+    startEdit(host, "queued-2", "message 2, corrected");
     rejectStoredGrowth();
 
     await submitQueuedEdit(host);
@@ -381,7 +362,7 @@ describe("queued message edit round-trip", () => {
 
   it("fences peer remove, reorder, retry, and steer actions while a row edit is open", async () => {
     const original = { id: "queued-1", text: "message 1", createdAt: 1_000 };
-    const { host, unsubscribe } = queueHost([original]);
+    const { host } = queueHost([original]);
     const sendRequest = vi.fn(() => ({ status: "started" as const }));
     const peer = makeChatHost({
       chatQueue: [original],
@@ -390,83 +371,64 @@ describe("queued message edit round-trip", () => {
       requestHandlers: { "chat.send": sendRequest },
       sessionKey: SESSION_KEY,
     });
-    const stopPeer = trackOutboxProjection(peer as never);
+    trackOutboxProjection(peer as never);
 
-    try {
-      beginQueuedMessageEdit(host as never, original.id);
+    beginQueuedMessageEdit(host as never, original.id);
 
-      expect(isQueuedMessageBeingEdited(peer as never, original.id)).toBe(true);
-      expect(moveQueuedChatMessage(peer as never, original.id, original.id)).toBe("rejected");
-      await retryQueuedChatMessage(peer as never, original.id);
-      await steerQueuedChatMessage(peer as never, original.id);
-      expect(sendRequest).not.toHaveBeenCalled();
-      expect(storedOrder(peer)).toEqual(["message 1"]);
-    } finally {
-      stopPeer();
-      unsubscribe();
-    }
+    expect(isQueuedMessageBeingEdited(peer as never, original.id)).toBe(true);
+    expect(moveQueuedChatMessage(peer as never, original.id, original.id)).toBe("rejected");
+    await retryQueuedChatMessage(peer as never, original.id);
+    await steerQueuedChatMessage(peer as never, original.id);
+    expect(sendRequest).not.toHaveBeenCalled();
+    expect(storedOrder(peer)).toEqual(["message 1"]);
   });
 
   it("clears a peer reorder conflict when the edit closes and the move succeeds", () => {
-    const { host, unsubscribe } = queueHost([{}, {}, {}]);
+    const { host } = queueHost([{}, {}, {}]);
     const peer = makeChatHost({
       client: host.client,
       connected: false,
       sessionKey: SESSION_KEY,
     });
-    const stopPeer = trackOutboxProjection(peer as never);
+    trackOutboxProjection(peer as never);
 
-    try {
-      beginQueuedMessageEdit(host as never, "queued-2");
+    beginQueuedMessageEdit(host as never, "queued-2");
 
-      expect(moveQueuedChatMessage(peer as never, "queued-3", "queued-1")).toBe("rejected");
-      expect(peer.chatError).toBe(QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
-      expect(storedOrder(peer)).toEqual(["message 1", "message 2", "message 3"]);
-      expect(cancelQueuedMessageEdit(host as never)).toBe(true);
-      expect(moveQueuedChatMessage(peer as never, "queued-3", "queued-1")).toBe("moved");
-      expect(storedOrder(peer)).toEqual(["message 3", "message 1", "message 2"]);
-      expect(peer.chatError).toBeNull();
-      expect(peer.lastError).toBeNull();
-    } finally {
-      stopPeer();
-      unsubscribe();
-    }
+    expect(moveQueuedChatMessage(peer as never, "queued-3", "queued-1")).toBe("rejected");
+    expect(peer.chatError).toBe(QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
+    expect(storedOrder(peer)).toEqual(["message 1", "message 2", "message 3"]);
+    expect(cancelQueuedMessageEdit(host as never)).toBe(true);
+    expect(moveQueuedChatMessage(peer as never, "queued-3", "queued-1")).toBe("moved");
+    expect(storedOrder(peer)).toEqual(["message 3", "message 1", "message 2"]);
+    expect(peer.chatError).toBeNull();
+    expect(peer.lastError).toBeNull();
   });
 
   it("preserves other operations' storage errors when a queue move succeeds", () => {
-    const { host, unsubscribe } = queueHost([{}, {}]);
-    try {
-      host.lastError = "History could not be refreshed";
-      host.chatError = OFFLINE_QUEUE_STORAGE_ERROR;
+    const { host } = queueHost([{}, {}]);
+    host.lastError = "History could not be refreshed";
+    host.chatError = OFFLINE_QUEUE_STORAGE_ERROR;
 
-      expect(moveQueuedChatMessage(host as never, "queued-2", "queued-1")).toBe("moved");
+    expect(moveQueuedChatMessage(host as never, "queued-2", "queued-1")).toBe("moved");
 
-      expect(storedOrder(host)).toEqual(["message 2", "message 1"]);
-      expect(host.lastError).toBe("History could not be refreshed");
-      expect(host.chatError).toBe(OFFLINE_QUEUE_STORAGE_ERROR);
-    } finally {
-      unsubscribe();
-    }
+    expect(storedOrder(host)).toEqual(["message 2", "message 1"]);
+    expect(host.lastError).toBe("History could not be refreshed");
+    expect(host.chatError).toBe(OFFLINE_QUEUE_STORAGE_ERROR);
   });
 
   it("keeps peer reorder targets within one side of an edited-row barrier", () => {
-    const { host, unsubscribe } = queueHost([{}, {}, {}, {}]);
+    const { host } = queueHost([{}, {}, {}, {}]);
     const peer = makeChatHost({
       client: host.client,
       connected: false,
       sessionKey: SESSION_KEY,
     });
-    const stopPeer = trackOutboxProjection(peer as never);
+    trackOutboxProjection(peer as never);
 
-    try {
-      beginQueuedMessageEdit(host as never, "queued-2");
+    beginQueuedMessageEdit(host as never, "queued-2");
 
-      expect(moveQueuedChatMessage(peer as never, "queued-4", "queued-3")).toBe("moved");
-      expect(storedOrder(peer)).toEqual(["message 1", "message 2", "message 4", "message 3"]);
-    } finally {
-      stopPeer();
-      unsubscribe();
-    }
+    expect(moveQueuedChatMessage(peer as never, "queued-4", "queued-3")).toBe("moved");
+    expect(storedOrder(peer)).toEqual(["message 1", "message 2", "message 4", "message 3"]);
   });
 
   it("does not collapse same-payload row and composer sends", async () => {
@@ -476,8 +438,7 @@ describe("queued message edit round-trip", () => {
       connected: true,
       requestHandlers: { "chat.send": sendRequest },
     });
-    beginQueuedMessageEdit(host as never, "queued-1");
-    updateQueuedMessageEdit(host as never, "same payload");
+    startEdit(host, "queued-1", "same payload");
 
     const rowSend = submitQueuedEdit(host);
     await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledOnce());

@@ -4,6 +4,19 @@ import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
+function loadRoute(
+  context: Parameters<typeof loadChatRoute>[0],
+  target: string | Parameters<typeof loadChatRoute>[1],
+  search = "",
+  face: Parameters<typeof loadChatRoute>[2] = "chat",
+) {
+  return loadChatRoute(
+    context,
+    typeof target === "string" ? { pathname: target, search, hash: "" } : target,
+    face,
+    new AbortController().signal,
+  );
+}
 const fullId = "0123456789abcdef0123456789abcdef";
 const SHARE_ROUTE = {
   kind: "thread-id-prefix",
@@ -79,12 +92,7 @@ describe("catalog share route resolution", () => {
     });
 
     await expect(
-      loadChatRoute(
-        catalogContext(request),
-        { pathname: "/shared-sessions/0123456789ab", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
+      loadRoute(catalogContext(request), "/shared-sessions/0123456789ab"),
     ).resolves.toMatchObject({
       kind: "session",
       sessionKey: `agent:research:catalog:external:gateway:${fullId}`,
@@ -101,11 +109,9 @@ describe("catalog share route resolution", () => {
         return beamCatalog([{ threadId: fullId, name: "Pretty Beam route" }]);
       });
 
-      const loaded = await loadChatRoute(
+      const loaded = await loadRoute(
         catalogContext(request, "/openclaw"),
-        { pathname: `/openclaw/beam/${reference}`, search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
+        `/openclaw/beam/${reference}`,
       );
 
       expect(loaded).toMatchObject({
@@ -153,54 +159,26 @@ describe("catalog share route resolution", () => {
     );
     const context = catalogContext(request);
 
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/beam/candidate-0123456789ab", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({
+    await expect(loadRoute(context, "/beam/candidate-0123456789ab")).resolves.toMatchObject({
       kind: "ambiguous",
       shortId: "0123456789ab",
       candidates: [{ href: `/beam/candidate-${ids[0]}` }, { href: `/beam/candidate-${ids[1]}` }],
       truncated: true,
     });
 
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/beam/aaaaaaaaaaaa", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({
+    await expect(loadRoute(context, "/beam/aaaaaaaaaaaa")).resolves.toMatchObject({
       kind: "missing-session",
       currentSessionHref: "/chat/research",
       sessionsHref: "/sessions",
     });
 
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/beam/ABCDEF012345", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({
+    await expect(loadRoute(context, "/beam/ABCDEF012345")).resolves.toMatchObject({
       kind: "route-error",
       message: "This Beam share URL is invalid.",
     });
 
     const disabled = catalogContext(vi.fn(async () => ({ catalogs: [] })));
-    await expect(
-      loadChatRoute(
-        disabled,
-        { pathname: "/beam/0123456789ab", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({
+    await expect(loadRoute(disabled, "/beam/0123456789ab")).resolves.toMatchObject({
       kind: "route-error",
       message: "This shared session route is unavailable.",
     });
@@ -211,26 +189,18 @@ describe("catalog share route resolution", () => {
         return { catalogs: [...result.catalogs, { ...result.catalogs[0], id: "other" }] };
       }),
     );
-    await expect(
-      loadChatRoute(
-        duplicated,
-        { pathname: "/beam/0123456789ab", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({ kind: "route-error" });
+    await expect(loadRoute(duplicated, "/beam/0123456789ab")).resolves.toMatchObject({
+      kind: "route-error",
+    });
   });
 
   it("keeps paginated empty results ambiguous and rejects duplicate declared hosts", async () => {
     const paginated = catalogContext(vi.fn(async () => beamCatalog([], "more")));
-    await expect(
-      loadChatRoute(
-        paginated,
-        { pathname: "/beam/0123456789ab", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({ kind: "ambiguous", candidates: [], truncated: true });
+    await expect(loadRoute(paginated, "/beam/0123456789ab")).resolves.toMatchObject({
+      kind: "ambiguous",
+      candidates: [],
+      truncated: true,
+    });
 
     const duplicateHost = catalogContext(
       vi.fn(async () => {
@@ -244,28 +214,18 @@ describe("catalog share route resolution", () => {
         };
       }),
     );
-    await expect(
-      loadChatRoute(
-        duplicateHost,
-        { pathname: "/beam/0123456789ab", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({ kind: "route-error" });
+    await expect(loadRoute(duplicateHost, "/beam/0123456789ab")).resolves.toMatchObject({
+      kind: "route-error",
+    });
   });
 
   it("preserves full-id links while canonicalizing an internally bridged stale name", async () => {
     const request = vi.fn(async () => beamCatalog([{ threadId: fullId, name: "Renamed session" }]));
     const originalPath = `/openclaw/beam/old-name-${fullId}`;
-    const loaded = await loadChatRoute(
+    const loaded = await loadRoute(
       catalogContext(request, "/openclaw"),
-      {
-        pathname: "/openclaw/chat",
-        search: `?${new URLSearchParams({ [INTERNAL_SESSION_PATH_PARAM]: originalPath })}`,
-        hash: "",
-      },
-      "chat",
-      new AbortController().signal,
+      "/openclaw/chat",
+      `?${new URLSearchParams({ [INTERNAL_SESSION_PATH_PARAM]: originalPath })}`,
     );
     expect(loaded).toMatchObject({
       kind: "session",

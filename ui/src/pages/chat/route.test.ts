@@ -11,6 +11,19 @@ import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import { pages } from "./route.ts";
 
+function loadRoute(
+  context: Parameters<typeof loadChatRoute>[0],
+  target: string | Parameters<typeof loadChatRoute>[1],
+  search = "",
+  face: Parameters<typeof loadChatRoute>[2] = "chat",
+) {
+  return loadChatRoute(
+    context,
+    typeof target === "string" ? { pathname: target, search, hash: "" } : target,
+    face,
+    new AbortController().signal,
+  );
+}
 const keyUuid = "12345678-90ab-cdef-1234-567890abcdef";
 const sessionKey = `agent:main:dashboard:${keyUuid}`;
 
@@ -88,18 +101,22 @@ function coldContext() {
   };
 }
 
+function mountedRouter(context: ApplicationContext) {
+  const router = createApplicationRouter();
+  onTestFinished(() => router.stop());
+  const route = router.getRoute("chat")!;
+  const component = vi.spyOn(route, "component").mockResolvedValue({ renderSolid: () => null });
+  onTestFinished(() => component.mockRestore());
+  return { router, route, scopedContext: { ...context, router } };
+}
+
 describe("loadChatRoute", () => {
   it.each(["connection", "profile"])(
     "does not carry an established key into a new %s scope",
     async (replacement) => {
       const { context, request } = contextFor({ ok: true, ...row(), agentId: "main" });
       context.gateway.snapshot.selfUser = { id: "first" };
-      const router = createApplicationRouter();
-      onTestFinished(() => router.stop());
-      const route = router.getRoute("chat")!;
-      const component = vi.spyOn(route, "component").mockResolvedValue({ renderSolid: () => null });
-      onTestFinished(() => component.mockRestore());
-      const scopedContext = { ...context, router };
+      const { router, route, scopedContext } = mountedRouter(context);
       const location = { pathname: "/chat/main/deploy-monitor-12345678", search: "", hash: "" };
       await router.navigate("chat", scopedContext, {}, location);
       if (replacement === "connection") {
@@ -128,13 +145,7 @@ describe("loadChatRoute", () => {
     "keeps a disconnected exact revalidation retryable for %s",
     async (reference) => {
       const { context, request } = contextFor({ ok: true, ...row(), agentId: "main" });
-      const router = createApplicationRouter();
-      onTestFinished(() => router.stop());
-      const component = vi
-        .spyOn(router.getRoute("chat")!, "component")
-        .mockResolvedValue({ renderSolid: () => null });
-      onTestFinished(() => component.mockRestore());
-      const scopedContext = { ...context, router };
+      const { router, scopedContext } = mountedRouter(context);
       const location = { pathname: `/chat/main/${reference}`, search: "", hash: "" };
       await router.navigate("chat", scopedContext, {}, location);
       const pending = createDeferredCore<SessionsResolveResult>();
@@ -158,13 +169,7 @@ describe("loadChatRoute", () => {
     "keeps revalidation bound to the established session when %s is reassigned",
     async (reference) => {
       const { context, request } = contextFor({ ok: true, ...row(), agentId: "main" });
-      const router = createApplicationRouter();
-      onTestFinished(() => router.stop());
-      const component = vi
-        .spyOn(router.getRoute("chat")!, "component")
-        .mockResolvedValue({ renderSolid: () => null });
-      onTestFinished(() => component.mockRestore());
-      const scopedContext = { ...context, router };
+      const { router, scopedContext } = mountedRouter(context);
       const location = { pathname: `/chat/main/${reference}`, search: "", hash: "" };
       await router.navigate("chat", scopedContext, {}, location);
       expect(router.getState().matches[0]?.data).toMatchObject({ sessionKey });
@@ -194,9 +199,10 @@ describe("loadChatRoute", () => {
     const key = "agent:main:research";
     context.sessions.state.result = sessionsResult([row({ key })], 1);
     const location = { pathname: "/chat/main/research", search: "", hash: "" };
-    await expect(
-      loadChatRoute(context, location, "chat", new AbortController().signal),
-    ).resolves.toMatchObject({ kind: "session", sessionKey: key });
+    await expect(loadRoute(context, location)).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: key,
+    });
     expect(request).not.toHaveBeenCalled();
     await expect(
       loadChatRoute(context, location, "chat", new AbortController().signal, {}),
@@ -205,12 +211,7 @@ describe("loadChatRoute", () => {
   });
   it("leaves a bare namespace unresolved instead of inventing a main session", async () => {
     const { context, list } = contextFor({ ok: false }, "workspace");
-    const loaded = await loadChatRoute(
-      context,
-      { pathname: "/chat", search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
+    const loaded = await loadRoute(context, "/chat");
 
     expect(loaded).toEqual({ type: "notFound", data: { routeId: "chat" } });
     expect(list).not.toHaveBeenCalled();
@@ -233,15 +234,11 @@ describe("loadChatRoute", () => {
         boardFace: session.boardFace ?? undefined,
       })),
     });
-    const ambiguous = await loadChatRoute(
+    const ambiguous = await loadRoute(
       context,
-      {
-        pathname: "/dashboard/ignored/deploy-12345678",
-        search: "?draft=ship&__openclawComposerFocus=1",
-        hash: "",
-      },
+      "/dashboard/ignored/deploy-12345678",
+      "?draft=ship&__openclawComposerFocus=1",
       "dashboard",
-      new AbortController().signal,
     );
     expect(ambiguous).toMatchObject({ kind: "ambiguous", truncated: false });
     if (!("kind" in ambiguous) || ambiguous.kind !== "ambiguous") {
@@ -257,15 +254,11 @@ describe("loadChatRoute", () => {
     )) {
       request.mockResolvedValueOnce({ ok: true, ...expectedRow!, agentId: candidate.agentId });
       await expect(
-        loadChatRoute(
+        loadRoute(
           context,
-          {
-            pathname: new URL(candidate.href, "https://control.test").pathname,
-            search: new URL(candidate.href, "https://control.test").search,
-            hash: "",
-          },
+          new URL(candidate.href, "https://control.test").pathname,
+          new URL(candidate.href, "https://control.test").search,
           "dashboard",
-          new AbortController().signal,
         ),
       ).resolves.toEqual({
         kind: "session",
@@ -283,26 +276,14 @@ describe("loadChatRoute", () => {
   it("carries expanded dashboard presentation into route data", async () => {
     const { context } = contextFor();
     await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/dashboard/work", search: "?dashboard=expanded", hash: "" },
-        "dashboard",
-        new AbortController().signal,
-      ),
+      loadRoute(context, "/dashboard/work", "?dashboard=expanded", "dashboard"),
     ).resolves.toMatchObject({
       kind: "session",
       sessionKey: "agent:work:main",
       face: "dashboard",
       dashboardExpanded: true,
     });
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat/work", search: "?dashboard=expanded", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({
+    await expect(loadRoute(context, "/chat/work", "?dashboard=expanded")).resolves.toMatchObject({
       kind: "session",
       sessionKey: "agent:work:main",
       face: "chat",
@@ -312,12 +293,7 @@ describe("loadChatRoute", () => {
 
   it("reclassifies a slug-shaped path after cold defaults reveal the main key", async () => {
     const { context, connect } = coldContext();
-    const pending = loadChatRoute(
-      context,
-      { pathname: "/chat/research/workspace", search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
+    const pending = loadRoute(context, "/chat/research/workspace");
     let settled = false;
     void pending.then(() => {
       settled = true;
@@ -352,12 +328,7 @@ describe("loadChatRoute", () => {
       ["/chat/research/main", "agent:research:main", "workspace", null],
     ] as const) {
       const { context, connect } = coldContext();
-      const loaded = await loadChatRoute(
-        context,
-        { pathname, search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      );
+      const loaded = await loadRoute(context, pathname);
       expect(loaded).toMatchObject({
         kind: "session",
         sessionKey: targetSessionKey,
@@ -376,16 +347,7 @@ describe("loadChatRoute", () => {
   it("loads a specific synthetic catalog thread from its URL target", async () => {
     const { context, list } = contextFor();
     await expect(
-      loadChatRoute(
-        context,
-        {
-          pathname: "/chat/main",
-          search: "?catalog=claude&host=gateway%3Alocal&thread=thread-2",
-          hash: "",
-        },
-        "chat",
-        new AbortController().signal,
-      ),
+      loadRoute(context, "/chat/main", "?catalog=claude&host=gateway%3Alocal&thread=thread-2"),
     ).resolves.toEqual({
       kind: "session",
       sessionKey: "agent:main:catalog:claude:gateway%3Alocal:thread-2",

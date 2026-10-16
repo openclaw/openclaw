@@ -21,6 +21,19 @@ import {
   sessionRouteUuid as uuid,
 } from "./route-resolution.test-support.ts";
 
+function loadRoute(
+  context: Parameters<typeof loadChatRoute>[0],
+  target: string | Parameters<typeof loadChatRoute>[1],
+  search = "",
+  face: Parameters<typeof loadChatRoute>[2] = "chat",
+) {
+  return loadChatRoute(
+    context,
+    typeof target === "string" ? { pathname: target, search, hash: "" } : target,
+    face,
+    new AbortController().signal,
+  );
+}
 describe("gateway-backed session route resolution", () => {
   it("resolves a non-default agent's canonical global face from its scoped row", async () => {
     const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
@@ -42,16 +55,7 @@ describe("gateway-backed session route resolution", () => {
     } as ApplicationContext["gateway"]["snapshot"]["hello"];
 
     await expect(
-      loadChatRoute(
-        context,
-        {
-          pathname: "/chat/research",
-          search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
-          hash: "",
-        },
-        "chat",
-        new AbortController().signal,
-      ),
+      loadRoute(context, "/chat/research", `?${SESSION_FACE_PREFERENCE_PARAM}=1`),
     ).resolves.toEqual({
       kind: "session",
       sessionKey: "global",
@@ -89,9 +93,7 @@ describe("gateway-backed session route resolution", () => {
 
     expect(face).toBe("chat");
     expect(target.options.pathname).toBe("/chat/roboclaw/1234567890abcdef1234567890abcdef");
-    await expect(
-      loadChatRoute(context, targetLocation(target), face, new AbortController().signal),
-    ).resolves.toMatchObject({
+    await expect(loadRoute(context, targetLocation(target), "", face)).resolves.toMatchObject({
       kind: "session",
       sessionKey: dashboardRow.key,
       // The loader adopts the stored face, so the page renders the dashboard board and
@@ -118,14 +120,7 @@ describe("gateway-backed session route resolution", () => {
     const search = new URLSearchParams(targetLocation(target).search);
     search.set(INTERNAL_SESSION_PATH_PARAM, target.options.pathname);
 
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat", search: `?${search.toString()}`, hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({
+    await expect(loadRoute(context, "/chat", `?${search.toString()}`)).resolves.toMatchObject({
       kind: "session",
       sessionKey: dashboardRow.key,
       canonicalLocation: {
@@ -151,9 +146,7 @@ describe("gateway-backed session route resolution", () => {
       preferenceDerivedFace: true,
     });
 
-    await expect(
-      loadChatRoute(context, targetLocation(target), "chat", new AbortController().signal),
-    ).resolves.toEqual({
+    await expect(loadRoute(context, targetLocation(target))).resolves.toEqual({
       kind: "session",
       sessionKey: `agent:roboclaw:${catalogKey}`,
       agentId: "roboclaw",
@@ -182,16 +175,7 @@ describe("gateway-backed session route resolution", () => {
         boardFace: session.boardFace ?? undefined,
       })),
     });
-    const loaded = await loadChatRoute(
-      context,
-      {
-        pathname: "/chat/roboclaw/default-mode-with-rare-surprises",
-        search: "",
-        hash: "",
-      },
-      "chat",
-      new AbortController().signal,
-    );
+    const loaded = await loadRoute(context, "/chat/roboclaw/default-mode-with-rare-surprises");
 
     expect(loaded).toMatchObject({
       kind: "ambiguous",
@@ -223,14 +207,9 @@ describe("gateway-backed session route resolution", () => {
     });
     (context.gateway.snapshot.client as unknown as { request: typeof request }).request = request;
 
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat/roboclaw/deploy-monitor-12345678", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).rejects.toBe(rejection);
+    await expect(loadRoute(context, "/chat/roboclaw/deploy-monitor-12345678")).rejects.toBe(
+      rejection,
+    );
     expect(list).not.toHaveBeenCalled();
   });
 
@@ -276,12 +255,7 @@ describe("gateway-backed session route resolution", () => {
       ok: false,
       candidates: rows.map(({ key }) => ({ key })),
     });
-    const loaded = await loadChatRoute(
-      context,
-      { pathname: "/chat/roboclaw/12345678", search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
+    const loaded = await loadRoute(context, "/chat/roboclaw/12345678");
 
     expect(loaded).toMatchObject({ kind: "ambiguous", shortId: "12345678", truncated: true });
   });
@@ -294,12 +268,7 @@ describe("gateway-backed session route resolution", () => {
     request.mockResolvedValueOnce({ ok: false });
     request.mockResolvedValueOnce({ ok: true, ...literalRow, agentId: "main" });
 
-    const loaded = await loadChatRoute(
-      context,
-      { pathname: `/chat/main/${uuid}`, search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
+    const loaded = await loadRoute(context, `/chat/main/${uuid}`);
 
     expect(loaded).toMatchObject({
       kind: "session",
@@ -347,20 +316,17 @@ describe("gateway-backed session route resolution", () => {
 
     expect(chipTarget.options.pathname).toBe(`/chat/main/~key/${literalUuid}`);
 
-    await expect(
-      loadChatRoute(context, targetLocation(chipTarget), "chat", new AbortController().signal),
-    ).resolves.toMatchObject({ kind: "session", sessionKey: literal.key });
+    await expect(loadRoute(context, targetLocation(chipTarget))).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: literal.key,
+    });
 
     // Plain literal paths remain short-first, so this collision opens the short match.
     // Tool-generated links advertise `~key` to bypass that intentional ambiguity.
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: `/chat/main/${literalUuid}`, search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({ kind: "session", sessionKey: shortMatch.key });
+    await expect(loadRoute(context, `/chat/main/${literalUuid}`)).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: shortMatch.key,
+    });
     expect(request).toHaveBeenCalledWith(
       "sessions.resolve",
       expect.objectContaining({ shortId: "567890abcdef" }),
@@ -372,14 +338,7 @@ describe("gateway-backed session route resolution", () => {
     async ({ pathname, search }) => {
       const error = new Error("lookup unavailable");
       const { context, list, request } = contextFor(error);
-      await expect(
-        loadChatRoute(
-          context,
-          { pathname, search, hash: "" },
-          "chat",
-          new AbortController().signal,
-        ),
-      ).rejects.toBe(error);
+      await expect(loadRoute(context, pathname, search)).rejects.toBe(error);
       expect(request).toHaveBeenCalledOnce();
       expect(list).not.toHaveBeenCalled();
     },
@@ -392,12 +351,7 @@ describe("gateway-backed session route resolution", () => {
       const pending = createDeferred<SessionsResolveResult>();
       const request = vi.fn(() => pending.promise);
       (context.gateway.snapshot.client as unknown as { request: typeof request }).request = request;
-      const navigation = loadChatRoute(
-        context,
-        { pathname: "/chat/roboclaw/existing-literal", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      );
+      const navigation = loadRoute(context, "/chat/roboclaw/existing-literal");
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
       context.gateway.snapshot.client = {} as NonNullable<typeof context.gateway.snapshot.client>;
       if (outcome === "response") {

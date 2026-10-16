@@ -164,14 +164,15 @@ describe("outbox destination identity", () => {
     "retains %s through admission, reload, and a selected-agent change",
     (input, sessionKey, agentId) => {
       const host = { ...state, sessionKey: input };
+      const queued = {
+        id: "queued",
+        text: "follow up",
+        createdAt: 1,
+        sendState: "waiting-idle" as const,
+      };
       expect(persistChatComposerState(host)).toBe(true);
       expect(
-        admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, input), {
-          id: "queued",
-          text: "follow up",
-          createdAt: 1,
-          sendState: "waiting-idle",
-        }),
+        admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, input), queued),
       ).toBe(true);
       const reloaded = { ...state, assistantAgentId: "different" };
       expect(listStoredChatOutboxes(reloaded)).toEqual([
@@ -180,11 +181,8 @@ describe("outbox destination identity", () => {
           agentId,
           queue: [
             {
-              id: "queued",
+              ...queued,
               storageScope: outboxStorageScope(host),
-              text: "follow up",
-              createdAt: 1,
-              sendState: "waiting-idle",
               sessionKey,
               agentId,
             },
@@ -388,21 +386,22 @@ describe("outbox browser-state transfer", () => {
 
 describe("partially preserved legacy identity", () => {
   it("retains independently targeted legacy items for review alongside the ambiguous bucket draft", () => {
+    const exactItem = {
+      id: "exact",
+      text: "qualified",
+      createdAt: 1,
+      sessionKey: "agent:other:thread",
+      agentId: "other",
+      sendAttempts: 1,
+      sendRunId: "original",
+      sendState: "unconfirmed",
+    };
     seed(2, {
       "global\u0000agent:selected": {
         draft: "ambiguous draft",
         updatedAt: 1,
         queue: [
-          {
-            id: "exact",
-            text: "qualified",
-            createdAt: 1,
-            sessionKey: "agent:other:thread",
-            agentId: "other",
-            sendAttempts: 1,
-            sendRunId: "original",
-            sendState: "unconfirmed",
-          },
+          exactItem,
           { id: "ambiguous", text: "collapsed", createdAt: 2, sessionKey: "global" },
         ],
       },
@@ -412,16 +411,7 @@ describe("partially preserved legacy identity", () => {
     const entries = readChatOutboxRecovery(state).entries;
     expect(entries).toHaveLength(2);
     const exact = entries.find((entry) => entry.session.queue?.[0]?.id === "exact")!;
-    expect(exact.session.queue).toMatchObject([
-      {
-        id: "exact",
-        sessionKey: "agent:other:thread",
-        agentId: "other",
-        sendRunId: "original",
-        sendAttempts: 1,
-        sendState: "unconfirmed",
-      },
-    ]);
+    expect(exact.session.queue).toMatchObject([exactItem]);
     expect(entries.find((entry) => entry !== exact)?.session).toMatchObject({
       draft: "ambiguous draft",
       queue: [{ id: "ambiguous" }],
@@ -435,15 +425,7 @@ describe("partially preserved legacy identity", () => {
     expect(listStoredChatOutboxes(state)[0]).toMatchObject({
       sessionKey: "agent:other:thread",
       agentId: "other",
-      queue: [
-        {
-          id: "exact",
-          sendRunId: "original",
-          sendAttempts: 1,
-          sendState: "unconfirmed",
-          storageScope: outboxStorageScope(state),
-        },
-      ],
+      queue: [{ ...exactItem, storageScope: outboxStorageScope(state) }],
     });
     expect(readChatOutboxRecovery(state).entries).toHaveLength(1);
   });
