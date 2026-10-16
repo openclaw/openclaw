@@ -1,6 +1,7 @@
 import { createSignal, merge } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -40,29 +41,53 @@ function mountComposer(initial: ChatComposerProps) {
   };
 }
 
-it("updates edits and history from the draft owner without redrawing the pane", () => {
+function mountOwnedComposer(overrides: Partial<ChatComposerProps> = {}) {
   const requestUpdate = vi.fn();
-  const owner = createChatState<ChatPageHost>({
-    requestUpdate,
-    updateComplete: Promise.resolve(),
-  });
+  const owner = createChatState<ChatPageHost>({ requestUpdate, updateComplete: Promise.resolve() });
   const state = createPageState(
     createInitializationContext(),
     owner.createRenderLifecycle(),
     document.createElement("div"),
   );
   state.sessionKey = "agent:main:draft-source";
+  state.chatMessage = overrides.draft ?? "";
+  state.chatGoalDraftMode = overrides.goalDraftMode ?? null;
   owner.attach(state);
   onTestFinished(owner.dispose);
   const view = mountComposer(
     createComposerProps({
+      ...overrides,
       sessionKey: state.sessionKey,
       draftSource: owner.composerDraft,
       getDraft: () => state.chatMessage,
       getMentions: () => state.chatMentions ?? [],
       onDraftChange: state.handleChatDraftChange,
+      onGoalDraftModeChange: (mode) => {
+        state.chatGoalDraftMode = mode;
+        state.handleChatDraftChange(state.chatMessage);
+        overrides.onGoalDraftModeChange?.(mode);
+      },
     }),
   );
+  const input = (value: string) => {
+    const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.focus();
+    textarea.value = value;
+    textarea.dispatchEvent(
+      new InputEvent("input", { bubbles: true, inputType: "insertText", data: value.at(-1) }),
+    );
+  };
+  const enter = () =>
+    view.container
+      .querySelector("textarea")!
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      );
+  return { owner, state, view, requestUpdate, input, enter };
+}
+
+it("updates edits and history from the draft owner without redrawing the pane", () => {
+  const { owner, state, view, requestUpdate } = mountOwnedComposer();
   const textarea = view.container.querySelector("textarea")!;
   textarea.value = "An ordinary edit";
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
@@ -95,6 +120,88 @@ it("updates edits and history from the draft owner without redrawing the pane", 
   flush();
   expect(draftChanged).not.toHaveBeenCalled();
   expect(view.container.querySelector("textarea")).toBe(textarea);
+});
+
+it("restores the conversation draft when a restored goal edit is cancelled", () => {
+  const { state, view } = mountOwnedComposer({
+    draft: "Edit this objective",
+    goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Conversation draft" },
+    onGoalSubmit: vi.fn(async () => false),
+  });
+  const cancel = view.container.querySelector<HTMLButtonElement>(".agent-chat__goal-mode button")!;
+  expect(cancel).not.toBeNull();
+  cancel.click();
+  flush();
+  expect(state.chatGoalDraftMode).toBeNull();
+  expect(state.chatMessage).toBe("Conversation draft");
+  expect(view.container.querySelector("textarea")!.value).toBe("Conversation draft");
+  expect(view.container.querySelector(".agent-chat__goal-mode")).toBeNull();
+});
+
+it("starts a goal and admits only one same-turn submit", async () => {
+  const result = createDeferred<boolean>();
+  const onGoalSubmit = vi.fn(() => result.promise);
+  const { state, view, input, enter } = mountOwnedComposer({ onGoalSubmit });
+  input("/goal start ");
+  flush();
+  expect(state.chatGoalDraftMode).toEqual({ action: "start" });
+  expect(view.container.querySelector(".agent-chat__goal-mode")).not.toBeNull();
+  expect(view.container.querySelector("textarea")!.value).toBe("");
+  input("Keep every literal space  ");
+  flush();
+  enter();
+  enter();
+  view.container.querySelector<HTMLButtonElement>(".agent-chat__goal-mode button")!.click();
+  expect(state.chatGoalDraftMode).toEqual({ action: "start" });
+  expect(onGoalSubmit).toHaveBeenCalledExactlyOnceWith(
+    { action: "start", objective: "Keep every literal space  " },
+    expect.any(KeyboardEvent),
+  );
+  state.chatGoalDraftMode = { action: "start" };
+  state.handleChatDraftChange(state.chatMessage);
+  flush();
+  expect(view.container.querySelector("textarea")!.readOnly).toBe(true);
+  result.resolve(true);
+  await waitForSolid(() => expect(state.chatGoalDraftMode).toBeNull());
+  expect(view.container.querySelector(".agent-chat__goal-mode")).toBeNull();
+});
+
+it("does not clear a replacement goal mode when an earlier submit completes", async () => {
+  const result = createDeferred<boolean>();
+  const { state, view, enter } = mountOwnedComposer({
+    draft: "First objective",
+    goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Old conversation" },
+    onGoalSubmit: () => result.promise,
+  });
+  enter();
+  state.chatGoalDraftMode = {
+    action: "edit",
+    goalId: "goal-two",
+    previousDraft: "New conversation",
+  };
+  state.handleChatDraftChange("Replacement objective");
+  result.resolve(true);
+  await result.promise;
+  flush();
+  expect(state.chatGoalDraftMode).toMatchObject({ action: "edit", goalId: "goal-two" });
+  expect(state.chatMessage).toBe("Replacement objective");
+  expect(view.container.querySelector("textarea")!.value).toBe("Replacement objective");
+});
+
+it("settles an accepted goal against its draft owner after the composer unmounts", async () => {
+  const result = createDeferred<boolean>();
+  const { state, view, enter } = mountOwnedComposer({
+    draft: "Updated objective",
+    goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Conversation draft" },
+    onGoalSubmit: () => result.promise,
+  });
+  enter();
+  disposeComposer(view.container);
+  result.resolve(true);
+  await result.promise;
+  flush();
+  expect(state.chatGoalDraftMode).toBeNull();
+  expect(state.chatMessage).toBe("Conversation draft");
 });
 
 it("updates composer text on a live locale change without disturbing an IME draft", async () => {

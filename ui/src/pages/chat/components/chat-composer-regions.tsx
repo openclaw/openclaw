@@ -1,7 +1,7 @@
 import { createRenderEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
 import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
-import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
+import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
 import { ChatGoal, renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
 import { renderChatQueueSolid as ChatQueue } from "./chat-composer-queue.tsx";
 import { isChatRunWorking } from "./chat-composer-state.ts";
@@ -102,7 +102,7 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
 export function ComposerGoal(view: {
   composer: ChatComposerProps;
   state: ChatComposerState;
-  controller: GoalComposerController;
+  goalComposer: GoalComposer;
   requestUpdate: () => void;
 }) {
   const resumeRecovery = () => {
@@ -137,7 +137,7 @@ export function ComposerGoal(view: {
               onGoalAction={view.composer.onGoalAction}
               onGoalEdit={
                 view.composer.onGoalSubmit
-                  ? (selected) => view.controller.begin(selected)
+                  ? (selected) => view.goalComposer.begin(selected)
                   : undefined
               }
               onExpandedChange={(expanded) => {

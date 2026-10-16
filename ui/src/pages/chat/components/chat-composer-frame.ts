@@ -28,7 +28,7 @@ import {
   replaceComposerPopoverAnchor,
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
-import { createGoalComposerController } from "./chat-composer-goal-mode.tsx";
+import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
@@ -71,6 +71,7 @@ type ComposerInteraction = {
 export function createChatComposerContext(
   props: ChatComposerProps,
   interaction: ComposerInteraction,
+  goalComposer: GoalComposer,
   prediction?: ComposerPrediction,
 ) {
   const state = getChatComposerState(props.paneId);
@@ -161,7 +162,6 @@ export function createChatComposerContext(
           ? t("chat.composer.runDone")
           : t("chat.composer.runInterrupted");
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  const goalComposer = createGoalComposerController(props, state, requestUpdate);
   const mentionsUnsupported = props.mentionsUnsupported || goalComposer.active;
   const mentionDirectory =
     props.connected && canCompose && !mentionsUnsupported ? props.mentionDirectory : undefined;
@@ -352,8 +352,8 @@ export function createChatComposerContext(
         : undefined,
     );
     state.mentionInput = undefined;
-    goalComposer.activateDraft(target.value);
-    if (!goalComposer.active) {
+    const activatedGoal = goalComposer.activateDraft(target.value);
+    if (!activatedGoal && !goalComposer.active) {
       updateSlashMenu(target.value, state, slashMenuHost, requestUpdate);
       updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
       const mentionIntent = typedAtSign ? "trigger" : "input";

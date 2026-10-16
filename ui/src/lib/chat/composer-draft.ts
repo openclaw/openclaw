@@ -1,11 +1,12 @@
 import { registerListener } from "../../../../src/shared/listeners.js";
-import type { ChatAttachment, HumanMention } from "./chat-types.ts";
+import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "./chat-types.ts";
 
 export type ComposerDraftSnapshot = {
   draft: string;
   mentions: readonly HumanMention[];
   attachments: ChatAttachment[];
   pendingAttachmentReads: number;
+  goalDraftMode?: ChatGoalDraftMode | null;
 };
 
 export type ComposerDraftSource = {

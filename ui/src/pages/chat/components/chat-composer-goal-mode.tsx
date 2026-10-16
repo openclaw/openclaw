@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { createMemo, createStore, onCleanup, Show } from "solid-js";
 import "../../../styles/chat/composer-context-strip.css";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -14,34 +14,45 @@ import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types
 
 registerEnglishCatalog(registerChatGoalsEnglish);
 
-export function createGoalComposerController(
-  props: ChatComposerProps,
-  state: ChatComposerState,
-  requestUpdate: () => void,
-) {
-  const key = composerDraftKey(props);
-  const current = () =>
-    state.composerDraftScope?.key === key && state.goalComposer?.key === key
-      ? state.goalComposer
-      : null;
-  if (props.goalDraftMode !== undefined) {
-    const restored = props.goalDraftMode;
-    const mode = current();
-    const unchanged =
-      mode &&
-      restored &&
-      mode.action === restored.action &&
-      mode.sessionId === restored.sessionId &&
-      (mode.action !== "edit" ||
-        (restored.action === "edit" &&
-          mode.goalId === restored.goalId &&
-          mode.previousDraft === restored.previousDraft));
-    if (!unchanged) {
-      state.goalComposer = restored ? { ...restored, key, pending: false } : null;
+type GoalMode = { value: ChatGoalDraftMode; key: string; token: symbol };
+
+function sameGoalMode(left: ChatGoalDraftMode | null | undefined, right: ChatGoalDraftMode) {
+  return (
+    left?.action === right.action &&
+    left.sessionId === right.sessionId &&
+    (left.action !== "edit" ||
+      (right.action === "edit" &&
+        left.goalId === right.goalId &&
+        left.previousDraft === right.previousDraft))
+  );
+}
+
+export function createGoalComposer(readProps: () => ChatComposerProps, state: ChatComposerState) {
+  let disposed = false;
+  onCleanup(() => {
+    disposed = true;
+  });
+  const mode = createMemo<GoalMode | null>((previous) => {
+    const props = readProps();
+    const value = props.goalDraftMode;
+    if (!value) {
+      return null;
     }
-  }
+    const key = composerDraftKey(props);
+    return previous?.key === key && sameGoalMode(previous.value, value)
+      ? previous
+      : { value, key, token: Symbol("goal-mode") };
+  });
+  const [request, setRequest] = createStore<{ token: symbol | null }>({ token: null });
+  const pendingNow = (current: GoalMode | null) => {
+    let pending = false;
+    setRequest((draft) => {
+      pending = Boolean(current && draft.token === current.token);
+    });
+    return pending;
+  };
   const replaceDraft = (draft: string) => {
-    commitComposerDraft(props, draft);
+    commitComposerDraft(readProps(), draft);
     const textarea = state.composerTextarea;
     if (textarea) {
       textarea.value = draft;
@@ -49,65 +60,64 @@ export function createGoalComposerController(
     }
   };
   const focus = () => queueMicrotask(() => state.composerTextarea?.focus({ preventScroll: true }));
-  const clearMode = (mode: ChatGoalDraftMode) => {
-    state.goalComposer = null;
-    props.onGoalDraftModeChange?.(null);
+  const clearMode = (current: ChatGoalDraftMode) => {
+    readProps().onGoalDraftModeChange?.(null);
     // Editing borrows the composer; leaving it restores the conversation draft.
-    if (mode.action === "edit") {
-      replaceDraft(mode.previousDraft);
+    if (current.action === "edit") {
+      replaceDraft(current.previousDraft);
     }
   };
   const cancel = () => {
-    const mode = current();
-    if (!mode || mode.pending) {
+    const current = mode();
+    if (!current || pendingNow(current)) {
       return;
     }
-    clearMode(mode);
-    requestUpdate();
+    clearMode(current.value);
     focus();
   };
   const begin = (goal?: SessionGoal) => {
-    if (!props.onGoalSubmit || current()?.pending) {
-      return;
+    const props = readProps();
+    if (!props.onGoalSubmit || !props.onGoalDraftModeChange || pendingNow(mode())) {
+      return false;
     }
     const previousDraft = state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft;
-    const mode: ChatGoalDraftMode = {
+    props.onGoalDraftModeChange({
       ...(props.currentSessionId ? { sessionId: props.currentSessionId } : {}),
       ...(goal ? { action: "edit", goalId: goal.id, previousDraft } : { action: "start" }),
-    };
-    state.goalComposer = { ...mode, key, pending: false };
-    props.onGoalDraftModeChange?.(mode);
+    });
     resetSlashMenuState(state);
     resetSkillMenuState(state);
     replaceDraft(goal?.objective ?? "");
-    requestUpdate();
     focus();
+    return true;
   };
-  // Only incomplete creation commands become forms. Populated commands and
-  // lifecycle actions retain their text-command interpretation.
   const activateDraft = (draft: string, submitting = false) => {
-    if (current() || !props.connected || !props.canSend || !props.onGoalSubmit) {
+    const props = readProps();
+    if (mode() || !props.connected || !props.canSend || !props.onGoalSubmit) {
       return false;
     }
     const match = /^\s*\/goal(?:\s+(start|set|create))?\s*$/iu.exec(draft);
-    // A separator commits the action word; do not consume prefixes such as
-    // /goal starting while the user is still typing an ordinary objective.
+    // A separator commits the action word; prefixes remain ordinary objectives.
     if (!match || (!submitting && (!match[1] || !/\s$/u.test(draft)))) {
       return false;
     }
-    begin();
-    return true;
+    return begin();
   };
   return {
     get active() {
-      return current() !== null;
+      return mode() !== null;
     },
     get pending() {
-      return current()?.pending === true;
+      return Boolean(mode() && request.token === mode()?.token);
     },
     get submissionLabel() {
-      const mode = current();
-      return mode ? t(mode.action === "edit" ? "chat.goals.save" : "chat.goals.start") : undefined;
+      const current = mode();
+      return current
+        ? t(current.value.action === "edit" ? "chat.goals.save" : "chat.goals.start")
+        : undefined;
+    },
+    get mode() {
+      return mode()?.value ?? null;
     },
     begin,
     activateDraft,
@@ -115,53 +125,75 @@ export function createGoalComposerController(
       if (
         command.key !== "goal" ||
         command.source !== "native" ||
-        state.slashMenuCompletion?.inline ||
-        !props.onGoalSubmit
+        state.slashMenuCompletion?.inline
       ) {
         return false;
       }
-      begin();
-      return true;
+      return begin();
     },
     cancel,
     async submit(submissionAction?: Event) {
-      const mode = current();
+      const current = mode();
+      const props = readProps();
       const objective = state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft;
-      if (!mode || mode.pending || !props.onGoalSubmit || !objective.trim()) {
+      if (!current || !props.onGoalSubmit || !objective.trim()) {
+        return;
+      }
+      let admitted = false;
+      // Store draft reads include earlier same-turn admissions, before rendering commits.
+      setRequest((draft) => {
+        if (draft.token === current.token) {
+          return;
+        }
+        draft.token = current.token;
+        admitted = true;
+      });
+      if (!admitted) {
         return;
       }
       replaceDraft(objective);
-      mode.pending = true;
-      requestUpdate();
       try {
+        const active = current.value;
         const submitted = await props.onGoalSubmit(
           {
-            ...(mode.sessionId ? { sessionId: mode.sessionId } : {}),
-            ...(mode.action === "start"
+            ...(active.sessionId ? { sessionId: active.sessionId } : {}),
+            ...(active.action === "start"
               ? { action: "start", objective }
-              : { action: "edit", goalId: mode.goalId, objective }),
+              : { action: "edit", goalId: active.goalId, objective }),
           },
           submissionAction,
         );
-        if (submitted && current() === mode) {
-          clearMode(mode);
+        const live = readProps();
+        const liveMode = live.draftSource
+          ? live.draftSource.read().goalDraftMode
+          : live.goalDraftMode;
+        if (
+          submitted &&
+          mode() === current &&
+          state.composerDraftScope?.key === current.key &&
+          composerDraftKey(live) === current.key &&
+          sameGoalMode(liveMode, active)
+        ) {
+          clearMode(active);
         }
       } finally {
-        mode.pending = false;
-        requestUpdate();
+        if (!disposed) {
+          setRequest((draft) => {
+            if (draft.token === current.token) {
+              draft.token = null;
+            }
+          });
+        }
       }
-    },
-    get mode() {
-      return current();
     },
   };
 }
 
-export type GoalComposerController = ReturnType<typeof createGoalComposerController>;
+export type GoalComposer = ReturnType<typeof createGoalComposer>;
 
-export function GoalComposerMode(props: { controller: GoalComposerController }) {
+export function GoalComposerMode(props: { composer: GoalComposer }) {
   return (
-    <Show when={props.controller.mode}>
+    <Show when={props.composer.mode}>
       {(mode) => (
         <>
           <div
@@ -182,8 +214,8 @@ export function GoalComposerMode(props: { controller: GoalComposerController }) 
               type="button"
               class="composer-context-strip__dismiss"
               aria-label={t("chat.goals.cancel")}
-              disabled={mode().pending}
-              onClick={() => props.controller.cancel()}
+              disabled={props.composer.pending}
+              onClick={() => props.composer.cancel()}
             >
               {<Icon name="x" />}
             </button>

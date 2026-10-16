@@ -235,7 +235,7 @@ export function renderChatComposerView(
           <ComposerGoal
             composer={props}
             state={context().state}
-            controller={context().goalComposer}
+            goalComposer={context().goalComposer}
             requestUpdate={context().requestUpdate}
           />
           <Show when={props.composerRecovery}>
@@ -304,7 +304,7 @@ export function renderChatComposerView(
                     />
                   </>
                 )}
-                <GoalComposerMode controller={context().goalComposer} />
+                <GoalComposerMode composer={context().goalComposer} />
                 <SelectedHumanMentions
                   text={context().visibleDraft}
                   mentions={props.mentions}

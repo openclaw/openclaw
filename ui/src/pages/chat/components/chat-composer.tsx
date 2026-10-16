@@ -10,6 +10,7 @@ import {
 import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { createChatComposerContext } from "./chat-composer-frame.ts";
+import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerPrediction } from "./chat-composer-prediction.ts";
 import { composerDraftKey, getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
@@ -52,6 +53,7 @@ export function ChatComposer(props: ChatComposerProps) {
   });
   const draftState = createMemo(() => draft()?.read());
   const currentProps = merge(props, () => draftState() ?? {}, { onRequestUpdate: requestUpdate });
+  const goalComposer = createGoalComposer(() => currentProps, state);
   const prediction = createComposerPrediction(() => {
     const options = currentProps.composerPredictions;
     const client = currentProps.gatewayClient;
@@ -88,7 +90,7 @@ export function ChatComposer(props: ChatComposerProps) {
     revision();
     computingFrame = true;
     try {
-      return createChatComposerContext(currentProps, interaction, prediction);
+      return createChatComposerContext(currentProps, interaction, goalComposer, prediction);
     } finally {
       computingFrame = false;
     }

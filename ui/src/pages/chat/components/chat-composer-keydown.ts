@@ -2,7 +2,7 @@ import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.t
 import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
-import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
+import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
 import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
 import {
@@ -31,7 +31,7 @@ type ComposerKeyDownDeps = {
   ) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
-  goalComposer: GoalComposerController;
+  goalComposer: GoalComposer;
 };
 
 export function createComposerKeyDownHandler({

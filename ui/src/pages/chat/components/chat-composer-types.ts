@@ -216,7 +216,6 @@ export type ChatComposerState = SkillMenuState &
     composerInputIntentKey: string | null;
     pendingClearedSubmittedDraft: ScopedComposerDraft | null;
     goalExpandedId: string | null;
-    goalComposer: (ChatGoalDraftMode & { key: string; pending: boolean }) | null;
     activeQuestionKey: string | null;
     gatewayQuestionIds: Set<string>;
     asyncQuestionIds: Set<string>;

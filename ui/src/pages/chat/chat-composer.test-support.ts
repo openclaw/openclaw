@@ -40,10 +40,18 @@ export function renderComposerInto(container: HTMLElement, props: ComposerProps)
       attachments: owner.getAttachments?.() ?? owner.attachments ?? [],
       pendingAttachmentReads:
         owner.getPendingAttachmentReads?.() ?? owner.pendingAttachmentReads ?? 0,
+      goalDraftMode: owner.goalDraftMode,
     }));
     const bind = (): NativeComposerProps => ({
       ...owner,
       draftSource: owner.draftSource ?? draftSource,
+      onGoalDraftModeChange: (mode) => {
+        owner.onGoalDraftModeChange?.(mode);
+        if (!owner.draftSource) {
+          owner.goalDraftMode = mode;
+          draftSource.publish();
+        }
+      },
       onDraftChange: (value: string, mentions?: readonly HumanMention[]) => {
         const previous = owner.getDraft?.() ?? owner.draft;
         owner.onDraftChange(value, mentions);

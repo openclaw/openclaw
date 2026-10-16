@@ -22,7 +22,6 @@ function createChatComposerState(): ChatComposerState {
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
     goalExpandedId: null,
-    goalComposer: null,
     activeQuestionKey: null,
     gatewayQuestionIds: new Set(),
     asyncQuestionIds: new Set(),

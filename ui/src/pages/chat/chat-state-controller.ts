@@ -68,9 +68,12 @@ export function createChatState<TState extends ChatPageHost>(
     mentions: stateValue?.chatMentions ?? emptyMentions,
     attachments: stateValue?.chatAttachments ?? [],
     pendingAttachmentReads: attachmentReadsValue.pendingReads,
+    goalDraftMode: stateValue?.chatGoalDraftMode,
   }));
   const attachmentChanged = () => {
-    if (disposed) return;
+    if (disposed) {
+      return;
+    }
     publishComposerDraft();
     stateValue?.requestUpdate?.();
   };
@@ -143,7 +146,9 @@ export function createChatState<TState extends ChatPageHost>(
       attachmentReadsValue.abortReads();
       attachmentReadsValue = reads;
       reads.retarget(api.attachmentInputProps(state), () => {
-        if (disposed) return;
+        if (disposed) {
+          return;
+        }
         publishComposerDraft();
         state.requestUpdate?.();
       });
@@ -485,6 +490,7 @@ export function createChatState<TState extends ChatPageHost>(
       draft.mentions !== publishedDraft.mentions ||
       draft.attachments !== publishedDraft.attachments ||
       draft.pendingAttachmentReads !== publishedDraft.pendingAttachmentReads ||
+      draft.goalDraftMode !== publishedDraft.goalDraftMode ||
       attachmentReadsValue.revision !== publishedReadRevision
     ) {
       publishComposerDraft();
