@@ -510,7 +510,7 @@ describe("sessionsCommand", () => {
     ]);
   });
 
-  it("exports session color and subagent lineage metadata in JSON output", async () => {
+  it("exports session color, category, and subagent lineage metadata in JSON output", async () => {
     const store = await writeStore({
       "agent:main:child": {
         sessionId: "child-session",
@@ -527,6 +527,7 @@ describe("sessionsCommand", () => {
         lastInteractionAt: Date.now() - 5 * 60_000,
         label: "research helper",
         color: "blue",
+        category: "Research",
         status: "done",
         model: "test:opus",
       },
@@ -558,6 +559,7 @@ describe("sessionsCommand", () => {
         lastInteractionAt?: number;
         label?: string;
         color?: string;
+        category?: string;
         status?: string;
       }>;
     }>(sessionsCommand, store);
@@ -576,6 +578,7 @@ describe("sessionsCommand", () => {
       lastInteractionAt: Date.now() - 5 * 60_000,
       label: "research helper",
       color: "blue",
+      category: "Research",
       status: "done",
     });
     expect(child).not.toHaveProperty("sessionFile");
