@@ -1,8 +1,16 @@
 // Real Control UI rendering and routing; provider/Gateway replies are controlled fixtures.
-import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  button,
+  candidate,
+  expectRequestCounts,
+  runningStep,
+  runningWizard,
+  screenshot,
+  setupContext,
+} from "./model-setup-fixtures.test-support.ts";
 import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -20,14 +28,9 @@ const detection = {
       credentials: true,
       recommended: true,
     },
-    {
-      kind: "anthropic-api-key",
-      label: "Anthropic",
+    candidate("anthropic-api-key", "Anthropic", "anthropic/claude-sonnet-4-6", {
       detail: "Available credentials",
-      modelRef: "anthropic/claude-sonnet-4-6",
-      credentials: true,
-      recommended: false,
-    },
+    }),
   ],
   manualProviders: [{ id: "openai", label: "OpenAI" }],
   authOptions: [
@@ -48,14 +51,10 @@ suite.define(() => {
     "waits for an explicit choice on %s and preserves provider failure details",
     async (query) => {
       await suite.withPage(
-        {
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { width: 1080, height: 850 },
-          recordVideo: captureUiProof
-            ? { dir: suite.artifactDir, size: { width: 1080, height: 850 } }
-            : undefined,
-        },
+        setupContext(
+          { viewport: { width: 1080, height: 850 } },
+          captureUiProof ? suite.artifactDir : undefined,
+        ),
         async ({ page }) => {
           const installGateway = query ? installMockGateway : installSetupGateway;
           const gateway = await installGateway(page, {
@@ -87,7 +86,7 @@ suite.define(() => {
             false,
           );
           expect(await page.locator("openclaw-model-setup-page [data-selected]").count()).toBe(0);
-          await page.getByRole("button", { name: "Check again", exact: true }).click();
+          await button(page, "Check again").click();
           await gateway.waitForRequest("openclaw.setup.detect", { after: 1 });
           await page.getByRole("heading", { name: "Found on this Gateway" }).waitFor();
           for (const method of [
@@ -102,12 +101,11 @@ suite.define(() => {
             expect(await gateway.getRequests(method)).toHaveLength(0);
           }
           if (captureUiProof) {
-            await page.screenshot({
-              path: path.join(
-                suite.artifactDir,
-                query ? "first-run-choices.png" : "settings-choices.png",
-              ),
-            });
+            await screenshot(
+              page,
+              suite.artifactDir,
+              query ? "first-run-choices.png" : "settings-choices.png",
+            );
           }
           await page.locator('[data-candidate-kind="anthropic-api-key"] button').click();
           const activated = await gateway.waitForRequest("openclaw.setup.activate.start");
@@ -120,12 +118,11 @@ suite.define(() => {
             .waitFor();
           expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(1);
           if (captureUiProof) {
-            await page.screenshot({
-              path: path.join(
-                suite.artifactDir,
-                query ? "first-run-error.png" : "settings-error.png",
-              ),
-            });
+            await screenshot(
+              page,
+              suite.artifactDir,
+              query ? "first-run-error.png" : "settings-error.png",
+            );
           }
         },
       );
@@ -134,14 +131,10 @@ suite.define(() => {
 
   it("starts managed provider installation only after a click and waits at capability consent", async () => {
     await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { width: 1080, height: 850 },
-        recordVideo: captureUiProof
-          ? { dir: suite.artifactDir, size: { width: 1080, height: 850 } }
-          : undefined,
-      },
+      setupContext(
+        { viewport: { width: 1080, height: 850 } },
+        captureUiProof ? suite.artifactDir : undefined,
+      ),
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           featureMethods: [
@@ -152,17 +145,13 @@ suite.define(() => {
           ],
           methodResponses: {
             "openclaw.setup.detect": detection,
-            "openclaw.setup.auth.start": { done: false, status: "running" },
-            "wizard.next": {
-              done: false,
-              status: "running",
-              step: {
-                id: "capabilities",
-                type: "confirm",
-                message: "Allow this provider plugin to call its inference endpoint?",
-                initialValue: false,
-              },
-            },
+            "openclaw.setup.auth.start": runningWizard(),
+            "wizard.next": runningStep(
+              "capabilities",
+              "confirm",
+              "Allow this provider plugin to call its inference endpoint?",
+              { initialValue: false },
+            ),
             "wizard.cancel": { status: "cancelled" },
           },
         });
@@ -192,11 +181,9 @@ suite.define(() => {
         expect(next).toHaveLength(1);
         expect(next[0]!.params).not.toHaveProperty("answer");
         if (captureUiProof) {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "provider-capability-consent.png"),
-          });
+          await screenshot(page, suite.artifactDir, "provider-capability-consent.png");
         }
-        await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        await button(dialog, "Cancel").click();
         await gateway.waitForRequest("wizard.cancel");
         expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(1);
       },
@@ -205,14 +192,10 @@ suite.define(() => {
 
   it("continues Meta capability review into its auth form, then relaunches without replay", async () => {
     await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { width: 1080, height: 850 },
-        recordVideo: captureUiProof
-          ? { dir: suite.artifactDir, size: { width: 1080, height: 850 } }
-          : undefined,
-      },
+      setupContext(
+        { viewport: { width: 1080, height: 850 } },
+        captureUiProof ? suite.artifactDir : undefined,
+      ),
       async ({ page, context }) => {
         const modelRef = "meta/fixture-model";
         const gateway = await installSetupGateway(page, {
@@ -225,17 +208,13 @@ suite.define(() => {
           ],
           methodResponses: {
             "openclaw.setup.detect": detection,
-            "openclaw.setup.auth.start": { done: false, status: "running" },
-            "wizard.next": {
-              done: false,
-              status: "running",
-              step: {
-                id: "meta-capabilities",
-                type: "confirm",
-                message: "Accept Meta provider capabilities?",
-                initialValue: false,
-              },
-            },
+            "openclaw.setup.auth.start": runningWizard(),
+            "wizard.next": runningStep(
+              "meta-capabilities",
+              "confirm",
+              "Accept Meta provider capabilities?",
+              { initialValue: false },
+            ),
           },
         });
         await openModelSetup(page, suite.server.baseUrl);
@@ -249,25 +228,17 @@ suite.define(() => {
         const dialog = page.locator("openclaw-modal-dialog");
         await dialog.getByText("Accept Meta provider capabilities?", { exact: true }).waitFor();
         if (captureUiProof) {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "meta-capability-review.png"),
-          });
+          await screenshot(page, suite.artifactDir, "meta-capability-review.png");
         }
-        await gateway.setMethodResponse("wizard.next", {
-          done: false,
-          status: "running",
-          step: {
-            id: "meta-api-key",
-            type: "text",
-            message: "Meta API key",
-            sensitive: true,
-          },
-        });
-        await dialog.getByRole("button", { name: "Yes", exact: true }).click();
+        await gateway.setMethodResponse(
+          "wizard.next",
+          runningStep("meta-api-key", "text", "Meta API key", { sensitive: true }),
+        );
+        await button(dialog, "Yes").click();
         const key = dialog.getByLabel("Meta API key", { exact: true });
         await key.waitFor();
         if (captureUiProof) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "meta-auth-form.png") });
+          await screenshot(page, suite.artifactDir, "meta-auth-form.png");
         }
         await key.fill("synthetic-meta-api-key");
         await gateway.setMethodResponse("wizard.next", {
@@ -275,7 +246,7 @@ suite.define(() => {
           status: "done",
           modelActivation: { modelRef },
         });
-        await dialog.getByRole("button", { name: "Submit", exact: true }).click();
+        await button(dialog, "Submit").click();
         await page.locator(".model-setup-success").waitFor();
         const nextRequests = await gateway.getRequests("wizard.next");
         expect(nextRequests.map(({ params }) => params)).toEqual([
@@ -287,7 +258,7 @@ suite.define(() => {
           },
         ]);
         if (captureUiProof) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "meta-selected.png") });
+          await screenshot(page, suite.artifactDir, "meta-selected.png");
         }
         const relaunched = await context.newPage();
         const afterRelaunch = await installMockGateway(relaunched, {
@@ -308,13 +279,13 @@ suite.define(() => {
         });
         await relaunched.goto(suite.server.baseUrl + "settings/model-setup?firstRun=explicit");
         await relaunched.locator(".model-setup__current").waitFor();
-        expect(await afterRelaunch.getRequests("openclaw.setup.auth.start")).toHaveLength(0);
-        expect(await afterRelaunch.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
-        expect(await afterRelaunch.getRequests("openclaw.setup.verify")).toHaveLength(0);
+        await expectRequestCounts(afterRelaunch, {
+          "openclaw.setup.auth.start": 0,
+          "openclaw.setup.activate.start": 0,
+          "openclaw.setup.verify": 0,
+        });
         if (captureUiProof) {
-          await relaunched.screenshot({
-            path: path.join(suite.artifactDir, "meta-relaunched.png"),
-          });
+          await screenshot(relaunched, suite.artifactDir, "meta-relaunched.png");
         }
       },
     );
@@ -324,15 +295,13 @@ suite.define(() => {
     "keeps custom endpoint %s on the selected provider",
     async (outcome) => {
       await suite.withPage(
-        {
-          locale: "en-US",
-          permissions: ["clipboard-read", "clipboard-write"],
-          serviceWorkers: "block",
-          viewport: { width: 1080, height: 850 },
-          recordVideo: captureUiProof
-            ? { dir: suite.artifactDir, size: { width: 1080, height: 850 } }
-            : undefined,
-        },
+        setupContext(
+          {
+            permissions: ["clipboard-read", "clipboard-write"],
+            viewport: { width: 1080, height: 850 },
+          },
+          captureUiProof ? suite.artifactDir : undefined,
+        ),
         async ({ page }) => {
           const gateway = await installSetupGateway(page, {
             featureMethods: [
@@ -355,17 +324,9 @@ suite.define(() => {
                         status: "unavailable",
                       },
                     }
-                  : { done: false, status: "running" },
+                  : runningWizard(),
               "wizard.cancel": { status: "cancelled" },
-              "wizard.next": {
-                done: false,
-                status: "running",
-                step: {
-                  id: "endpoint",
-                  type: "text",
-                  message: "API base URL",
-                },
-              },
+              "wizard.next": runningStep("endpoint", "text", "API base URL"),
             },
           });
           await openModelSetup(page, suite.server.baseUrl);
@@ -389,28 +350,27 @@ suite.define(() => {
               await diagnostic.evaluate((element) => getComputedStyle(element).overflowY),
             ).toBe("auto");
             if (captureUiProof) {
-              await page.screenshot({
+              await screenshot(page, suite.artifactDir, "custom-remote-handoff.png", {
                 animations: "disabled",
-                path: path.join(suite.artifactDir, "custom-remote-handoff.png"),
               });
             }
-            await alert.getByRole("button", { name: "Copy", exact: true }).click();
+            await button(alert, "Copy").click();
             await expect
               .poll(() => page.evaluate(() => navigator.clipboard.readText()))
               .toBe(diagnosticText);
             expect(await dialog.locator("details").count()).toBe(0);
-            expect(await gateway.getRequests("wizard.next")).toHaveLength(0);
-            expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(1);
+            await expectRequestCounts(gateway, {
+              "wizard.next": 0,
+              "openclaw.setup.auth.start": 1,
+            });
             return;
           }
           await dialog.getByLabel("API base URL", { exact: true }).fill("http://127.0.0.1:9876/v1");
           if (captureUiProof) {
-            await page.screenshot({
-              path: path.join(suite.artifactDir, "custom-endpoint-input.png"),
-            });
+            await screenshot(page, suite.artifactDir, "custom-endpoint-input.png");
           }
           if (outcome === "cancel") {
-            await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+            await button(dialog, "Cancel").click();
             await gateway.waitForRequest("wizard.cancel");
             expect(await gateway.getRequests("wizard.next")).toHaveLength(1);
           } else {
@@ -432,7 +392,7 @@ suite.define(() => {
                     },
                   },
             );
-            await dialog.getByRole("button", { name: "Submit", exact: true }).click();
+            await button(dialog, "Submit").click();
             if (outcome === "success") {
               await page.locator(".model-setup-success").waitFor();
             } else {
@@ -446,12 +406,12 @@ suite.define(() => {
               expect(await dialog.locator("details").count()).toBe(0);
             }
           }
-          expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(1);
-          expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
+          await expectRequestCounts(gateway, {
+            "openclaw.setup.auth.start": 1,
+            "openclaw.setup.activate.start": 0,
+          });
           if (captureUiProof) {
-            await page.screenshot({
-              path: path.join(suite.artifactDir, "custom-endpoint-outcome.png"),
-            });
+            await screenshot(page, suite.artifactDir, "custom-endpoint-outcome.png");
           }
         },
       );

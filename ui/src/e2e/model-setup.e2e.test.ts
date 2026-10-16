@@ -2,10 +2,24 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  button,
+  candidate,
+  configSnapshot,
+  expectCount,
+  expectFocused,
+  expectText,
+  fullScreenshot,
+  makeDetection,
+  runningStep,
+  runningWizard,
+  screenshot,
+  setupArtifacts,
+  setupContext,
+} from "./model-setup-fixtures.test-support.ts";
 import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -14,17 +28,11 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-let artifactDir: string | undefined;
-beforeEach(() => {
-  artifactDir = artifactRoot
-    ? createControlUiE2eArtifactDir("model-setup", artifactRoot)
-    : undefined;
-});
+const artifacts = setupArtifacts("model-setup");
 async function captureSignIn(page: Page, name: string) {
-  if (artifactDir) {
+  if (artifacts.dir) {
     await writeFile(
-      path.join(artifactDir, `sign-in-${name}.png`),
+      path.join(artifacts.dir, `sign-in-${name}.png`),
       await takeControlUiViewportScreenshot(page, page.locator(".model-setup-wizard"), [
         page.locator(".wizard-step__actions:not(.wizard-step__actions--split)"),
       ]),
@@ -61,22 +69,15 @@ const localPrepareOptions = [
 suite.define(() => {
   it("refreshes detected authentication without retaining an account email for API-key access", async () => {
     await suite.withPage(
-      {
-        ...(artifactDir
-          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
-          : {}),
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      setupContext({ viewport: { height: 900, width: 1280 } }, artifacts.dir),
       async ({ page }) => {
-        const candidate = {
-          kind: "codex-cli",
-          brandId: "openai",
+        const detectedCandidate = {
+          kind: "codex-cli" as const,
           label: "Codex",
           modelRef: "openai/gpt-5.6-luna",
           recommended: false,
           credentials: true,
+          brandId: "openai",
         };
         const gateway = await installSetupGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "openclaw.setup.detect"],
@@ -85,22 +86,17 @@ suite.define(() => {
               sequence: [
                 "logged in · ChatGPT account · alex@example.com",
                 "logged in · API key (usage-billed)",
-              ].map((detail) => ({
-                candidates: [{ ...candidate, detail }],
-                manualProviders: [],
-                workspace: "/tmp/openclaw-e2e",
-                setupComplete: false,
-              })),
+              ].map((detail) => makeDetection({ candidates: [{ ...detectedCandidate, detail }] })),
             },
           },
         });
 
         await openModelSetup(page, suite.server.baseUrl);
         const row = page.locator('[data-candidate-kind="codex-cli"]');
-        await expect.poll(() => row.textContent()).toContain("ChatGPT account · alex@example.com");
-        if (artifactDir) {
+        await expectText(row, "ChatGPT account · alex@example.com");
+        if (artifacts.dir) {
           await writeFile(
-            path.join(artifactDir, "auth-account-desktop.png"),
+            path.join(artifacts.dir, "auth-account-desktop.png"),
             await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
           );
         }
@@ -109,11 +105,11 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
           .toBe(detectionCount + 1);
-        await expect.poll(() => row.textContent()).toContain("API key (usage-billed)");
+        await expectText(row, "API key (usage-billed)");
         expect(await row.textContent()).not.toContain("alex@example.com");
-        if (artifactDir) {
+        if (artifacts.dir) {
           await writeFile(
-            path.join(artifactDir, "auth-api-key-desktop.png"),
+            path.join(artifacts.dir, "auth-api-key-desktop.png"),
             await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
           );
         }
@@ -123,14 +119,7 @@ suite.define(() => {
 
   it("hands first-run model setup to the custodian in onboarding chrome", async () => {
     await suite.withPage(
-      {
-        ...(artifactDir
-          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
-          : {}),
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      setupContext({ viewport: { height: 900, width: 1280 } }, artifacts.dir),
       async ({ page }) => {
         const gateway = await installSetupGateway(page, {
           featureMethods: [
@@ -142,27 +131,16 @@ suite.define(() => {
             "openclaw.chat",
           ],
           methodResponses: {
-            "openclaw.setup.detect": {
+            "openclaw.setup.detect": makeDetection({
               candidates: [
-                {
-                  kind: "openai-api-key",
+                candidate("openai-api-key", "OpenAI API key", "openai/gpt-5", {
                   brandId: "openai",
-                  label: "OpenAI API key",
                   detail: "Saved credentials are available",
-                  modelRef: "openai/gpt-5",
-                  recommended: false,
-                  credentials: true,
-                },
+                }),
               ],
               manualProviders: [{ id: "openai", label: "OpenAI" }],
-              workspace: "/tmp/openclaw-e2e",
-              setupComplete: false,
-            },
-            "openclaw.setup.activate.start": {
-              sessionId: "activation-session",
-              done: false,
-              status: "running",
-            },
+            }),
+            "openclaw.setup.activate.start": runningWizard("activation-session"),
             "wizard.next": {
               done: true,
               status: "done",
@@ -212,11 +190,7 @@ suite.define(() => {
           .poll(() => page.locator(".shell").getAttribute("class"))
           .toContain("shell--onboarding");
         expect(await page.locator(".shell-nav").isVisible()).toBe(false);
-        if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, "custodian-onboarding-handoff.png"),
-          });
-        }
+        await screenshot(page, artifacts.dir, "custodian-onboarding-handoff.png");
 
         const chatRequest = await gateway.waitForRequest("openclaw.chat");
         expect(chatRequest.params).toMatchObject({
@@ -239,15 +213,10 @@ suite.define(() => {
 
   it("completes device-code sign-in from its verified activation result", async () => {
     await suite.withPage(
-      {
-        ...(artifactDir
-          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
-          : {}),
-        locale: "en-US",
-        reducedMotion: "reduce",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      setupContext(
+        { reducedMotion: "reduce", viewport: { height: 900, width: 1280 } },
+        artifacts.dir,
+      ),
       async ({ page }) => {
         const signInUrl = `https://example.com/device?${new URLSearchParams({
           client_id: "device-code-client",
@@ -256,9 +225,7 @@ suite.define(() => {
           scope: "openid profile email offline_access",
           state: "state-1".repeat(16),
         })}`;
-        const initialDetection = {
-          candidates: [],
-          manualProviders: [],
+        const initialDetection = makeDetection({
           authOptions: [
             {
               id: "provider-device-code",
@@ -267,9 +234,7 @@ suite.define(() => {
               featured: true,
             },
           ],
-          workspace: "/tmp/openclaw-e2e",
-          setupComplete: false,
-        };
+        });
         const gateway = await installSetupGateway(page, {
           featureMethods: [
             "chat.metadata",
@@ -279,41 +244,19 @@ suite.define(() => {
             "wizard.next",
           ],
           methodResponses: {
-            "config.get": {
-              config: {},
-              sourceConfig: {},
-              raw: "{}",
-              hash: "config-hash-1",
-              valid: true,
-              issues: [],
-            },
+            "config.get": configSnapshot({}, "config-hash-1"),
             "openclaw.setup.detect": initialDetection,
-            "openclaw.setup.auth.start": {
-              sessionId: "device-code-session",
-              done: false,
-              status: "running",
-            },
+            "openclaw.setup.auth.start": runningWizard("device-code-session"),
             "wizard.next": {
               sequence: [
-                {
-                  done: false,
-                  status: "running",
-                  step: {
-                    id: "scope",
-                    type: "note",
-                    message: "Scope: System / agent",
-                    executor: "client",
-                  },
-                },
-                {
-                  done: false,
-                  status: "running",
-                  step: {
-                    id: "device-code",
-                    type: "progress",
+                runningStep("scope", "note", "Scope: System / agent", { executor: "client" }),
+                runningStep(
+                  "device-code",
+                  "progress",
+                  `Open this URL in your local browser:\n\n${signInUrl}`,
+                  {
                     executor: "gateway",
                     title: "Authorize device",
-                    message: `Open this URL in your local browser:\n\n${signInUrl}`,
                     externalUrl: signInUrl,
                     deviceCode: {
                       code: "ABCD-1234",
@@ -321,7 +264,7 @@ suite.define(() => {
                       message: "Enter this one-time code on the sign-in page.",
                     },
                   },
-                },
+                ),
                 {
                   done: true,
                   status: "done",
@@ -335,18 +278,18 @@ suite.define(() => {
         const response = await openModelSetup(page, suite.server.baseUrl);
         expect(response?.status()).toBe(200);
         await gateway.deferNext("wizard.next", { answer: { stepId: "scope" } });
-        await page
-          .locator('[data-auth-choice="provider-device-code"]')
-          .getByRole("button", { name: "Set up & verify", exact: true })
-          .click();
+        await button(
+          page.locator('[data-auth-choice="provider-device-code"]'),
+          "Set up & verify",
+        ).click();
         const start = await gateway.waitForRequest("openclaw.setup.auth.start");
         expect(start.params).toMatchObject({ authChoice: "provider-device-code" });
         await gateway.waitForRequest("wizard.next", { match: { answer: { stepId: "scope" } } });
         await gateway.deferNext("wizard.next");
         await gateway.resolveDeferred("wizard.next");
         await page.getByText("ABCD-1234", { exact: true }).waitFor();
-        await page.getByRole("button", { name: "Copy code", exact: true }).waitFor();
-        expect(await page.getByRole("button", { name: "Continue", exact: true }).count()).toBe(0);
+        await button(page, "Copy code").waitFor();
+        expect(await button(page, "Continue").count()).toBe(0);
         expect(await page.locator(".model-setup-wizard__body").textContent()).not.toContain(
           signInUrl,
         );
@@ -376,25 +319,16 @@ suite.define(() => {
         expect(await gateway.getRequests("openclaw.setup.detect")).toHaveLength(
           detectCountBeforeCompletion,
         );
-        await expect
-          .poll(async () => page.locator(".model-setup-success").textContent())
-          .toContain("provider/verified-model");
+        await expectText(page.locator(".model-setup-success"), "provider/verified-model");
       },
     );
   });
 
   it("recovers Ollama setup in place after the local server starts", async () => {
     await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      setupContext({ colorScheme: "dark", viewport: { height: 900, width: 1280 } }),
       async ({ page }) => {
-        const initialDetection = {
-          candidates: [],
-          manualProviders: [],
+        const initialDetection = makeDetection({
           prepareOptions: localPrepareOptions,
           recommendedInstalls: [
             {
@@ -405,9 +339,7 @@ suite.define(() => {
               website: "https://ollama.com/download",
             },
           ],
-          workspace: "/tmp/openclaw-e2e",
-          setupComplete: false,
-        };
+        });
         const gateway = await installSetupGateway(page, {
           featureMethods: [
             "chat.metadata",
@@ -419,72 +351,39 @@ suite.define(() => {
           ],
           methodResponses: {
             "openclaw.setup.detect": initialDetection,
-            "openclaw.setup.prepare.start": {
-              sessionId: "ollama-prepare-session",
-              done: false,
-              status: "running",
-            },
-            "openclaw.setup.activate.start": {
-              sessionId: "activation-session",
-              done: false,
-              status: "running",
-            },
+            "openclaw.setup.prepare.start": runningWizard("ollama-prepare-session"),
+            "openclaw.setup.activate.start": runningWizard("activation-session"),
             "wizard.next": {
               sequence: [
-                {
-                  done: false,
-                  status: "running",
-                  step: {
-                    id: "ollama-mode",
-                    type: "select",
-                    message: "Ollama mode",
-                    options: [
-                      {
-                        value: "cloud-local",
-                        label: "Cloud + Local",
-                        hint: "Route cloud and local models through your Ollama host",
-                      },
-                      { value: "cloud-only", label: "Cloud only", hint: "Hosted Ollama models" },
-                      { value: "local-only", label: "Local only", hint: "Local models only" },
-                    ],
-                  },
-                },
-                {
-                  done: false,
-                  status: "running",
-                  step: {
-                    id: "ollama-base-url",
-                    type: "text",
-                    message: "Ollama base URL",
-                    initialValue: "http://127.0.0.1:11434",
-                  },
-                },
-                {
-                  done: false,
-                  status: "running",
-                  step: {
-                    id: "ollama-retry",
-                    type: "note",
-                    title: "Ollama",
-                    message: [
-                      "Ollama could not be reached at http://127.0.0.1:11434.",
-                      "Start or restart the Ollama server for this address.",
-                      "If Ollama is not installed on that machine, download it at https://ollama.com/download",
-                      "",
-                      "Continue when it is running. OpenClaw will retry this address.",
-                    ].join("\n"),
-                  },
-                },
-                {
-                  done: false,
-                  status: "running",
-                  step: {
-                    id: "ollama-retry-confirm",
-                    type: "confirm",
-                    message: "Retry this Ollama address now?",
-                    initialValue: true,
-                  },
-                },
+                runningStep("ollama-mode", "select", "Ollama mode", {
+                  options: [
+                    {
+                      value: "cloud-local",
+                      label: "Cloud + Local",
+                      hint: "Route cloud and local models through your Ollama host",
+                    },
+                    { value: "cloud-only", label: "Cloud only", hint: "Hosted Ollama models" },
+                    { value: "local-only", label: "Local only", hint: "Local models only" },
+                  ],
+                }),
+                runningStep("ollama-base-url", "text", "Ollama base URL", {
+                  initialValue: "http://127.0.0.1:11434",
+                }),
+                runningStep(
+                  "ollama-retry",
+                  "note",
+                  [
+                    "Ollama could not be reached at http://127.0.0.1:11434.",
+                    "Start or restart the Ollama server for this address.",
+                    "If Ollama is not installed on that machine, download it at https://ollama.com/download",
+                    "",
+                    "Continue when it is running. OpenClaw will retry this address.",
+                  ].join("\n"),
+                  { title: "Ollama" },
+                ),
+                runningStep("ollama-retry-confirm", "confirm", "Retry this Ollama address now?", {
+                  initialValue: true,
+                }),
                 {
                   done: true,
                   status: "done",
@@ -505,7 +404,7 @@ suite.define(() => {
             '[data-prepare-choice="lmstudio"] [data-provider-icon="lmstudio"]',
           ].join(","),
         );
-        await expect.poll(() => localProviderIcons.count()).toBe(3);
+        await expectCount(localProviderIcons, 3);
         const localProviderIconColors = await localProviderIcons.evaluateAll((icons) =>
           icons.map((icon) => getComputedStyle(icon).color),
         );
@@ -519,26 +418,14 @@ suite.define(() => {
         const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
         expect(start.params).toMatchObject({ authChoice: "ollama" });
 
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "ollama-mode-select-desktop.png"),
-          });
-        }
+        await fullScreenshot(page, artifacts.dir, "ollama-mode-select-desktop.png");
 
-        await page.getByRole("button", { name: "Ollama mode", exact: true }).click();
+        await button(page, "Ollama mode").click();
         await page.getByRole("option", { name: /Local only/u }).click();
         const baseUrl = page.getByLabel("Ollama base URL");
         await expect.poll(() => baseUrl.inputValue()).toBe("http://127.0.0.1:11434");
 
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "ollama-host-desktop.png"),
-          });
-        }
+        await fullScreenshot(page, artifacts.dir, "ollama-host-desktop.png");
 
         await page.getByRole("button", { name: "Submit" }).click();
         await page.getByText("Ollama could not be reached at http://127.0.0.1:11434.").waitFor();
@@ -546,28 +433,16 @@ suite.define(() => {
           .getByText("Continue when it is running. OpenClaw will retry this address.")
           .waitFor();
 
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "ollama-recovery-desktop.png"),
-          });
-        }
+        await fullScreenshot(page, artifacts.dir, "ollama-recovery-desktop.png");
 
         await page.getByRole("button", { name: "Continue" }).click();
         await page.getByText("Retry this Ollama address now?").waitFor();
 
         await page.getByRole("button", { name: "Continue" }).click();
         await page.getByRole("heading", { name: "Connection verified" }).waitFor();
-        await expect
-          .poll(() => page.locator(".model-setup-success").textContent())
-          .toContain("ollama/qwen3:0.6b");
-        await expect
-          .poll(() => page.locator(".model-setup-success").textContent())
-          .not.toContain("Verified in");
-        await expect
-          .poll(() => page.locator('.model-setup-success [data-provider-icon="ollama"]').count())
-          .toBe(1);
+        await expectText(page.locator(".model-setup-success"), "ollama/qwen3:0.6b");
+        await expectText(page.locator(".model-setup-success"), "Verified in", true);
+        await expectCount(page.locator('.model-setup-success [data-provider-icon="ollama"]'), 1);
 
         const activate = await gateway.waitForRequest("openclaw.setup.activate.start");
         expect(activate.params).toEqual({
@@ -577,13 +452,7 @@ suite.define(() => {
           modelRef: "ollama/qwen3:0.6b",
         });
 
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "ollama-ready-desktop.png"),
-          });
-        }
+        await fullScreenshot(page, artifacts.dir, "ollama-ready-desktop.png");
 
         await gateway.setMethodResponse("openclaw.setup.detect", {
           ...initialDetection,
@@ -594,15 +463,9 @@ suite.define(() => {
         });
         await page.getByRole("button", { name: "Return to Models" }).click();
         await page.locator(".model-providers__defaults").waitFor();
-        await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
+        await expectCount(page.locator("openclaw-modal-dialog"), 0);
         expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "ollama-main-desktop.png"),
-          });
-        }
+        await fullScreenshot(page, artifacts.dir, "ollama-main-desktop.png");
 
         const wizardRequests = await gateway.getRequests("wizard.next");
         expect(wizardRequests).toHaveLength(6);
@@ -624,12 +487,7 @@ suite.define(() => {
 
   it("offers supported Google setup in an accessible provider picker", async () => {
     await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 1000, width: 1440 },
-      },
+      setupContext({ colorScheme: "dark", viewport: { height: 1000, width: 1440 } }),
       async ({ page }) => {
         const gateway = await installSetupGateway(page, {
           featureMethods: [
@@ -662,8 +520,7 @@ suite.define(() => {
                 },
               ],
             },
-            "openclaw.setup.detect": {
-              candidates: [],
+            "openclaw.setup.detect": makeDetection({
               unavailableCandidates: [],
               manualProviders: [
                 {
@@ -695,14 +552,8 @@ suite.define(() => {
                 },
               ],
               authOptions: [],
-              workspace: "/tmp/openclaw-e2e",
-              setupComplete: false,
-            },
-            "openclaw.setup.activate.start": {
-              sessionId: "activation-session",
-              done: false,
-              status: "running",
-            },
+            }),
+            "openclaw.setup.activate.start": runningWizard("activation-session"),
             "wizard.next": {
               done: true,
               status: "done",
@@ -714,7 +565,7 @@ suite.define(() => {
         const response = await openModelSetup(page, suite.server.baseUrl);
         expect(response?.status()).toBe(200);
         await page.getByRole("heading", { name: "On this Gateway", exact: true }).waitFor();
-        await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
+        await expectCount(page.getByText("Gemini CLI OAuth"), 0);
 
         const providerPicker = page.locator(".model-setup-provider-select");
         const providerTrigger = providerPicker.locator(".model-setup-provider-select__trigger");
@@ -749,42 +600,30 @@ suite.define(() => {
         await expect
           .poll(() => page.locator('[data-manual-provider="zai-cn"]').getAttribute("aria-label"))
           .toContain("Z.AI");
-        await expect
-          .poll(() =>
-            page.locator('[data-manual-provider="qwen-cn"] [data-provider-icon="alibaba"]').count(),
-          )
-          .toBe(1);
+        await expectCount(
+          page.locator('[data-manual-provider="qwen-cn"] [data-provider-icon="alibaba"]'),
+          1,
+        );
 
         const providerMenuWidth = () =>
           providerPicker
             .locator('[role="menu"]')
             .evaluate((menu) => Math.round(menu.getBoundingClientRect().width));
         await expect.poll(providerMenuWidth).toBe(620);
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "provider-picker-desktop.png"),
-          });
-        }
+        await fullScreenshot(page, artifacts.dir, "provider-picker-desktop.png");
         await page.setViewportSize({ height: 844, width: 390 });
         await providerPicker.scrollIntoViewIfNeeded();
         await expect.poll(providerMenuWidth).toBe(358);
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "provider-picker-mobile.png"),
-          });
-        }
+        await screenshot(page, artifacts.dir, "provider-picker-mobile.png", {
+          animations: "disabled",
+        });
         await page.setViewportSize({ height: 1000, width: 1440 });
         await page.keyboard.press("Escape");
         await waitForProviderHide();
         await expect.poll(() => providerTrigger.getAttribute("aria-expanded")).toBe("false");
 
         const accessValue = page.locator('.model-setup__manual input[type="password"]');
-        await expect
-          .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        await expectFocused(providerTrigger);
         await page.keyboard.press("Enter");
         await expect.poll(() => providerTrigger.getAttribute("aria-expanded")).toBe("true");
         await expect.poll(manualProviderMenuReady).toBe(true);
@@ -802,10 +641,8 @@ suite.define(() => {
         await expect.poll(() => manualProviderHasFocus("zai-cn")).toBe(true);
         await page.keyboard.press("Enter");
         await waitForProviderHide();
-        await expect.poll(() => providerTrigger.textContent()).toContain("Z.AI");
-        await expect
-          .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        await expectText(providerTrigger, "Z.AI");
+        await expectFocused(providerTrigger);
 
         await accessValue.fill("same-provider-secret");
         await providerTrigger.click();
@@ -813,43 +650,35 @@ suite.define(() => {
         await page.locator('[data-manual-provider="zai-cn"]').click();
         await waitForProviderHide();
         await expect.poll(() => accessValue.inputValue()).toBe("same-provider-secret");
-        await expect
-          .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        await expectFocused(providerTrigger);
 
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
         await page.keyboard.press("Shift+Tab");
         await waitForProviderHide();
-        await expect
-          .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        await expectFocused(providerTrigger);
 
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
         await page.keyboard.press("Tab");
         await expect.poll(() => providerTrigger.getAttribute("aria-expanded")).toBe("false");
-        await expect
-          .poll(() => accessValue.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        await expectFocused(accessValue);
 
         await accessValue.fill("sk-old-provider-secret");
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
         await page.locator('[data-manual-provider="gemini-api-key"]').click();
         await waitForProviderHide();
-        await expect.poll(() => providerTrigger.textContent()).toContain("Google");
-        await expect.poll(() => providerTrigger.textContent()).toContain("AI Studio API key");
+        await expectText(providerTrigger, "Google");
+        await expectText(providerTrigger, "AI Studio API key");
         await expect.poll(() => accessValue.inputValue()).toBe("");
-        await expect
-          .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        await expectFocused(providerTrigger);
 
         await providerTrigger.click();
         await page.locator('[data-manual-provider="qwen-cn"]').click();
         await waitForProviderHide();
         await expect.poll(() => providerTrigger.getAttribute("aria-expanded")).toBe("false");
-        await expect.poll(() => providerTrigger.textContent()).toContain("Qwen Cloud");
+        await expectText(providerTrigger, "Qwen Cloud");
         await accessValue.fill("qwen-test-secret");
         await expect.poll(() => accessValue.inputValue()).toBe("qwen-test-secret");
         await page.evaluate(
@@ -870,12 +699,8 @@ suite.define(() => {
         await page.getByRole("heading", { name: "Connection verified" }).waitFor();
         await page.getByText("qwen/qwen3-coder-plus", { exact: true }).waitFor();
 
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "success-desktop.png"),
-          });
+        if (artifacts.dir) {
+          await fullScreenshot(page, artifacts.dir, "success-desktop.png");
           await page.setViewportSize({ height: 844, width: 390 });
           await expect
             .poll(() =>
@@ -884,16 +709,10 @@ suite.define(() => {
                 .evaluate((element) => element.getAttribute("aria-hidden") !== "true"),
             )
             .toBe(false);
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "success-mobile.png"),
-          });
+          await fullScreenshot(page, artifacts.dir, "success-mobile.png");
           await page.setViewportSize({ height: 1000, width: 1440 });
         }
-        await expect
-          .poll(() => page.locator(".model-setup-success").textContent())
-          .not.toContain("Verified in");
+        await expectText(page.locator(".model-setup-success"), "Verified in", true);
 
         const detectCountBeforeDismiss = (await gateway.getRequests("openclaw.setup.detect"))
           .length;
@@ -907,8 +726,8 @@ suite.define(() => {
         await expect.poll(manualProviderMenuReady).toBe(true);
         await page.locator('[data-manual-provider="gemini-api-key"]').click();
         await waitForProviderHide();
-        await expect.poll(() => providerTrigger.textContent()).toContain("Google");
-        await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
+        await expectText(providerTrigger, "Google");
+        await expectCount(page.getByText("Gemini CLI OAuth"), 0);
       },
     );
   });
@@ -918,14 +737,11 @@ suite.define(() => {
         featureMethods: ["openclaw.setup.detect"],
         methodResponses: {
           "openclaw.setup.detect": {
-            candidates: Array.from({ length: 8 }, (_, index) => ({
-              kind: "saved-auth:fixture",
-              label: "Saved provider " + index,
-              detail: "An existing connection available for this agent",
-              modelRef: "fixture/model-" + index,
-              credentials: true,
-              recommended: false,
-            })),
+            candidates: Array.from({ length: 8 }, (_, index) =>
+              candidate("saved-auth:fixture", "Saved provider " + index, "fixture/model-" + index, {
+                detail: "An existing connection available for this agent",
+              }),
+            ),
             manualProviders: [],
             prepareOptions: localPrepareOptions,
             workspace: "/workspace/demo",
@@ -935,7 +751,7 @@ suite.define(() => {
       });
       await openModelSetup(page, suite.server.baseUrl);
       const panel = page.locator(".model-setup-discovery");
-      const close = panel.getByRole("button", { name: "Close", exact: true });
+      const close = button(panel, "Close");
       for (const width of [1280, 390]) {
         await page.setViewportSize({ width, height: 900 });
         await expect
@@ -955,7 +771,7 @@ suite.define(() => {
         expect(await body.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
       }
       await close.click();
-      await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
+      await expectCount(page.locator("openclaw-modal-dialog"), 0);
     });
   });
 });
