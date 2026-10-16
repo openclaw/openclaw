@@ -90,6 +90,37 @@ describe("iMessage message-tool artifact", () => {
     ]);
   });
 
+  it("advertises edit for the macOS 26 translation edit selector", () => {
+    setCachedIMessagePrivateApiStatus("imsg", {
+      available: true,
+      v2Ready: true,
+      selectors: { editMessageItemTranslation: true, retractMessagePart: true },
+      rpcMethods: [],
+    });
+
+    const discovery = describeMessageTool({
+      cfg: { channels: { imessage: { cliPath: "imsg" } } } as never,
+      chatType: "group",
+      currentChannelId: "chat_id:1",
+    });
+    expect(discovery?.actions).toContain("edit");
+
+    // No edit selector at all still hides the action.
+    setCachedIMessagePrivateApiStatus("imsg", {
+      available: true,
+      v2Ready: true,
+      selectors: { retractMessagePart: true },
+      rpcMethods: [],
+    });
+    expect(
+      describeMessageTool({
+        cfg: { channels: { imessage: { cliPath: "imsg" } } } as never,
+        chatType: "group",
+        currentChannelId: "chat_id:1",
+      })?.actions,
+    ).not.toContain("edit");
+  });
+
   it("keeps group-only actions hidden for a direct numeric current chat", () => {
     setCachedIMessagePrivateApiStatus("imsg", {
       available: true,
