@@ -82,7 +82,7 @@ describe("snapshot write serialization and scheduling", () => {
     await store.flush();
     const restored = await store.read(sessionKey);
     expect(restored?.messages).toEqual(
-      messages.slice(-80).map(({ openclawResponsesInputReplay: _, ...message }) => message),
+      messages.slice(-80).map(({ openclawResponsesInputReplay: _replay, ...message }) => message),
     );
     expect(restored?.pagination).toEqual({
       hasMore: true,
