@@ -9364,7 +9364,6 @@
 ["test/scripts/build-all.test.ts","../../src/cli/update-cli/update-command-service-publication.js","c3670fd69a37a8f5847fa5a8a08f31327184a7e0389411a38b5cf2f6ae179dcf",1]
 ["test/scripts/ci-changed-type-graphs.test.ts","../../scripts/check-tsgo-core-boundary.mts","846c3cf697c1f0c01c2357e09c4135ebb137408274e8a2629a9cb6907499bfc3",1]
 ["test/scripts/ci-check-plan.test.ts","../../scripts/lib/ci-extension-lint-plan.mts","59e7a1cd3d71c8c57cf94e72558246ce7786bed8478b10b220aec0529de0f964",1]
-["test/scripts/ci-check-plan.test.ts","../../scripts/run-tsgo-core-test-shards.mts","3a3ccafa927251461859ae513d0a0cc2f5c2dac99ad7b4ae3d30e49a74089aa6",1]
 ["test/scripts/ci-node-test-plan.test.ts","../../scripts/lib/ci-test-timings.mts","24d3550834db9932ab3c93145d6db67334e60d0d02ab08b04913ccb7a133568c",1]
 ["test/scripts/ci-node-test-plan.test.ts","../../scripts/lib/ci-test-timings.mts","34e2bec157b88a35284a710828eb6d854fb1342ebf3f6dbec256e95371ccf2d9",1]
 ["test/scripts/ci-node-test-plan.test.ts","../../scripts/lib/ci-test-timings.mts","34e2bec157b88a35284a710828eb6d854fb1342ebf3f6dbec256e95371ccf2d9",2]
