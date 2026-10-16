@@ -170,6 +170,7 @@ export type ClawHubPackageListItem = {
   isOfficial: boolean;
   summary?: string | null;
   ownerHandle?: string | null;
+  ownerOfficial?: boolean;
   createdAt: number;
   updatedAt: number;
   latestVersion?: string | null;
@@ -226,6 +227,7 @@ export type ClawHubPackageDetail = {
     handle?: string | null;
     displayName?: string | null;
     image?: string | null;
+    official?: boolean;
   } | null;
 };
 

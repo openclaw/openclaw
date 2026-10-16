@@ -93,12 +93,44 @@ function officialPackage(name = packageName) {
     channel: "official",
     isOfficial: true,
     ownerHandle: "openclaw",
+    ownerOfficial: true,
     summary: "Researches a topic and produces a briefing.",
     createdAt: 1,
     updatedAt: 2,
     latestVersion: version,
     stats: { downloads: 12 },
   };
+}
+
+function communityPackage() {
+  return {
+    ...officialPackage("@alice/research-briefing"),
+    channel: "community",
+    isOfficial: false,
+    ownerHandle: "alice",
+    ownerOfficial: false,
+  };
+}
+
+function selectPackage(pkg: ReturnType<typeof officialPackage>) {
+  mocks.detail.mockResolvedValue({
+    package: pkg,
+    owner: { handle: pkg.ownerHandle, official: pkg.ownerOfficial },
+  });
+  mocks.version.mockResolvedValue({
+    package: { name: pkg.name, family: "claw" },
+    version: { version, createdAt: 2, changelog: "", clawManifestSummary: summary },
+  });
+  mocks.artifact.mockResolvedValue({
+    package: { name: pkg.name, family: "claw" },
+    version,
+    artifact: { kind: "npm-pack", sha256: digest, npmIntegrity: "sha512-proof" },
+  });
+  const read = mocks.read.getMockImplementation()!;
+  mocks.read.mockImplementation(async (root: string) => {
+    const result = await read(root);
+    return { ...result, source: { ...result.source, name: pkg.name } };
+  });
 }
 
 const summary = {
@@ -145,7 +177,7 @@ async function prepareResolverFixture(packages: ClawManifest["packages"] = []) {
 }
 
 beforeEach(async () => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   const temp = await tempDirs.make("openclaw-clawhub-catalog-");
   const extractedRoot = path.join(temp, "extracted");
   const archivePath = path.join(temp, "catalog.clawpack");
@@ -219,7 +251,7 @@ beforeEach(async () => {
   mocks.extract.mockImplementation(async ({ onExtracted }) => await onExtracted(extractedRoot));
   mocks.detail.mockResolvedValue({
     package: { ...officialPackage(), ownerHandle: undefined, clawManifestSummary: summary },
-    owner: { handle: "openclaw" },
+    owner: { handle: "openclaw", official: true },
   });
   mocks.version.mockResolvedValue({
     package: { name: packageName, displayName: "Research Briefing", family: "claw" },
@@ -248,7 +280,20 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-describe("official ClawHub Claw catalog", () => {
+describe("public ClawHub Claw catalog", () => {
+  it("uses the current publisher badge without hiding a former official Claw", async () => {
+    const revoked = { ...officialPackage(), ownerOfficial: false };
+    mocks.list.mockResolvedValue({ items: [revoked], nextCursor: null });
+    expect(await listClawHubClaws()).toMatchObject([{ packageName, official: false }]);
+    mocks.detail.mockResolvedValue({
+      package: revoked,
+      owner: { handle: "openclaw", official: false },
+    });
+    expect(await readClawHubClawDetail({ packageName, version })).toMatchObject({
+      packageName,
+      official: false,
+    });
+  });
   it("loads all 30 official starters across paginated list responses", async () => {
     const first = Array.from({ length: 25 }, (_, index) =>
       officialPackage(`@openclaw/starter-${index}`),
@@ -270,12 +315,12 @@ describe("official ClawHub Claw catalog", () => {
     expect(result.at(-1)?.packageName).toBe("@openclaw/starter-29");
     expect(mocks.list).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ family: "claw", isOfficial: true, limit: 100 }),
+      expect.objectContaining({ family: "claw", limit: 100 }),
     );
     expect(mocks.list).toHaveBeenNthCalledWith(2, expect.objectContaining({ cursor: "page 2" }));
   });
 
-  it("uses list for a blank query and filters typed search to the official publisher", async () => {
+  it("uses list for a blank query and filters malformed or private search results", async () => {
     mocks.list.mockResolvedValue({ items: [officialPackage()], nextCursor: null });
     await expect(searchClawHubClaws({ query: "  " })).resolves.toHaveLength(1);
     expect(mocks.search).not.toHaveBeenCalled();
@@ -285,11 +330,12 @@ describe("official ClawHub Claw catalog", () => {
       { score: 1, package: officialPackage("@other/impostor") },
       { score: 1, package: { ...officialPackage(), ownerHandle: "someone-else" } },
       { score: 1, package: { ...officialPackage(), name: 42 } },
+      { score: 1, package: { ...communityPackage(), channel: "private" } },
     ]);
     const result = await searchClawHubClaws({ query: "research" });
     expect(result.map((item) => item.packageName)).toEqual([packageName]);
     expect(mocks.search).toHaveBeenCalledWith(
-      expect.objectContaining({ query: "research", family: "claw", isOfficial: true, limit: 100 }),
+      expect.objectContaining({ query: "research", family: "claw", limit: 100 }),
     );
   });
 
@@ -303,39 +349,66 @@ describe("official ClawHub Claw catalog", () => {
 
     expect(entries.map((entry) => entry.packageName)).toEqual(["@openclaw/first"]);
     expect(mocks.list).toHaveBeenCalledOnce();
-    expect(mocks.list).toHaveBeenCalledWith(
-      expect.objectContaining({ family: "claw", isOfficial: true, limit: 1 }),
-    );
+    expect(mocks.list).toHaveBeenCalledWith(expect.objectContaining({ family: "claw", limit: 1 }));
   });
 
-  it("finds an official match when community matches fill the search cap", async () => {
-    mocks.search.mockImplementation(async ({ isOfficial, limit }) =>
-      isOfficial
-        ? [{ score: 1, package: officialPackage() }]
-        : Array.from({ length: limit }, (_, index) => ({
-            score: 1,
-            package: { ...officialPackage(`@community/result-${index}`), isOfficial: false },
-          })),
+  it("discovers personal publishers through the public list and search API", async () => {
+    const registry = await vi.importActual<typeof import("../infra/clawhub-packages.js")>(
+      "../infra/clawhub-packages.js",
     );
+    mocks.list.mockImplementation(registry.listClawHubPackages);
+    mocks.search.mockImplementation(registry.searchClawHubPackages);
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input : input.url,
+      );
+      const items =
+        url.searchParams.get("isOfficial") === "true"
+          ? [officialPackage()]
+          : [officialPackage(), communityPackage()];
+      return Response.json(
+        url.pathname.endsWith("/search")
+          ? { results: items.map((pkg) => ({ score: 1, package: pkg })) }
+          : { items, nextCursor: null },
+      );
+    });
 
-    await expect(searchClawHubClaws({ query: "research", limit: 1 })).resolves.toMatchObject([
-      { packageName },
-    ]);
-    expect(mocks.search).toHaveBeenCalledWith(
-      expect.objectContaining({ query: "research", family: "claw", isOfficial: true, limit: 1 }),
-    );
+    for (const query of ["", "research"]) {
+      const entries = await searchClawHubClaws({ query, fetchImpl });
+      expect(
+        entries.map(({ packageName: name, channel, official, ownerHandle }) => ({
+          packageName: name,
+          channel,
+          official,
+          ownerHandle,
+        })),
+      ).toEqual([
+        { packageName, channel: "official", official: true, ownerHandle: "openclaw" },
+        {
+          packageName: "@alice/research-briefing",
+          channel: "community",
+          official: false,
+          ownerHandle: "alice",
+        },
+      ]);
+    }
   });
 
-  it("projects exact-release contents from the verified archive", async () => {
+  it("projects a personal publisher release and previews its verified archive", async () => {
+    const { name: personalPackageName } = communityPackage();
+    selectPackage(communityPackage());
     mocks.skillCard.mockResolvedValueOnce(
       "---\nname: citation-check\ndescription: Metadata description\n---\n# Citation check\n",
     );
-    const detail = await readClawHubClawDetail({ packageName });
+    const detail = await readClawHubClawDetail({ packageName: personalPackageName });
     expect(validateClawsCatalogDetailResult({ detail })).toBe(true);
     expect(detail).toMatchObject({
-      packageName,
+      packageName: personalPackageName,
       version,
       agentName: "Research Briefing",
+      channel: "community",
+      official: false,
+      ownerHandle: "alice",
       workspaceFiles: 2,
       skills: 1,
       plugins: 1,
@@ -354,11 +427,19 @@ describe("official ClawHub Claw catalog", () => {
         automations: [{ name: "Daily briefing", schedule: "0 9 * * *", timezone: "UTC" }],
       },
     });
+    await expect(
+      readClawHubClawPreview({
+        packageName: personalPackageName,
+        version,
+        kind: "instruction",
+        name: "brief.md",
+      }),
+    ).resolves.toEqual({ kind: "instruction", name: "brief.md", content: "# Brief template\n" });
     expect(mocks.version).toHaveBeenCalledWith(
-      expect.objectContaining({ name: packageName, version }),
+      expect.objectContaining({ name: personalPackageName, version }),
     );
     expect(mocks.download).toHaveBeenCalledWith(
-      expect.objectContaining({ name: packageName, version, artifact: "clawpack" }),
+      expect.objectContaining({ name: personalPackageName, version, artifact: "clawpack" }),
     );
     expect(mocks.skillCard).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -473,7 +554,7 @@ describe("official ClawHub Claw catalog", () => {
     });
     mocks.detail.mockResolvedValue({
       package: { ...officialPackage(), ownerHandle: undefined, scanStatus: "clean" },
-      owner: { handle: "openclaw" },
+      owner: { handle: "openclaw", official: true },
     });
     mocks.version.mockResolvedValue({
       package: { name: packageName, family: "claw" },
@@ -512,10 +593,10 @@ describe("official ClawHub Claw catalog", () => {
     expect(detail).not.toHaveProperty("scanStatus");
   });
 
-  it("refuses a non-official coordinate or forged publisher before resolving detail", async () => {
-    await expect(readClawHubClawDetail({ packageName: "@other/impostor" })).rejects.toThrow(
-      /official OpenClaw/,
-    );
+  it("refuses a non-canonical coordinate or forged publisher before resolving detail", async () => {
+    await expect(
+      readClawHubClawDetail({ packageName: "@alice/research-briefing@latest" }),
+    ).rejects.toThrow(/package name/);
     expect(mocks.detail).not.toHaveBeenCalled();
 
     mocks.detail.mockResolvedValue({
@@ -523,6 +604,20 @@ describe("official ClawHub Claw catalog", () => {
       owner: { handle: "someone-else" },
     });
     await expect(readClawHubClawDetail({ packageName })).rejects.toThrow(/identity/);
+
+    mocks.detail.mockResolvedValue({
+      package: { ...communityPackage(), channel: "private" },
+      owner: { handle: "alice" },
+    });
+    await expect(
+      readClawHubClawPreview({
+        packageName: "@alice/research-briefing",
+        version,
+        kind: "instruction",
+        name: "SOUL.md",
+      }),
+    ).rejects.toMatchObject({ code: "clawhub_identity_mismatch" });
+    expect(mocks.download).not.toHaveBeenCalled();
   });
 
   it("rejects repeating pagination cursors rather than silently hiding starters", async () => {
@@ -737,13 +832,16 @@ describe("verified ClawHub Claw source", () => {
     await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("requires a fresh risk acknowledgement on apply and never persists denied content", async () => {
+  it("requires personal-release risk acknowledgement and never persists denied content", async () => {
     const { stateDir } = await prepareResolverFixture();
+    const { name: personalPackageName } = communityPackage();
+    selectPackage(communityPackage());
     const { checkClawHubPackageTrust } = await vi.importActual<
       typeof import("../infra/clawhub-install-trust.js")
     >("../infra/clawhub-install-trust.js");
     mocks.security.mockResolvedValue({
       ...matchingSecurity,
+      package: { name: personalPackageName, family: "claw" },
       overview: "No security analysis has been recorded yet.",
       verdict: "review",
     });
@@ -751,7 +849,7 @@ describe("verified ClawHub Claw source", () => {
 
     await expect(
       withResolvedClawHubSource({
-        coordinate: { packageName, version },
+        coordinate: { packageName: personalPackageName, version },
         mode: "preview",
         stateDir,
         run: async () => undefined,
@@ -761,7 +859,7 @@ describe("verified ClawHub Claw source", () => {
 
     await expect(
       withResolvedClawHubSource({
-        coordinate: { packageName, version },
+        coordinate: { packageName: personalPackageName, version },
         mode: "apply",
         stateDir,
         run: async () => undefined,
@@ -772,13 +870,13 @@ describe("verified ClawHub Claw source", () => {
 
     await expect(
       withResolvedClawHubSource({
-        coordinate: { packageName, version },
+        coordinate: { packageName: personalPackageName, version },
         mode: "apply",
         stateDir,
         acknowledgeClawHubRisk: true,
         run: async (_source, _trust, persistSource) => (await persistSource()).source.name,
       }),
-    ).resolves.toMatchObject({ value: packageName, riskAcknowledgementRequired: true });
+    ).resolves.toMatchObject({ value: personalPackageName, riskAcknowledgementRequired: true });
   });
 
   it("rejects a valid archive when its embedded package identity differs", async () => {

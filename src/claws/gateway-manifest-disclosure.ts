@@ -1,4 +1,5 @@
 import type { ClawManifestDisclosure } from "../../packages/gateway-protocol/src/schema/claws.js";
+import { isCanonicalClawHubPackageName } from "./schema-portability.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
 import type { ClawReadResult, ClawSourceIdentity } from "./types.js";
 
@@ -12,7 +13,7 @@ export function projectClawManifestDisclosure(
   if (
     identity.kind !== "package" ||
     identity.integrityKind !== "artifact" ||
-    !/^@openclaw\/[a-z0-9][a-z0-9._-]*$/u.test(identity.name) ||
+    !isCanonicalClawHubPackageName(identity.name) ||
     !/^sha256:[a-f0-9]{64}$/u.test(identity.integrity) ||
     !Number.isSafeInteger(identity.byteLength) ||
     identity.byteLength <= 0 ||

@@ -43,7 +43,7 @@ describe("Claws on Agents Home", () => {
 
     page.querySelector<HTMLButtonElement>(".agents-home__claw-card-link")?.click();
     expect(navigate).toHaveBeenCalledWith("claws", {
-      pathname: "/agents/claws/workflow-operator",
+      pathname: "/agents/claws/packages/%40openclaw%2Fworkflow-operator",
     });
     expect(request).toHaveBeenCalledWith("claws.catalog.search", {});
   });
