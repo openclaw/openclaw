@@ -1,6 +1,7 @@
 import {
   createEffect,
   createMemo,
+  createProjection,
   createSignal,
   merge,
   onCleanup,
@@ -26,9 +27,10 @@ export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.
 
 export function ChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(untrack(() => props.paneId));
-  // A replacement draft retires the native input's uncommitted IME preview.
+  // Unrelated prop updates must preserve the native input's uncommitted IME preview.
+  const compositionDraftKey = createMemo(() => composerDraftKey(props));
   const [composition, setComposition] = createSignal<{ key: string; value: string } | null>(() => {
-    composerDraftKey(props);
+    compositionDraftKey();
     return null;
   });
   const interaction = {
@@ -46,7 +48,11 @@ export function ChatComposer(props: ChatComposerProps) {
     return source ? projectOwner(source, (owner) => owner.read()) : undefined;
   });
   const draftState = createMemo(() => draft()?.read());
-  const currentProps = merge(props, () => draftState() ?? {});
+  // Draft edits must not recreate unrelated footer and notice content.
+  const currentProps = merge(
+    props,
+    createProjection(() => draftState() ?? {}, {}, { shallow: true }),
+  );
   const goalComposer = createGoalComposer(() => currentProps, state);
   const microphonePicker = (state.microphonePicker ??= new ComposerMicrophoneOwner());
   state.dictation ??= new ComposerDictationOwner(
