@@ -1,8 +1,3 @@
-import { createHash } from "node:crypto";
-import type {
-  AgentMessage,
-  ContextEngineProjection,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isActiveHarnessContextEngine } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { resolveCodexContextEngineProjectionMaxChars } from "./context-engine-projection.js";
@@ -18,36 +13,6 @@ export type CodexContextEngineThreadBootstrapProjection = Pick<
   /** Final selection identity; the ordinary fingerprint admits the previous native prefix. */
   deliveredFingerprint?: string;
 };
-
-export function resolveCodexHistorySelection(
-  messages: AgentMessage[],
-  source: ContextEngineProjection | undefined,
-  previousFingerprint: string | undefined,
-): { projection: CodexContextEngineThreadBootstrapProjection; prefixLength: number | undefined } {
-  const hash = createHash("sha256").update(
-    JSON.stringify([source?.mode ?? "per_turn", source?.epoch, source?.fingerprint]),
-  );
-  const fingerprint = () => `selection-v1:${hash.copy().digest("hex")}`;
-  let prefixLength = fingerprint() === previousFingerprint ? 0 : undefined;
-  for (let index = 0; index < messages.length; index++) {
-    const serialized = JSON.stringify(messages[index]);
-    hash.update(`${Buffer.byteLength(serialized)}:`);
-    hash.update(serialized);
-    if (fingerprint() === previousFingerprint) {
-      prefixLength = index + 1;
-    }
-  }
-  const deliveredFingerprint = fingerprint();
-  return {
-    projection: {
-      mode: "thread_bootstrap",
-      epoch: source?.epoch?.trim() || "selected-history",
-      fingerprint: prefixLength === undefined ? deliveredFingerprint : previousFingerprint,
-      deliveredFingerprint,
-    },
-    prefixLength,
-  };
-}
 
 export function buildContextEngineBinding(
   params: AgentHarnessSessionRuntimeParamsV1,

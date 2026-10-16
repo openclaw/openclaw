@@ -16,7 +16,7 @@ import {
 import { isNonEmptyString } from "./attempt-workspace-context.js";
 import {
   prepareCodexContextEngineHistory,
-  resolveCodexPreservedHistoryTokenBudget,
+  reserveCodexHistoryBudget,
 } from "./context-engine-history.js";
 import {
   CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
@@ -42,7 +42,6 @@ import {
   buildTurnCollaborationMode,
 } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
-import { resolveCodexHistoryItemReserveTokens } from "./user-input.js";
 
 export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const {
@@ -203,18 +202,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     if (!activeContextEngine) {
       return;
     }
-    // The native adapter owns this allowance for both selection and later media
-    // restoration. Supply the resolved existing SDK inputs directly so a restored
-    // document cannot acquire a different/unbounded window after assembly.
     const promptBudget = configuredContextBudget
       ? {
           contextTokens: configuredContextBudget,
           reserveTokens:
             configuredContextBudget -
             resolveProjectionPromptBudgetTokens({ contextTokenBudget: configuredContextBudget }),
-          inputTokens:
-            (params.images?.length ?? 0) * IMAGE_BLOCK_TOKENS +
-            resolveCodexHistoryItemReserveTokens(configuredContextBudget),
+          inputTokens: (params.images?.length ?? 0) * IMAGE_BLOCK_TOKENS,
           systemPrompt: joinPresentSections(
             baseDeveloperInstructions,
             refreshableInstructions,
@@ -229,7 +223,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           ),
         }
       : undefined;
-    const preservedHistoryTokenBudget = resolveCodexPreservedHistoryTokenBudget(promptBudget);
+    const historyBudget = reserveCodexHistoryBudget(promptBudget);
     try {
       const assembled = await assembleHarnessContextEngine({
         contextEngine: activeContextEngine,
@@ -237,7 +231,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         sessionKey: contextSessionKey,
         messages: historyState.messages,
         tokenBudget: effectiveContextTokenBudget,
-        ...(promptBudget ? { promptBudget } : {}),
+        ...(historyBudget ? { promptBudget: historyBudget.promptBudget } : {}),
         availableTools: new Set(availableToolNames()),
         citationsMode: params.config?.memory?.citations,
         sandboxed: sandbox?.enabled === true,
@@ -270,12 +264,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           prepareFileContext,
           currentUserTurnIdempotencyKey,
           currentUserMessage: admittedMessage,
-          preserveAssembledHistory: configuredContextBudget !== undefined,
-          preservedHistoryTokenBudget,
         },
+        historyTokenBudget: historyBudget?.tokenBudget,
+        baseDeveloperInstructions,
         assertCurrent: assertProjectionCurrent,
       });
-      const { contextEngineProjection, projectionDecision, projection } = history;
+      const { projectionDecision, projection } = history;
+      const { contextEngineProjection } = history.promptState;
       preparedBootstrapProjection = history.preparedBootstrapProjection;
       contextEngineBootstrapPromptApplied = projectionDecision.project;
       contextImageGroups = projectionDecision.project ? (projection.imageGroups ?? []) : [];
@@ -296,11 +291,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         projectedPromptChars: projection.promptText.length,
         developerInstructionAdditionChars: projection.developerInstructionAddition?.length ?? 0,
       });
-      // Projection metadata and rendered prompt must advance together or retries can skip context.
-      promptState.contextEngineProjection = contextEngineProjection;
-      const seedHistory = configuredContextBudget !== undefined;
-      await history.applyPromptState(promptState, baseDeveloperInstructions);
-      if (seedHistory) {
+      Object.assign(promptState, history.promptState);
+      if (history.promptState.historyBootstrapItems !== undefined) {
         contextImageGroups = [];
       }
     } catch (assembleErr) {

@@ -24,171 +24,107 @@ import {
 } from "./run-attempt.context-engine.test-support.js";
 import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
-import { CODEX_HISTORY_FRAGMENT_PREFIX, CODEX_HISTORY_FRAGMENT_SUFFIX } from "./user-input.js";
 
 setupRunAttemptTestHooks();
 
 describe("Codex attachment continuity", () => {
-  it.each(["oversized", "fitting"] as const)(
-    "charges real managed-document restoration to the selected history allowance (%s)",
-    async (mode) => {
-      const sessionId = `session-selected-document-${mode}`;
-      const workspaceDir = path.join(tempDir, `selected-document-${mode}`);
-      await fs.mkdir(workspaceDir, { recursive: true });
-      const params = createParams(`agent:main:${sessionId}`, workspaceDir);
-      const contextTokens = mode === "oversized" ? 8_192 : 64_000;
-      params.authoredContextTokenCap = contextTokens;
-      params.contextTokenBudget = contextTokens;
-      params.contextWindowInfo = {
-        tokens: contextTokens,
-        referenceTokens: contextTokens,
-        source: "agentContextTokens",
-      };
-      params.model = { ...params.model, maxTokens: 256 };
-      params.prompt = "CURRENT_SAVED_DOCUMENT_REQUEST";
-      await attachSqliteSessionTarget(
-        params,
-        path.join(tempDir, `selected-document-${mode}.sqlite`),
-        sessionId,
-      );
-      const target = {
-        agentId: "main",
-        sessionId,
-        sessionKey: params.sessionKey!,
-        storePath: params.sessionTarget!.storePath!,
-      };
-      const document =
-        "SAVED_DOCUMENT_COMPLETE_PREFIX\n" +
-        "d".repeat(mode === "oversized" ? 100_000 : 128) +
-        "\nSAVED_DOCUMENT_COMPLETE_TAIL";
-      const saved = await saveMediaBuffer(
-        Buffer.from(document),
-        "text/plain",
-        "inbound",
-        undefined,
-        `${mode}.txt`,
-      );
-      const timestamp = Date.now();
-      const sourceMessage = {
-        role: "user" as const,
-        content: "",
-        timestamp,
-        idempotencyKey: `selected-document-${mode}:user`,
-        __openclaw: {
-          media: [
-            {
-              url: `media://inbound/${saved.id}`,
-              contentType: "text/plain",
-              fileName: `${mode}.txt`,
-              hydrationSuppressed: true,
-            },
-          ],
-        },
-      };
-      await appendSessionTranscriptMessageByIdentity({
-        ...target,
-        message: sourceMessage,
-        now: timestamp,
-      });
-      const assemble = vi.fn(
-        async ({ messages }: Parameters<ReturnType<typeof createContextEngine>["assemble"]>[0]) => {
-          const selected = messages.filter(
-            (message) => asOptionalRecord(message)?.idempotencyKey === sourceMessage.idempotencyKey,
-          );
-          expect(selected).toEqual([sourceMessage]);
-          // The tiny saved source row fits; its real media restoration is what
-          // must consume the resolved assembly allowance before native effects.
-          return { messages: selected, estimatedTokens: 42 };
-        },
-      );
-      params.contextEngine = createContextEngine({ assemble });
-      const abort = new AbortController();
-      params.abortSignal = abort.signal;
-      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
-      vi.useFakeTimers();
-      const harness = createStartedThreadHarness(undefined, { persistedThreads: [] });
-      const run = runCodexAppServerAttempt(params);
-      let acceptedOriginal = false;
-      try {
-        if (mode === "oversized") {
-          const outcome = await Promise.race([
-            run.then(
-              () => ({ kind: "completed" as const }),
-              (error: unknown) => ({ kind: "rejected" as const, error }),
-            ),
-            harness.waitForMethod("turn/start").then(() => ({ kind: "started" as const })),
-          ]);
-          acceptedOriginal = outcome.kind === "started";
-          // The original defect reaches native turn/start, producing a direct
-          // assertion failure rather than an absent-RPC fixture timeout.
-          expect(outcome.kind).toBe("rejected");
-          if (outcome.kind === "rejected") {
-            expect(String(outcome.error)).toMatch(/budget|allowance|exceed|restor|attachment/i);
-            expect(String(outcome.error)).toMatch(/new conversation.*smaller attachment/i);
-          }
-          expect(
-            harness.requests.filter(({ method }) =>
-              ["thread/start", "thread/inject_items", "turn/start"].includes(method),
-            ),
-          ).toEqual([]);
-        } else {
-          await run.waitForTurnAccepted();
-          acceptedOriginal = true;
-          const seed = harness.requests.find(
-            ({ method, params: request }) =>
-              method === "thread/inject_items" &&
-              JSON.stringify(request).includes("SAVED_DOCUMENT_COMPLETE_PREFIX"),
-          );
-          expect(seed).toBeDefined();
-          const items = asOptionalRecord(seed?.params)?.items;
-          expect(Array.isArray(items)).toBe(true);
-          const restored = (Array.isArray(items) ? items : [])
-            .flatMap((item) => {
-              const content = asOptionalRecord(item)?.content;
-              return Array.isArray(content) ? content : [];
-            })
-            .flatMap((part) => {
-              const text = asOptionalRecord(part)?.text;
-              if (typeof text !== "string") {
-                return [];
-              }
-              const withoutPrefix = text.startsWith(CODEX_HISTORY_FRAGMENT_PREFIX)
-                ? text.slice(CODEX_HISTORY_FRAGMENT_PREFIX.length)
-                : text;
-              return [
-                withoutPrefix.endsWith(CODEX_HISTORY_FRAGMENT_SUFFIX)
-                  ? withoutPrefix.slice(0, -CODEX_HISTORY_FRAGMENT_SUFFIX.length)
-                  : withoutPrefix,
-              ];
-            })
-            .join("");
-          expect(restored).toContain(document);
-          expect(restored).toContain('<file name="fitting.txt" mime="text/plain">');
-          expect(restored).not.toContain(params.prompt);
-          const current = harness.requests.find(({ method }) => method === "turn/start");
-          expect(JSON.stringify(current?.params)).toContain(params.prompt);
-          expect(JSON.stringify(current?.params)).not.toContain("SAVED_DOCUMENT_COMPLETE_PREFIX");
-          await harness.completeTurn();
-          expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
-          acceptedOriginal = false;
-        }
-        expect(assemble).toHaveBeenCalledTimes(1);
-        const rows = (await readSessionTranscriptEvents(target)).flatMap((event) => {
-          const message = asOptionalRecord(asOptionalRecord(event)?.message);
-          return message?.idempotencyKey === sourceMessage.idempotencyKey ? [message] : [];
-        });
-        expect(rows).toEqual([sourceMessage]);
-      } finally {
-        if (acceptedOriginal) {
-          await run.waitForTurnAccepted();
-          await harness.completeTurn();
-        }
-        abort.abort("test cleanup");
-        await run.catch(() => undefined);
-        closeHost();
+  it("rejects real restored-document overage before native effects instead of clipping it", async () => {
+    const sessionId = "session-selected-document";
+    const workspaceDir = path.join(tempDir, "selected-document");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const params = createParams(`agent:main:${sessionId}`, workspaceDir);
+    params.authoredContextTokenCap = 8_192;
+    params.contextTokenBudget = 8_192;
+    params.contextWindowInfo = {
+      tokens: 8_192,
+      referenceTokens: 8_192,
+      source: "agentContextTokens",
+    };
+    params.model = { ...params.model, maxTokens: 256 };
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "selected-document.sqlite"),
+      sessionId,
+    );
+    const target = {
+      agentId: "main",
+      sessionId,
+      sessionKey: params.sessionKey!,
+      storePath: params.sessionTarget!.storePath!,
+    };
+    const saved = await saveMediaBuffer(
+      Buffer.from(`SAVED_DOCUMENT_PREFIX\n${"d".repeat(100_000)}\nSAVED_DOCUMENT_TAIL`),
+      "text/plain",
+      "inbound",
+      undefined,
+      "oversized.txt",
+    );
+    const timestamp = Date.now();
+    const sourceMessage = {
+      role: "user" as const,
+      content: "",
+      timestamp,
+      idempotencyKey: "selected-document:user",
+      __openclaw: {
+        media: [
+          {
+            url: `media://inbound/${saved.id}`,
+            contentType: "text/plain",
+            fileName: "oversized.txt",
+            hydrationSuppressed: true,
+          },
+        ],
+      },
+    };
+    await appendSessionTranscriptMessageByIdentity({
+      ...target,
+      message: sourceMessage,
+      now: timestamp,
+    });
+    params.contextEngine = createContextEngine({
+      assemble: async ({ messages }) => ({
+        messages: messages.filter(
+          (message) => asOptionalRecord(message)?.idempotencyKey === sourceMessage.idempotencyKey,
+        ),
+        estimatedTokens: 42,
+      }),
+    });
+    const abort = new AbortController();
+    params.abortSignal = abort.signal;
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    vi.useFakeTimers();
+    const harness = createStartedThreadHarness(undefined, { persistedThreads: [] });
+    const run = runCodexAppServerAttempt(params);
+    let started = false;
+    try {
+      const outcome = await Promise.race([
+        run.then(
+          () => ({ kind: "completed" as const }),
+          (error: unknown) => ({ kind: "rejected" as const, error }),
+        ),
+        harness.waitForMethod("turn/start").then(() => ({ kind: "started" as const })),
+      ]);
+      started = outcome.kind === "started";
+      expect(outcome.kind).toBe("rejected");
+      if (outcome.kind === "rejected") {
+        expect(String(outcome.error)).toMatch(/budget|allowance|exceed|restor|attachment/i);
+        expect(String(outcome.error)).toMatch(/new conversation.*smaller attachment/i);
       }
-    },
-  );
+      expect(
+        harness.requests.filter(({ method }) =>
+          ["thread/start", "thread/inject_items", "turn/start"].includes(method),
+        ),
+      ).toEqual([]);
+    } finally {
+      if (started) {
+        await run.waitForTurnAccepted();
+        await harness.completeTurn();
+      }
+      abort.abort("test cleanup");
+      await run.catch(() => undefined);
+      closeHost();
+    }
+  });
 
   it("restores captionless managed documents in order without changing their transcript", async () => {
     const sessionId = "session-continuity-attachments";

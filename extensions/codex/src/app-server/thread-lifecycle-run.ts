@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
+import { injectCodexHistoryDelta } from "./context-engine-history.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
@@ -25,7 +26,6 @@ import {
   areUserMcpServersFingerprintsCompatible,
   shouldStartTransientNoToolThread,
 } from "./thread-fingerprints.js";
-import { injectCodexHistoryDelta } from "./thread-history-delivery.js";
 import {
   resumePendingCodexThread,
   prepareCodexThreadResume,

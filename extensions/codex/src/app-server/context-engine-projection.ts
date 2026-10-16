@@ -10,7 +10,6 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-util
 type CodexContextProjection = {
   developerInstructionAddition?: string;
   promptText: string;
-  currentRequestText: string;
   promptContextRange?: CodexProjectedContextRange;
   imageGroups?: CodexProjectedImageGroup[];
 };
@@ -44,8 +43,6 @@ const MAX_RENDERED_CONTEXT_CHARS = 1_000_000;
 const DEFAULT_TEXT_PART_CHARS = 6_000;
 const MAX_TEXT_PART_CHARS = 128_000;
 const APPROX_RENDERED_CHARS_PER_TOKEN = 4;
-const PRESERVED_HISTORY_OVERFLOW_MESSAGE =
-  "Selected history or restored attachments exceed their rendered allowance. Start a new conversation with a smaller attachment.";
 // Codex app-server validates the summed v2 turn/start text input against
 // codex-rs/protocol/src/user_input.rs::MAX_USER_INPUT_TEXT_CHARS.
 export const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
@@ -55,7 +52,7 @@ const MIN_PROMPT_BUDGET_TOKENS = 8_000;
 const CODEX_CONTEXT_SENDER_FIELD_MAX_CHARS = 256;
 
 // Match compaction attribution: stable IDs establish identity; display labels do not.
-function formatCodexContextSenderSuffix(message: AgentMessage): string {
+export function formatCodexContextSenderSuffix(message: AgentMessage): string {
   if (message.role !== "user") {
     return "";
   }
@@ -108,35 +105,20 @@ export async function projectContextEngineAssemblyForCodex(params: {
   prepareFileContext?: PrepareContextFile;
   currentUserTurnIdempotencyKey?: string;
   currentUserMessage?: AgentMessage;
-  /** The context engine already bounded these messages against the prompt budget. */
-  preserveAssembledHistory?: boolean;
-  /** Remaining rendered history allowance after current-request and carrier reservations. */
-  preservedHistoryTokenBudget?: number;
 }): Promise<CodexContextProjection> {
   const prompt = params.prompt.trim();
-  const maxRenderedContextChars = params.preserveAssembledHistory
-    ? Math.floor((params.preservedHistoryTokenBudget ?? 0) * APPROX_RENDERED_CHARS_PER_TOKEN)
-    : normalizeRenderedContextMaxChars(params.maxRenderedContextChars);
-  if (
-    params.preserveAssembledHistory &&
-    (!Number.isSafeInteger(maxRenderedContextChars) || maxRenderedContextChars <= 0)
-  ) {
-    throw new CodexContextAttachmentError("Preserved history requires a finite positive allowance");
-  }
+  const maxRenderedContextChars = normalizeRenderedContextMaxChars(params.maxRenderedContextChars);
   const context = await renderMessagesForCodexContext(
     params.assembledMessages.filter(
       (message) => message.role !== "custom" || isCodexDurableCustomMessage(message),
     ),
     {
-      maxTextPartChars: params.preserveAssembledHistory
-        ? maxRenderedContextChars
-        : Math.min(
-            MAX_TEXT_PART_CHARS,
-            Math.max(DEFAULT_TEXT_PART_CHARS, Math.floor(maxRenderedContextChars / 4)),
-          ),
+      maxTextPartChars: Math.min(
+        MAX_TEXT_PART_CHARS,
+        Math.max(DEFAULT_TEXT_PART_CHARS, Math.floor(maxRenderedContextChars / 4)),
+      ),
       toolPayloadMode: params.toolPayloadMode ?? "elide",
       maxRenderedContextChars,
-      preserveAssembledHistory: params.preserveAssembledHistory,
       prepareFileContext: params.prepareFileContext,
       currentUserTurnIdempotencyKey: params.currentUserTurnIdempotencyKey,
     },
@@ -167,7 +149,6 @@ export async function projectContextEngineAssemblyForCodex(params: {
       ? { developerInstructionAddition: params.systemPromptAddition.trim() }
       : {}),
     promptText,
-    currentRequestText: currentRequest,
     ...(promptContextRange ? { promptContextRange } : {}),
     ...(context.imageGroups.length && promptPrefix
       ? {
@@ -384,7 +365,6 @@ async function renderMessagesForCodexContext(
     maxTextPartChars: number;
     toolPayloadMode: "elide" | "preserve";
     maxRenderedContextChars: number;
-    preserveAssembledHistory?: boolean;
     prepareFileContext?: PrepareContextFile;
     currentUserTurnIdempotencyKey?: string;
   },
@@ -405,42 +385,20 @@ async function renderMessagesForCodexContext(
       continue;
     }
     const remaining = options.maxRenderedContextChars - retainedChars;
-    const separator = totalChars > 0 ? "\n\n" : "";
-    const label = `[${message.role}${formatCodexContextSenderSuffix(message)}]\n`;
-    const preservedBody = options.preserveAssembledHistory
-      ? renderMessageBody(message, {
-          ...options,
-          mediaPrepared: message.role === "user" && options.prepareFileContext !== undefined,
-        })
-      : undefined;
-    const selectedTextChars = label.length + (preservedBody?.length ?? 0) + separator.length;
-    if (preservedBody && selectedTextChars > remaining) {
-      throw new CodexContextAttachmentError(PRESERVED_HISTORY_OVERFLOW_MESSAGE);
-    }
-    // A one-character sentinel exposes a capped expansion instead of accepting
-    // silently shortened restored text. Preparation adds its own file markup.
-    const fileReadLimit = options.preserveAssembledHistory
-      ? Math.max(0, remaining - selectedTextChars - (preservedBody ? 2 : 0)) + 1
-      : Math.min(remaining, options.maxTextPartChars);
     // Read only retained attachments, then charge their rendered text to this same window.
     const files =
-      (remaining > 0 || options.preserveAssembledHistory) && message.role === "user"
-        ? await options.prepareFileContext?.(message, fileReadLimit)
+      remaining > 0 && message.role === "user"
+        ? await options.prepareFileContext?.(message, Math.min(remaining, options.maxTextPartChars))
         : undefined;
     // Use the shared image estimate; native image payloads consume context too.
     const imageChars =
       (files?.images.length ?? 0) * IMAGE_BLOCK_TOKENS * APPROX_RENDERED_CHARS_PER_TOKEN;
     const imagesFit = imageChars < remaining;
-    const acceptedImageChars = options.preserveAssembledHistory || imagesFit ? imageChars : 0;
+    const acceptedImageChars = imagesFit ? imageChars : 0;
     const text = [
-      preservedBody ??
-        renderMessageBody(message, { ...options, mediaPrepared: files !== undefined }),
-      files?.text
-        ? options.preserveAssembledHistory
-          ? files.text
-          : truncateText(files.text, options.maxTextPartChars)
-        : undefined,
-      imageChars > 0 && !imagesFit && !options.preserveAssembledHistory
+      renderMessageBody(message, { ...options, mediaPrepared: files !== undefined }),
+      files?.text ? truncateText(files.text, options.maxTextPartChars) : undefined,
+      imageChars > 0 && !imagesFit
         ? "[Attachment images omitted: context budget exceeded]"
         : undefined,
     ]
@@ -449,26 +407,21 @@ async function renderMessagesForCodexContext(
     if (!text && acceptedImageChars === 0) {
       continue;
     }
+    const separator = totalChars > 0 ? "\n\n" : "";
     // The context-engine path owns a second history projection. Keep its user
     // labels aligned with generic compaction: only authenticated stable IDs
     // establish speaker provenance; legacy/name-only rows remain anonymous.
-    const chunk = `${label}${text}${separator}`;
-    if (options.preserveAssembledHistory && chunk.length + acceptedImageChars > remaining) {
-      throw new CodexContextAttachmentError(PRESERVED_HISTORY_OVERFLOW_MESSAGE);
-    }
+    const chunk = `[${message.role}${formatCodexContextSenderSuffix(message)}]\n${text}${separator}`;
     totalChars += chunk.length;
     if (remaining > 0) {
       // The final truncation below owns the surrogate-safe boundary after adding its marker.
-      const quoted = neutralizeCodexExplicitMentionSigils(chunk);
-      const retained = options.preserveAssembledHistory
-        ? quoted
-        : quoted.slice(-(remaining - acceptedImageChars));
+      const retained = neutralizeCodexExplicitMentionSigils(chunk).slice(
+        -(remaining - acceptedImageChars),
+      );
       tail.push({
         text: retained,
         separatorLength: separator.length,
-        ...((options.preserveAssembledHistory || imagesFit) &&
-        files?.images.length &&
-        retained.length === chunk.length
+        ...(imagesFit && files?.images.length && retained.length === chunk.length
           ? { images: files.images }
           : {}),
       });
@@ -478,13 +431,11 @@ async function renderMessagesForCodexContext(
   }
   const ordered = tail.toReversed();
   const retainedContext = ordered.map((entry) => entry.text).join("");
-  const fitted = options.preserveAssembledHistory
-    ? { text: retainedContext, retainedStart: 0, prefixLength: 0 }
-    : truncateOlderContext(
-        retainedContext,
-        options.maxRenderedContextChars - retainedImageChars,
-        totalChars,
-      );
+  const fitted = truncateOlderContext(
+    retainedContext,
+    options.maxRenderedContextChars - retainedImageChars,
+    totalChars,
+  );
   const imageGroups: CodexProjectedImageGroup[] = [];
   let offset = 0;
   for (const entry of ordered) {
@@ -508,10 +459,9 @@ type MessageRenderOptions = {
   maxTextPartChars: number;
   toolPayloadMode: "elide" | "preserve";
   mediaPrepared?: boolean;
-  preserveAssembledHistory?: boolean;
 };
 
-function renderMessageBody(message: AgentMessage, options: MessageRenderOptions): string {
+export function renderMessageBody(message: AgentMessage, options: MessageRenderOptions): string {
   // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
     return message.summary.trim();
@@ -553,9 +503,7 @@ function renderMessagePart(
   const type = typeof record.type === "string" ? record.type : undefined;
   if (type === "text") {
     const text = typeof record.text === "string" ? record.text.trim() : "";
-    return toolResultBody && !options.preserveAssembledHistory
-      ? truncateText(text, options.maxTextPartChars)
-      : text;
+    return toolResultBody ? truncateText(text, options.maxTextPartChars) : text;
   }
   if (type === "image") {
     return options.mediaPrepared ? "" : "[image omitted]";
@@ -572,8 +520,7 @@ function renderMessagePart(
     }
     const renderPayload = toolCall ? renderToolCallPayload : renderToolResultPayload;
     const prefix = !toolCall && toolResultBody ? "" : `${label}\n`;
-    const text = `${prefix}${stableJson(renderPayload(record))}`;
-    return options.preserveAssembledHistory ? text : truncateText(text, options.maxTextPartChars);
+    return truncateText(`${prefix}${stableJson(renderPayload(record))}`, options.maxTextPartChars);
   }
   return `[${type ?? "non-text"} content omitted]`;
 }

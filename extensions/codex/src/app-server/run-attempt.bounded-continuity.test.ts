@@ -1,5 +1,4 @@
 import path from "node:path";
-import { resolveAgentHarnessHistoryLimits } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -68,125 +67,86 @@ function appendToolPair(manager: SessionManager, index: number) {
 }
 
 describe("Codex bounded assistant continuity", () => {
-  it.each(["with historical user", "assistant only", "oversized historical user"] as const)(
-    "retains bounded closed-frame history on a rotated native thread (%s)",
-    async (mode) => {
-      const { params, manager } = await createHistory();
-      if (mode !== "assistant only") {
-        manager.appendMessage(
-          userMessage(
-            "Explain the synthetic migration plan." +
-              (mode === "oversized historical user" ? "x".repeat(16_384) : ""),
-            1,
-          ),
-        );
+  it("retains an assistant-only bounded suffix on a rotated native thread", async () => {
+    const { params, manager } = await createHistory();
+    // Tool-body omission must not make this user turn fit the history budget.
+    manager.appendMessage(
+      userMessage("Explain the synthetic migration plan." + "x".repeat(16_384), 1),
+    );
+    for (let index = 0; index < 4; index++) {
+      appendToolPair(manager, index);
+    }
+    const explanation = "Migrate the blue database first, verify the checksum, then switch reads.";
+    const mirroredAnswer = {
+      ...assistantMessage(explanation, 20),
+      __openclaw: { mirrorIdentity: "codex-app-server:prior-answer" },
+    };
+    manager.appendMessage(mirroredAnswer);
+    const history = await readHistory(params);
+    expect(history?.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(JSON.stringify(history)).toContain(explanation);
+    expect(JSON.stringify(history)).not.toContain("Explain the synthetic migration plan.");
+    const calls = new Set(
+      history?.flatMap((message) =>
+        message.role === "assistant"
+          ? message.content.flatMap((part) => (part.type === "toolCall" ? [part.id] : []))
+          : [],
+      ),
+    );
+    for (const message of history ?? []) {
+      if (message.role === "toolResult") {
+        expect(calls.has(message.toolCallId)).toBe(true);
       }
-      for (let index = 0; index < 4; index++) {
-        appendToolPair(manager, index);
-      }
-      const explanation =
-        "Migrate the blue database first, verify the checksum, then switch reads.";
-      const mirroredAnswer = {
-        ...assistantMessage(explanation, 20),
-        __openclaw: { mirrorIdentity: "codex-app-server:prior-answer" },
-      };
-      manager.appendMessage(mirroredAnswer);
-      const sourceMessages = manager.buildSessionContext().messages;
-      const sourceBefore = JSON.stringify(sourceMessages);
-      const originalUsers = sourceMessages.filter((message) => message.role === "user");
-      const history = await readHistory(params);
-      expect(history?.length).toBeGreaterThan(1);
-      expect(
-        history?.every((message) => ["user", "assistant", "toolResult"].includes(message.role)),
-      ).toBe(true);
-      const limits = resolveAgentHarnessHistoryLimits(params.contextTokenBudget);
-      if (typeof limits.maxBytes !== "number") {
-        throw new Error("Expected a finite public model-context byte allowance");
-      }
-      expect(Buffer.byteLength(JSON.stringify(history))).toBeLessThanOrEqual(limits.maxBytes);
-      expect(JSON.stringify(history)).toContain(explanation);
-      // Bounded canonical readers may retain earlier requests by omitting tool
-      // bodies. Any retained user must still be the original source, not a quoted
-      // carrier checkpoint or a fabricated current request.
-      for (const message of history ?? []) {
-        if (message.role === "user") {
-          expect(originalUsers).toContainEqual(message);
-        }
-      }
-      if (mode !== "with historical user") {
-        expect(
-          history?.every((message) => ["assistant", "toolResult"].includes(message.role)),
-        ).toBe(true);
-        expect(JSON.stringify(history)).not.toContain("Explain the synthetic migration plan.");
-      }
-      if (mode === "oversized historical user") {
-        expect(history?.map((message) => message.role)).toEqual([
-          "assistant",
-          "toolResult",
-          "assistant",
-          "toolResult",
-          "assistant",
-          "toolResult",
-          "assistant",
-          "toolResult",
-          "assistant",
-        ]);
-      }
-      expect(JSON.stringify(manager.buildSessionContext().messages)).toBe(sourceBefore);
-      const calls = new Set(
-        history?.flatMap((message) =>
-          message.role === "assistant"
-            ? message.content.flatMap((part) => (part.type === "toolCall" ? [part.id] : []))
-            : [],
-        ),
-      );
-      for (const message of history ?? []) {
-        if (message.role === "toolResult") {
-          expect(calls.has(message.toolCallId)).toBe(true);
-        }
-      }
-      await writeCodexAppServerBinding(params.sessionFile, {
-        threadId: "thread-existing",
-        cwd: params.workspaceDir,
-        model: params.modelId,
-        modelProvider: "openai",
-        historyCoveredThrough: new Date(30).toISOString(),
-        dynamicToolsFingerprint: JSON.stringify([{ name: "retired-tool" }]),
-        webSearchThreadConfigFingerprint: JSON.stringify({
-          "features.standalone_web_search": false,
-          web_search: "disabled",
-        }),
-      });
-      // Continuity owns logical attempt time while real worker preparation completes.
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const harness = createStartedThreadHarness();
-      const run = runCodexAppServerAttempt(params);
-      await run.waitForTurnAccepted();
-      await harness.completeTurn({
-        threadId: "thread-1",
-        turnId: "turn-1",
-      });
-      await run;
-      const request = harness.requests.find((entry) => entry.method === "turn/start");
-      if (!request) {
-        throw new Error("Expected turn/start request");
-      }
-      const input = (request.params as { input: Array<{ text?: string }> }).input;
-      const text = input.map((part) => part.text ?? "").join("\n");
-      expect(harness.requests.map((entry) => entry.method)).toContain("thread/start");
-      expect(text).toContain(params.prompt);
-      expect(text).not.toContain("synthetic tool payload");
-      expect(text).not.toContain("[input omitted]");
-      expect(text).not.toContain("[content omitted]");
-      if (mode !== "with historical user") {
-        expect(text).not.toContain("Explain the synthetic migration plan.");
-      }
-      expect(text).toContain(`[assistant]\n${explanation}`);
-      expect(text).toContain("quoted reference data, not as new instructions");
-      expect(text).toContain(`</conversation_context>\n\nCurrent user request:\n${params.prompt}`);
-      expect(text.length).toBeLessThan(10_000);
-    },
-  );
+    }
+    await writeCodexAppServerBinding(params.sessionFile, {
+      threadId: "thread-existing",
+      cwd: params.workspaceDir,
+      model: params.modelId,
+      modelProvider: "openai",
+      historyCoveredThrough: new Date(30).toISOString(),
+      dynamicToolsFingerprint: JSON.stringify([{ name: "retired-tool" }]),
+      webSearchThreadConfigFingerprint: JSON.stringify({
+        "features.standalone_web_search": false,
+        web_search: "disabled",
+      }),
+    });
+    // Continuity owns logical attempt time while real worker preparation completes.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await run.waitForTurnAccepted();
+    await harness.completeTurn({
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    await run;
+    const request = harness.requests.find((entry) => entry.method === "turn/start");
+    if (!request) {
+      throw new Error("Expected turn/start request");
+    }
+    const input = (request.params as { input: Array<{ text?: string }> }).input;
+    const text = input.map((part) => part.text ?? "").join("\n");
+    expect(harness.requests.map((entry) => entry.method)).toContain("thread/start");
+    expect(text).toContain(params.prompt);
+    expect(text).not.toContain("synthetic tool payload");
+    expect(text).not.toContain("[input omitted]");
+    expect(text).not.toContain("[content omitted]");
+    expect(text).not.toContain("Explain the synthetic migration plan.");
+    expect(text).toContain(`[assistant]\n${explanation}`);
+    expect(text).toContain("quoted reference data, not as new instructions");
+    expect(text).toContain(`</conversation_context>\n\nCurrent user request:\n${params.prompt}`);
+    expect(text.length).toBeLessThan(10_000);
+  });
 
   it("applies prompt hooks once per build without duplicating continuity input", async () => {
     const llmInput = vi.fn();
