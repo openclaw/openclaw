@@ -16,6 +16,14 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const FIXTURE_COMMIT = "a".repeat(40);
 const FIXTURE_WORKSPACE = "/node/workspace";
 const FIXTURE_TOKEN = `ghp_${"x".repeat(36)}`;
+const success = {
+  code: 0,
+  stderr: "",
+  signal: null,
+  killed: false,
+  termination: "exit" as const,
+  workspaceDir: FIXTURE_WORKSPACE,
+};
 
 it.each(["win32", "linux", "darwin"] as const)(
   "preserves authenticated Git arguments with native long paths on %s",
@@ -69,15 +77,7 @@ it.each(["win32", "linux", "darwin"] as const)(
           },
         );
       }
-      return {
-        stdout: "absent",
-        stderr: "",
-        code: seed ? 0 : 1,
-        signal: null,
-        killed: false,
-        termination: "exit",
-        workspaceDir: FIXTURE_WORKSPACE,
-      };
+      return { ...success, stdout: "absent", code: seed ? 0 : 1 };
     });
     await expect(
       repository.prepareRepository({ origin, gitToken: FIXTURE_TOKEN }),
@@ -88,87 +88,62 @@ it.each(["win32", "linux", "darwin"] as const)(
   },
 );
 
+function failure(
+  stage: string,
+  result: Partial<SpawnResult & { workspaceDir: string }>,
+  diagnosis: string,
+) {
+  return {
+    stage,
+    result,
+    diagnosis,
+    label: `git ${stage.startsWith("-") ? "checkout " : ""}${stage}`,
+    reason: stage === "clone" ? "clone-failed" : "checkout-failed",
+  };
+}
+
 it.each([
-  {
-    stage: "clone",
-    label: "git clone",
-    reason: "clone-failed",
-    result: {
+  failure(
+    "clone",
+    {
       code: 128,
       stderr: `fatal: authentication failed ${FIXTURE_TOKEN}\n${"progress ".repeat(300)}check repository access`,
     },
-    diagnosis: "check repository access",
-  },
-  {
-    stage: "fetch",
-    label: "git fetch",
-    reason: "checkout-failed",
-    result: { code: null, stderr: " \n", termination: "timeout", signal: "SIGTERM" },
-    diagnosis: "timeout (exit code null, signal SIGTERM): no stderr output",
-  },
-  {
-    stage: "rev-parse",
-    label: "git rev-parse",
-    reason: "checkout-failed",
-    result: { code: 128, stderr: "fatal: FETCH_HEAD is unavailable" },
-    diagnosis: "FETCH_HEAD is unavailable",
-  },
-  {
-    stage: "--detach",
-    label: "git checkout --detach",
-    reason: "checkout-failed",
-    result: { code: 1, stderr: "error: unable to create file: Permission denied" },
-    diagnosis: "Permission denied",
-  },
-  {
-    stage: "-B",
-    label: "git checkout -B",
-    reason: "checkout-failed",
-    result: { code: 128, stderr: "fatal: cannot lock ref" },
-    diagnosis: "cannot lock ref",
-  },
-  {
-    stage: "rev-parse",
-    label: "git rev-parse",
-    reason: "checkout-failed",
-    result: { stdout: "not a commit" },
-    diagnosis: "invalid commit revision",
-  },
-  {
-    stage: "rev-parse",
-    label: "git rev-parse",
-    reason: "checkout-failed",
-    result: { stdout: "b".repeat(40) },
-    diagnosis: "requested commit mismatch",
-  },
-  {
-    stage: "--detach",
-    label: "git checkout --detach",
-    reason: "checkout-failed",
-    result: { workspaceDir: "/node/other-workspace" },
-    diagnosis: "workspace directory changed during checkout",
-  },
-] satisfies Array<{
-  stage: string;
-  label: string;
-  reason: string;
-  result: Partial<SpawnResult & { workspaceDir: string }>;
-  diagnosis: string;
-}>)(
+    "check repository access",
+  ),
+  failure(
+    "fetch",
+    { code: null, stderr: " \n", termination: "timeout", signal: "SIGTERM" },
+    "timeout (exit code null, signal SIGTERM): no stderr output",
+  ),
+  failure(
+    "rev-parse",
+    { code: 128, stderr: "fatal: FETCH_HEAD is unavailable" },
+    "FETCH_HEAD is unavailable",
+  ),
+  failure(
+    "--detach",
+    { code: 1, stderr: "error: unable to create file: Permission denied" },
+    "Permission denied",
+  ),
+  failure("-B", { code: 128, stderr: "fatal: cannot lock ref" }, "cannot lock ref"),
+  failure("rev-parse", { stdout: "not a commit" }, "invalid commit revision"),
+  failure("rev-parse", { stdout: "b".repeat(40) }, "requested commit mismatch"),
+  failure(
+    "--detach",
+    { workspaceDir: "/node/other-workspace" },
+    "workspace directory changed during checkout",
+  ),
+])(
   "preserves bounded, redacted $label failure details: $diagnosis",
   async ({ stage, label, reason, result, diagnosis }) => {
     const exec: NodeWorkerRepositoryExec = async ({ argv, seed }) => ({
-      code: 0,
-      stderr: "",
+      ...success,
       stdout: seed
         ? "absent"
         : argv.includes("rev-parse")
           ? FIXTURE_COMMIT
           : `sha256:${"c".repeat(64)}`,
-      termination: "exit",
-      signal: null,
-      killed: false,
-      workspaceDir: FIXTURE_WORKSPACE,
       ...(argv.includes(stage) ? result : {}),
     });
     const prepared = await createNodeWorkerRepositoryPreparation(exec).prepareRepository({
@@ -195,15 +170,7 @@ it("reports missing Git from the executable repository helper", async () => {
   const root = await fs.realpath(tempDirs.make("node-repository-missing-git-"));
   const repository = createNodeWorkerRepositoryPreparation(async ({ argv, input, seed }) => {
     if (seed) {
-      return {
-        stdout: "absent",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-        workspaceDir: root,
-      };
+      return { ...success, stdout: "absent", workspaceDir: root };
     }
     const result = await runCommandWithTimeout([process.execPath, ...argv.slice(1)], {
       cwd: root,
@@ -248,34 +215,25 @@ it("prepares and reuses an exact repository commit without a Gateway workspace",
     expect(result.code, result.stderr).toBe(0);
     return result.stdout.trim();
   };
+  const commitAtOrigin = (...args: string[]) =>
+    git(
+      origin,
+      "-c",
+      "user.name=Repository Test",
+      "-c",
+      "user.email=repository@example.invalid",
+      "commit",
+      "--quiet",
+      ...args,
+    );
   await git(origin, "init", "--quiet");
   const originalBranch = await git(origin, "symbolic-ref", "--short", "HEAD");
   await fs.writeFile(path.join(origin, "tracked.txt"), "pinned contents\n");
   await git(origin, "add", ".");
-  await git(
-    origin,
-    "-c",
-    "user.name=Repository Test",
-    "-c",
-    "user.email=repository@example.invalid",
-    "commit",
-    "--quiet",
-    "-m",
-    "pinned",
-  );
+  await commitAtOrigin("-m", "pinned");
   const commit = await git(origin, "rev-parse", "HEAD");
   await fs.writeFile(path.join(origin, "tracked.txt"), "later contents\n");
-  await git(
-    origin,
-    "-c",
-    "user.name=Repository Test",
-    "-c",
-    "user.email=repository@example.invalid",
-    "commit",
-    "--quiet",
-    "-am",
-    "later",
-  );
+  await commitAtOrigin("-am", "later");
   const runtime = new NodeWorkerWorkspaceRuntime({
     root: path.join(home, "state", "node-host"),
     env: { PATH: process.env.PATH, HOME: home },
@@ -382,17 +340,7 @@ it("prepares and reuses an exact repository commit without a Gateway workspace",
   await git(origin, "rm", "--cached", "tracked.txt");
   await fs.writeFile(path.join(origin, "tracked.txt"), "rewritten history\n");
   await git(origin, "add", ".");
-  await git(
-    origin,
-    "-c",
-    "user.name=Repository Test",
-    "-c",
-    "user.email=repository@example.invalid",
-    "commit",
-    "--quiet",
-    "-m",
-    "replace history",
-  );
+  await commitAtOrigin("-m", "replace history");
   await git(origin, "update-ref", "-d", `refs/heads/${originalBranch}`);
   const replacement = new NodeWorkerWorkspaceRuntime({
     root: path.join(root, "replacement-node"),

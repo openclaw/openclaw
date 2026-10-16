@@ -102,6 +102,10 @@ function observedInstaller() {
     ensure,
     log,
     changed,
+    expectInfo: (message: string) =>
+      expect(log.info).toHaveBeenLastCalledWith(
+        `worker runtime install: node=node-1 bundle=aaaaaaaaaaaa ${message}`,
+      ),
     advance: (milliseconds: number) => {
       clock += milliseconds;
     },
@@ -178,9 +182,7 @@ describe("Gateway node worker bundle installer", () => {
     expect(h.log.info).toHaveBeenCalledTimes(1);
     h.advance(28_500);
     call.progress(3_000_000);
-    expect(h.log.info).toHaveBeenLastCalledWith(
-      "worker runtime install: node=node-1 bundle=aaaaaaaaaaaa 3.0/4.0 MB (75%) 100.0 KB/s",
-    );
+    h.expectInfo("3.0/4.0 MB (75%) 100.0 KB/s");
     h.advance(500);
     call.progress(3_500_000);
     expect(h.log.info).toHaveBeenCalledTimes(2);
@@ -192,18 +194,14 @@ describe("Gateway node worker bundle installer", () => {
       updatedAtMs: 32_000,
     });
     expect(h.changed).toHaveBeenCalledTimes(4);
-    expect(h.log.info).toHaveBeenLastCalledWith(
-      "worker runtime install: node=node-1 bundle=aaaaaaaaaaaa transfer complete after 30.5s; node is installing",
-    );
+    h.expectInfo("transfer complete after 30.5s; node is installing");
     call.succeed();
     await call.pending;
     expect(h.ensure.readInstall(node.nodeId)).toBeUndefined();
     expect(h.changed).toHaveBeenCalledTimes(5);
     expect(h.changed).toHaveBeenLastCalledWith(node.nodeId, ["environment-1"]);
     expect(h.ensure.version()).toBe(7);
-    expect(h.log.info).toHaveBeenLastCalledWith(
-      "worker runtime install: node=node-1 bundle=aaaaaaaaaaaa installed in 31.0s",
-    );
+    h.expectInfo("installed in 31.0s");
   });
 
   it("refcounts each environment sharing an install until its callers settle", async () => {
@@ -286,9 +284,7 @@ describe("Gateway node worker bundle installer", () => {
         startedAtMs: 1_000,
         updatedAtMs: 91_500,
       });
-      expect(h.log.info).toHaveBeenLastCalledWith(
-        "worker runtime install: node=node-1 bundle=aaaaaaaaaaaa transfer restarted",
-      );
+      h.expectInfo("transfer restarted");
       if (nextServe === "queued") {
         provision.fail(new Error("transfer interrupted"));
         await expect(provision.pending).rejects.toThrow("transfer interrupted");
@@ -297,9 +293,7 @@ describe("Gateway node worker bundle installer", () => {
 
       h.advance(30_000);
       refresh.progress(3_000_000);
-      expect(h.log.info).toHaveBeenLastCalledWith(
-        "worker runtime install: node=node-1 bundle=aaaaaaaaaaaa 3.0/4.0 MB (75%) 100.0 KB/s",
-      );
+      h.expectInfo("3.0/4.0 MB (75%) 100.0 KB/s");
       expect(
         h.log.info.mock.calls.filter(([message]) => message.includes("transfer restarted")),
       ).toHaveLength(1);
@@ -309,9 +303,7 @@ describe("Gateway node worker bundle installer", () => {
         transferredBytes: 4_000_000,
         phase: "installing",
       });
-      expect(h.log.info).toHaveBeenLastCalledWith(
-        "worker runtime install: node=node-1 bundle=aaaaaaaaaaaa transfer complete after 40.0s; node is installing",
-      );
+      h.expectInfo("transfer complete after 40.0s; node is installing");
       refresh.succeed();
       await refresh.pending;
       expect(h.ensure.readInstall(node.nodeId)).toBeUndefined();

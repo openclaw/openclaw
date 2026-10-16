@@ -13,6 +13,12 @@ import { PREPARE_REPOSITORY_NODE_JS } from "./repository-node-toolchain.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const requireModule = createRequire(import.meta.url);
+const downloadScript =
+  '#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\ncp "$(dirname "$0")/../release.tgz" "$2"\n';
+const writeExecutable = (file: string, script: string) =>
+  fs.writeFileSync(file, script, { mode: 0o755 });
+const run = (file: string, args: string[], env: NodeJS.ProcessEnv) =>
+  execFileSync(file, args, { env, encoding: "utf8" }).trim();
 
 function fixture(
   tools: Record<string, string> = Object.fromEntries(
@@ -24,27 +30,33 @@ function fixture(
   const release = path.join(root, "release");
   fs.mkdirSync(bin);
   fs.mkdirSync(path.join(release, "bin"), { recursive: true });
-  fs.writeFileSync(
+  writeExecutable(
     path.join(bin, "uname"),
     '#!/bin/sh\ncase "$1" in -s) echo Linux;; *) echo x86_64;; esac\n',
-    { mode: 0o755 },
   );
   for (const [name, script] of Object.entries(tools)) {
-    fs.writeFileSync(path.join(release, "bin", name), script, { mode: 0o755 });
+    writeExecutable(path.join(release, "bin", name), script);
   }
   const archive = path.join(root, "release.tgz");
   execFileSync("tar", ["-czf", archive, "-C", root, "release"]);
   const digest = createHash("sha256").update(fs.readFileSync(archive)).digest("hex");
-  fs.writeFileSync(
-    path.join(bin, "curl"),
-    '#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\ncp "$(dirname "$0")/../release.tgz" "$2"\n',
-    { mode: 0o755 },
-  );
+  writeExecutable(path.join(bin, "curl"), downloadScript);
   return {
     root,
     bin,
     archive,
     digest,
+    checkout(version: string, packageManager?: string) {
+      const workspace = path.join(root, "workspace");
+      const home = path.join(root, "session-home");
+      fs.mkdirSync(workspace);
+      fs.mkdirSync(home);
+      fs.writeFileSync(path.join(workspace, ".nvmrc"), version);
+      if (packageManager) {
+        fs.writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ packageManager }));
+      }
+      return { workspace, home };
+    },
     env: {
       ...process.env,
       HOME: root,
@@ -78,10 +90,7 @@ function prepareRepositoryNode(
   });
 }
 
-/**
- * Mirrors a system-packaged Corepack: read-only files, env-node entry stubs, and an enable that
- * links shims into the running package's dist.
- */
+// System Corepack: read-only package, env-node stubs, enable links into its own dist.
 function workerCorepack(root: string) {
   const corepack = path.join(root, "worker", "lib", "node_modules", "corepack");
   fs.mkdirSync(path.join(corepack, "dist", "lib"), { recursive: true });
@@ -139,24 +148,18 @@ describe("cloud Node toolchain preparation", () => {
         encoding: "utf8",
       }).trim();
     const bin = install();
-    expect(execFileSync(path.join(bin, "node"), ["--version"], { encoding: "utf8" }).trim()).toBe(
-      "v22.21.1",
-    );
-    fs.writeFileSync(path.join(f.bin, "curl"), "#!/bin/sh\nexit 99\n", { mode: 0o755 });
+    expect(run(path.join(bin, "node"), ["--version"], process.env)).toBe("v22.21.1");
+    writeExecutable(path.join(f.bin, "curl"), "#!/bin/sh\nexit 99\n");
     expect(install()).toBe(bin);
     fs.appendFileSync(path.join(bin, "node"), "# changed\n");
     expect(() => install()).toThrow(/allow HTTPS access to nodejs.org and retry preparation/);
-    fs.writeFileSync(
-      path.join(f.bin, "curl"),
-      '#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\ncp "$(dirname "$0")/../release.tgz" "$2"\n',
-      { mode: 0o755 },
-    );
+    writeExecutable(path.join(f.bin, "curl"), downloadScript);
     expect(install()).toBe(bin);
   });
 
   it("rejects a default-release archive whose digest differs from the source pin", () => {
     const f = fixture();
-    fs.writeFileSync(path.join(f.bin, "node"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    writeExecutable(path.join(f.bin, "node"), "#!/bin/sh\nexit 1\n");
     const result = spawnSync("sh", ["-s"], {
       input: DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
       env: f.env,
@@ -171,11 +174,7 @@ describe("cloud Node toolchain preparation", () => {
 
   it("selects the latest matching repository release and gives session commands its PATH", async () => {
     const f = fixture();
-    const workspace = path.join(f.root, "workspace");
-    const home = path.join(f.root, "session-home");
-    fs.mkdirSync(workspace);
-    fs.mkdirSync(home);
-    fs.writeFileSync(path.join(workspace, ".nvmrc"), "22\n");
+    const { workspace, home } = f.checkout("22\n");
     const fetchUrls: string[] = [];
     const setupPath = await prepareRepositoryNode(f, ["24.21.0", "22.20.0", "22.21.1"], fetchUrls)(
       workspace,
@@ -186,9 +185,7 @@ describe("cloud Node toolchain preparation", () => {
       "https://nodejs.org/dist/index.json",
       "https://nodejs.org/dist/v22.21.1/SHASUMS256.txt",
     ]);
-    expect(
-      execFileSync("node", ["--version"], { env: { PATH: setupPath }, encoding: "utf8" }).trim(),
-    ).toBe("v22.21.1");
+    expect(run("node", ["--version"], { PATH: setupPath })).toBe("v22.21.1");
     expect(process.execPath).not.toBe(fs.realpathSync(path.join(home, ".local", "bin", "node")));
     const session = snapshotNodeWorkerEnv({ PATH: "/runtime/bin" }, home);
     expect(session.HOME).toBe(home);
@@ -211,24 +208,18 @@ describe("cloud Node toolchain preparation", () => {
       const corepackBin = workerCorepack(f.root);
       f.env.PATH = corepackBin + path.delimiter + f.env.PATH;
       vi.stubEnv("PATH", corepackBin + path.delimiter + process.env.PATH);
-      const workspace = path.join(f.root, "workspace");
-      const home = path.join(f.root, "session-home");
-      fs.mkdirSync(workspace);
-      fs.mkdirSync(home);
-      fs.writeFileSync(path.join(workspace, ".nvmrc"), `${version}\n`);
-      fs.writeFileSync(path.join(workspace, "package.json"), '{"packageManager":"pnpm@10.11.0"}');
+      const { workspace, home } = f.checkout(`${version}\n`, "pnpm@10.11.0");
       const prepare = prepareRepositoryNode(f, [version]);
       await prepare(workspace, home, f.root);
       // A commit refresh prepares the same HOME again; detected installs then re-enable Corepack.
       const setupPath = await prepare(workspace, home, f.root);
-      const run = (command: string) =>
-        execFileSync("sh", ["-c", command], {
-          env: { PATH: setupPath, HOME: home },
-          encoding: "utf8",
-        });
-      expect(run("node --version").trim()).toBe(`v${version}`);
+      const shell = (command: string) =>
+        run("sh", ["-c", command], { PATH: setupPath, HOME: home });
+      expect(shell("node --version")).toBe(`v${version}`);
       expect(
-        JSON.parse(run('corepack enable --install-directory "$HOME/.local/bin" && pnpm --version')),
+        JSON.parse(
+          shell('corepack enable --install-directory "$HOME/.local/bin" && pnpm --version'),
+        ),
       ).toEqual({ node: runner, argv: ["pnpm", "--version"] });
     },
   );
