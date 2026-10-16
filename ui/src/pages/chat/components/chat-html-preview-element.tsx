@@ -193,7 +193,9 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
       transport.handleMessage(event);
     };
     const stopMessages = listen(window, "message", (event) => {
-      if (event instanceof MessageEvent) handleMessage(event);
+      if (event instanceof MessageEvent) {
+        handleMessage(event);
+      }
     });
     onCleanup(() => {
       disposed = true;

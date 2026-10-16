@@ -19,7 +19,7 @@ function scrollRef() {
     () => [presented(), element()] as const,
     ([active, target]) => {
       if (!active || !target) {
-        return;
+        return undefined;
       }
       const observation = observeScrollState(target, (state) => {
         for (const key of ["scrollable", "atStart", "atEnd"] as const) {

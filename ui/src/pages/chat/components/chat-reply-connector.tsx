@@ -34,7 +34,7 @@ export function ReplyConnector() {
   // ResizeObserver tracks external transcript geometry only while presented.
   createEffect(presented, (active) => {
     if (!active) {
-      return;
+      return undefined;
     }
     let cancelled = false;
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(draw) : undefined;

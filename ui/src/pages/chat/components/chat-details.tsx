@@ -59,8 +59,8 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
       };
     });
     const intent = () => choice().intent;
-    const setIntent = (intent: "auto" | "open" | "closed") =>
-      setChoice((previous) => ({ ...previous, intent }));
+    const setIntent = (nextIntent: "auto" | "open" | "closed") =>
+      setChoice((previous) => ({ ...previous, intent: nextIntent }));
     const [wideEnough, setWideEnough] = createSignal(false);
     const canDock = () => !props.mobile && props.conversationVisible !== false && wideEnough();
     const opened = () =>
@@ -241,7 +241,9 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
         listen(window, "resize", reposition),
         listen(document, "pointerdown", outside),
         listen(document, "keydown", (event) => {
-          if (event instanceof KeyboardEvent) escape(event);
+          if (event instanceof KeyboardEvent) {
+            escape(event);
+          }
         }),
         ...(window.visualViewport
           ? [

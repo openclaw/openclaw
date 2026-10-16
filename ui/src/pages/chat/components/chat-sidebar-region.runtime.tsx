@@ -38,7 +38,7 @@ function activePanelTab(root: ParentNode | null | undefined) {
 
 function Region(props: RegionProps, host: RegionElement) {
   // The pane owns the sibling shell; headers and native panels own their queried descendants.
-  let panel: HTMLDivElement | undefined;
+  let panelElement: HTMLDivElement | undefined;
   let previousGeometry = "";
   let focusFrame: number | null = null;
   let focusedSurface: Element | null = null;
@@ -246,7 +246,7 @@ function Region(props: RegionProps, host: RegionElement) {
       // Track content, not region roles: swapping can keep the same main/side
       // widths while changing the transcript width and its row measurements.
       return () => {
-        panel?.dispatchEvent(
+        panelElement?.dispatchEvent(
           new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT, {
             bubbles: true,
             detail: {
@@ -361,7 +361,7 @@ function Region(props: RegionProps, host: RegionElement) {
             >
               {(value) => <Divider column={value()} />}
             </Show>
-            <div class="side-panel" ref={(element) => (panel = element)}>
+            <div class="side-panel" ref={(element) => (panelElement = element)}>
               <Show when={sidebarSidePanels(props.layout).length > 0}>
                 <SidebarRegionHeader
                   {...props}

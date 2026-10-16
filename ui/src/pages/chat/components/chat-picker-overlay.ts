@@ -172,7 +172,9 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
       ownerDocument.defaultView,
       "keydown",
       (event) => {
-        if (event instanceof KeyboardEvent) dismissChatComposerPickersOnEscape(event);
+        if (event instanceof KeyboardEvent) {
+          dismissChatComposerPickersOnEscape(event);
+        }
       },
       options,
     );

@@ -123,7 +123,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
   const focusRequest = createMemo(() => props.focusRequest);
   createEffect(focusRequest, (request) => {
     if (!request) {
-      return;
+      return undefined;
     }
     // The full-width mobile panel must commit before its input can take focus.
     // Consume the pane's live intent after that commit, not while still hidden.
