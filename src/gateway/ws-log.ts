@@ -258,10 +258,13 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
     return extra;
   }
 
-  if (stream === "lifecycle") {
+  if (stream === "lifecycle" || stream === "compaction") {
     const phase = typeof data.phase === "string" ? data.phase : undefined;
     if (phase) {
       extra.phase = phase;
+    }
+    if (stream === "compaction" && typeof data.outcome === "string") {
+      extra.outcome = data.outcome;
     }
     if (typeof data.aborted === "boolean") {
       extra.aborted = data.aborted;

@@ -330,7 +330,7 @@ describe("gateway ws log helpers", () => {
     },
   );
 
-  test.each(["assistant", "tool", "lifecycle"])(
+  test.each(["assistant", "tool", "lifecycle", "compaction"])(
     "keeps %s content out of verbose event logs",
     (stream) => {
       setVerbose(true);
@@ -348,6 +348,8 @@ describe("gateway ws log helpers", () => {
           text: marker,
           meta: marker,
           error: marker,
+          reason: marker,
+          outcome: "failed",
           aborted: true,
           phase: "start",
           name: "fetch",
@@ -370,11 +372,16 @@ describe("gateway ws log helpers", () => {
           ? { media: 2, textChars: 25 }
           : stream === "tool"
             ? { tool: "start:fetch", call: "12345678…9abc" }
-            : { phase: "start", aborted: true, err: true }),
+            : {
+                phase: "start",
+                aborted: true,
+                err: true,
+                ...(stream === "compaction" ? { outcome: "failed" } : {}),
+              }),
       });
       expect(summary).not.toHaveProperty("text");
       expect(summary).not.toHaveProperty("error");
-      if (stream !== "lifecycle") {
+      if (stream === "assistant" || stream === "tool") {
         expect(output).toHaveBeenLastCalledWith(
           expect.stringContaining(`${stream === "assistant" ? "textChars" : "metaChars"}=25`),
         );
