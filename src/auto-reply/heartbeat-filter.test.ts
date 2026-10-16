@@ -90,51 +90,33 @@ const HIDDEN_REASONING_BLOCKS = [
 
 describe("isHeartbeatUserMessage", () => {
   it("matches heartbeat prompts", () => {
-    expect(
-      isHeartbeatUserMessage(
-        user(
-          `${HEARTBEAT_PROMPT}\nUse the provided monitor scratch when deciding what needs attention.`,
-        ),
-        HEARTBEAT_PROMPT,
-      ),
-    ).toBe(true);
-
+    const expectPrompt = (text: string, prompt?: string) =>
+      expect(isHeartbeatUserMessage(user(text), prompt)).toBe(true);
+    const taskPrefix =
+      "Run the following periodic tasks (only those due based on their intervals):";
+    expectPrompt(`${HEARTBEAT_PROMPT}\nUse monitor scratch.`, HEARTBEAT_PROMPT);
     for (const acknowledgement of ["HEARTBEAT_OK", "NO_REPLY"]) {
-      expect(
-        isHeartbeatUserMessage(
-          user(
-            `Run the following periodic tasks (only those due based on their intervals):\n\n- email-check: Check for urgent unread emails\n\nAfter completing all due tasks, reply ${acknowledgement}.`,
-          ),
-        ),
-      ).toBe(true);
+      expectPrompt(
+        `${taskPrefix}\n\n- email-check\n\nAfter completing all due tasks, reply ${acknowledgement}.`,
+      );
     }
 
     for (const completion of [
       "After completing all due tasks, use heartbeat_respond to report the outcome. Set notify=false when nothing needs the user's attention.",
       `After completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`,
     ]) {
-      expect(
-        isHeartbeatUserMessage(
-          user(
-            `Run the following periodic tasks (only those due based on their intervals):\n\n- deployment: Check deployment status\n\n${completion}\n\nHeartbeat monitor scratch:\nReview the deployment queue.`,
-          ),
-        ),
-      ).toBe(true);
+      expectPrompt(
+        `${taskPrefix}\n\n- deployment\n\n${completion}\n\nHeartbeat monitor scratch:\nReview queue.`,
+      );
     }
 
-    expect(isHeartbeatUserMessage(wake)).toBe(true);
-
-    expect(isHeartbeatUserMessage(user(HEARTBEAT_RESPONSE_TOOL_PROMPT))).toBe(true);
-
+    expectPrompt(INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat);
+    expectPrompt(HEARTBEAT_RESPONSE_TOOL_PROMPT);
     const customHeartbeatPrompt = "Check the handoff queue.";
-    expect(
-      isHeartbeatUserMessage(
-        user(
-          `${resolveHeartbeatPromptForResponseTool(customHeartbeatPrompt)}\n\nUse workspace notes only.`,
-        ),
-        customHeartbeatPrompt,
-      ),
-    ).toBe(true);
+    expectPrompt(
+      `${resolveHeartbeatPromptForResponseTool(customHeartbeatPrompt)}\n\nUse workspace notes only.`,
+      customHeartbeatPrompt,
+    );
   });
 });
 
