@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import { resolveAdditionalConfiguredModelRefs } from "../../agents/model-visibility-policy.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -42,11 +43,11 @@ function providerIdentity(source: ProviderIdentitySource, provider: string): unk
   const pluginIds = source.providerPlugins.get(provider) ?? [];
   const forProvider = <T>(entries: Record<string, T> | undefined) =>
     Object.entries(entries ?? {}).filter(([id]) => normalizeProviderId(id) === provider);
-  const visibility = (models: Record<string, unknown> | undefined) =>
-    Object.entries(models ?? {}).filter(
-      ([ref]) =>
-        ref.includes("/") && normalizeProviderId(ref.slice(0, ref.indexOf("/"))) === provider,
-    );
+  // A ref without a provider prefix may resolve to any provider.
+  const namesProvider = (ref: string) =>
+    !ref.includes("/") || normalizeProviderId(ref.slice(0, ref.indexOf("/"))) === provider;
+  const modelSettings = (models: Record<string, unknown> | undefined) =>
+    Object.entries(models ?? {}).filter(([ref]) => namesProvider(ref));
   const { providers: _providers, ...models } = config.models ?? {};
   return {
     models,
@@ -61,9 +62,14 @@ function providerIdentity(source: ProviderIdentitySource, provider: string): unk
       ([, profile]) => normalizeProviderId(profile.provider) === provider,
     ),
     credentialOrder: forProvider(authStore.order),
-    visibility: [
-      visibility(config.agents?.defaults?.models),
-      visibility(config.agents?.entries?.[source.agentId]?.models),
+    // The configured view admits exactly these refs (primary, fallbacks, model maps, utility).
+    configuredRefs: resolveAdditionalConfiguredModelRefs({
+      cfg: config,
+      agentId: source.agentId,
+    }).filter(namesProvider),
+    modelSettings: [
+      modelSettings(config.agents?.defaults?.models),
+      modelSettings(config.agents?.entries?.[source.agentId]?.models),
     ],
     // Selection policy may name any provider's models, including by pattern.
     modelPolicy: [

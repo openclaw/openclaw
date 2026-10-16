@@ -128,6 +128,17 @@ it("serves the published list while a provider never answers and hides a removed
     expect(await read()).not.toContain("openai/gpt-5.4");
     activeConfig = config;
     expect(await read()).toContain("openai/gpt-5.4");
+    // Primary and fallback settings also decide configured membership.
+    activeConfig = {
+      ...config,
+      agents: {
+        ...config.agents,
+        defaults: { ...config.agents?.defaults, model: { primary: "anthropic/claude-opus-5-5" } },
+      },
+    };
+    expect(await read()).not.toContain("openai/gpt-5.4");
+    activeConfig = config;
+    expect(await read()).toContain("openai/gpt-5.4");
     // An edit to the config env section may remove a provider key.
     activeConfig = { ...config, env: { vars: { OPENAI_API_KEY: "" } } };
     expect(await read()).not.toContain("openai/gpt-5.4");
