@@ -1,4 +1,3 @@
-// Google tests cover media understanding provider.video plugin behavior.
 import { createServer, type Server } from "node:http";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
@@ -55,18 +54,30 @@ function createOversizedJsonServer(): { server: Server; closed: Promise<number> 
   return { server, closed };
 }
 
+function describeVideo(overrides: Partial<Parameters<typeof describeGeminiVideo>[0]> = {}) {
+  return describeGeminiVideo({
+    buffer: Buffer.from("video-bytes"),
+    fileName: "clip.mp4",
+    apiKey: "test-key",
+    timeoutMs: 1500,
+    ...overrides,
+  });
+}
+
+function mediaResponse(...texts: string[]) {
+  return { candidates: [{ content: { parts: texts.map((text) => ({ text })) } }] };
+}
+
 describe("describeGeminiVideo", () => {
   it("respects case-insensitive x-goog-api-key overrides", async () => {
     let seenKey: string | null = null;
     const fetchFn = withFetchPreconnect(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       seenKey = headers.get("x-goog-api-key");
-      return Response.json({
-        candidates: [{ content: { parts: [{ text: "video ok" }] } }],
-      });
+      return Response.json(mediaResponse("video ok"));
     });
 
-    const result = await describeGeminiVideo({
+    const result = await describeVideo({
       buffer: Buffer.from("video"),
       fileName: "clip.mp4",
       apiKey: "test-key",
@@ -80,21 +91,11 @@ describe("describeGeminiVideo", () => {
   });
 
   it("builds the expected request payload", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
-      candidates: [
-        {
-          content: {
-            parts: [{ text: "first" }, { text: " second " }, { text: "" }],
-          },
-        },
-      ],
-    });
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch(
+      mediaResponse("first", " second ", ""),
+    );
 
-    const result = await describeGeminiVideo({
-      buffer: Buffer.from("video-bytes"),
-      fileName: "clip.mp4",
-      apiKey: "test-key",
-      timeoutMs: 1500,
+    const result = await describeVideo({
       baseUrl: "https://generativelanguage.googleapis.com/v1beta/",
       model: "gemini-3-pro",
       headers: { "X-Other": "1" },
@@ -143,9 +144,7 @@ describe("describeGeminiVideo", () => {
       if (!handler) {
         throw new Error(`Expected registered Google ${method}`);
       }
-      const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
-        candidates: [{ content: { parts: [{ text: "media ok" }] } }],
-      });
+      const { fetchFn, getRequest } = createRequestCaptureJsonFetch(mediaResponse("media ok"));
 
       const result = await handler({
         buffer: Buffer.from("media-bytes"),
@@ -174,11 +173,7 @@ describe("describeGeminiVideo", () => {
 
     try {
       await expect(
-        describeGeminiVideo({
-          buffer: Buffer.from("video-bytes"),
-          fileName: "clip.mp4",
-          apiKey: "test-key",
-          timeoutMs: 1500,
+        describeVideo({
           fetchFn,
         }),
       ).rejects.toThrow(/JSON response exceeds 16777216 bytes/u);
@@ -190,11 +185,7 @@ describe("describeGeminiVideo", () => {
 
   it("rejects non-Google video base URLs before sending authenticated requests", async () => {
     await expect(
-      describeGeminiVideo({
-        buffer: Buffer.from("video-bytes"),
-        fileName: "clip.mp4",
-        apiKey: "test-key",
-        timeoutMs: 1500,
+      describeVideo({
         baseUrl: "https://example.com/v1beta/",
         fetchFn: async () => {
           throw new Error("fetch should not run");

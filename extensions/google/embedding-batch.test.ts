@@ -126,6 +126,16 @@ function stubBatchFetch(
   return fetchMock;
 }
 
+function stubStage(stage: BatchStage, response: Response | Record<string, unknown>) {
+  return stubBatchFetch((candidate) =>
+    candidate === stage
+      ? response instanceof Response
+        ? response
+        : Response.json(response)
+      : undefined,
+  );
+}
+
 function runBatch(
   requests = singleRequest(),
   gemini = makeGeminiClient(),
@@ -186,13 +196,12 @@ describe("Google embedding-batch bounded JSON reads", () => {
     { label: "mixed coordinates", valuesJson: "[1,null]", reason: "invalid" },
     { label: "positive overflow", valuesJson: "[1,1e400]", reason: "invalid" },
   ])("rejects downloaded $label vectors before normalization", async ({ valuesJson, reason }) => {
-    stubBatchFetch((stage) =>
-      stage === "download"
-        ? new Response(
-            `{"key":"r0","response":{"embedding":{${valuesJson === undefined ? "" : `"values":${valuesJson}`}}}}\n` +
-              '{"key":"r0","response":{"embedding":{"values":[1,0]}}}',
-          )
-        : undefined,
+    stubStage(
+      "download",
+      new Response(
+        `{"key":"r0","response":{"embedding":{${valuesJson === undefined ? "" : `"values":${valuesJson}`}}}}\n` +
+          '{"key":"r0","response":{"embedding":{"values":[1,0]}}}',
+      ),
     );
 
     await expect(runBatch()).rejects.toThrow(`r0: ${reason} embedding`);
@@ -205,18 +214,17 @@ describe("Google embedding-batch bounded JSON reads", () => {
       batchRequest("r1", "two"),
       batchRequest("r2", "three"),
     ];
-    stubBatchFetch((stage) =>
-      stage === "download"
-        ? new Response(
-            [
-              { key: "r0", response: { embedding: { values: [3, 4] } } },
-              { key: "r0", response: { embedding: { values: [null] } } },
-              { request_id: "r1", embedding: { values: [0, 1] } },
-            ]
-              .map((line) => JSON.stringify(line))
-              .join("\n"),
-          )
-        : undefined,
+    stubStage(
+      "download",
+      new Response(
+        [
+          { key: "r0", response: { embedding: { values: [3, 4] } } },
+          { key: "r0", response: { embedding: { values: [null] } } },
+          { request_id: "r1", embedding: { values: [0, 1] } },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+      ),
     );
     await expect(runBatch(requests)).rejects.toThrow("missing 1 embedding responses");
   });
@@ -482,47 +490,38 @@ describe("Google embedding-batch bounded JSON reads", () => {
   );
 
   it("honors terminal LRO fields when metadata is stale", async () => {
-    stubBatchFetch((stage) =>
-      stage === "create"
-        ? Response.json({
-            name: "batches/b-0",
-            done: true,
-            metadata: { state: "BATCH_STATE_RUNNING" },
-            response: { responsesFile: "files/out-0" },
-          })
-        : undefined,
-    );
+    stubStage("create", {
+      name: "batches/b-0",
+      done: true,
+      metadata: { state: "BATCH_STATE_RUNNING" },
+      response: { responsesFile: "files/out-0" },
+    });
 
     await expect(runBatch()).resolves.toEqual(new Map([["r0", [1, 0, 0]]]));
   });
 
   it("keeps a terminal Operation error ahead of stale success metadata", async () => {
-    stubBatchFetch((stage) =>
-      stage === "create"
-        ? Response.json({
-            name: "batches/b-0",
-            done: true,
-            metadata: { state: "BATCH_STATE_SUCCEEDED" },
-            response: { responsesFile: "files/out-0" },
-            error: { code: 13, message: "provider job failed" },
-          })
-        : undefined,
-    );
+    stubStage("create", {
+      name: "batches/b-0",
+      done: true,
+      metadata: { state: "BATCH_STATE_SUCCEEDED" },
+      response: { responsesFile: "files/out-0" },
+      error: { code: 13, message: "provider job failed" },
+    });
 
     await expect(runBatch()).rejects.toThrow("gemini batch batches/b-0 failed");
   });
 
   it("keeps shipped compatible-endpoint output aliases", async () => {
     const requests = [batchRequest("r0", "hello"), batchRequest("r1", "world")];
-    stubBatchFetch((stage) =>
-      stage === "download"
-        ? new Response(
-            [
-              JSON.stringify({ custom_id: "r0", embedding: { values: [1, 0] } }),
-              JSON.stringify({ request_id: "r1", embedding: { values: [0, 1] } }),
-            ].join("\n"),
-          )
-        : undefined,
+    stubStage(
+      "download",
+      new Response(
+        [
+          JSON.stringify({ custom_id: "r0", embedding: { values: [1, 0] } }),
+          JSON.stringify({ request_id: "r1", embedding: { values: [0, 1] } }),
+        ].join("\n"),
+      ),
     );
 
     await expect(runBatch(requests)).resolves.toEqual(
@@ -534,16 +533,15 @@ describe("Google embedding-batch bounded JSON reads", () => {
   });
 
   it("falls back from an empty top-level output error", async () => {
-    stubBatchFetch((stage) =>
-      stage === "download"
-        ? new Response(
-            JSON.stringify({
-              key: "r0",
-              error: { message: "" },
-              response: { error: { message: "nested output error" } },
-            }),
-          )
-        : undefined,
+    stubStage(
+      "download",
+      new Response(
+        JSON.stringify({
+          key: "r0",
+          error: { message: "" },
+          response: { error: { message: "nested output error" } },
+        }),
+      ),
     );
 
     await expect(runBatch()).rejects.toThrow("nested output error");
@@ -554,33 +552,25 @@ describe("Google embedding-batch bounded JSON reads", () => {
     { state: "JOB_STATE_CANCELLED", normalized: "cancelled" },
     { state: "BATCH_STATE_EXPIRED", normalized: "expired" },
   ])("surfaces $state Operation failures", async ({ state, normalized }) => {
-    stubBatchFetch((stage) =>
-      stage === "create"
-        ? Response.json({
-            name: "batches/b-0",
-            done: true,
-            metadata: { state },
-          })
-        : undefined,
-    );
+    stubStage("create", {
+      name: "batches/b-0",
+      done: true,
+      metadata: { state },
+    });
 
     await expect(runBatch()).rejects.toThrow(`gemini batch batches/b-0 ${normalized}`);
   });
 
   it("rejects conflicting output files in one Operation", async () => {
-    stubBatchFetch((stage) =>
-      stage === "create"
-        ? Response.json({
-            name: "batches/b-0",
-            done: true,
-            metadata: {
-              state: "BATCH_STATE_SUCCEEDED",
-              output: { responsesFile: "files/metadata-output" },
-            },
-            response: { responsesFile: "files/response-output" },
-          })
-        : undefined,
-    );
+    stubStage("create", {
+      name: "batches/b-0",
+      done: true,
+      metadata: {
+        state: "BATCH_STATE_SUCCEEDED",
+        output: { responsesFile: "files/metadata-output" },
+      },
+      response: { responsesFile: "files/response-output" },
+    });
 
     await expect(runBatch()).rejects.toThrow("conflicting output files");
   });
