@@ -218,6 +218,7 @@ async function prepareNonInteractive(ctx: NonInteractiveContext) {
   const listing = await listOmlxModels({
     config: ctx.config,
     env: process.env,
+    agentDir: ctx.agentDir,
     baseUrl,
     apiKey: resolved?.key ?? (replaceAuth ? "" : undefined),
     replaceAuth,

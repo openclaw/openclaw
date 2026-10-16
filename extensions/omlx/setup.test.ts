@@ -366,6 +366,14 @@ describe("oMLX setup through the inference catalog", () => {
       vi.stubEnv("OMLX_API_KEY", ambientKey);
       await withOpenClawTestState({ label: "omlx-initial-credential" }, async (state) => {
         const fetchMock = fixture();
+        const agentId = "secondary";
+        const agentDir = state.agentDir(agentId);
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "omlx:default": { type: "api_key", provider: "omlx", key: "other-agent-key" },
+          },
+        });
         fetchMock.mockImplementation(async (input) =>
           Response.json({
             data: new URL(input instanceof Request ? input.url : String(input)).pathname.endsWith(
@@ -378,20 +386,24 @@ describe("oMLX setup through the inference catalog", () => {
         let config: OpenClawConfig;
         if (mode === "interactive") {
           const ctx = interactiveContext(selectedKey);
+          ctx.agentDir = agentDir;
           ctx.env = { OMLX_API_KEY: ambientKey };
           ctx.prompter.confirm = vi.fn(async () => false);
           const result = await configureOmlxInteractive(ctx);
           expect(ctx.prompter.confirm).toHaveBeenCalledOnce();
-          await state.writeAuthProfiles({
-            version: 1,
-            profiles: Object.fromEntries(
-              result.profiles.map(({ profileId, credential }) => [profileId, credential]),
-            ),
-          });
+          await state.writeAuthProfiles(
+            {
+              version: 1,
+              profiles: Object.fromEntries(
+                result.profiles.map(({ profileId, credential }) => [profileId, credential]),
+              ),
+            },
+            agentId,
+          );
           config = applyProviderAuthConfigPatch({}, result.configPatch, result);
         } else {
           const ctx = nonInteractiveContext();
-          ctx.agentDir = state.agentDir();
+          ctx.agentDir = agentDir;
           ctx.opts.customApiKey = selectedKey;
           ctx.resolveApiKey = vi.fn(async () => ({ key: selectedKey, source: "flag" as const }));
           ctx.toApiKeyCredential = vi.fn<
@@ -406,10 +418,15 @@ describe("oMLX setup through the inference catalog", () => {
         expect(new Headers(fetchMock.mock.lastCall?.[1]?.headers).get("authorization")).toBe(
           `Bearer ${selectedKey}`,
         );
-        const store = await ensureAuthProfileStoreAsync(state.agentDir());
+        const store = await ensureAuthProfileStoreAsync(agentDir);
         await expect(
-          detectOmlxAvailability({ config, env: { OMLX_API_KEY: ambientKey } }),
-        ).resolves.toBe(true);
+          discoverOmlxProvider({
+            ...catalogContext(),
+            config,
+            agentDir,
+            env: { OMLX_API_KEY: ambientKey },
+          }),
+        ).resolves.toBeTruthy();
         const discoveryAuthorization = new Headers(fetchMock.mock.lastCall?.[1]?.headers).get(
           "authorization",
         );
@@ -419,14 +436,14 @@ describe("oMLX setup through the inference catalog", () => {
         }
         const embedding = await adapter.create({
           config,
-          agentDir: state.agentDir(),
+          agentDir,
           model: "text-embedding-mini",
         });
         await expect(embedding.provider?.embed("orchard")).resolves.toEqual([1, 0]);
         const chatAuth = await resolveApiKeyForProvider({
           provider: "omlx",
           cfg: config,
-          agentDir: state.agentDir(),
+          agentDir,
         });
         expect({
           credential: store.profiles["omlx:default"],
@@ -445,6 +462,28 @@ describe("oMLX setup through the inference catalog", () => {
           chatKey: selectedKey,
           chatProfile: "omlx:default",
         });
+        if (mode === "noninteractive") {
+          const repeated = nonInteractiveContext();
+          repeated.config = config;
+          repeated.baseConfig = config;
+          repeated.agentDir = agentDir;
+          await expect(validateOmlxNonInteractive(repeated)).resolves.toBe(true);
+          const validationAuthorization = new Headers(fetchMock.mock.lastCall?.[1]?.headers).get(
+            "authorization",
+          );
+          const next = await configureOmlxNonInteractive(repeated);
+          expect({
+            validationAuthorization,
+            authorization: new Headers(fetchMock.mock.lastCall?.[1]?.headers).get("authorization"),
+            binding: next?.models?.providers?.omlx?.apiKey,
+          }).toEqual({
+            validationAuthorization: `Bearer ${selectedKey}`,
+            authorization: `Bearer ${selectedKey}`,
+            binding: "omlx:default",
+          });
+          expect(repeated.resolveApiKey).not.toHaveBeenCalled();
+          expect(repeated.toApiKeyCredential).not.toHaveBeenCalled();
+        }
       });
     },
   );
