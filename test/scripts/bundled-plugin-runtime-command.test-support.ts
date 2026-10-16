@@ -167,15 +167,17 @@ function killOwnedRuntimeCommand(child: ChildProcess | undefined, detached: bool
 }
 
 async function observeRuntimeCommandTimeout(params: {
-  run: () => Promise<unknown>;
+  args: string[];
   ready: (child: ChildProcess, operation: Promise<unknown>) => Promise<number[]>;
   timeoutMs: number;
   detached: boolean;
+  runDetached?: boolean;
   root?: string;
   descendantPidPath?: string;
   signal: AbortSignal;
   onTestFinished: TestContext["onTestFinished"];
 }): Promise<Error> {
+  const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
   const spawnSpy = vi.spyOn(childProcess, "spawn");
   let child: ChildProcess | undefined;
   let commandResult: Promise<unknown> | undefined;
@@ -203,12 +205,8 @@ async function observeRuntimeCommandTimeout(params: {
     } finally {
       vi.useRealTimers();
       spawnSpy.mockRestore();
-      if (commandResult) {
-        await commandResult;
-      }
-      if (closed) {
-        await closed;
-      }
+      await commandResult;
+      await closed;
       if (descendantPid !== undefined && !params.signal.aborted) {
         await waitForDead(descendantPid, params.signal);
       }
@@ -221,8 +219,11 @@ async function observeRuntimeCommandTimeout(params: {
   // readiness and cleanup must not consume or depend on that clock.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
-    commandResult = params
-      .run()
+    commandResult = runtimeSmoke
+      .runCommand(process.execPath, params.args, {
+        detached: params.runDetached,
+        timeoutMs: params.timeoutMs,
+      })
       .catch((error: unknown) => error)
       .finally(() => {
         settled = true;
@@ -261,97 +262,65 @@ async function observeRuntimeCommandTimeout(params: {
 }
 
 export function registerRuntimeCommandTimeoutTests(createPackageRoot: () => string): void {
-  (process.platform !== "win32" ? it : it.skip)(
-    "kills timed-out runtime command groups",
-    async ({ signal, onTestFinished }) => {
-      const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
-      const root = createPackageRoot();
-      const commandPath = path.join(root, "timeout-command.mjs");
-      const descendantPidPath = path.join(root, "timed-out-descendant.pid");
-      const readyPath = path.join(root, "timed-out-descendant.ready");
-      const descendantScript = [
-        "import fs from 'node:fs';",
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {}, 1000);",
-        `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
-        fixtureReadySource(readyPath),
-      ].join("\n");
-      fs.writeFileSync(
-        commandPath,
-        [
+  (process.platform !== "win32" ? it : it.skip).for([
+    { name: "kills timed-out runtime command groups", detached: true, timeoutMs: 250 },
+    {
+      name: "falls back to direct kills for non-detached command timeouts",
+      detached: false,
+      timeoutMs: 500,
+    },
+  ])("$name", async ({ detached, timeoutMs }, { signal, onTestFinished }) => {
+    const root = createPackageRoot();
+    const commandPath = path.join(root, "timeout-command.mjs");
+    const descendantPidPath = path.join(root, "timed-out-descendant.pid");
+    const readyPath = path.join(root, "timed-out-descendant.ready");
+    const script = detached
+      ? [
           "import childProcess from 'node:child_process';",
           "import fs from 'node:fs';",
           `const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            descendantScript,
+            [
+              "import fs from 'node:fs';",
+              "process.on('SIGTERM', () => {});",
+              "setInterval(() => {}, 1000);",
+              `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+              fixtureReadySource(readyPath),
+            ].join("\n"),
           )}], { stdio: "ignore" });`,
           `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(child.pid) + "\\n");`,
           fixtureReadySource(descendantPidPath),
           "setInterval(() => {}, 1000);",
           "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      const error = await observeRuntimeCommandTimeout({
-        run: () =>
-          runtimeSmoke.runCommand(process.execPath, [commandPath], {
-            detached: undefined,
-            timeoutMs: 250,
-          }),
-        ready: async (_child, operation) => {
-          const pid = await waitForPidFile(descendantPidPath, operation, signal);
-          await fixtureReadyBeforeSettlement(readyPath, operation, signal);
-          return [pid];
-        },
-        timeoutMs: 250,
-        detached: true,
-        root,
-        descendantPidPath,
-        signal,
-        onTestFinished,
-      });
-      expect(error.message).toMatch(/timed out after 250ms/u);
-    },
-  );
-
-  (process.platform !== "win32" ? it : it.skip)(
-    "falls back to direct kills for non-detached command timeouts",
-    async ({ signal, onTestFinished }) => {
-      const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
-      const root = createPackageRoot();
-      const commandPath = path.join(root, "non-detached-timeout-command.mjs");
-      const commandPidPath = path.join(root, "non-detached-command.pid");
-      fs.writeFileSync(
-        commandPath,
-        [
+        ]
+      : [
           "import fs from 'node:fs';",
           "setInterval(() => {}, 1000);",
-          `fs.writeFileSync(${JSON.stringify(commandPidPath)}, String(process.pid) + "\\n");`,
-          fixtureReadySource(commandPidPath),
+          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid) + "\\n");`,
+          fixtureReadySource(descendantPidPath),
           "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      const error = await observeRuntimeCommandTimeout({
-        run: () =>
-          runtimeSmoke.runCommand(process.execPath, [commandPath], {
-            detached: false,
-            timeoutMs: 500,
-          }),
-        ready: async (child, operation) => {
-          expect(await waitForPidFile(commandPidPath, operation, signal)).toBe(child.pid);
-          return [];
-        },
-        timeoutMs: 500,
-        detached: false,
-        root,
-        signal,
-        onTestFinished,
-      });
-      expect(error.message).toMatch(/timed out after 500ms/u);
-    },
-  );
+        ];
+    fs.writeFileSync(commandPath, script.join("\n"), "utf8");
+    const error = await observeRuntimeCommandTimeout({
+      args: [commandPath],
+      ready: async (child, operation) => {
+        const pid = await waitForPidFile(descendantPidPath, operation, signal);
+        if (detached) {
+          await fixtureReadyBeforeSettlement(readyPath, operation, signal);
+          return [pid];
+        }
+        expect(pid).toBe(child.pid);
+        return [];
+      },
+      timeoutMs,
+      detached,
+      runDetached: detached ? undefined : false,
+      root,
+      descendantPidPath: detached ? descendantPidPath : undefined,
+      signal,
+      onTestFinished,
+    });
+    expect(error.message).toMatch(new RegExp(`timed out after ${timeoutMs}ms`, "u"));
+  });
 }
 
 export function registerRuntimeCommandOutputTimeoutTest(): void {
@@ -359,18 +328,12 @@ export function registerRuntimeCommandOutputTimeoutTest(): void {
     signal,
     onTestFinished,
   }) => {
-    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const startedAt = Date.now();
     const error = await observeRuntimeCommandTimeout({
-      run: () =>
-        runtimeSmoke.runCommand(
-          process.execPath,
-          [
-            "-e",
-            "setInterval(() => {}, 1000); process.stdout.write('partial\\n'); process.stderr.write('problem\\n');",
-          ],
-          { timeoutMs: 200 },
-        ),
+      args: [
+        "-e",
+        "setInterval(() => {}, 1000); process.stdout.write('partial\\n'); process.stderr.write('problem\\n');",
+      ],
       ready: async (child, operation) => {
         const outputReady = createDeferred();
         const output = { stdout: "", stderr: "" };

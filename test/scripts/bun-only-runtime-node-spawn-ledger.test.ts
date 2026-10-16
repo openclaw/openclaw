@@ -3,8 +3,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   attributeSpawns,
-  classifyNodeSpawns,
-  renderMarkdownReport,
+  classifyNodeSpawns as classify,
+  renderMarkdownReport as markdown,
 } from "../../scripts/e2e/lib/bun-only-runtime/node-spawn-ledger.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -23,10 +23,7 @@ const trace = {
   ts: 150,
   cmd: ["/sentinels/node", "--eval", 'const requiredFlag="";'],
   cwd: "/smoke",
-  stack: [
-    "at resolveNodeRuntimeExecutable (runtime.js:1:1)",
-    "at spawnNodeTerminalPty (pty.js:2:2)",
-  ],
+  stack: ["at resolveNodeRuntimeExecutable", "at spawnNodeTerminalPty"],
 };
 const sentinel = {
   name: "node",
@@ -54,10 +51,13 @@ const attribute = (
   traceRecords: AttributionInput["traceRecords"] = [trace],
   sentinelRecords: AttributionInput["sentinelRecords"] = [sentinel],
 ) => attributeSpawns({ sentinelRecords, traceRecords, steps: [step] });
+type Classification = Parameters<typeof classify>[0];
+const classifyWith = (overrides: Partial<Classification> = {}) =>
+  classify({ attempts: attribute(), steps: [step], blockers: [blocker], ...overrides });
 
 describe("Bun-only Node spawn ledger", () => {
   it.each(["unexpected", "matched", "stack mismatch", "argv mismatch", "failed step"])(
-    "classifies and reports a %s spawn",
+    "classifies %s spawns",
     (kind) => {
       const match =
         kind === "stack mismatch"
@@ -65,15 +65,14 @@ describe("Bun-only Node spawn ledger", () => {
           : kind === "argv mismatch"
             ? { argv: ["--permission"] }
             : blocker.match;
-      const result = classifyNodeSpawns({
-        attempts: attribute(),
+      const result = classifyWith({
         steps: [kind === "failed step" ? { ...step, status: "failed", exitCode: 1 } : step],
         blockers: kind === "unexpected" ? [] : [{ ...blocker, match }],
       });
       expect(result.ok).toBe(kind === "matched");
       if (kind === "matched" || kind === "failed step") {
         expect(result.blockers[0]).toMatchObject({ status: "reproduced", reproducedBy: ["spawn"] });
-        expect(renderMarkdownReport(result)).toContain(
+        expect(markdown(result)).toContain(
           "| terminal-pty | known-blocker | reproduced | 1 | spawn |",
         );
       } else {
@@ -83,27 +82,28 @@ describe("Bun-only Node spawn ledger", () => {
         expect(result.failedSteps).toHaveLength(1);
       }
       if (kind === "unexpected") {
-        const report = renderMarkdownReport(result);
+        const report = markdown(result);
         expect(report).toContain(JSON.stringify(["node", ...sentinel.argv]));
         expect(report).toContain('ancestor 10: "bun openclaw.mjs gateway run"');
-        expect(result.attempts).toMatchObject([{ ancestors: sentinel.ancestors }]);
         expect(report).toContain("spawnNodeTerminalPty");
-        expect(
-          renderMarkdownReport({ ...result, bunVersion: "1.4.3", bunRevision: "test-revision" }),
-        ).toContain("Bun 1.4.3 (test-revision)");
+        expect(result.attempts).toMatchObject([{ ancestors: sentinel.ancestors }]);
+        expect(markdown({ ...result, bunVersion: "1", bunRevision: "rev" })).toContain(
+          "Bun 1 (rev)",
+        );
       }
     },
   );
 
-  it("explains a node-host spawn in a later step but never an earlier step", () => {
-    const steps = ["gateway", "node-host", "agent"].map((name, index) => ({
-      name,
-      status: "passed",
-      startMs: 100 + index * 200,
-      endMs: 200 + index * 200,
-      sentinelStart: index,
-      sentinelEnd: index + 1,
-    }));
+  it("matches node-host spawns only in the same or later steps", () => {
+    const steps = ["gateway", "node-host", "agent"].map((name, index) =>
+      Object.assign({}, step, {
+        name,
+        startMs: 100 + index * 200,
+        endMs: 200 + index * 200,
+        sentinelStart: index,
+        sentinelEnd: index + 1,
+      }),
+    );
     const nodeHostTrace = {
       ...trace,
       cmd: ["npm", "view", "openclaw@latest"],
@@ -111,26 +111,23 @@ describe("Bun-only Node spawn ledger", () => {
     };
     const attempts = attributeSpawns({
       steps,
-      traceRecords: [250, 450, 650].map((ts, index) => ({
-        childPid: sentinel.pid + index,
-        pid: nodeHostTrace.pid,
-        ppid: nodeHostTrace.ppid,
-        cmd: nodeHostTrace.cmd,
-        stack: nodeHostTrace.stack,
-        ts,
-      })),
-      sentinelRecords: [0, 1, 2].map((index) => ({
-        pid: sentinel.pid + index,
-        ppid: sentinel.ppid,
-        cwd: sentinel.cwd,
-        ancestors: sentinel.ancestors,
-        index,
-        name: "npm",
-        argv: nodeHostTrace.cmd.slice(1),
-      })),
+      traceRecords: [250, 450, 650].map((ts, index) =>
+        Object.assign({}, nodeHostTrace, {
+          childPid: sentinel.pid + index,
+          ts,
+        }),
+      ),
+      sentinelRecords: [0, 1, 2].map((index) =>
+        Object.assign({}, sentinel, {
+          pid: sentinel.pid + index,
+          index,
+          name: "npm",
+          argv: nodeHostTrace.cmd.slice(1),
+        }),
+      ),
     });
     expect(attempts.map((attempt) => attempt.step)).toEqual(["gateway", "node-host", "agent"]);
-    const result = classifyNodeSpawns({
+    const result = classifyWith({
       attempts,
       steps,
       blockers: [
@@ -141,25 +138,27 @@ describe("Bun-only Node spawn ledger", () => {
         },
       ],
     });
-    expect(result.blockers).toMatchObject([{ matchedAttempts: attempts.slice(1) }]);
+    expect(result).toMatchObject({
+      blockers: [{ matchedAttempts: attempts.slice(1) }],
+      staleBlockers: [],
+    });
     expect(result.unexpectedAttempts).toEqual([attempts[0]]);
-    expect(result.staleBlockers).toEqual([]);
   });
 
   it.each([{ evidence: "failure" }, { evidence: ["spawn", "failure"] }])(
-    "reproduces failure evidence %j without requiring a cached probe to spawn again",
+    "matches cached failure evidence %j",
     ({ evidence }) => {
-      const result = classifyNodeSpawns({
+      const result = classifyWith({
         attempts: [],
-        steps: [{ ...step, stderr: "A Node executable is required for terminals on Bun" }],
-        blockers: [
-          { ...blocker, evidence, failure: "A Node executable is required for terminals" },
-        ],
+        steps: [{ ...step, stderr: "Node required on Bun" }],
+        blockers: [{ ...blocker, evidence, failure: "Node required" }],
       });
-      expect(result.ok).toBe(true);
-      expect(result.blockers[0]).toMatchObject({ status: "reproduced", reproducedBy: ["failure"] });
+      expect(result).toMatchObject({
+        ok: true,
+        blockers: [{ status: "reproduced", reproducedBy: ["failure"] }],
+      });
       if (evidence === "failure") {
-        const withSpawn = classifyNodeSpawns({ ...result, attempts: attribute() });
+        const withSpawn = classify({ ...result, attempts: attribute() });
         expect(withSpawn.unexpectedAttempts).toHaveLength(1);
       }
     },
@@ -168,20 +167,19 @@ describe("Bun-only Node spawn ledger", () => {
   it.each(["stale", "not-exercised"])("reports a %s blocker without spawn evidence", (status) => {
     const exercised = status === "stale";
     const reason = "Desktop provider is not enabled.";
-    const result = classifyNodeSpawns({
+    const result = classifyWith({
       attempts: [],
       steps: exercised ? [step] : [],
       blockers: [exercised ? blocker : { ...blocker, step: null, notExercisedReason: reason }],
     });
-    expect(result.ok).toBe(!exercised);
-    expect(result.blockers[0]).toMatchObject({ status });
+    expect(result).toMatchObject({ ok: !exercised, blockers: [{ status }] });
     expect(result.staleBlockers).toHaveLength(exercised ? 1 : 0);
-    expect(renderMarkdownReport(result)).toContain(
+    expect(markdown(result)).toContain(
       exercised ? "Delete this entry from expected-node-blockers.json." : reason,
     );
   });
 
-  it("covers a path-qualified launcher only with a sentinel at that exact path", () => {
+  it("matches path-qualified launchers at the exact sentinel path", () => {
     const shellTrace = { ...trace, childPid: 15, cmd: ["sh", "-c", "/usr/local/bin/node -v"] };
     const ancestors = [{ pid: 15, cmdline: "sh" }];
     const masked = { ...sentinel, exe: "/usr/local/bin/node", argv: ["-v"], ancestors };
@@ -190,76 +188,74 @@ describe("Bun-only Node spawn ledger", () => {
     expect(attribute([shellTrace], [elsewhere])).toHaveLength(2);
   });
 
-  it.each(["unrelated", "descendants", "exec"])(
-    "attributes a shell stack to %s sentinels",
-    (kind) => {
-      const shellTrace = {
-        ...trace,
-        childPid: kind === "exec" ? trace.childPid : 15,
-        cmd: [
-          "/bin/sh",
-          "-c",
-          kind === "exec"
-            ? "exec node --version"
-            : kind === "descendants"
-              ? "node -v; npm -v"
-              : "node --version",
-        ],
-      };
-      const ancestors = [
-        { pid: 15, cmdline: "sh" },
-        { pid: 10, cmdline: "bun" },
-      ];
-      const sentinels =
+  it.each([
+    ["unrelated", "node --version"],
+    ["descendants", "node -v; npm -v"],
+    ["exec", "exec node --version"],
+  ])("attributes %s shell stacks", (kind, command) => {
+    const shellTrace = {
+      ...trace,
+      childPid: kind === "exec" ? trace.childPid : 15,
+      cmd: ["/bin/sh", "-c", command],
+    };
+    const ancestors = [
+      { pid: 15, cmdline: "sh" },
+      { pid: 10, cmdline: "bun" },
+    ];
+    const sentinels =
+      kind === "descendants"
+        ? [
+            { ...sentinel, ppid: 15, argv: ["-v"], ancestors },
+            { ...sentinel, pid: 21, ppid: 15, name: "npm", argv: ["-v"], ancestors },
+          ]
+        : [kind === "exec" ? { ...sentinel, argv: ["--version"] } : sentinel];
+    const attempts = attribute([shellTrace], sentinels);
+    if (kind === "unrelated") {
+      expect(attempts).toMatchObject([{ sentinel, stack: [] }]);
+      expect(attempts[0]).not.toHaveProperty("trace");
+    } else {
+      expect(attempts).toMatchObject(
         kind === "descendants"
           ? [
-              { ...sentinel, ppid: 15, argv: ["-v"], ancestors },
-              { ...sentinel, pid: 21, ppid: 15, name: "npm", argv: ["-v"], ancestors },
+              { trace: shellTrace, sentinel: { name: "node" } },
+              { trace: shellTrace, sentinel: { name: "npm" } },
             ]
-          : [kind === "exec" ? { ...sentinel, argv: ["--version"] } : sentinel];
-      const attempts = attribute([shellTrace], sentinels);
-      if (kind === "unrelated") {
-        expect(attempts).toHaveLength(1);
-        expect(attempts[0]).toMatchObject({ sentinel, stack: [] });
-        expect(attempts[0]).not.toHaveProperty("trace");
-      } else {
-        expect(attempts).toMatchObject(
-          kind === "descendants"
-            ? [
-                { trace: shellTrace, sentinel: { name: "node" } },
-                { trace: shellTrace, sentinel: { name: "npm" } },
-              ]
-            : [{ trace: shellTrace, stack: trace.stack, sentinel: { pid: trace.childPid } }],
-        );
-      }
-    },
-  );
+          : [{ trace: shellTrace, stack: trace.stack, sentinel: { pid: trace.childPid } }],
+      );
+    }
+  });
 
   it.each([null, 99])("keeps a trace with child PID %s separate from the sentinel", (childPid) => {
     const attempts = attribute([{ ...trace, childPid, errorCode: "ENOENT" }]);
-    expect(attempts).toHaveLength(2);
-    expect(attempts[0]).toMatchObject({ sentinel, stack: [] });
-    expect(attempts[1]).toMatchObject({ trace: { childPid, errorCode: "ENOENT" } });
+    expect(attempts).toMatchObject([
+      { sentinel, stack: [] },
+      { trace: { childPid, errorCode: "ENOENT" } },
+    ]);
   });
 });
 
 describe("Bun spawn trace preload", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  function stubSpawnRuntime(spawn: (...args: unknown[]) => unknown) {
-    const runtime = (
+  async function preload(spawn: (...args: unknown[]) => unknown) {
+    const tracePath = path.join(tempDirs.make("bun-spawn-trace-"), "trace.jsonl");
+    let runtime = (
       globalThis as typeof globalThis & {
         Bun?: { spawn: typeof spawn; spawnSync: typeof spawn };
       }
     ).Bun;
     if (runtime) {
-      vi.spyOn(runtime, "spawn").mockImplementation(spawn);
-      vi.spyOn(runtime, "spawnSync").mockImplementation(spawn);
-      return runtime;
+      for (const method of ["spawn", "spawnSync"] as const) {
+        vi.spyOn(runtime, method).mockImplementation(spawn);
+      }
+    } else {
+      runtime = { spawn, spawnSync: spawn };
+      vi.stubGlobal("Bun", runtime);
     }
-    const stub = { spawn, spawnSync: spawn };
-    vi.stubGlobal("Bun", stub);
-    return stub;
+    vi.stubEnv("OPENCLAW_BUN_ONLY_SPAWN_TRACE", tracePath);
+    vi.resetModules();
+    await import("../../scripts/e2e/lib/bun-only-runtime/spawn-trace-preload.mjs");
+    return { tracePath, runtime };
   }
 
   afterEach(() => {
@@ -274,7 +270,6 @@ describe("Bun spawn trace preload", () => {
     ["spawn", true],
     ["spawnSync", true],
   ] as const)("records %s with failure=%s without changing its outcome", async (method, failed) => {
-    const tracePath = path.join(tempDirs.make("bun-spawn-trace-"), "trace.jsonl");
     const clock = vi.spyOn(Date, "now").mockReturnValue(100);
     const child = { pid: 42 };
     const error = Object.assign(new Error("not found"), { code: "ENOENT" });
@@ -286,10 +281,7 @@ describe("Bun spawn trace preload", () => {
       clock.mockReturnValue(200);
       return child;
     });
-    const runtime = stubSpawnRuntime(original);
-    vi.stubEnv("OPENCLAW_BUN_ONLY_SPAWN_TRACE", tracePath);
-    vi.resetModules();
-    await import("../../scripts/e2e/lib/bun-only-runtime/spawn-trace-preload.mjs");
+    const { tracePath, runtime } = await preload(original);
     const cmd = failed
       ? ["node", "--version"]
       : ["/bin/sh", "-c", "/usr/bin/node --version; /opt/tools/npm --version"];
@@ -309,11 +301,7 @@ describe("Bun spawn trace preload", () => {
   });
 
   it("does not trace unrelated shell commands", async () => {
-    const tracePath = path.join(tempDirs.make("bun-spawn-trace-"), "trace.jsonl");
-    const runtime = stubSpawnRuntime(vi.fn(() => ({ pid: 7 })));
-    vi.stubEnv("OPENCLAW_BUN_ONLY_SPAWN_TRACE", tracePath);
-    vi.resetModules();
-    await import("../../scripts/e2e/lib/bun-only-runtime/spawn-trace-preload.mjs");
+    const { tracePath, runtime } = await preload(vi.fn(() => ({ pid: 7 })));
     runtime.spawn(["/bin/sh", "-c", "echo nodejs-like && nodemon --help"]);
     expect(existsSync(tracePath)).toBe(false);
   });
