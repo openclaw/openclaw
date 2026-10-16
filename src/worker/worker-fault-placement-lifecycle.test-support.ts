@@ -87,15 +87,11 @@ export class WorkerFaultPlacementLifecycle {
     const { placementStore, sessionId } = this.options;
     const current = await placementStore.getAsync(sessionId);
     const placement = current?.state === "active" ? current : await this.activatePlacement();
-    const activeClaim = projectWorkerSessionTurnClaim(placement);
-    if (activeClaim) {
-      if (activeClaim.runId !== runId) {
-        throw new Error(`fault placement is already claimed by ${activeClaim.runId}`);
-      }
-      await this.bindCredentialToClaim(credential, activeClaim);
-      return activeClaim;
+    let claim = projectWorkerSessionTurnClaim(placement);
+    if (claim && claim.runId !== runId) {
+      throw new Error(`fault placement is already claimed by ${claim.runId}`);
     }
-    const claim = await placementStore.claimTurn({
+    claim ??= await placementStore.claimTurn({
       sessionId,
       agentId: this.options.agentId,
       sessionKey: this.options.sessionKey,

@@ -52,7 +52,7 @@ import * as stateDb from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
-import { createWorkerConnection, type WorkerConnection } from "./worker-connection.js";
+import { createWorkerConnection } from "./worker-connection.js";
 import {
   seedFaultAttachedEnvironment,
   WorkerFaultPlacementLifecycle,
@@ -127,6 +127,10 @@ type Gate = {
   entered: Deferred<void>;
   release: Deferred<void>;
 };
+function enterGate({ entered, release }: Gate): Promise<void> {
+  entered.resolve();
+  return release.promise;
+}
 type TranscriptGate = Gate & { phase: "before-apply" | "after-apply" };
 type LiveEventGate = Gate & {
   stage: "before-service" | "after-service";
@@ -151,12 +155,7 @@ type ProviderPlan =
     }
   | { kind: "pending"; release: Deferred<WorkerInferenceTerminalOutcome>; started: Deferred<void> };
 
-export type WorkerClients = {
-  connection: WorkerConnection;
-  transcript: WorkerTranscriptCommitClient;
-  live: WorkerLiveEventClient;
-  inference: WorkerInferenceProxyClient;
-};
+export type WorkerClients = Awaited<ReturnType<ComposedGatewayHarness["createClients"]>>;
 
 type WorkerClientOptions = {
   admissionProof?: string;
@@ -193,7 +192,7 @@ export class ComposedGatewayHarness {
   serviceValue!: workerEnv.WorkerEnvironmentService;
   private liveEventsValue!: liveEvents.WorkerLiveEventReceiver;
   private readonly placementLifecycle: WorkerFaultPlacementLifecycle;
-  private placementGateValue: WorkerSessionPlacementGate | undefined;
+  private placementGateValue: WorkerSessionPlacementGate;
   private useReplacementExecutor = false;
   private connectionsPaused = false;
   private unsubscribeLive: (() => void) | undefined;
@@ -250,9 +249,7 @@ export class ComposedGatewayHarness {
         profiles: { development: { provider: "fake", settings: { region: "test" } } },
       },
     };
-    this.placementStore = placements.createWorkerSessionPlacementStore({
-      database: this.database,
-    });
+    this.placementStore = placements.createWorkerSessionPlacementStore({ database });
     this.liveEventsValue = liveEvents.createWorkerLiveEventReceiver();
     this.placementLifecycle = new WorkerFaultPlacementLifecycle({
       agentId: "main",
@@ -382,7 +379,7 @@ export class ComposedGatewayHarness {
     return descriptor;
   }
 
-  async createClients(params: WorkerClientOptions = {}): Promise<WorkerClients> {
+  async createClients(params: WorkerClientOptions = {}) {
     const descriptor = await this.createDescriptor(params);
     const { admission, assignment, connectionEndpoint } = descriptor;
     const connection = createWorkerConnection({
@@ -569,10 +566,9 @@ export class ComposedGatewayHarness {
   };
 
   private createService(): workerEnv.WorkerEnvironmentService {
-    const ledger = createWorkerTranscriptCommitStore({ database: this.database });
     const committer = createWorkerTranscriptCommitter({
       getConfig: () => this.cfg,
-      store: ledger,
+      store: createWorkerTranscriptCommitStore({ database: this.database }),
     });
     return workerEnv.createWorkerEnvironmentService({
       scheduler: createTestGatewayScheduler(),
@@ -585,19 +581,17 @@ export class ComposedGatewayHarness {
       applyTranscriptCommit: async (params) => {
         const gate = this.transcriptGate;
         if (gate?.phase === "before-apply") {
-          gate.entered.resolve();
-          await gate.release.promise;
+          await enterGate(gate);
         }
         const result = await committer.commit(params);
         if (gate?.phase === "after-apply") {
-          gate.entered.resolve();
-          await gate.release.promise;
+          await enterGate(gate);
         }
         return result;
       },
       liveEvents: this.liveEventsValue,
       inferenceStore: createWorkerInferenceStore({ path: this.database.path }),
-      ...(this.placementGateValue ? { placementStore: this.placementGateValue } : {}),
+      placementStore: this.placementGateValue,
     });
   }
 
@@ -644,15 +638,13 @@ export class ComposedGatewayHarness {
           );
           if (gate) {
             gate.claimed = true;
-            if (gate.stage === "before-service") {
-              gate.entered.resolve();
-              await gate.release.promise;
-            }
+          }
+          if (gate?.stage === "before-service") {
+            await enterGate(gate);
           }
           const result = await service.pushLiveEvent(identity, request);
           if (gate?.stage === "after-service") {
-            gate.entered.resolve();
-            await gate.release.promise;
+            await enterGate(gate);
           }
           return result;
         },
