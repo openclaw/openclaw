@@ -11,6 +11,7 @@ const components = [
 ];
 
 it.each([
+  "src/infra/gateway-lock-process.ts",
   "src/infra/sqlite-coordinator.ts",
   "src/plugins/discovery.ts",
   "src/infra/sqlite-readonly-location.worker.ts",

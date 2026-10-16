@@ -1,4 +1,5 @@
 .github/workflows/pr-crabbox-gate-publisher.yml
+cli-root-options.mjs
 node-sqlite.mjs
 node-version.mjs
 package.json
@@ -578,6 +579,7 @@ src/infra/boundary-path.ts
 src/infra/bun-sqlite-library.ts
 src/infra/clawhub-integrity.ts
 src/infra/clawhub-spec.ts
+src/infra/cli-root-options.ts
 src/infra/command-carriers.ts
 src/infra/config-dir.ts
 src/infra/container-env-file.ts
@@ -638,6 +640,7 @@ src/infra/fs-safe-advanced.ts
 src/infra/fs-safe-copy.worker.ts
 src/infra/fs-safe-defaults.ts
 src/infra/fs-safe.ts
+src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-process-argv.ts
 src/infra/gateway-supervision.ts
@@ -1134,6 +1137,7 @@ src/process/spawn-broker/protocol.ts
 src/process/spawn-diagnostics.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
+src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-windows-job-native.ts
 src/process/windows-command.ts
 src/proxy-capture/env.ts

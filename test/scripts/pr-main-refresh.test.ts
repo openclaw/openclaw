@@ -4,6 +4,7 @@ import {
   constants,
   createReadStream,
   existsSync,
+  mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
@@ -11,8 +12,8 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { delimiter, dirname, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
@@ -38,6 +39,72 @@ function recoverFixtureLock(f: ReturnType<typeof fixture>, oid: string) {
 }
 
 describePosix("native PR main refresh boundaries", () => {
+  it("preserves guarded Git backend delegation without reentering fixture instrumentation", () => {
+    const originalPath = process.env.PATH;
+    const configuredGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const root = tempDirs.make("openclaw-pr-git-backend-");
+    const bin = join(root, "bin");
+    const observations = join(root, "backend.log");
+    mkdirSync(bin);
+    writeFileSync(observations, "");
+    // Model a configured wrapper that resolves its backend from PATH. Bound
+    // reentry so a regression reports the cycle instead of hanging the suite.
+    writeFileSync(
+      join(bin, "git"),
+      `#!${process.execPath}
+import { spawnSync } from 'node:child_process';
+import { accessSync, appendFileSync, constants, realpathSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
+const observations = ${JSON.stringify(observations)};
+const depth = Number(process.env.PR_FIXTURE_GIT_DEPTH ?? '0');
+if (depth >= 4) {
+  appendFileSync(observations, 'recursion\\n');
+  console.error('bounded fixture Git recursion');
+  process.exit(86);
+}
+const self = realpathSync(process.argv[1]);
+const backend = ${JSON.stringify(configuredGit)};
+const candidate = (process.env.PATH ?? '').split(delimiter)
+  .map(directory => join(directory || '.', 'git'))
+  .find(file => {
+    try {
+      accessSync(file, constants.X_OK);
+      return realpathSync(file) !== self;
+    } catch {
+      return false;
+    }
+  });
+if (!candidate) throw new Error('Missing fixture Git backend');
+const guardedBackend = realpathSync(candidate) === realpathSync(backend);
+appendFileSync(observations, guardedBackend ? 'backend\\n' : 'interception\\n');
+const result = spawnSync(candidate, process.argv.slice(2), {
+  env: {
+    ...process.env,
+    PATH: guardedBackend ? ${JSON.stringify(originalPath)} : process.env.PATH,
+    PR_FIXTURE_GIT_DEPTH: String(depth + 1),
+  },
+  stdio: 'inherit',
+});
+process.exit(result.status ?? 1);
+`,
+      { mode: 0o755 },
+    );
+    vi.stubEnv("PATH", `${bin}${delimiter}${originalPath ?? ""}`);
+    try {
+      const f = fixture();
+      const result = f.run("review-checkout-main");
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.main);
+      expect(f.events().some((event) => event.kind === "main-fetch")).toBe(true);
+      expect(f.env.PATH?.split(delimiter)).not.toContain(dirname(f.realGit));
+      const calls = readFileSync(observations, "utf8").trim().split("\n");
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.every((call) => call === "backend")).toBe(true);
+    } finally {
+      vi.stubEnv("PATH", originalPath);
+    }
+  });
+
   it.each([
     "review-init",
     "review-checkout-pr",
@@ -306,7 +373,7 @@ describePosix("native PR main refresh boundaries", () => {
     f.git(f.worktree, "commit", "--allow-empty", "-qm", "reviewed fixup");
     const published = f.git(f.worktree, "rev-parse", "HEAD");
     const gitShim = join(f.root, "bin", "git");
-    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const realGit = f.realGit;
     const updateMetadata = [
       'const fs = require("node:fs")',
       "const file = process.argv[1]",
@@ -802,9 +869,7 @@ ${readFileSync(gitShim, "utf8")}
       meta = meta.replace(f.head, "not-a-commit");
     } else {
       const candidate =
-        fault === "noncommit"
-          ? f.git(f.worktree, "rev-parse", `${f.head}^{tree}`)
-          : f.sameTreeHead;
+        fault === "noncommit" ? f.git(f.worktree, "rev-parse", `${f.head}^{tree}`) : f.sameTreeHead;
       writeFileSync(
         join(f.local, "pr-meta.json"),
         JSON.stringify({ ...f.metadata, headRefOid: candidate }),
