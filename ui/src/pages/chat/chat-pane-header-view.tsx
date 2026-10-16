@@ -7,6 +7,8 @@ import type { ChatDetails } from "./components/chat-details.tsx";
 export type PaneDetailsProps = {
   chat: ChatDetails["props"];
   mobile: boolean;
+  conversationVisible?: boolean;
+  externalTrigger?: boolean;
   presentation: PresentationValue;
   setRef: (details: ChatDetails | undefined) => void;
 };
@@ -19,6 +21,8 @@ export function PaneDetails(props: PaneDetailsProps) {
       ref={(element) => props.setRef(element)}
       prop:props={props.chat}
       prop:mobile={props.mobile}
+      prop:conversationVisible={props.conversationVisible ?? true}
+      prop:externalTrigger={props.externalTrigger ?? false}
       prop:presented={presented()}
     />
   );
@@ -70,6 +74,7 @@ export function PaneHeaderSessionMenu(props: SessionMenuProps) {
       prop:deleteAllowed={props.deleteAllowed}
       prop:onOpen={props.onOpen}
       prop:onOpenCommandPalette={props.onOpenCommandPalette}
+      prop:onOpenDetails={props.onOpenDetails}
       prop:onSettingsChange={props.onSettingsChange}
       prop:onAction={props.onAction}
     />
@@ -80,7 +85,12 @@ declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-chat-details": HTMLAttributes<ChatDetails> &
-        ElementProperties<Pick<ChatDetails, "props" | "presented" | "mobile">>;
+        ElementProperties<
+          Pick<
+            ChatDetails,
+            "props" | "presented" | "mobile" | "conversationVisible" | "externalTrigger"
+          >
+        >;
       "openclaw-chat-header-session-menu": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-chat-header-session-menu"]
       > &

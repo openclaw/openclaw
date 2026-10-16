@@ -150,7 +150,7 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
     ),
   );
   return (
-    <div id="channels-pairing-requests">
+    <div id="channels-pairing-requests" ref={(element) => props.onPairingRoot(element)}>
       <SettingsSection
         title={t("channels.pairing.title")}
         description={t("channels.pairing.subtitle")}
