@@ -304,7 +304,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
           setHeartbeatSilentCompletion(options);
           return undefined;
         });
-        expect((await run()).status).toBe("ran");
+        expect(await run()).toEqual({ status: "ran", durationMs: expect.any(Number) });
         expectToolPrompt(replySpy);
         const context = replySpy.mock.calls[0]?.[0];
         expect(context?.SessionKey).toMatch(/:heartbeat$/);

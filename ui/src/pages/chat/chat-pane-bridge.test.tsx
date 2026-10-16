@@ -116,3 +116,51 @@ it("applies a route draft and its focus cue to an already mounted native pane", 
   );
   view.unmount();
 });
+
+it("opens provider findings through the mounted pane's first rendered frame", async () => {
+  installTranscriptDomMocks();
+  onTestFinished(resetTranscriptTestDom);
+  const sessionKey = "agent:main:bridge-provider-review";
+  const review = {
+    id: "bridge-review",
+    runId: "bridge-paused-run",
+    canContinue: true,
+    explanation: "The agent tried to modify a synthetic file outside the selected project.",
+    continuationMessage: "Continue only inside the selected project.",
+  };
+  const fixture = createMountedPanes([
+    {
+      key: sessionKey,
+      agentId: "main",
+      kind: "direct",
+      sessionId: "bridge-provider-review",
+      updatedAt: 1,
+      providerReview: review,
+    },
+  ]);
+  const container = document.body.appendChild(createApplicationContextProvider(fixture.context));
+  onTestFinished(() => container.remove());
+  const view = mountSolid(
+    () => (
+      <ApplicationProvider value={fixture.context}>
+        <ChatPaneView paneId="bridge-provider-review" sessionKey={sessionKey} active />
+      </ApplicationProvider>
+    ),
+    { container },
+  );
+  onTestFinished(view.unmount);
+  const reviewButton = await waitForSolid(() =>
+    expectDefined(
+      view.container.querySelector<HTMLButtonElement>(".chat-provider-review button"),
+      "mounted provider review action",
+    ),
+  );
+  expect(reviewButton.textContent).toContain("Review findings");
+  reviewButton.click();
+  await vi.dynamicImportSettled();
+  await waitForSolid(() => {
+    const dialog = view.container.querySelector("openclaw-modal-dialog");
+    expect(dialog?.textContent).toContain(review.explanation);
+    expect(dialog?.querySelector("blockquote")?.textContent).toBe(review.continuationMessage);
+  });
+});

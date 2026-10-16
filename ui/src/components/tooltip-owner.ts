@@ -40,9 +40,10 @@ export interface TooltipPolicyOptions {
   preview: (anchor: HTMLElement | SVGElement, content: string) => void;
 }
 
-export class TooltipController {
-  static readonly #activeByDocument = new WeakMap<Document, TooltipController>();
-  static readonly #pendingByDocument = new WeakMap<Document, TooltipController>();
+/** Synchronous interaction authority, available before the lazy renderer loads. */
+export class TooltipOwner {
+  static readonly #activeByDocument = new WeakMap<Document, TooltipOwner>();
+  static readonly #pendingByDocument = new WeakMap<Document, TooltipOwner>();
 
   static readonly consumeEscape = (event: KeyboardEvent, ownerDocument: Document): boolean => {
     if (
@@ -54,11 +55,11 @@ export class TooltipController {
       return false;
     }
     // Cancel loading intent without giving an invisible tooltip keyboard authority.
-    const pending = TooltipController.#pendingByDocument.get(ownerDocument);
+    const pending = TooltipOwner.#pendingByDocument.get(ownerDocument);
     if (pending) {
       pending.#close();
     }
-    const active = TooltipController.#activeByDocument.get(ownerDocument);
+    const active = TooltipOwner.#activeByDocument.get(ownerDocument);
     if (!active) {
       return false;
     }
@@ -81,8 +82,8 @@ export class TooltipController {
 
   static closeForProvider(provider: TooltipProviderPolicy) {
     const active =
-      TooltipController.#pendingByDocument.get(provider.ownerDocument) ??
-      TooltipController.#activeByDocument.get(provider.ownerDocument);
+      TooltipOwner.#pendingByDocument.get(provider.ownerDocument) ??
+      TooltipOwner.#activeByDocument.get(provider.ownerDocument);
     if (active && active.#tooltipProvider === provider) {
       active.options.retire();
     }
@@ -119,33 +120,6 @@ export class TooltipController {
     readonly host: HTMLElement,
     private readonly options: TooltipPolicyOptions,
   ) {}
-  get content() {
-    return this.options.props().content ?? "";
-  }
-  get placement() {
-    return this.options.props().placement ?? "top";
-  }
-  get closeDelay() {
-    return this.options.props().closeDelay ?? RICH_CONTENT_CLOSE_DELAY;
-  }
-  get hoverDismissDelay() {
-    return this.options.props().hoverDismissDelay;
-  }
-  get delay() {
-    return this.options.props().delay;
-  }
-  get describe() {
-    return this.options.props().describe ?? true;
-  }
-  get disabled() {
-    return this.options.props().disabled ?? false;
-  }
-  get openOnClick() {
-    return this.options.props().openOnClick ?? false;
-  }
-  get anchor() {
-    return this.options.props().anchor;
-  }
   get id() {
     return this.#tooltipId;
   }
@@ -153,15 +127,16 @@ export class TooltipController {
     return this.#triggerElement;
   }
   get resolvedPlacement(): OverlayPlacement {
-    return (this.placement === "right-start" || this.placement === "right") &&
+    const placement = this.options.props().placement ?? "top";
+    return (placement === "right-start" || placement === "right") &&
       this.host.ownerDocument.defaultView?.matchMedia?.("(max-width: 640px)").matches
       ? "bottom-start"
-      : this.placement;
+      : placement;
   }
   refresh() {
     this.#attachTrigger();
     this.contentChanged();
-    if (this.disabled || !this.#tooltipText) {
+    if ((this.options.props().disabled ?? false) || !this.#tooltipText) {
       this.options.retire();
     } else if (this.host.hasAttribute("open") && this.#isRedundant()) {
       this.#close();
@@ -174,11 +149,8 @@ export class TooltipController {
     this.#tooltipProvider = null;
     this.#detachTrigger();
   }
-  close() {
-    this.#close();
-  }
   #attachTrigger() {
-    const trigger = this.anchor ?? this.options.trigger();
+    const trigger = this.options.props().anchor ?? this.options.trigger();
     if (trigger === this.#triggerElement) {
       return;
     }
@@ -207,8 +179,6 @@ export class TooltipController {
     trigger.addEventListener("focusin", this.handleFocusIn);
     trigger.addEventListener("focusout", this.handleFocusOut);
     trigger.addEventListener("click", this.#handleClick, true);
-    this.#observeRichContent();
-    this.#syncDescription();
   }
 
   #detachTrigger() {
@@ -230,7 +200,7 @@ export class TooltipController {
 
   previewForAnchor(anchor: HTMLElement | SVGElement, content: string, input: "pointer" | "focus") {
     this.options.preview(anchor, content);
-    if (this.anchor !== anchor || !anchor.isConnected || !this.host.isConnected) {
+    if (this.options.props().anchor !== anchor || !anchor.isConnected || !this.host.isConnected) {
       return;
     }
     this.refresh();
@@ -278,7 +248,7 @@ export class TooltipController {
   };
 
   readonly #handlePointerDown = () => {
-    if (!this.openOnClick) {
+    if (!(this.options.props().openOnClick ?? false)) {
       this.#close();
     }
   };
@@ -330,7 +300,7 @@ export class TooltipController {
   // touch and in browsers that do not focus buttons on click there is no other
   // way to read it.
   readonly #handleClick = () => {
-    if (this.openOnClick && !this.#pinned) {
+    if ((this.options.props().openOnClick ?? false) && !this.#pinned) {
       this.#pinned = this.#show();
       return;
     }
@@ -339,7 +309,7 @@ export class TooltipController {
 
   #scheduleOpen() {
     if (
-      this.disabled ||
+      (this.options.props().disabled ?? false) ||
       this.#pending ||
       this.host.hasAttribute("open") ||
       this.#openTimer !== null
@@ -347,10 +317,11 @@ export class TooltipController {
       return;
     }
     const provider = this.#tooltipProvider;
+    const configuredDelay = this.options.props().delay;
     const delay =
-      this.delay === undefined && provider?.delayed === false
+      configuredDelay === undefined && provider?.delayed === false
         ? 0
-        : Math.max(0, this.delay ?? HOVER_DELAY);
+        : Math.max(0, configuredDelay ?? HOVER_DELAY);
     this.#openTimer = window.setTimeout(() => {
       this.#openTimer = null;
       this.#show();
@@ -359,7 +330,7 @@ export class TooltipController {
 
   #show() {
     if (
-      this.disabled ||
+      (this.options.props().disabled ?? false) ||
       !this.#triggerElement ||
       !this.#tooltipText ||
       this.#isRedundant() ||
@@ -372,13 +343,13 @@ export class TooltipController {
 
   /** Loading is cancelable intent; only the overlay lifecycle may accept visibility. */
   pendingOpen() {
-    const previous = TooltipController.#pendingByDocument.get(this.host.ownerDocument);
+    const previous = TooltipOwner.#pendingByDocument.get(this.host.ownerDocument);
     if (previous && previous !== this) {
       previous.#close();
     }
     this.#pending = true;
     this.#observePresentation();
-    TooltipController.#pendingByDocument.set(this.host.ownerDocument, this);
+    TooltipOwner.#pendingByDocument.set(this.host.ownerDocument, this);
     this.host.ownerDocument.defaultView?.addEventListener(
       "keydown",
       this.#handleWindowKeyDown,
@@ -389,8 +360,8 @@ export class TooltipController {
   /** Apply only lifecycle-admitted state; canceled requests never alter interaction policy. */
   acceptedOpen(open: boolean) {
     this.#pending = false;
-    if (TooltipController.#pendingByDocument.get(this.host.ownerDocument) === this) {
-      TooltipController.#pendingByDocument.delete(this.host.ownerDocument);
+    if (TooltipOwner.#pendingByDocument.get(this.host.ownerDocument) === this) {
+      TooltipOwner.#pendingByDocument.delete(this.host.ownerDocument);
     }
     if (!open) {
       this.#presentationObserver.disconnect();
@@ -404,15 +375,15 @@ export class TooltipController {
         true,
       );
       this.#clearTimers();
-      if (TooltipController.#activeByDocument.get(this.host.ownerDocument) === this) {
-        TooltipController.#activeByDocument.delete(this.host.ownerDocument);
+      if (TooltipOwner.#activeByDocument.get(this.host.ownerDocument) === this) {
+        TooltipOwner.#activeByDocument.delete(this.host.ownerDocument);
         this.#tooltipProvider?.closeTooltip();
       }
       return;
     }
     this.#clearTimers(false);
     this.#observePresentation();
-    TooltipController.#activeByDocument.set(this.host.ownerDocument, this);
+    TooltipOwner.#activeByDocument.set(this.host.ownerDocument, this);
     this.#tooltipProvider?.openTooltip();
     this.#syncDescription();
     this.host.setAttribute("open", "");
@@ -426,7 +397,7 @@ export class TooltipController {
 
   // Capture before dialogs/default actions; earlier capture owners use the same consumer.
   readonly #handleWindowKeyDown = (event: KeyboardEvent) => {
-    TooltipController.consumeEscape(event, this.host.ownerDocument);
+    TooltipOwner.consumeEscape(event, this.host.ownerDocument);
   };
 
   handleInteraction(event: PointerEvent | FocusEvent, target: Node | null) {
@@ -434,7 +405,7 @@ export class TooltipController {
       if (
         "pointerType" in event &&
         event.pointerType !== "touch" &&
-        this.hoverDismissDelay !== undefined &&
+        this.options.props().hoverDismissDelay !== undefined &&
         this.#hoverExitPending &&
         this.#closeTimer === null &&
         !this.#containsInteractionTarget(target)
@@ -512,7 +483,7 @@ export class TooltipController {
     return (
       !this.#richContentText &&
       this.#triggerElement !== null &&
-      isTooltipTextRedundant(this.content, this.#triggerElement)
+      isTooltipTextRedundant(this.options.props().content ?? "", this.#triggerElement)
     );
   }
 
@@ -535,7 +506,7 @@ export class TooltipController {
         "pointer-events",
         richText && !this.options.props().pointerThrough ? "auto" : "none",
       );
-    if (!this.describe) {
+    if (!(this.options.props().describe ?? true)) {
       this.#restoreDescription();
       return;
     }
@@ -570,7 +541,7 @@ export class TooltipController {
     ) {
       descriptionRoot.append(this.#descriptionElement);
     }
-    const descriptionText = richText || this.content;
+    const descriptionText = richText || (this.options.props().content ?? "");
     if (this.#descriptionElement.textContent !== descriptionText) {
       this.#descriptionElement.textContent = descriptionText;
     }
@@ -646,12 +617,16 @@ export class TooltipController {
       this.#close();
       return;
     }
-    this.#closeTimer = window.setTimeout(() => {
-      this.#closeTimer = null;
-      if (!this.#shouldRemainOpen(pointerExit)) {
-        this.#close();
-      }
-    }, this.hoverDismissDelay ?? this.closeDelay);
+    const props = this.options.props();
+    this.#closeTimer = window.setTimeout(
+      () => {
+        this.#closeTimer = null;
+        if (!this.#shouldRemainOpen(pointerExit)) {
+          this.#close();
+        }
+      },
+      props.hoverDismissDelay ?? props.closeDelay ?? RICH_CONTENT_CLOSE_DELAY,
+    );
   }
 
   #clearTimers(resetHover = true) {
@@ -673,7 +648,7 @@ export class TooltipController {
   }
 
   get #tooltipText() {
-    return this.#richContentText || this.content;
+    return this.#richContentText || (this.options.props().content ?? "");
   }
 
   #observeRichContent() {
@@ -707,4 +682,4 @@ export class TooltipController {
   }
 }
 
-export const consumeTooltipEscape = TooltipController.consumeEscape;
+export const consumeTooltipEscape = TooltipOwner.consumeEscape;

@@ -26,8 +26,8 @@ const VIEWPORT_RESIZE_DELAY_MS = 300;
 const MIN_VIEWPORT_DIMENSION = 100;
 const MAX_VIEWPORT_DIMENSION = 8192;
 
-/** Owns panel fitting for both screenshots and streamed frames. */
-export class BrowserPanelViewportController {
+/** Synchronous resize admission and acknowledgment; rendering does not own in-flight requests. */
+export class BrowserPanelViewportOwner {
   observedViewportSize: { width: number; height: number } | null = null;
   private lastResize: ViewportResize | null = null;
   private resizing = false;

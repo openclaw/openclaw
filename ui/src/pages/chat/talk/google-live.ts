@@ -7,7 +7,7 @@ import {
   RealtimeTalkPcmInputPump,
   RealtimeTalkPcmOutputQueue,
 } from "./audio.ts";
-import { RealtimeTalkCameraController } from "./camera-controller.ts";
+import { RealtimeTalkCameraOwner } from "./camera-owner.ts";
 import { buildGoogleLiveUrl, GOOGLE_LIVE_SETUP_TIMEOUT_MS } from "./google-live-lifecycle.ts";
 import { GoogleLiveToolOwner, type GoogleLiveFunctionCall } from "./google-live-tools.ts";
 import {
@@ -69,7 +69,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private closed = false;
   private interruptedTurn = false;
-  private readonly camera: RealtimeTalkCameraController;
+  private readonly camera: RealtimeTalkCameraOwner;
   private active = false;
   private readonly startup = Promise.withResolvers<RealtimeTalkTransportStartResult>();
   private startupError: Error | undefined;
@@ -106,7 +106,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         this.videoFramesActive && this.hasSentVideoFrame && this.camera.hasUsableTrack(),
       sendResult: (callId, name, result) => this.sendToolResult(callId, name, result),
     });
-    this.camera = new RealtimeTalkCameraController({
+    this.camera = new RealtimeTalkCameraOwner({
       getDeviceId: () => this.ctx.videoDeviceId,
       setDeviceId: (deviceId) => (this.ctx.videoDeviceId = deviceId),
       isClosed: () => this.closed,

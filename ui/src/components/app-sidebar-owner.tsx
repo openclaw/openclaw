@@ -52,6 +52,7 @@ import { SidebarAgentRoster, renderSidebarPinnedSession } from "./sidebar-agent-
 import type { createSidebarScroll } from "./sidebar-context-controller.ts";
 import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.tsx";
+import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 import {
   captureSidebarSnapshotModel,
@@ -176,7 +177,10 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   // dropped because the controller aligns from cumulative snapshots.
   private narration: SidebarSessionNarrationController | null = null;
   private narrationLoad: Promise<void> | null = null;
-  constructor(...args: ConstructorParameters<typeof AppSidebarSessionNavigationElement>) {
+  constructor(
+    public override navigationCatalog: SidebarNavigationCatalog,
+    ...args: ConstructorParameters<typeof AppSidebarSessionNavigationElement>
+  ) {
     super(...args);
     new SubscriptionsController(this)
       .watch(
