@@ -86,10 +86,11 @@ Pages view saves and restores its dashboard catalog without waiting for the
 inactive Sessions roster.
 
 Boot and roster records retain the existing 30-day expiry, and transcripts keep
-up to 80 recent rows of canonical history (plus rows from the same history entry) for a warm reload.
+up to 80 recent rows (plus rows from the same history entry) for a warm reload.
 Older history loads from the Gateway as you scroll up. Cache upgrades discard
 older, unbounded transcript records; a connected visit fills the new cache.
-History imported from CLI backends retains its existing cached window and Gateway pagination.
+The first upward scroll refills the Gateway's current history window before continuing
+to older pages. Overlapping cached rows are deduplicated.
 Clearing site data removes local recovery data.
 If browser storage is unavailable or no usable record exists, the connection
 screen appears as usual.

@@ -15,7 +15,6 @@ import {
 import {
   CHAT_TRANSCRIPT_METADATA_KEYS,
   MAX_CACHED_CHAT_WEIGHT,
-  capSnapshotPagination,
   type ChatCacheObserver,
   type ChatMessageCache,
   type ChatSessionSnapshot,
@@ -145,12 +144,7 @@ function createSnapshotRecord(
   try {
     let projected = pending.snapshot;
     const messages = projected.messages;
-    // Imported history pages use Gateway index ordinals, not the rows' native
-    // sequences. Preserve their window until that pagination fact reaches the UI.
-    const imported = messages.some(
-      (message) => asOptionalRecord(asOptionalRecord(message)?.__openclaw)?.importedFrom,
-    );
-    let start = imported ? 0 : Math.max(0, messages.length - CHAT_SNAPSHOT_MESSAGE_LIMIT);
+    let start = Math.max(0, messages.length - CHAT_SNAPSHOT_MESSAGE_LIMIT);
     // A history entry can project multiple rows; retain its whole sequence group.
     while (start > 0) {
       const seq = readSessionMessageSequence(messages[start]);
@@ -160,11 +154,20 @@ function createSnapshotRecord(
       start--;
     }
     if (start > 0) {
-      const pagination = capSnapshotPagination(projected.pagination, messages, start);
-      if (!pagination) {
-        return null;
-      }
-      projected = { ...projected, messages: messages.slice(start), pagination };
+      // Display rows are not Gateway page boundaries. Refill from zero on the
+      // first upward scroll; the history owner deduplicates the overlap and
+      // returns the next authoritative offset, including merged CLI histories.
+      projected = {
+        ...projected,
+        messages: messages.slice(start),
+        pagination: {
+          hasMore: true,
+          nextOffset: 0,
+          ...(projected.pagination.totalMessages !== undefined
+            ? { totalMessages: projected.pagination.totalMessages }
+            : {}),
+        },
+      };
     }
     // Pairing credentials stay in the live projection, never the browser's disk cache.
     const json = JSON.stringify(projected, (_key, value: unknown) => {

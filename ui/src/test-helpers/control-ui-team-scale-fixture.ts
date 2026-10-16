@@ -20,6 +20,7 @@ import {
   prepareTeamScaleSidebarListChurn,
   type TeamScaleLiveEvent,
 } from "./control-ui-sidebar-list-fixture.ts";
+import { createTeamScaleHistoryFixture } from "./control-ui-team-scale-history-fixture.ts";
 import {
   createTeamScalePeople,
   TEAM_SCALE_SELF_INSTANCE_ID,
@@ -219,49 +220,13 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       label: person.name,
     })),
   });
-  const messageIds = Array.from(
-    { length: counts.transcriptMessages },
-    (_, index) => `team-message-${index + 1}`,
-  );
-  const messagesPerWidget = Math.ceil(counts.transcriptMessages / counts.inlineWidgets);
-  const historyMessages = messageIds.map((id, index) => ({
-    role:
-      options.largeSnapshot && index % 4 === 2 ? "toolResult" : index % 2 ? "assistant" : "user",
-    __openclaw: { id, seq: index + 1 },
-    ...(options.largeSnapshot
-      ? {
-          idempotencyKey: `synthetic-message-${index}`,
-          ...(index % 4 === 2 ? { toolCallId: `synthetic-tool-${index}`, toolName: "read" } : {}),
-          openclawResponsesInputReplay: { text: "Synthetic replay metadata. ".repeat(10) },
-          usage: { input: 1200, output: 400, totalTokens: 1600 },
-        }
-      : {}),
-    timestamp: now - (counts.transcriptMessages - index) * 60_000,
-    content: [
-      ...(duplicateReads && index === counts.transcriptMessages - 1
-        ? duplicateReads.attachments
-        : []),
-      {
-        type: "text",
-        text: [
-          `### Project checkpoint ${index + 1}`,
-          "Review the synthetic work queue, confirm the dependency order, and record the owner of the next action. The fixture contains no real conversations or account data.",
-          index % 2
-            ? "The current implementation is ready for verification. Coverage includes the normal path, a recoverable failure, and the final user-visible result."
-            : "Please check the current progress and keep the existing layout stable while the remaining results arrive.",
-          ...(options.largeSnapshot
-            ? ["Synthetic transcript detail and tool output. ".repeat(40)]
-            : []),
-          ...(index % messagesPerWidget === messagesPerWidget - 1 ||
-          index === counts.transcriptMessages - 1
-            ? [
-                `[embed ref="team-scale-chart-${Math.floor(index / messagesPerWidget) + 1}" title="Team metric ${Math.floor(index / messagesPerWidget) + 1}" height="220" /]`,
-              ]
-            : []),
-        ].join("\n\n"),
-      },
-    ],
-  }));
+  const { messageIds, historyMessages } = createTeamScaleHistoryFixture({
+    messageCount: counts.transcriptMessages,
+    inlineWidgets: counts.inlineWidgets,
+    now,
+    largeSnapshot: options.largeSnapshot,
+    attachments: duplicateReads?.attachments,
+  });
   const largeHistory = options.largeSnapshot
     ? {
         messages: historyMessages,

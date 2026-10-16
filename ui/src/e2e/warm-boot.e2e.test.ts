@@ -18,6 +18,15 @@ const suite = createControlUiE2eSuite({
 // A literal conversation can restore before hello; the shorthand main route needs live defaults.
 const sessionKey = "agent:main:thread:warm-reload";
 const transcriptText = "This conversation is ready before the Gateway reconnects.";
+const reloadProfiles = [
+  "matching",
+  "different",
+  "device-token",
+  "trusted-proxy",
+  "legacy-rail",
+  "large",
+  "imported",
+];
 
 async function expectOwnMessageAlignment(page: Page): Promise<void> {
   const own = page.locator(".chat-group.user", { hasText: "Morgan's saved message." });
@@ -112,19 +121,32 @@ async function waitForPersistedWarmState(page: Page): Promise<void> {
 }
 
 suite.define(() => {
-  it.each(["matching", "different", "device-token", "trusted-proxy", "legacy-rail", "large"])(
+  it.each(reloadProfiles)(
     "reconciles the cached shell, roster, and transcript with a %s profile",
     async (profile) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const timestamp = Date.now();
+        const imported = profile === "imported";
         const olderMessages =
-          profile === "large"
-            ? Array.from({ length: 1_099 }, (_, index) => ({
+          profile === "large" || imported
+            ? Array.from({ length: imported ? 119 : 1_099 }, (_, index) => ({
                 role: index % 2 ? "assistant" : "user",
                 content: `Older history ${index + 1}`,
-                __openclaw: { id: `older-${index + 1}`, seq: index + 1 },
+                __openclaw: {
+                  id: `older-${index + 1}`,
+                  ...(imported ? { importedFrom: "claude-cli" } : { seq: index + 1 }),
+                },
               }))
             : [];
+        const rememberedMessage = {
+          role: "assistant",
+          content: transcriptText,
+          openclawResponsesInputReplay: { items: ["retained for reconciliation identity"] },
+          __openclaw: {
+            id: "cached-message",
+            ...(imported ? { importedFrom: "claude-cli" } : { seq: olderMessages.length + 1 }),
+          },
+        };
         const currentRow = {
           key: sessionKey,
           sessionId: "warm-reload-session",
@@ -181,11 +203,7 @@ suite.define(() => {
               sessionInfo: currentRow,
               messages: [
                 ...olderMessages,
-                {
-                  role: "assistant",
-                  content: transcriptText,
-                  __openclaw: { id: "cached-message", seq: olderMessages.length + 1 },
-                },
+                rememberedMessage,
                 ...(profile === "matching"
                   ? [
                       {
@@ -204,7 +222,7 @@ suite.define(() => {
               ],
               deltaCursor: "warm-reload-cursor",
               hasMore: false,
-              ...(profile === "large" ? { totalMessages: 1_100 } : {}),
+              ...(olderMessages.length ? { totalMessages: olderMessages.length + 1 } : {}),
               metadata: { models: [] },
             },
           },
@@ -470,36 +488,68 @@ suite.define(() => {
         await transcript
           .getByText(
             profile === "different" ? "This is profile B's conversation." : transcriptText,
-            { exact: true },
+            {
+              exact: true,
+            },
           )
           .waitFor();
         await page.screenshot({
           path: path.join(suite.artifactDir, `warm-${profile}-after-hello.png`),
         });
-        if (profile === "large") {
+        if (profile === "large" || imported) {
+          const messages = [...olderMessages, rememberedMessage];
+          const firstPage = messages.slice(-1_000);
+          const hasMore = messages.length > firstPage.length;
           await gateway.setMethodResponse("chat.history", {
             cases: [
               {
-                match: { offset: 80 },
+                match: { offset: 0 },
                 response: {
-                  messages: olderMessages.slice(0, 1_020),
+                  messages: firstPage,
                   sessionId: currentRow.sessionId,
-                  totalMessages: 1_100,
+                  totalMessages: messages.length,
+                  hasMore,
+                  ...(hasMore ? { nextOffset: 1_000 } : {}),
+                },
+              },
+              {
+                match: { offset: 1_000 },
+                response: {
+                  messages: messages.slice(0, -1_000),
+                  sessionId: currentRow.sessionId,
+                  totalMessages: messages.length,
                   hasMore: false,
                 },
               },
             ],
           });
+          const messageCount = () =>
+            page
+              .locator(".chat-pane-cache__pane--active")
+              .evaluate((element) => Reflect.get(element, "state").chatMessages.length);
           const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
           await thread.hover();
           await page.mouse.wheel(0, -100_000);
-          const history = await gateway.waitForRequest("chat.history");
-          expect(history.params).toMatchObject({ offset: 80 });
+          const history = await gateway.waitForRequest("chat.history", { match: { offset: 0 } });
+          expect(history.params).toMatchObject({ offset: 0 });
+          await expect.poll(messageCount).toBe(firstPage.length);
           await page
-            .getByText("Older history 1020", { exact: true })
+            .getByText(`Older history ${olderMessages.length - 79}`, { exact: true })
             .waitFor({ state: "attached" });
           await page.mouse.wheel(0, -1_000_000);
-          await page.getByText("Older history 1", { exact: true }).waitFor();
+          if (hasMore) {
+            const older = await gateway.waitForRequest("chat.history", {
+              match: { offset: 1_000 },
+            });
+            expect(older.params).toMatchObject({ offset: 1_000 });
+            await expect.poll(messageCount).toBe(messages.length);
+            await page
+              .getByText("Older history 100", { exact: true })
+              .waitFor({ state: "attached" });
+            await page.getByText("Older history 101", { exact: true }).waitFor();
+          } else {
+            await page.getByText("Older history 1", { exact: true }).waitFor();
+          }
         }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);

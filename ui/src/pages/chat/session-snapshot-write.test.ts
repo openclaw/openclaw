@@ -86,7 +86,7 @@ describe("snapshot write serialization and scheduling", () => {
     );
     expect(restored?.pagination).toEqual({
       hasMore: true,
-      nextOffset: 80,
+      nextOffset: 0,
       totalMessages: pagination.totalMessages,
     });
     expect(restored?.deltaCursor).toBe("latest-cursor");
@@ -108,11 +108,11 @@ describe("snapshot write serialization and scheduling", () => {
     await store.flush();
     const restored = await store.read(sessionKey);
     expect(restored?.messages).toEqual(messages.slice(18));
-    expect(restored?.pagination).toEqual({ hasMore: true, nextOffset: 28, totalMessages: 34 });
+    expect(restored?.pagination).toEqual({ hasMore: true, nextOffset: 0, totalMessages: 34 });
   });
 
   it.each([false, true])(
-    "preserves the Gateway's imported history window (mixed=%s)",
+    "bounds imported history and refills its Gateway window on upward scroll (mixed=%s)",
     async (mixed) => {
       const messages = Array.from({ length: 120 }, (_, index) => ({
         role: "assistant",
@@ -129,7 +129,11 @@ describe("snapshot write serialization and scheduling", () => {
       };
       store.write(sessionKey, value);
       await store.flush();
-      expect(await store.read(sessionKey)).toEqual(value);
+      expect(await store.read(sessionKey)).toEqual({
+        ...value,
+        messages: messages.slice(-80),
+        pagination: { hasMore: true, nextOffset: 0, totalMessages: 200 },
+      });
     },
   );
 
