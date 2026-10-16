@@ -25,12 +25,9 @@ import {
 import {
   sanitizeServiceInspectionError,
   ServiceInspectionError,
+  type ServiceInspectionDiagnostic,
 } from "./service-inspection-error.js";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceEnv,
-  GatewayServiceReadOptions,
-} from "./service-types.js";
+import type { GatewayServiceEnv, GatewayServiceReadOptions } from "./service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "./service.js";
 
 const native = vi.hoisted(() => ({
@@ -52,7 +49,13 @@ vi.mock("node:child_process", async (importOriginal) => ({
 const label = "ai.openclaw.gateway";
 const programArguments = ["node", "gateway.js"];
 const environment = { HOME: "/service-home", OPENCLAW_STATE_DIR: "/service-state" };
-const missingJob = { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };
+const launchResult = (stdout = "", code = 0, termination = "exit", stderr = "") => ({
+  code,
+  termination,
+  stdout,
+  stderr,
+});
+const missingJob = launchResult("", 113, "exit", "Could not find service");
 const renderPlist = (args: string[]) => {
   const contents = buildLaunchAgentPlist({
     label,
@@ -64,28 +67,23 @@ const renderPlist = (args: string[]) => {
   native.plists.add(contents);
   return contents;
 };
-const readers: Array<{
-  name: string;
-  read: (
-    env: GatewayServiceEnv,
-    options?: GatewayServiceReadOptions,
-  ) => Promise<GatewayServiceCommandConfig | null>;
-  resolvePath: (env: GatewayServiceEnv) => string;
-  render: (args: string[]) => string;
-}> = [
-  {
-    name: "LaunchAgent",
-    read: readLaunchAgentProgramArguments,
-    resolvePath: resolveLaunchAgentPlistPath,
-    render: renderPlist,
-  },
-  {
-    name: "Scheduled Task",
-    read: readScheduledTaskCommand,
-    resolvePath: resolveTaskScriptPath,
-    render: (args) => buildTaskScript({ programArguments: args, environment }),
-  },
-];
+const readers = [
+  ["LaunchAgent", readLaunchAgentProgramArguments, resolveLaunchAgentPlistPath, renderPlist],
+  [
+    "Scheduled Task",
+    readScheduledTaskCommand,
+    resolveTaskScriptPath,
+    (args: string[]) => buildTaskScript({ programArguments: args, environment }),
+  ],
+] as const;
+const nativeError = (code: string, errno?: number) => ({
+  error: Object.assign(new Error("native-secret-canary"), { code, errno }),
+});
+const nativeFailure = (status: number, stdout: string) => ({
+  status,
+  stdout,
+  stderr: "native-secret-canary",
+});
 
 describe("native service command inspection", () => {
   let root: string;
@@ -120,9 +118,9 @@ describe("native service command inspection", () => {
   const strictPlist = () => readLaunchAgentProgramArguments(env, { requireEffective: true });
   const unreadable = (name: string) => `Effective ${name} service command could not be inspected.`;
 
-  describe.each(readers)("$name", ({ name, read, resolvePath, render }) => {
+  describe.each(readers)("%s", (name, read, resolvePath, render) => {
     it.each(["dangling", "directory", "empty", "registered", "unavailable"])(
-      "keeps a %s definition distinct from proven absence",
+      "does not treat %s definitions as absent",
       async (condition) => {
         const filename = resolvePath(env);
         if (condition === "directory") {
@@ -134,23 +132,14 @@ describe("native service command inspection", () => {
           await fs.mkdir(path.dirname(filename), { recursive: true });
           await fs.symlink(path.join(root, "absent-definition"), filename, "junction");
         } else {
-          native.launchctl.mockImplementation(async (_command: string, args: string[]) =>
-            args[1]?.startsWith("system/")
-              ? missingJob
-              : condition === "registered"
-                ? {
-                    code: 0,
-                    termination: "exit",
-                    stdout: `${args[1]} = {\n\tstate = waiting\n}`,
-                    stderr: "",
-                  }
-                : {
-                    code: 1,
-                    termination: "error",
-                    stdout: "",
-                    stderr: "native-inspection-secret-canary",
-                  },
-          );
+          native.launchctl.mockImplementation(async (_command: string, args: string[]) => {
+            if (args[1]?.startsWith("system/")) {
+              return missingJob;
+            }
+            return condition === "registered"
+              ? launchResult(`${args[1]} = {\n\tstate = waiting\n}`)
+              : launchResult("", 1, "error", "native-inspection-secret-canary");
+          });
           native.scheduler.mockReturnValue(
             condition === "registered"
               ? { status: 0, stdout: JSON.stringify({ state: 3 }) }
@@ -214,7 +203,7 @@ describe("native service command inspection", () => {
       { placement: "delegated serial", condition: "absent", explicit: true },
       { placement: "delegated serial", condition: "ready", explicit: false },
     ])(
-      "preserves native $condition state with fractional elapsed time ($placement, explicit=$explicit)",
+      "$placement preserves $condition state (explicit=$explicit)",
       async ({ placement, condition, explicit }) => {
         let now = 0;
         let firstRead = true;
@@ -255,42 +244,33 @@ describe("native service command inspection", () => {
               })
             : await readState();
 
-        if (condition === "absent") {
-          expect(state).toMatchObject({
-            command: null,
-            installed: false,
-            running: false,
-            loadState: { status: "not-loaded" },
-            runtime: { status: "stopped", missingUnit: true },
-          });
-        } else {
-          expect(state).toMatchObject({
-            command: { programArguments },
-            installed: true,
-            running: false,
-            loadState: { status: "loaded" },
-            runtime: {
-              status: "unknown",
-              state: condition === "running" ? "Running" : "Ready",
-            },
-          });
+        const absent = condition === "absent";
+        expect(state).toMatchObject({
+          command: absent ? null : { programArguments },
+          installed: !absent,
+          running: false,
+          loadState: { status: absent ? "not-loaded" : "loaded" },
+          runtime: absent
+            ? { status: "stopped", missingUnit: true }
+            : {
+                status: "unknown",
+                state: condition === "running" ? "Running" : "Ready",
+              },
+        });
+        if (!absent) {
           expect(state.runtime?.missingUnit).not.toBe(true);
           expect(state.runtime?.inspectionFailure).toBeUndefined();
         }
         expect(native.scheduler).toHaveBeenCalledTimes(3);
         expect(run).not.toHaveBeenCalled();
         expect(now).toBe(401);
-        for (const allowance of schedulerAllowances) {
-          expect(allowance.timeout).toBe(explicit ? Math.floor(allowance.remaining) : 60_000);
-          expect(allowance.timeout).toBeGreaterThan(0);
-          if (explicit) {
-            expect(allowance.timeout).toBeLessThanOrEqual(allowance.remaining);
-          }
-        }
+        expect(schedulerAllowances.map(({ timeout }) => timeout)).toEqual(
+          schedulerAllowances.map(({ remaining }) => (explicit ? Math.floor(remaining) : 60_000)),
+        );
       },
     );
 
-    it("does not launch further native work after reading the installed script consumes 1000 ms", async () => {
+    it("stops native work when the launcher read exhausts its deadline", async () => {
       let now = 0;
       vi.spyOn(performance, "now").mockImplementation(() => now);
       const { scriptPath, run, observe } = await windowsFixture(true, () => {
@@ -306,7 +286,7 @@ describe("native service command inspection", () => {
       expect(run).not.toHaveBeenCalled();
     });
 
-    it("rejects a late missing Scheduler result after the strict reader deadline", async () => {
+    it("rejects late Scheduler absence", async () => {
       let now = 0;
       vi.spyOn(performance, "now").mockImplementation(() => now);
       native.scheduler.mockImplementation(() => {
@@ -319,7 +299,7 @@ describe("native service command inspection", () => {
     });
   });
 
-  it("does not infer Windows service absence while a Startup launcher remains", async () => {
+  it("does not treat a Startup launcher as absent", async () => {
     for (const pathname of resolveStartupEntryPaths(env)) {
       await writeFile(pathname, "@echo off\n");
     }
@@ -327,56 +307,32 @@ describe("native service command inspection", () => {
   });
 
   it.each([
-    {
-      failure: "timeout",
-      response: { error: Object.assign(new Error("native-secret-canary"), { code: "ETIMEDOUT" }) },
-      diagnostic: { kind: "timeout", timeoutMs: 731 },
-      reported: "timed out after 731 ms",
-    },
-    {
-      failure: "spawn",
-      response: {
-        error: Object.assign(new Error("native-secret-canary"), { code: "EACCES", errno: -13 }),
-      },
-      diagnostic: { kind: "spawn", errno: -13 },
-      reported: "errno -13",
-    },
-    {
-      failure: "spawn without a resolvable Startup home",
-      missingStartupHome: true,
-      response: {
-        error: Object.assign(new Error("native-secret-canary"), { code: "EACCES", errno: -13 }),
-      },
-      diagnostic: { kind: "spawn", errno: -13 },
-      reported: "errno -13",
-    },
-    {
-      failure: "lookup access denied",
-      response: { status: 1, stdout: "-2147024891", stderr: "native-secret-canary" },
-      diagnostic: { kind: "native", exitCode: 1, hresult: -2147024891 },
-      reported: "HRESULT 0x80070005",
-    },
-    {
-      failure: "connection missing file",
-      response: { status: 2, stdout: "-2147024894", stderr: "native-secret-canary" },
-      diagnostic: { kind: "native", exitCode: 2, hresult: -2147024894 },
-      reported: "HRESULT 0x80070002",
-    },
-    {
-      failure: "malformed HRESULT",
-      response: { status: 1, stdout: "-2147024894 native-secret-canary" },
-      diagnostic: { kind: "native", exitCode: 1 },
-      reported: "Task Scheduler check failed (exit 1)",
-    },
-    {
-      failure: "invalid response",
-      response: { status: 0, stdout: "native-secret-canary" },
-      diagnostic: { kind: "invalid-response" },
-      reported: "Task Scheduler check returned an invalid response",
-    },
-  ])(
-    "preserves safe Windows $failure diagnostics through strict inspection",
-    async ({ response, diagnostic, reported, missingStartupHome = false }) => {
+    [nativeError("ETIMEDOUT"), { kind: "timeout", timeoutMs: 731 }, "timed out after 731 ms"],
+    [nativeError("EACCES", -13), { kind: "spawn", errno: -13 }, "errno -13"],
+    [nativeError("EACCES", -13), { kind: "spawn", errno: -13 }, "errno -13", true],
+    [
+      nativeFailure(1, "-2147024891"),
+      { kind: "native", exitCode: 1, hresult: -2147024891 },
+      "HRESULT 0x80070005",
+    ],
+    [
+      nativeFailure(2, "-2147024894"),
+      { kind: "native", exitCode: 2, hresult: -2147024894 },
+      "HRESULT 0x80070002",
+    ],
+    [
+      nativeFailure(1, "-2147024894 native-secret-canary"),
+      { kind: "native", exitCode: 1 },
+      "Task Scheduler check failed (exit 1)",
+    ],
+    [
+      { status: 0, stdout: "native-secret-canary" },
+      { kind: "invalid-response" },
+      "Task Scheduler check returned an invalid response",
+    ],
+  ] satisfies Array<[object, ServiceInspectionDiagnostic, string, boolean?]>)(
+    "preserves safe Scheduler diagnostics: %j",
+    async (response, diagnostic, reported, missingStartupHome = false) => {
       vi.spyOn(performance, "now").mockReturnValue(0);
       native.scheduler.mockReturnValue(response);
       const inspectionEnv = missingStartupHome
@@ -400,11 +356,7 @@ describe("native service command inspection", () => {
     },
   );
 
-  const assignments: Array<{
-    name: string;
-    lines: string[];
-    environment?: Record<string, string>;
-  }> = [
+  const assignments: Array<[string[], Record<string, string>?]> = [
     ...[
       "set MALFORMED",
       'set "OPENCLAW_STATE_DIR=%USERPROFILE%\\.openclaw"',
@@ -412,13 +364,9 @@ describe("native service command inspection", () => {
       'set "OPENCLAW_STATE_DIR=C:\\literal^^caret"',
       "set OPENCLAW_STATE_DIR=C:\\first & echo second",
       "set /a HOME=1",
-    ].map((line) => ({
-      name: line,
-      lines: ["@echo off", "set HOME=/partial-home", line, "node gateway.js"],
-    })),
-    {
-      name: "literal assignments",
-      lines: [
+    ].map((line): [string[]] => [["@echo off", "set HOME=/partial-home", line, "node gateway.js"]]),
+    [
+      [
         "@echo off",
         "set HOME=/literal-home",
         "set home=/effective-home",
@@ -429,7 +377,7 @@ describe("native service command inspection", () => {
         "set PERCENT=%%USERPROFILE%%",
         "node gateway.js",
       ],
-      environment: {
+      {
         HOME: "/effective-home",
         OPENCLAW_STATE_DIR: "C:\\literal%USERPROFILE% & (state)",
         NODE_OPTIONS: "",
@@ -437,11 +385,11 @@ describe("native service command inspection", () => {
         UNQUOTED: "  literal spaces  ",
         PERCENT: "%USERPROFILE%",
       },
-    },
+    ],
   ];
   it.each(assignments)(
-    "reads Windows environment literally: $name",
-    async ({ lines, environment: expectedEnvironment }) => {
+    "reads Windows environment literally: %j",
+    async (lines, expectedEnvironment) => {
       await writeFile(resolveTaskScriptPath(env), lines.join("\r\n"));
       if (expectedEnvironment) {
         await expect(strictTask()).resolves.toMatchObject({
@@ -464,7 +412,7 @@ describe("native service command inspection", () => {
     { decoded: { ProgramArguments: ["node", 42] } },
     { decoded: { ProgramArguments: programArguments, WorkingDirectory: 42 } },
     { decoded: { ProgramArguments: programArguments, EnvironmentVariables: { HOME: 42 } } },
-  ])("rejects unreadable native plist contents or fields: %j", async ({ decoded, content }) => {
+  ])("rejects malformed plists: %j", async ({ decoded, content }) => {
     await writeFile(
       resolveLaunchAgentPlistPath(env),
       content === "truncated"
@@ -495,7 +443,7 @@ describe("native service command inspection", () => {
     "echo unsupported-command",
     "export OPENCLAW_STATE_DIR='unterminated",
     "export OPENCLAW_STATE_DIR=$(printf unsupported)",
-  ])("inspects generated environment without inventing effective values: %s", async (scenario) => {
+  ])("inspects generated environment: %s", async (scenario) => {
     const recovering = scenario === "missing" || scenario === "unreadable";
     const expectedEnvFile = resolveLaunchAgentEnvironmentReadOptions(
       env,

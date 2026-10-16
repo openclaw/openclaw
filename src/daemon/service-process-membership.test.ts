@@ -26,13 +26,12 @@ const coalition = (id: number, name: string, pid = process.pid) => `pid/${pid} =
   resource coalition = {
     ID = ${id}
     type = resource
-    state = active
-    active count = 2
     name = ${name}
-    bundle ID = example.synthetic
   }
 }`;
 const uncontained = (pid: number) => `pid/${pid} = {\n  type = pid\n}`;
+type QueryFailure = { status?: number; error?: Error };
+type PsResult = QueryFailure & { stdout: string };
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -50,21 +49,9 @@ describe("launchd process membership", () => {
   const pidRecord = uncontained(process.pid);
   const jobRecord = coalition(1203, "ai.openclaw.gateway");
   const malformedPid = (body: string) => pidRecord.replace("type = pid", body);
-  const cases: Array<{
-    label: string;
-    caller: string;
-    gateway: string;
-    expected: string;
-    ps?: { stdout: string; status?: number; error?: Error };
-    query?: { status?: number; error?: Error };
-  }> = [
-    {
-      label: "reparented same group",
-      ps: { stdout: groupRows() },
-      caller: "",
-      gateway: "",
-      expected: "inside",
-    },
+  type RecordCase = [string, string, string, string, PsResult?, QueryFailure?];
+  const cases: RecordCase[] = [
+    ["reparented same group", "", "", "inside", { stdout: groupRows() }],
     ...(
       [
         ["same coalition", 1203, "example.child", "inside"],
@@ -72,42 +59,34 @@ describe("launchd process membership", () => {
         ["distinct native jobs", 1204, "com.apple.Terminal", "outside"],
         ["same coalition with opaque service rows", 1203, "example.child", "inside", true],
       ] satisfies Array<[string, number, string, string, boolean?]>
-    ).map(([label, callerId, callerName, expected, services]) => ({
+    ).map(([label, callerId, callerName, expected, services]): RecordCase => [
       label,
-      expected,
-      caller: coalition(callerId, callerName).replace(
+      coalition(callerId, callerName).replace(
         /\n}$/,
         `\n${services ? "  services = {\n    42 0 example.synthetic.worker (A)\n    43 0 example.synthetic.helper (D)\n  }" : ""}\n}`,
       ),
-      gateway: coalition(1203, "ai.openclaw.gateway", gatewayPid),
-    })),
+      coalition(1203, "ai.openclaw.gateway", gatewayPid),
+      expected,
+    ]),
     ...(
       [
         ["neither PID has a coalition", false, false, "absent"],
         ["only the caller has a coalition", true, false, "absent"],
         ["caller outside the known job", false, true, "outside"],
       ] satisfies Array<[string, boolean, boolean, string]>
-    ).map(([label, caller, gateway, expected]) => ({
+    ).map(([label, caller, gateway, expected]): RecordCase => [
       label,
+      caller ? coalition(1203, "ai.openclaw.gateway") : uncontained(process.pid),
+      gateway ? coalition(1203, "ai.openclaw.gateway", gatewayPid) : uncontained(gatewayPid),
       expected,
-      caller: caller ? coalition(1203, "ai.openclaw.gateway") : uncontained(process.pid),
-      gateway: gateway
-        ? coalition(1203, "ai.openclaw.gateway", gatewayPid)
-        : uncontained(gatewayPid),
-    })),
+    ]),
     ...[
       { label: "missing caller", stdout: `${gatewayPid} 900 0\n` },
       { label: "invalid group", stdout: `${process.pid} 0 0\n${gatewayPid} 900 0\n` },
       { label: "duplicate PID", stdout: groupRows() + `${process.pid} 900 0\n` },
       { label: "failed ps", stdout: groupRows(), status: 1 },
       { label: "timed out ps", stdout: groupRows(), error: new Error("timeout") },
-    ].map(({ label, ...ps }) => ({
-      label,
-      ps,
-      caller: "",
-      gateway: "",
-      expected: "unknown",
-    })),
+    ].map(({ label, ...ps }): RecordCase => [label, "", "", "unknown", ps]),
     ...(
       [
         ["empty response", ""],
@@ -131,18 +110,19 @@ describe("launchd process membership", () => {
         ["missing name", coalition(1203, "")],
         ["failed query", jobRecord, { status: 1 }],
         ["truncated query", jobRecord, { error: new Error("maxBuffer") }],
-      ] satisfies Array<[string, string, { status?: number; error?: Error }?]>
-    ).map(([label, stdout, query]) => ({
+      ] satisfies Array<[string, string, QueryFailure?]>
+    ).map(([label, stdout, query]): RecordCase => [
       label,
+      stdout,
+      stdout.replaceAll(`pid/${process.pid}`, `pid/${gatewayPid}`),
+      "unknown",
+      undefined,
       query,
-      caller: stdout,
-      gateway: stdout.replaceAll(`pid/${process.pid}`, `pid/${gatewayPid}`),
-      expected: "unknown",
-    })),
+    ]),
   ];
   it.each(cases)(
-    "classifies $label from native records",
-    ({ caller, gateway, ps, query, expected }) => {
+    "classifies %s from native records",
+    (_label, caller, gateway, expected, ps, query) => {
       vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", "ai.openclaw.gateway");
       vi.stubEnv("OPENCLAW_SERVICE_MARKER", "openclaw");
       native.spawn.mockImplementation((command: string, args: string[]) =>
@@ -206,70 +186,52 @@ describe("launchd process membership when launchctl denies PID domains", () => {
 describe("systemd process membership", () => {
   const root = "/user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway.service";
   const cg = `0::${root}`;
-  const cases: Array<{
-    label: string;
-    caller?: string;
-    gateway?: string;
-    controlGroup?: string;
-    callerStat?: string;
-    gatewayStat?: string;
-    expected: string;
-  }> = [
+  const workers = `${cg}/workers`;
+  const v1 = `1:name=systemd:${root}`;
+  const hybrid = `0::/\n${v1}`;
+  const other = "1:name=systemd:/outside.service";
+  type ProcText = string | undefined;
+  type ProcStats = { callerStat?: string; gatewayStat?: string };
+  type Case = [string, ProcText, ProcText, string, string?, ProcStats?];
+  const rootStats = {
+    callerStat: procStat(process.pid, 901),
+    gatewayStat: procStat(gatewayPid, 900),
+  };
+  const cases: Case[] = [
     ...(
       [
         ["unit root", cg, cg, "inside"],
-        ["delegated subgroup", `${cg}/workers/session.scope`, cg, "inside"],
+        ["delegated subgroup", `${workers}/session.scope`, cg, "inside"],
         [
           "delegated worker.service sibling",
-          `${cg}/workers/sibling`,
-          `${cg}/workers/worker.service`,
+          `${workers}/sibling`,
+          `${workers}/worker.service`,
           "inside",
         ],
         ["unit prefix lookalike", `${cg}-other.service`, cg, "outside"],
-        ["legacy hierarchy", `1:name=systemd:${root}/worker`, `1:name=systemd:${root}`, "inside"],
-        [
-          "hybrid hierarchy",
-          `0::/\n1:name=systemd:${root}/worker`,
-          `0::/\n1:name=systemd:${root}`,
-          "inside",
-        ],
+        ["legacy hierarchy", `${v1}/worker`, v1, "inside"],
+        ["hybrid hierarchy", `${hybrid}/worker`, hybrid, "inside"],
         ["caller root hierarchy", "0::/", cg, "outside"],
         ["unmanaged Gateway", cg, "0::/", "unknown"],
-        [
-          "conflicting authorities",
-          `1:name=systemd:${root}\n2:name=systemd:/other.service`,
-          cg,
-          "unknown",
-        ],
-        ["incomparable v1 and v2 paths", "1:name=systemd:/outside.service", cg, "unknown"],
-        [
-          "different named hierarchy identities",
-          "1:name=systemd:/outside.service",
-          `2:name=systemd:${root}`,
-          "unknown",
-        ],
+        ["conflicting authorities", `${v1}\n2:name=systemd:/other.service`, cg, "unknown"],
+        ["incomparable v1 and v2 paths", other, cg, "unknown"],
+        ["different named hierarchy identities", other, `2:name=systemd:${root}`, "unknown"],
         ["path traversal", `${cg}/../outside`, cg, "unknown"],
         ["malformed output", "unavailable", cg, "unknown"],
       ] satisfies Array<[string, string, string, string]>
-    ).map(([label, caller, gateway, expected]) => ({
-      label,
-      caller,
-      gateway,
-      expected,
-      controlGroup: root,
-    })),
+    ).map(([label, caller, gateway, expected]): Case => [label, caller, gateway, expected, root]),
     ...[
       { label: "missing", controlGroup: undefined },
       { label: "relative", controlGroup: "openclaw-gateway.service" },
       { label: "path traversal", controlGroup: `${root}/../other.service` },
       { label: "prefix lookalike", controlGroup: `${root}-other.service` },
-    ].map(({ label, controlGroup }) => ({
+    ].map(({ label, controlGroup }): Case => [
       label,
+      "0::/user.slice/session-5.scope",
+      cg,
+      "unknown",
       controlGroup,
-      caller: "0::/user.slice/session-5.scope",
-      gateway: cg,
-      expected: "unknown",
-    })),
+    ]),
     ...(
       [
         ["unified namespace root", "0::/", "0::/", "absent"],
@@ -296,15 +258,14 @@ describe("systemd process membership", () => {
         ["denied caller proc", undefined, "0::/", "unknown"],
         ["vanished Gateway proc", "0::/", undefined, "unknown"],
       ] satisfies Array<[string, string | undefined, string | undefined, string, string?]>
-    ).map(([label, caller, gateway, expected, controlGroup]) => ({
+    ).map(([label, caller, gateway, expected, controlGroup]): Case => [
       label,
       caller,
       gateway,
       expected,
       controlGroup,
-      callerStat: procStat(process.pid, 901),
-      gatewayStat: procStat(gatewayPid, 900),
-    })),
+      rootStats,
+    ]),
     ...(
       [
         ["reparented same group", procStat(process.pid, 900), "inside"],
@@ -320,24 +281,24 @@ describe("systemd process membership", () => {
         ["unreadable caller", undefined, "unknown"],
         ["vanished Gateway", procStat(process.pid, 901), "unknown", true],
       ] satisfies Array<[string, string | undefined, string, boolean?]>
-    ).map(([label, callerStat, expected, missingGateway]) => ({
+    ).map(([label, callerStat, expected, missingGateway]): Case => [
       label,
-      callerStat,
+      "0::/",
+      "0::/",
       expected,
-      gatewayStat: missingGateway ? undefined : procStat(gatewayPid, 900),
-      caller: "0::/",
-      gateway: "0::/",
-    })),
+      undefined,
+      { callerStat, gatewayStat: missingGateway ? undefined : procStat(gatewayPid, 900) },
+    ]),
   ];
   it.each(cases)(
-    "classifies $label from native membership",
-    ({ caller, gateway, controlGroup, callerStat, gatewayStat, expected }) => {
+    "classifies %s from native membership",
+    (_label, caller, gateway, expected, controlGroup, stats) => {
       vi.stubEnv("OPENCLAW_SYSTEMD_UNIT", "unrelated.service");
       const files = new Map([
         [`/proc/${process.pid}/cgroup`, caller],
         [`/proc/${gatewayPid}/cgroup`, gateway],
-        [`/proc/${process.pid}/stat`, callerStat],
-        [`/proc/${gatewayPid}/stat`, gatewayStat],
+        [`/proc/${process.pid}/stat`, stats?.callerStat],
+        [`/proc/${gatewayPid}/stat`, stats?.gatewayStat],
       ]);
       native.read.mockImplementation((file: string) => {
         const value = files.get(file);
