@@ -1,7 +1,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
-import { createRequireRecord, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
+import { expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
@@ -89,6 +89,10 @@ function prefillPayload(type: string) {
   };
 }
 
+function expectEventTypes(events: StreamEvent[], types: string) {
+  expect(events.map((event) => event.type)).toEqual(types.split(" "));
+}
+
 function textDelta(delta: string) {
   return { type: "text_delta", contentIndex: 0, delta };
 }
@@ -110,29 +114,6 @@ function errorEvent(error: MessageFixture, partial?: MessageFixture) {
   };
 }
 
-const lmstudioBinaryModel = {
-  api: "openai-completions",
-  provider: "lmstudio",
-  id: "google/gemma-4-26b-a4b-qat",
-  baseUrl: "http://127.0.0.1:1234/v1",
-  reasoning: true,
-  compat: {
-    supportsReasoningEffort: true,
-    supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-    reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
-  },
-} as unknown as Model<"openai-completions">;
-
-const lmstudioBareModel = {
-  api: "openai-completions",
-  provider: "lmstudio",
-  id: "qwen3-8b-instruct",
-  baseUrl: "http://127.0.0.1:1234/v1",
-  reasoning: true,
-} as unknown as Model<"openai-completions">;
-
-const requireRecord = createRequireRecord("record", "expected-label-record");
-
 const streamTestModel = {
   id: "test-model",
   name: "Test Model",
@@ -146,17 +127,22 @@ const streamTestModel = {
   maxTokens: 1_024,
 } satisfies Model<"openai-completions">;
 
-function createEventStream(events: EventFixture[]): ReturnType<StreamFn> {
-  const output = createAssistantMessageEventStream();
-  const stream = output as unknown as { push(event: unknown): void; end(): void };
-  queueMicrotask(() => {
-    for (const event of events) {
-      stream.push(completeStreamEvent(event));
-    }
-    stream.end();
-  });
-  return output as ReturnType<StreamFn>;
+function localModel(id: string, compat?: Model<"openai-completions">["compat"]) {
+  return {
+    ...streamTestModel,
+    provider: "lmstudio",
+    id,
+    baseUrl: "http://127.0.0.1:1234/v1",
+    reasoning: true,
+    ...(compat ? { compat } : {}),
+  };
 }
+const lmstudioBareModel = localModel("qwen3-8b-instruct");
+const lmstudioBinaryModel = localModel("google/gemma-4-26b-a4b-qat", {
+  supportsReasoningEffort: true,
+  supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+  reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
+});
 
 function createPayloadCapture(initialReasoningEffort?: string) {
   const payloads: Array<Record<string, unknown>> = [];
@@ -172,23 +158,15 @@ function createPayloadCapture(initialReasoningEffort?: string) {
   return { baseStreamFn, payloads };
 }
 
-function createControlledPlainTextToolCallCompatStream() {
-  const source = createAssistantMessageEventStream();
-  const baseStream: StreamFn = () => source as ReturnType<StreamFn>;
-  const wrapped = createPlainTextToolCallCompatWrapper(baseStream);
-  const stream = wrapped(
-    streamTestModel,
-    {
-      messages: [],
-      tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
-    } as never,
-    {},
-  );
-  return { source, stream };
-}
-
 async function collectEvents(events: EventFixture[], toolNames = ["read"]): Promise<StreamEvent[]> {
-  const wrapped = createPlainTextToolCallCompatWrapper(() => createEventStream(events));
+  const outputSource = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    for (const event of events) {
+      outputSource.push(completeStreamEvent(event) as never);
+    }
+    outputSource.end();
+  });
+  const wrapped = createPlainTextToolCallCompatWrapper(() => outputSource);
   const stream = await wrapped(
     streamTestModel,
     { tools: toolNames.map((name) => ({ name })) } as never,
@@ -229,7 +207,6 @@ it("transformProviderStreamMessages: transforms checkpoint and done result messa
   const final: AssistantMessage = {
     ...partial,
     usage: createZeroUsageFixture(),
-    stopReason: "stop",
   };
   const source = createAssistantMessageEventStream();
   source.push({ type: "start", partial });
@@ -252,22 +229,20 @@ it("transformProviderStreamMessages: transforms checkpoint and done result messa
   expect((await stream.result()).usage.cacheTelemetry).toEqual({ state: "available" });
 });
 
-describe("defaultToolStreamExtraParams", () => {
-  it("defaults tool_stream on when absent", () => {
-    expect(defaultToolStreamExtraParams()).toEqual({ tool_stream: true });
-    expect(defaultToolStreamExtraParams({ fastMode: true })).toEqual({
-      fastMode: true,
-      tool_stream: true,
-    });
+it("defaultToolStreamExtraParams: defaults tool_stream on when absent", () => {
+  expect(defaultToolStreamExtraParams()).toEqual({ tool_stream: true });
+  expect(defaultToolStreamExtraParams({ fastMode: true })).toEqual({
+    fastMode: true,
+    tool_stream: true,
   });
+});
 
-  it("preserves explicit tool_stream values", () => {
-    const enabled = { tool_stream: true, fastMode: true };
-    const disabled = { tool_stream: false, fastMode: true };
+it("defaultToolStreamExtraParams: preserves explicit tool_stream values", () => {
+  const enabled = { tool_stream: true, fastMode: true };
+  const disabled = { tool_stream: false, fastMode: true };
 
-    expect(defaultToolStreamExtraParams(enabled)).toBe(enabled);
-    expect(defaultToolStreamExtraParams(disabled)).toBe(disabled);
-  });
+  expect(defaultToolStreamExtraParams(enabled)).toBe(enabled);
+  expect(defaultToolStreamExtraParams(disabled)).toBe(disabled);
 });
 
 it.each([
@@ -282,113 +257,85 @@ it.each([
   },
 );
 
-describe("setQwenChatTemplateThinking", () => {
-  it("preserves existing chat-template kwargs and enables thinking", () => {
-    const payload = {
-      chat_template_kwargs: {
-        custom_flag: "keep",
-        preserve_thinking: false,
-      },
-    };
-
-    setQwenChatTemplateThinking(payload, true);
-
-    expect(payload.chat_template_kwargs).toEqual({
-      custom_flag: "keep",
-      preserve_thinking: false,
-      enable_thinking: true,
-    });
-  });
-
-  it("creates the required chat-template kwargs when absent", () => {
-    const payload: Record<string, unknown> = {};
-
-    setQwenChatTemplateThinking(payload, false);
-
+it.each([true, false])(
+  "setQwenChatTemplateThinking: preserves kwargs when present, enabled=%s",
+  (enabled) => {
+    const payload: Record<string, unknown> = enabled
+      ? { chat_template_kwargs: { custom_flag: "keep", preserve_thinking: false } }
+      : {};
+    setQwenChatTemplateThinking(payload, enabled);
     expect(payload).toEqual({
-      chat_template_kwargs: {
-        enable_thinking: false,
-        preserve_thinking: true,
-      },
+      chat_template_kwargs: enabled
+        ? { custom_flag: "keep", preserve_thinking: false, enable_thinking: true }
+        : { enable_thinking: false, preserve_thinking: true },
     });
-  });
-});
+  },
+);
+it.each([{ max_tokens: 256 }, { effort: "low", summary: "auto" }])(
+  "normalizeOpenAICompatibleReasoningPayload: preserves explicit %j controls",
+  (reasoning) => {
+    const payload = { reasoning_effort: "high", reasoning };
+    normalizeOpenAICompatibleReasoningPayload(payload, "high");
+    expect(payload).toEqual({ reasoning });
+  },
+);
 
-it("normalizeOpenAICompatibleReasoningPayload: preserves explicit reasoning controls", () => {
-  const withMaxTokens: Record<string, unknown> = {
-    reasoning_effort: "high",
-    reasoning: { max_tokens: 256 },
-  };
-  const withEffort: Record<string, unknown> = {
-    reasoning_effort: "high",
-    reasoning: { effort: "low", summary: "auto" },
-  };
-
-  normalizeOpenAICompatibleReasoningPayload(withMaxTokens, "high");
-  normalizeOpenAICompatibleReasoningPayload(withEffort, "high");
-
-  expect(withMaxTokens).toEqual({ reasoning: { max_tokens: 256 } });
-  expect(withEffort).toEqual({ reasoning: { effort: "low", summary: "auto" } });
-});
-
-describe("normalizeOpenAICompatibleReasoningReplay", () => {
-  it("honors provider-owned tool-call replay selection", () => {
-    const payload = {
-      messages: [
-        { role: "assistant", content: "plain" },
-        { role: "assistant", tool_calls: [{ id: "call_1" }] },
-      ],
-    };
-
-    normalizeOpenAICompatibleReasoningReplay(payload, {
-      thinkingEnabled: true,
-      shouldBackfillAssistantMessage: (message) => Array.isArray(message.tool_calls),
-    });
-
-    expect(payload.messages).toEqual([
+it("normalizeOpenAICompatibleReasoningReplay: honors provider-owned tool-call replay selection", () => {
+  const payload = {
+    messages: [
       { role: "assistant", content: "plain" },
-      { role: "assistant", tool_calls: [{ id: "call_1" }], reasoning_content: "" },
-    ]);
+      { role: "assistant", tool_calls: [{ id: "call_1" }] },
+    ],
+  };
+
+  normalizeOpenAICompatibleReasoningReplay(payload, {
+    thinkingEnabled: true,
+    shouldBackfillAssistantMessage: (message) => Array.isArray(message.tool_calls),
   });
 
-  it("normalizes nullable reasoning for providers requiring string replay", () => {
-    const payload = {
-      messages: [
-        { role: "assistant", reasoning_content: null },
-        { role: "assistant", reasoning_content: undefined },
-      ],
-    };
+  expect(payload.messages).toEqual([
+    { role: "assistant", content: "plain" },
+    { role: "assistant", tool_calls: [{ id: "call_1" }], reasoning_content: "" },
+  ]);
+});
 
-    normalizeOpenAICompatibleReasoningReplay(payload, {
-      thinkingEnabled: true,
-      replaceNullReasoningContent: true,
-    });
+it("normalizeOpenAICompatibleReasoningReplay: normalizes nullable reasoning for providers requiring string replay", () => {
+  const payload = {
+    messages: [
+      { role: "assistant", reasoning_content: null },
+      { role: "assistant", reasoning_content: undefined },
+    ],
+  };
 
-    expect(payload.messages).toEqual([
-      { role: "assistant", reasoning_content: "" },
-      { role: "assistant", reasoning_content: "" },
-    ]);
+  normalizeOpenAICompatibleReasoningReplay(payload, {
+    thinkingEnabled: true,
+    replaceNullReasoningContent: true,
   });
 
-  it("strips disabled reasoning with assistant-only policy", () => {
-    const payload = {
-      messages: [
-        { role: "user", reasoning_content: "preserve user" },
-        { role: "assistant", reasoning_content: "remove assistant" },
-        { role: "tool", reasoning_content: "preserve tool" },
-      ],
-    };
-    normalizeOpenAICompatibleReasoningReplay(payload, {
-      thinkingEnabled: false,
-      stripAssistantMessagesOnly: true,
-    });
+  expect(payload.messages).toEqual([
+    { role: "assistant", reasoning_content: "" },
+    { role: "assistant", reasoning_content: "" },
+  ]);
+});
 
-    expect(payload.messages).toEqual([
+it("normalizeOpenAICompatibleReasoningReplay: strips disabled reasoning with assistant-only policy", () => {
+  const payload = {
+    messages: [
       { role: "user", reasoning_content: "preserve user" },
-      { role: "assistant" },
+      { role: "assistant", reasoning_content: "remove assistant" },
       { role: "tool", reasoning_content: "preserve tool" },
-    ]);
+    ],
+  };
+  normalizeOpenAICompatibleReasoningReplay(payload, {
+    thinkingEnabled: false,
+    stripAssistantMessagesOnly: true,
   });
+
+  expect(payload.messages).toEqual([
+    { role: "user", reasoning_content: "preserve user" },
+    { role: "assistant" },
+    { role: "tool", reasoning_content: "preserve tool" },
+  ]);
 });
 
 it("createDeepSeekV4OpenAICompatibleThinkingWrapper: backfills reasoning_content on every replayed assistant message when thinking is enabled", () => {
@@ -418,11 +365,7 @@ it("createDeepSeekV4OpenAICompatibleThinkingWrapper: backfills reasoning_content
 });
 
 it("createPayloadPatchStreamWrapper: calls the underlying stream directly when shouldPatch rejects the model", () => {
-  let onPayloadWasInstalled = false;
-  const baseStreamFn: StreamFn = (_model, _context, options) => {
-    onPayloadWasInstalled = typeof options?.onPayload === "function";
-    return {} as ReturnType<StreamFn>;
-  };
+  const baseStreamFn = vi.fn<StreamFn>(() => ({}) as ReturnType<StreamFn>);
 
   const wrapped = createPayloadPatchStreamWrapper(
     baseStreamFn,
@@ -433,225 +376,188 @@ it("createPayloadPatchStreamWrapper: calls the underlying stream directly when s
   );
   void wrapped({ id: "model" } as never, { messages: [] } as never, {});
 
-  expect(onPayloadWasInstalled).toBe(false);
+  expect(baseStreamFn).toHaveBeenCalledOnce();
+  expect(baseStreamFn.mock.calls[0]?.[2]?.onPayload).toBeUndefined();
 });
 
-describe("createOpenAICompatibleCompletionsThinkingOffWrapper", () => {
-  it("uses per-call thinking before the undefined default", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture("high");
-    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn);
-    for (const reasoning of ["off", "max", undefined] as const) {
-      void wrapped(lmstudioBinaryModel, { messages: [] }, { reasoning });
+it("createOpenAICompatibleCompletionsThinkingOffWrapper: uses per-call thinking before the undefined default", () => {
+  const { baseStreamFn, payloads } = createPayloadCapture("high");
+  const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn);
+  for (const reasoning of ["off", "max", undefined] as const) {
+    void wrapped(lmstudioBinaryModel, { messages: [] }, { reasoning });
+  }
+
+  expect(payloads.map((payload) => payload.reasoning_effort)).toEqual(["none", "high", "high"]);
+});
+
+it.each([
+  ["no disabled effort", lmstudioBareModel, "high"],
+  ["no effort sent", lmstudioBinaryModel, undefined],
+] as const)(
+  "createOpenAICompatibleCompletionsThinkingOffWrapper: omits reasoning_effort with %s",
+  (_name, model, initialEffort) => {
+    const { baseStreamFn, payloads } = createPayloadCapture(initialEffort);
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
+    void wrapped(model, { messages: [] }, {});
+    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  },
+);
+
+it("createPlainTextToolCallCompatWrapper: does not promote complete-looking text tool calls after a length stop", async () => {
+  const rawToolText = '[tool:read] {"path":"/tmp/file.txt"}';
+  const events = await collectEvents([doneEvent(rawToolText, "length")]);
+
+  expectEventTypes(events, "done");
+  expect(events.at(-1)).toMatchObject({
+    reason: "length",
+    message: { content: [textBlock(rawToolText)], stopReason: "length" },
+  });
+});
+
+it("createPlainTextToolCallCompatWrapper: flushes false-positive buffered prefixes around interleaved events in source order", async () => {
+  const firstText = "[tool:re";
+  const secondText = " not a call";
+  const events = await collectEvents([
+    textDelta(firstText),
+    thinkingDelta([textBlock(firstText), thinkingBlock()], 1),
+    textDelta(secondText),
+    doneEvent([textBlock(`${firstText}${secondText}`), thinkingBlock()]),
+  ]);
+
+  expectEventTypes(events, "text_delta thinking_delta text_delta done");
+  expect(events[0]).toHaveProperty("delta", firstText);
+  expect(events[1]).toHaveProperty("partial.content", [textBlock(firstText), thinkingBlock()]);
+  expect(events[2]).toHaveProperty("delta", secondText);
+});
+
+it("createPlainTextToolCallCompatWrapper: keeps possible tool-call text buffered across interleaved non-text events", async () => {
+  const rawToolText = "[tool:read]\n<parameter=path>\nsrc/index.ts\n</parameter>\n</function>";
+  const events = await collectEvents([
+    { type: "text_delta", contentIndex: 1, delta: rawToolText },
+    thinkingDelta([thinkingBlock(), textBlock(rawToolText)], 0),
+    doneEvent([thinkingBlock(), textBlock(rawToolText)]),
+  ]);
+
+  expectEventTypes(events, "start thinking_delta toolcall_start toolcall_delta toolcall_end done");
+  expect(events[1]).toHaveProperty("partial.content", [
+    thinkingBlock(),
+    expect.objectContaining({ type: "toolCall", name: "read" }),
+  ]);
+  expect(JSON.stringify(events)).not.toContain(rawToolText);
+});
+
+it("createPlainTextToolCallCompatWrapper: scrubs compacted error partials when an emoji crosses the safe prefix boundary", async () => {
+  const toolPrefix = "[tool:read]\n<parameter=path>\n";
+  const emojiIndex = 255_999;
+  const firstChunk = `${toolPrefix}${"x".repeat(emojiIndex - toolPrefix.length)}😀${"y".repeat(70_000)}`;
+  const secondChunk = "z".repeat(70_000);
+  const rawToolText = firstChunk + secondChunk;
+  const events = await collectEvents([
+    textDelta(firstChunk),
+    textDelta(secondChunk),
+    errorEvent(
+      { content: [textBlock(rawToolText)], errorMessage: "stream failed" },
+      { content: [textBlock(rawToolText)] },
+    ),
+  ]);
+
+  expectEventTypes(events, "error");
+  expect(events[0]).toHaveProperty("partial.content", [textBlock("")]);
+  expect(events[0]).toHaveProperty("error.content", []);
+  expect(JSON.stringify(events)).not.toContain("[tool:read]");
+});
+
+it("createPlainTextToolCallCompatWrapper: scrubs mixed under-cap calls from multi-block errors without partials", async () => {
+  const rawCall = "<function=read></function>";
+  const visibleText = "Visible answer before the stream error.";
+  const rawText = `${rawCall}\n${visibleText}`;
+  const events = await collectEvents([
+    textDelta(rawText),
+    errorEvent({
+      role: "assistant",
+      content: [textBlock(rawCall), textBlock(visibleText)],
+      message: "stream failed",
+    }),
+  ]);
+
+  expectEventTypes(events, "text_delta error");
+  expect(events[0]).toHaveProperty("delta", visibleText);
+  expect(events[1]).toHaveProperty("error.content", [textBlock(visibleText)]);
+  expect(JSON.stringify(events)).not.toContain("<function=read>");
+});
+
+it("createPlainTextToolCallCompatWrapper: promotes split zero-argument XML function calls without leaking partials", async () => {
+  const source = createAssistantMessageEventStream();
+  const wrapped = createPlainTextToolCallCompatWrapper(() => source);
+  const stream = await wrapped(
+    streamTestModel,
+    {
+      messages: [],
+      tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
+    } as never,
+    {},
+  );
+  const iterator = stream[Symbol.asyncIterator]();
+  const rawToolText = ["<function=read>", "</function>"].join("\n");
+
+  try {
+    source.push(completeStreamEvent({ type: "start", partial: { content: [] } }) as never);
+    expect((await nextEvent(iterator, "start")).type).toBe("start");
+
+    let streamedText = "";
+    for (const delta of ["<", "function=read>\n</func", "tion>"]) {
+      streamedText += delta;
+      source.push({
+        type: "text_delta",
+        contentIndex: 0,
+        delta,
+        partial: { role: "assistant", content: [{ type: "text", text: streamedText }] },
+      } as never);
     }
+    source.push(doneEvent([textBlock(rawToolText)]) as never);
 
-    expect(payloads.map((payload) => payload.reasoning_effort)).toEqual(["none", "high", "high"]);
-  });
-
-  it("drops reasoning_effort when the model has no disabled effort", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture("high");
-    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
-    void wrapped(lmstudioBareModel, { messages: [] }, {});
-
-    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
-  });
-
-  it("does not add reasoning_effort when none was sent", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture();
-    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
-    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
-
-    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
-  });
-});
-
-describe("createPlainTextToolCallCompatWrapper", () => {
-  it("does not promote complete-looking text tool calls after a length stop", async () => {
-    const rawToolText = '[tool:read] {"path":"/tmp/file.txt"}';
-    const events = await collectEvents([doneEvent(rawToolText, "length")]);
-
-    expect(events.map((event) => event.type)).toEqual(["done"]);
-    const done = events.at(-1) as {
-      reason?: unknown;
-      message?: { content?: unknown; stopReason?: unknown };
-    };
-    expect(done.reason).toBe("length");
-    expect(done.message).toMatchObject({
-      content: [textBlock(rawToolText)],
-      stopReason: "length",
+    const events = [
+      await nextEvent(iterator, "zero-argument tool-call start"),
+      await nextEvent(iterator, "zero-argument tool-call arguments"),
+      await nextEvent(iterator, "zero-argument tool-call end"),
+      await nextEvent(iterator, "zero-argument done event"),
+    ];
+    expectEventTypes(events, "toolcall_start toolcall_delta toolcall_end done");
+    expect(events[1]).toMatchObject({ delta: "{}" });
+    expect(events[3]).toMatchObject({
+      reason: "toolUse",
+      message: {
+        content: [{ type: "toolCall", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      },
     });
-  });
-
-  it("flushes false-positive buffered prefixes around interleaved events in source order", async () => {
-    const firstText = "[tool:re";
-    const secondText = " not a call";
-    const events = await collectEvents([
-      textDelta(firstText),
-      thinkingDelta([textBlock(firstText), thinkingBlock()], 1),
-      textDelta(secondText),
-      doneEvent([textBlock(`${firstText}${secondText}`), thinkingBlock()]),
-    ]);
-
-    expect(events.map((event) => event.type)).toEqual([
-      "text_delta",
-      "thinking_delta",
-      "text_delta",
-      "done",
-    ]);
-    expect(requireRecord(events[0], "first text").delta).toBe(firstText);
-    expect(events[1]).toHaveProperty("partial.content", [textBlock(firstText), thinkingBlock()]);
-    expect(requireRecord(events[2], "second text").delta).toBe(secondText);
-  });
-
-  it("keeps possible tool-call text buffered across interleaved non-text events", async () => {
-    const rawToolText = "[tool:read]\n<parameter=path>\nsrc/index.ts\n</parameter>\n</function>";
-    const events = await collectEvents([
-      { type: "text_delta", contentIndex: 1, delta: rawToolText },
-      thinkingDelta([thinkingBlock(), textBlock(rawToolText)], 0),
-      doneEvent([thinkingBlock(), textBlock(rawToolText)]),
-    ]);
-
-    expect(events.map((event) => event.type)).toEqual([
-      "start",
-      "thinking_delta",
-      "toolcall_start",
-      "toolcall_delta",
-      "toolcall_end",
-      "done",
-    ]);
-    expect(events[1]).toHaveProperty("partial.content", [
-      thinkingBlock(),
-      expect.objectContaining({ type: "toolCall", name: "read" }),
-    ]);
-    expect(JSON.stringify(events)).not.toContain(rawToolText);
-  });
-
-  it("scrubs compacted error partials when an emoji crosses the safe prefix boundary", async () => {
-    const toolPrefix = "[tool:read]\n<parameter=path>\n";
-    const emojiIndex = 255_999;
-    const firstChunk = `${toolPrefix}${"x".repeat(emojiIndex - toolPrefix.length)}😀${"y".repeat(70_000)}`;
-    const secondChunk = "z".repeat(70_000);
-    const rawToolText = firstChunk + secondChunk;
-    const events = await collectEvents([
-      textDelta(firstChunk),
-      textDelta(secondChunk),
-      errorEvent(
-        { content: [textBlock(rawToolText)], errorMessage: "stream failed" },
-        { content: [textBlock(rawToolText)] },
-      ),
-    ]);
-
-    expect(events.map((event) => event.type)).toEqual(["error"]);
-    const terminalError = requireRecord(events[0], "error event");
-    expect(requireRecord(terminalError.partial, "error partial").content).toEqual([
-      { type: "text", text: "" },
-    ]);
-    expect(requireRecord(terminalError.error, "error body").content).toEqual([]);
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-  });
-
-  it("scrubs mixed under-cap calls from multi-block errors without partials", async () => {
-    const rawCall = "<function=read></function>";
-    const visibleText = "Visible answer before the stream error.";
-    const rawText = `${rawCall}\n${visibleText}`;
-    const events = await collectEvents([
-      textDelta(rawText),
-      errorEvent({
-        role: "assistant",
-        content: [textBlock(rawCall), textBlock(visibleText)],
-        message: "stream failed",
-      }),
-    ]);
-
-    expect(events.map((event) => event.type)).toEqual(["text_delta", "error"]);
-    expect(requireRecord(events[0], "text event").delta).toBe(visibleText);
-    expect(requireRecord(requireRecord(events[1], "error event").error, "error").content).toEqual([
-      { type: "text", text: visibleText },
-    ]);
-    expect(JSON.stringify(events)).not.toContain("<function=read>");
-  });
-
-  it("promotes split zero-argument XML function calls without leaking partials", async () => {
-    const { source, stream } = createControlledPlainTextToolCallCompatStream();
-    const iterator = (await stream)[Symbol.asyncIterator]();
-    const rawToolText = ["<function=read>", "</function>"].join("\n");
-
-    try {
-      source.push(completeStreamEvent({ type: "start", partial: { content: [] } }) as never);
-      expect((await nextEvent(iterator, "start")).type).toBe("start");
-
-      let streamedText = "";
-      for (const delta of ["<", "function=read>\n</func", "tion>"]) {
-        streamedText += delta;
-        source.push({
-          type: "text_delta",
-          contentIndex: 0,
-          delta,
-          partial: {
-            role: "assistant",
-            content: [{ type: "text", text: streamedText }],
-          },
-        } as never);
-      }
-      source.push(doneEvent([textBlock(rawToolText)]) as never);
-
-      const events = [
-        await nextEvent(iterator, "zero-argument tool-call start"),
-        await nextEvent(iterator, "zero-argument tool-call arguments"),
-        await nextEvent(iterator, "zero-argument tool-call end"),
-        await nextEvent(iterator, "zero-argument done event"),
-      ];
-      expect(events.map((event) => event.type)).toEqual([
-        "toolcall_start",
-        "toolcall_delta",
-        "toolcall_end",
-        "done",
-      ]);
-      expect(events[1]).toMatchObject({ delta: "{}" });
-      expect(events[3]).toMatchObject({
-        reason: "toolUse",
-        message: {
-          content: [{ type: "toolCall", name: "read", arguments: {} }],
-          stopReason: "toolUse",
-        },
-      });
-      expect(JSON.stringify(events)).not.toContain("<function");
-      expect(JSON.stringify(events)).not.toContain("</function>");
-    } finally {
-      source.end();
-      await iterator.return?.();
-    }
-  });
+    expect(JSON.stringify(events)).not.toContain("<function");
+    expect(JSON.stringify(events)).not.toContain("</function>");
+  } finally {
+    source.end();
+    await iterator.return?.();
+  }
 });
 
-describe("stripTrailingAnthropicAssistantPrefillWhenThinking", () => {
-  it("preserves assistant tool-use turns across Anthropic and OpenAI-shaped payloads", () => {
-    for (const type of ["tool_use", "toolCall"]) {
-      const payload = {
-        thinking: { type: "adaptive" },
-        messages: [
-          { role: "user", content: "Read a file." },
-          {
-            role: "assistant",
-            content: [{ type, id: type === "tool_use" ? "toolu_1" : "call_1", name: "Read" }],
-          },
-        ],
-      };
-      expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(0);
-    }
-    expect(
-      stripTrailingAnthropicAssistantPrefillWhenThinking({
-        thinking: { type: "adaptive" },
-        messages: [{ role: "assistant", tool_calls: [{ id: "call_1", name: "Read" }] }],
-      }),
-    ).toBe(0);
-  });
-
-  it("keeps assistant prefill when Anthropic thinking is disabled", () => {
-    const payload = prefillPayload("disabled");
-
+it.each([
+  { content: [{ type: "tool_use", id: "toolu_1", name: "Read" }] },
+  { content: [{ type: "toolCall", id: "call_1", name: "Read" }] },
+  { tool_calls: [{ id: "call_1", name: "Read" }] },
+])(
+  "stripTrailingAnthropicAssistantPrefillWhenThinking: preserves assistant tool-use turns in %j",
+  (message) => {
+    const payload = {
+      thinking: { type: "adaptive" },
+      messages: [{ role: "assistant", ...message }],
+    };
     expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(0);
-    expect(payload.messages).toHaveLength(2);
-  });
+  },
+);
+it("stripTrailingAnthropicAssistantPrefillWhenThinking: keeps assistant prefill when Anthropic thinking is disabled", () => {
+  const payload = prefillPayload("disabled");
+
+  expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(0);
+  expect(payload.messages).toHaveLength(2);
 });
 
 it("createAnthropicThinkingPrefillPayloadWrapper: reports stripped assistant prefill count", () => {
