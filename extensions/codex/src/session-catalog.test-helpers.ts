@@ -302,47 +302,25 @@ export function createCodexSessionCatalogNodeHostCommands(
   return createCodexSessionCatalogNodeHostCommandsRuntime(asControlFactory(control), bindingStore);
 }
 
-type CreateSessionEntryParams = Parameters<
-  PluginRuntime["agent"]["session"]["createSessionEntry"]
->[0];
-type CreateSessionEntryResult = Awaited<
-  ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>
->;
-type PatchSessionEntryParams = Parameters<
-  PluginRuntime["agent"]["session"]["prepareSessionEntryPatch"]
->[0];
-type SessionEntrySummary = ReturnType<
-  PluginRuntime["agent"]["session"]["listSessionEntries"]
->[number];
+type SessionRuntime = PluginRuntime["agent"]["session"];
+type CreateSessionEntryParams = Parameters<SessionRuntime["createSessionEntry"]>[0];
+type CreateSessionEntryResult = Awaited<ReturnType<SessionRuntime["createSessionEntry"]>>;
+type PatchSessionEntryParams = Parameters<SessionRuntime["prepareSessionEntryPatch"]>[0];
+type SessionEntrySummary = ReturnType<SessionRuntime["listSessionEntries"]>[number];
 
 type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
   agentId?: string;
 };
-type SessionCatalogProvider = Omit<
-  RegisteredSessionCatalogProvider,
-  "list" | "read" | "continueSession" | "archive" | "openTerminal"
-> & {
-  list: (
-    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["list"]>[0]>,
-  ) => ReturnType<RegisteredSessionCatalogProvider["list"]>;
-  read: (
-    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["read"]>[0]>,
-  ) => ReturnType<RegisteredSessionCatalogProvider["read"]>;
-  continueSession?: (
-    params: OptionalCatalogAgent<
-      Parameters<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>[0]
-    >,
-  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>;
-  archive?: (
-    params: OptionalCatalogAgent<
-      Parameters<NonNullable<RegisteredSessionCatalogProvider["archive"]>>[0]
-    >,
-  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["archive"]>>;
-  openTerminal?: (
-    params: OptionalCatalogAgent<
-      Parameters<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>[0]
-    >,
-  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>;
+type CatalogMethodName = "list" | "read" | "continueSession" | "archive" | "openTerminal";
+type CatalogMethod<K extends CatalogMethodName> = (
+  params: OptionalCatalogAgent<Parameters<NonNullable<RegisteredSessionCatalogProvider[K]>>[0]>,
+) => ReturnType<NonNullable<RegisteredSessionCatalogProvider[K]>>;
+type SessionCatalogProvider = Omit<RegisteredSessionCatalogProvider, CatalogMethodName> & {
+  list: CatalogMethod<"list">;
+  read: CatalogMethod<"read">;
+  continueSession?: CatalogMethod<"continueSession">;
+  archive?: CatalogMethod<"archive">;
+  openTerminal?: CatalogMethod<"openTerminal">;
 };
 
 function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): SessionCatalogProvider {

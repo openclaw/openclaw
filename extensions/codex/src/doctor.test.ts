@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
@@ -99,8 +98,44 @@ function createCheck(deps: Parameters<typeof registerCodexManagedAppServerDoctor
   return check;
 }
 
+const finalizationContext = () => ({
+  ...context(config()),
+  mode: "fix" as const,
+  env: { OPENCLAW_UPDATE_POST_CORE: "1" },
+});
+
+function nativeCheck(command: string) {
+  return createCheck({
+    ...managedDeps(),
+    resolveNativeCommand: () => command,
+    runVersionCommand: undefined,
+  });
+}
+
+function expectFinding(findings: unknown, expected: Record<string, unknown>) {
+  expect(findings).toEqual([expect.objectContaining(expected)]);
+}
+
 describe("managed Codex doctor check", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  async function withNativeProbe(
+    source: (pidPath: string) => string,
+    run: (check: HealthCheck, command: string, pidPath: string) => Promise<void>,
+    detached = false,
+  ) {
+    const directory = tempDirs.make("openclaw-codex-probe-");
+    const command = path.join(directory, "codex");
+    const pidPath = path.join(directory, "probe.pid");
+    try {
+      await fs.writeFile(command, `#!${process.execPath}\n${source(pidPath)}`, { mode: 0o755 });
+      await run(nativeCheck(command), command, pidPath);
+    } finally {
+      const pid = Number(await fs.readFile(pidPath, "utf8").catch(() => ""));
+      if (pid > 0) {
+        killProcessTree(pid, { force: true, detached });
+      }
+    }
+  }
   it.skipIf(process.platform === "win32")(
     "returns successful JSON when a version binary closes stdin immediately",
     async () => {
@@ -158,15 +193,13 @@ fs.writeSync(1, "codex-cli ${CODEX_APP_SERVER_VERSION}\\n");
         syscall: "spawn",
       }),
     );
-    await expect(createCheck(deps).detect(context(cfg))).resolves.toEqual([
-      expect.objectContaining({
-        severity: "warning",
-        path: "/candidate/plugin/codex-native",
-        message: expect.stringContaining(
-          "Codex catalog updater cannot run: /candidate/plugin/codex-native is not runnable on this CPU",
-        ),
-      }),
-    ]);
+    expectFinding(await createCheck(deps).detect(context(cfg)), {
+      severity: "warning",
+      path: "/candidate/plugin/codex-native",
+      message: expect.stringContaining(
+        "Codex catalog updater cannot run: /candidate/plugin/codex-native is not runnable on this CPU",
+      ),
+    });
     expect(deps.resolveStartOptions).toHaveBeenCalledWith(
       expect.objectContaining({ managedCommandOrder: "package-only" }),
       { pluginRoot: "/candidate/plugin", preferInstalled: false },
@@ -176,25 +209,11 @@ fs.writeSync(1, "codex-cli ${CODEX_APP_SERVER_VERSION}\\n");
   it("reports a real missing executable during update finalization", async () => {
     const directory = tempDirs.make("openclaw-codex-missing-");
     const command = path.join(directory, "missing-codex");
-    const check = createCheck({
-      ...managedDeps(),
-      resolveNativeCommand: () => command,
-      runVersionCommand: undefined,
+    expectFinding(await nativeCheck(command).detect(finalizationContext()), {
+      severity: "warning",
+      path: command,
+      message: `Codex catalog updater cannot run: ${command} or its working directory was not found. Repair the executable or working directory and restart the Gateway.`,
     });
-
-    await expect(
-      check.detect({
-        ...context(config()),
-        mode: "fix",
-        env: { OPENCLAW_UPDATE_POST_CORE: "1" },
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        severity: "warning",
-        path: command,
-        message: `Codex catalog updater cannot run: ${command} or its working directory was not found. Repair the executable or working directory and restart the Gateway.`,
-      }),
-    ]);
   });
 
   async function createAgentDirectory() {
@@ -227,15 +246,9 @@ fs.writeSync(1, "codex-cli ${CODEX_APP_SERVER_VERSION}\\n");
 
   it.skipIf(process.platform === "win32")(
     "bounds a successful probe whose detached descendant retains its output pipes",
-    async () => {
-      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-orphan-"));
-      const pidPath = path.join(directory, "orphan.pid");
-      try {
-        const command = path.join(directory, "codex");
-        await fs.writeFile(
-          command,
-          `#!${process.execPath}
-const { spawn } = require("node:child_process");
+    () =>
+      withNativeProbe(
+        (pidPath) => `const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const orphan = spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 10000)"], {
   detached: true,
@@ -245,37 +258,20 @@ fs.writeFileSync(${JSON.stringify(pidPath)}, String(orphan.pid));
 orphan.unref();
 console.log("codex-cli ${CODEX_APP_SERVER_VERSION}");
 `,
-          { mode: 0o755 },
-        );
-        const check = createCheck({
-          ...managedDeps(),
-          resolveNativeCommand: () => command,
-          runVersionCommand: undefined,
-        });
-        const startedAt = performance.now();
-        const findings = await check.detect({
-          ...context(config()),
-          mode: "fix",
-          env: { OPENCLAW_UPDATE_POST_CORE: "1" },
-        });
+        async (check) => {
+          const startedAt = performance.now();
+          const findings = await check.detect(finalizationContext());
 
-        expect(performance.now() - startedAt).toBeLessThan(7_000);
-        expect(findings).toEqual([
-          expect.objectContaining({
+          expect(performance.now() - startedAt).toBeLessThan(7_000);
+          expectFinding(findings, {
             checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
             severity: "warning",
             message: expect.stringContaining("version check failed:"),
             fixHint: expect.stringContaining("after restart"),
-          }),
-        ]);
-      } finally {
-        const orphanPid = Number(await fs.readFile(pidPath, "utf8").catch(() => ""));
-        if (orphanPid > 0) {
-          killProcessTree(orphanPid, { force: true, detached: true });
-        }
-        await fs.rm(directory, { recursive: true, force: true });
-      }
-    },
+          });
+        },
+        true,
+      ),
     15_000,
   );
 
@@ -284,12 +280,10 @@ console.log("codex-cli ${CODEX_APP_SERVER_VERSION}");
     deps.resolveStartOptions.mockRejectedValueOnce(new Error("managed launcher missing"));
     const check = createCheck(deps);
 
-    await expect(check.detect(context(config()))).resolves.toEqual([
-      expect.objectContaining({
-        checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
-        message: "Managed Codex app-server could not be resolved: managed launcher missing",
-      }),
-    ]);
+    expectFinding(await check.detect(context(config())), {
+      checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
+      message: "Managed Codex app-server could not be resolved: managed launcher missing",
+    });
     expect(deps.runVersionCommand).not.toHaveBeenCalled();
   });
 
@@ -298,58 +292,40 @@ console.log("codex-cli ${CODEX_APP_SERVER_VERSION}");
     deps.resolveNativeCommand.mockReturnValueOnce(undefined);
     const check = createCheck(deps);
 
-    await expect(check.detect(context(config()))).resolves.toEqual([
-      expect.objectContaining({
-        checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
-        path: "/candidate/plugin/codex",
-        message: "Managed Codex app-server resolved a launcher without a native artifact.",
-      }),
-    ]);
+    expectFinding(await check.detect(context(config())), {
+      checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
+      path: "/candidate/plugin/codex",
+      message: "Managed Codex app-server resolved a launcher without a native artifact.",
+    });
     expect(deps.runVersionCommand).not.toHaveBeenCalled();
   });
 
   it.skipIf(process.platform === "win32")(
     "bounds a native version probe that ignores SIGTERM",
-    async () => {
-      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-version-"));
-      const pidPath = path.join(directory, "probe.pid");
-      try {
-        const command = path.join(directory, "codex");
-        await fs.writeFile(
-          command,
-          `#!${process.execPath}
-require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+    () =>
+      withNativeProbe(
+        (
+          pidPath,
+        ) => `require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
 process.on("SIGTERM", () => {});
 setInterval(() => {}, 1000);
 `,
-          { mode: 0o755 },
-        );
-        const check = createCheck({
-          ...managedDeps(),
-          resolveNativeCommand: () => command,
-          runVersionCommand: undefined,
-        });
-        const findings = await check.detect(context(config()));
+        async (check, command, pidPath) => {
+          const findings = await check.detect(context(config()));
 
-        expect(findings).toEqual([
-          expect.objectContaining({
+          expectFinding(findings, {
             checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
             path: command,
             message:
               "Managed Codex app-server version check failed: Version check timed out after 5000 ms",
             requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within 5000 ms`,
-          }),
-        ]);
-        const probePid = Number(await fs.readFile(pidPath, "utf8"));
-        expect(() => process.kill(probePid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
-      } finally {
-        const probePid = Number(await fs.readFile(pidPath, "utf8").catch(() => ""));
-        if (probePid > 0) {
-          killProcessTree(probePid, { force: true });
-        }
-        await fs.rm(directory, { recursive: true, force: true });
-      }
-    },
+          });
+          const probePid = Number(await fs.readFile(pidPath, "utf8"));
+          expect(() => process.kill(probePid, 0)).toThrow(
+            expect.objectContaining({ code: "ESRCH" }),
+          );
+        },
+      ),
     15_000,
   );
 
@@ -399,14 +375,12 @@ setInterval(() => {}, 1000);
     }));
     const check = createCheck(deps);
 
-    await expect(check.detect(context(config({ homeScope: "user" })))).resolves.toEqual([
-      expect.objectContaining({
-        checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
-        severity: "error",
-        path: "/candidate/plugin/codex-native",
-        message: `Managed Codex app-server version mismatch: expected ${CODEX_APP_SERVER_VERSION}, detected 0.146.0.`,
-      }),
-    ]);
+    expectFinding(await check.detect(context(config({ homeScope: "user" }))), {
+      checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
+      severity: "error",
+      path: "/candidate/plugin/codex-native",
+      message: `Managed Codex app-server version mismatch: expected ${CODEX_APP_SERVER_VERSION}, detected 0.146.0.`,
+    });
     expect(deps.runVersionCommand).toHaveBeenCalledWith("/candidate/plugin/codex-native");
   });
 });

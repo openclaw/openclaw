@@ -48,8 +48,9 @@ afterAll(async () => {
 });
 
 async function completeResume(argv: string[]) {
-  const outputPath = argv[argv.indexOf("--output-last-message") + 1];
-  if (!outputPath) {
+  const outputFlag = argv.indexOf("--output-last-message");
+  const outputPath = argv[outputFlag + 1];
+  if (outputFlag < 0 || !outputPath) {
     throw new Error("missing Codex output path");
   }
   await fs.writeFile(outputPath, "final answer\n");
@@ -64,13 +65,46 @@ async function completeResume(argv: string[]) {
 }
 
 async function listLocalSessions(params: { filter?: string; limit?: number }) {
-  const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
-    (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
-  );
-  const raw = await command?.handle(JSON.stringify(params));
+  const raw = await nodeCommand(CODEX_CLI_SESSIONS_LIST_COMMAND).handle(JSON.stringify(params));
   return JSON.parse(raw ?? "{}") as Awaited<
     ReturnType<typeof listCodexCliSessionsOnNode>
   >["result"];
+}
+
+function nodeCommand(
+  name = "codex.cli.session.resume",
+  source: Parameters<typeof createCodexCliSessionNodeHostCommands>[0] = resolveCatalogSource,
+) {
+  return createCodexCliSessionNodeHostCommands(source).find((entry) => entry.command === name)!;
+}
+
+async function writeHistory(records: Array<{ session_id: string; ts: number; text: string }>) {
+  await fs.writeFile(
+    path.join(tempDir, "history.jsonl"),
+    records.map((record) => JSON.stringify(record)).join("\n"),
+  );
+}
+
+const meta = (id: string, cwd: string, timestamp = "2026-05-14T00:10:23.618Z") => ({
+  timestamp,
+  type: "session_meta",
+  payload: { id, cwd },
+});
+const userMessage = (text: string, timestamp = "2026-05-14T00:10:24.000Z") => ({
+  timestamp,
+  type: "response_item",
+  payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+});
+
+async function writeRollout(sessionId: string, records: unknown[] = [], large = false) {
+  const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
+  const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
+  await fs.mkdir(sessionDir, { recursive: true });
+  await fs.writeFile(sessionFile, records.map((record) => JSON.stringify(record)).join("\n"));
+  if (large) {
+    await fs.truncate(sessionFile, 5 * 1_024 * 1_024);
+  }
+  return sessionFile;
 }
 
 describe("codex cli node sessions", () => {
@@ -130,14 +164,11 @@ describe("codex cli node sessions", () => {
 
   it("lists recent sessions from Codex history and hydrates cwd from session files", async () => {
     const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd";
-    await fs.writeFile(
-      path.join(tempDir, "history.jsonl"),
-      [
-        JSON.stringify({ session_id: sessionId, ts: 1778677925, text: "first ask" }),
-        JSON.stringify({ session_id: sessionId, ts: 1778678322, text: "latest ask" }),
-        JSON.stringify({ session_id: "older", ts: 1778670000, text: "skip me" }),
-      ].join("\n"),
-    );
+    await writeHistory([
+      { session_id: sessionId, ts: 1778677925, text: "first ask" },
+      { session_id: sessionId, ts: 1778678322, text: "latest ask" },
+      { session_id: "older", ts: 1778670000, text: "skip me" },
+    ]);
     const sessionDir = path.join(tempDir, "sessions", "2026", "05", "13");
     await fs.mkdir(sessionDir, { recursive: true });
     await fs.writeFile(
@@ -242,22 +273,10 @@ describe("codex cli node sessions", () => {
   );
 
   it("keeps authorized resume execution available while native discovery is disabled", async () => {
-    processRuntimeMocks.runCommandBuffered.mockImplementation(async (argv) => {
-      const outputFlag = argv.indexOf("--output-last-message");
-      const outputPath = argv[outputFlag + 1];
-      if (outputFlag < 0 || !outputPath) {
-        throw new Error("missing Codex output path");
-      }
-      await fs.writeFile(outputPath, "final answer\n", "utf8");
-      return {
-        stdout: Buffer.from("diagnostic"),
-        stderr: Buffer.alloc(0),
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
-    });
+    processRuntimeMocks.runCommandBuffered.mockImplementation(async (argv) => ({
+      ...(await completeResume(argv)),
+      stdout: Buffer.from("diagnostic"),
+    }));
 
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "openclaw.json"));
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
@@ -280,8 +299,8 @@ describe("codex cli node sessions", () => {
     });
     registry.registry.plugins.push(record);
     const api = registry.createApi(record, { config });
-    for (const nodeCommand of createCodexCliSessionNodeHostCommands(resolveCatalogSource)) {
-      api.registerNodeHostCommand(nodeCommand);
+    for (const command of createCodexCliSessionNodeHostCommands(resolveCatalogSource)) {
+      api.registerNodeHostCommand(command);
     }
     for (const policy of createCodexCliSessionNodeInvokePolicies()) {
       api.registerNodeInvokePolicy(policy);
@@ -335,17 +354,11 @@ describe("codex cli node sessions", () => {
 
   it("does not attach an empty rollout to history from its filename alone", async () => {
     const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd";
-    await fs.writeFile(
-      path.join(tempDir, "history.jsonl"),
-      JSON.stringify({ session_id: sessionId, ts: 1778678322, text: "history prompt" }),
-    );
+    await writeHistory([{ session_id: sessionId, ts: 1778678322, text: "history prompt" }]);
     const sessionsDir = path.join(tempDir, "sessions");
     await fs.mkdir(sessionsDir);
     await fs.writeFile(path.join(sessionsDir, `rollout-${sessionId}.jsonl`), "");
-    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
-      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
-    )!;
-    const result = JSON.parse(await command.handle(JSON.stringify({ filter: sessionId })));
+    const result = await listLocalSessions({ filter: sessionId });
     expect(result.sessions).toEqual([
       {
         sessionId,
@@ -385,9 +398,7 @@ describe("codex cli node sessions", () => {
         options,
       ),
     );
-    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
-      (entry) => entry.command === "codex.cli.session.resume",
-    )!;
+    const command = nodeCommand();
     const request = JSON.stringify({
       sessionId: "canceled-session",
       prompt: "continue",
@@ -425,9 +436,7 @@ describe("codex cli node sessions", () => {
   it("does not start a node resume canceled while its source is resolving", async () => {
     const source = Promise.withResolvers<Awaited<ReturnType<typeof resolveCatalogSource>>>();
     resolveCatalogSource.mockReturnValueOnce(source.promise);
-    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
-      (entry) => entry.command === "codex.cli.session.resume",
-    )!;
+    const command = nodeCommand();
     const controller = new AbortController();
     const result = command.handle(
       JSON.stringify({ sessionId: "pending-session", agentId: "research", prompt: "continue" }),
@@ -469,9 +478,7 @@ describe("codex cli node sessions", () => {
         await fs.writeFile(path.join(options?.env?.CODEX_HOME ?? tempDir, "resumed"), "yes");
         return completeResume(argv);
       });
-      const command = createCodexCliSessionNodeHostCommands((agentId) =>
-        factory.forNode(agentId),
-      ).find((entry) => entry.command === "codex.cli.session.resume")!;
+      const command = nodeCommand(undefined, (agentId) => factory.forNode(agentId));
       let entry: ReturnType<PluginRuntime["agent"]["session"]["getSessionEntry"]> = {
         sessionId: "openclaw-session",
         updatedAt: 1,
@@ -563,9 +570,7 @@ describe("codex cli node sessions", () => {
       await releaseAllocation.promise;
       return directory;
     });
-    const command = createCodexCliSessionNodeHostCommands((agentId) =>
-      factory.forNode(agentId),
-    ).find((entry) => entry.command === "codex.cli.session.resume")!;
+    const command = nodeCommand(undefined, (agentId) => factory.forNode(agentId));
     const request = JSON.stringify({
       sessionId: "source-race",
       agentId: "research",
@@ -646,10 +651,7 @@ describe("codex cli node sessions", () => {
 
   it("ignores Date-invalid Codex history timestamps", async () => {
     const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cf";
-    await fs.writeFile(
-      path.join(tempDir, "history.jsonl"),
-      JSON.stringify({ session_id: sessionId, ts: 8_700_000_000_000, text: "bad timestamp" }),
-    );
+    await writeHistory([{ session_id: sessionId, ts: 8_700_000_000_000, text: "bad timestamp" }]);
 
     const parsed = await listLocalSessions({ filter: "bad timestamp", limit: 5 });
 
@@ -664,34 +666,16 @@ describe("codex cli node sessions", () => {
 
   it("streams rollout JSONL with a record spanning many chunks", async () => {
     const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5250";
-    const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
-    const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
-    await fs.mkdir(sessionDir, { recursive: true });
-    const filler = JSON.stringify({
+    const filler = {
       timestamp: "2026-05-14T00:10:23.619Z",
       type: "event_msg",
       payload: { type: "token_count", padding: "x".repeat(5 * 1_024 * 1_024) },
-    });
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          timestamp: "2026-05-14T00:10:23.618Z",
-          type: "session_meta",
-          payload: { id: sessionId, cwd: "/tmp/codex-streaming" },
-        }),
-        filler,
-        JSON.stringify({
-          timestamp: "2026-05-14T00:10:24.000Z",
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "rollout fallback" }],
-          },
-        }),
-      ].join("\n"),
-    );
+    };
+    const sessionFile = await writeRollout(sessionId, [
+      meta(sessionId, "/tmp/codex-streaming"),
+      filler,
+      userMessage("rollout fallback"),
+    ]);
     const readFile = vi.spyOn(fs, "readFile");
 
     const parsed = await listLocalSessions({ limit: 5 });
@@ -711,18 +695,8 @@ describe("codex cli node sessions", () => {
 
   it("discards partial large-file summaries and closes after a later read fails", async () => {
     const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5251";
-    const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
-    const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
-    await fs.mkdir(sessionDir, { recursive: true });
-    await fs.writeFile(sessionFile, "");
-    await fs.truncate(sessionFile, 5 * 1_024 * 1_024);
-    const firstChunk = Buffer.from(
-      `${JSON.stringify({
-        timestamp: "2026-05-14T00:10:23.618Z",
-        type: "session_meta",
-        payload: { id: sessionId, cwd: "/tmp/partial" },
-      })}\n`,
-    );
+    await writeRollout(sessionId, [], true);
+    const firstChunk = Buffer.from(`${JSON.stringify(meta(sessionId, "/tmp/partial"))}\n`);
     const close = vi.fn(async () => undefined);
     const read = vi
       .fn()
@@ -742,28 +716,11 @@ describe("codex cli node sessions", () => {
 
   it("keeps a completed large-file summary when close rejects", async () => {
     const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5252";
-    const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
-    const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
-    await fs.mkdir(sessionDir, { recursive: true });
-    await fs.writeFile(sessionFile, "");
-    await fs.truncate(sessionFile, 5 * 1_024 * 1_024);
+    const sessionFile = await writeRollout(sessionId, [], true);
     const content = Buffer.from(
-      [
-        JSON.stringify({
-          timestamp: "2026-05-14T00:10:23.618Z",
-          type: "session_meta",
-          payload: { id: sessionId, cwd: "/tmp/close-failure" },
-        }),
-        JSON.stringify({
-          timestamp: "2026-05-14T00:10:24.000Z",
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "survives close failure" }],
-          },
-        }),
-      ].join("\n"),
+      [meta(sessionId, "/tmp/close-failure"), userMessage("survives close failure")]
+        .map((record) => JSON.stringify(record))
+        .join("\n"),
     );
     const close = vi.fn(async () => {
       throw Object.assign(new Error("close failed"), { code: "EIO" });
@@ -823,30 +780,11 @@ describe("codex cli node sessions", () => {
 
   it("keeps Codex session-file previews on UTF-16 code point boundaries", async () => {
     const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5248";
-    const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
-    const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
     const text = `${"b".repeat(136)}🤖tail`;
-
-    await fs.mkdir(sessionDir, { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          timestamp: "2026-05-14T00:10:23.618Z",
-          type: "session_meta",
-          payload: { id: sessionId, cwd: "/tmp/codex-work" },
-        }),
-        JSON.stringify({
-          timestamp: "2026-05-14T00:10:23.619Z",
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text }],
-          },
-        }),
-      ].join("\n"),
-    );
+    const sessionFile = await writeRollout(sessionId, [
+      meta(sessionId, "/tmp/codex-work"),
+      userMessage(text, "2026-05-14T00:10:23.619Z"),
+    ]);
 
     const parsed = await listLocalSessions({ filter: "", limit: 5 });
 
