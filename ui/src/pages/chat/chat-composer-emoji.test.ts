@@ -198,7 +198,7 @@ describe("chat emoji acceptance", () => {
 describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
   it("accepts before synchronous overlay retirement can dismiss the menu again", () => {
     let overlay: Overlay | undefined;
-    vi.mocked(TextareaTokenAnchor.prototype.updateNative).mockImplementation((next) => {
+    vi.spyOn(TextareaTokenAnchor.prototype, "updateNative").mockImplementation((next) => {
       overlay = next;
     });
     vi.spyOn(TextareaTokenAnchor.prototype, "close").mockImplementation(() => overlay?.retire());
