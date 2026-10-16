@@ -871,26 +871,17 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
           const allowed =
             ownerInvite || (await isDmAllowedWithIngress(ship, settingsState.effectiveDmAllowlist));
           if (ownerInvite || (settingsState.effectiveAutoAcceptDmInvites && allowed)) {
-            try {
-              await api.poke({
-                app: "chat",
-                mark: "chat-dm-rsvp",
-                json: { ship, ok: true },
-              });
-              processedDmInvites.add(ship);
-              runtime.log?.(
-                ownerInvite
-                  ? `[tlon] Auto-accepted DM invite from owner ${ship}`
-                  : `[tlon] Auto-accepted DM invite from ${ship}`,
-              );
-            } catch (err) {
-              runtime.error?.(
-                ownerInvite
-                  ? `[tlon] Failed to auto-accept DM from owner: ${String(err)}`
-                  : `[tlon] Failed to auto-accept DM from ${ship}: ${String(err)}`,
-              );
-              throw err;
-            }
+            await api.poke({
+              app: "chat",
+              mark: "chat-dm-rsvp",
+              json: { ship, ok: true },
+            });
+            processedDmInvites.add(ship);
+            runtime.log?.(
+              ownerInvite
+                ? `[tlon] Auto-accepted DM invite from owner ${ship}`
+                : `[tlon] Auto-accepted DM invite from ${ship}`,
+            );
             continue;
           }
 
