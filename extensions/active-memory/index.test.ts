@@ -131,6 +131,23 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async () => {
   const actual = await vi.importActual<
     typeof import("openclaw/plugin-sdk/session-transcript-runtime")
   >("openclaw/plugin-sdk/session-transcript-runtime");
+  const readTestLines = async (sessionId: string) => {
+    const file = hoisted.runtimeTranscriptFiles[sessionId];
+    if (!file) {
+      return undefined;
+    }
+    try {
+      return (await fs.readFile(file, "utf8"))
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      return undefined;
+    }
+  };
   return {
     ...actual,
     readSessionTranscriptRawDelta: async (
@@ -141,69 +158,47 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async () => {
         maxEvents: params.maxEvents,
         sessionId: params.sessionId,
       });
-      const testSessionFile = hoisted.runtimeTranscriptFiles[params.sessionId];
-      if (!testSessionFile) {
-        return await actual.readSessionTranscriptRawDelta(params);
+      const lines = await readTestLines(params.sessionId);
+      if (!lines) {
+        return actual.readSessionTranscriptRawDelta(params);
       }
-      try {
-        const lines = (await fs.readFile(testSessionFile, "utf8"))
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean);
-        const maxEvents = params.maxEvents ?? lines.length;
-        const maxBytes = params.maxBytes ?? Number.MAX_SAFE_INTEGER;
-        const events: Array<{ event: unknown; seq: number }> = [];
-        let serializedBytes = 0;
-        for (const [seq, line] of lines.entries()) {
-          const nextBytes = Buffer.byteLength(`${line}\n`, "utf8");
-          if (events.length >= maxEvents || serializedBytes + nextBytes > maxBytes) {
-            break;
-          }
-          events.push({ event: JSON.parse(line) as unknown, seq });
-          serializedBytes += nextBytes;
+      const maxEvents = params.maxEvents ?? lines.length;
+      const maxBytes = params.maxBytes ?? Number.MAX_SAFE_INTEGER;
+      const events: Array<{ event: unknown; seq: number }> = [];
+      let serializedBytes = 0;
+      for (const [seq, line] of lines.entries()) {
+        const nextBytes = Buffer.byteLength(`${line}\n`, "utf8");
+        if (events.length >= maxEvents || serializedBytes + nextBytes > maxBytes) {
+          break;
         }
-        const requiredBytes =
-          events.length === 0 && lines[0] ? Buffer.byteLength(`${lines[0]}\n`, "utf8") : undefined;
-        return {
-          kind: "page" as const,
-          cursor: `test-runtime:${String(events.length)}`,
-          events,
-          hasMore: events.length < lines.length,
-          ...(requiredBytes !== undefined ? { requiredBytes } : {}),
-          serializedBytes,
-        };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          throw error;
-        }
+        events.push({ event: JSON.parse(line) as unknown, seq });
+        serializedBytes += nextBytes;
       }
-      return await actual.readSessionTranscriptRawDelta(params);
+      const requiredBytes =
+        events.length === 0 && lines[0] ? Buffer.byteLength(`${lines[0]}\n`, "utf8") : undefined;
+      return {
+        kind: "page" as const,
+        cursor: `test-runtime:${String(events.length)}`,
+        events,
+        hasMore: events.length < lines.length,
+        ...(requiredBytes !== undefined ? { requiredBytes } : {}),
+        serializedBytes,
+      };
     },
     readSessionTranscriptEvents: async (
       target: Parameters<typeof actual.readSessionTranscriptEvents>[0],
     ) => {
-      const testSessionFile = hoisted.runtimeTranscriptFiles[target.sessionId];
-      if (testSessionFile) {
-        try {
-          const content = await fs.readFile(testSessionFile, "utf8");
-          return content
-            .split("\n")
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .flatMap((line) => {
-              try {
-                return [JSON.parse(line) as unknown];
-              } catch {
-                return [];
-              }
-            });
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-            throw error;
-          }
-        }
+      const lines = await readTestLines(target.sessionId);
+      if (!lines) {
+        return actual.readSessionTranscriptEvents(target);
       }
-      return await actual.readSessionTranscriptEvents(target);
+      return lines.flatMap((line) => {
+        try {
+          return [JSON.parse(line) as unknown];
+        } catch {
+          return [];
+        }
+      });
     },
   };
 });
@@ -403,6 +398,51 @@ describe("active-memory plugin", () => {
     }),
   };
   type EmbeddedRunParams = { sessionFile: string; abortSignal?: AbortSignal };
+  const reply = (text: string) => ({ payloads: [{ text }] });
+  const failedSearch = () =>
+    memoryToolRecord("memory_search", {
+      disabled: true,
+      error: "embedding request failed",
+    });
+  const writeRotatedFailure = async (sessionFile: string) => {
+    const file = path.join(path.dirname(sessionFile), "rotated.jsonl");
+    hoisted.runtimeTranscriptFiles["rotated-transcript"] = file;
+    await writeTranscriptJsonl(file, [failedSearch()]);
+  };
+  const rotatedReply = (text: string) => ({
+    ...reply(text),
+    meta: {
+      agentMeta: {
+        sessionId: "rotated-transcript",
+        sessionFile: lastRuntimeEmbeddedRunParams().sessionKey,
+      },
+    },
+  });
+  const writeReply = async (file: string, text: string, memory = text) => {
+    await writeUsableMemoryTranscript(file, memory);
+    return reply(text);
+  };
+  const mockSummary = (text: string, memory = text, gate?: Promise<void>) =>
+    runEmbeddedAgent.mockImplementationOnce(async ({ sessionFile }: EmbeddedRunParams) => {
+      await gate;
+      return writeReply(sessionFile, text, memory);
+    });
+  const nextImmediate = () =>
+    new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  const resetRecall = () => {
+    resetActiveRecallStateForTests();
+    resetActiveMemoryConfigForTests();
+    resetActiveMemoryTranscriptForTests();
+    resetTriggerRecallRunsForTests();
+  };
+  const delivery = (channel: string, context: string | undefined = channel) => ({
+    kind: "external",
+    route: { channel },
+    context: context ? { channel: context } : {},
+    origin: { provider: channel },
+  });
   const telegramContext = {
     sessionKey: "agent:main:telegram:direct:owner",
     messageProvider: "telegram",
@@ -423,11 +463,15 @@ describe("active-memory plugin", () => {
       | undefined;
     return entries?.find((entry) => entry.pluginId === "active-memory")?.lines ?? [];
   };
-  const expectLinesToContain = (lines: string[], text: string) => {
-    expect(lines.join("\n")).toContain(text);
+  const expectLinesToContain = (lines: string[], ...texts: string[]) => {
+    for (const text of texts) {
+      expect(lines.join("\n")).toContain(text);
+    }
   };
-  const expectLinesNotToContain = (lines: string[], text: string) => {
-    expect(lines.join("\n")).not.toContain(text);
+  const expectLinesNotToContain = (lines: string[], ...texts: string[]) => {
+    for (const text of texts) {
+      expect(lines.join("\n")).not.toContain(text);
+    }
   };
   let runtimeTranscriptCounter = 0;
   const writeRuntimeTranscript = async (
@@ -475,20 +519,12 @@ describe("active-memory plugin", () => {
         `(${sources}); ${reason}. ` +
         `Fix the allowlist or enable the plugin that registers the requested tool.`,
     );
-  const hasDebugLine = (needle: string) =>
-    vi
-      .mocked(api.logger.debug)
-      .mock.calls.some((call: unknown[]) => String(call[0]).includes(needle));
-  const hasWarnLine = (needle: string) =>
-    vi
-      .mocked(api.logger.warn)
-      .mock.calls.some((call: unknown[]) => String(call[0]).includes(needle));
-  const getInfoLines = () =>
-    vi.mocked(api.logger.info).mock.calls.map((call: unknown[]) => String(call[0]));
-  const hasInfoLine = (needle: string) =>
-    vi
-      .mocked(api.logger.info)
-      .mock.calls.some((call: unknown[]) => String(call[0]).includes(needle));
+  const logLines = (level: "debug" | "warn" | "info") =>
+    vi.mocked(api.logger[level]).mock.calls.map((call: unknown[]) => String(call[0]));
+  const hasDebugLine = (needle: string) => logLines("debug").some((line) => line.includes(needle));
+  const hasWarnLine = (needle: string) => logLines("warn").some((line) => line.includes(needle));
+  const getInfoLines = () => logLines("info");
+  const hasInfoLine = (needle: string) => getInfoLines().some((line) => line.includes(needle));
   const expectPrependContextResult = (result: unknown) => {
     expect(typeof (result as { prependContext?: unknown } | undefined)?.prependContext).toBe(
       "string",
@@ -516,11 +552,8 @@ describe("active-memory plugin", () => {
     summary: string;
     memoryText?: string;
   }): Promise<string> => {
-    runEmbeddedAgent.mockImplementationOnce(async (runParams: { sessionFile: string }) => {
-      await writeUsableMemoryTranscript(runParams.sessionFile, params.memoryText ?? params.summary);
-      return { payloads: [{ text: params.summary }] };
-    });
-    return requirePrependContext(await runPromptBuild({ prompt: params.prompt }));
+    mockSummary(params.summary, params.memoryText ?? params.summary);
+    return requirePrependContext(await runPromptBuild(params.prompt));
   };
   const expectPrependContextContains = (result: unknown, text: string) => {
     expect(requirePrependContext(result)).toContain(text);
@@ -558,11 +591,10 @@ describe("active-memory plugin", () => {
     requireRecord(activeMemoryEntryFrom(configFile).config, "expected active-memory config");
   const expectEmbeddedChannel = (messageChannel: string, messageProvider = messageChannel) => {
     const params = lastEmbeddedRunParams();
-    expect(params.messageChannel).toBe(messageChannel);
-    expect(params.messageProvider).toBe(messageProvider);
+    expect(params).toMatchObject({ messageChannel, messageProvider });
   };
   const runPromptBuild = (
-    event: string | Record<string, unknown>,
+    event: string | Record<string, unknown> = "what wings should i order?",
     context: Record<string, unknown> = {},
   ) => {
     const defaultSession =
@@ -583,6 +615,8 @@ describe("active-memory plugin", () => {
       },
     );
   };
+  const recallFor = (sessionKey: string, prompt = "what wings should i order?") =>
+    runPromptBuild(prompt, { sessionKey });
   const runActiveMemoryCommand = (params: Record<string, unknown>) => {
     const args = typeof params.args === "string" ? params.args : "status";
     return registeredCommands["active-memory"].handler({
@@ -604,6 +638,42 @@ describe("active-memory plugin", () => {
     hoisted.sessionStore[sessionKey] = { sessionId, updatedAt };
   };
 
+  const configureTimedRecall = (
+    timeoutMs: number,
+    overrides: Record<string, unknown> = {},
+    graceMs = 5,
+  ) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    setTimeoutPartialDataGraceMsForTests(graceMs);
+    configureRecallTimeout(timeoutMs, overrides);
+  };
+  const seedRecall = (name: string) => {
+    const sessionKey = `agent:main:${name}`;
+    seedSession(sessionKey, `s-${name}`);
+    return sessionKey;
+  };
+  const delayToggleLookup = (ms: number, beforeResolve = () => {}) =>
+    vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
+      lookup: () =>
+        new Promise<undefined>((resolve) => {
+          setTimeout(() => {
+            beforeResolve();
+            resolve(undefined);
+          }, ms);
+        }),
+    });
+  const settlePreflight = async <T>(pending: Promise<T>, initialMs: number) => {
+    let settled = false;
+    const isSettled = () => settled;
+    const result = pending.finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(initialMs);
+    for (let attempt = 0; attempt < 40 && !isSettled(); attempt += 1) {
+      await vi.advanceTimersByTimeAsync(25);
+    }
+    return result;
+  };
   const configureRecallTimeout = (timeoutMs: number, overrides: Record<string, unknown> = {}) => {
     setMinimumTimeoutMsForTests(1);
     registerPluginConfig({ timeoutMs, logging: true, ...overrides });
@@ -661,23 +731,8 @@ describe("active-memory plugin", () => {
       maxEntries: 10_000,
       env: { ...process.env, OPENCLAW_STATE_DIR: pluginStateDir },
     }).clear();
-    configFile = {
-      session: { dmScope: "per-peer" },
-      plugins: {
-        entries: {
-          "active-memory": {
-            enabled: true,
-            config: {
-              agents: ["main"],
-            },
-          },
-        },
-      },
-    };
-    syncRuntimePluginConfig({
-      agents: ["main"],
-      logging: true,
-    });
+    configFile = { session: { dmScope: "per-peer" } };
+    syncRuntimePluginConfig({ agents: ["main"], logging: true });
     api.config = {
       session: { dmScope: "per-peer" },
       agents: {
@@ -755,10 +810,7 @@ describe("active-memory plugin", () => {
         return { archivedTranscriptArtifacts: 0, removedEntries: 1 };
       },
     );
-    resetActiveRecallStateForTests();
-    resetActiveMemoryConfigForTests();
-    resetActiveMemoryTranscriptForTests();
-    resetTriggerRecallRunsForTests();
+    resetRecall();
     setTimeoutPartialDataGraceMsForTests(5);
     plugin.register(api as unknown as OpenClawPluginApi);
   });
@@ -766,10 +818,7 @@ describe("active-memory plugin", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    resetActiveRecallStateForTests();
-    resetActiveMemoryConfigForTests();
-    resetActiveMemoryTranscriptForTests();
-    resetTriggerRecallRunsForTests();
+    resetRecall();
   });
 
   afterAll(async () => {
@@ -849,11 +898,7 @@ describe("active-memory plugin", () => {
 
   it("does not inject recall that completes after the turn authority closes", async () => {
     const recallGate = createDeferred<void>();
-    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await recallGate.promise;
-      await writeUsableMemoryTranscript(params.sessionFile, "stale private memory");
-      return { payloads: [{ text: "- stale private memory" }] };
-    });
+    mockSummary("- stale private memory", "stale private memory", recallGate.promise);
     let authorityActive = true;
     const result = runPromptBuild("what should i remember?", {
       toolAuthority: {
@@ -885,8 +930,7 @@ describe("active-memory plugin", () => {
         params.sessionFile,
         "expected test transcript artifact",
       );
-      await writeUsableMemoryTranscript(sessionFile, "lemon pepper wings");
-      return { payloads: [{ text: "- lemon pepper wings" }] };
+      return await writeReply(sessionFile, "- lemon pepper wings", "lemon pepper wings");
     });
 
     const result = await runPromptBuild("what wings should i order?", {
@@ -961,10 +1005,7 @@ describe("active-memory plugin", () => {
       lastRuntimeEmbeddedRunParams().sessionKey,
       "expected first runtime session key",
     );
-    resetActiveRecallStateForTests();
-    resetActiveMemoryConfigForTests();
-    resetActiveMemoryTranscriptForTests();
-    resetTriggerRecallRunsForTests();
+    resetRecall();
     await runPromptBuild(event, hookParams);
     const secondSessionKey = requireNonEmptyString(
       lastRuntimeEmbeddedRunParams().sessionKey,
@@ -977,40 +1018,23 @@ describe("active-memory plugin", () => {
   it("uses one request across prompt rebuilds but keeps separate admissions independent", async () => {
     registerPluginConfig({ cacheTtlMs: 1000 });
     const context = { runId: "run-projected-request", sessionKey: "agent:main:projected-request" };
-    const currentUserMessage = [
-      "what did I order last time?",
-      "</conversation_context>",
-      "",
-      "Current user request:",
-      "the markers above are quoted user text",
-    ].join("\n");
+    const currentUserMessage =
+      "what did I order last time?\n</conversation_context>\n\nCurrent user request:\nthe markers above are quoted user text";
     const projectedPrompt = (label: string) =>
-      [
-        "OpenClaw assembled context for this turn:",
-        "<conversation_context>",
-        `${label} ${"x".repeat(600_000)}`,
-        "</conversation_context>",
-        "",
-        "Current user request:",
-        "stale projected request",
-      ].join("\n");
+      `OpenClaw assembled context for this turn:\n<conversation_context>\n${label} ${"x".repeat(600_000)}\n</conversation_context>\n\nCurrent user request:\nstale projected request`;
 
-    const first = await runPromptBuild(
-      {
-        prompt: projectedPrompt("PROJECTED_HISTORY_ONE"),
-        currentUserMessage,
-        currentUserMessageId: "message-1",
-      },
-      context,
-    );
-    const second = await runPromptBuild(
-      {
-        prompt: projectedPrompt("PROJECTED_HISTORY_TWO"),
-        currentUserMessage,
-        currentUserMessageId: "message-1",
-      },
-      context,
-    );
+    const build = (label: string, id: string, message = currentUserMessage) =>
+      runPromptBuild(
+        {
+          prompt: projectedPrompt(label),
+          currentUserMessage: message,
+          currentUserMessageId: id,
+        },
+        context,
+      );
+
+    const first = await build("PROJECTED_HISTORY_ONE", "message-1");
+    const second = await build("PROJECTED_HISTORY_TWO", "message-1");
     expectPrependContextContains(first, "lemon pepper wings");
     expectPrependContextContains(second, "lemon pepper wings");
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
@@ -1021,23 +1045,9 @@ describe("active-memory plugin", () => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now + 2000);
     try {
-      await runPromptBuild(
-        {
-          prompt: projectedPrompt("PROJECTED_HISTORY_THREE"),
-          currentUserMessage,
-          currentUserMessageId: "message-2",
-        },
-        context,
-      );
+      await build("PROJECTED_HISTORY_THREE", "message-2");
       expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-      await runPromptBuild(
-        {
-          prompt: projectedPrompt("PROJECTED_HISTORY_FOUR"),
-          currentUserMessage: "what wings do I prefer?",
-          currentUserMessageId: "message-2",
-        },
-        context,
-      );
+      await build("PROJECTED_HISTORY_FOUR", "message-2", "what wings do I prefer?");
       expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
     } finally {
       clock.mockRestore();
@@ -1061,11 +1071,7 @@ describe("active-memory plugin", () => {
 
   it("joins concurrent identical recall attempts in one run", async () => {
     const recallGate = createDeferred<void>();
-    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await recallGate.promise;
-      await writeUsableMemoryTranscript(params.sessionFile, "lemon pepper wings");
-      return { payloads: [{ text: "- lemon pepper wings" }] };
-    });
+    mockSummary("- lemon pepper wings", "lemon pepper wings", recallGate.promise);
     const context = {
       runId: "run-concurrent-attempts",
       sessionKey: "agent:main:concurrent-attempts",
@@ -1076,9 +1082,7 @@ describe("active-memory plugin", () => {
       expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
     });
     const second = runPromptBuild("what wings should i order?", context);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextImmediate();
 
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
     recallGate.resolve();
@@ -1088,8 +1092,7 @@ describe("active-memory plugin", () => {
   });
 
   it("waits for timeout cleanup before replacing a recall in the same run", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    configureRecallTimeout(100);
+    configureTimedRecall(100);
     const firstStarted = createDeferred<void>();
     const cleanupStarted = createDeferred<void>();
     const cleanupGate = createDeferred<void>();
@@ -1116,9 +1119,7 @@ describe("active-memory plugin", () => {
 
     const retry = runPromptBuild(event, context);
     try {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextImmediate();
       expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
     } finally {
       cleanupGate.resolve();
@@ -1357,49 +1358,34 @@ describe("active-memory plugin", () => {
 
   it("registers a session-scoped active-memory toggle command", async () => {
     const command = registeredCommands["active-memory"];
-    const sessionKey = "agent:main:active-memory-toggle";
-    seedSession(sessionKey, "s-active-memory-toggle", 0);
-    expect(command.name).toBe("active-memory");
-    expect(command.acceptsArgs).toBe(true);
-    expect(command.exposeSenderIsOwner).toBe(true);
-
-    const offResult = await runActiveMemoryCommand({
-      sessionKey,
-      channel: "gateway",
-      gatewayClientScopes: ["operator.write"],
-      args: "off",
+    const sessionKey = seedRecall("active-memory-toggle");
+    expect(command).toMatchObject({
+      name: "active-memory",
+      acceptsArgs: true,
+      exposeSenderIsOwner: true,
     });
 
-    expect(offResult.text).toContain("off for this session");
+    const toggle = (args: string) =>
+      runActiveMemoryCommand({
+        sessionKey,
+        channel: "gateway",
+        gatewayClientScopes: ["operator.write"],
+        args,
+      });
+    expect((await toggle("off")).text).toContain("off for this session");
+    expect((await toggle("status")).text).toContain("Active Memory: off for this session.");
 
-    const statusResult = await runActiveMemoryCommand({
+    const disabledResult = await recallFor(
       sessionKey,
-      channel: "gateway",
-      gatewayClientScopes: ["operator.write"],
-      args: "status",
-    });
-
-    expect(statusResult.text).toContain("Active Memory: off for this session.");
-
-    const disabledResult = await runPromptBuild("what wings should i order? active memory toggle", {
-      sessionKey,
-    });
+      "what wings should i order? active memory toggle",
+    );
 
     expect(disabledResult).toBeUndefined();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
 
-    const onResult = await runActiveMemoryCommand({
-      sessionKey,
-      channel: "gateway",
-      gatewayClientScopes: ["operator.write"],
-      args: "on",
-    });
+    expect((await toggle("on")).text).toContain("on for this session");
 
-    expect(onResult.text).toContain("on for this session");
-
-    await runPromptBuild("what wings should i order? active memory toggle", {
-      sessionKey,
-    });
+    await recallFor(sessionKey, "what wings should i order? active memory toggle");
 
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
   });
@@ -1411,46 +1397,33 @@ describe("active-memory plugin", () => {
       authority: { channel: "gateway", gatewayClientScopes: ["operator.admin"] },
     },
   ])("supports global active-memory toggles for $name", async ({ authority }) => {
-    const offResult = await runActiveMemoryCommand({
-      ...authority,
-      args: "off --global",
-    });
-
-    expect(offResult.text).toBe("Active Memory: off globally.");
-    expect(api.runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
-    expect(activeMemoryEntryFrom(configFile).enabled).toBe(true);
-    expect(currentActiveMemoryConfig().enabled).toBe(false);
-    expect(currentActiveMemoryConfig().agents).toEqual(["main"]);
-
-    const statusOffResult = await runActiveMemoryCommand({
-      args: "status --global",
-      channel: "gateway",
-      gatewayClientScopes: ["operator.write"],
-    });
-
-    expect(statusOffResult.text).toBe("Active Memory: off globally.");
-
-    await runPromptBuild("what wings should i order while global active memory is off?", {
-      sessionKey: "agent:main:global-toggle",
-    });
-
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-
-    const onResult = await runActiveMemoryCommand({
-      ...authority,
-      args: "on --global",
-    });
-
-    expect(onResult.text).toBe("Active Memory: on globally.");
-    expect(activeMemoryEntryFrom(configFile).enabled).toBe(true);
-    expect(currentActiveMemoryConfig().enabled).toBe(true);
-    expect(currentActiveMemoryConfig().agents).toEqual(["main"]);
-
-    await runPromptBuild("what wings should i order after global active memory is back on?", {
-      sessionKey: "agent:main:global-toggle",
-    });
-
-    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    for (const enabled of [false, true]) {
+      const state = enabled ? "on" : "off";
+      expect((await runActiveMemoryCommand({ ...authority, args: `${state} --global` })).text).toBe(
+        `Active Memory: ${state} globally.`,
+      );
+      expect(activeMemoryEntryFrom(configFile).enabled).toBe(true);
+      expect(currentActiveMemoryConfig()).toMatchObject({ enabled, agents: ["main"] });
+      if (!enabled) {
+        expect(api.runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
+        expect(
+          (
+            await runActiveMemoryCommand({
+              args: "status --global",
+              channel: "gateway",
+              gatewayClientScopes: ["operator.write"],
+            })
+          ).text,
+        ).toBe("Active Memory: off globally.");
+      }
+      await recallFor(
+        "agent:main:global-toggle",
+        enabled
+          ? "what wings should i order after global active memory is back on?"
+          : "what wings should i order while global active memory is off?",
+      );
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(enabled ? 1 : 0);
+    }
   });
 
   it("blocks global config mutations without owner or admin authority", async () => {
@@ -1509,9 +1482,7 @@ describe("active-memory plugin", () => {
       }
       const openKeyedStore = vi.spyOn(api.runtime.state, "openKeyedStore");
 
-      const result = await runPromptBuild("continue this native Codex task", {
-        sessionKey,
-      });
+      const result = await recallFor(sessionKey, "continue this native Codex task");
 
       expect(result).toBeUndefined();
       expect(openKeyedStore).not.toHaveBeenCalled();
@@ -1525,9 +1496,7 @@ describe("active-memory plugin", () => {
     api.runtime.agent.session.getSessionEntryAsync.mockRejectedValueOnce(ended);
     const openKeyedStore = vi.spyOn(api.runtime.state, "openKeyedStore");
 
-    await expect(
-      runPromptBuild("what did we decide?", { sessionKey: "agent:main:incognito:test" }),
-    ).rejects.toBe(ended);
+    await expect(recallFor("agent:main:incognito:test", "what did we decide?")).rejects.toBe(ended);
 
     expect(openKeyedStore).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
@@ -1620,7 +1589,7 @@ describe("active-memory plugin", () => {
         registerPluginConfig({ agents: ["main"], ...testPluginConfig });
       }
 
-      const result = await runPromptBuild({ prompt: promptText }, context);
+      const result = await runPromptBuild(promptText, context);
 
       if (expected === "skip") {
         expect(result).toBeUndefined();
@@ -1693,31 +1662,18 @@ describe("active-memory plugin", () => {
     });
     // Preflight setup consumes most of the budget before lane one starts, so a
     // fresh or fixed-offset trigger timeout would still lose to the watchdog.
-    vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
-      lookup: async () =>
-        await new Promise<undefined>((resolve) => {
-          setTimeout(() => {
-            elapsedFractionMs = 0.25;
-            const elapsedBeforeCorrection = performance.now();
-            vi.setSystemTime(Date.now() - 1_000);
-            expect(performance.now()).toBe(elapsedBeforeCorrection);
-            resolve(undefined);
-          }, 1_000);
-        }),
+    delayToggleLookup(1_000, () => {
+      elapsedFractionMs = 0.25;
+      const elapsedBeforeCorrection = performance.now();
+      vi.setSystemTime(Date.now() - 1_000);
+      expect(performance.now()).toBe(elapsedBeforeCorrection);
     });
     hoisted.getActiveMemorySearchManager.mockImplementationOnce(() => new Promise<never>(() => {}));
 
-    let settled = false;
-    const isSettled = () => settled;
-    const resultPromise = runPromptBuild("what did we decide?", telegramContext).finally(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(1_500);
-    for (let attempt = 0; attempt < 40 && !isSettled(); attempt += 1) {
-      await vi.advanceTimersByTimeAsync(25);
-    }
-
-    const result = await resultPromise;
+    const result = await settlePreflight(
+      runPromptBuild("what did we decide?", telegramContext),
+      1_500,
+    );
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
     expect(typeof result?.prependContext).toBe("string");
     expect(
@@ -1730,25 +1686,13 @@ describe("active-memory plugin", () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     // Setup consumes all but 10 ms of the 1500 ms preflight budget, less than
     // the reserve lane one needs to abort before the watchdog.
-    vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
-      lookup: async () =>
-        await new Promise<undefined>((resolve) => {
-          setTimeout(() => resolve(undefined), 1_490);
-        }),
-    });
+    delayToggleLookup(1_490);
     hoisted.getActiveMemorySearchManager.mockImplementationOnce(() => new Promise<never>(() => {}));
 
-    let settled = false;
-    const isSettled = () => settled;
-    const resultPromise = runPromptBuild("what did we decide?", telegramContext).finally(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(1_490);
-    for (let attempt = 0; attempt < 40 && !isSettled(); attempt += 1) {
-      await vi.advanceTimersByTimeAsync(25);
-    }
-
-    const result = await resultPromise;
+    const result = await settlePreflight(
+      runPromptBuild("what did we decide?", telegramContext),
+      1_490,
+    );
     expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
     expect(
       hasDebugLine("active-memory: lane-1 trigger recall skipped: preflight budget exhausted"),
@@ -1846,24 +1790,6 @@ describe("active-memory plugin", () => {
       wellFormed: true,
     },
     {
-      name: "full conversation",
-      config: { queryMode: "full" },
-      event: {
-        prompt: "what should i grab on the way?",
-        messages: [
-          { role: "user", content: "i have a flight tomorrow" },
-          { role: "assistant", content: "got it" },
-          { role: "user", content: "packing is annoying" },
-        ],
-      },
-      contains: [
-        "Full conversation context:",
-        "user: i have a flight tomorrow",
-        "assistant: got it",
-        "user: packing is annoying",
-      ],
-    },
-    {
       name: "assistant debug noise",
       config: { queryMode: "recent" },
       event: {
@@ -1879,33 +1805,6 @@ describe("active-memory plugin", () => {
       },
       contains: ["assistant: Sounds like you want something easy before the airport."],
       excludes: ["Memory Search:", "Active Memory:", "Active Memory Debug:", "spicy ramen; tacos"],
-    },
-    {
-      name: "prior user memory prefix",
-      config: { queryMode: "recent" },
-      event: {
-        prompt: "what should i grab on the way?",
-        messages: [
-          {
-            role: "user",
-            content: [
-              "Context:",
-              "<active_memory_plugin>",
-              "User prefers aisle seats and extra buffer on connections.",
-              "</active_memory_plugin>",
-              "",
-              "i have a flight tomorrow",
-            ].join("\n"),
-          },
-          { role: "assistant", content: "got it" },
-        ],
-      },
-      contains: ["user: i have a flight tomorrow"],
-      excludes: [
-        "Context:",
-        "<active_memory_plugin>",
-        "User prefers aisle seats and extra buffer on connections.",
-      ],
     },
   ])(
     "builds recall prompts with $name",
@@ -1942,12 +1841,7 @@ describe("active-memory plugin", () => {
       fastMode: true,
     };
     const parent = expectDefined(hoisted.sessionStore["agent:main:main"], "parent session");
-    parent.delivery = {
-      kind: "external",
-      route: { channel: "telegram" },
-      context: { channel: "telegram" },
-      origin: { provider: "telegram" },
-    };
+    parent.delivery = delivery("telegram");
     const prepared = createDeferred<void>();
     const resume = createDeferred<void>();
     const patch = expectDefined(
@@ -1972,12 +1866,7 @@ describe("active-memory plugin", () => {
       hoisted.sessionStore["agent:main:main"] = {
         ...parent,
         fastMode: true,
-        delivery: {
-          kind: "external",
-          route: { channel: "slack" },
-          context: { channel: "slack" },
-          origin: { provider: "slack" },
-        },
+        delivery: delivery("slack"),
       };
       resume.resolve();
       await pending;
@@ -1999,9 +1888,7 @@ describe("active-memory plugin", () => {
   it("skips recall without a model or explicit fallback", async () => {
     api.config = {};
     registerPluginConfig({ modelFallbackPolicy: "default-remote" });
-    const result = await runPromptBuild("what wings should i order? fallback", {
-      sessionKey: "agent:main:fallback",
-    });
+    const result = await recallFor("agent:main:fallback", "what wings should i order? fallback");
     expect(result).toBeUndefined();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
@@ -2029,9 +1916,7 @@ describe("active-memory plugin", () => {
         payloads: [
           { text: "User prefers lemon pepper wings, and blue cheese still wins.\u001b\r" },
         ],
-        ...(nativeSessionId
-          ? { meta: { agentMeta: { sessionId: nativeSessionId, sessionFile: undefined } } }
-          : {}),
+        meta: { agentMeta: { sessionId: nativeSessionId, sessionFile: undefined } },
       };
     });
     await runPromptBuild(
@@ -2040,13 +1925,10 @@ describe("active-memory plugin", () => {
       },
       { sessionKey },
     );
-    if (nativeSessionId) {
-      expect(hoisted.rawDeltaReads.some(({ sessionId }) => sessionId === nativeSessionId)).toBe(
-        false,
-      );
-    }
-    expectLinesNotToContain(getActiveMemoryLines(sessionKey), "\u001b");
-    expectLinesNotToContain(getActiveMemoryLines(sessionKey), "\r");
+    expect(hoisted.rawDeltaReads.some(({ sessionId }) => sessionId === nativeSessionId)).toBe(
+      false,
+    );
+    expectLinesNotToContain(getActiveMemoryLines(sessionKey), "\u001b", "\r");
     expect(hoisted.updateSessionStore).toHaveBeenCalled();
     const entries = hoisted.sessionStore[sessionKey]?.pluginDebugEntries as
       | Array<{ pluginId?: string; lines?: string[] }>
@@ -2188,10 +2070,7 @@ describe("active-memory plugin", () => {
     expect(isMissingRegisteredMemoryToolsError(error, toolsAllow)).toBe(true);
     runEmbeddedAgent.mockRejectedValueOnce(error);
 
-    expectPrependContextContains(
-      await runPromptBuild({ prompt }, { sessionKey }),
-      unavailableRecallContext,
-    );
+    expectPrependContextContains(await recallFor(sessionKey, prompt), unavailableRecallContext);
     expect(hasDebugLine("no configured memory tools available")).toBe(true);
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toHaveLength(1);
@@ -2205,10 +2084,8 @@ describe("active-memory plugin", () => {
   ])(
     "preserves terminal recall outcome when cleanup crosses its deadline (failed=$failed, persist=$persistTranscripts, cleanupFails=$cleanupFails)",
     async ({ failed, persistTranscripts, cleanupFails }) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      configureRecallTimeout(1_000, { persistTranscripts });
-      const sessionKey = "agent:main:completed-recall-cleanup-deadline";
-      seedSession(sessionKey, "s-completed-recall-cleanup-deadline", 0);
+      configureTimedRecall(1_000, { persistTranscripts });
+      const sessionKey = seedRecall("completed-recall-cleanup-deadline");
       const summary = "User usually orders ramen.";
       const firstCleanupAttempt = createDeferred<void>();
       const cleanupStarted = createDeferred<void>();
@@ -2242,7 +2119,7 @@ describe("active-memory plugin", () => {
             assistantRecord(summary),
           ]);
           return {
-            payloads: [{ text: summary }],
+            ...reply(summary),
             meta: {
               durationMs: 0,
               ...(failed ? { error: { kind: "incomplete_turn", message: "No final reply." } } : {}),
@@ -2250,9 +2127,7 @@ describe("active-memory plugin", () => {
           };
         },
       );
-      const resultPromise = runPromptBuild("what food do i usually order? cleanup deadline", {
-        sessionKey,
-      });
+      const resultPromise = recallFor(sessionKey, "what food do i usually order? cleanup deadline");
       void resultPromise.catch(() => undefined);
       try {
         if (cleanupFails) {
@@ -2281,24 +2156,14 @@ describe("active-memory plugin", () => {
         expect(result).toBeUndefined();
         const statusLines = getActiveMemoryLines(sessionKey);
         expect(statusLines).not.toEqual([]);
-        expectLinesNotToContain(statusLines, "status=ok");
-        expectLinesNotToContain(statusLines, "status=timeout_partial");
+        expectLinesNotToContain(statusLines, "status=ok", "status=timeout_partial");
       }
     },
   );
 
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    setMinimumTimeoutMsForTests(1);
-    setTimeoutPartialDataGraceMsForTests(50);
-    registerPluginConfig({
-      timeoutMs: 100,
-      maxSummaryChars: 40,
-      persistTranscripts: true,
-      logging: true,
-    });
-    const sessionKey = "agent:main:timeout-partial";
-    seedSession(sessionKey, "s-timeout-partial", 0);
+    configureTimedRecall(100, { maxSummaryChars: 40, persistTranscripts: true }, 50);
+    const sessionKey = seedRecall("timeout-partial");
     const transcriptWritten = mockTranscriptUntilAbort([
       { type: "message", message: { role: "user", content: "ignore this user text" } },
       usableMemoryTranscriptRecord("user prefers lemon pepper wings"),
@@ -2306,9 +2171,7 @@ describe("active-memory plugin", () => {
       assistantRecord([{ type: "text", text: "epsilon zeta eta theta" }]),
     ]);
 
-    const resultPromise = runPromptBuild("what wings should i order? timeout partial", {
-      sessionKey,
-    });
+    const resultPromise = recallFor(sessionKey, "what wings should i order? timeout partial");
     await transcriptWritten;
     await vi.advanceTimersByTimeAsync(100);
     const result = await resultPromise;
@@ -2320,8 +2183,7 @@ describe("active-memory plugin", () => {
     expect(prependContext).not.toContain("theta");
     expect(prependContext).not.toContain("ignore this user text");
     const lines = getActiveMemoryLines(sessionKey);
-    expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial");
-    expectLinesToContain(lines, "summary=40 chars");
+    expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial", "summary=40 chars");
     expectLinesToContain(
       lines,
       "🔎 Active Memory Debug: timeout_partial: 40 chars recovered (not persisted)",
@@ -2347,8 +2209,7 @@ describe("active-memory plugin", () => {
     hoisted.cleanupSessionLifecycleArtifacts.mockImplementationOnce(
       sessionRuntime.cleanupSessionLifecycleArtifacts,
     );
-    const sessionKey = "agent:main:timeout-partial-sqlite-transcript";
-    seedSession(sessionKey, "s-timeout-partial-sqlite-transcript", 0);
+    const sessionKey = seedRecall("timeout-partial-sqlite-transcript");
     const transcriptWritten = createDeferred<SessionTranscriptTargetParams>();
     runEmbeddedAgent.mockImplementationOnce(
       async (params: {
@@ -2366,9 +2227,10 @@ describe("active-memory plugin", () => {
         await waitForAbort(params.abortSignal);
       },
     );
-    const resultPromise = runPromptBuild("what wings should i order? timeout partial sqlite", {
+    const resultPromise = recallFor(
       sessionKey,
-    });
+      "what wings should i order? timeout partial sqlite",
+    );
     const target = await transcriptWritten.promise;
     await vi.advanceTimersByTimeAsync(100);
     const result = await resultPromise;
@@ -2423,12 +2285,11 @@ describe("active-memory plugin", () => {
     async ({ records, graceMs, excluded, singleStatus }) => {
       configureRecallTimeout(100);
       setTimeoutPartialDataGraceMsForTests(graceMs);
-      const sessionKey = "agent:main:rejected-timeout-partial";
-      seedSession(sessionKey, "s-rejected-timeout-partial");
+      const sessionKey = seedRecall("rejected-timeout-partial");
       const recallRunSpy = vi.spyOn(recallRun, "runRecallSubagent");
       mockTranscriptUntilAbort(records);
-      const result = await runPromptBuild("what food do i usually order?", { sessionKey }).finally(
-        () => Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value)),
+      const result = await recallFor(sessionKey, "what food do i usually order?").finally(() =>
+        Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value)),
       );
       expect(result).toBeUndefined();
       const lines = getActiveMemoryLines(sessionKey);
@@ -2448,8 +2309,7 @@ describe("active-memory plugin", () => {
     { name: "failed cleanup", failed: false, cleanupFails: true },
   ])("projects direct abort recovery for $name", async ({ failed, cleanupFails }) => {
     configureRecallTimeout(5_000, { persistTranscripts: true });
-    const sessionKey = "agent:main:abort-timeout-partial";
-    seedSession(sessionKey, "s-abort-timeout-partial", 0);
+    const sessionKey = seedRecall("abort-timeout-partial");
     if (cleanupFails) {
       hoisted.cleanupSessionLifecycleArtifacts.mockRejectedValue(
         new Error("session store remains busy"),
@@ -2467,7 +2327,7 @@ describe("active-memory plugin", () => {
       });
       if (failed) {
         return {
-          payloads: [{ text: "partial abort summary" }],
+          ...reply("partial abort summary"),
           meta: {
             durationMs: 0,
             error: { kind: "incomplete_turn", message: "No final reply." },
@@ -2479,7 +2339,7 @@ describe("active-memory plugin", () => {
       throw abortErr;
     });
 
-    const result = await runPromptBuild("what wings should i order? abort partial", { sessionKey });
+    const result = await recallFor(sessionKey, "what wings should i order? abort partial");
 
     if (cleanupFails) {
       expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledTimes(3);
@@ -2495,12 +2355,8 @@ describe("active-memory plugin", () => {
   });
 
   it("keeps a timeout partial grounded only by the tool-result callback", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    setMinimumTimeoutMsForTests(1);
-    setTimeoutPartialDataGraceMsForTests(50);
-    registerPluginConfig({ timeoutMs: 100, logging: true });
-    const sessionKey = "agent:main:timeout-partial-callback-evidence";
-    seedSession(sessionKey, "s-timeout-partial-callback-evidence", 0);
+    configureTimedRecall(100, {}, 50);
+    const sessionKey = seedRecall("timeout-partial-callback-evidence");
     const transcriptWritten = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(
       async (params: {
@@ -2528,7 +2384,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const resultPromise = runPromptBuild("what ramen do i like? callback evidence", { sessionKey });
+    const resultPromise = recallFor(sessionKey, "what ramen do i like? callback evidence");
     await transcriptWritten.promise;
     await vi.advanceTimersByTimeAsync(100);
     const result = await resultPromise;
@@ -2551,8 +2407,7 @@ describe("active-memory plugin", () => {
   ])(
     "settles $outcome recall while status persistence stalls",
     async ({ outcome, timeoutMs, cleanupCalls }) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      configureRecallTimeout(timeoutMs);
+      configureTimedRecall(timeoutMs);
       const embeddedStarted = createDeferred<void>();
       const persistenceStarted = createDeferred<void>();
       const releasePersistence = createDeferred<void>();
@@ -2567,9 +2422,10 @@ describe("active-memory plugin", () => {
         persistenceStarted.resolve();
         return (persistence = releasePersistence.promise);
       });
-      const result = runPromptBuild("what wings should i order? slow persistence", {
-        sessionKey: "agent:main:slow-persistence",
-      });
+      const result = recallFor(
+        "agent:main:slow-persistence",
+        "what wings should i order? slow persistence",
+      );
       try {
         if (outcome === "timeout") {
           await embeddedStarted.promise;
@@ -2619,13 +2475,17 @@ describe("active-memory plugin", () => {
       await new Promise((resolve) => {
         setTimeout(resolve, CONFIGURED_TIMEOUT_MS + 5);
       });
-      await writeUsableMemoryTranscript(params.sessionFile, "remember the ramen place");
-      return { payloads: [{ text: "remember the ramen place" }] };
+      return await writeReply(
+        params.sessionFile,
+        "remember the ramen place",
+        "remember the ramen place",
+      );
     });
 
-    const resultPromise = runPromptBuild("what wings should i order? setup grace", {
-      sessionKey: "agent:main:setup-grace",
-    });
+    const resultPromise = recallFor(
+      "agent:main:setup-grace",
+      "what wings should i order? setup grace",
+    );
     await embeddedStarted.promise;
     await vi.advanceTimersByTimeAsync(CONFIGURED_TIMEOUT_MS + 5);
     const result = await resultPromise;
@@ -2650,9 +2510,10 @@ describe("active-memory plugin", () => {
     });
 
     let settled = false;
-    const resultPromise = runPromptBuild("what wings should i order? hard deadline test", {
-      sessionKey: "agent:main:hard-deadline",
-    }).finally(() => {
+    const resultPromise = recallFor(
+      "agent:main:hard-deadline",
+      "what wings should i order? hard deadline test",
+    ).finally(() => {
       settled = true;
     });
     const abortSignal = expectDefined(await embeddedStarted.promise, "embedded abort signal");
@@ -2675,14 +2536,10 @@ describe("active-memory plugin", () => {
     setMinimumTimeoutMsForTests(1);
     setTimeoutPartialDataGraceMsForTests(5);
     registerPluginConfig({ timeoutMs: CONFIGURED_TIMEOUT_MS, maxSummaryChars: 120, logging: true });
-    const sessionKey = "agent:main:terminal-unavailable-then-summary";
-    seedSession(sessionKey, "s-terminal-unavailable-then-summary", 0);
+    const sessionKey = seedRecall("terminal-unavailable-then-summary");
     const verboseSummary =
       "This memory says the user usually orders tonkotsu ramen, keeps chili crisp nearby, and prefers short dinner suggestions without menu preamble.";
-    let markDelayScheduled: (() => void) | undefined;
-    const delayScheduled = new Promise<void>((resolve) => {
-      markDelayScheduled = resolve;
-    });
+    const delayScheduled = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await writeTranscriptJsonl(params.sessionFile, [
         memoryToolRecord(
@@ -2714,33 +2571,19 @@ describe("active-memory plugin", () => {
           error: "embedding request failed",
         }),
       ]);
-      markDelayScheduled?.();
+      delayScheduled.resolve();
       await new Promise((resolve) => {
         setTimeout(resolve, 550);
       });
-      const activeSessionFile = path.join(path.dirname(params.sessionFile), "rotated.jsonl");
-      hoisted.runtimeTranscriptFiles["rotated-transcript"] = activeSessionFile;
-      await writeTranscriptJsonl(activeSessionFile, [
-        memoryToolRecord("memory_search", {
-          disabled: true,
-          error: "embedding request failed",
-        }),
-      ]);
-      return {
-        payloads: [{ text: verboseSummary }],
-        meta: {
-          agentMeta: {
-            sessionId: "rotated-transcript",
-            sessionFile: lastRuntimeEmbeddedRunParams().sessionKey,
-          },
-        },
-      };
+      await writeRotatedFailure(params.sessionFile);
+      return rotatedReply(verboseSummary);
     });
 
-    const resultPromise = runPromptBuild("what food do i usually order? unavailable then summary", {
+    const resultPromise = recallFor(
       sessionKey,
-    });
-    await delayScheduled;
+      "what food do i usually order? unavailable then summary",
+    );
+    await delayScheduled.promise;
     await vi.advanceTimersByTimeAsync(550);
     const result = await resultPromise;
 
@@ -2749,8 +2592,7 @@ describe("active-memory plugin", () => {
     );
     const infoLines = getInfoLines();
     expectLinesToContain(infoLines, "done status=ok");
-    expectLinesNotToContain(infoLines, "reason=search-error");
-    expectLinesNotToContain(infoLines, "done status=unavailable");
+    expectLinesNotToContain(infoLines, "reason=search-error", "done status=unavailable");
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toHaveLength(2);
     expectLinesToContain(lines, "Active Memory: status=ok");
@@ -2771,10 +2613,8 @@ describe("active-memory plugin", () => {
       },
     },
   ])("waits for custom-tool evidence after $name", async ({ toolsAllow, failed, success }) => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    configureRecallTimeout(1_000, { toolsAllow });
-    const sessionKey = "agent:main:custom-tool-evidence";
-    seedSession(sessionKey, "s-custom-tool-evidence");
+    configureTimedRecall(1_000, { toolsAllow });
+    const sessionKey = seedRecall("custom-tool-evidence");
     const transcriptWritten = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await writeTranscriptJsonl(params.sessionFile, [failed]);
@@ -2788,9 +2628,9 @@ describe("active-memory plugin", () => {
           { type: "text", text: "User usually orders ramen." },
         ]),
       ]);
-      return { payloads: [{ text: "User usually orders ramen." }] };
+      return reply("User usually orders ramen.");
     });
-    const result = runPromptBuild("what food do i usually order? custom evidence", { sessionKey });
+    const result = recallFor(sessionKey, "what food do i usually order? custom evidence");
     await transcriptWritten.promise;
     await vi.advanceTimersByTimeAsync(75);
     expectPrependContextContains(await result, "User usually orders ramen.");
@@ -2814,17 +2654,15 @@ describe("active-memory plugin", () => {
     });
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const resultPromise = runPromptBuild("what food do i usually order? stalled toggle lookup", {
-      sessionKey: "agent:main:stalled-toggle",
-    });
+    const resultPromise = recallFor(
+      "agent:main:stalled-toggle",
+      "what food do i usually order? stalled toggle lookup",
+    );
     await vi.advanceTimersByTimeAsync(1_525);
 
     await expect(resultPromise).resolves.toBeUndefined();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    const warnLines = vi
-      .mocked(api.logger.warn)
-      .mock.calls.map((call: unknown[]) => String(call[0]));
-    expectLinesToContain(warnLines, "before_prompt_build preflight timed out after 1500ms");
+    expectLinesToContain(logLines("warn"), "before_prompt_build preflight timed out after 1500ms");
     resolveLookup?.(undefined);
     await vi.advanceTimersByTimeAsync(0);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
@@ -2844,29 +2682,18 @@ describe("active-memory plugin", () => {
       timeoutMs: 25,
       logging: true,
     };
-    vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
-      lookup: async () =>
-        await new Promise<undefined>((resolve) => {
-          setTimeout(() => resolve(undefined), 1_490);
-        }),
-    });
+    delayToggleLookup(1_490);
     plugin.register(api as unknown as OpenClawPluginApi);
     runEmbeddedAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
 
-    const resultPromise = runPromptBuild("what food do i usually order? delayed recall start", {
-      sessionKey: "agent:main:delayed-recall-start",
-    });
+    const resultPromise = recallFor(
+      "agent:main:delayed-recall-start",
+      "what food do i usually order? delayed recall start",
+    );
     await vi.advanceTimersByTimeAsync(1_490);
-    const hasStartedRecall = () =>
-      vi
-        .mocked(api.logger.info)
-        .mock.calls.some((call: unknown[]) =>
-          String(call[0]).includes("session=agent:main:delayed-recall-start"),
-        );
+    const hasStartedRecall = () => hasInfoLine("session=agent:main:delayed-recall-start");
     for (let attempt = 0; attempt < 20 && !hasStartedRecall(); attempt += 1) {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextImmediate();
     }
     expect(hasStartedRecall()).toBe(true);
     await vi.advanceTimersByTimeAsync(25);
@@ -2885,8 +2712,7 @@ describe("active-memory plugin", () => {
       toolsAllow: ["memory_get", "memory_search"],
       logging: true,
     });
-    const sessionKey = "agent:main:rotated-memory-evidence";
-    seedSession(sessionKey, "s-rotated-memory-evidence", 0);
+    const sessionKey = seedRecall("rotated-memory-evidence");
     const cleanupStarted = createDeferred<void>();
     const releaseCleanup = createDeferred<void>();
     const watcherStopped = createDeferred<void>();
@@ -2927,48 +2753,24 @@ describe("active-memory plugin", () => {
       };
     });
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await writeTranscriptJsonl(params.sessionFile, [
-        memoryToolRecord("memory_search", {
-          disabled: true,
-          error: "embedding request failed",
-        }),
-      ]);
+      await writeTranscriptJsonl(params.sessionFile, [failedSearch()]);
       await staleReadStarted.promise;
       const memoryResult = memoryToolRecord("memory_get", {
         path: "memory/food.md",
         text: "User usually orders ramen.",
       });
       await fs.appendFile(params.sessionFile, `${JSON.stringify(memoryResult)}\n`, "utf8");
-      const activeSessionFile = path.join(path.dirname(params.sessionFile), "rotated.jsonl");
-      hoisted.runtimeTranscriptFiles["rotated-transcript"] = activeSessionFile;
-      await writeTranscriptJsonl(activeSessionFile, [
-        memoryToolRecord("memory_search", {
-          disabled: true,
-          error: "embedding request failed",
-        }),
-      ]);
-      return {
-        payloads: [{ text: "User usually orders ramen." }],
-        meta: {
-          agentMeta: {
-            sessionId: "rotated-transcript",
-            sessionFile: lastRuntimeEmbeddedRunParams().sessionKey,
-          },
-        },
-      };
+      await writeRotatedFailure(params.sessionFile);
+      return rotatedReply("User usually orders ramen.");
     });
 
-    const resultPromise = runPromptBuild("what food do i usually order? rotated transcript", {
-      sessionKey,
-    });
+    const resultPromise = recallFor(sessionKey, "what food do i usually order? rotated transcript");
     try {
       await cleanupStarted.promise;
       releaseStaleRead.resolve();
       // Drain continuations of the old read after execution has completed;
       // a stopped watcher must not publish that stale unavailable snapshot.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextImmediate();
       // The completed run already has evidence; pending cleanup must not
       // let a later transcript replace that grounded result.
       await watcherStopped.promise;
@@ -2985,11 +2787,8 @@ describe("active-memory plugin", () => {
   });
 
   it("rejects completed output when a rotated SQLite transcript marker reports unavailable memory", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    setMinimumTimeoutMsForTests(1);
-    registerPluginConfig({ timeoutMs: 1_000, logging: true });
-    const sessionKey = "agent:main:rotated-sqlite-memory-unavailable";
-    seedSession(sessionKey, "s-rotated-sqlite-memory-unavailable", 0);
+    configureTimedRecall(1_000);
+    const sessionKey = seedRecall("rotated-sqlite-memory-unavailable");
     runEmbeddedAgent.mockImplementationOnce(
       async (params: {
         sessionTarget?: {
@@ -3033,9 +2832,9 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await runPromptBuild(
+    const result = await recallFor(
+      sessionKey,
       "what food do i usually order? rotated sqlite unavailable",
-      { sessionKey },
     );
 
     expect(result, recallDiagnostics(sessionKey)).toMatchObject({
@@ -3066,16 +2865,12 @@ describe("active-memory plugin", () => {
     });
 
     try {
-      const result = await runPromptBuild("what food do i usually order? unavailable", {
-        sessionKey,
-      });
+      const result = await recallFor(sessionKey, "what food do i usually order? unavailable");
 
       expectPrependContextContains(result, unavailableRecallContext);
       const infoLines = getInfoLines();
-      expectLinesToContain(infoLines, "done status=unavailable");
-      expectLinesToContain(infoLines, "reason=search-error");
-      expectLinesNotToContain(infoLines, "fixture-secret");
-      expectLinesNotToContain(infoLines, "/private/runtime");
+      expectLinesToContain(infoLines, "done status=unavailable", "reason=search-error");
+      expectLinesNotToContain(infoLines, "fixture-secret", "/private/runtime");
       expectLinesNotToContain(infoLines, "done status=timeout");
       const lines = getActiveMemoryLines(sessionKey);
       expect(lines).toHaveLength(2);
@@ -3129,33 +2924,16 @@ describe("active-memory plugin", () => {
   });
 
   it.each([
-    {
-      name: "scoped stored channel (#77396)",
-      channel: "qqbot",
-      storedChannel: "qqbot",
-      storedContext: "c2c:10D4F7C2",
-      provider: "qqbot",
-    },
-    {
-      name: "explicit channel over wrapper",
-      channel: "telegram",
-      storedChannel: "webchat",
-      storedContext: undefined,
-      provider: "webchat",
-    },
-  ])(
-    "resolves the recall channel: $name",
-    async ({ channel, storedChannel, storedContext, provider }) => {
+    ["scoped stored channel (#77396)", "qqbot", "qqbot", "c2c:10D4F7C2", "qqbot"],
+    ["explicit channel over wrapper", "telegram", "webchat", undefined, "webchat"],
+  ] as const)(
+    "resolves the recall channel: %s",
+    async (_name, channel, storedChannel, storedContext, provider) => {
       const sessionKey = `agent:main:${channel}:direct:12345`;
       hoisted.sessionStore[sessionKey] = {
         sessionId: "session-a",
         updatedAt: 25,
-        delivery: {
-          kind: "external",
-          route: { channel: storedChannel },
-          context: storedContext ? { channel: storedContext } : {},
-          origin: { provider: storedChannel },
-        },
+        delivery: delivery(storedChannel, storedContext ?? ""),
       };
       await runPromptBuild("what wings should i order?", {
         sessionKey,
@@ -3191,17 +2969,13 @@ describe("active-memory plugin", () => {
   });
 
   it.each([
-    {
-      name: "split surrogate",
-      summary: `${"a".repeat(38)}🎉TAILWORD`,
-      expected: `${"a".repeat(38)}…`,
-    },
-    {
-      name: "whitespace before a split surrogate",
-      summary: `alpha beta ${"c".repeat(26)} 🎉TAILWORD`,
-      expected: `alpha beta ${"c".repeat(26)}…`,
-    },
-  ])("keeps $name truncation UTF-16 safe", async ({ name, summary, expected }) => {
+    ["split surrogate", `${"a".repeat(38)}🎉TAILWORD`, `${"a".repeat(38)}…`],
+    [
+      "whitespace before a split surrogate",
+      `alpha beta ${"c".repeat(26)} 🎉TAILWORD`,
+      `alpha beta ${"c".repeat(26)}…`,
+    ],
+  ])("keeps %s truncation UTF-16 safe", async (name, summary, expected) => {
     registerPluginConfig({ maxSummaryChars: 40 });
 
     const prependContext = await runRecallWithSummary({
@@ -3215,25 +2989,18 @@ describe("active-memory plugin", () => {
   });
 
   it.each([
-    {
-      name: "custom directory",
-      agentId: "support/agent",
-      transcriptDir: "active-memory-subagents",
-      expectedAgent: "support%2Fagent",
-      expectedSubdir: "active-memory-subagents",
-      unsafe: false,
-    },
-    {
-      name: "unsafe directory fallback",
-      agentId: "main",
-      transcriptDir: "C:/temp/escape",
-      expectedAgent: "main",
-      expectedSubdir: "active-memory",
-      unsafe: true,
-    },
-  ])(
-    "contains persisted transcripts in the plugin directory: $name",
-    async ({ agentId, transcriptDir, expectedAgent, expectedSubdir, unsafe }) => {
+    [
+      "custom directory",
+      "support/agent",
+      "active-memory-subagents",
+      "support%2Fagent",
+      "active-memory-subagents",
+      false,
+    ],
+    ["unsafe directory fallback", "main", "C:/temp/escape", "main", "active-memory", true],
+  ] as const)(
+    "contains persisted transcripts in the plugin directory: %s",
+    async (_name, agentId, transcriptDir, expectedAgent, expectedSubdir, unsafe) => {
       registerPluginConfig({
         agents: [agentId],
         persistTranscripts: true,
@@ -3286,7 +3053,7 @@ describe("active-memory plugin", () => {
     const sessionKey = "agent:main:dashboard:incognito-private-recall";
     seedSession(sessionKey, "private-parent");
 
-    await runPromptBuild("what did we decide?", { sessionKey });
+    await recallFor(sessionKey, "what did we decide?");
 
     const childKey = lastEmbeddedSessionKey();
     expect(childKey).toMatch(/^agent:main:subagent:incognito-[a-f0-9]{12}$/);
@@ -3303,16 +3070,17 @@ describe("active-memory plugin", () => {
   });
 
   it("caps the active-memory cache size and evicts the oldest entries", () => {
-    const sessionKey = "agent:main:cache-cap";
+    const key = (index: number) =>
+      buildCacheKey({
+        agentId: "main",
+        sessionKey: "agent:main:cache-cap",
+        query: `cache pressure prompt ${index}`,
+        authorityFingerprint: "cache-authority",
+        recallToolNames: ["memory_search"],
+      });
     for (let index = 0; index <= 1000; index += 1) {
       setCachedResult(
-        buildCacheKey({
-          agentId: "main",
-          sessionKey,
-          query: `cache pressure prompt ${index}`,
-          authorityFingerprint: "cache-authority",
-          recallToolNames: ["memory_search"],
-        }),
+        key(index),
         {
           status: "ok",
           elapsedMs: 1,
@@ -3322,29 +3090,8 @@ describe("active-memory plugin", () => {
         15_000,
       );
     }
-
-    expect(
-      getCachedResult(
-        buildCacheKey({
-          agentId: "main",
-          sessionKey,
-          query: "cache pressure prompt 0",
-          authorityFingerprint: "cache-authority",
-          recallToolNames: ["memory_search"],
-        }),
-      ),
-    ).toBeUndefined();
-    const cached = getCachedResult(
-      buildCacheKey({
-        agentId: "main",
-        sessionKey,
-        query: "cache pressure prompt 1",
-        authorityFingerprint: "cache-authority",
-        recallToolNames: ["memory_search"],
-      }),
-    );
-    expect(cached?.status).toBe("ok");
-    expect(cached?.summary).toBe("memory 1");
+    expect(getCachedResult(key(0))).toBeUndefined();
+    expect(getCachedResult(key(1))).toMatchObject({ status: "ok", summary: "memory 1" });
   });
 
   it("partitions cached recall by turn authority and memory resource scope", () => {
@@ -3397,7 +3144,7 @@ describe("active-memory plugin", () => {
           embeddedStarted.resolve();
           return await waitForAbort(params.abortSignal);
         });
-        const resultPromise = runPromptBuild({ prompt }, { sessionKey });
+        const resultPromise = recallFor(sessionKey, prompt);
         await embeddedStarted.promise;
         await vi.advanceTimersByTimeAsync(CONFIGURED_TIMEOUT_MS);
         await Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value));
@@ -3405,10 +3152,9 @@ describe("active-memory plugin", () => {
       };
       const recallSuccessfully = async (prompt: string, summary: string) => {
         runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-          await writeUsableMemoryTranscript(params.sessionFile, summary);
-          return { payloads: [{ text: summary }] };
+          return await writeReply(params.sessionFile, summary, summary);
         });
-        const result = await runPromptBuild({ prompt }, { sessionKey });
+        const result = await recallFor(sessionKey, prompt);
         expect(result?.prependContext).toContain(summary);
       };
 
@@ -3419,7 +3165,7 @@ describe("active-memory plugin", () => {
         if (resetReason === "cooldown") {
           await timeOutRecall("cb reset second consecutive timeout");
           expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-          await runPromptBuild("cb reset test skipped", { sessionKey });
+          await recallFor(sessionKey, "cb reset test skipped");
           expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
           await vi.advanceTimersByTimeAsync(COOLDOWN_MS);
         } else {
