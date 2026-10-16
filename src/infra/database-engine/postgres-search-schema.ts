@@ -91,7 +91,10 @@ export function assertPostgresSearchAdmitted(
   schema: SearchSchema,
 ): void {
   if (!db.isOpen || !getSqliteDatabaseAdmission(db, key)?.includes(JSON.stringify(schema))) {
-    throw new Error(
+    throw new DatabaseSearchCapabilityUnavailableError(
+      schema.mode !== "keyword-only" && Object.keys(schema.vector ?? {}).length
+        ? "vector"
+        : "fullText",
       "PostgreSQL search requires matching store admission; reopen the store with its search schema.",
     );
   }

@@ -1,9 +1,11 @@
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   openOpenClawAgentDatabaseReadOnly,
   retainOpenClawAgentDatabaseReadOnly,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
+  isPostgresSqlConnection,
   readCuratedMemoryTriggerCandidates,
   readCuratedProjectMemoryCandidates,
   MEMORY_INDEX_FTS_TABLE,
@@ -40,6 +42,10 @@ import {
   type MemoryRecallData,
   type MemoryRecallQuery,
 } from "./manager-retrieval-read.js";
+import {
+  searchPostgresMemoryKeyword,
+  searchPostgresMemoryVector,
+} from "./manager-search-postgres.js";
 import { searchChunksByEmbedding } from "./manager-search-vector.js";
 import {
   searchKeywordWithFallback,
@@ -112,6 +118,35 @@ export type MemorySearchWorkerOutput =
   | { kind: "vector"; rows: Awaited<ReturnType<typeof searchChunksByEmbedding>> };
 
 export type MemoryKeywordWorkerResult = Extract<MemorySearchWorkerOutput, { kind: "keyword" }>;
+
+/** Internal query entry; public admission stays closed until the remaining memory lifecycle is ported. */
+export function executeMemorySearchWorkerQuery(
+  database: EngineConnection,
+  request: { kind: "vector"; query: MemoryVectorWorkerQuery },
+  activation?: { postgres: "test-only" },
+): Promise<Extract<MemorySearchWorkerOutput, { kind: "vector" }>>;
+export function executeMemorySearchWorkerQuery(
+  database: EngineConnection,
+  request: { kind: "keyword"; query: MemoryKeywordWorkerQuery },
+  activation?: { postgres: "test-only" },
+): Promise<MemoryKeywordWorkerResult>;
+export async function executeMemorySearchWorkerQuery(
+  database: EngineConnection,
+  request:
+    | { kind: "vector"; query: MemoryVectorWorkerQuery }
+    | { kind: "keyword"; query: MemoryKeywordWorkerQuery },
+  activation?: { postgres: "test-only" },
+): Promise<MemoryKeywordWorkerResult | Extract<MemorySearchWorkerOutput, { kind: "vector" }>> {
+  if (activation?.postgres === "test-only" && isPostgresSqlConnection(database)) {
+    return request.kind === "vector"
+      ? { kind: "vector", rows: await searchPostgresMemoryVector(database, request.query) }
+      : { kind: "keyword", ...(await searchPostgresMemoryKeyword(database, request.query)) };
+  }
+  const db = requireMemorySearchDatabase(database);
+  return request.kind === "vector"
+    ? { kind: "vector", rows: await searchChunksByEmbedding({ ...request.query, db }) }
+    : { kind: "keyword", ...(await searchKeywordWithFallback({ ...request.query, db })) };
+}
 
 serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   // SAFETY: The paired runtime constructs the private request union.
@@ -244,10 +279,10 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       };
     }
     if (request.kind === "vector") {
-      return { kind: "vector", rows: await searchChunksByEmbedding({ ...request.query, db }) };
+      return await executeMemorySearchWorkerQuery(db, request);
     }
     const indexState = request.includeIndexState ? readMemoryRetrievalIndexState(db) : undefined;
-    const { body, path } = await searchKeywordWithFallback({ ...request.query, db });
+    const { body, path } = await executeMemorySearchWorkerQuery(db, request);
     const recallData = request.query.includeRecallMetadata
       ? readMemoryRecallData(db, {
           candidates: [...body.rows, ...path.rows],
