@@ -2748,7 +2748,7 @@ describe("session accessor seam", () => {
       });
 
       await predicateStarted.promise;
-      const replacement =
+      const replacement: SessionEntry =
         change === "pending final delivery"
           ? {
               ...stored,
