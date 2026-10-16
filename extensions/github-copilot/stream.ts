@@ -3,26 +3,12 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import {
   applyAnthropicEphemeralCacheControlMarkers,
   projectCopilotRequestFacts,
+  wrapProviderPayloadHook,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
-
-function patchOnPayloadResult(
-  result: unknown,
-  patchPayload: (payload: unknown) => unknown,
-  fallbackPayload?: unknown,
-): unknown {
-  if (result && typeof result === "object" && "then" in result) {
-    return Promise.resolve(result).then((next) => {
-      patchPayload(next === undefined ? fallbackPayload : next);
-      return next;
-    });
-  }
-  patchPayload(result === undefined ? fallbackPayload : result);
-  return result;
-}
 
 type CopilotAnthropicToolBlock = {
   record: Record<string, unknown>;
@@ -158,14 +144,15 @@ export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): Str
       }),
       ...(patchPayload
         ? {
-            onPayload: (payload: unknown, payloadModel: Parameters<StreamFn>[0]) => {
-              patchPayload(payload);
-              return patchOnPayloadResult(
+            onPayload: wrapProviderPayloadHook(
+              (payload, payloadModel) =>
                 originalOnPayload?.(payload, anthropic ? model : payloadModel),
-                patchPayload,
-                payload,
-              );
-            },
+              (payload, result) => {
+                patchPayload(result === undefined ? payload : result);
+                return result;
+              },
+              (payload) => patchPayload(payload),
+            ),
           }
         : {}),
     });

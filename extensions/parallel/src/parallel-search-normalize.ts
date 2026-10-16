@@ -91,7 +91,6 @@ export async function executeParallelSearchRequest(params: {
   endpoint: string;
   args: Record<string, unknown>;
   searchConfig: SearchConfigRecord | undefined;
-  signal?: AbortSignal;
   search: (
     request: NormalizedParallelSearchRequest,
     timeoutSeconds: number,
@@ -119,8 +118,6 @@ export async function executeParallelSearchRequest(params: {
 
   const start = Date.now();
   const response = await params.search(request, resolveSearchTimeoutSeconds(params.searchConfig));
-  // A provider can finish after its caller aborts; never cache that stale result.
-  params.signal?.throwIfAborted();
   const results = mapParallelResults(response, request.count);
   const payload: Record<string, unknown> = {
     ...(request.objective ? { objective: request.objective } : {}),

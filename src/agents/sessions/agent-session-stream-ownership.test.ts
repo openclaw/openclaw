@@ -80,12 +80,13 @@ it.each([
       status: "completed",
       content: [{ type: "output_text", text: "Done.", annotations: [] }],
     };
-    const prefixPersisted = createDeferred();
     const answerStreamed = createDeferred();
     const manager = SessionManager.inMemory();
     let prefixWasPersisted = false;
+    let terminalSeen = false;
     const execute = vi.fn(async () => {
       expect(prefixWasPersisted).toBe(true);
+      expect(terminalSeen).toBe(true);
       return { content: [{ type: "text" as const, text: "Found." }], details: {} };
     });
     async function* events() {
@@ -99,7 +100,10 @@ it.each([
         yield {
           type: "response.output_item.done",
           output_index: 0,
-          item: ciphertextArrival === "item-done" ? reasoning : unencryptedReasoning,
+          item:
+            ciphertextArrival === "item-done"
+              ? { ...reasoning, encrypted_content: "streamed-ciphertext" }
+              : unencryptedReasoning,
         };
       }
       yield {
@@ -108,10 +112,6 @@ it.each([
         item: { ...call, arguments: "", status: "in_progress" },
       };
       yield { type: "response.output_item.done", output_index: 1, item: call };
-      if (ciphertextArrival === "item-done") {
-        // Complete reasoning must still permit persistence and execution during sampling.
-        await prefixPersisted.promise;
-      }
       yield {
         type: "response.output_item.added",
         output_index: 2,
@@ -126,7 +126,10 @@ it.each([
       yield { type: "response.output_text.delta", output_index: 2, delta: "Done." };
       // Let the consumer observe streaming progress before the terminal replay payload.
       await answerStreamed.promise;
+      expect(prefixWasPersisted).toBe(false);
+      expect(execute).not.toHaveBeenCalled();
       yield { type: "response.output_item.done", output_index: 2, item: answer };
+      terminalSeen = true;
       yield {
         type: "response.completed",
         response: {
@@ -178,7 +181,6 @@ it.each([
           event.message.content.some((block) => block.type === "toolCall")
         ) {
           prefixWasPersisted = true;
-          prefixPersisted.resolve();
         }
       },
       undefined,

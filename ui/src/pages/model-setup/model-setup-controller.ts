@@ -9,7 +9,7 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { SubscriptionsController } from "../../lib/subscriptions-controller.ts";
 import { ModelProviderLoginController } from "../model-providers/login-controller.ts";
 import { ModelPageController } from "../model-providers/page-controller.ts";
 import {

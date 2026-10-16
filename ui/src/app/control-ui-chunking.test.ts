@@ -8,7 +8,60 @@ import {
 } from "../../config/control-ui-chunking.ts";
 
 describe("Control UI build chunking", () => {
-  it("emits one measured shared stylesheet while keeping optional code lazy", async () => {
+  it("keeps a shared decorator helper from pulling New Session into chat", async () => {
+    const chat = new URL("../pages/chat/chat-page-state.ts", import.meta.url).pathname;
+    const newSession = new URL("../pages/new-session/new-session-page-owner.ts", import.meta.url)
+      .pathname;
+    const entry = "\0decorator-route-fixture";
+    const sources = new Map([
+      [
+        entry,
+        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)});`,
+      ],
+      [chat, "const mark = (value: unknown) => value; @mark export class ChatPage {}"],
+      [newSession, "const mark = (value: unknown) => value; @mark export class NewSessionPage {}"],
+    ]);
+    const result = await build({
+      configFile: false,
+      publicDir: false,
+      logLevel: "silent",
+      plugins: [
+        {
+          name: "decorator-route-fixture",
+          enforce: "pre",
+          resolveId: (id) => (sources.has(id) ? id : null),
+          load: (id) => sources.get(id) ?? null,
+        },
+      ],
+      build: {
+        write: false,
+        minify: false,
+        rolldownOptions: {
+          input: entry,
+          preserveEntrySignatures: "allow-extension",
+          output: { codeSplitting: controlUiCodeSplitting, strictExecutionOrder: true },
+        },
+      },
+    });
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const chatChunk = chunks.find((chunk) => chat in chunk.modules)!;
+    const newChunk = chunks.find((chunk) => newSession in chunk.modules)!;
+    const dependencies = new Set<string>();
+    const visit = (file: string) => {
+      if (dependencies.has(file)) {
+        return;
+      }
+      dependencies.add(file);
+      chunks.find((chunk) => chunk.fileName === file)?.imports.forEach(visit);
+    };
+    visit(chatChunk.fileName);
+    expect(dependencies.has(newChunk.fileName)).toBe(false);
+  });
+
+  it("keeps decorated routes and optional code lazy with one shared stylesheet", async () => {
     const modulePath = (relative: string) => new URL(relative, import.meta.url).pathname;
     const chat = modulePath("../pages/chat/chat-pane.tsx");
     const newSession = modulePath("../pages/new-session/new-session-page.tsx");
@@ -23,9 +76,12 @@ describe("Control UI build chunking", () => {
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; function mark() {} export class Chat { @mark value; } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
-      [newSession, `import ${JSON.stringify(sidebarStyle)}; export const ready = true;`],
+      [
+        newSession,
+        `import ${JSON.stringify(sidebarStyle)}; function mark() {} export class NewSession { @mark value; }`,
+      ],
       [optional, 'export const panel = "optional-panel";'],
       [sharedStyle, ".shared-fixture { color: red; }"],
       [sidebarStyle, ".sidebar-fixture { color: blue; }"],
@@ -62,6 +118,19 @@ describe("Control UI build chunking", () => {
     expect(styles[0]).toMatchObject({ source: expect.stringContaining(".shared-fixture") });
     expect(styles[0]).toMatchObject({ source: expect.stringContaining(".sidebar-fixture") });
     const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const chatChunk = chunks.find((chunk) => chat in chunk.modules)!;
+    const newSessionChunk = chunks.find((chunk) => newSession in chunk.modules)!;
+    const staticImports = (fileName: string, visited = new Set<string>()): Set<string> => {
+      if (!visited.has(fileName)) {
+        visited.add(fileName);
+        for (const imported of chunks.find((chunk) => chunk.fileName === fileName)!.imports) {
+          staticImports(imported, visited);
+        }
+      }
+      return visited;
+    };
+    expect(staticImports(chatChunk.fileName)).not.toContain(newSessionChunk.fileName);
+    expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
     const deferred = chunks.find((chunk) => optional in chunk.modules)!;
     expect(deferred).toBeDefined();
     expect(chunks.filter((chunk) => chunk.imports.includes(deferred.fileName))).toHaveLength(0);
@@ -184,7 +253,7 @@ describe("Control UI build chunking", () => {
     ).toBe("node_modules/nanoid/index.browser.js");
     expect(
       controlUiBootManifestKey(
-        "/repo/node_modules/@awesome.me/webawesome/node_modules/nanoid/index.browser.js",
+        "/repo/node_modules/@example/control/node_modules/nanoid/index.browser.js",
       ),
     ).toBe("node_modules/nanoid/index.browser.js");
     expect(controlUiBootManifestKey("/repo/ui/src/main.ts?html-proxy&index=0.js")).not.toContain(

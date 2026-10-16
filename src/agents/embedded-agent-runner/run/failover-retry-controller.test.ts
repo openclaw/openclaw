@@ -290,8 +290,9 @@ describe("createEmbeddedRunFailoverRetryController", () => {
 
   it.each([
     ["fallback", true, undefined, 30_000, "rate_limit", 9_897_000, false],
-    ["no fallback", false, undefined, 30_000, "rate_limit", 9_897_000, true],
+    ["no fallback", false, undefined, 30_000, "rate_limit", 9_897_000, false],
     ["replay-unsafe", true, false, 30_000, "rate_limit", 9_897_000, true],
+    ["replay-unsafe without fallback", false, false, 30_000, "rate_limit", 9_897_000, true],
     ["disabled cap", true, undefined, 0, "rate_limit", 9_897_000, true],
     ["absent cap", true, undefined, undefined, "rate_limit", 9_897_000, true],
     ["inside cap", true, undefined, 30_000, "rate_limit", 20_000, true],

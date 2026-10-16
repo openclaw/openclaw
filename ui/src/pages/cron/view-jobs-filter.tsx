@@ -12,6 +12,7 @@ const SCHEDULE_KIND_FILTER_LABELS: Record<CronJobsScheduleKindFilter, string> = 
   at: "cron.form.at",
   every: "cron.form.every",
   cron: "cron.form.cronOption",
+  event: "cron.events.label",
   "on-exit": "cron.form.repeatOnExit",
   stream: "cron.form.repeatStream",
 };

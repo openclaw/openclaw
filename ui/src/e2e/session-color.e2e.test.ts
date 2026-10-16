@@ -7,9 +7,11 @@ import { createControlUiSessionRow as sessionRow } from "../test-helpers/control
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
+  focusSessionMenuItem,
   installMockGateway,
   openSessionMenuSubmenu,
   sessionsListResponse,
+  sessionMenuSubmenu,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
@@ -46,29 +48,14 @@ suite.define(() => {
           await expect
             .poll(() =>
               page
-                .locator("openclaw-chat-header-session-menu > wa-dropdown > wa-dropdown-item:focus")
+                .locator(
+                  'openclaw-chat-header-session-menu .chat-header-session-menu__panel [role^="menuitem"]:focus',
+                )
                 .count(),
             )
             .toBe(1);
           for (const name of ["Advanced", "Icon & color"]) {
-            const item = page.getByRole("menuitem", { name, exact: true });
-            const index = await item.evaluate((element) =>
-              [...(element.parentElement?.children ?? [])]
-                .filter(
-                  (candidate) =>
-                    candidate.localName === "wa-dropdown-item" &&
-                    candidate.getAttribute("aria-disabled") !== "true",
-                )
-                .indexOf(element),
-            );
-            expect(index).toBeGreaterThanOrEqual(0);
-            await page.keyboard.press("Home");
-            for (let step = 0; step < index; step += 1) {
-              await page.keyboard.press("ArrowDown");
-            }
-            await expect
-              .poll(() => item.evaluate((element) => element === document.activeElement))
-              .toBe(true);
+            await focusSessionMenuItem(page, name);
             await page.keyboard.press("Enter");
           }
         } else {
@@ -295,9 +282,9 @@ suite.define(() => {
           picker.getByRole("button", { name: "Purple", exact: true }).getAttribute("aria-pressed"),
         )
         .toBe("true");
-      const appearanceSubmenu = page
-        .getByRole("menuitem", { name: "Icon & color", exact: true })
-        .locator('[part="submenu"]');
+      const appearanceSubmenu = sessionMenuSubmenu(
+        page.getByRole("menuitem", { name: "Icon & color", exact: true }),
+      );
       const appearanceChoices = [
         picker.getByRole("button", { name: "Purple", exact: true }),
         picker.getByRole("button", { name: "book", exact: true }),
@@ -308,7 +295,23 @@ suite.define(() => {
       await expect.poll(stripe).not.toBe(darkStripe);
       await shot("after-light-menu.png", appearanceSubmenu, appearanceChoices);
       await page.keyboard.press("Escape");
+      await expect
+        .poll(() =>
+          page
+            .getByRole("menuitem", { name: "Icon & color", exact: true })
+            .getAttribute("aria-expanded"),
+        )
+        .toBe("false");
       await page.keyboard.press("Escape");
+      await expect
+        .poll(() =>
+          page
+            .getByRole("menuitem", { name: "Advanced", exact: true })
+            .getAttribute("aria-expanded"),
+        )
+        .toBe("false");
+      await page.keyboard.press("Escape");
+      await page.locator("openclaw-session-menu").waitFor({ state: "detached" });
 
       const committed = await gateway.getSessionRow(key);
       Object.assign(designReview, {
@@ -325,7 +328,9 @@ suite.define(() => {
       // Only the roster response carries this label; wait for that render so a
       // transient event-only clear cannot hide a stale color restored by refresh.
       await row.getByText("Design review refreshed", { exact: true }).waitFor();
-      expect(await row.getAttribute("style")).toBeNull();
+      expect(
+        await row.evaluate((element) => element.style.getPropertyValue("--session-color")),
+      ).toBe("");
       await expect.poll(() => dot.count()).toBe(0);
       await expect
         .poll(() => row.getAttribute("class"))
@@ -340,7 +345,7 @@ suite.define(() => {
       await expect.poll(() => dot.getAttribute("aria-label")).toBe("Session color: Blue");
       await shot(
         "after-compact-menu.png",
-        page.locator('openclaw-chat-header-session-menu > wa-dropdown [part="menu"]'),
+        page.locator("openclaw-chat-header-session-menu .chat-header-session-menu__panel"),
         [page.getByRole("button", { name: "Blue", exact: true })],
       );
       await page.getByRole("button", { name: "Reset to default", exact: true }).click();

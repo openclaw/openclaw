@@ -1,6 +1,10 @@
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { emptyLegacyContent, type LegacyTemplateResult } from "../../../lit/solid-content.tsx";
+import {
+  emptyLegacyContent,
+  type LegacyTemplateResult,
+  type LegacyDirectiveResult,
+} from "../../../lit/solid-content.tsx";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { SidebarLayout, SidebarSlotId } from "../sidebar-layout.ts";
 
@@ -10,9 +14,10 @@ export type SidebarPanelDefinition = {
   icon: LegacyTemplateResult;
   shortcut?: KeyboardShortcutCombo;
   available: boolean;
-  content: LegacyTemplateResult | typeof emptyLegacyContent | null;
-  loading: LegacyTemplateResult;
-  headerAction?: LegacyTemplateResult;
+  content: LegacyTemplateResult | LegacyDirectiveResult | typeof emptyLegacyContent | null;
+  loading: LegacyTemplateResult | LegacyDirectiveResult;
+  headerAction?: LegacyTemplateResult | LegacyDirectiveResult;
+  headerLink?: { href: string; label: string };
   empty: {
     description: string;
     action?: LegacyTemplateResult;
@@ -31,7 +36,9 @@ export type SidebarRegionCallbacks = {
 
 export type RegionProps = {
   panelIdPrefix: string;
-  conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
+  conversationTab?: Pick<SidebarPanelDefinition, "label"> & {
+    icon: LegacyTemplateResult | LegacyDirectiveResult;
+  };
   layout: SidebarLayout;
   panelDefinitions: SidebarPanelDefinition[];
   fetchFavicon?: LinkFaviconFetcher;

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { prepareConfigRuntimeEnv } from "../config-env-vars.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { SessionStoreRegistryReadRequired } from "./session-sqlite-target.js";
@@ -20,33 +21,62 @@ vi.mock("./targets-read-availability.worker.js", () => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 afterEach(() => resetConfigRuntimeState());
+afterEach(() => vi.unstubAllEnvs());
 
 test("shares published config while recapturing candidates and following config publications", () => {
   const root = tempDirs.make("session-inventory-publication-");
-  const env = { OPENCLAW_STATE_DIR: root };
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const cfg: OpenClawConfig = {
     agents: { entries: { main: {} } },
     session: { store: path.join(root, "custom.json") },
   };
   setRuntimeConfigSnapshot(cfg);
-  const original = prepareSessionStoreTargetInventory(cfg, ["main"], env);
+  const original = prepareSessionStoreTargetInventory(cfg, ["main"]);
   const sibling = path.join(root, "custom.main.sqlite");
   fs.writeFileSync(sibling, "");
-  const current = prepareSessionStoreTargetInventory(cfg, ["main"], env);
+  const current = prepareSessionStoreTargetInventory(cfg, ["main"]);
   expect(current.config).toBe(original.config);
+  expect(current.env).toBe(original.env);
+  expect(Object.isFrozen(current.env)).toBe(true);
   expect(Object.isFrozen(current.config.session)).toBe(true);
   expect(original.candidates.some((candidate) => candidate.path === sibling)).toBe(false);
   expect(current.candidates.some((candidate) => candidate.path === sibling)).toBe(true);
 
   cfg.session!.store = path.join(root, "replacement.json");
   setRuntimeConfigSnapshot(cfg);
-  const replacement = prepareSessionStoreTargetInventory(cfg, ["main"], env);
+  const replacement = prepareSessionStoreTargetInventory(cfg, ["main"]);
   expect(replacement.config).not.toBe(original.config);
+  expect(replacement.env).not.toBe(original.env);
   expect(replacement.paths.get("main")?.configured).toBe(cfg.session!.store);
   expect(original.config.session?.store).toBe(path.join(root, "custom.json"));
 });
 
-test("isolates detached inventory configs across caller edits", () => {
+test("refreshes published inventory environments after env publication and rollback", () => {
+  const root = tempDirs.make("session-inventory-env-");
+  const key = "OPENCLAW_TEST_INVENTORY_ENV";
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  vi.stubEnv(key, undefined);
+  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+  setRuntimeConfigSnapshot(cfg);
+  const original = prepareSessionStoreTargetInventory(cfg, ["main"]);
+  const publication = prepareConfigRuntimeEnv({
+    previousConfig: cfg,
+    nextConfig: { ...cfg, env: { vars: { [key]: "published" } } },
+  }).publish();
+  try {
+    const current = prepareSessionStoreTargetInventory(cfg, ["main"]);
+    expect(current.env[key]).toBe("published");
+    expect(original.env[key]).toBeUndefined();
+    expect(prepareSessionStoreTargetInventory(cfg, ["main"]).env).toBe(current.env);
+  } finally {
+    publication();
+  }
+  const restored = prepareSessionStoreTargetInventory(cfg, ["main"]);
+  expect(restored.env[key]).toBeUndefined();
+  expect(prepareSessionStoreTargetInventory(cfg, ["main"]).env).toBe(restored.env);
+});
+
+test("isolates detached inventory configs and explicit environments across caller edits", () => {
   const root = tempDirs.make("session-inventory-detached-");
   const env = { OPENCLAW_STATE_DIR: root };
   const cfg: OpenClawConfig = {
@@ -55,9 +85,27 @@ test("isolates detached inventory configs across caller edits", () => {
   };
   const original = prepareSessionStoreTargetInventory(cfg, ["main"], env);
   cfg.session!.store = path.join(root, "replacement.json");
+  env.OPENCLAW_STATE_DIR = path.join(root, "replacement-state");
   const replacement = prepareSessionStoreTargetInventory(cfg, ["main"], env);
   expect(original.config.session?.store).toBe(path.join(root, "original.json"));
   expect(replacement.paths.get("main")?.configured).toBe(cfg.session!.store);
+  expect(original.env.OPENCLAW_STATE_DIR).toBe(root);
+  expect(replacement.env.OPENCLAW_STATE_DIR).toBe(path.join(root, "replacement-state"));
+});
+
+test("captures explicit environments afresh even for the active config", () => {
+  const root = tempDirs.make("session-inventory-explicit-env-");
+  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+  const env = { OPENCLAW_STATE_DIR: root };
+  setRuntimeConfigSnapshot(cfg);
+  const original = prepareSessionStoreTargetInventory(cfg, ["main"], env);
+  env.OPENCLAW_STATE_DIR = path.join(root, "replacement");
+  const replacement = prepareSessionStoreTargetInventory(cfg, ["main"], env);
+  expect(original.env.OPENCLAW_STATE_DIR).toBe(root);
+  expect(replacement.env.OPENCLAW_STATE_DIR).toBe(path.join(root, "replacement"));
+  expect(replacement.paths.get("main")?.default).toBe(
+    path.join(root, "replacement", "agents", "main", "sessions", "sessions.json"),
+  );
 });
 
 test.each(["shared.sqlite", "agents/main/agent/openclaw-agent.sqlite"])(

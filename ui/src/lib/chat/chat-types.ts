@@ -231,6 +231,7 @@ export type ChatItem =
       tone?: "danger";
       /** Collapse the body behind a disclosure; the label line stays visible. */
       collapsedBody?: true;
+      showTimestamp?: true;
       /** Structural only: separates a handed-off run from its resumption. Never rendered. */
       handoffBoundary?: true;
       /** A background skill review's changes; rendered as a native row instead of `text`. */

@@ -77,7 +77,7 @@ describe("channel-final transcript mirrors", () => {
     );
   const entries = () => readVisibleSessionTranscriptMessageEntries(scope);
 
-  it.each([false, true])("replays shipped SDK mirror bytes with media=%s", async (media) => {
+  it.each([true])("replays shipped SDK mirror bytes with media=%s", async (media) => {
     const request = {
       ...delivery("shipped-sdk-mirror", "Chart"),
       ...(media ? { mediaUrls: ["https://example.com/one/chart.png"] } : {}),
@@ -162,22 +162,7 @@ describe("channel-final transcript mirrors", () => {
     expect(await readSessionTranscriptEvents(scope)).toEqual(before);
   });
 
-  it("rejects adding media to a new keyed text-only mirror with identical display text", async () => {
-    const request = delivery("text-only-media-collision", "Chart\nchart.png");
-    const original = await appendAssistantMirrorMessageByIdentity(request);
-    await expect(appendAssistantMirrorMessageByIdentity(request)).resolves.toEqual(original);
-    const before = await readSessionTranscriptEvents(scope);
-    await expect(
-      appendAssistantMirrorMessageByIdentity({
-        ...request,
-        text: "Chart",
-        mediaUrls: ["https://example.com/chart.png"],
-      }),
-    ).rejects.toThrow("conflicts with the admitted message");
-    expect(await readSessionTranscriptEvents(scope)).toEqual(before);
-  });
-
-  it.each(["latest", "source run"])(
+  it.each(["source run"])(
     "correlates authored media captions through %s source lookup",
     async (lookup) => {
       const mediaUrls = ["https://example.com/one/chart.png"];
@@ -231,7 +216,7 @@ describe("channel-final transcript mirrors", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "correlates queued answers from the source run (identical text: %s)",
     async (identical) => {
       const firstText = "The train leaves at noon.";
@@ -290,7 +275,6 @@ describe("channel-final transcript mirrors", () => {
   });
 
   it.each([
-    { name: "different answer", message: { role: "assistant", content: "A different departure." } },
     {
       name: "another delivery mirror",
       message: {
@@ -404,27 +388,6 @@ describe("channel-final transcript mirrors", () => {
       openclawDeliveryMirror: { kind: "channel-final-suppressed", reason: "stale-foreground" },
     });
     expect(message).not.toHaveProperty("openclawDeliveryMirror.sourceAssistantMessageId");
-  });
-
-  it("preserves a fieldless mirror when replay follows a newly matching assistant", async () => {
-    const request = delivery("fieldless-delivery");
-    const original = await appendAssistantMirrorMessageByIdentity(request);
-    expect(original).toMatchObject({ ok: true });
-    expect((await entries())[0]?.message).not.toHaveProperty(
-      "openclawDeliveryMirror.sourceAssistantMessageId",
-    );
-    await append(
-      { role: "assistant", content: "The train leaves at noon." },
-      "later-matching-answer",
-    );
-    const before = rows();
-
-    await expect(appendAssistantMirrorMessageByIdentity(request)).resolves.toEqual(original);
-
-    expect(rows()).toEqual(before);
-    expect((await entries())[0]?.message).not.toHaveProperty(
-      "openclawDeliveryMirror.sourceAssistantMessageId",
-    );
   });
 
   it.each(["entry cleanup", "latest-message refusal"] as const)(

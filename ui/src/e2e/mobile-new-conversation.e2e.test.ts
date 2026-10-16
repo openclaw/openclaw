@@ -190,6 +190,8 @@ suite.define(() => {
         expect(await page.locator(".header-new-session:visible").count()).toBe(0);
         expect(await action.count()).toBe(1);
         if (route === "new") {
+          // The drawer moves focus after rendering; Escape must not reach the departing text field.
+          await page.locator(".shell-nav:focus, .shell-nav :focus").waitFor();
           await page.keyboard.press("Escape");
           await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
         }

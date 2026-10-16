@@ -67,7 +67,7 @@ const mocks = vi.hoisted(() => ({
   listRealtimeTranscriptionProviders: vi.fn(() => []),
   resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(),
   isRealtimeVoiceProviderConfiguredAsync: vi.fn(
-    ({
+    async ({
       provider,
       cfg,
       providerConfig,
@@ -1315,60 +1315,57 @@ describe("talk.config handler", () => {
     }
   });
 
-  it("projects the runtime realtime transport when source config omits it", async () => {
-    setSourceConfig({});
-
-    const respond = vi.fn();
-    await callTalkHandler("talk.config", {
-      params: {},
-      client: { connect: { scopes: ["operator.read"] } },
-      respond,
-      config: {
+  it.each<{
+    name: string;
+    runtimeConfig: OpenClawConfig;
+    sourceConfig?: OpenClawConfig;
+    expected: Record<string, unknown>;
+    providerConfig?: Record<string, unknown>;
+  }>([
+    {
+      name: "runtime transport absent from source",
+      runtimeConfig: { talk: { realtime: { transport: "provider-websocket" } } },
+      sourceConfig: {},
+      expected: { transport: "provider-websocket" },
+    },
+    {
+      name: "unavailable non-OpenAI model without a bundled projector",
+      runtimeConfig: {
         talk: {
-          realtime: { transport: "provider-websocket" },
-        },
-      } as OpenClawConfig,
-    });
-
-    const response = expectRespondOk(respond) as { config?: { talk?: Record<string, unknown> } };
-    expectRecordFields(response.config?.talk?.realtime, {
-      transport: "provider-websocket",
-    });
-  });
-
-  it("preserves unavailable non-OpenAI realtime models without a bundled projector", async () => {
-    const runtimeConfig = {
-      talk: {
-        realtime: {
-          provider: "other-realtime",
-          model: "other-live-model",
-          providers: {
-            "other-realtime": { model: "other-live-model", voice: "other-voice" },
+          realtime: {
+            provider: "other-realtime",
+            model: "other-live-model",
+            providers: {
+              "other-realtime": { model: "other-live-model", voice: "other-voice" },
+            },
           },
         },
       },
-    } as OpenClawConfig;
-    setSourceConfig(runtimeConfig);
-    mocks.listRealtimeVoiceProviders.mockReturnValue([]);
-    const respond = vi.fn();
-
-    await callTalkHandler("talk.config", {
-      params: {},
-      client: { connect: { scopes: ["operator.read"] } },
-      respond,
-      config: runtimeConfig,
-    });
-
-    const response = expectRespondOk(respond) as { config?: { talk?: Record<string, unknown> } };
-    const realtime = expectRecordFields(response.config?.talk?.realtime, {
-      provider: "other-realtime",
-      model: "other-live-model",
-    });
-    expectRecordFields((realtime.providers as Record<string, unknown>)["other-realtime"], {
-      model: "other-live-model",
-      voice: "other-voice",
-    });
-  });
+      expected: { provider: "other-realtime", model: "other-live-model" },
+      providerConfig: { model: "other-live-model", voice: "other-voice" },
+    },
+  ])(
+    "projects realtime config: $name",
+    async ({ runtimeConfig, sourceConfig, expected, providerConfig }) => {
+      setSourceConfig(sourceConfig ?? runtimeConfig);
+      mocks.listRealtimeVoiceProviders.mockReturnValue([]);
+      const respond = vi.fn();
+      await callTalkHandler("talk.config", {
+        params: {},
+        client: { connect: { scopes: ["operator.read"] } },
+        respond,
+        config: runtimeConfig,
+      });
+      const response = expectRespondOk(respond) as { config?: { talk?: Record<string, unknown> } };
+      const realtime = expectRecordFields(response.config?.talk?.realtime, expected);
+      if (providerConfig) {
+        expectRecordFields(
+          (realtime.providers as Record<string, unknown>)["other-realtime"],
+          providerConfig,
+        );
+      }
+    },
+  );
 
   defineRealtimeConfigProjectionTests(async (runtimeConfig, includeSecrets) => {
     setSourceConfig(runtimeConfig);

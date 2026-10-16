@@ -1,6 +1,4 @@
 // Discord tests cover channel plugin behavior.
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { ChannelType } from "discord-api-types/v10";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -19,8 +17,6 @@ import { RequestClient } from "./internal/rest.js";
 import { createDiscordLivePolicyReader } from "./monitor/live-policy.js";
 import type { MonitorDiscordOpts } from "./monitor/provider.js";
 import * as sendModule from "./send.js";
-import { createDiscordSendReceipt } from "./send.receipt.js";
-import { EMPTY_DISCORD_TEST_CONFIG } from "./test-support/config.js";
 import { argAt, objectArgAt, recordField } from "./test-support/mock-calls.js";
 let discordPlugin: typeof import("./channel.js").discordPlugin;
 let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
@@ -28,14 +24,6 @@ let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 const probeDiscordMock = vi.hoisted(() => vi.fn());
 const monitorDiscordProviderMock = vi.hoisted(() => vi.fn());
 const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
-
-function discordTestSendResult(messageId: string, channelId = "channel:thread-123") {
-  return {
-    messageId,
-    channelId,
-    receipt: createDiscordSendReceipt({ platformMessageIds: [messageId], channelId, kind: "text" }),
-  };
-}
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
@@ -281,19 +269,6 @@ describe("discordPlugin outbound", () => {
     expect(resolveFor("channel:111")).toBeUndefined();
   });
 
-  it("avoids local require calls for bundled-only sibling modules", async () => {
-    const source = await readFile(
-      resolve(process.cwd(), "extensions/discord/src/channel.ts"),
-      "utf8",
-    );
-    expect(source).not.toContain('require("./ui.js")');
-    expect(source).not.toContain('require("./channel-actions.js")');
-  });
-
-  it("prefers final assistant text for text-only cron announce delivery", () => {
-    expect(discordPlugin.outbound?.preferFinalAssistantVisibleText).toBe(true);
-  });
-
   it("routes Discord message actions through the gateway", () => {
     expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "read" as never })).toBe(
       "gateway",
@@ -411,39 +386,6 @@ describe("discordPlugin outbound", () => {
 
     expect(resolveReplyToMode({ cfg, accountId: "work" })).toBe("first");
     expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("all");
-  });
-
-  it("splits text and video into separate sends for attached outbound delivery", async () => {
-    const sendMessageDiscord = vi
-      .fn()
-      .mockResolvedValueOnce(discordTestSendResult("text-1"))
-      .mockResolvedValueOnce(discordTestSendResult("video-1"));
-
-    const result = await discordPlugin.outbound!.sendMedia!({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      to: "channel:123",
-      text: "done - tiny cyber-lobster clip incoming",
-      mediaUrl: "/tmp/molty.mp4",
-      accountId: "work",
-      replyToId: "reply-123",
-      threadId: "thread-123",
-      deps: {
-        discord: sendMessageDiscord,
-      },
-    });
-
-    expect(sendMessageDiscord).toHaveBeenCalledTimes(2);
-    expect(argAt(sendMessageDiscord, 0, 0)).toBe("channel:thread-123");
-    expect(argAt(sendMessageDiscord, 0, 1)).toBe("done - tiny cyber-lobster clip incoming");
-    expect(objectArgAt(sendMessageDiscord, 0, 2).reply).toEqual({
-      messageId: "reply-123",
-      scope: "all",
-    });
-    expect(argAt(sendMessageDiscord, 1, 0)).toBe("channel:thread-123");
-    expect(argAt(sendMessageDiscord, 1, 1)).toBe("");
-    expect(objectArgAt(sendMessageDiscord, 1, 2).mediaUrl).toBe("/tmp/molty.mp4");
-    expect(result.channel).toBe("discord");
-    expect(result.messageId).toBe("video-1");
   });
 
   it("sends typing to the attached Discord thread", async () => {

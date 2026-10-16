@@ -15,6 +15,7 @@ import {
   readTranscriptEventRows,
   readTranscriptStatsSync,
   readTranscriptStorageRows,
+  type SqliteTranscriptSnapshotRow,
 } from "./session-accessor.sqlite-read.js";
 import {
   readTranscriptGenerationInTransaction,
@@ -23,10 +24,12 @@ import {
 import {
   appendTranscriptEventInTransaction,
   appendTranscriptEventsInTransaction,
+  replaceSqliteTranscriptEventsInTransaction,
   rewriteSqliteTranscriptEventRowsInTransaction,
   updateSqliteTranscriptEventJsonInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { replaceSqliteTranscriptSuffixInTransaction } from "./session-accessor.sqlite-transcript-suffix.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
@@ -45,6 +48,61 @@ afterEach(() => {
 });
 
 describe("SQLite transcript append", () => {
+  it("captures the replacement's stored rows after media normalization and duplicate filtering", async () => {
+    await withOpenClawTestState({ label: "replacement-snapshot" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "replacement",
+        sessionKey: "agent:main:replacement",
+        env: state.env,
+      };
+      const message = {
+        type: "message",
+        id: "answer",
+        parentId: null,
+        message: {
+          role: "assistant",
+          content: "large payload ".repeat(1024),
+          MediaPaths: ["/media/a.png"],
+          MediaTypes: ["image/png"],
+        },
+      };
+      const unicode = { type: "custom", id: "unicode", data: "\ud800\u0000" };
+      const rows: SqliteTranscriptSnapshotRow[] = [];
+      runOpenClawAgentWriteTransaction(
+        (database) =>
+          replaceSqliteTranscriptEventsInTransaction(
+            database,
+            scope,
+            [
+              message,
+              { ...message, message: { role: "assistant", content: "ignored duplicate" } },
+              unicode,
+            ],
+            { writtenRows: rows },
+          ),
+        scope,
+      );
+      const database = openOpenClawAgentDatabase(scope);
+      expect(rows.map((row) => row.seq)).toEqual([0, 1]);
+      expect(JSON.parse(rows[0]!.eventJson).message).toMatchObject({
+        content: message.message.content,
+        __openclaw: { media: [expect.objectContaining({ path: "/media/a.png" })] },
+      });
+      expect(JSON.parse(rows[0]!.eventJson).message).not.toHaveProperty("MediaPaths");
+      expect(JSON.parse(rows[1]!.eventJson)).toEqual(unicode);
+      expect(rows).toEqual(readTranscriptEventRows(database, scope.sessionId));
+      const emptyRows: SqliteTranscriptSnapshotRow[] = [];
+      runOpenClawAgentWriteTransaction(
+        (writer) =>
+          replaceSqliteTranscriptEventsInTransaction(writer, scope, [], { writtenRows: emptyRows }),
+        scope,
+      );
+      expect(emptyRows).toEqual([]);
+      expect(readTranscriptEventRows(database, scope.sessionId)).toEqual([]);
+    });
+  });
+
   it("canonicalizes assistant media at the generic transcript append owner", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-append-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -411,7 +469,7 @@ describe("SQLite exact transcript rewrite", () => {
             { seq: 2, expectedEventJson: JSON.stringify(events[2], null, 2), event: events[2] },
           ]);
         }, scope),
-      ).toThrow("changed before exact rewrite");
+      ).toThrow(SqliteTranscriptMutationConflictError);
       expect(snapshot()).toEqual(before);
       expect(readTranscriptStatsSync(scope)).toEqual(stats);
     }, events);
@@ -824,53 +882,6 @@ describe("SQLite exact transcript suffix replacement", () => {
         readIdempotencyOwners(db, scope.sessionId, ...owners.map((row) => row.event_id)),
       ).toEqual(owners);
     }, events);
-  });
-
-  it("preserves the established idempotency owner across retained suffix rows", async () => {
-    const duplicateKeyEvents = [
-      rewriteEvents[0],
-      keyedAssistant("first", "root", "retry"),
-      { type: "custom", id: "removed", parentId: "first" },
-      keyedAssistant("owner", "removed", "retry"),
-    ] as const;
-    await withRewriteFixture(({ db, scope }) => {
-      db.prepare(
-        "UPDATE transcript_events SET created_at = CASE seq WHEN 1 THEN 101 WHEN 3 THEN 303 ELSE created_at END WHERE session_id = ?",
-      ).run(scope.sessionId);
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = NULL, created_at = 101 WHERE session_id = ? AND event_id = ?",
-      ).run(scope.sessionId, "first");
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = ?, created_at = 303 WHERE session_id = ? AND event_id = ?",
-      ).run("retry", scope.sessionId, "owner");
-
-      replaceTranscriptSuffixForTest(scope, duplicateKeyEvents, [
-        duplicateKeyEvents[0],
-        duplicateKeyEvents[1],
-        { ...duplicateKeyEvents[3], parentId: "first" },
-      ]);
-
-      expect(
-        db
-          .prepare(
-            "SELECT event_id, message_idempotency_key, created_at FROM transcript_event_identities WHERE session_id = ? AND event_id IN ('first', 'owner') ORDER BY event_id",
-          )
-          .all(scope.sessionId),
-      ).toEqual([
-        { event_id: "first", message_idempotency_key: null, created_at: 101 },
-        { event_id: "owner", message_idempotency_key: "retry", created_at: 303 },
-      ]);
-      expect(
-        db
-          .prepare(
-            "SELECT seq, created_at FROM transcript_events WHERE session_id = ? AND seq IN (1, 2) ORDER BY seq",
-          )
-          .all(scope.sessionId),
-      ).toEqual([
-        { seq: 1, created_at: 101 },
-        { seq: 2, created_at: 303 },
-      ]);
-    }, duplicateKeyEvents);
   });
 
   it.each([

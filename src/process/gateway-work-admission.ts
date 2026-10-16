@@ -342,7 +342,14 @@ export function beginGatewayShutdownCleanup(): void {
 }
 
 export function isGatewayRestartDrainError(error: unknown): error is GatewayDrainingError {
-  return error instanceof GatewayDrainingError && isGatewayRestartDraining();
+  if (!isGatewayRestartDraining()) {
+    return false;
+  }
+  try {
+    return error instanceof GatewayDrainingError;
+  } catch {
+    return false;
+  }
 }
 
 /** Restart drain is one-way until the in-process restart resets runtime state. */

@@ -41,6 +41,12 @@ describe("resolveOcPath — md AST", () => {
     const m = resolveOcPath(md, parseOcPath("oc://X.md"));
     expect(m?.kind).toBe("root");
   });
+
+  it("keeps a wrapped prose item addressable when a later line contains a colon", () => {
+    const ast = parseMd("## Tools\n- Install dependencies\n  Note: first\n  second\n").ast;
+    const path = parseOcPath("oc://X.md/tools/install-dependencies-note-first-second");
+    expectNode(resolveOcPath(ast, path), "md-item");
+  });
 });
 
 describe("resolveOcPath — jsonc AST", () => {
@@ -205,6 +211,56 @@ describe("setOcPath — jsonl leaf", () => {
 });
 
 describe("setOcPath — md insertion", () => {
+  it.each(["description:\n", "description:\n  "])(
+    "does not expose an empty inserted value as an editable field: %j",
+    (value) => {
+      const ast = parseMd("## Tools\n## Other\n- keep: stable\n").ast;
+      const inserted = setOcPath(ast, parseOcPath("oc://X.md/tools/+"), value);
+      if (!inserted.ok) {
+        throw new Error("expected successful insertion");
+      }
+      const before = structuredClone(inserted.ast);
+      const field = parseOcPath("oc://X.md/tools/description/description");
+      expect(resolveOcPath(inserted.ast, field)).toBeNull();
+      expect(setOcPath(inserted.ast, field, "updated").ok).toBe(false);
+      expect(inserted.ast).toEqual(before);
+      expect(inserted.ast.raw).toContain("## Other\n- keep: stable\n");
+    },
+  );
+
+  it.each(["\n", "\r\n"])("edits a wrapped field immediately after insertion with %j", (eol) => {
+    const raw = "## Tools\n- keep: stable\n## Other\n- sibling: unchanged\n".replaceAll("\n", eol);
+    const ast = parseMd(raw).ast;
+    const inserted = setOcPath(
+      ast,
+      parseOcPath("oc://X.md/tools/+"),
+      "description: first line\n  second line",
+    );
+    if (!inserted.ok) {
+      throw new Error("expected successful insertion");
+    }
+    const field = parseOcPath("oc://X.md/tools/description/description");
+    expectLeaf(resolveOcPath(inserted.ast, field), {
+      leafType: "string",
+      valueText: "first line\n  second line",
+    });
+    const edited = setOcPath(inserted.ast, field, "updated");
+    if (!edited.ok) {
+      throw new Error("expected successful chained edit");
+    }
+    expect(edited.ast.raw).toBe(
+      "## Tools\n- keep: stable\n- description: updated\n## Other\n- sibling: unchanged\n".replaceAll(
+        "\n",
+        eol,
+      ),
+    );
+    expectLeaf(resolveOcPath(parseMd(edited.ast.raw).ast, field), {
+      leafType: "string",
+      valueText: "updated",
+    });
+    expect(ast.raw).toBe(raw);
+  });
+
   it.each([["oc://X.md/tools/+", "## Tools\n- keep: stable\n"]])(
     "refuses sentinel-bearing Markdown insertion values at %s",
     (uri, raw) => {
@@ -228,12 +284,26 @@ describe("setOcPath — md insertion", () => {
     );
     expect(result).toMatchObject({
       ok: true,
-      ast: { raw: `---\nname: x\n${REDACTED_SENTINEL}: safe\n---` },
+      ast: { raw: `---\nname: x\n${REDACTED_SENTINEL}: safe\n---\n` },
     });
   });
 
   it.each([
-    ["section", "## Existing\n", "oc://X.md/+", "New Section", "## Existing\n\n## New Section"],
+    ["section", "## Existing\n", "oc://X.md/+", "New Section", "## Existing\n\n## New Section\n"],
+    [
+      "frontmatter",
+      "\uFEFF## Existing\r\n* keep: literal",
+      "oc://X.md/[frontmatter]/+name",
+      "x",
+      "\uFEFF---\r\nname: x\r\n---\r\n## Existing\r\n* keep: literal",
+    ],
+    [
+      "empty frontmatter",
+      "\uFEFF---\r\n# keep\r\n---\r\n## Existing",
+      "oc://X.md/[frontmatter]/+name",
+      "x",
+      "\uFEFF---\r\n# keep\r\nname: x\r\n---\r\n## Existing",
+    ],
   ])("preserves output and input AST when inserting a %s", (_kind, raw, path, value, expected) => {
     const md = parseMd(raw).ast;
     const before = structuredClone(md);

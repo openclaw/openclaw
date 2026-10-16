@@ -2,10 +2,14 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import process from "node:process";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
-import { beforeAll, describe, expect, it } from "vitest";
-import { runClaudeCliNativeSpawnProof } from "../../test/helpers/claude-cli-native-spawn-proof.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  compileClaudeCliNativeLauncher,
+  runClaudeCliNativeSpawnProof,
+} from "../../test/helpers/claude-cli-native-spawn-proof.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
@@ -161,6 +165,23 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
 describe.runIf(process.platform === "win32" || process.env.OPENCLAW_CLAUDE_CLI_SPAWN_PROOF === "1")(
   "ordinary Claude CLI executable launch",
   () => {
+    const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+    let nativeLauncher: string | undefined;
+
+    beforeAll(async () => {
+      if (process.platform === "win32") {
+        nativeLauncher = await compileClaudeCliNativeLauncher(
+          tempDirs.make("openclaw-claude-native-"),
+        );
+      }
+    }, 150_000);
+    const nativeLaunch = () => {
+      if (!nativeLauncher) {
+        throw new Error("The native Claude CLI launcher fixture was not compiled");
+      }
+      return { kind: "native" as const, launcher: nativeLauncher };
+    };
+
     beforeAll(async () => {
       const instance = await createOpenClawTestInstance({ name: "claude-cli-spawn-prepare" });
       try {
@@ -178,7 +199,9 @@ describe.runIf(process.platform === "win32" || process.env.OPENCLAW_CLAUDE_CLI_S
     )(
       "completes an ordinary agent turn through %s",
       async (kind) => {
-        const proof = await runClaudeCliNativeSpawnProof(kind);
+        const proof = await runClaudeCliNativeSpawnProof(
+          kind === "native" ? nativeLaunch() : { kind },
+        );
         console.log("[claude-cli-native-proof]", JSON.stringify(proof));
         expect(proof.code, proof.stderr).toBe(0);
         expect(JSON.parse(proof.stdout)).toMatchObject({

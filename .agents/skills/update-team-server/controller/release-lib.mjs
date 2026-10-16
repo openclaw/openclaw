@@ -544,21 +544,32 @@ function syncPath(pathname) {
 }
 
 function releaseFootprint(root) {
-  const footprint = { bytes: 0, entries: 0 };
-  const pending = [root];
-  const device = lstatSync(root).dev;
-  while (pending.length) {
-    const pathname = pending.pop(), entry = lstatSync(pathname);
-    if (entry.dev !== device) reject("release capacity inventory crosses filesystems");
-    footprint.bytes += Math.max(entry.size, entry.blocks * 512);
-    footprint.entries++;
-    if (entry.isDirectory()) {
-      for (const name of readdirSync(pathname)) pending.push(join(pathname, name));
-    } else if (!entry.isFile() && !entry.isSymbolicLink()) {
-      reject("release capacity inventory contains an unsupported entry");
-    }
+  // Keep the large metadata walk outside V8: its optimized lstatSync loop has crashed.
+  // Count every hardlink and sparse file's copy cost, rather than du's shared blocks.
+  const result = spawnSync("python3", ["-c", `
+import os, stat, sys
+pending = [sys.argv[1]]
+device = os.lstat(pending[0]).st_dev
+size = entries = 0
+while pending:
+    path = pending.pop()
+    entry = os.lstat(path)
+    if entry.st_dev != device:
+        sys.exit("release capacity inventory crosses filesystems")
+    size += max(entry.st_size, entry.st_blocks * 512)
+    entries += 1
+    if stat.S_ISDIR(entry.st_mode):
+        with os.scandir(path) as children:
+            pending.extend(child.path for child in children)
+    elif not (stat.S_ISREG(entry.st_mode) or stat.S_ISLNK(entry.st_mode)):
+        sys.exit("release capacity inventory contains an unsupported entry")
+print(size, entries)
+`, root], { encoding: "utf8" });
+  if (result.status !== 0) {
+    reject(`cannot measure release capacity: ${result.error?.message ?? result.stderr.trim()}`);
   }
-  return footprint;
+  const [bytes, entries] = result.stdout.trim().split(/\s+/).map(value => integer(value, "release footprint"));
+  return { bytes, entries };
 }
 
 function releaseCapacity(phase, reference, mirror, buildHome, servingRoot, runtimeHome) {
@@ -826,7 +837,8 @@ function runtimeOperation(action, root, values) {
     const version = target.kind === "bun" ? result.bun : result.node;
     const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version ?? "");
     if (!match || !/^3\.\d+\.\d+$/.test(result.sqlite ?? "") ||
-        (target.kind === "bun" ? Number(match[1]) < 1 || (Number(match[1]) === 1 && Number(match[2]) < 4) :
+        (target.kind === "bun" ? Number(match[1]) < 1 || (Number(match[1]) === 1 &&
+          (Number(match[2]) < 4 || (Number(match[2]) === 4 && Number(match[3]) < 3))) :
           result.bun !== undefined || Number(match[1]) < 24 || (Number(match[1]) === 24 && Number(match[2]) < 15))) reject("Gateway runtime capability probe failed");
     return "RUNTIME_PROBED";
   }
@@ -2343,6 +2355,11 @@ function policy(pathname) {
   if (typeof model !== "string" || !model.includes("/") || model.trim() !== model) {
     reject("configured deployment model is invalid");
   }
+  const fallbacks = typeof modelValue === "object" ? modelValue?.fallbacks ?? [] : [];
+  if (!Array.isArray(fallbacks) || fallbacks.some(value =>
+    typeof value !== "string" || !value.includes("/") || value.trim() !== value)) {
+    reject("configured deployment model fallbacks are invalid");
+  }
   return {
     mode: config.tools.exec.mode,
     appServer: server,
@@ -2350,6 +2367,7 @@ function policy(pathname) {
     updateAuto: config.update.auto.enabled,
     clickclackCommandMenu: config.channels?.clickclack?.commandMenu,
     model,
+    fallbacks,
   };
 }
 
@@ -4542,10 +4560,19 @@ try {
         result = "RECOVERING";
         break;
       }
-      if (readinessCode !== "200" || readiness.ready !== true ||
-          !Array.isArray(readiness.failing) || readiness.failing.length ||
+      if (!Array.isArray(readiness.failing) ||
+          readiness.failing.some(value => typeof value !== "string" || !value) ||
           !Number.isFinite(readiness.uptimeMs) || readiness.uptimeMs < 0) {
-        reject("Gateway marker readyz is not ready");
+        reject("Gateway marker readyz is malformed");
+      }
+      // Convergence is a snapshot, not a promise that channel readiness stays
+      // green. Wait for native readiness again within the same startup deadline.
+      if (readinessCode === "503" && readiness.ready === false && readiness.failing.length) {
+        result = "RECOVERING";
+        break;
+      }
+      if (readinessCode !== "200" || readiness.ready !== true || readiness.failing.length) {
+        reject("Gateway marker readyz is inconsistent");
       }
       // CPU/utilization alone can reflect useful startup work. Native delay evidence
       // and a bounded system.info response determine whether dispatch may proceed.

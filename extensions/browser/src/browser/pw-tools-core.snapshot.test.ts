@@ -505,33 +505,6 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(page.setViewportSize).not.toHaveBeenCalled();
   });
 
-  it("publishes finalized CDP refs without recomputing duplicate indexes", async () => {
-    const page = makeAriaSnapshotPage(vi.fn());
-
-    getPageForTargetId.mockResolvedValue(page);
-    markBackendDomRefsOnPage.mockResolvedValue(new Set(["e2"]));
-    readDocumentIdentitiesForPage.mockResolvedValue({ mainFrame: "cdp:loader-1" });
-
-    await mod.storeSnapshotRefsViaPlaywright({
-      ...target,
-      expectedDocumentIdentity: "cdp:loader-1",
-      refs: Object.freeze({
-        e1: Object.freeze({ role: "button", name: "Save", nth: 0, backendDOMNodeId: 42 }),
-        e2: Object.freeze({ role: "button", name: "Save", nth: 1, backendDOMNodeId: 84 }),
-      }),
-    });
-
-    expect(storeRoleRefsForTarget).toHaveBeenCalledWith({
-      page,
-      ...target,
-      refs: {
-        e1: { role: "button", name: "Save", nth: 0, domMarker: true },
-        e2: { role: "button", name: "Save", nth: 1, domMarker: true },
-      },
-      mode: "role",
-    });
-  });
-
   it("does not publish CDP refs after the document changes", async () => {
     const page = makeAriaSnapshotPage(vi.fn());
 

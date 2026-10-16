@@ -26,12 +26,13 @@ export function verifyTranscriptEvents(
       readTranscriptFingerprint(source.path),
       source.originalPath,
     )((event) => stage.append(0, seq++, JSON.stringify(canonicalizeTranscriptEventMedia(event))));
-    const repair = stage.repairLegacyTranscript(0, mode !== "ordered");
-    if (mode === "ordered") {
-      // Receipt adoption retains its original order and branch-repair contract.
-      if (repair.repaired || !repair.recognized) {
-        return undefined;
-      }
+    const repair = stage.repairLegacyTranscript(0);
+    // Historical receipts require exact payloads; retries accept only recognized branch repair.
+    if (
+      (mode === "ordered" && (repair.repaired || !repair.recognized)) ||
+      (repair.branchRepaired && !repair.recognized)
+    ) {
+      return undefined;
     }
     const db = getSessionKysely(database);
     const sqliteEvents = executeSqliteQueryTakeFirstSync(
@@ -53,8 +54,7 @@ export function verifyTranscriptEvents(
           .orderBy("seq", "asc"),
       )) {
         if (mode !== "ordered") {
-          stage.addSeen(event.event_json);
-          const entry: unknown = JSON.parse(event.event_json);
+          const entry = stage.addSeen(event.event_json, true);
           if (isRecord(entry) && typeof entry.id === "string") {
             stage.addSeen(`id\0${entry.id}`);
           }
@@ -96,12 +96,9 @@ export function verifyTranscriptEvents(
       firstMissing ??= id;
       missingEvents += 1;
     }
-    if (missingEvents > 0) {
-      const branchRepair = stage.repairLegacyTranscript(0);
-      // Missing history must be appendable without discarding or rewriting original rows.
-      if (branchRepair.repaired || !branchRepair.recognized) {
-        return undefined;
-      }
+    // Appending must not require reconstruction or discard unrecognized history.
+    if (missingEvents > 0 && (repair.branchRepaired || !repair.recognized)) {
+      return undefined;
     }
     validate();
     return { events: repair.events, missingEvents, sqliteEvents };

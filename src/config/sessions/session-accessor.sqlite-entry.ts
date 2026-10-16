@@ -597,14 +597,13 @@ async function patchSqliteSessionEntrySnapshot(
             );
             try {
               if (next && result) {
-                const entry = structuredClone(result);
                 if (transcriptPredicate) {
-                  options.onCommitted?.(entry, transcriptPredicate);
+                  options.onCommitted?.(result, transcriptPredicate);
                 } else {
-                  options.onCommitted?.(entry);
+                  options.onCommitted?.(result);
                 }
                 if (committedSource) {
-                  options.onCommittedSource?.(committedSource, structuredClone(result));
+                  options.onCommittedSource?.(committedSource, result);
                 }
               }
             } finally {
@@ -638,13 +637,13 @@ async function patchSqliteSessionEntrySnapshot(
       skipMaintenance: options.skipMaintenance,
       storePath: params.storePath,
     });
+    kickSessionHistoryDiskBudgetMaintenance({
+      ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+      env: resolved.env,
+      storePath: params.storePath,
+      ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
+    });
   }
-  kickSessionHistoryDiskBudgetMaintenance({
-    ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
-    env: resolved.env,
-    storePath: params.storePath,
-    ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
-  });
   return committed;
 }
 

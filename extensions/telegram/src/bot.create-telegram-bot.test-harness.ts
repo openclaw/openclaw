@@ -12,7 +12,12 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, vi } from "vitest";
+import { telegramDirectDeliveryDepsForTest } from "./bot-delivery-deps.test-support.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import {
+  readAmbientTranscriptWatermarkAsync,
+  resolveAmbientTranscriptWatermarkKey,
+} from "./bot-message-context.session.runtime.js";
 import {
   runTelegramChannelInboundEventWithHarness,
   type TelegramTestMiddleware,
@@ -392,6 +397,7 @@ const telegramBotRuntimeForTest = {
     )()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
 export const telegramBotDepsForTest: TelegramBotDeps = {
+  ...telegramDirectDeliveryDepsForTest,
   getRuntimeConfig: () => {
     const config = getRuntimeConfig();
     if (getRuntimeConfigSnapshot() !== config) {
@@ -402,6 +408,8 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   getSessionEntryAsync: async (params) => getSessionEntryMock(params),
   resolveStorePath: resolveStorePathMock,
   readSessionUpdatedAtAsync: readSessionUpdatedAtMock,
+  readAmbientTranscriptWatermarkAsync,
+  resolveAmbientTranscriptWatermarkKey,
   recordInboundSession: recordInboundSessionMock as TelegramBotDeps["recordInboundSession"],
   recordChannelActivity: vi.fn() as TelegramBotDeps["recordChannelActivity"],
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>

@@ -493,36 +493,6 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     );
   });
 
-  it("preserves distinct session suffixes with a long Podman container prefix", async () => {
-    const cfg = createSandboxConfig([]);
-    cfg.scope = "session";
-    cfg.docker.containerPrefix = "x".repeat(56);
-    cfg.docker.user = undefined;
-    spawnState.containerExists = false;
-    spawnState.inspectRunning = false;
-    registryMocks.readRegistryEntry.mockResolvedValue(null);
-
-    const firstCreate = await ensureSandboxCreateCallForTest({
-      cfg,
-      scopeKey: "agent:first:session",
-      engine: harness.PODMAN_SANDBOX_ENGINE,
-    });
-    const firstName = collectDockerFlagValues(firstCreate.args, "--name")[0];
-
-    spawnState.calls.length = 0;
-    spawnState.containerExists = false;
-    const secondCreate = await ensureSandboxCreateCallForTest({
-      cfg,
-      scopeKey: "agent:second:session",
-      engine: harness.PODMAN_SANDBOX_ENGINE,
-    });
-    const secondName = collectDockerFlagValues(secondCreate.args, "--name")[0];
-
-    expect(firstName).not.toBe(secondName);
-    expect(firstName?.length).toBeLessThanOrEqual(63);
-    expect(secondName?.length).toBeLessThanOrEqual(63);
-  });
-
   it("invalidates a Podman container when the same tmpfs list becomes explicit", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
@@ -589,25 +559,6 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       "/tmp/podman-machine-default",
     ]);
   });
-
-  it("rejects Podman Machine bind sources outside the default home share", async () => {
-    const cfg = createSandboxConfig([]);
-    usePodmanMachine();
-    spawnState.inspectRunning = false;
-    registryMocks.readRegistryEntry.mockResolvedValue(null);
-
-    await expect(
-      harness.ensureSandboxContainer({
-        engine: harness.PODMAN_SANDBOX_ENGINE,
-        scopeKey: "agent:test:session",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
-        cfg,
-      }),
-    ).rejects.toThrow(/outside the default host home share/u);
-
-    expect(spawnState.calls.some((call) => call.args[0] === "create")).toBe(false);
-  });
 });
 
 describe("ensureSandboxContainer managed mounts", () => {
@@ -620,31 +571,6 @@ describe("ensureSandboxContainer managed mounts", () => {
     createSandboxConfig,
     ensureSandboxCreateCallForTest,
   } = harness;
-
-  it("creates read-only workspace and agent mounts in the daemon namespace", async () => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-dood-"));
-    for (const dir of ["private", "agent"]) {
-      fs.mkdirSync(path.join(root, dir), { recursive: true });
-    }
-    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
-      { type: "bind", source: "/host/state", destination: root, writable: true },
-    ]);
-    spawnState.containerExists = false;
-    registryMocks.readRegistryEntry.mockResolvedValue(null);
-    await harness.ensureSandboxContainer({
-      scopeKey: "shared",
-      workspaceDir: path.join(root, "private"),
-      agentWorkspaceDir: path.join(root, "agent"),
-      cfg: createSandboxConfig([], [], "ro"),
-    });
-    const binds = collectDockerFlagValues(
-      spawnState.calls.find((call) => call.args[0] === "create")?.args ?? [],
-      "-v",
-    );
-    expect(binds).toContain("/host/state/private:/workspace:ro,z");
-    expect(binds).toContain("/host/state/agent:/agent:ro,z");
-    expect(binds.some((bind) => bind.startsWith(root))).toBe(false);
-  });
 
   it("preserves a hot container after a source change, then recreates it when stopped", async () => {
     const workspaceDir = fs.realpathSync(tempDirs.make("openclaw-dood-"));

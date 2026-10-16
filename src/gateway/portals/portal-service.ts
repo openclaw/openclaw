@@ -22,6 +22,7 @@ import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { claimTailscaleServePort, type TailscaleRouteClaim } from "../../infra/tailscale.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
+import { isLoopbackHost } from "../net.js";
 import { listenGatewayHttpServer } from "../server/http-listen.js";
 import { getTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 import {
@@ -284,6 +285,16 @@ export function createGatewayPortalService(params: {
       tokenQuery,
       url: openableUrl.toString(),
       publicUrl,
+      exposure: {
+        // A DNS/TLS name does not expose a direct listener bound only to loopback.
+        // Ingress can expose a loopback backend, but never proves viewer access.
+        kind:
+          isLoopbackHost(openableUrl.hostname) ||
+          (!ingress && !params.managedTailscale && params.httpBindHosts.every(isLoopbackHost))
+            ? "loopback-only"
+            : "non-loopback",
+        browserReachability: "unverified",
+      },
       ...(portal.path ? { path: portal.path } : {}),
       ...(portal.description ? { description: portal.description } : {}),
       ...(portal.origin ? { origin: portal.origin } : {}),

@@ -237,6 +237,46 @@ it("bounds admission, detects writes behind its cursor, and stops reading clean 
   expect(pending.sessionIds).toHaveLength(300);
 });
 
+it("classifies a pending batch with bounded SQL and preserves later projection changes", () => {
+  const db = createDatabase();
+  settle(db);
+  const sessionIds = Array.from(
+    { length: 96 },
+    (_, index) => `session-${String(index).padStart(3, "0")}`,
+  );
+  transaction(db, () => {
+    for (const sessionId of sessionIds) {
+      seedCleanSession(db, sessionId);
+    }
+    db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 1");
+  });
+  const statements = trackSqliteStatementExecutions(db, ["all"], () => "all");
+  try {
+    expect(maintain(db)).toEqual({
+      sessionIds,
+      hasMore: false,
+      traversalComplete: true,
+    });
+    // Classification and queue consumption are bounded commands, not commands per session.
+    expect(statements.counts.all).toBeLessThanOrEqual(16);
+  } finally {
+    statements.restore();
+  }
+  transaction(db, () => {
+    db.exec(`UPDATE session_transcript_index_state SET needs_rebuild = 0
+      WHERE session_id <> 'session-095';
+      INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+        VALUES ('session-000', 1, '{}', 2);
+      UPDATE session_transcript_active_events SET context_eligible = NULL
+        WHERE session_id = 'session-001';`);
+  });
+  expect(maintain(db)).toEqual({
+    sessionIds: ["session-000", "session-001", "session-095"],
+    hasMore: false,
+    traversalComplete: true,
+  });
+});
+
 it("rolls back admission and pending facts with raw writes, including nested savepoints", () => {
   const db = createDatabase();
   seedCleanSession(db, "seed");

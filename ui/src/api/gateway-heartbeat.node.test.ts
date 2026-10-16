@@ -75,6 +75,24 @@ describe("GatewayBrowserClient heartbeat recovery", () => {
     }
   });
 
+  it("keeps an in-flight upgrade through tab wake while the Gateway is stalled", async () => {
+    useNodeFakeTimers();
+    const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
+    try {
+      client.start();
+      const ws = getLatestWebSocket();
+      // A stalled Gateway main thread has not answered the HTTP upgrade yet.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(client.needsWakeReconnect).toBe(false);
+
+      ws.emitClose(1006, "");
+      // Waiting out reconnect backoff is a valid wake reason.
+      expect(client.needsWakeReconnect).toBe(true);
+    } finally {
+      client.stop();
+    }
+  });
+
   it.each([Number.MAX_SAFE_INTEGER, 2 ** 32 + 1])(
     "clamps the advertised heartbeat %d when deciding whether a tab is stale",
     async (advertisedTickIntervalMs) => {

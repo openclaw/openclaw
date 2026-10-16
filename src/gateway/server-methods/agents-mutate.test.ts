@@ -113,7 +113,7 @@ const mocks = vi.hoisted(() => ({
   movePathToTrash: vi.fn(async (_pathname?: string) => "/trashed"),
   fsMkdir: vi.fn(async () => undefined),
   fsAppendFile: vi.fn(async () => {}),
-  fsReadFile: vi.fn(async () => ""),
+  fsReadFile: vi.fn<() => Promise<string>>(),
   fsStat: vi.fn(async (..._args: unknown[]) => null as import("node:fs").Stats | null),
   fsLstat: vi.fn(
     async (..._args: unknown[]) =>
@@ -669,9 +669,6 @@ async function expectUnsafeWorkspaceFile(method: "agents.files.get" | "agents.fi
 }
 
 beforeEach(() => {
-  mocks.fsReadFile.mockImplementation(async () => {
-    throw createEnoentError();
-  });
   mocks.fsStat.mockImplementation(async () => {
     throw createEnoentError();
   });
@@ -684,7 +681,6 @@ beforeEach(() => {
     async () =>
       ({
         stat: async () => makeFileStat(),
-        readFile: async () => Buffer.from(""),
         truncate: async () => {},
         writeFile: async () => {},
         close: async () => {},

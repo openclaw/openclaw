@@ -253,11 +253,14 @@ export function CheckoutChip(props: { params: CheckoutChipOptions }) {
                 label: t("newSession.checkoutCurrent"),
                 icon: <Icon name="folder" />,
                 sub: props.params.branches?.headBranch,
+                description: props.params.currentCheckoutUnavailableReason,
                 checked: !props.params.worktree,
-                disabled: props.params.remotePlacement,
+                disabled:
+                  props.params.remotePlacement ||
+                  Boolean(props.params.currentCheckoutUnavailableReason),
                 title: props.params.remotePlacement
                   ? t("newSession.checkoutRemoteLocked")
-                  : undefined,
+                  : props.params.currentCheckoutUnavailableReason,
                 onSelect: () => props.params.onSelectWorktree(false),
                 keepOpen: true,
               }}
@@ -273,9 +276,10 @@ export function CheckoutChip(props: { params: CheckoutChipOptions }) {
                 disabled: !props.params.worktreeAvailable,
                 title: props.params.worktreeAvailable
                   ? undefined
-                  : props.params.repositoryUnavailable
-                    ? t("newSession.gitCheckUnavailable")
-                    : t("newSession.worktreeUnavailable"),
+                  : (props.params.currentCheckoutUnavailableReason ??
+                    (props.params.repositoryUnavailable
+                      ? t("newSession.gitCheckUnavailable")
+                      : t("newSession.worktreeUnavailable"))),
                 onSelect: () => props.params.onSelectWorktree(true),
                 keepOpen: true,
               }}

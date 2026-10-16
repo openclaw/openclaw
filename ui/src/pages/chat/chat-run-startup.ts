@@ -9,7 +9,14 @@ registerNewSessionSetupEnglish();
 export type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
 
 export type ChatRunStartupState =
-  | { state: "status"; runId: string; phase: ChatRunStartupPhase; seq?: number }
+  | {
+      state: "status";
+      runId: string;
+      phase: ChatRunStartupPhase;
+      waitReason?: "response" | "slot";
+      seq?: number;
+    }
+  | { state: "status"; runId: string; phase: "answer" | "finishing"; seq?: number }
   | {
       state: "status";
       runId: string;
@@ -36,16 +43,52 @@ export function reconcileChatRunStartup(
   }
   const current = host.chatRunStartup;
   if (current?.runId === next.runId) {
+    const isModelWaitTransition =
+      next.state === "status" &&
+      (next.phase === "waiting_for_model" ||
+        (next.phase === "starting_model" &&
+          current.state === "status" &&
+          current.phase === "waiting_for_model"));
+    // Finishing settles one attempt, not the run. Only newer agent activity can resume it.
     if (
-      (next.state === "status" && !isChatRunRecoveryStatus(next) && current.state === "activity") ||
+      current.state === "status" &&
+      current.phase === "finishing" &&
+      (next.seq === undefined || (current.seq !== undefined && next.seq <= current.seq))
+    ) {
+      return;
+    }
+    if (
+      current.state === "status" &&
+      current.phase === "answer" &&
+      next.seq === undefined &&
+      !(next.state === "status" && next.phase === "finishing")
+    ) {
+      return;
+    }
+    if (
+      (next.state === "status" &&
+        next.phase !== "finishing" &&
+        next.phase !== "answer" &&
+        !isModelWaitTransition &&
+        !isChatRunRecoveryStatus(next) &&
+        (current.state === "activity" ||
+          (current.state === "status" && current.phase === "answer"))) ||
+      (current.state === "status" &&
+        current.phase === "starting_model" &&
+        next.state === "status" &&
+        isChatRunStartupPhase(next.phase) &&
+        next.phase !== "starting_model" &&
+        next.phase !== "waiting_for_model") ||
       (current.seq !== undefined &&
-        (next.seq === undefined ? next.state === "status" : next.seq <= current.seq))
+        (next.seq === undefined
+          ? next.state === "status" && next.phase !== "answer" && next.phase !== "finishing"
+          : next.seq <= current.seq))
     ) {
       return;
     }
     // Chat deltas use a different sequence; retain the agent sequence so an
     // older reconnect snapshot cannot resurrect an already-cleared retry.
-    if (next.state === "activity" && next.seq === undefined && current.seq !== undefined) {
+    if (next.seq === undefined && current.seq !== undefined) {
       host.chatRunStartup = { ...next, seq: current.seq };
       return;
     }
@@ -63,6 +106,7 @@ const STARTUP_LABEL_KEYS = {
   preparing_context: "chat.startupStatus.preparingContext",
   memory_flushing: "chat.startupStatus.memoryFlushing",
   starting_model: "chat.startupStatus.startingModel",
+  waiting_for_model: "chat.startupStatus.waitingForLocalModel",
 } as const satisfies Record<ChatRunStartupPhase, Parameters<typeof t>[0]>;
 
 export function isChatRunStartupPhase(value: unknown): value is ChatRunStartupPhase {
@@ -73,6 +117,7 @@ export function chatStartupStatusLabel(
   run: ChatRunStartupStatus | null | undefined,
   placement: ApplicationPlacementStartupStatus | null | undefined,
   environmentStartStatus: WorkerEnvironmentStartStatus | undefined = placement?.startStatus,
+  awaitingActivity = false,
 ): string | undefined {
   const startStatus = environmentStartStatus;
   if (
@@ -91,6 +136,12 @@ export function chatStartupStatusLabel(
     }
   }
   if (run) {
+    if (run.phase === "waiting_for_model" && run.waitReason === "slot") {
+      return t("chat.startupStatus.waitingForModelSlot");
+    }
+    if (run.phase === "finishing" || run.phase === "answer") {
+      return undefined;
+    }
     if (run.phase === "retrying") {
       return t("chat.recovery.retrying");
     }
@@ -114,7 +165,7 @@ export function chatStartupStatusLabel(
     case "sending":
       return t("chat.composer.sendingMessage");
     default:
-      return undefined;
+      return awaitingActivity ? t("chat.startupStatus.preparingContext") : undefined;
   }
 }
 

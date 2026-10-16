@@ -81,6 +81,8 @@ export type ThemeArtwork = {
   icons?: Record<string, { url: string }>;
   hats?: Record<string, { url: string }>;
   critters?: Record<string, { url: string; title?: string; crossMs?: number }>;
+  /** Plugin-only canvas artwork per color mode; a missing mode keeps neutral artwork. */
+  backgrounds?: Partial<Record<ThemeColorMode, { url: string }>>;
 };
 export type ThemeDescriptor = {
   id: ThemeId;

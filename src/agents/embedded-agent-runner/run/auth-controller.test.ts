@@ -123,7 +123,7 @@ function createMutableEmbeddedRunAuthController(params: {
     attemptedThinking: new Set(),
     fallbackConfigured: params.fallbackConfigured ?? false,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe ?? false,
-    provider: "custom-openai",
+    provider: params.harness.models.runtime.provider,
     modelId: "test-model",
     state: params.harness,
     ...(params.prepareModelForAuthProfile
@@ -142,6 +142,94 @@ describe("createEmbeddedRunAuthController", () => {
     mocks.prepareProviderRuntimeAuth.mockReset();
     mocks.getApiKeyForModelCore.mockReset();
   });
+
+  it.each([false, true])(
+    "recovers expired SIWC auth without runtime exchange state (refresh fails: %s)",
+    async (refreshFails) => {
+      const harness = createMutableAuthControllerHarness();
+      harness.models.runtime.provider = "openai";
+      const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+      const auth = {
+        apiKey: "synthetic-old-access",
+        mode: "oauth",
+        authFlow: "chatgpt-token-sharing",
+        profileId: "openai:siwc",
+        source: "profile",
+      };
+      mocks.getApiKeyForModelCore.mockResolvedValueOnce(auth).mockImplementation(async (params) => {
+        expect(params).toMatchObject({
+          profileId: auth.profileId,
+          forceRefresh: true,
+          lockedProfile: true,
+        });
+        if (refreshFails) {
+          throw new Error("synthetic refresh failure");
+        }
+        return { ...auth, apiKey: "synthetic-renewed-access" };
+      });
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey,
+        profileCandidates: [auth.profileId],
+        fallbackConfigured: true,
+      });
+      await controller.initializeAuthProfile();
+      expect(harness.runtimeAuthState).toBeNull();
+      const error =
+        '401 {"error":{"code":"token_expired","message":"Provided authentication token is expired."}}';
+      await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, false)).resolves.toBe(
+        !refreshFails,
+      );
+      expect(setRuntimeApiKey).toHaveBeenLastCalledWith(
+        "openai",
+        refreshFails ? "synthetic-old-access" : "synthetic-renewed-access",
+      );
+      await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, true)).resolves.toBe(
+        false,
+      );
+      expect(mocks.getApiKeyForModelCore).toHaveBeenCalledTimes(2);
+      expect(harness.lastProfileId).toBe(auth.profileId);
+    },
+  );
+
+  it.each([
+    { provider: "openai", mode: "api-key", authFlow: undefined, error: "401 token_expired" },
+    { provider: "openai", mode: "oauth", authFlow: undefined, error: "401 token_expired" },
+    {
+      provider: "custom-openai",
+      mode: "oauth",
+      authFlow: "chatgpt-token-sharing",
+      error: "401 token_expired",
+    },
+    {
+      provider: "openai",
+      mode: "oauth",
+      authFlow: "chatgpt-token-sharing",
+      error: "401 invalid api key",
+    },
+  ])(
+    "does not force-refresh unrelated auth: $provider/$mode/$authFlow/$error",
+    async ({ provider, mode, authFlow, error }) => {
+      const harness = createMutableAuthControllerHarness();
+      harness.models.runtime.provider = provider;
+      mocks.getApiKeyForModelCore.mockResolvedValue({
+        apiKey: "synthetic-access",
+        mode,
+        authFlow,
+        profileId: "default",
+        source: "profile",
+      });
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey: vi.fn(),
+      });
+      await controller.initializeAuthProfile();
+      await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, false)).resolves.toBe(
+        false,
+      );
+      expect(mocks.getApiKeyForModelCore).toHaveBeenCalledOnce();
+    },
+  );
 
   it("commits a prepared route only after its credential resolves", async () => {
     const harness = createMutableAuthControllerHarness();

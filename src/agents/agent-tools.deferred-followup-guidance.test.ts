@@ -99,7 +99,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
     expect(exec.toolNames).toEqual(["exec", "process", schedulerToolName]);
     expect(exec.description).toBe(
-      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. Omit host to use the session's configured host. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
+      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. Omit host/node to use the session's configured host. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
     );
     expect(process.description).toBe(
       "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill. poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention. No polling as timer/reminder; scheduled follow-up uses automations.",
@@ -227,7 +227,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
     ] as AnyAgentTool[]);
 
     expect(tool?.description).toContain(
-      "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs a separate, independently steerable session. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent.",
+      "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs to revisit or steer deliberately supervised child work. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent.",
     );
     expect(tool?.description).not.toContain("trial-and-error");
     expect(tool?.description).toContain("configured agent (see agents_list);");

@@ -19,6 +19,63 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("does not reuse another message's available ticket for the same source", async () => {
+  vi.useFakeTimers();
+  const source = "/tmp/openclaw/" + crypto.randomUUID() + ".png";
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      Response.json({
+        available: true,
+        mediaTicket: "readable-message-ticket",
+        mediaTicketExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    )
+    .mockResolvedValueOnce(
+      Response.json({ available: false, reason: "Message unavailable", retryable: false }),
+    );
+  vi.stubGlobal("fetch", fetchMock);
+  const mount = (messageId: string) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const [images, setImages] = createSignal([{ url: source, width: 1200, height: 800 }]);
+    const draw = () => {
+      setImages([{ url: source, width: 1200, height: 800 }]);
+      flush();
+    };
+    const { unmount } = mountSolid(
+      () => (
+        <MessageImages
+          images={images()}
+          options={{ sessionKey: "agent:main:shared-source", messageId, onRequestUpdate: draw }}
+        />
+      ),
+      { container },
+    );
+    panes.push({ container, draw, unmount });
+    return container;
+  };
+  const readable = mount("readable-message");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(readable.querySelector("img")?.getAttribute("src")).toContain(
+    "mediaTicket=readable-message-ticket",
+  );
+
+  const unavailable = mount("unavailable-message");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(unavailable.querySelector("img")).toBeNull();
+  expect(unavailable.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
+  expect(readable.querySelector("img")?.getAttribute("src")).toContain(
+    "mediaTicket=readable-message-ticket",
+  );
+  expect(
+    fetchMock.mock.calls.map(([url]) =>
+      new URL(url instanceof Request ? url.url : url, window.location.origin).searchParams.get(
+        "messageId",
+      ),
+    ),
+  ).toEqual(["readable-message", "unavailable-message"]);
+});
+
 it("does not let an aborted late renewal replace a newly mounted pane retry", async () => {
   vi.useFakeTimers();
   const startedAt = Date.parse("2026-09-19T12:00:00Z");

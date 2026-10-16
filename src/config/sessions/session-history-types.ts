@@ -91,6 +91,7 @@ export type ChatHistoryPage = {
 
 export type ChatHistoryPageParams = {
   encodeResponse?: boolean;
+  includePluginSteering?: boolean;
   compactionMetrics?: LegacyCompactionMetrics;
   entry: InternalSessionEntry | undefined;
   provider: string | undefined;
@@ -114,6 +115,7 @@ type SessionHistoryTranscriptMeta = {
   idempotencyKey?: string;
   seq?: number;
   turnBoundary?: boolean;
+  pluginSteering?: { pluginId: string; pluginName?: string; displayText?: string };
 };
 
 export type SessionHistoryMessage = Record<string, unknown> & {

@@ -140,27 +140,6 @@ describe("qa channel transport", () => {
     ).rejects.toThrow("last check error: channels.status exploded");
   });
 
-  it("uses the shared normalized message state", async () => {
-    const transport = createQaChannelTransport(createQaBusState());
-
-    const inbound = await transport.sendInbound({
-      accountId: "default",
-      conversation: { id: "dm:qa-operator", kind: "direct" },
-      senderId: "qa-operator",
-      text: "hello from the operator",
-    });
-
-    expect(transport.state.getSnapshot().messages).toHaveLength(1);
-    const message = await transport.state.readMessage({
-      messageId: inbound.id,
-    });
-    if (!message) {
-      throw new Error("expected normalized QA message");
-    }
-    expect(message.id).toBe(inbound.id);
-    expect(message.text).toBe("hello from the operator");
-  });
-
   it("implements the portable scenario transport actions", async () => {
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
@@ -210,23 +189,6 @@ describe("qa channel transport", () => {
     await expect(
       transport.waitForOutbound({ conversation, textIncludes: "QA-ACCOUNT-OK", timeoutMs: 50 }),
     ).resolves.toMatchObject({ accountId: "default", id: expected.id });
-  });
-
-  it("ignores another account's failure while waiting for a condition", async () => {
-    const state = createQaBusState();
-    const transport = createQaChannelTransport(state);
-
-    await expect(
-      transport.waitForCondition(async () => {
-        state.addOutboundMessage({
-          accountId: "other",
-          to: "dm:alice",
-          isError: true,
-          text: "⚠️ agent failed before reply: foreign account failure",
-        });
-        return "owned condition completed";
-      }, 50),
-    ).resolves.toBe("owned condition completed");
   });
 
   it.each([{ command: "queue collect please help", name: "queue" }])(

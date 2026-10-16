@@ -78,6 +78,65 @@ it.each([false, true])(
   },
 );
 
+it("returns the durable committed message when prepared input arrives after its key", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const f = fixture();
+    const input = expectDefined(
+      await acquireSessionInputActor(
+        { agentId: f.scope.agentId, storePath: f.scope.storePath, target: f.target },
+        { assertCurrent() {}, assertReadable() {} },
+      ),
+      "durable input actor",
+    );
+    const original = { role: "user", content: "Original", idempotencyKey: "prepared-input" };
+    const accepted = { ...original, content: "Accepted" };
+    const append = (commandId: string, message: unknown) =>
+      input.actor.appendToolResult(
+        {
+          commandId,
+          phaseId: "prepared-input",
+          turn: {
+            agentId: f.scope.agentId,
+            sessionKey: f.scope.sessionKey,
+            options: {
+              expectedSessionId: f.scope.sessionId,
+              sessionFile: "synthetic-session.jsonl",
+              messages: [
+                {
+                  eventId: "accepted-input",
+                  message: original,
+                  preparedMessage: { prepared: true, message },
+                },
+              ],
+            },
+          },
+        },
+        { assertCurrent() {}, authorize() {} },
+      );
+    try {
+      expect(await append("first", accepted)).toMatchObject({ kind: "committed" });
+      const replay = await append("retry", {
+        ...original,
+        content: "Must not replace accepted input",
+      });
+      expect(replay).toMatchObject({
+        kind: "committed",
+        receipt: {
+          transcript: {
+            appendedMessages: [{ appended: false, messageId: "accepted-input", message: accepted }],
+          },
+        },
+      });
+      expect(f.events().filter((event) => event.type === "message")).toEqual([
+        expect.objectContaining({ id: "accepted-input", message: accepted }),
+      ]);
+    } finally {
+      await input.actor.release();
+    }
+  });
+});
+
 it.each([
   { phase: "acceptInput", change: "metadata" },
   { phase: "adoptRun", change: "metadata" },

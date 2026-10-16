@@ -7,12 +7,12 @@ import {
   screenRecordTempPath,
   writeScreenRecordToFile,
 } from "../nodes-screen.js";
-import { parseDurationMs } from "../parse-duration.js";
 import { runNodesCommand } from "./cli-utils.js";
 import {
   buildNodeInvokeParams,
   callNodesGatewayCli,
   nodesCallOpts,
+  parseNodeDurationMs,
   parseOptionalNodeFiniteNumber,
   parseOptionalNodeInteger,
   resolveCliNodeId,
@@ -37,7 +37,7 @@ export function registerNodesScreenCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 120000)", "120000")
       .action(async (opts: NodesRpcOpts & { out?: string }) => {
         await runNodesCommand("screen record", async () => {
-          const durationMs = parseDurationMs(opts.duration ?? "");
+          const durationMs = parseNodeDurationMs(opts.duration ?? "");
           const screenIndex = parseOptionalNodeInteger(
             opts.screen ?? "0",
             "--screen",

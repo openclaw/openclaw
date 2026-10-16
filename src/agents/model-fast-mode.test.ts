@@ -35,7 +35,7 @@ function resolver(cfg: OpenClawConfig = {}) {
   });
 }
 describe("private selected Fast metadata", () => {
-  it("uses each selected model's policy and effective agent parameters", () => {
+  it("uses each selected model's policy", () => {
     const catalog: ModelCatalogEntry[] = [
       {
         id: "speed-fixture",
@@ -48,13 +48,7 @@ describe("private selected Fast metadata", () => {
       { id: "MiniMax-M2.7", name: "MiniMax M2.7", provider: "minimax", api: "anthropic-messages" },
     ];
     const resolve = fastResolver({
-      cfg: {
-        agents: {
-          entries: {
-            main: { models: { "openai/speed-fixture": { params: { serviceTier: "flex" } } } },
-          },
-        },
-      },
+      cfg: {},
       agentId: "main",
       catalog,
       metadataSnapshot: createPluginMetadataSnapshotFixture({
@@ -67,7 +61,7 @@ describe("private selected Fast metadata", () => {
     });
     const evaluation = { availability: true, routeResolution: null, selectedAuthMode: "api_key" };
     expect(catalog.map((entry) => resolve(entry, evaluation, "openclaw"))).toEqual([
-      false,
+      true,
       true,
       true,
     ]);
@@ -116,6 +110,18 @@ describe("private selected Fast metadata", () => {
     });
     expect(
       explicit(opus, { availability: true, routeResolution: null, selectedAuthMode: "api_key" }),
+    ).toBe(false);
+    const agentModel = resolver({
+      agents: {
+        entries: {
+          main: {
+            models: { "anthropic/claude-opus-5": { params: { serviceTier: "standard_only" } } },
+          },
+        },
+      },
+    });
+    expect(
+      agentModel(opus, { availability: true, routeResolution: null, selectedAuthMode: "api_key" }),
     ).toBe(false);
   });
   it("does not replace unresolved route ownership with catalog provenance", () => {

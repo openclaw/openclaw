@@ -7,6 +7,7 @@ import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
 import { Icon } from "../solid/icon.tsx";
 import type { PanelEmptyStateElement, PanelEmptyStateProps } from "../solid/panel-empty-state.tsx";
 import "../solid/panel-empty-state.tsx";
+import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../tooltip.ts";
 import type { TerminalSessionInfo } from "./terminal-connection.ts";
@@ -247,17 +248,11 @@ function ActionButton(props: {
   onClick: () => void;
 }) {
   return (
-    <button
+    <PanelIconButton
+      {...props}
       class={props.class ?? "rail-header__action tp-icon"}
-      type="button"
-      title={props.label}
-      aria-label={props.label}
-      disabled={props.disabled}
-      data-new-tab-action={props.newTab ? "" : undefined}
-      onClick={() => props.onClick()}
-    >
-      <Icon name={props.icon} />
-    </button>
+      icon={<Icon name={props.icon} />}
+    />
   );
 }
 

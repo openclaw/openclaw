@@ -1,3 +1,4 @@
+import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expiry.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -70,6 +71,7 @@ export async function prepareAgentCatalogSource(
   catalogMode: PreparedModelRuntimeCatalogMode,
   persist = true,
   sourceOptions: {
+    refresh?: boolean;
     authStore?: AuthProfileStore;
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
@@ -138,7 +140,12 @@ export async function prepareAgentCatalogSource(
   };
   const { pluginMetadataSnapshot: metadataSnapshot, pluginRegistry } = pluginGeneration;
   // Read-only inventories can request live discovery without preparing a runtime registry.
-  return pluginRegistry
-    ? withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, prepareSource)
-    : prepareSource();
+  const { value, providerExpiries, servingLimits } = await captureProviderCatalogExpiries(
+    () =>
+      pluginRegistry
+        ? withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, prepareSource)
+        : prepareSource(),
+    { refresh: sourceOptions.refresh },
+  );
+  return { ...value, providerExpiries, servingLimits };
 }

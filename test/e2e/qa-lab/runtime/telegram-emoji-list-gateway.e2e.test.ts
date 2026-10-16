@@ -9,7 +9,6 @@ import {
   writeJson,
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 type JsonObject = Record<string, unknown>;
 type TelegramCall = { pathname: string; method: string; body: JsonObject };
@@ -257,7 +256,6 @@ test("binds Telegram emoji discovery to the current conversation before Bot API 
           mock = await startQaMockOpenAiServer();
           await gatewayOwner.start({
             repoRoot,
-            command: createQaPreparedRepoCliCommand(repoRoot),
             providerBaseUrl: `${apiRoot}/v1`,
             mockSessionObserverUrl: mock.sessionObserverUrl,
             transportBaseUrl: apiRoot,

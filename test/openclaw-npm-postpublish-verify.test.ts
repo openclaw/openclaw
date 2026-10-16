@@ -40,7 +40,8 @@ import { toolingTsEntrypoints } from "./scripts/tooling-ts-runtime.test-support.
 
 const { createTempDir } = createScriptTestHarness();
 const makeInstalledPackageRoot = () => createTempDir("openclaw-postpublish-");
-const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
+const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 20_000;
+const INSTALLED_WORKER_DIST_JS_FILE_SCAN_LIMIT = 10_000;
 
 function writeInstalledFile(root: string, relativePath: string, source = "export {};\n") {
   const file = join(root, relativePath);
@@ -441,7 +442,7 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     writeInstalledFile(packageRoot, "dist/root.js");
-    for (let index = 0; index < INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT; index += 1) {
+    for (let index = 0; index < INSTALLED_WORKER_DIST_JS_FILE_SCAN_LIMIT; index += 1) {
       writeInstalledFile(packageRoot, `dist/worker/worker-chunk-${index}.mjs`);
     }
 
@@ -807,6 +808,7 @@ describe("runtime dependency ownership build contract", () => {
   async function buildInstalledFixture(
     rootSource: string,
     pluginSources: Record<string, string> = {},
+    extraEntries: Record<string, string> = {},
   ) {
     const root = realpathSync(createTempDir("runtime-dependency-ownership-"));
     const files = {
@@ -832,6 +834,7 @@ describe("runtime dependency ownership build contract", () => {
         root: "src/root.js",
         "extensions/example/index": "extensions/example/index.js",
         "extensions/example/observer": "extensions/example/observer.js",
+        ...extraEntries,
       },
       outDir: "dist",
       format: "esm",
@@ -889,6 +892,36 @@ describe("runtime dependency ownership build contract", () => {
       join(root, "dist/extensions/example/package.json"),
       JSON.stringify({ name: "@openclaw/example", dependencies: {} }),
     );
+    expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([
+      expect.stringContaining("missing declared runtime dependency 'fixture-lazy'"),
+      expect.stringContaining("missing declared runtime dependency 'fixture-runtime'"),
+    ]);
+  });
+
+  it("retains every plugin owner across repeated entries and cyclic shared chunks", async () => {
+    const root = await buildInstalledFixture(
+      "export const ready = true;",
+      {
+        "extensions/other/index.js": 'export { value } from "../../src/shared.js";',
+        "src/shared.js": `
+          export { value } from "fixture-runtime";
+          export const load = () => import("../extensions/example/lazy.js");
+        `,
+        "extensions/example/lazy.js": `
+          export { lazy } from "fixture-lazy";
+          export const back = () => import("../../src/shared.js");
+        `,
+      },
+      { "extensions/other/index": "extensions/other/index.js" },
+    );
+    const manifestPath = "dist/extensions/other/package.json";
+    writePackageFile(root, manifestPath, {
+      name: "@openclaw/other",
+      dependencies: { "fixture-runtime": "1.0.0", "fixture-lazy": "1.0.0" },
+    });
+    expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([]);
+
+    writePackageFile(root, manifestPath, { name: "@openclaw/other", dependencies: {} });
     expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([
       expect.stringContaining("missing declared runtime dependency 'fixture-lazy'"),
       expect.stringContaining("missing declared runtime dependency 'fixture-runtime'"),

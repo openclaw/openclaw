@@ -76,7 +76,11 @@ describe("transcript normalization", () => {
     ]);
   });
 
-  it("canonicalizes Responses reasoning and retains credential-shaped encrypted bytes", () => {
+  it.each([
+    { label: "absent", content: undefined },
+    { label: "empty", content: [] },
+    { label: "cleartext", content: [{ type: "reasoning_text", text: "not part of replay" }] },
+  ])("canonicalizes Responses reasoning and retains empty containers: $label", ({ content }) => {
     const message = castAgentMessage({
       role: "assistant",
       ...route,
@@ -88,6 +92,7 @@ describe("transcript normalization", () => {
             type: "reasoning",
             id: "rs_1",
             summary: [{ type: "summary_text", text: "not part of replay" }],
+            content,
             encrypted_content: ciphertext,
             status: "completed",
             extra: "not part of replay",
@@ -101,6 +106,7 @@ describe("transcript normalization", () => {
         id: "rs_1",
         type: "reasoning",
         summary: [],
+        ...(content?.length === 0 ? { content: [] } : {}),
         status: "completed",
         encrypted_content: ciphertext,
       }),

@@ -159,7 +159,10 @@ describe("gateway agent handler", () => {
         | CronCreatorAuthorityCapability
         | undefined;
       expect(capability).toMatchObject({ active: true, runId });
-      return { payloads: [{ text: "ok" }], meta: { durationMs: 100 } };
+      return {
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100, terminalReply: { disposition: "visible", text: "ok" } },
+      };
     });
 
     await invokeAgent(
@@ -1255,7 +1258,10 @@ describe("gateway agent handler", () => {
           opts.userTurnTranscriptRecorder,
           "user turn recorder missing",
         ).persistApproved();
-        return { payloads: [{ text: "ok" }], meta: { durationMs: 100 } };
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { durationMs: 100, terminalReply: { disposition: "visible", text: "ok" } },
+        };
       },
     );
 

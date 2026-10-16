@@ -137,8 +137,6 @@ export type SyncedServerUiPrefs = { [K in SyncedPrefKey]?: SyncedPrefValue<K> | 
 // Browser storage can retain unknown keys until authoritative rejection; known fields stay typed.
 export type ServerUiPrefs = SyncedServerUiPrefs &
   Record<string, unknown> & {
-    /** Browser-only identities of the last confirmed navigation publications, never RPC entries. */
-    navigationConfirmation?: Partial<Record<"sidebarEntries", string>>;
     /** Browser-only edit base: the observed snapshot with subsequent authored membership operations folded in. */
     sidebarEntriesBase?: readonly string[];
     /** Browser-only: an unacknowledged authored reorder, including a reversal back to the edit base. */

@@ -406,9 +406,9 @@ describe("AppSidebar session attention", () => {
         `Waiting for approval\n${kind === "exec" ? "git status" : "Enable the calendar plugin"}`,
       );
       expect(indicator?.getAttribute("tabindex")).toBe("0");
-      expect(sidebar.querySelector(".sidebar-recent-session__subtitle")?.textContent).toBe(
-        "Waiting for approval",
-      );
+      const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+      expect(row?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
+      expect(row?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
       expect(sidebar.textContent).not.toContain("Run failed:");
     },
   );

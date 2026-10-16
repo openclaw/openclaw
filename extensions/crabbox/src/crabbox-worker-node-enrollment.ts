@@ -158,7 +158,7 @@ setPhase("preparation");
       const current = spawnSync("crontab", ["-l"], { encoding: "utf8", timeout: 10000 });
       const kept = (current.status === 0 ? current.stdout : "").split("\\n").filter((line) => line && !line.includes(script));
       spawnSync("crontab", ["-"], { input: [...kept, "@reboot /bin/sh " + script].join("\\n") + "\\n", timeout: 10000 });
-    } catch {}
+    } catch { /* Prefetch is optional; failed setup keeps the ordinary cold-start path. */ }
   };
   const launcher = path.join(process.env.ProgramFiles || "C:\\\\Program Files", "Crabbox", "bin", "Start-CrabboxDetachedProcess.ps1");
   if (process.platform === "win32" && mode && !${JSON.stringify(desktopTarget === "windows/normal")} && !fs.existsSync(launcher)) {

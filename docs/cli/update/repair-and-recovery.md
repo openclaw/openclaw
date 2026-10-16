@@ -156,6 +156,9 @@ copy does not replace an earlier update's originals. Standalone `doctor --fix`
 snapshots databases under its own maintenance custody with a single isolated backup worker.
 Shared database families larger than 64 MiB keep discovery copies in an isolated process
 so a slow copy does not block Doctor's main thread from processing cancellation.
+Official image activation keeps one such copy per container: after a capture
+succeeds, later starts of the same container skip the repeated full copy, keep
+that copy, and still retire other expired Doctor captures.
 Standalone Doctor captures are retained for 30 days: the next standalone `doctor --fix`
 retires older sealed Doctor captures and reports each removal; incomplete captures
 and update captures are never retired automatically, so take a verified backup
@@ -175,7 +178,13 @@ during capture; an observed change leaves the capture incomplete and produces a
 warning. For databases, the warning names each database that changed after its
 snapshot or had no stable generation during it, followed by the backup's
 database warnings. A running Gateway that writes during capture is enough to
-cause this. The set is not an atomic snapshot across active stores. Missing,
+cause this. Capture is best effort: when it fails, the update warns that it
+continues without the original-state capture, names the step and source paths
+that failed (for example, database generation verification), and proceeds.
+Database rollback uses the pre-migration snapshots the update takes after the
+Gateway stops, described in
+[Recovery limits](/cli/update/how-updates-run#recovery-limits).
+The set is not an atomic snapshot across active stores. Missing,
 unreadable, or incomplete captures do not establish a safe
 rollback point. The updater process keeps optional debug-proxy persistence
 disabled because its update history can use an older database schema. Doctor

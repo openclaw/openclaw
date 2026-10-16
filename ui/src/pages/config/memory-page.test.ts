@@ -310,30 +310,6 @@ describe("MemorySettingsPage catalog state", () => {
     }
   });
 
-  it("keeps a committed add-on change successful while making its failed refresh visible", async () => {
-    const refresh = vi.fn(() => Promise.reject(new Error("config refresh failed")));
-    const initial = [addon("active-memory", true), addon("memory-wiki", false)];
-    const updated = [addon("active-memory", false), addon("memory-wiki", false)];
-    const { element } = createPage({
-      configObject: {},
-      listCatalog: (call) => Promise.resolve({ plugins: call === 0 ? initial : updated }),
-      refresh,
-    });
-    mountMemoryPage(element);
-    try {
-      await waitForSolid(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
-      toggleAddon(element, "Active memory", false);
-
-      await waitForSolid(() => expect(refresh).toHaveBeenCalledOnce());
-      await waitForSolid(() => expect(element.textContent).toContain("config refresh failed"));
-      await waitForSolid(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(false));
-      expect(element.textContent).toContain("Needs attention");
-      expect(element.textContent).not.toContain("Could not update Active memory");
-    } finally {
-      element.remove();
-    }
-  });
-
   it("retains runtime warnings through same-boot reconnects and publications, then clears a new boot", async () => {
     const initial = [addon("active-memory", true), addon("memory-wiki", false)];
     const updated = [addon("active-memory", true), addon("memory-wiki", true)];

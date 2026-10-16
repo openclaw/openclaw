@@ -62,6 +62,8 @@ describe("catalog request existing directory ownership", () => {
     await closeOpenClawStateDatabaseByPathAsync(database.path);
     const { pool } = createCatalogInspectionPool(fixture.env);
     try {
+      // Worker startup and the copy probe are real; this contract does not measure their latency.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       for (let tick = 0; tick < 3; tick++) {
         const { inspection, ...result } = await pool.run(
           {
@@ -86,8 +88,12 @@ describe("catalog request existing directory ownership", () => {
         }
       }
     } finally {
-      await pool.close();
-      await closeOpenClawStateDatabaseByPathAsync(database.path);
+      try {
+        await pool.close();
+      } finally {
+        vi.useRealTimers();
+        await closeOpenClawStateDatabaseByPathAsync(database.path);
+      }
     }
   });
 

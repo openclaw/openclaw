@@ -220,6 +220,14 @@ export function createEmbeddedModelState(
           pending = undefined;
           // Context-engine projection can later mutate transcript objects; retain this run's result.
           completed = applyAssistantDeliveryDirectives(structuredClone(message));
+          // Delivery facts are prepared here, but terminal classification still owns the raw text.
+          for (let index = 0; index < message.content.length; index += 1) {
+            const source = message.content[index];
+            const captured = completed.content[index];
+            if (source?.type === "text" && captured?.type === "text") {
+              captured.text = source.text;
+            }
+          }
           lastUsage ??= message.stopReason === "error" ? retryUsage : undefined;
           retryUsage = undefined;
           recordContextAccounting(message, false);

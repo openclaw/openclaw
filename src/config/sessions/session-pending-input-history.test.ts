@@ -29,6 +29,7 @@ import {
   releaseSessionPendingInputOwner,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
+import { readSessionPendingInputContext } from "./session-pending-input-history.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import * as historyRuntime from "./session-transcript-worker-runtime.js";
@@ -179,6 +180,10 @@ it("bounds materialized pending pages by bytes without truncating input or skipp
       expect(page.items[0]?.message.content === content).toBe(true);
       expect(page.total).toBe(2);
       expect(page.nextBefore).toBeDefined();
+      expect(await readSessionPendingInputContext(scope)).toEqual({
+        items: page.items,
+        nextBefore: page.nextBefore,
+      });
       const older = await listSessionPendingInputs(scope, { before: page.nextBefore });
       expect(older.items.map((input) => input.id)).toEqual([receipts[0]?.inputId]);
       expect(older.items[0]?.message.content === content).toBe(true);
@@ -188,6 +193,60 @@ it("bounds materialized pending pages by bytes without truncating input or skipp
         receipt.finish("interrupted");
       }
       await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
+    }
+  });
+});
+
+it("reads count-free context in one statement and includes later committed inputs", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:pending-context",
+      sessionId: "pending-context",
+    };
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+    const read = () => {
+      const counter = trackSqliteStatementExecutions(database.db, ["read"], () => "read");
+      try {
+        const page = readPendingInputHistoryInDatabase(database, { ...scope, includeTotal: false });
+        expect(counter.counts.read).toBe(1);
+        expect(page.total).toBeUndefined();
+        return page;
+      } finally {
+        counter.restore();
+      }
+    };
+    expect(read().rows).toEqual([]);
+    const receipt = expectDefined(
+      await stageSessionPendingInput(scope, {
+        runId: "later-input",
+        message: {
+          role: "user",
+          content: "Retained after the empty read",
+          timestamp: 1,
+          idempotencyKey: "later-input:user",
+        },
+        assertCurrent() {},
+      }),
+      "Expected accepted input custody",
+    );
+    try {
+      receipt.finish("interrupted");
+      await receipt.settled?.();
+      expect(read().rows).toMatchObject([{ input_id: receipt.inputId, state: "interrupted" }]);
+      expect(await readSessionPendingInputContext(scope)).toMatchObject({
+        items: [
+          {
+            id: receipt.inputId,
+            state: "interrupted",
+            message: { content: "Retained after the empty read" },
+          },
+        ],
+      });
+    } finally {
+      receipt.finish("interrupted");
+      await receipt.settled?.();
     }
   });
 });

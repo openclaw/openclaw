@@ -222,7 +222,7 @@ function hasMeaningfulExplicitOllamaConfig(
   if (!providerConfig) {
     return false;
   }
-  if (Array.isArray(providerConfig.models) && providerConfig.models.length > 0) {
+  if (providerConfig.models?.length) {
     return true;
   }
   const baseUrl = readProviderBaseUrl(providerConfig);
@@ -232,12 +232,10 @@ function hasMeaningfulExplicitOllamaConfig(
   return Boolean(
     readOllamaStringValue(providerConfig.apiKey) ||
     providerConfig.auth ||
-    typeof providerConfig.authHeader === "boolean" ||
-    (providerConfig.headers &&
-      typeof providerConfig.headers === "object" &&
-      Object.keys(providerConfig.headers).length > 0) ||
+    providerConfig.authHeader !== undefined ||
+    (providerConfig.headers && Object.keys(providerConfig.headers).length > 0) ||
     providerConfig.request ||
-    typeof providerConfig.injectNumCtxForOpenAICompat === "boolean",
+    providerConfig.injectNumCtxForOpenAICompat !== undefined,
   );
 }
 
@@ -257,7 +255,7 @@ export async function resolveOllamaDiscoveryResult(params: {
     return null;
   }
   const explicit = params.ctx.config.models?.providers?.ollama;
-  const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
+  const hasExplicitModels = Boolean(explicit?.models?.length);
   const hasMeaningfulExplicitConfig = hasMeaningfulExplicitOllamaConfig(explicit);
   const hasRemoteOllamaApiProvider = hasExplicitRemoteOllamaApiProvider(
     params.ctx.config.models?.providers,

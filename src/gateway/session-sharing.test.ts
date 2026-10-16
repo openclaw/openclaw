@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readSessionMembersInWorker } from "../config/sessions/session-sharing-store.js";
-import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -17,12 +20,12 @@ import {
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
+import { authorizeSessionSharingTarget } from "./session-sharing-policy.js";
 import {
   allowedSessionVisibilities,
   canReceiveSessionEvent,
   authorizeIncognitoSessionTarget,
   authorizeResolvedSessionMutationAsync,
-  authorizeSessionSharingTarget,
   createSessionListEntryFilter,
   prepareProjectedSessionSharing,
   resolveSessionSharingRole,
@@ -988,11 +991,11 @@ describe("session sharing policy", () => {
         }
         await projection.ensureMaterialized();
         await projection.prepareMembership();
-        const check = (recipient: GatewayClient, event?: string) =>
+        const check = (recipient: GatewayClient, event?: string, sessionKeys = [sessionKey]) =>
           canReceiveSessionEvent({
             cfg,
             client: recipient,
-            sessionKeys: [sessionKey],
+            sessionKeys,
             event,
             prepared: {
               sharing: prepareProjectedSessionSharing({
@@ -1020,6 +1023,16 @@ describe("session sharing policy", () => {
           expect(check(recipient, "session.suggestion")).toBe(false);
           recipient.authenticatedUserProfile = undefined;
           expect(check(recipient, "session.suggestion")).toBe(true);
+
+          removeSessionMember(scope, "member", undefined, sessionId);
+          expect(check(client({ user: "member" }), "session.suggestion")).toBe(false);
+        } else {
+          for (const keys of [
+            ["agent:main:events-suggest", sessionKey],
+            [sessionKey, "agent:main:events-suggest"],
+          ]) {
+            expect(check(client({ user: "author" }), "session.suggestion", keys)).toBe(false);
+          }
         }
       }
     });

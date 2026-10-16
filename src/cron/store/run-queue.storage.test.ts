@@ -93,6 +93,70 @@ it.each([false, true])(
   },
 );
 
+it("preserves a durable claim when its runtime queue marker is absent", async () => {
+  await withOpenClawTestState({ label: "cron-queue-claim-conflict" }, async (fixture) => {
+    const now = 1_800_000_000_000;
+    const storeKey = fixture.statePath("cron", "jobs.json");
+    const job: CronJob = {
+      id: "claimed",
+      name: "claimed",
+      agentId: "main",
+      enabled: true,
+      createdAtMs: now - 1000,
+      updatedAtMs: now - 1000,
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "command", argv: ["echo", "synthetic"] },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      delivery: { mode: "none" },
+      state: { nextRunAtMs: now },
+    };
+    await saveCronStore(storeKey, { version: 1, jobs: [job] });
+    const request = {
+      jobId: job.id,
+      receiptId: createCronScheduledRunId(storeKey, job.id, now),
+      configRevision: resolveCronJobConfigRevision(job),
+      mode: "scheduled" as const,
+      scheduledSlotMs: now,
+    };
+    let context = captureOpenClawStateWorkerContext();
+    const first = await executeOpenClawStateWorker(context, {
+      type: "cron.requestRuns",
+      input: { storeKey, nowMs: now, requests: [request] },
+    });
+    expect(first.accepted).toHaveLength(1);
+    await closeOpenClawStateDatabaseAsync();
+    const db = openOpenClawStateDatabase().db;
+    // An offline fixture repair loses the marker but must not release the durable claim.
+    db.prepare("UPDATE cron_jobs SET state_json = ? WHERE store_key = ? AND job_id = ?").run(
+      JSON.stringify(job.state),
+      storeKey,
+      job.id,
+    );
+    const before = db
+      .prepare("SELECT * FROM cron_run_receipts WHERE receipt_id = ?")
+      .get(request.receiptId);
+    await closeOpenClawStateDatabaseAsync();
+    context = captureOpenClawStateWorkerContext();
+    const competing = { ...request, mode: "force" as const, receiptId: "cron:request:competing" };
+    const retry = await executeOpenClawStateWorker(context, {
+      type: "cron.requestRuns",
+      input: { storeKey, nowMs: now + 1, requests: [request, competing] },
+    });
+    expect(retry.accepted).toEqual([]);
+    expect(retry.rejected).toEqual([
+      { jobId: job.id, receiptId: request.receiptId, reason: "already-requested" },
+      { jobId: job.id, receiptId: competing.receiptId, reason: "already-running" },
+    ]);
+    await closeOpenClawStateDatabaseAsync();
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT * FROM cron_run_receipts WHERE store_key = ?")
+        .all(storeKey),
+    ).toEqual([before]);
+  });
+});
+
 it("keeps requested occurrences and siblings intact when activation rolls back", async () => {
   await withOpenClawTestState({ label: "cron-queue-activation-rollback" }, async (fixture) => {
     const now = 1_800_000_000_000;

@@ -4,14 +4,17 @@ import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { Dialog, Frame, Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
-import { pwAi } from "./pw-ai.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
+import { getObservedBrowserStateForPage } from "./pw-session-state.js";
 import {
   armObservedDialogResponseOnPage,
   beginActionDownloadCaptureOnPage,
+  createObservedDialogAbortSignalForPage,
   ensurePageState,
+  isBrowserObservedDialogBlockedError,
   isDownloadStartingNavigationError,
   refLocator,
+  respondToObservedDialogOnPage,
   restoreRoleRefsForTarget,
   storeRoleRefsForTarget,
 } from "./pw-session.js";
@@ -654,13 +657,6 @@ describe("pw-session ensurePageState", () => {
     expect(state.roleRefsFrame).toBeUndefined();
   });
 });
-
-const {
-  createObservedDialogAbortSignalForPage,
-  getObservedBrowserStateForPage,
-  isBrowserObservedDialogBlockedError,
-  respondToObservedDialogOnPage,
-} = pwAi;
 
 type Handler = (arg: unknown) => void;
 

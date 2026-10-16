@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -6,9 +7,9 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 suite.define(() => {
-  it("does not rebuild model options while typing a draft with a large catalog", async () => {
+  it("keeps model options stable and welcome recents current through typing and row updates", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         models: [
           { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
           ...Array.from({ length: 2000 }, (_, index) => ({
@@ -20,11 +21,16 @@ suite.define(() => {
         ],
         sessions: Array.from({ length: 500 }, (_, index) => ({
           key: "agent:main:dashboard:typing-" + index,
+          sessionId: "typing-" + index,
           kind: "direct",
+          childOwnerSessionKeys: [],
           label: "Research session " + index,
-          updatedAt: 1000 + index,
+          // Keep the changed row in the admitted shared page, not overflow
+          // whose promotion correctly requires an authoritative membership read.
+          updatedAt: 2000 - index,
         })),
       });
+      await page.clock.install();
       await page.goto(suite.server.baseUrl + "new");
       await page.locator('[data-chat-model-option="fixture/model-1999"]').waitFor({
         state: "attached",
@@ -38,8 +44,16 @@ suite.define(() => {
             requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
           }),
       );
+      const sessionKey = "agent:main:dashboard:typing-0";
+      const sidebarRow = page
+        .locator('aside.sidebar [data-session-key="' + sessionKey + '"]')
+        .first();
+      await expect.poll(() => sidebarRow.textContent()).toContain("Research session 0");
+      await pauseVirtualClock(page);
       const observation = await page.evaluateHandle(() => {
         let catalogLabelReads = 0;
+        const textarea = document.querySelector(".new-session-page__message");
+        const modelOption = document.querySelector('[data-chat-model-option="fixture/model-1999"]');
         // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the original receiver.
         const original = String.prototype.toLocaleLowerCase;
         // Count preparation even when Solid suppresses identical DOM writes.
@@ -57,28 +71,71 @@ suite.define(() => {
           finish() {
             // oxlint-disable-next-line no-extend-native -- Restore the page-local instrumentation.
             String.prototype.toLocaleLowerCase = original;
-            return catalogLabelReads;
+            return {
+              catalogLabelReads,
+              sameTextarea: textarea === document.querySelector(".new-session-page__message"),
+              sameModelOption:
+                modelOption ===
+                document.querySelector('[data-chat-model-option="fixture/model-1999"]'),
+            };
           },
         };
       });
-      const samples: number[] = [];
+      const row = await gateway.getSessionRow(sessionKey);
+      const requestsBefore = await gateway.getRequests();
       for (const key of "abcdefghij") {
-        const start = performance.now();
+        const now = await page.evaluate(() => Date.now());
+        await gateway.emitGatewayEvent("sessions.changed", {
+          agentId: "main",
+          sessionKey,
+          reason: "patch",
+          ancestorSessions: [],
+          session: {
+            ...row,
+            label: "Background update " + key,
+            displayName: "Background update " + key,
+            updatedAt: now,
+            snapshotAt: now,
+          },
+        });
         await input.press(key);
-        await page.evaluate(
-          () =>
-            new Promise<void>((resolve) => {
-              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-            }),
-        );
-        samples.push(performance.now() - start);
+        await page.clock.runFor(32);
       }
-      // Keep timing diagnostic-only: the deterministic regression is catalog work,
-      // not a wall-clock threshold sensitive to the machine running this test.
-      console.log("New Session key + two frames (ms)", samples);
+      // Cross the entire event-collection window so a wrongly queued read
+      // cannot pass just because this runner typed faster than the debounce.
+      // The paused clock keeps independent 60-second fallbacks outside it.
+      await page.clock.fastForward(5_001);
       expect(await input.inputValue()).toBe("Warmup abcdefghij");
-      expect(await observation.evaluate((value) => value.finish())).toBe(0);
+      expect(await observation.evaluate((value) => value.finish())).toEqual({
+        catalogLabelReads: 0,
+        sameTextarea: true,
+        sameModelOption: true,
+      });
+      await expect.poll(() => sidebarRow.textContent()).toContain("Background update j");
+      expect((await gateway.getRequests()).slice(requestsBefore.length)).toEqual([]);
       await observation.dispose();
+      // Reveal catches up from the current owner, not a retained mutable roster.
+      await input.fill("");
+      await expect
+        .poll(() => page.locator(".agent-chat__recent-name").first().textContent())
+        .toBe("Background update j");
+      const visibleUpdatedAt = await page.evaluate(() => Date.now());
+      await gateway.emitGatewayEvent("sessions.changed", {
+        agentId: "main",
+        sessionKey,
+        reason: "patch",
+        ancestorSessions: [],
+        session: {
+          ...row,
+          label: "Visible recent update",
+          displayName: "Visible recent update",
+          updatedAt: visibleUpdatedAt,
+          snapshotAt: visibleUpdatedAt,
+        },
+      });
+      await expect
+        .poll(() => page.locator(".agent-chat__recent-name").first().textContent())
+        .toBe("Visible recent update");
     });
   });
 });

@@ -3,12 +3,10 @@ import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
-import type { PluginHookToolRequesterContext } from "../plugins/hook-types.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -47,7 +45,7 @@ import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.j
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import { applyDelegationCapability } from "./delegation-capability.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
-import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
+import { buildHarnessHostRequester } from "./harness/host-requester.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 import { resolveLocalModelLeanPreserveToolNames } from "./local-model-lean.js";
 import { createMemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
@@ -195,15 +193,6 @@ function* assembleOpenClawCodingTools(
   }
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
-  const execRuntimeConfig = options?.exec?.config ?? options?.config;
-  const preparedRunEnvironment =
-    preparedTools === undefined && execRuntimeConfig && executionAgentId
-      ? prepareGitHubToolEnvironment({
-          config: execRuntimeConfig,
-          sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
-          agentId: executionAgentId,
-        })
-      : undefined;
   const sessionPermissionPolicy = options?.sessionPermissionPolicy;
   const coreToolPolicy =
     preparedSurface?.policy ?? prepareCoreToolPolicy({ ...options, agentId }, execConfig);
@@ -213,7 +202,6 @@ function* assembleOpenClawCodingTools(
   const { workspaceRoot, runtimeRoot } = capabilityProfile.workspace;
   const codingRoot = sandboxRoot ?? runtimeRoot;
   const containmentRoot = sandboxRoot ?? sessionPermissionPolicy?.root ?? codingRoot;
-  const memoryFlushWriteRoot = sandboxRoot ?? workspaceRoot;
   const memoryWriteProvenance = createMemoryWriteProvenanceObserver({
     mutationRoot: sandboxRoot ?? workspaceRoot,
     workspaceDir: sandboxRoot ?? workspaceRoot,
@@ -252,7 +240,6 @@ function* assembleOpenClawCodingTools(
     ...(attachmentReadRoot ? { readOnlyRoots: [attachmentReadRoot] } : {}),
   };
   options?.recordToolPrepStage?.("workspace-policy");
-  const execDefaults = options?.exec ?? {};
   const scheduledExecTarget = options?.scheduledToolPolicy?.execTarget;
   const effectiveExecPolicy = projectEffectiveExecPolicy({
     base: execConfig,
@@ -277,10 +264,10 @@ function* assembleOpenClawCodingTools(
           skillInstructionDeliveryCache: options?.skillInstructionDeliveryCache,
           memoryWriteProvenance,
           execDefaults: {
-            ...execDefaults,
+            ...options?.exec,
             ...effectiveExecPolicy,
-            config: execRuntimeConfig,
-            preparedRunEnvironment,
+            config: options?.exec?.config ?? options?.config,
+            preparedRunEnvironment: options?.exec?.preparedRunEnvironment,
             reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
             reviewTranscript: options?.exec?.reviewTranscript,
             trigger: options?.trigger,
@@ -296,6 +283,7 @@ function* assembleOpenClawCodingTools(
             safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
             safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
             agentId,
+            executionAgentId,
             cleanupMs: options?.exec?.cleanupMs ?? execConfig.cleanupMs,
             scopeKey,
             sessionKey: options?.sessionKey,
@@ -537,7 +525,7 @@ function* assembleOpenClawCodingTools(
     tools,
     isMemoryFlushRun && memoryFlushWritePath
       ? {
-          root: memoryFlushWriteRoot,
+          root: sandboxRoot ?? workspaceRoot,
           relativePath: memoryFlushWritePath,
           memoryWriteProvenance,
           containerWorkdir: sandbox?.containerWorkdir,
@@ -613,14 +601,7 @@ function* assembleOpenClawCodingTools(
   options?.recordToolPrepStage?.("authorization-policy");
   const turnSourceChannel = options?.messageChannel ?? options?.messageProvider;
   const turnSourceTo = options?.currentMessagingTarget ?? options?.currentChannelId;
-  const requester = {
-    ...(turnSourceChannel ? { channel: turnSourceChannel } : {}),
-    ...(options?.agentAccountId ? { accountId: options.agentAccountId } : {}),
-    ...(options?.senderId ? { senderId: options.senderId } : {}),
-    ...(options?.senderIsOwner !== undefined ? { senderIsOwner: options.senderIsOwner } : {}),
-    ...(options?.memberRoleIds?.length ? { roleIds: [...options.memberRoleIds] } : {}),
-  } satisfies PluginHookToolRequesterContext;
-  const hasRequester = Object.keys(requester).length > 0;
+  const requester = buildHarnessHostRequester(options ?? {});
   const hookContext = {
     awaitSessionDiffBaseline: options?.awaitSessionDiffBaseline,
     agentId: executionAgentId,
@@ -638,7 +619,7 @@ function* assembleOpenClawCodingTools(
     trigger: options?.trigger,
     approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
-    ...(hasRequester ? { requester } : {}),
+    ...(Object.keys(requester).length > 0 ? { requester } : {}),
     ...(turnSourceChannel ? { turnSourceChannel } : {}),
     ...(turnSourceTo ? { turnSourceTo } : {}),
     ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
@@ -666,6 +647,7 @@ function* assembleOpenClawCodingTools(
       sessionKey: executionSessionKey,
       accountId: gatewayCaller.accountId,
       capabilityProfile,
+      tools: finalizedTools,
       sessionEventSourcePolicy: options?.sessionEventSourcePolicy ?? {
         toolsAllow: finalizedTools.map((tool) => tool.name),
       },

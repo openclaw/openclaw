@@ -7,7 +7,7 @@ import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import "../../lib/toast-host.ts";
-import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
+import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { DefaultsDraft } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
@@ -35,6 +35,17 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage agent scope", () => {
+  it("settles the final update when the page unmounts", async () => {
+    const { context } = createHarness("main");
+    const page = createPage(context);
+    mountPage(page);
+    await page.updateComplete;
+
+    unmountPage(page);
+
+    await expect(page.updateComplete).resolves.toBe(true);
+  });
+
   it("recovers a failed preload provider usage result on the next page activation", async () => {
     const { context, request, snapshot } = createHarness("main");
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -95,6 +106,26 @@ describe("ModelProvidersPage agent scope", () => {
 
     await vi.waitFor(() => expect(requestCount(request, "usage.status")).toBe(2));
     await waitForSolid(() => expect(page.state.data?.providerUsage).toMatchObject({ ok: true }));
+  });
+
+  it("does not readopt an old route snapshot when only loader pending changes", async () => {
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await waitForProviders(page);
+    const data = page.state.data;
+    const reads = request.mock.calls.length;
+    const row = page.querySelector("[data-provider-id]");
+
+    page.loaderPending = true;
+    await page.updateComplete;
+    expect(page.state.data).toBe(data);
+    expect(page.querySelector(".settings-loading-skeleton")).toBeNull();
+    expect(page.querySelector("[data-provider-id]")).toBe(row);
+
+    page.loaderPending = false;
+    await page.updateComplete;
+    expect(page.state.data).toBe(data);
+    expect(request.mock.calls).toHaveLength(reads);
   });
 
   it("keeps direct data visible while a same-client reconnect replaces it", async () => {
@@ -222,6 +253,7 @@ describe("ModelProvidersPage agent scope", () => {
       expect(page.querySelector(".model-providers__defaults")?.textContent).toContain(
         "2 more fallbacks after this one",
       );
+      await openPicker(fallback!);
       expect(fallback?.textContent).toContain("No fallback model (remove all 3)");
       await choosePickerValue(fallback!, selection);
 

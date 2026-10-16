@@ -408,7 +408,8 @@ describe("prepared Gateway plugin borrowing", () => {
             context.getRuntimeConfig = () => config;
             context.resolveGatewayContext = () => context;
             const handler: GatewayRequestHandler = async ({ respond }) => {
-              expect(oldInstance.retainedWorkCount).toBe(0);
+              // Provider catalog refresh may still retain the plugin after this turn closes.
+              expect(lease).toBeUndefined();
               await startReload();
               respond(true, { ok: true, runtime: { generation: 2, pluginIds: [toolPluginId] } });
             };
@@ -798,6 +799,8 @@ describe("published Gateway plugin services", () => {
           assert(record);
           const gatewayInstance = getPluginInstance(record);
           assert(gatewayInstance);
+          // Startup catalog refresh owns a temporary lease unrelated to the agent run.
+          await gatewayInstance.waitForRetainedWork(runtime.requestEntryLifetime.signal);
           const retainedBeforeRun = gatewayInstance.retainedWorkCount;
           runLease = await withPluginRuntimeRegistryScope(registryOwner.registry, () =>
             acquireAgentRunPreparedModelRuntime(

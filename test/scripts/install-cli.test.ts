@@ -20,6 +20,7 @@ import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
+  createInstallGitWorktreeFixtureScript,
   createInstallGitBranchFallbackFixtureScript,
   createInstallGitCloneFixtureScript,
   createInstallGitUpdateFixtureScript,
@@ -421,34 +422,20 @@ fi
     expect(JSON.parse(failure.stdout)).toEqual({ event: "error", message: dynamicValue });
   });
 
-  it("rejects a git checkout without a commit before updating it", () => {
-    const result = runInstallCliShell(`
-      set -euo pipefail
-      tmp="$(mktemp -d)"
-      repo="$tmp/repo"
-      mkdir -p "$repo/.git"
-      ensure_git() { :; }
-      ensure_pnpm() { :; }
-      git() {
-        [[ "$1" == "--git-dir=$repo/.git" ]] &&
-          [[ "$2" == "--work-tree=$repo" ]] &&
-          [[ "$3" == "rev-parse" ]] &&
-          [[ "$4" == "--verify" ]] &&
-          [[ "$5" == "--quiet" ]] &&
-          [[ "$6" == "HEAD^{commit}" ]] &&
-          return 1
-        return 99
-      }
-
-      set +e
-      (install_openclaw_from_git "$repo")
-      status="$?"
-      set -e
-      [[ "$status" -eq 1 ]]
-      [[ -d "$repo/.git" ]]
-    `);
-
-    expect(result.status).toBe(0);
+  it.each([
+    "valid",
+    "missing-head",
+    "broken-gitfile",
+    "subdirectory",
+    "main",
+    "main-no-update",
+    "latest",
+    "named-branch",
+  ])("preserves linked checkout boundaries: %s", (scenario) => {
+    const result = runShell(createInstallGitWorktreeFixtureScript(SCRIPT_PATH, scenario), {
+      FIXTURE_NODE: nodeExecutable,
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
   });
 
   it("publishes fresh Git clones only after success and cleans failed staging directories", () => {

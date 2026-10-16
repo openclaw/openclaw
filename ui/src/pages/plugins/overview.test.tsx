@@ -1,8 +1,14 @@
 import type { JSX } from "@solidjs/web";
 import { flush } from "solid-js";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import { renderPluginMetadata, renderPluginPublisher } from "./overview.tsx";
+import {
+  renderPluginCompatibilityNotices,
+  renderPluginMetadata,
+  renderPluginPublisher,
+} from "./overview.tsx";
 import { createDiscoveryDetail } from "./plugins-page.test-support.ts";
 import { renderPluginSecurityAudit } from "./security-audit.tsx";
 
@@ -14,6 +20,106 @@ function render(content: () => JSX.Element, container: HTMLDivElement) {
   flush();
 }
 afterEach(cleanupSolid);
+
+it("omits compatibility notices for plugins without observed deprecated API usage", () => {
+  const container = document.createElement("div");
+  render(() => renderPluginCompatibilityNotices(undefined), container);
+  expect(container.children).toHaveLength(0);
+});
+
+it("shows neutral compatibility copy and adds API replacements only in plugin details", () => {
+  const notice = {
+    code: "deprecated-sdk-api" as const,
+    severity: "info" as const,
+    message:
+      "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update.",
+    removalDate: "2026-12-31",
+    migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
+    apis: [
+      {
+        id: "channel-pairing-sync-allowlist",
+        displayName: "readChannelAllowFromStoreSync",
+        replacement: "Await readChannelAllowFromStore instead.",
+      },
+    ],
+  };
+  const notices = [notice];
+  const container = document.createElement("div");
+  render(() => renderPluginCompatibilityNotices(notices), container);
+  const message = container.querySelector(".plugins-row-message--info");
+  expect(message?.textContent).toContain(notice.message);
+  expect(message?.getAttribute("role")).toBe("status");
+  expect(
+    container.querySelector(".oc-banner-warning, .oc-banner-error, svg, [role=alert]"),
+  ).toBeNull();
+  expect(container.querySelector("a")?.textContent).toBe("Details");
+  expect(container.querySelector("a")?.getAttribute("href")).toBe(notice.migrationGuideUrl);
+  expect(container.textContent).not.toContain("readChannelAllowFromStoreSync");
+  render(() => renderPluginCompatibilityNotices(notices, true), container);
+  expect(container.querySelector("dt")?.textContent).toBe("readChannelAllowFromStoreSync");
+  expect(container.querySelector("dd")?.textContent).toBe(
+    "Await readChannelAllowFromStore instead.",
+  );
+});
+
+it("localizes a mounted compatibility notice from its structured removal date", async () => {
+  onTestFinished(captureI18nStateForTesting());
+  const translate = i18n.t.bind(i18n);
+  const translation = vi.spyOn(i18n, "t").mockImplementation((key, params) => {
+    if (i18n.getLocale() === "de") {
+      if (key === "pluginsPage.compatibilityDeprecatedDated") {
+        return `Verwendet OpenClaw-APIs bis ${params?.date}.`;
+      }
+      if (key === "pluginsPage.compatibilityDetails") {
+        return "Mehr erfahren";
+      }
+    }
+    return translate(key, params);
+  });
+  onTestFinished(() => translation.mockRestore());
+  await i18n.setLocale("en");
+  const container = document.createElement("div");
+  render(
+    () =>
+      renderPluginCompatibilityNotices([
+        {
+          code: "deprecated-sdk-api",
+          severity: "info",
+          message: "Server-only English fallback",
+          removalDate: "2026-12-31",
+          migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
+          apis: [],
+        },
+      ]),
+    container,
+  );
+  expect(container.textContent).toBe(
+    "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update. Details",
+  );
+  await i18n.setLocale("de");
+  flush();
+  expect(container.textContent).toBe("Verwendet OpenClaw-APIs bis 31. Dez. 2026. Mehr erfahren");
+});
+
+it("uses catalog copy when a compatibility notice has no removal date", () => {
+  const container = document.createElement("div");
+  render(
+    () =>
+      renderPluginCompatibilityNotices([
+        {
+          code: "deprecated-sdk-api",
+          severity: "info",
+          message: "Server-only English fallback",
+          migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
+          apis: [],
+        },
+      ]),
+    container,
+  );
+  expect(container.textContent).toBe(
+    "Uses older OpenClaw APIs. It keeps working for now; check for a plugin update. Details",
+  );
+});
 
 it.each([
   "Martian-Engineering/lossless-claw",

@@ -113,6 +113,7 @@ import {
   mockCallArg,
   waitForFast,
 } from "../subagent-test-fixtures.test-helpers.js";
+import { resolveRequesterRecoveryDelivery } from "../subagents/announce/subagent-announce-completion-delivery.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { registerHarnessCompletionRecoveryCases } from "./main-session-harness-completion.test-harness.js";
 import { registerParentRestartRecoveryCases } from "./main-session-parent-recovery.test-harness.js";
@@ -122,6 +123,7 @@ import {
   claimMainSessionRecoveryOwner,
   commitMainSessionRecovery,
 } from "./main-session-recovery-store.js";
+import { registerCheckpointReceiptTests } from "./main-session-restart-checkpoint.test-support.js";
 import { registerAcceptedRecoveryStopCase } from "./main-session-restart-command.test-support.js";
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
@@ -3442,7 +3444,7 @@ describe("main-session-restart-recovery", () => {
     }
   });
 
-  it("tombstones exhausted recovery with replacement-session instructions", async () => {
+  it("tombstones exhausted recovery with operator-resume instructions", async () => {
     const { readEntry } = await makeMainSessionFixture({
       sessionKey: "agent:main:discord:direct:123",
       mainRestartRecovery: {
@@ -3456,7 +3458,7 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
     expect(sendRecoveryNotice).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: expect.stringContaining("Resume in new session"),
+        text: expect.stringContaining("use Resume to continue in this session"),
       }),
     );
     expect(sendRecoveryNotice).toHaveBeenCalledWith(
@@ -3612,7 +3614,7 @@ describe("main-session-restart-recovery", () => {
       to: "discord:dm:main",
       threadId: undefined,
       idempotencyKey: "main-session-restart-recovery:recovery-main:failed-notice",
-      text: expect.stringContaining("Resume in new session"),
+      text: expect.stringContaining("use Resume to continue in this session"),
     });
     const failedEntry = readEntry();
     expect(failedEntry).toMatchObject({
@@ -3652,7 +3654,7 @@ describe("main-session-restart-recovery", () => {
         content: [
           {
             type: "text",
-            text: expect.stringContaining("Resume in new session"),
+            text: expect.stringContaining("use Resume to continue in this session"),
           },
         ],
       },
@@ -4060,41 +4062,13 @@ describe("main-session-restart-recovery", () => {
     expect(readEntry()).toMatchObject({ abortedLastRun: false });
   });
 
-  it("reconciles a receipt delivered during a restart-recovery continuation", async () => {
-    const { sessionsDir, storePath, sessionKey, readEntry } =
-      await makeDeliveredReceiptFixture("message-call-recovered");
-    await writeTranscript(
-      sessionsDir,
-      "main-session",
-      makeMessageDeliveryTranscript({
-        toolCallId: "message-call-recovered",
-        beforeCall: [
-          makeAssistantTextMessage("starting"),
-          makeUserMessage("[System] continue after restart", {
-            idempotencyKey: "recovery-1:user",
-          }),
-        ],
-      }),
-    );
-
-    await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
-
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(readEntry()).toMatchObject({
-      status: "done",
-      abortedLastRun: false,
-      restartRecoveryTerminalRunIds: ["discord-message-1"],
-    });
-    const transcript = await loadTestTranscript(sessionKey, storePath);
-    expect(
-      transcript
-        .map((event) => event.message)
-        .some(
-          (message) =>
-            message?.idempotencyKey ===
-            "restart-recovery:message-tool-result:discord-message-1:message-call-recovered",
-        ),
-    ).toBe(true);
+  registerCheckpointReceiptTests({
+    makeMainSessionFixture,
+    makeDeliveredReceiptFixture,
+    writeTranscript,
+    expectRecovery,
+    loadTestTranscript,
+    discordDeliveryContext,
   });
 
   it.each([
@@ -4188,6 +4162,10 @@ describe("main-session-restart-recovery", () => {
       abortedLastRun: false,
       lastRunId: "control-ui-run",
       restartRecoveryTerminalRunIds: ["control-ui-run"],
+    });
+    expect(resolveRequesterRecoveryDelivery(readEntry(), "control-ui-run")).toMatchObject({
+      kind: "result",
+      result: { captured: true, meta: { terminalReply: { disposition: "silent" } } },
     });
   });
 

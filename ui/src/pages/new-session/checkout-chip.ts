@@ -37,6 +37,7 @@ export function resolveCheckoutChip(params: {
 export type CheckoutChipOptions = {
   state: CheckoutChipState;
   remotePlacement: boolean;
+  currentCheckoutUnavailableReason?: string;
   repository?: boolean;
   folderLabel: string;
   worktree: boolean;
@@ -49,8 +50,6 @@ export type CheckoutChipOptions = {
   submitting: boolean;
   pendingPlacement: boolean;
   popoverOpen: boolean;
-  popoverHiding: boolean;
-  onGuardTransition: (event: MouseEvent) => void;
   onPopoverShow: () => void;
   onPopoverHide: () => void;
   onPopoverAfterHide: () => void;

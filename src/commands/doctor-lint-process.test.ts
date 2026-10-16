@@ -3,10 +3,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
-import {
-  buildUpdateRehearsalPathEnv,
-  UPDATE_REHEARSAL_COMMAND_STARTED_AT_ENV,
-} from "../infra/update-rehearsal-paths.js";
+import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import type { SpawnResult } from "../process/exec-result.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
@@ -92,17 +89,17 @@ it.each([
 });
 
 it("hands the worker this command's budget anchor", async () => {
-  let anchor: string | undefined;
+  let input: string | undefined;
   vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (_argv, options) => {
-    assert(typeof options !== "number");
-    anchor = options.env?.[UPDATE_REHEARSAL_COMMAND_STARTED_AT_ENV];
+    assert(typeof options !== "number" && typeof options.input === "string");
+    input = options.input;
     options.onOutputChunk?.(Buffer.from(report), "stdout");
     return workerResult();
   });
   await expect(
     runUpdateDoctorLintProcess({ json: true }, { commandStartedAtMs: 1_234 }),
   ).resolves.toBe(0);
-  expect(anchor).toBe("1234");
+  expect(JSON.parse(input ?? "")).toEqual({ options: { json: true }, commandStartedAtMs: 1_234 });
 });
 
 it.each([

@@ -32,7 +32,7 @@ describe("write-unified-entry-dts", () => {
         "scripts/lib/plugin-sdk-entrypoints.json",
         "scripts/windows-cmd-helpers.mjs",
         "packages/normalization-core/src/mountinfo-path.ts",
-        "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
+        "src/infra/runtime-process-manifest.ts",
         "src/state/openclaw-state-schema.sql",
         "src/state/openclaw-agent-schema.sql",
         "src/shared/freebsd-process-identity.ts",

@@ -26,6 +26,7 @@ import { PluginInstallAction } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
+  renderPluginCompatibilityNotices,
   renderPluginContentCapabilities,
   renderPluginMetadata,
   renderPluginPublisher,
@@ -194,22 +195,25 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
                     onIconError={() => props.onIconError(plugin().id)}
                     loading={props.iconLoading?.(plugin().id)}
                   />
-                  <a
-                    class="settings-row__text plugins-settings-row__link oc-settings-row-content"
-                    href={props.pluginHref(plugin().id)}
-                    onClick={(event: MouseEvent) => {
-                      if (!shouldHandleNavigationClick(event)) {
-                        return;
-                      }
-                      event.preventDefault();
-                      props.onOpenPlugin(plugin().id);
-                    }}
-                  >
-                    <span class="settings-row__title oc-settings-row-title">{plugin().name}</span>
-                    <span class="settings-row__desc oc-settings-row-description">
-                      {plugin().description || t("pluginsPage.optionalCapability")}
-                    </span>
-                  </a>
+                  <div class="settings-row__text oc-settings-row-content">
+                    <a
+                      class="settings-row__text plugins-settings-row__link"
+                      href={props.pluginHref(plugin().id)}
+                      onClick={(event: MouseEvent) => {
+                        if (!shouldHandleNavigationClick(event)) {
+                          return;
+                        }
+                        event.preventDefault();
+                        props.onOpenPlugin(plugin().id);
+                      }}
+                    >
+                      <span class="settings-row__title oc-settings-row-title">{plugin().name}</span>
+                      <span class="settings-row__desc oc-settings-row-description">
+                        {plugin().description || t("pluginsPage.optionalCapability")}
+                      </span>
+                    </a>
+                    {renderPluginCompatibilityNotices(plugin().compatibilityNotices)}
+                  </div>
                   <div class="settings-row__control oc-settings-row-control">
                     {(() => {
                       const state = plugin().state;
@@ -304,31 +308,27 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
           </div>
         </>
       ) : (
-        <>
-          <div id="plugin-settings-advanced" class="settings-stack">
-            <PluginManager />
-            <SettingsSection
-              title={t("pluginsPage.advanced")}
-              description={t("pluginsPage.advancedDescription")}
-              actions={
-                <>
-                  <button
-                    type="button"
-                    class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
-                    aria-label={t("common.reload")}
-                    disabled={props.configBusy || props.configSchemaLoading}
-                    onClick={props.onConfigReload}
-                  >
-                    <Icon name="refresh" />
-                  </button>
-                </>
-              }
-              carapace={true}
-            >
-              <AdvancedSettings {...props} />
-            </SettingsSection>
-          </div>
-        </>
+        <div id="plugin-settings-advanced" class="settings-stack">
+          <PluginManager />
+          <SettingsSection
+            title={t("pluginsPage.advanced")}
+            description={t("pluginsPage.advancedDescription")}
+            actions={
+              <button
+                type="button"
+                class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
+                aria-label={t("common.reload")}
+                disabled={props.configBusy || props.configSchemaLoading}
+                onClick={props.onConfigReload}
+              >
+                <Icon name="refresh" />
+              </button>
+            }
+            carapace
+          >
+            <AdvancedSettings {...props} />
+          </SettingsSection>
+        </div>
       )}
     </>
   );
@@ -415,6 +415,7 @@ function PluginNotices(props: DetailProps) {
         </div>
       ) : null}
       {renderPluginRowMessage(props.messages[pluginRowKey(props.pluginId)])}
+      {renderPluginCompatibilityNotices(plugin()?.compatibilityNotices, true)}
     </>
   );
 }

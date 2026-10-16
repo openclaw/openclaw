@@ -16,10 +16,7 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveAgentCreationClaimAgentId } from "./agent-creation-claim.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
-import {
-  agentDeletionJournalPublication,
-  observeAgentDeletionJournal,
-} from "./agent-deletion-journal-publication.js";
+import { agentDeletionJournalPublication } from "./agent-deletion-journal-publication.js";
 import { resolveAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
 import { publishAgentDeletionJournalStatus } from "./agent-deletion-journal-status.js";
 import { parseAgentDeletionDatabasePaths } from "./agent-deletion-journal.read.js";
@@ -585,39 +582,6 @@ export async function readAgentDeletionJournalAsync(
   );
   context.admission.assertCurrent();
   return result;
-}
-
-/** Keep an effect-boundary journal assertion current through committed owner writes. */
-export async function prepareAgentDeletionJournalObservation(
-  agentId: string,
-  options: OpenClawStateDatabaseOptions = {},
-) {
-  const context = captureOpenClawStateWorkerContext({
-    ...options,
-    path: options.database?.path ?? options.path,
-  });
-  const observation = observeAgentDeletionJournal(agentId, context);
-  try {
-    const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
-    const entry = await runOpenClawStateWorkerOperation(
-      context,
-      (scope) =>
-        scope.execute({
-          type: "agentDeletion.read",
-          input: { agentId: normalizeAgentId(agentId) },
-        }),
-      { existingOnly: true },
-    );
-    observation.seed(entry);
-    return {
-      entry,
-      assertCurrent: (operationId: string) => observation.assertCurrent(operationId),
-      release: observation.release,
-    };
-  } catch (error) {
-    observation.release();
-    throw error;
-  }
 }
 
 /** Committed-state read; deletion owners recheck pending entries under write authority. */

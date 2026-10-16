@@ -39,6 +39,7 @@ export type SessionActionRow = Pick<
   isChild?: boolean;
   pinnable?: boolean;
   sidebarRoot?: boolean;
+  hasArchiveDescendants?: boolean;
   archiveGuard?: Pick<
     SessionsPatchManyParams["targets"][number],
     "expectedSidebarRoot" | "expectedCategory" | "expectedArchived" | "expectedSidebarAncestors"

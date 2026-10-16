@@ -2,6 +2,7 @@
 
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { createChatSubmissions } from "../app/chat-submissions.ts";
 import type { ApplicationOverlaySnapshot } from "../app/overlays-types.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import {
@@ -26,7 +27,6 @@ import type { SelectPicker } from "./select-picker.ts";
 import "./app-sidebar.tsx";
 
 type Sidebar = AppSidebarSessionNavigationElement & {
-  teamOnlineExpanded: boolean;
   sidebarNarrationLines: ReadonlyMap<string, string>;
 };
 
@@ -65,12 +65,15 @@ async function mount(rows: GatewaySessionRow[]) {
   const gateway = createGatewayHarness(
     createTestGatewayClient(vi.fn(async () => ({ questions: [] }))),
   );
-  const context = createContext(gateway.gateway, sessions.sessions, {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: [{ id: "main" }, { id: "work" }],
-  });
+  const context = {
+    ...createContext(gateway.gateway, sessions.sessions, {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "work" }],
+    }),
+    chatSubmissions: createChatSubmissions(),
+  };
   const overlayListeners = new Set<(snapshot: ApplicationOverlaySnapshot) => void>();
   context.overlays.subscribe = (listener) => {
     overlayListeners.add(listener);
@@ -117,6 +120,45 @@ async function expectRowRefresh(sidebar: Sidebar, change: () => void) {
 }
 
 describe("sidebar projection memo", () => {
+  it("keeps one provisional row and invalidates admission without a new list or route", async () => {
+    const old = session("old");
+    const created = session("dashboard:creating");
+    const { sidebar, context, gateway, publish, row } = await mount([old]);
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = created.key;
+    gateway.publish({ sessionKey: old.key });
+    const creation = { sessionKey: created.key, admitted: false };
+    const release = context.chatSubmissions.beginCreate({
+      creation,
+      message: null,
+      canDisplay: () => true,
+    });
+    try {
+      await settleLitElement(sidebar);
+      expect(sidebar.getRouteSessionKey()).toBe(created.key);
+      expect(sidebar.findSidebarSessionByKey(old.key)?.visuallyActive).toBe(false);
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(1);
+      publish([old, created]);
+      await settleLitElement(sidebar);
+      expect(row(created.key)).toBeNull();
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(1);
+      const result = sidebar.sessionData.sessionsResult;
+      const navigation = sidebar.getSessionNavigationState();
+      expect(result?.sessions.some((value) => value.key === created.key)).toBe(true);
+      creation.admitted = true;
+      sidebar.requestUpdate();
+      await settleLitElement(sidebar);
+      expect(sidebar.sessionData.sessionsResult).toBe(result);
+      expect(sidebar.getSessionNavigationState()).not.toBe(navigation);
+      expect(sidebar.getRouteSessionKey()).toBe(created.key);
+      expect(sidebar.findSidebarSessionByKey(created.key)?.visuallyActive).toBe(true);
+      expect(row(created.key)).not.toBeNull();
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(0);
+    } finally {
+      release();
+    }
+  });
+
   it("shares the projection across unrelated updates and refreshes route, list, and filter inputs", async () => {
     const projectHome = vi.spyOn(sidebarAgentSessionRows, "projectSidebarHomeSession");
     const rows = [
@@ -139,13 +181,13 @@ describe("sidebar projection memo", () => {
     projectRows.mockClear();
     for (const change of [
       () => {
-        sidebar.teamOnlineExpanded = true;
+        sidebar.requestUpdate();
       },
       () => {
         sidebar.devGitBranch = "feature/sidebar";
       },
       () => {
-        sidebar.teamOnlineExpanded = false;
+        sidebar.requestUpdate();
       },
       () => {
         sidebar.sidebarMenus.closePositionedMenu("sessionSort");
@@ -265,7 +307,7 @@ describe("sidebar projection memo", () => {
       }
       await settleLitElement(sidebar);
       expect(row(target.key) !== null).toBe(statusFilter === "snoozed");
-      sidebar.teamOnlineExpanded = true;
+      sidebar.requestUpdate();
       await settleLitElement(sidebar);
       await vi.advanceTimersByTimeAsync(999);
       await settleLitElement(sidebar);
@@ -419,6 +461,93 @@ describe("sidebar projection memo", () => {
     });
     expect(row(target.key)).not.toBeNull();
   });
+
+  it.each(["done", "failed", "killed", "timeout"] as const)(
+    "keeps activity through answer streaming and finishing until the run is %s",
+    async (status) => {
+      const target = session("answer", {
+        hasActiveRun: true,
+        activeRunIds: ["answer-run"],
+        status: "running",
+      });
+      const other = session("other", {
+        hasActiveRun: true,
+        activeRunIds: ["other-run"],
+        status: "running",
+      });
+      const { sidebar, gateway, row, sessions, publish } = await mount([target, other]);
+      const spinner = (sessionKey: string) =>
+        row(sessionKey)?.querySelector('[aria-label="Active run"]');
+      expect(spinner(target.key)).not.toBeNull();
+      gateway.publishEvent("agent", {
+        sessionKey: target.key,
+        runId: "answer-run",
+        seq: 1,
+        stream: "assistant",
+        data: { text: "The answer is ready." },
+      });
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).not.toBeNull();
+      expect(spinner(other.key)).not.toBeNull();
+      gateway.publishEvent("chat", {
+        sessionKey: target.key,
+        runId: "answer-run",
+        state: "delta",
+        replace: true,
+        message: { role: "assistant", content: [] },
+      });
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).not.toBeNull();
+      gateway.publishEvent("agent", {
+        sessionKey: target.key,
+        runId: "answer-run",
+        seq: 2,
+        stream: "item",
+        data: {
+          kind: "tool",
+          phase: "start",
+          itemId: "inspect",
+          toolCallId: "inspect",
+          name: "read_file",
+          title: "Read file",
+        },
+      });
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).not.toBeNull();
+      gateway.publishEvent("agent", {
+        sessionKey: target.key,
+        runId: "answer-run",
+        seq: 3,
+        stream: "lifecycle",
+        data: { phase: "finishing", error: "retryable" },
+      });
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).not.toBeNull();
+      gateway.publishEvent("agent", {
+        sessionKey: target.key,
+        runId: "answer-run",
+        seq: 4,
+        stream: "run_status",
+        data: { phase: "retrying", message: "Retrying" },
+      });
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).not.toBeNull();
+      gateway.publishEvent("agent", {
+        sessionKey: target.key,
+        runId: "answer-run",
+        seq: 3,
+        stream: "lifecycle",
+        data: { phase: "finishing" },
+      });
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).not.toBeNull();
+      expect(sessions.sessions.state.result?.sessions[0]?.hasActiveRun).toBe(true);
+      publish([{ ...target, hasActiveRun: false, activeRunIds: [], status }, other]);
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).toBeNull();
+      expect(spinner(other.key)).not.toBeNull();
+    },
+  );
 
   it("replaces held running subtitles at their deadline without another input or full row projection", async () => {
     vi.useFakeTimers();

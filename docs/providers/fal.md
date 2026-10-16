@@ -13,7 +13,7 @@ generation.
 | Property | Value                                                                           |
 | -------- | ------------------------------------------------------------------------------- |
 | Provider | `fal`                                                                           |
-| Auth     | `FAL_KEY` (canonical; `FAL_API_KEY` also works as a fallback)                   |
+| Auth     | `FAL_KEY` (preferred; `FAL_API_KEY` also works as a fallback)                   |
 | API      | fal model endpoints (`https://fal.run`; video jobs use `https://queue.fal.run`) |
 | Base URL | Override with `models.providers.fal.baseUrl`                                    |
 

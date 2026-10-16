@@ -1,6 +1,8 @@
 import { basename } from "node:path";
 import { createRuntimeProcessEntrypoints } from "./runtime-process-manifest.js";
 
+export const MAX_DIAGNOSTIC_WORKER_SLOTS = 64;
+
 const workerScriptNames = new Set([
   ...Object.values(createRuntimeProcessEntrypoints(import.meta.url)).map((entry) =>
     basename(entry.distWorkerPath),

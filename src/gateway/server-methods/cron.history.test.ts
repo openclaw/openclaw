@@ -416,6 +416,53 @@ it("preserves shared custom-session conversation history across recorded runs", 
   });
 });
 
+it("does not disclose hidden session keys in cron.history errors", async () => {
+  await withCronTranscript(async ({ cron, storePath, baseKey, alias, job, query }) => {
+    await patchSessionEntryCore({ agentId: "main", sessionKey: baseKey }, () => ({
+      visibility: "draft",
+    }));
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "limited",
+          definitions: {
+            limited: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+          },
+        },
+      },
+    };
+    const context = await createHistoryReadContext({
+      cron,
+      cronStorePath: storePath,
+      getRuntimeConfig: () => cfg,
+    });
+    const otherProfile = ensureProfileForEmail("cron-other-reader@example.test");
+    const client = sharingPolicyClient({ scopes: ["operator.read"], user: otherProfile.id });
+    prepareGatewayRecipientProfile(client);
+    expect(operatorSessionCap(client, cfg)).toBe("none");
+    for (const selector of [
+      { runId: "public-old-run" },
+      { runAtMs: 10 },
+      { runId: "missing-run" },
+      { runId: "public-old-run", cursor: "invalid" },
+    ]) {
+      const { respond } = await query({ id: job.id, ...selector }, { client }, context);
+      expect(respond.mock.calls).toEqual([
+        [
+          false,
+          undefined,
+          {
+            code: "UNAVAILABLE",
+            message: "The recorded cron transcript is unavailable. Refresh the run and try again.",
+          },
+        ],
+      ]);
+      expect(JSON.stringify(respond.mock.calls)).not.toContain(baseKey);
+      expect(JSON.stringify(respond.mock.calls)).not.toContain(alias);
+    }
+  });
+});
+
 it("refuses ambiguous timestamps and cursors moved to another recorded run", async () => {
   await withCronTranscript(async ({ job, record, query }) => {
     const first = await query({ id: job.id, runId: "public-old-run", limit: 1 });
@@ -525,6 +572,8 @@ it.each(["sharing", "binding", "retention", "transcript owner"] as const)(
         expect(result.respond.mock.calls).toHaveLength(1);
         expect(result.respond.mock.calls[0]?.[0]).toBe(false);
         expect(result.payload?.messages).toBeUndefined();
+        expect(JSON.stringify(result.respond.mock.calls)).not.toContain(baseKey);
+        expect(JSON.stringify(result.respond.mock.calls)).not.toContain(unrelatedKey);
       },
     );
   },

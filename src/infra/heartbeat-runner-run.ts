@@ -14,7 +14,10 @@ import { parseSessionDeliveryRoute } from "../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { formatErrorMessage } from "./errors.js";
 import { execRequestAbortSignal, readExecRequestOwners } from "./exec-request-context.js";
-import { resolveHeartbeatTimeoutOverrideSeconds } from "./heartbeat-config.js";
+import {
+  resolveHeartbeatIntervalMs,
+  resolveHeartbeatTimeoutOverrideSeconds,
+} from "./heartbeat-config.js";
 import { createHeartbeatDispatch, deliverHeartbeatDispatch } from "./heartbeat-dispatch.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { heartbeatLog } from "./heartbeat-log.js";
@@ -31,6 +34,7 @@ import {
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import {
   getHeartbeatWakeAbortSignal,
+  HEARTBEAT_SKIP_CHANNEL_NOT_READY,
   HEARTBEAT_SKIP_NO_PENDING_EVENT,
   type HeartbeatRunResult,
 } from "./heartbeat-wake.js";
@@ -48,7 +52,13 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     return { status: "skipped", reason: wake.reason };
   }
   // Preparation can admit isolated work; later busy skips must retain the occurrence.
-  markSessionEventWakeWorkStarted();
+  markSessionEventWakeWorkStarted(
+    wake.isAmbientPoll
+      ? (opts.scheduledEveryMs ??
+          resolveHeartbeatIntervalMs(wake.cfg, undefined, wake.heartbeat) ??
+          undefined)
+      : undefined,
+  );
   const prepared = await prepareHeartbeatRunStage(wake);
   if (prepared.kind === "skipped") {
     return { status: "skipped", reason: prepared.reason };
@@ -64,6 +74,23 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       accountId: delivery.accountId,
     });
     return { status: "skipped", reason: "alerts-disabled" };
+  }
+  const channel = delivery.channel !== "none" ? delivery.channel : undefined;
+  const readiness =
+    wake.isAmbientPoll && channel && delivery.to
+      ? await resolveHeartbeatChannelPlugin(channel)
+          ?.heartbeat?.checkReady?.({ cfg, accountId: delivery.accountId, deps: opts.deps })
+          .catch((error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }))
+      : undefined;
+  if (readiness && !readiness.ok) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: readiness.reason,
+      channel,
+      accountId: delivery.accountId,
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: HEARTBEAT_SKIP_CHANNEL_NOT_READY };
   }
   // Message tools infer external destinations from encoded session routes.
   const sourceRoute = parseSessionDeliveryRoute(runSessionKey);
@@ -117,7 +144,6 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       : [],
   );
   const admittedGenericEvents: SystemEvent[] = [];
-  const channel = delivery.channel !== "none" ? delivery.channel : undefined;
   const typing =
     channel &&
     isHeartbeatTypingEnabled({

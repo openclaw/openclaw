@@ -26,6 +26,23 @@ function deadlineRecovery(t, terminalAtMs, failure = null, admissionReadyAtMs = 
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const journal = join(root, "journal.json"), events = join(root, "events.jsonl");
   const before = "a".repeat(40), after = "b".repeat(40);
+  for (const sha of [before, after]) {
+    const sdk = join(root, sha, "dist/plugin-sdk");
+    mkdirSync(sdk, { recursive: true });
+    writeFileSync(join(root, sha, "package.json"), '{"type":"module"}');
+    // Closed native SDK examples; parsing itself belongs to the public SDK.
+    writeFileSync(join(sdk, "model-ref-parse.js"), `
+export function splitTrailingAuthProfile(raw) {
+  const routes = {
+    "fixture/exact-model":"fixture/exact-model", "fixture/fallback":"fixture/fallback",
+    "fixture/exact-model@work":"fixture/exact-model", "fixture/fallback@work":"fixture/fallback",
+    "fixture/fallback@20251001":"fixture/fallback@20251001"
+  };
+  if (!Object.hasOwn(routes, raw)) throw Error("unexpected synthetic model route");
+  return { model: routes[raw] };
+}
+`);
+  }
   const original = JSON.stringify({ phase: "ROLLBACK_FAILED", topology: "system",
     predecessor: { sha: before }, candidate: { sha: after },
     process: { pid: 123, generation: 456 }, protectedPaths: {} });
@@ -57,7 +74,7 @@ if(kind==="proof") {
     }
     case "journal-original-witness": case "recovery-snapshot": emit({}); break;
     case "validate-release": emit({buildId:"fixture"}); break;
-    case "policy": emit({model:"fixture/exact-model"}); break;
+    case "policy": process.stdout.write(process.env.FIXTURE_POLICY); break;
     case "approvals": process.stdout.write("0"); break;
     case "session-preservation-verify": case "compatibility": case "recovery-check": case "gateway-runtime": break;
     case "recovery-finish": case "unlink-exact": record({kind:operation}); unlinkSync(rest[0]); break;
@@ -96,7 +113,8 @@ if(kind==="proof") {
       emit({runId:params.runId,status:"ok",endedAt:atMs,stopReason:"stop",
         terminalReply:{disposition:"visible",text:accepted.message.split(": ").at(-1)},
         terminalReceipt:{runId:params.runId,sessionId:accepted.sessionId,turnId:"fixture-turn",
-          terminalDisposition:"visible",effective:{provider:"fixture",model:"exact-model"}}});
+          requested:{provider:"fixture",model:process.env.FIXTURE_REQUESTED_MODEL},
+          terminalDisposition:"visible",effective:{provider:"fixture",model:process.env.FIXTURE_EFFECTIVE_MODEL}}});
     }
   }
 } else if(kind==="probe") {
@@ -109,7 +127,8 @@ if(kind==="proof") {
     const pending=atMs<Number(process.env.FIXTURE_MARKER_READY_AT_MS),code=process.env.FIXTURE_REFUSAL_CODE;
     const agentDatabases=[...(process.env.FIXTURE_OTHER_AGENT_PENDING==="1"?[{agentId:"other-agent",code:"agent-database-inspection-pending"}]:[]),
       ...(pending||code?[{agentId:JSON.parse(process.env.OPENCLAW_TEAM_OPERATOR_PROFILE).modelAgent,code:code||"agent-database-inspection-pending"}]:[])];
-    emit({ready:true,failing:[],uptimeMs:atMs,eventLoop:eventLoop(atMs),...(agentDatabases.length?{agentDatabases}:{})});
+    const ready=atMs>=Number(process.env.FIXTURE_READYZ_READY_AT_MS);
+    emit({ready,failing:ready?[]:["discord"],uptimeMs:atMs,eventLoop:eventLoop(atMs),...(agentDatabases.length?{agentDatabases}:{})});
   }
 } else if(kind==="pause") {
   const [at,budget,seconds]=args,ms=Number(seconds)*1000;
@@ -144,7 +163,7 @@ state_database="$FIXTURE_ROOT/state.sqlite"
 session_witness_record=""
 session_witness=""
 session_proof=original-pre-cutover
-policy_identity='{"model":"fixture/exact-model"}'
+policy_identity="$FIXTURE_POLICY"
 node_bin="$FIXTURE_NODE"
 allow_cpu_degraded=0
 gateway_runtime_snapshot=""
@@ -187,10 +206,12 @@ verify_convergence() {
 proof_json() { [[ "$1" == gateway-status ]]; }
 assert_scheduler_owner() { :; }
 run_marker_rpc() { "$node_bin" "$FIXTURE_HELPER" rpc "$2" "$3" "$4" "$clock_ms"; }
+run_gateway_node() { "$node_bin" "$@"; }
 read_probe() {
   local body
   body="$("$node_bin" "$FIXTURE_HELPER" probe "$1" "$clock_ms")" || return "$?"
   probe_body="$body"; probe_status=200
+  if [[ "$1" == readyz ]] && ((clock_ms < FIXTURE_READYZ_READY_AT_MS)); then probe_status=503; fi
   if [[ "$1" == startupz ]] && { ((clock_ms < FIXTURE_STARTUP_READY_AT_MS)) || [[ "$FIXTURE_OTHER_AGENT_PENDING" == 1 ]]; }; then probe_status=503; fi
 }
 run_gateway() {
@@ -214,11 +235,15 @@ if recover_journal; then exit 0; else exit "$?"; fi
     env: { PATH: "/usr/bin:/bin", HOME: root, LANG: "C", LC_ALL: "C",
       OPENCLAW_TEAM_OPERATOR_PROFILE: process.env.OPENCLAW_TEAM_OPERATOR_PROFILE,
       FIXTURE_ROOT: root, FIXTURE_HELPER: helper, FIXTURE_NODE: process.execPath,
+      FIXTURE_POLICY: JSON.stringify({ model: options.policyModel ?? "fixture/exact-model", fallbacks: options.fallbacks ?? [] }),
+      FIXTURE_REQUESTED_MODEL: options.requestedModel ?? "exact-model",
+      FIXTURE_EFFECTIVE_MODEL: options.effectiveModel ?? "exact-model",
       FIXTURE_TERMINAL_AT_MS: String(terminalAtMs), FIXTURE_OBSERVATION_FAILURE: JSON.stringify(failure),
       FIXTURE_ADMISSION_READY_AT_MS: String(admissionReadyAtMs),
       FIXTURE_LIBRARY: join(dirname(ownerPath), "release-lib.mjs"),
       FIXTURE_CONVERGENCE_AT_MS: String(options.convergenceAtMs ?? 590_000),
       FIXTURE_MARKER_READY_AT_MS: String(options.markerReadyAtMs ?? 0),
+      FIXTURE_READYZ_READY_AT_MS: String(options.readyzReadyAtMs ?? 0),
       FIXTURE_STARTUP_READY_AT_MS: String(options.startupReadyAtMs ?? 0),
       FIXTURE_RPC_READY_AT_MS: String(options.rpcReadyAtMs ?? 0),
       FIXTURE_LOOP_READY_AT_MS: String(options.loopReadyAtMs ?? 0),
@@ -340,6 +365,29 @@ test("marker waits for critical startup, agent admission and responsive probes i
   const dispatches = rows.filter(row => row.kind === "agent");
   assert.equal(dispatches.length, 1);
   assert.ok(dispatches[0].atMs >= 596_000 && dispatches[0].atMs < 600_000);
+});
+
+test("marker waits for native readiness to recover after convergence without renewing the deadline", (t) => {
+  const { result, rows, journal } = deadlineRecovery(t, 596_000, null, 0, {
+    readyzReadyAtMs: 596_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(journal), false);
+  const dispatches = rows.filter(row => row.kind === "agent");
+  assert.equal(dispatches.length, 1);
+  assert.equal(dispatches[0].atMs, 596_000);
+});
+
+test("persistent native not-ready retains recovery evidence at the original deadline", (t) => {
+  const { result, rows, journal, original } = deadlineRecovery(t, Infinity, null, 0, {
+    readyzReadyAtMs: 601_000,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /stage=marker.readiness-budget/);
+  assert.equal(readFileSync(journal, "utf8"), original);
+  assert.equal(rows.filter(row => row.kind === "agent").length, 0);
+  const pauses = rows.filter(row => row.kind === "pause");
+  assert.equal(pauses.at(-1).atMs + pauses.at(-1).ms, 600_000);
 });
 
 for (const [label, options] of [
@@ -660,4 +708,52 @@ for (const fault of ["generation", "foreign", "policy", "identity"]) test(`succe
   assert.equal(rows.some(row => row.event === "marker" || row.event === "restore-pointers"), false);
   assert.equal(journal.phase, "ROLLBACK_FAILED");
   assert.equal(journal.originalWitness, "fixture");
+});
+
+for (const flow of ["recover", "rollback"]) {
+test(`marker configured fallback completes ${flow} with its original run`, (t) => {
+  const { result, rows, journal } = deadlineRecovery(t, 590_000, null, 0, {
+    flow, fallbacks: ["fixture/fallback"], effectiveModel: "fallback",
+  });
+  assert.equal(result.status, flow === "rollback" ? 1 : 0, result.stderr);
+  assert.match(result.stdout, /MARKER_VERIFIED /);
+  if (flow === "rollback") {
+    assert.match(result.stderr, /ROLLED_BACK sha=/);
+  }
+  assert.equal(existsSync(journal), false);
+  assert.equal(rows.filter(row => row.kind === "native-run").length, 1);
+});
+}
+
+for (const [label, options] of [
+  ["unconfigured effective model", { effectiveModel: "other-model" }],
+  ["different requested model", { requestedModel: "other-model", effectiveModel: "fallback" }],
+]) {
+test(`marker configured fallback rejects ${label} and retains recovery evidence`, (t) => {
+  const { result, journal } = deadlineRecovery(t, 590_000, null, 0, {
+    fallbacks: ["fixture/fallback"], ...options,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /stage=marker.reply-check/);
+  assert.equal(existsSync(journal), true);
+});
+}
+
+test("marker configured fallback resolves auth profiles through the serving release SDK", (t) => {
+  const { result, rows, journal } = deadlineRecovery(t, 590_000, null, 0, {
+    policyModel: "fixture/exact-model@work", fallbacks: ["fixture/fallback@work"], effectiveModel: "fallback",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /MARKER_VERIFIED /);
+  assert.equal(existsSync(journal), false);
+  assert.equal(rows.filter(row => row.kind === "native-run").length, 1);
+});
+
+test("marker configured fallback preserves model-version suffixes during receipt comparison", (t) => {
+  const { result, journal } = deadlineRecovery(t, 590_000, null, 0, {
+    fallbacks: ["fixture/fallback@20251001"], effectiveModel: "fallback",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /stage=marker.reply-check/);
+  assert.equal(existsSync(journal), true);
 });

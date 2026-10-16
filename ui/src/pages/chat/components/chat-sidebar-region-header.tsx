@@ -35,10 +35,16 @@ type SidebarRegionHeaderProps = RegionProps & {
   refreshHostedTabs: () => void;
 };
 
-export function readRegionHostedTabs(host: HTMLElement, panel: SidebarPanel) {
-  return readPanelHostedTabs(
-    host.parentElement?.querySelector(`[data-panel-slot="${panel.slot}"]`)?.firstElementChild,
+export function readRegionPanelHost(host: HTMLElement, slot: SidebarSlotId): Element | null {
+  const container = host.parentElement?.querySelector(`[data-panel-slot="${slot}"]`);
+  // Native panel views have an interop wrapper; raw plugin content still owns its first element.
+  return (
+    container?.querySelector("[data-sidebar-panel-host]") ?? container?.firstElementChild ?? null
   );
+}
+
+export function readRegionHostedTabs(host: HTMLElement, panel: SidebarPanel) {
+  return readPanelHostedTabs(readRegionPanelHost(host, panel.slot));
 }
 
 export function sidebarPanelType(definitions: SidebarPanelDefinition[], slot: SidebarSlotId) {
@@ -94,12 +100,12 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
         id: type.slot,
         label: type.label,
         class: "side-panel-type-menu__item session-menu__item",
-        attributes: { value: type.slot },
         content: <PanelTypeOption type={type} />,
       })),
   );
   return (
     <Menu
+      lazy
       id={`side-panel-type-${id}`}
       class="side-panel-type-menu"
       panelClass="side-panel-type-menu__panel"
@@ -141,7 +147,7 @@ function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {
       : null;
   };
   return (
-    <Show when={favicon()} fallback={<LitContent value={props.tab.icon} />}>
+    <Show when={favicon()} fallback={props.tab.icon}>
       {(src) => <img class="tabstrip-tab__favicon" src={src()} alt="" />}
     </Show>
   );

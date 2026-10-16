@@ -14,6 +14,7 @@ import { executeUserChannelIdentityChange } from "./user-channel-identities.work
 import { personalCredentialPublication } from "./user-model-account-authority.js";
 import {
   connectUserModelAccount,
+  enrollPersonalAuthProfileAuthorizationInDatabase,
   clearUserProfileAuthLink,
   setUserProfileAuthLink,
   listUserModelAccounts,
@@ -24,7 +25,6 @@ import {
   selectStoredGitHubIdentities,
   selectUserProfileRoleAuthority,
 } from "./user-profile-github-identity.js";
-import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
   createUserProfileWriteOperation,
   linkEmail,
@@ -172,6 +172,23 @@ export const userProfileOperations = {
         options,
       ),
   ),
+  "userProfiles.modelAccount.enrollAuthorization": accountWrite(
+    (
+      input: Parameters<typeof enrollPersonalAuthProfileAuthorizationInDatabase>[1],
+      options,
+      assertCurrent,
+    ) =>
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          assertCurrent("transaction");
+          const result = enrollPersonalAuthProfileAuthorizationInDatabase(db, input);
+          assertCurrent("commit");
+          return result;
+        },
+        options,
+        { operationLabel: "users.model-accounts.enroll-authorization" },
+      ),
+  ),
   "userProfiles.modelAccount.link": accountWrite(
     (
       input: Omit<Parameters<typeof setUserProfileAuthLink>[0], "assertCurrent">,
@@ -194,13 +211,6 @@ export const userProfileOperations = {
     input: { profileId: string; provider: string },
     { stateOptions },
   ) => readSelectedUserModelAccount(input.profileId, input.provider, stateOptions()),
-  "userProfiles.list": (
-    input: { githubAccountIds: readonly number[] } | undefined,
-    { open, stateOptions },
-  ) => {
-    const options = { ...stateOptions(), database: open() };
-    return readUserProfileSnapshotSync(options, input?.githubAccountIds);
-  },
   "userProfiles.directory": ({ limit }: { limit: number }, { open, stateOptions }) => {
     const database = open();
     ensureUserProfilesSchema(stateOptions(), database);

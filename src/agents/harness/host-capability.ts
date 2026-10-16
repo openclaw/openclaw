@@ -416,6 +416,9 @@ export function createAgentHarnessHostCapabilities(params: {
         ...effectiveOptions,
         // Availability belongs to this prepared host, not mutable plugin inputs.
         githubPublicationAvailable,
+        // One host owns selection and launch. A plugin's mutable config or exec
+        // overrides cannot replace the identity captured before its handoff.
+        exec: { ...effectiveOptions.exec, preparedRunEnvironment },
         runtimePluginToolGrant,
         skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
         installedSkills: getInstalledSkills(
@@ -536,7 +539,6 @@ export function createAgentHarnessHostCapabilities(params: {
           },
         ),
       );
-      library?.assertPublicationCurrent();
       return bindCreatedTools(sourceTools, bindingOptions);
     },
     prepareMutableFileApproval: async (request) => {

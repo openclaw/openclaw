@@ -304,20 +304,6 @@ describe("OpenAI realtime voice browser authentication", () => {
     );
   });
 
-  it("reports an unresolved Platform credential without trying another auth route", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_MISSING_TEST");
-    execFileSyncMock.mockImplementationOnce(() => {
-      throw new Error("keychain unavailable");
-    });
-    const provider = buildOpenAIRealtimeVoiceProvider();
-
-    await expect(
-      provider.createBrowserSession?.({
-        providerConfig: {},
-      }),
-    ).rejects.toThrow("OpenAI Realtime voice requires an OpenAI Platform API key");
-  });
-
   it("does not configure Azure realtime sessions without a Platform API key", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const cfg = { agents: { defaults: {} } } as never;

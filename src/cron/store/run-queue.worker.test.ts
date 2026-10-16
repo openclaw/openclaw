@@ -131,6 +131,26 @@ function scheduled(storeKey: string, current: CronJob) {
   };
 }
 
+it("keeps the first execution link across binding retries without changing the run claim", async () => {
+  const current = job("execution-link");
+  const queue = await store("execution-link", [current]);
+  await queue.request([scheduled(queue.storeKey, current)]);
+  const activated = await queue.drain();
+  expect(activated.launches).toHaveLength(1);
+  const receipt = activated.launches[0]!.runReceipt;
+  const bind = (contextId: string, executionId: string) =>
+    executeOpenClawStateWorker(context, {
+      type: "cron.bindReceiptExecution",
+      input: { receiptId: receipt.receiptId, binding: { contextId, executionId } },
+    });
+
+  expect(await bind("original-context", "original-execution")).toBe(true);
+  expect(await bind("replacement-context", "replacement-execution")).toBe(false);
+  expect(await bind("original-context", "original-execution")).toBe(true);
+  expect(await queue.readReceipt(receipt)).toEqual(receipt);
+  await queue.cancel([receipt.receiptId], "superseded");
+});
+
 it("deduplicates committed slots and drains persisted job order within worker capacity", async () => {
   const jobs = [
     job("z-first", { state: { nextRunAtMs: now, lastError: "previous run failed" } }),
@@ -162,6 +182,22 @@ it("deduplicates committed slots and drains persisted job order within worker ca
   await queue.cancel([first.launches[0]!.runReceipt.receiptId], "superseded");
   expect(await readCronRunRecords(queue.storeKey, "z-first")).toEqual([]);
   expect((await queue.drain()).launches.map((entry) => entry.job.id)).toEqual(["a-second"]);
+});
+
+it("advances a consumed scheduled slot without reclaiming its terminal receipt", async () => {
+  const current = job("consumed");
+  const queue = await store("consumed", [current]);
+  const request = scheduled(queue.storeKey, current);
+  await queue.request([request]);
+  await queue.cancel([request.receiptId], "superseded");
+  expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBe(now);
+  const retry = await queue.request([request]);
+  expect(retry.accepted).toEqual([]);
+  expect(retry.rejected).toEqual([
+    { jobId: current.id, receiptId: request.receiptId, reason: "already-requested" },
+  ]);
+  expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBeGreaterThan(now);
+  expect((await queue.drain()).launches).toEqual([]);
 });
 
 it("returns durable receipt handles across queued edits and records disabled requests under their public ID", async () => {

@@ -7,14 +7,10 @@ import {
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import type { ChatSessionCompanionThread } from "../chat-session-companion.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import {
-  handleChatAttachmentPaste,
-  renderAttachmentPreview,
-  renderAttachmentReadStatus,
-} from "./chat-attachments.ts";
+import { handleChatAttachmentPaste } from "./chat-attachments.ts";
+import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
 import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
@@ -71,9 +67,9 @@ export function SessionRailComposer(props: {
         props.submit();
       }}
     >
-      <LitContent value={renderAttachmentPreview(props.attachmentProps)} />
-      <LitContent
-        value={renderAttachmentReadStatus(props.attachmentProps.attachmentReads?.pendingReads ?? 0)}
+      <AttachmentPreview {...props.attachmentProps} readRevision={props.attachmentProps} />
+      <AttachmentReadStatus
+        pendingReads={props.attachmentProps.attachmentReads?.pendingReads ?? 0}
       />
       <div class="agent-chat__composer-input-row">
         <label class="agent-chat__composer-combobox chat-session-rail__prompt">

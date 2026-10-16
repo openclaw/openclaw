@@ -353,25 +353,27 @@ describe("progress narration through reply options", () => {
     }
   });
 
-  it("does not let silent or directive-only preambles suppress narration", async () => {
-    vi.useFakeTimers();
-    try {
-      const { narrator, generate, inputs } = createNarratorHarness();
+  it.each(["NO_REPLY", "[[audio_as_voice]] _NO_REPLY_"])(
+    "treats prepared literal preambles as visible progress: %s",
+    async (text) => {
+      vi.useFakeTimers();
+      try {
+        const { narrator, generate } = createNarratorHarness();
 
-      narrator.noteItemEvent({ kind: "preamble", progressText: "[[reply_to_current]]" });
-      narrator.noteItemEvent({
-        kind: "preamble",
-        progressText: "[[audio_as_voice]] _NO_REPLY_",
-      });
-      narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "ls" } });
-      await flushNarrations();
+        narrator.noteItemEvent({ kind: "preamble", progressText: "[[reply_to_current]]" });
+        narrator.noteItemEvent({
+          kind: "preamble",
+          progressText: text,
+        });
+        narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "ls" } });
+        await flushNarrations();
 
-      expect(generate).toHaveBeenCalledTimes(1);
-      expect(inputs[0]?.activityNotes.some((note) => note.startsWith("model:"))).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(generate).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("narrates a tool burst buffered during an active generation without another event", async () => {
     const started = createDeferred();

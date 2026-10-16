@@ -1,10 +1,8 @@
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 import type { DiscordSourceConfig, SourceRuntime, SourceStatus } from "../../types.js";
-import { checkAbort, parseApiBase, wait } from "../http.js";
+import { checkAbort, parseApiBase, readApiResponse, wait } from "../http.js";
 
 const retrySchema = z.object({ retry_after: z.number().finite().nonnegative() });
-const timeoutMs = 30_000;
 export const ABORT_LABEL = "Discord collection aborted.";
 
 export class DiscordHttpError extends Error {
@@ -20,51 +18,14 @@ export function createClient(
 ) {
   const base = parseApiBase(config.apiBaseUrl, "Discord");
 
-  async function request(url: string) {
-    const controller = new AbortController();
-    const signal = runtime.signal
-      ? AbortSignal.any([runtime.signal, controller.signal])
-      : controller.signal;
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const init: RequestInit = {
-      headers: { Authorization: `Bot ${config.token}`, Accept: "application/json" },
-      signal,
-      redirect: "error",
-    };
-    let release: (() => Promise<void>) | undefined;
-    try {
-      checkAbort(runtime.signal, ABORT_LABEL);
-      status.stats.apiCalls = Number(status.stats.apiCalls) + 1;
-      let response: Response;
-      if (runtime.fetchImpl) {
-        response = await runtime.fetchImpl(url, init);
-      } else {
-        const result = await fetchWithSsrFGuard({
-          url,
-          init,
-          signal,
-          timeoutMs,
-          requireHttps: true,
-          maxRedirects: 0,
-          capture: false,
-        });
-        response = result.response;
-        release = result.release;
-      }
-      const body = await response.text();
-      checkAbort(runtime.signal, ABORT_LABEL);
-      let data: unknown;
-      try {
-        data = JSON.parse(body);
-      } catch {
-        data = undefined;
-      }
-      return { status: response.status, headers: response.headers, data };
-    } finally {
-      clearTimeout(timer);
-      await release?.();
-    }
-  }
+  const request = (url: string) =>
+    readApiResponse(
+      url,
+      { Authorization: `Bot ${config.token}`, Accept: "application/json" },
+      runtime,
+      status,
+      ABORT_LABEL,
+    );
 
   return {
     async get(path: string, params?: Record<string, string>): Promise<unknown> {

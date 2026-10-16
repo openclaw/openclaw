@@ -492,14 +492,14 @@ export function createNativeLoginRecheck(
   },
   eligibleProviders: readonly string[],
   publish: (auth: PreparedModelCatalogAuth) => void,
-): () => void {
+): (options?: { force?: boolean }) => void | Promise<void> {
   const { owners, index } = owner.pluginGeneration.pluginMetadataSnapshot;
   const refs = new Set(listManifestSyntheticAuthProviderRefs(index).map(owner.normalizeProvider));
   const providerIds = eligibleProviders.filter(
     (provider) => owners.cliBackends.has(provider) && refs.has(provider),
   );
   let checkedAt = Date.now();
-  let pending = false;
+  let pending: Promise<void> | undefined;
   const recheck = async () => {
     owner.assertCurrent();
     await using _ = {
@@ -546,17 +546,20 @@ export function createNativeLoginRecheck(
       },
     );
   };
-  return () => {
+  return (options) => {
     const now = Date.now();
-    if (pending || !providerIds.length || now - checkedAt < NATIVE_LOGIN_RECHECK_MS) {
-      return;
+    if (pending) {
+      return pending;
+    }
+    if (!providerIds.length || (!options?.force && now - checkedAt < NATIVE_LOGIN_RECHECK_MS)) {
+      return undefined;
     }
     checkedAt = now;
-    pending = true;
-    void recheck()
+    pending = recheck()
       .catch(() => undefined)
       .finally(() => {
-        pending = false;
+        pending = undefined;
       });
+    return pending;
   };
 }

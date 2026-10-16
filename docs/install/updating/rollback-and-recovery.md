@@ -178,6 +178,9 @@ the source, so WAL files left by an exited writer are not mistaken for a change
 during capture. The installed
 updater owns this ordering; staging a newer candidate cannot change an
 already-running older updater.
+While those fingerprints are tracked, the new version's Doctor also reads databases
+through private copies for its schema checks. A Doctor that fails before writing
+therefore leaves the snapshots restorable, and the package rolls back.
 On Windows, an eligible capture first runs the same native SQLite exclusion check
 used by rollback. This settles any retained WAL before recording write fingerprints,
 so later check cleanup is not mistaken for another writer. If another connection

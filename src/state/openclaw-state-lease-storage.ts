@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { computeBackoff } from "../infra/backoff.js";
+import { isStateDatabaseMaintenanceContention } from "../infra/gateway-state-owner-record.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
@@ -180,7 +181,10 @@ export async function releaseOpenClawStateLeaseBestEffort(
       return;
     } catch (error) {
       const now = performance.now();
-      if (!isSqliteLockError(error) || now >= deadline) {
+      if (
+        (!isSqliteLockError(error) && !isStateDatabaseMaintenanceContention(error)) ||
+        now >= deadline
+      ) {
         if (execute) {
           // The async resource owner retains failed cleanup for exact-owner retry.
           throw error;

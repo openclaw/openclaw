@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
 import { mergePreparedNativeCatalog } from "../prepared-model-runtime.catalog-publication.js";
 import {
   augmentModelCatalogWithAgentHarness,
   augmentPreparedModelCatalogWithAgentHarness,
+  isPreparedNativeModelCatalogReady,
 } from "./model-catalog.js";
 
 const cfg = {
@@ -476,4 +478,80 @@ describe("agent harness model catalog", () => {
       ],
     });
   });
+});
+
+it("checks resident native readiness with linear catalog work and observes revocation", () => {
+  let inspectedRows = 0;
+  let ready = true;
+  const rows: ModelCatalogEntry[] = Array.from({ length: 240 }, (_, index) => ({
+    get provider() {
+      inspectedRows++;
+      return "fixture";
+    },
+    id: `model-${index}`,
+    name: `Model ${index}`,
+    ...(index >= 200 ? { nativeRuntime: "native-test" } : {}),
+  }));
+  const readModelCatalogReadiness = vi.fn(() =>
+    ready ? { accountType: "apiKey" as const } : undefined,
+  );
+  const pluginRegistry = createEmptyPluginRegistry();
+  pluginRegistry.agentHarnesses.push({
+    pluginId: "native-test",
+    source: "fixture",
+    harness: {
+      id: "native-test",
+      label: "Native fixture",
+      supports: () => ({ supported: true }),
+      runAttempt: vi.fn(),
+      readModelCatalogReadiness,
+    },
+  });
+  const params = {
+    input: {
+      config: cfg,
+      agentId: "main",
+      agentDir: "/tmp/native-readiness-agent",
+      workspaceDir: "/tmp/native-readiness-workspace",
+    },
+    pluginGeneration: {
+      remoteCatalog: null,
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+      pluginRegistry,
+      inlineProviderModels: [],
+      configuredCatalogEntries: [],
+    },
+    snapshot: { entries: rows, routeVariants: rows },
+    catalogAcquired: true,
+  };
+  expect(isPreparedNativeModelCatalogReady(params)).toBe(true);
+  expect(readModelCatalogReadiness).toHaveBeenCalledTimes(40);
+  // Bound row inspections, not elapsed time: a known member must not trigger a full rescan.
+  expect(inspectedRows).toBeLessThan(rows.length * 2);
+  ready = false;
+  expect(isPreparedNativeModelCatalogReady(params)).toBe(false);
+  expect(isPreparedNativeModelCatalogReady({ ...params, catalogAcquired: false })).toBe(false);
+  expect(
+    isPreparedNativeModelCatalogReady({
+      ...params,
+      snapshot: {
+        ...params.snapshot,
+        nativeProviderOutcomes: { "native-test": [{ provider: "fixture", status: "unavailable" }] },
+      },
+    }),
+  ).toBe(true);
+  ready = true;
+  for (const [modelId, runtime, expected] of [
+    ["model-239", "native-test", true],
+    ["model-0", "native-test", false],
+    ["missing", "native-test", false],
+    ["model-239", "other-runtime", false],
+  ] as const) {
+    expect(
+      isPreparedNativeModelCatalogReady({
+        ...params,
+        selection: { provider: "fixture", modelId, runtime },
+      }),
+    ).toBe(expected);
+  }
 });

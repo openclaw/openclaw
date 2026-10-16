@@ -8,13 +8,12 @@ import {
   resolveSourceReplyDelivery,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
+  createMissingReplyNotice,
+  MISSING_REPLY_NOTICE_TEXT,
   isSyntheticSourceReplyTurn,
   resolveReplyCompletion,
+  shouldDeliverMissingReplyNotice,
 } from "../../agents/reply-completion.js";
-import {
-  assertSubagentRegistryWriteSourceCurrent,
-  SubagentRegistryWriteError,
-} from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import {
   deriveContextPromptTokens,
   hasBillableUsage,
@@ -34,11 +33,13 @@ import {
   buildFallbackNotice,
   buildProviderPolicyRetryNotice,
 } from "../fallback-state.js";
+import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
+  retainSilentFinalPayloads,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -48,7 +49,6 @@ import {
   resolveSourceReplyPolicy,
   resolveTerminalReplyDelivery,
 } from "./agent-runner-core.js";
-import { buildEmptyInteractiveReplyPayload } from "./agent-runner-failure-reply.js";
 import { signalTypingIfNeeded } from "./agent-runner-helpers.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import {
@@ -59,19 +59,18 @@ import {
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
-import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-channel-actions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
+import {
+  recordReplyOperationAgentTurn,
+  resolveReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
+import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
-import {
-  attachWaitingStatusProgressContinuation,
-  buildWaitingStatusPayload,
-} from "./waiting-status.js";
+import { buildWaitingStatusPayload, prepareWaitingStatusContinuation } from "./waiting-status.js";
 export async function prepareReplyAgentPayloads(state: {
   context: FinalizeReplyAgentRunInput;
   accounting: AccountedAgentTurn;
@@ -133,12 +132,38 @@ export async function prepareReplyAgentPayloads(state: {
       cfg,
       isHeartbeat,
     });
+  const missingReplyNoticeAllowed = shouldDeliverMissingReplyNotice({
+    ...followupRun.run,
+    config: cfg,
+    terminalReplyExpectation,
+    trigger: resolveReplyRunTrigger(context),
+    isHeartbeat,
+    currentInboundEventKind: followupRun.currentInboundEventKind,
+  });
+  const backgroundMissingReply =
+    !missingReplyNoticeAllowed &&
+    (!runResult.meta?.error ||
+      (runResult.meta.error.kind === "incomplete_turn" &&
+        runResult.meta.error.message.startsWith(MISSING_REPLY_NOTICE_TEXT)));
   const blocked =
     runResult.meta?.error?.kind === "hook_block" ||
     runResult.didSendDeterministicApprovalPrompt === true;
   const replyOperationRunState = resolveReplyOperationRunState(opts);
+  const successfulTerminal =
+    context.execution.status === "ok" &&
+    !blocked &&
+    !runResult.meta?.error &&
+    runResult.meta?.aborted !== true &&
+    !terminalFailurePayload;
+  const authoredSilence =
+    successfulTerminal && runResult.meta?.terminalReply?.disposition === "silent";
+  const strandedFinal =
+    successfulTerminal &&
+    runResult.meta?.terminalReply?.disposition === "empty" &&
+    runResult.meta.terminalReply.code === "message-tool-not-called" &&
+    followupRun.strandedReplyRetry !== true;
   const implicitContinuation = runResult.meta?.continuationPending === true;
-  // A media-run continuation has no completion child to take over delivery; its status is the reply.
+  // Completion-message children own their continuation; detached media retains its own run owner.
   const continuationOwner =
     implicitContinuation && hasCompletionMessageSessionSpawn(runResult.acceptedSessionSpawns)
       ? {
@@ -154,6 +179,21 @@ export async function prepareReplyAgentPayloads(state: {
   if (pendingContinuation && !implicitContinuation) {
     opts?.onPendingContinuation?.();
   }
+  const heartbeatText = isHeartbeat
+    ? (runResult.meta?.finalAssistantRawText ??
+      runResult.meta?.finalAssistantVisibleText ??
+      payloadArray
+        .filter(isReplyPayloadTerminalContent)
+        .map((payload) => payload.text ?? "")
+        .join("\n"))
+    : undefined;
+  // Heartbeat acknowledgments are a host-owned non-outcome, not missing answers.
+  // Require authored text: stripHeartbeatToken also skips genuinely empty input.
+  const heartbeatAcknowledgment =
+    successfulTerminal &&
+    !pendingContinuation &&
+    Boolean(heartbeatText?.trim()) &&
+    stripHeartbeatToken(heartbeatText, { mode: "heartbeat" }).shouldSkip;
 
   const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
     blockReplyPipeline,
@@ -174,25 +214,26 @@ export async function prepareReplyAgentPayloads(state: {
     committedMessagingToolSourceReplyDelivery ||
     visibleOutboundDelivery ||
     runResult.didSendDeterministicApprovalPrompt === true;
-  const sourceReplyDelivery = resolveSourceReplyDelivery(
-    runResult,
-    await resolveTerminalReplyDelivery({
-      blockReplyPipeline,
-      directBlockDeliveries,
-      resolveReplyDelivery: opts?.resolveReplyDelivery,
-      sourceReplyDeliveryState: runResult.sourceReplyDeliveryState,
-    }),
-  );
+  const terminalReplyDelivery = await resolveTerminalReplyDelivery({
+    blockReplyPipeline,
+    directBlockDeliveries,
+    resolveReplyDelivery: opts?.resolveReplyDelivery,
+    sourceReplyDeliveryState: runResult.sourceReplyDeliveryState,
+  });
+  const sourceReplyDelivery = resolveSourceReplyDelivery(runResult, terminalReplyDelivery);
   let completion = resolveReplyCompletion(
     terminalReplyExpectation,
-    blocked
+    blocked || heartbeatAcknowledgment
       ? "blocked"
-      : sourceReplyDelivery !== "missing"
-        ? sourceReplyDelivery
-        : pendingContinuation
-          ? "pending"
-          : "empty",
+      : authoredSilence
+        ? "silent"
+        : sourceReplyDelivery !== "missing"
+          ? sourceReplyDelivery
+          : pendingContinuation
+            ? "pending"
+            : "empty",
   );
+  const explicitSilence = completion.outcome === "silent";
   if (replyOperationRunState) {
     replyOperationRunState.replyCompletion = completion;
   }
@@ -217,28 +258,38 @@ export async function prepareReplyAgentPayloads(state: {
   const fallbackFailureKnown =
     fallbackAttempts.length > 0 || configuredFallbackModel.persistedAutoFallback;
   const hasSpecificFallbackFailure = fallbackTransition.fallbackActive && fallbackFailureKnown;
-  const waitingStatusPayload = terminalFailurePayload
-    ? undefined
-    : buildWaitingStatusPayload({
-        completion,
-        yielded: runResult.meta?.yielded === true,
-        continuationPending: implicitContinuation,
-        yieldAcknowledgment: runResult.meta?.yieldAcknowledgment,
-        // Child spawns are side effects, not user-visible messages. They must not
-        // suppress the explicit waiting reply for the parent turn.
-        hasVisibleMessageDelivery:
-          successfulSourceReplyDelivery ||
-          committedMessagingToolSourceReplyDelivery ||
-          runResult.didSendDeterministicApprovalPrompt === true,
-      });
-  const emptyInteractiveReplyPayload = terminalFailurePayload
-    ? undefined
-    : buildEmptyInteractiveReplyPayload({ completion });
+  const waitingStatusPayload =
+    context.execution.status === "failed"
+      ? undefined
+      : buildWaitingStatusPayload({
+          completion,
+          yielded: runResult.meta?.yielded === true,
+          continuationPending: implicitContinuation,
+          mediaContinuation: implicitContinuation && !continuationOwner,
+          yieldAcknowledgment: runResult.meta?.yieldAcknowledgment,
+          // Child spawns do not suppress a model-authored acknowledgment.
+          hasVisibleMessageDelivery:
+            successfulSourceReplyDelivery ||
+            committedMessagingToolSourceReplyDelivery ||
+            runResult.didSendDeterministicApprovalPrompt === true,
+        });
+  const missingReplyPayload =
+    strandedFinal ||
+    terminalFailurePayload ||
+    !missingReplyNoticeAllowed ||
+    completion.outcome !== "missing"
+      ? undefined
+      : createMissingReplyNotice();
   const buildStrandedRetryMissingDeliveryDiagnostic = (): ReplyPayload | undefined => {
-    if (!sessionKey || !storePath || followupRun.strandedReplyRetry !== true) {
-      return undefined;
-    }
-    if (sessionCtx.InboundEventKind === "room_event" || completedSourceReplyDelivery) {
+    if (
+      !missingReplyNoticeAllowed ||
+      authoredSilence ||
+      !sessionKey ||
+      !storePath ||
+      followupRun.strandedReplyRetry !== true ||
+      sessionCtx.InboundEventKind === "room_event" ||
+      completedSourceReplyDelivery
+    ) {
       return undefined;
     }
     const sourceReplyPolicy = resolveSourceReplyPolicy({
@@ -255,6 +306,7 @@ export async function prepareReplyAgentPayloads(state: {
       base: followupRun,
       payloads: [],
       finalText: "",
+      terminalReply: runResult.meta?.terminalReply,
       sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
       sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
       successfulSourceReplyDelivery: completedSourceReplyDelivery,
@@ -317,6 +369,9 @@ export async function prepareReplyAgentPayloads(state: {
     return result.replyPayloads;
   };
   const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
+    if (backgroundMissingReply) {
+      return undefined;
+    }
     const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
       fallbackTransition,
       fallbackFailureKnown,
@@ -327,13 +382,16 @@ export async function prepareReplyAgentPayloads(state: {
     if (!silentFallbackFailurePayload) {
       return undefined;
     }
-    replyOperation.fail(
-      "run_failed",
-      new Error(
-        `configured model backend ${fallbackTransition.selectedModelRef} failed and fallback ${fallbackTransition.activeModelRef} produced no visible reply`,
-      ),
-    );
-    opts?.onAgentRunTerminalOutcome?.("failed");
+    if (!replyOperation.result) {
+      replyOperation.retainFailureUntilComplete();
+      replyOperation.fail(
+        "run_failed",
+        new Error(
+          `configured model backend ${fallbackTransition.selectedModelRef} failed and fallback ${fallbackTransition.activeModelRef} produced no visible reply`,
+        ),
+      );
+      opts?.onAgentRunTerminalOutcome?.("failed");
+    }
     const [preparedPayload] = await buildFinalPayloads([silentFallbackFailurePayload]);
     if (!preparedPayload) {
       return undefined;
@@ -341,7 +399,24 @@ export async function prepareReplyAgentPayloads(state: {
     await signalTypingIfNeeded([preparedPayload], typingSignals);
     return returnWithQueuedFollowupDrain(preparedPayload);
   };
+  const recordMissingReply = () => {
+    if (completion.outcome === "missing" && !replyOperation.result) {
+      replyOperation.retainFailureUntilComplete();
+      replyOperation.fail("run_failed", new Error(MISSING_REPLY_NOTICE_TEXT));
+      recordReplyOperationAgentTurn(followupRun.replyOperationRunStates, replyOperation, {
+        kind: "settled",
+        status: "failed",
+        result: runResult,
+      });
+      opts?.onAgentRunTerminalOutcome?.("failed");
+    }
+  };
+  const quietContinuation = completion.outcome === "pending" && !waitingStatusPayload;
+  if (explicitSilence || quietContinuation) {
+    await prepareWaitingStatusContinuation({ context, owner: continuationOwner });
+  }
   const finishEmptyReply = async () => {
+    recordMissingReply();
     if (completion.outcome === "silent" || completion.outcome === "blocked") {
       opts?.onDeliberateSilentTerminalReply?.();
     }
@@ -485,19 +560,25 @@ export async function prepareReplyAgentPayloads(state: {
     }
   }
 
+  const quietFinal = authoredSilence || heartbeatAcknowledgment;
+  const sourcePayloads = quietFinal ? retainSilentFinalPayloads(payloadArray) : payloadArray;
   if (
-    completion.outcome !== "delivered" &&
-    payloadArray.length === 0 &&
-    fallbackNoticePayloads.length === 0 &&
-    !shouldDeliverTerminalFailure &&
-    !waitingStatusPayload &&
-    (!emptyInteractiveReplyPayload || hasSpecificFallbackFailure)
+    ((explicitSilence || heartbeatAcknowledgment) && sourcePayloads.length === 0) ||
+    (!strandedFinal &&
+      completion.outcome !== "delivered" &&
+      payloadArray.length === 0 &&
+      fallbackNoticePayloads.length === 0 &&
+      !shouldDeliverTerminalFailure &&
+      !waitingStatusPayload &&
+      (!missingReplyPayload || hasSpecificFallbackFailure))
   ) {
     return finishEmptyReply();
   }
 
   const payloadCandidates = (
-    fallbackNoticePayloads.length > 0 ? [...fallbackNoticePayloads, ...payloadArray] : payloadArray
+    !quietFinal && fallbackNoticePayloads.length > 0
+      ? [...fallbackNoticePayloads, ...sourcePayloads]
+      : sourcePayloads
   ).filter(isPayloadLaneEnabled);
   let replyPayloads = await buildFinalPayloads(payloadCandidates);
   if (sourceReplyDelivery !== "delivered" && completion.outcome === "delivered") {
@@ -519,6 +600,9 @@ export async function prepareReplyAgentPayloads(state: {
   if (waitingStatusPayload && hasTerminalReply) {
     replyPayloads = replyPayloadsWithoutToolWarnings;
   }
+  if (!hasTerminalReply && !waitingStatusPayload && !strandedFinal) {
+    recordMissingReply();
+  }
   if (shouldDeliverTerminalFailure && !hasTerminalReply && terminalFailurePayload) {
     replyPayloads = [...replyPayloads, ...(await buildFinalPayloads([terminalFailurePayload]))];
   } else if (waitingStatusPayload && !hasTerminalReply) {
@@ -534,20 +618,11 @@ export async function prepareReplyAgentPayloads(state: {
     if (silentFallbackFailurePayload) {
       return { kind: "return" as const, value: silentFallbackFailurePayload };
     }
-  } else if (emptyInteractiveReplyPayload && !hasTerminalReply) {
+  } else if (missingReplyPayload && !hasTerminalReply) {
     const emptyPayloads = await buildFinalPayloads([
-      buildStrandedRetryMissingDeliveryDiagnostic() ?? emptyInteractiveReplyPayload,
+      buildStrandedRetryMissingDeliveryDiagnostic() ?? missingReplyPayload,
     ]);
     replyPayloads = [...replyPayloads, ...emptyPayloads];
-    if (emptyPayloads.length > 0) {
-      replyOperation.retainFailureUntilComplete();
-      replyOperation.fail(
-        "run_failed",
-        new Error("interactive agent run completed without a visible reply"),
-      );
-      // Filtering can turn a successful model result into a failed reply.
-      opts?.onAgentRunTerminalOutcome?.("failed");
-    }
   }
 
   replyPayloads = attachMcpAppChannelAction({
@@ -563,13 +638,15 @@ export async function prepareReplyAgentPayloads(state: {
 
   const hasVisibleReplyPayload = replyPayloads.some(
     (payload) =>
-      !isReplyPayloadStatusNotice(payload) &&
-      isPayloadLaneEnabled(payload) &&
-      normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
+      payload.isError ||
+      (!isReplyPayloadStatusNotice(payload) &&
+        isPayloadLaneEnabled(payload) &&
+        normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null),
   );
   const canDeliverStandaloneFallbackNotice =
     Boolean(blockReplyPipeline?.didStream()) || successfulSideEffectDelivery;
   if (
+    !strandedFinal &&
     completion.outcome !== "delivered" &&
     (replyPayloads.length === 0 || (!hasVisibleReplyPayload && !canDeliverStandaloneFallbackNotice))
   ) {
@@ -598,80 +675,12 @@ export async function prepareReplyAgentPayloads(state: {
   const statusPayload = guardedReplyPayloads.find(
     (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
   );
-  // Media admission owns runs under the tools' runtime policy key, not a shared main key.
-  const mediaSessionKey =
-    implicitContinuation && !continuationOwner
-      ? (runtimePolicySessionKey ?? sessionKey ?? followupRun.run.sessionKey)
-      : undefined;
-  if (statusPayload) {
-    await attachWaitingStatusProgressContinuation({
+  if (!explicitSilence && !quietContinuation) {
+    await prepareWaitingStatusContinuation({
+      context,
+      owner: continuationOwner,
       payload: statusPayload,
-      acceptedSessionSpawns: runResult.acceptedSessionSpawns,
-      mediaRequester: mediaSessionKey
-        ? { sessionKey: mediaSessionKey, agentId: followupRun.run.agentId }
-        : undefined,
-      operation: replyOperation,
     });
-  }
-
-  if (continuationOwner) {
-    const acceptedSessionSpawns = runResult.acceptedSessionSpawns;
-    const requesterSessionKey = sessionKey ?? followupRun.run.sessionKey;
-    if (!requesterSessionKey || !acceptedSessionSpawns?.length || !statusPayload) {
-      throw new Error("accepted continuation status could not be prepared for delivery");
-    }
-    const { stateContext, operationKey, operationSessionId } = continuationOwner;
-    const assertRequesterCurrent = () => {
-      assertSubagentRegistryWriteSourceCurrent(stateContext);
-      // Abort can still owe non-yielded cleanup; replacement cannot inherit this cohort.
-      if (
-        replyRunRegistry.get(operationKey) !== replyOperation ||
-        replyOperation.key !== operationKey ||
-        replyOperation.sessionId !== operationSessionId
-      ) {
-        throw new Error("Requester continuation lost its original reply operation");
-      }
-    };
-    assertRequesterCurrent();
-    let settlementPromise: Promise<void> | undefined;
-    const settlement: PendingContinuationSettlement = {
-      settle: (statusDelivered) =>
-        (settlementPromise ??= (async () => {
-          try {
-            assertRequesterCurrent();
-            const { settleRequesterAfterSessionSpawns } =
-              await import("../../agents/subagents/registry/subagent-registry.js");
-            assertRequesterCurrent();
-            const transferred = await settleRequesterAfterSessionSpawns({
-              requesterSessionKey,
-              requesterAgentId: followupRun.run.agentId,
-              requesterTurnRunId: runId,
-              acceptedSessionSpawns,
-              requesterYielded: statusDelivered,
-              stateContext,
-              assertCurrent: assertRequesterCurrent,
-            });
-            if (!transferred) {
-              throw new Error(
-                "accepted continuation children could not transfer terminal delivery",
-              );
-            }
-            try {
-              assertRequesterCurrent();
-            } catch (error) {
-              throw new SubagentRegistryWriteError("committed", error, "published");
-            }
-          } finally {
-            getReplyPayloadMetadata(statusPayload)?.progressContinuation?.close();
-          }
-        })().catch((error: unknown) => {
-          if (!(error instanceof SubagentRegistryWriteError) || error.outcome === "not-committed") {
-            settlementPromise = undefined;
-          }
-          throw error;
-        })),
-    };
-    opts?.onPendingContinuation?.(settlement);
   }
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
@@ -708,7 +717,9 @@ export async function prepareReplyAgentPayloads(state: {
   return {
     kind: "continue" as const,
     activeSessionEntry,
+    replyCompletion: completion,
     completedSourceReplyDelivery,
+    reminderNoteAppended: guardedReplyPayloads !== replyPayloads,
     guardedReplyPayloads,
     responseUsageLine,
   };
