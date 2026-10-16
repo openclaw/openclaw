@@ -54,7 +54,7 @@ function firstLogErrorMessage(): unknown {
 }
 function expectPrivateExecLog(...secrets: string[]) {
   const message = String(firstLogErrorMessage());
-  expect(message).toBe("[tools] exec failed.");
+  expect(message).toBe("[tools] exec failed:");
   for (const secret of [...secrets, "export XAI_API_KEY"]) {
     expect(message).not.toContain(secret);
   }
@@ -93,7 +93,7 @@ describe("agent tool definition adapter logging", () => {
 
     const result = await invoke(def, "call-edit-1", { path: "private-notes.txt" });
 
-    expect(firstLogErrorMessage()).toBe("[tools] edit failed.");
+    expect(firstLogErrorMessage()).toBe("[tools] edit failed:");
     expect(result.details).toEqual({
       status: "error",
       tool: "edit",
@@ -124,7 +124,7 @@ describe("agent tool definition adapter logging", () => {
       input: "*** Begin Patch",
     });
 
-    expect(firstLogErrorMessage()).toBe(`[tools] apply_patch failed. ${operatorHint}`);
+    expect(firstLogErrorMessage()).toBe(`[tools] apply_patch failed: ${operatorHint}`);
     const logs = JSON.stringify([...mocks.logError.mock.calls, ...mocks.logDebug.mock.calls]);
     expect(logs).not.toContain("private-tool-message");
     expect(logs).not.toContain("private-tool-stack-sentinel");

@@ -113,7 +113,7 @@ async function executeAdaptedToolOperation(params: {
     const operatorHint = described.operatorHint ? ` ${described.operatorHint}` : "";
     // Operator-only: the hint names containment configuration and stays out of the
     // model-visible result below.
-    logError(`[tools] ${params.normalizedToolName} failed.${operatorHint}`);
+    logError(`[tools] ${params.normalizedToolName} failed:${operatorHint}`);
     const result = buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,
