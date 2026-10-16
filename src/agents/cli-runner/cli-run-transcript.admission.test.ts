@@ -201,11 +201,16 @@ function deferOperation() {
       queued.resolve();
       await released.promise;
     },
-    wait: async (result: Promise<void>) => {
-      await Promise.race([queued.promise, result]);
-      expect(didQueue).toBe(true);
+    async during(result: Promise<void>, action: () => void) {
+      try {
+        await Promise.race([queued.promise, result]);
+        expect(didQueue).toBe(true);
+        action();
+      } finally {
+        released.resolve();
+        await result;
+      }
     },
-    release: () => released.resolve(),
   };
 }
 
@@ -233,19 +238,25 @@ function deferRestoration() {
   return restoration;
 }
 
+function expectNoWrite() {
+  expect(mocks.open).not.toHaveBeenCalled();
+  expect(mocks.append).not.toHaveBeenCalled();
+}
+
+function retireSource(message = "Retired source") {
+  mocks.owned.mockImplementation(() => {
+    throw new Error(message);
+  });
+}
+
 it.each(["native", "supplied"] as const)(
   "waits for %s admission before appending",
   async (branch) => {
     const admission = deferAdmission();
     const { params, result } = run(branch);
-    try {
-      await admission.wait(result);
-      expect(mocks.append).not.toHaveBeenCalled();
-      expect(mocks.open).not.toHaveBeenCalled();
-    } finally {
-      admission.release();
-      await result;
-    }
+    await admission.during(result, () => {
+      expectNoWrite();
+    });
     expect(mocks.append).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         role: "user",
@@ -261,8 +272,7 @@ it.each(["missing", "session", "lifecycle", "writer"] as const)(
   async (change) => {
     const admission = deferAdmission();
     const { result } = run("native");
-    try {
-      await admission.wait(result);
+    await admission.during(result, () => {
       if (change === "missing") {
         current = undefined;
       } else if (change === "session") {
@@ -280,12 +290,8 @@ it.each(["missing", "session", "lifecycle", "writer"] as const)(
         true,
         current,
       );
-    } finally {
-      admission.release();
-      await result;
-    }
-    expect(mocks.open).not.toHaveBeenCalled();
-    expect(mocks.append).not.toHaveBeenCalled();
+    });
+    expectNoWrite();
     expect(mocks.warn).toHaveBeenCalledOnce();
   },
 );
@@ -296,15 +302,11 @@ it.each(["native", "supplied"] as const)(
     for (const authority of [mocks.owned, mocks.writer]) {
       const admission = deferAdmission();
       const { result } = run(branch);
-      try {
-        await admission.wait(result);
+      await admission.during(result, () => {
         authority.mockImplementationOnce(() => {
           throw new Error("Retired source");
         });
-      } finally {
-        admission.release();
-        await result;
-      }
+      });
       expect(mocks.append).not.toHaveBeenCalled();
     }
   },
@@ -323,17 +325,13 @@ it("keeps a supplied detached manager targetless", async () => {
 it("keeps the native target captured before the caller changes its request", async () => {
   const admission = deferAdmission();
   const { params, result } = run("native");
-  try {
-    await admission.wait(result);
+  await admission.during(result, () => {
     params.sessionTarget = {
       ...target,
       sessionId: "successor-session",
       storePath: "/synthetic/successor",
     };
-  } finally {
-    admission.release();
-    await result;
-  }
+  });
   expect(mocks.open).toHaveBeenCalledExactlyOnceWith({ ...target, env: capturedEnv });
   expect(mocks.append).toHaveBeenCalledOnce();
 });
@@ -341,32 +339,21 @@ it("keeps the native target captured before the caller changes its request", asy
 it("refuses retired write ownership before deferred cold restoration mutates it", async () => {
   const restoration = deferRestoration();
   const { result } = run("native");
-  try {
-    await restoration.wait(result);
+  await restoration.during(result, () => {
     expect(mocks.restoreCommit).not.toHaveBeenCalled();
-    mocks.owned.mockImplementation(() => {
-      throw new Error("Retired source");
-    });
-  } finally {
-    restoration.release();
-    await result;
-  }
+    retireSource();
+  });
   expect(mocks.restoreCommit).not.toHaveBeenCalled();
-  expect(mocks.open).not.toHaveBeenCalled();
-  expect(mocks.append).not.toHaveBeenCalled();
+  expectNoWrite();
   expect(mocks.warn).toHaveBeenCalledOnce();
 });
 
 it("retains the captured environment through cold restoration and admitted native writes", async () => {
   const restoration = deferRestoration();
   const { result } = run("native");
-  try {
-    await restoration.wait(result);
+  await restoration.during(result, () => {
     mocks.cloneEnv.mockReturnValue({ OPENCLAW_STATE_DIR: "/synthetic/ambient-successor" });
-  } finally {
-    restoration.release();
-    await result;
-  }
+  });
   expect(mocks.restoreCommit).toHaveBeenCalledOnce();
   expect(mocks.open).toHaveBeenCalledExactlyOnceWith({ ...target, env: capturedEnv });
   expect(mocks.append).toHaveBeenCalledOnce();
@@ -385,8 +372,7 @@ it.each(["current", "lifecycle", "writer"] as const)(
       expect(mocks.append).toHaveBeenCalledOnce();
       expect(mocks.warn).not.toHaveBeenCalled();
     } else {
-      expect(mocks.open).not.toHaveBeenCalled();
-      expect(mocks.append).not.toHaveBeenCalled();
+      expectNoWrite();
       expect(mocks.warn).toHaveBeenCalledOnce();
     }
   },
@@ -404,9 +390,7 @@ it("releases the fallback read when its final authority check fails", async () =
         { ok: true, value: current },
         { kind: "file", source, assertCurrent },
       );
-      mocks.owned.mockImplementation(() => {
-        throw new Error("Retired source after entry read");
-      });
+      retireSource("Retired source after entry read");
       assertCurrent();
       return result;
     },
@@ -414,8 +398,7 @@ it("releases the fallback read when its final authority check fails", async () =
 
   await run("native").result;
 
-  expect(mocks.open).not.toHaveBeenCalled();
-  expect(mocks.append).not.toHaveBeenCalled();
+  expectNoWrite();
   expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining("Retired source after entry read"),
   );

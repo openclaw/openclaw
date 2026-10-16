@@ -7,6 +7,7 @@ import { retireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
 import { resolveCliSessionReuse } from "../cli-session.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { buildCodexUserMcpServersThreadConfigPatchForRun } from "./bundle-mcp-codex.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import {
@@ -61,18 +62,15 @@ describe("prepareCliBundleMcpConfig codex", () => {
                 runId: sessionId,
                 provider: "openai",
                 modelId: "gpt-5.6-luna",
-                model: {
+                model: makeProviderModelFixture({
                   id: "gpt-5.6-luna",
                   name: "Test model",
                   api: "openai-responses",
                   provider: "openai",
                   baseUrl: "https://api.openai.com/v1",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 100_000,
                   maxTokens: 1_000,
-                },
+                }),
                 authStorage,
                 authProfileStore: { version: 1, profiles: {} },
                 modelRegistry: ModelRegistry.inMemory(authStorage),
@@ -182,21 +180,10 @@ describe("prepareCliBundleMcpConfig codex", () => {
       },
     });
 
-    // Codex consumes MCP config through TOML-like -c overrides instead of a
-    // generated config file.
-    expect(prepared.backend.args).toEqual([
-      "exec",
-      "--json",
-      "-c",
-      'mcp_servers={ openclaw = { url = "http://127.0.0.1:23119/mcp", default_tools_approval_mode = "approve", bearer_token_env_var = "OPENCLAW_MCP_TOKEN", env_http_headers = { x-session-key = "OPENCLAW_MCP_SESSION_KEY", x-openclaw-cli-capture-key = "OPENCLAW_MCP_CLI_CAPTURE_KEY" } } }',
-    ]);
-    expect(prepared.backend.resumeArgs).toEqual([
-      "exec",
-      "resume",
-      "{sessionId}",
-      "-c",
-      'mcp_servers={ openclaw = { url = "http://127.0.0.1:23119/mcp", default_tools_approval_mode = "approve", bearer_token_env_var = "OPENCLAW_MCP_TOKEN", env_http_headers = { x-session-key = "OPENCLAW_MCP_SESSION_KEY", x-openclaw-cli-capture-key = "OPENCLAW_MCP_CLI_CAPTURE_KEY" } } }',
-    ]);
+    const override =
+      'mcp_servers={ openclaw = { url = "http://127.0.0.1:23119/mcp", default_tools_approval_mode = "approve", bearer_token_env_var = "OPENCLAW_MCP_TOKEN", env_http_headers = { x-session-key = "OPENCLAW_MCP_SESSION_KEY", x-openclaw-cli-capture-key = "OPENCLAW_MCP_CLI_CAPTURE_KEY" } } }';
+    expect(prepared.backend.args).toEqual(["exec", "--json", "-c", override]);
+    expect(prepared.backend.resumeArgs).toEqual(["exec", "resume", "{sessionId}", "-c", override]);
     expect(prepared.cleanup).toBeUndefined();
   });
 });

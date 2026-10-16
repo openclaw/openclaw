@@ -14,18 +14,57 @@ import {
 
 setupCliBundleMcpTestHarness();
 
+type PrepareParams = Parameters<typeof prepareCliBundleMcpConfig>[0];
+function prepareGemini(params: Partial<PrepareParams> = {}) {
+  return prepareCliBundleMcpConfig({
+    enabled: true,
+    mode: "gemini-system-settings",
+    backend: { command: "gemini", args: ["--prompt", "{prompt}"] },
+    workspaceDir: "/tmp/openclaw-bundle-mcp-gemini",
+    ...params,
+  });
+}
+
+function loopback(options: { headers?: Record<string, string>; excludeTools?: string[] } = {}) {
+  return {
+    mcpServers: {
+      openclaw: {
+        type: "http",
+        url: "http://127.0.0.1:23119/mcp",
+        ...options,
+      },
+    },
+  };
+}
+
+async function readSettings(prepared: Awaited<ReturnType<typeof prepareGemini>>) {
+  return JSON.parse(
+    await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
+  ) as {
+    mcp?: { allowed?: string[] };
+    tools?: { exclude?: string[] };
+    mcpServers?: Record<
+      string,
+      {
+        url?: string;
+        headers?: Record<string, string>;
+        includeTools?: string[];
+        excludeTools?: string[];
+      }
+    >;
+    security?: { auth?: { selectedType?: string }; folderTrust?: { enabled?: boolean } };
+  };
+}
+
 describe("prepareCliBundleMcpConfig gemini", () => {
   it("disables Gemini native web search without bundle MCP", async () => {
-    const prepared = await prepareCliBundleMcpConfig({
+    const prepared = await prepareGemini({
       enabled: false,
-      mode: "gemini-system-settings",
       backend: { command: "gemini" },
       workspaceDir: "/tmp/openclaw-cli-gemini-web-search-disabled",
       toolOverrides: { webSearch: false },
     });
-    const raw = JSON.parse(
-      await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
-    ) as { tools?: { exclude?: string[] } };
+    const raw = await readSettings(prepared);
 
     expect(raw.tools?.exclude).toEqual(["google_web_search"]);
     expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
@@ -33,28 +72,15 @@ describe("prepareCliBundleMcpConfig gemini", () => {
   });
 
   it("writes Gemini system settings for bundle MCP servers", async () => {
-    const prepared = await prepareCliBundleMcpConfig({
-      enabled: true,
-      mode: "gemini-system-settings",
-      backend: {
-        command: "gemini",
-        args: ["--prompt", "{prompt}"],
-      },
-      workspaceDir: "/tmp/openclaw-bundle-mcp-gemini",
+    const prepared = await prepareGemini({
       config: { plugins: { enabled: false } },
-      additionalConfig: {
-        mcpServers: {
-          openclaw: {
-            type: "http",
-            url: "http://127.0.0.1:23119/mcp",
-            excludeTools: ["global_delete"],
-            headers: {
-              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-              "x-openclaw-client-caps": "${OPENCLAW_MCP_CLIENT_CAPS}",
-            },
-          },
+      additionalConfig: loopback({
+        headers: {
+          Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+          "x-openclaw-client-caps": "${OPENCLAW_MCP_CLIENT_CAPS}",
         },
-      },
+        excludeTools: ["global_delete"],
+      }),
       env: {
         OPENCLAW_MCP_TOKEN: "lb-tk-123",
         OPENCLAW_MCP_CLIENT_CAPS: "tool-events,inline-widgets",
@@ -65,24 +91,16 @@ describe("prepareCliBundleMcpConfig gemini", () => {
     expect(prepared.backend.args).toEqual(["--prompt", "{prompt}"]);
     expect(prepared.env?.OPENCLAW_MCP_TOKEN).toBe("lb-tk-123");
     expect(typeof prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe("string");
-    // Gemini reads MCP servers from a generated system settings JSON file.
-    const raw = JSON.parse(
-      await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
-    ) as {
-      mcp?: { allowed?: string[] };
-      tools?: { exclude?: string[] };
-      mcpServers?: Record<
-        string,
-        { url?: string; headers?: Record<string, string>; excludeTools?: string[] }
-      >;
-    };
+    const raw = await readSettings(prepared);
     expect(raw.mcp?.allowed).toEqual(["openclaw"]);
-    expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
-    expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer lb-tk-123");
-    expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-client-caps"]).toBe(
-      "tool-events,inline-widgets",
-    );
-    expect(raw.mcpServers?.openclaw?.excludeTools).toEqual(["delete_docs", "global_delete"]);
+    expect(raw.mcpServers?.openclaw).toMatchObject({
+      url: "http://127.0.0.1:23119/mcp",
+      headers: {
+        Authorization: "Bearer lb-tk-123",
+        "x-openclaw-client-caps": "tool-events,inline-widgets",
+      },
+      excludeTools: ["delete_docs", "global_delete"],
+    });
     expect(raw.tools?.exclude).toEqual(["google_web_search"]);
 
     await prepared.cleanup?.();
@@ -95,17 +113,13 @@ describe("prepareCliBundleMcpConfig gemini", () => {
       tools: { allow: ["docs__read_docs"], deny: ["docs__delete_docs"] },
       mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } },
     };
-    const prepared = await prepareCliBundleMcpConfig({
-      enabled: true,
-      mode: "gemini-system-settings",
+    const prepared = await prepareGemini({
       backend: { command: "gemini" },
       workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
       config,
       nativeMcpPolicy: cliNativeMcpPolicyContext(config, "gemini-policy"),
     });
-    const raw = JSON.parse(
-      await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
-    ) as { mcpServers?: { docs?: { includeTools?: string[]; excludeTools?: string[] } } };
+    const raw = await readSettings(prepared);
     expect(raw.mcpServers?.docs).toMatchObject({
       includeTools: ["read_docs"],
       excludeTools: ["app_docs", "delete_docs", "task_docs"],
@@ -115,9 +129,7 @@ describe("prepareCliBundleMcpConfig gemini", () => {
 
   it("omits a server when configured and policy allowlists do not overlap", async () => {
     const serverPath = await writeCliMcpPolicyProbeServer();
-    const prepared = await prepareCliBundleMcpConfig({
-      enabled: true,
-      mode: "gemini-system-settings",
+    const prepared = await prepareGemini({
       backend: { command: "gemini" },
       workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
       exclusiveConfig: {
@@ -131,35 +143,18 @@ describe("prepareCliBundleMcpConfig gemini", () => {
         },
       },
     });
-    const raw = JSON.parse(
-      await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
-    ) as { mcp?: { allowed?: string[] }; mcpServers?: Record<string, unknown> };
+    const raw = await readSettings(prepared);
     expect(raw.mcp?.allowed).not.toContain("docs");
     expect(raw.mcpServers?.docs).toBeUndefined();
     await prepared.cleanup?.();
   });
 
   it("writes a unique capture token into per-attempt Gemini settings", async () => {
-    const prepared = await prepareCliBundleMcpConfig({
-      enabled: true,
-      mode: "gemini-system-settings",
-      backend: {
-        command: "gemini",
-        args: ["--prompt", "{prompt}"],
-      },
-      workspaceDir: "/tmp/openclaw-bundle-mcp-gemini",
+    const prepared = await prepareGemini({
       config: { plugins: { enabled: false } },
-      additionalConfig: {
-        mcpServers: {
-          openclaw: {
-            type: "http",
-            url: "http://127.0.0.1:23119/mcp",
-            headers: {
-              "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
-            },
-          },
-        },
-      },
+      additionalConfig: loopback({
+        headers: { "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}" },
+      }),
       env: {
         OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
       },
@@ -171,11 +166,7 @@ describe("prepareCliBundleMcpConfig gemini", () => {
     });
 
     try {
-      const raw = JSON.parse(
-        await fs.readFile(attempt.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
-      ) as {
-        mcpServers?: Record<string, { headers?: Record<string, string> }>;
-      };
+      const raw = await readSettings({ ...prepared, env: attempt.env });
       expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe("attempt-123");
       expect(attempt.env?.GOOGLE_CLOUD_PROJECT).toBe("active-capture-project");
       expect(attempt.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).not.toBe(
@@ -192,55 +183,25 @@ describe("prepareCliBundleMcpConfig gemini", () => {
     const inheritedSettingsPath = path.join(dir, "settings.json");
     await fs.writeFile(
       inheritedSettingsPath,
-      `${JSON.stringify(
-        {
-          security: {
-            auth: {
-              selectedType: "vertex-ai",
-            },
-            folderTrust: {
-              enabled: true,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
+      JSON.stringify({
+        security: { auth: { selectedType: "vertex-ai" }, folderTrust: { enabled: true } },
+      }),
       "utf-8",
     );
-    const prepared = await prepareCliBundleMcpConfig({
-      enabled: true,
-      mode: "gemini-system-settings",
-      backend: {
-        command: "gemini",
-        args: ["--prompt", "{prompt}"],
-      },
-      workspaceDir: "/tmp/openclaw-bundle-mcp-gemini",
+    const prepared = await prepareGemini({
       config: { plugins: { enabled: false } },
-      additionalConfig: {
-        mcpServers: {
-          openclaw: {
-            type: "http",
-            url: "http://127.0.0.1:23119/mcp",
-          },
-        },
-      },
+      additionalConfig: loopback(),
       env: {
         GEMINI_CLI_SYSTEM_SETTINGS_PATH: inheritedSettingsPath,
       },
     });
 
     try {
-      const raw = JSON.parse(
-        await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
-      ) as {
-        security?: {
-          auth?: { selectedType?: string };
-          folderTrust?: { enabled?: boolean };
-        };
-      };
-      expect(raw.security?.auth?.selectedType).toBe("vertex-ai");
-      expect(raw.security?.folderTrust?.enabled).toBe(true);
+      const raw = await readSettings(prepared);
+      expect(raw.security).toMatchObject({
+        auth: { selectedType: "vertex-ai" },
+        folderTrust: { enabled: true },
+      });
       expect(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).not.toBe(inheritedSettingsPath);
     } finally {
       await prepared.cleanup?.();
