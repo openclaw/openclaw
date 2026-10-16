@@ -1,23 +1,16 @@
 // Regression: resizing the chat pane must not jump the transcript. The reader's
 // anchor row (topmost visible row) should stay in place while rows re-wrap.
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-
-let browser: Browser;
-let controlUi: ControlUiE2eServer;
-const contexts = new Set<BrowserContext>();
+const suite = createControlUiE2eSuite({
+  name: "Chat transcript resize anchoring",
+  startServerBeforeBrowser: true,
+  setupTimeoutMs: 120_000,
+  trackBrowserContexts: true,
+});
 
 const MESSAGE_COUNT = 120;
 const filler =
@@ -32,8 +25,6 @@ function messageContent(index: number): string {
 type AnchorSample = {
   key: string | null;
   topDelta: number;
-  scrollTop: number;
-  visibleKeys: string[];
   contentVisible: boolean;
 };
 
@@ -42,13 +33,7 @@ async function sampleAnchor(page: Page, anchorKey: string | null): Promise<Ancho
     const inner = document.querySelector<HTMLElement>(".chat-thread-inner--virtual");
     const scroller = inner?.parentElement;
     if (!inner || !scroller) {
-      return {
-        key: null,
-        topDelta: Number.NaN,
-        scrollTop: Number.NaN,
-        visibleKeys: [],
-        contentVisible: false,
-      };
+      return { key: null, topDelta: Number.NaN, contentVisible: false };
     }
     const scrollerRect = scroller.getBoundingClientRect();
     const rows = [...inner.querySelectorAll<HTMLElement>(".chat-virtual-row")]
@@ -63,8 +48,6 @@ async function sampleAnchor(page: Page, anchorKey: string | null): Promise<Ancho
     return {
       key: anchor?.key ?? null,
       topDelta: anchor ? anchor.rect.top - scrollerRect.top : Number.NaN,
-      scrollTop: scroller.scrollTop,
-      visibleKeys: rows.map((row) => row.key),
       contentVisible:
         anchor?.contentRect !== undefined &&
         anchor.contentRect.bottom > scrollerRect.top &&
@@ -74,39 +57,18 @@ async function sampleAnchor(page: Page, anchorKey: string | null): Promise<Ancho
 }
 
 async function settleFrames(page: Page, frames: number): Promise<void> {
-  await page.evaluate(
-    (count) =>
-      new Promise<void>((resolve) => {
-        const step = (remaining: number) => {
-          if (remaining <= 0) {
-            resolve();
-            return;
-          }
-          requestAnimationFrame(() => step(remaining - 1));
-        };
-        step(count);
-      }),
-    frames,
-  );
+  await page.evaluate(async (count) => {
+    for (let frame = 0; frame < count; frame++) {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    }
+  }, frames);
 }
 
-describeControlUiE2e("Chat transcript resize anchoring", () => {
-  beforeAll(async () => {
-    controlUi = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  }, 120_000);
-
-  afterAll(async () => {
-    for (const context of contexts) {
-      await context.close();
-    }
-    await browser?.close();
-    await controlUi?.close();
-  });
-
-  it("keeps the anchor row stable across pane width changes", async () => {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    contexts.add(context);
+suite.define(() => {
+  async function openTranscript() {
+    const context = await suite.newBrowserContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const now = Date.now();
     await installMockGateway(page, {
@@ -118,14 +80,16 @@ describeControlUiE2e("Chat transcript resize anchoring", () => {
       })),
     });
 
-    await page.goto(`${controlUi.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
     await page
       .getByText(`Message number ${MESSAGE_COUNT - 1}:`)
       .first()
-      .waitFor({
-        timeout: 15_000,
-      });
+      .waitFor({ timeout: 15_000 });
+    return page;
+  }
 
+  it("keeps the anchor row stable across pane width changes", async () => {
+    const page = await openTranscript();
     const scroller = page.locator(".chat-thread");
     await expect
       .poll(() =>
@@ -174,28 +138,13 @@ describeControlUiE2e("Chat transcript resize anchoring", () => {
     expect(before.key).not.toBeNull();
     expect(before.contentVisible, "reader anchor contains visible message content").toBe(true);
 
-    const widths = [1000, 820, 1280];
-    const observations: { width: number; sample: AnchorSample }[] = [];
-    for (const width of widths) {
+    for (const width of [1000, 820, 1280]) {
       await page.setViewportSize({ width, height: 900 });
       await settleFrames(page, 30);
       const sample = await sampleAnchor(page, before.key);
-      observations.push({ width, sample });
-      console.log(
-        `[resize-anchor] width=${width} anchor=${before.key} topDelta=${sample.topDelta} ` +
-          `(was ${before.topDelta}) scrollTop=${sample.scrollTop} (was ${before.scrollTop}) ` +
-          `visible=${sample.visibleKeys.length ? sample.visibleKeys.join(",") : "<none>"}`,
-      );
-    }
-
-    for (const { width, sample } of observations) {
-      // The anchor row must remain visible after every width change...
       expect(sample.key, `anchor visible at width ${width}`).toBe(before.key);
-      // ...and roughly hold its viewport position while its own text re-wraps.
-      // The fold-spanning anchor row's own re-wrap moves its top by a font-
-      // metric-dependent amount (42px on macOS, 63px on Linux CI at 820px);
-      // the pre-fix failure mode is the anchor leaving the viewport entirely
-      // with 250px+ scroll drift, so 120px keeps a wide detection margin.
+      // Rewrap shifts the row top by up to 63px across fonts; the regression
+      // lost the row entirely with 250px+ drift, leaving margin at 120px.
       expect(
         Math.abs(sample.topDelta - before.topDelta),
         `anchor drift at width ${width}`,
@@ -204,27 +153,8 @@ describeControlUiE2e("Chat transcript resize anchoring", () => {
   }, 120_000);
 
   it("keeps an end-pinned transcript pinned across width-only resizes", async () => {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    contexts.add(context);
-    const page = await context.newPage();
-    const now = Date.now();
-    await installMockGateway(page, {
-      sessionKey: "agent:main:main",
-      historyMessages: Array.from({ length: MESSAGE_COUNT }, (_, index) => ({
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: messageContent(index),
-        timestamp: now - (MESSAGE_COUNT - index) * 60_000,
-      })),
-    });
-
+    const page = await openTranscript();
     // Fresh sessions open pinned to the end; leave the scroll untouched.
-    await page.goto(`${controlUi.baseUrl}chat`);
-    await page
-      .getByText(`Message number ${MESSAGE_COUNT - 1}:`)
-      .first()
-      .waitFor({
-        timeout: 15_000,
-      });
     await settleFrames(page, 30);
 
     const distanceFromEnd = () =>

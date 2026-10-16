@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -9,46 +10,68 @@ const self = {
   senderId: "alice",
   senderName: "Alice Chen",
   senderIdentity: { type: "profile", id: "alice" },
-};
+} as const;
 const peer = {
   senderId: "jordan",
   senderName: "Jordan Lee",
   senderIdentity: { type: "profile", id: "jordan" },
+} as const;
+function message(
+  id: string,
+  role: string,
+  content: string,
+  metadata: Record<string, unknown> = {},
+  extra: Record<string, unknown> = {},
+) {
+  return { role, content, __openclaw: { id, ...metadata }, ...extra };
+}
+function sequence<T extends { __openclaw: object }>(messages: T[]) {
+  return messages.map((entry, index) =>
+    Object.assign(entry, {
+      timestamp: 1_800_000_000_000 + index * 1000,
+      __openclaw: Object.assign({}, entry["__openclaw"], { seq: index + 1 }),
+    }),
+  );
+}
+const history = sequence([
+  message("agent-source", "assistant", "Review the release checklist before sharing it."),
+  message("self-reply", "user", "OK", { ...self, replyToId: "agent-source" }),
+  message("peer-first", "user", "The desktop controls work.", peer),
+  message("peer-reply", "user", "The checklist is ready.", { ...peer, replyToId: "self-reply" }),
+  message("peer-last", "user", "I checked the mobile controls too.", peer),
+  message("answer-one", "assistant", "The first answer."),
+  message("answer-two", "assistant", "The second answer."),
+]);
+const selfPresence = {
+  self: true,
+  id: "alice",
+  identity: self.senderIdentity,
+  name: self.senderName,
 };
-const history = [
-  {
-    role: "assistant",
-    content: "Review the release checklist before sharing it.",
-    __openclaw: { id: "agent-source" },
-  },
-  {
-    role: "user",
-    content: "OK",
-    __openclaw: { id: "self-reply", ...self, replyToId: "agent-source" },
-  },
-  {
-    role: "user",
-    content: "The desktop controls work.",
-    __openclaw: { id: "peer-first", ...peer },
-  },
-  {
-    role: "user",
-    content: "The checklist is ready.",
-    __openclaw: { id: "peer-reply", ...peer, replyToId: "self-reply" },
-  },
-  {
-    role: "user",
-    content: "I checked the mobile controls too.",
-    __openclaw: { id: "peer-last", ...peer },
-  },
-  { role: "assistant", content: "The first answer.", __openclaw: { id: "answer-one" } },
-  { role: "assistant", content: "The second answer.", __openclaw: { id: "answer-two" } },
-].map((message, index) =>
-  Object.assign(message, {
-    timestamp: 1_800_000_000_000 + index * 1000,
-    __openclaw: Object.assign({}, message["__openclaw"], { seq: index + 1 }),
-  }),
-);
+async function preparePage(
+  page: Page,
+  key: string,
+  historyMessages: unknown[],
+  theme: string,
+  includePeer = false,
+) {
+  await installMockGateway(page, {
+    sessionKey: key,
+    historyMessages,
+    presenceUsers: [
+      selfPresence,
+      ...(includePeer
+        ? [{ id: "jordan", identity: peer.senderIdentity, name: peer.senderName }]
+        : []),
+    ],
+  });
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+  await page.evaluate(async (value) => {
+    document.documentElement.dataset.theme = value;
+    document.documentElement.dataset.themeMode = value;
+    await document.fonts.ready;
+  }, theme);
+}
 const viewports = [
   { width: 1440, height: 1000, touch: false, theme: "light" },
   { width: 390, height: 1000, touch: true, theme: "dark" },
@@ -58,68 +81,41 @@ const viewports = [
 suite.define(() => {
   it("keeps the reply line above completed work across an automatic resumption", async () => {
     const resumedSession = "agent:main:dashboard:reply-strip-resumed-work";
-    const messages = [
-      {
-        role: "user",
-        content: "Please review the release checklist.",
-        __openclaw: { id: "earlier-prompt", ...self },
-      },
-      {
-        role: "user",
-        content: "Check the release notes and test results before we share it.",
-        __openclaw: { id: "review-prompt", idempotencyKey: "review-run:user", ...peer },
-      },
-      {
-        role: "toolResult",
-        toolName: "read",
-        toolCallId: "read-release-notes",
-        content: "The release notes describe the updated controls.",
-        __openclaw: { id: "first-run-work", runId: "review-run" },
-      },
-      {
-        role: "toolResult",
-        toolName: "exec",
-        toolCallId: "check-test-results",
-        content: "The focused tests passed.",
-        __openclaw: { id: "resumed-work", runId: "announce:review-complete" },
-      },
-      {
-        role: "assistant",
-        content:
-          "The release checklist is ready. I checked the notes and test results; the controls are consistent across desktop and mobile.",
-        phase: "final_answer",
-        stopReason: "stop",
-        __openclaw: { id: "resumed-answer", runId: "announce:review-complete" },
-      },
-    ].map((message, index) =>
-      Object.assign(message, {
-        timestamp: 1_800_000_000_000 + index * 1000,
-        __openclaw: Object.assign({}, message["__openclaw"], { seq: index + 1 }),
-      }),
-    );
+    const messages = sequence([
+      message("earlier-prompt", "user", "Please review the release checklist.", self),
+      message(
+        "review-prompt",
+        "user",
+        "Check the release notes and test results before we share it.",
+        { idempotencyKey: "review-run:user", ...peer },
+      ),
+      message(
+        "first-run-work",
+        "toolResult",
+        "The release notes describe the updated controls.",
+        { runId: "review-run" },
+        { toolName: "read", toolCallId: "read-release-notes" },
+      ),
+      message(
+        "resumed-work",
+        "toolResult",
+        "The focused tests passed.",
+        { runId: "announce:review-complete" },
+        { toolName: "exec", toolCallId: "check-test-results" },
+      ),
+      message(
+        "resumed-answer",
+        "assistant",
+        "The release checklist is ready. I checked the notes and test results; the controls are consistent across desktop and mobile.",
+        { runId: "announce:review-complete" },
+        { phase: "final_answer", stopReason: "stop" },
+      ),
+    ]);
     await suite.withPage(
       { viewport: { width: 1440, height: 900 }, locale: "en-US" },
       async ({ page }) => {
-        await installMockGateway(page, {
-          sessionKey: resumedSession,
-          historyMessages: messages,
-          presenceUsers: [
-            {
-              self: true,
-              id: "alice",
-              identity: { type: "profile", id: "alice" },
-              name: "Alice Chen",
-            },
-            { id: "jordan", identity: { type: "profile", id: "jordan" }, name: "Jordan Lee" },
-          ],
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, resumedSession));
+        await preparePage(page, resumedSession, messages, "dark", true);
         await page.locator('[data-entry-id="resumed-answer"]').waitFor();
-        await page.evaluate(async () => {
-          document.documentElement.dataset.theme = "dark";
-          document.documentElement.dataset.themeMode = "dark";
-          await document.fonts.ready;
-        });
         const answerGroup = page.locator(
           '.chat-group.assistant:has([data-entry-id="resumed-answer"])',
         );
@@ -162,24 +158,7 @@ suite.define(() => {
       await suite.withPage(
         { viewport: { width, height }, locale: "en-US", hasTouch: touch },
         async ({ page }) => {
-          await installMockGateway(page, {
-            sessionKey,
-            historyMessages: history,
-            presenceUsers: [
-              {
-                self: true,
-                id: "alice",
-                identity: { type: "profile", id: "alice" },
-                name: "Alice Chen",
-              },
-            ],
-          });
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-          await page.evaluate(async (value) => {
-            document.documentElement.dataset.theme = value;
-            document.documentElement.dataset.themeMode = value;
-            await document.fonts.ready;
-          }, theme);
+          await preparePage(page, sessionKey, history, theme);
           expect(await page.evaluate(() => matchMedia("(hover: none)").matches)).toBe(touch);
           const own = page.locator('[data-entry-id="self-reply"]');
           const first = page.locator('[data-entry-id="peer-first"]');

@@ -12,7 +12,6 @@ import { closeBrowserPage } from "../test-helpers/browser-page.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   installMockGateway,
-  type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -44,12 +43,55 @@ const SHARED_APP_PLAYBACK_MEDIA = [
   ["reply.webm", "video", "video/webm", "transcode"],
 ] as const;
 const sharedAppPlaybackRequests: string[] = [];
+const COMPOSER = ".agent-chat__composer-combobox > textarea";
+const CARD = ".chat-assistant-attachment-card";
+const DESKTOP_VIEWPORT = { width: 1366, height: 900 };
 
-function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
-  return installMockGateway(page, {
-    agentModel: "openai/gpt-5.5",
-    ...scenario,
-  });
+function assistantMessage(content: unknown, minute: number) {
+  return { content, role: "assistant", timestamp: Date.UTC(2026, 6, 9, 10, minute) };
+}
+
+function attachmentLayout(card: Element) {
+  const part = (name: string) =>
+    card.querySelector<HTMLElement>(`.chat-assistant-attachment-card__status-${name}`)!;
+  const badge = part("badge").getBoundingClientRect();
+  const reason = part("reason");
+  const reasonRect = reason.getBoundingClientRect();
+  const separator = part("separator");
+  const separatorRect = separator.getBoundingClientRect();
+  return {
+    leftGap: separatorRect.left - badge.right,
+    rightGap: reasonRect.left - separatorRect.right,
+    badgeBottom: badge.bottom,
+    cardBottom: card.getBoundingClientRect().bottom,
+    cardClientWidth: card.clientWidth,
+    cardScrollWidth: card.scrollWidth,
+    reasonBottom: reasonRect.bottom,
+    reasonRight: reasonRect.right,
+    reasonTop: reasonRect.top,
+    separatorDisplay: getComputedStyle(separator).display,
+    reasonWhiteSpace: getComputedStyle(reason).whiteSpace,
+  };
+}
+
+function contextLayout(node: Element, includeOverlay = false) {
+  const rect = (selector: string) => node.querySelector(selector)!.getBoundingClientRect();
+  return {
+    footerHeight: rect(".chat-group-footer").height,
+    groupHeight: node.getBoundingClientRect().height,
+    contextBottom: includeOverlay ? rect(".msg-meta__details").bottom : 0,
+    summaryTop: includeOverlay ? rect(".msg-meta__summary").top : 0,
+  };
+}
+
+async function waitForComposerResize(page: Page, previous: number, direction: number) {
+  await page.waitForFunction(
+    ({ selector, previous: oldHeight, direction: sign }) => {
+      const element = document.querySelector(selector);
+      return element !== null && (element.getBoundingClientRect().height - oldHeight) * sign > 1;
+    },
+    { selector: COMPOSER, previous, direction },
+  );
 }
 
 function getSharedAppPage(): Promise<Page> {
@@ -59,7 +101,7 @@ function getSharedAppPage(): Promise<Page> {
 async function createSharedAppPage(): Promise<Page> {
   // The five app assertions use disjoint fixture messages and reset mutable
   // page state, so one lazy boot preserves coverage without five graph loads.
-  const page = await suite.browser.newPage({ viewport: { width: 1366, height: 900 } });
+  const page = await suite.browser.newPage({ viewport: DESKTOP_VIEWPORT });
   try {
     page.on("pageerror", (error) => sharedAppPageErrors.push(error.message));
     await page.route("https://cdn.example/**", async (route) => {
@@ -90,7 +132,8 @@ async function createSharedAppPage(): Promise<Page> {
         body: request.method() === "HEAD" ? Buffer.alloc(0) : body,
       });
     });
-    await installResponsiveChatGateway(page, {
+    await installMockGateway(page, {
+      agentModel: "openai/gpt-5.5",
       assistantName: "Claw",
       historyMessages: [
         {
@@ -102,13 +145,9 @@ async function createSharedAppPage(): Promise<Page> {
           timestamp: Date.UTC(2026, 6, 5, 9, 51),
           usage: { cacheRead: 2_400, input: 19_600, output: 126 },
         },
-        {
-          content: `MEDIA:${SHARED_APP_IMAGE_URL}`,
-          role: "assistant",
-          timestamp: Date.UTC(2026, 6, 9, 10, 0),
-        },
-        {
-          content: [
+        assistantMessage(`MEDIA:${SHARED_APP_IMAGE_URL}`, 0),
+        assistantMessage(
+          [
             { text: SHARED_APP_TTS_TEXT, type: "text" },
             ...SHARED_APP_PLAYBACK_MEDIA.map(([fileName, type, mimeType, playback]) => ({
               fileName,
@@ -118,16 +157,11 @@ async function createSharedAppPage(): Promise<Page> {
               url: `https://cdn.example/${fileName}`,
             })),
           ],
-          role: "assistant",
-          timestamp: Date.UTC(2026, 6, 9, 10, 1),
-        },
-        {
-          content: [{ text: SHARED_APP_SLASH_TEXT, type: "text" }],
-          role: "assistant",
-          timestamp: Date.UTC(2026, 6, 9, 10, 2),
-        },
-        {
-          content: [
+          1,
+        ),
+        assistantMessage([{ text: SHARED_APP_SLASH_TEXT, type: "text" }], 2),
+        assistantMessage(
+          [
             { text: SHARED_APP_ATTACHMENT_OUTCOME_TEXT, type: "text" },
             {
               type: "attachment",
@@ -158,9 +192,8 @@ async function createSharedAppPage(): Promise<Page> {
               },
             },
           ],
-          role: "assistant",
-          timestamp: Date.UTC(2026, 6, 9, 10, 3),
-        },
+          3,
+        ),
       ],
     });
     await page.goto(`${suite.server.baseUrl}chat/main`, {
@@ -207,41 +240,31 @@ suite.define(() => {
       const errorStart = sharedAppPageErrors.length;
       try {
         await page.setViewportSize({ width: 900, height: 800 });
-        const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+        const textarea = page.locator(COMPOSER);
         await textarea.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
         await textarea.fill(
           "Resize this populated draft across a narrow pane so its wrapped lines change height without waiting for another input event. ".repeat(
             2,
           ),
         );
-        await waitForLayoutSettled(page, ".agent-chat__composer-combobox > textarea");
+        await waitForLayoutSettled(page, COMPOSER);
         const wideHeight = (await textarea.boundingBox())?.height ?? 0;
 
         await page.setViewportSize({ width: 430, height: 800 });
-        await page.waitForFunction((previousHeight) => {
-          const element = document.querySelector<HTMLTextAreaElement>(
-            ".agent-chat__composer-combobox > textarea",
-          );
-          return element !== null && element.getBoundingClientRect().height > previousHeight + 1;
-        }, wideHeight);
+        await waitForComposerResize(page, wideHeight, 1);
         const narrowHeight = (await textarea.boundingBox())?.height ?? 0;
         expect(narrowHeight).toBeGreaterThan(wideHeight + 1);
 
         await page.setViewportSize({ width: 900, height: 800 });
-        await page.waitForFunction((previousHeight) => {
-          const element = document.querySelector<HTMLTextAreaElement>(
-            ".agent-chat__composer-combobox > textarea",
-          );
-          return element !== null && element.getBoundingClientRect().height < previousHeight - 1;
-        }, narrowHeight);
+        await waitForComposerResize(page, narrowHeight, -1);
         expect(
           sharedAppPageErrors
             .slice(errorStart)
             .filter((message) => message.includes("ResizeObserver loop")),
         ).toEqual([]);
       } finally {
-        await page.locator(".agent-chat__composer-combobox > textarea").fill("");
-        await page.setViewportSize({ width: 1366, height: 900 });
+        await page.locator(COMPOSER).fill("");
+        await page.setViewportSize(DESKTOP_VIEWPORT);
       }
     },
   );
@@ -252,7 +275,7 @@ suite.define(() => {
     async () => {
       const page = await getSharedAppPage();
       try {
-        await page.setViewportSize({ width: 1366, height: 900 });
+        await page.setViewportSize(DESKTOP_VIEWPORT);
         const group = page.locator(".chat-group").filter({ hasText: SHARED_APP_CONTEXT_TEXT });
         const tooltip = group.locator("openclaw-tooltip.msg-meta");
         const context = tooltip.locator(".msg-meta__details");
@@ -263,26 +286,10 @@ suite.define(() => {
 
         await messageText.hover();
         await waitForLayoutSettled(page, ".chat-group");
-        const initialLayout = await group.evaluate((node) => {
-          const footer = node.querySelector<HTMLElement>(".chat-group-footer")!;
-          return {
-            footerHeight: footer.getBoundingClientRect().height,
-            groupHeight: (node as HTMLElement).getBoundingClientRect().height,
-          };
-        });
+        const initialLayout = await group.evaluate(contextLayout, false);
         await summary.hover();
         await context.waitFor({ state: "visible", timeout: 10_000 });
-        const hoverLayout = await group.evaluate((node) => {
-          const footer = node.querySelector<HTMLElement>(".chat-group-footer")!;
-          const summaryNode = node.querySelector<HTMLElement>(".msg-meta__summary")!;
-          const detailsOverlay = node.querySelector<HTMLElement>(".msg-meta__details")!;
-          return {
-            contextBottom: detailsOverlay.getBoundingClientRect().bottom,
-            footerHeight: footer.getBoundingClientRect().height,
-            groupHeight: (node as HTMLElement).getBoundingClientRect().height,
-            summaryTop: summaryNode.getBoundingClientRect().top,
-          };
-        });
+        const hoverLayout = await group.evaluate(contextLayout, true);
         expect(hoverLayout.footerHeight).toBeCloseTo(initialLayout.footerHeight, 2);
         expect(hoverLayout.groupHeight).toBeCloseTo(initialLayout.groupHeight, 2);
         expect(hoverLayout.contextBottom).toBeLessThanOrEqual(hoverLayout.summaryTop + 4);
@@ -391,13 +398,9 @@ suite.define(() => {
       expect(await player.evaluate((element) => (element as { playback?: unknown }).playback)).toBe(
         playback,
       );
-      const card = player.locator(".chat-assistant-attachment-card");
+      const card = player.locator(CARD);
       await card.waitFor({ state: "visible", timeout: 10_000 });
-      await player.evaluate((element) => {
-        element
-          .querySelector(".chat-assistant-attachment-card")!
-          .scrollIntoView({ block: "center" });
-      });
+      await card.evaluate((element) => element.scrollIntoView({ block: "center" }));
       const requireMetadata = fileName !== "reply.m4a" && fileName !== "reply.mp4";
       // Read the stable player: an error replaces its media child and card.
       // Only AAC/H.264 fixtures may fall back; other codecs must actually load.
@@ -422,12 +425,11 @@ suite.define(() => {
         (await player.locator(".chat-assistant-attachment-card--compact").count()) > 0;
       if (!compactFallback) {
         expect(
-          sharedAppPlaybackRequests.some((url) => {
-            if (!url.includes(fileName)) {
-              return false;
-            }
-            return playback === "native" || new URL(url).searchParams.get("playback") === "1";
-          }),
+          sharedAppPlaybackRequests.some(
+            (url) =>
+              url.includes(fileName) &&
+              (playback === "native" || new URL(url).searchParams.get("playback") === "1"),
+          ),
         ).toBe(true);
       }
     }
@@ -442,7 +444,7 @@ suite.define(() => {
       const bubble = page
         .locator(".chat-bubble")
         .filter({ hasText: SHARED_APP_ATTACHMENT_OUTCOME_TEXT });
-      const cards = bubble.locator(".chat-assistant-attachment-card");
+      const cards = bubble.locator(CARD);
       await expect.poll(() => cards.count()).toBe(7);
       expect(
         await cards.locator(".chat-assistant-attachment-card__title").allTextContents(),
@@ -470,82 +472,31 @@ suite.define(() => {
       expect(await bubble.getByText("Media failed").count()).toBe(0);
 
       try {
-        await cards.filter({ hasText: "settings.toml" }).scrollIntoViewIfNeeded();
-        const desktopStatusSpacing = await cards
-          .filter({ hasText: "settings.toml" })
-          .evaluate((card) => {
-            const badge = card.querySelector<HTMLElement>(
-              ".chat-assistant-attachment-card__status-badge",
-            )!;
-            const reason = card.querySelector<HTMLElement>(
-              ".chat-assistant-attachment-card__status-reason",
-            )!;
-            const separator = card.querySelector<HTMLElement>(
-              ".chat-assistant-attachment-card__status-separator",
-            )!;
-            const badgeRect = badge.getBoundingClientRect();
-            const reasonRect = reason.getBoundingClientRect();
-            const separatorRect = separator.getBoundingClientRect();
-            return {
-              leftGap: separatorRect.left - badgeRect.right,
-              rightGap: reasonRect.left - separatorRect.right,
-            };
-          });
-        expect(desktopStatusSpacing.leftGap).toBeGreaterThan(4);
-        expect(desktopStatusSpacing.rightGap).toBeGreaterThan(4);
-        expect(Math.abs(desktopStatusSpacing.leftGap - desktopStatusSpacing.rightGap)).toBeLessThan(
-          0.25,
-        );
+        const failedCard = cards.filter({ hasText: "settings.toml" });
+        await failedCard.scrollIntoViewIfNeeded();
+        const { leftGap, rightGap } = await failedCard.evaluate(attachmentLayout);
+        expect(leftGap).toBeGreaterThan(4);
+        expect(rightGap).toBeGreaterThan(4);
+        expect(Math.abs(leftGap - rightGap)).toBeLessThan(0.25);
 
         for (const width of [320, 560]) {
           await page.setViewportSize({ width, height: 852 });
-          const failedCard = cards.filter({ hasText: "settings.toml" });
           // The viewport ACK does not settle the retained pane's responsive geometry.
           await failedCard.scrollIntoViewIfNeeded();
           await waitForLayoutSettled(
             page,
             ".chat-main__conversation, .chat-assistant-attachment-card, .chat-assistant-attachment-card__status-reason",
           );
-          const mobileStatusLayout = await failedCard.evaluate((card) => {
-            const badge = card.querySelector<HTMLElement>(
-              ".chat-assistant-attachment-card__status-badge",
-            )!;
-            const reason = card.querySelector<HTMLElement>(
-              ".chat-assistant-attachment-card__status-reason",
-            )!;
-            const separator = card.querySelector<HTMLElement>(
-              ".chat-assistant-attachment-card__status-separator",
-            )!;
-            const cardRect = card.getBoundingClientRect();
-            const reasonRect = reason.getBoundingClientRect();
-            return {
-              badgeBottom: badge.getBoundingClientRect().bottom,
-              cardBottom: cardRect.bottom,
-              cardClientWidth: card.clientWidth,
-              cardScrollWidth: card.scrollWidth,
-              reasonBottom: reasonRect.bottom,
-              reasonRight: reasonRect.right,
-              reasonTop: reasonRect.top,
-              separatorDisplay: getComputedStyle(separator).display,
-              reasonWhiteSpace: getComputedStyle(reason).whiteSpace,
-            };
-          });
-          expect(mobileStatusLayout.separatorDisplay).toBe("none");
-          expect(mobileStatusLayout.reasonWhiteSpace).toBe("normal");
-          expect(mobileStatusLayout.reasonTop).toBeGreaterThanOrEqual(
-            mobileStatusLayout.badgeBottom,
-          );
-          expect(mobileStatusLayout.reasonBottom).toBeLessThanOrEqual(
-            mobileStatusLayout.cardBottom,
-          );
-          expect(mobileStatusLayout.reasonRight).toBeLessThanOrEqual(width);
-          expect(mobileStatusLayout.cardScrollWidth).toBeLessThanOrEqual(
-            mobileStatusLayout.cardClientWidth,
-          );
+          const layout = await failedCard.evaluate(attachmentLayout);
+          expect(layout).toMatchObject({ separatorDisplay: "none", reasonWhiteSpace: "normal" });
+          expect(layout.reasonTop).toBeGreaterThanOrEqual(layout.badgeBottom);
+          expect(layout.reasonBottom).toBeLessThanOrEqual(layout.cardBottom);
+          expect(layout.reasonRight).toBeLessThanOrEqual(width);
+          expect(layout.cardScrollWidth).toBeLessThanOrEqual(layout.cardClientWidth);
           await expectNoHorizontalOverflow(page);
         }
       } finally {
-        await page.setViewportSize({ width: 1366, height: 900 });
+        await page.setViewportSize(DESKTOP_VIEWPORT);
       }
     },
   );
@@ -557,7 +508,7 @@ suite.define(() => {
       page = await getSharedAppPage();
       await page.setViewportSize({ width: 568, height: 320 });
       await page.getByText(SHARED_APP_SLASH_TEXT).waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      const textarea = page.locator(COMPOSER);
       await textarea.fill("/");
       await textarea.focus();
     });
@@ -566,8 +517,8 @@ suite.define(() => {
       if (!page) {
         return;
       }
-      await page.locator(".agent-chat__composer-combobox > textarea").fill("");
-      await page.setViewportSize({ width: 1366, height: 900 });
+      await page.locator(COMPOSER).fill("");
+      await page.setViewportSize(DESKTOP_VIEWPORT);
     });
 
     it("scrolls the keyboard-active slash option into view in short landscape", async () => {
