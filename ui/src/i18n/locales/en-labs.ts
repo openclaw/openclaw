@@ -32,7 +32,7 @@ const enLabs = {
     advisor: {
       title: "Advisor",
       description:
-        "Every few tool calls or minutes of agent work, Advisor reviews the conversation on the session's own model. If it spots avoidable work (drifting from the request, repeated or stalled tool calls), it offers one short correction to the active run, or the next turn when steering is unavailable. Adds model calls.",
+        "Advisor reviews the conversation on the session's own model every few tool calls or minutes, and when a run ends. If the agent is going off course, it sends one short correction: to the active run, or as a follow-up turn when the run already ended. Adds model calls.",
     },
     composerPredictions: {
       title: "Composer predictions",
