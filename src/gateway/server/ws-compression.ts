@@ -167,7 +167,10 @@ export function installGatewayDeflateCodec(socket: WebSocket): boolean {
 
   let inbound: Buffer[] = [];
   codec.decompress = (data, fin, callback) => {
-    inbound.push(data);
+    // Empty continuation frames must not consume memory outside the byte limit.
+    if (data.length > 0) {
+      inbound.push(data);
+    }
     if (!fin) {
       deliver(callback, EMPTY);
       return;

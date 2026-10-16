@@ -517,7 +517,9 @@ describe("authenticated operator request starts", () => {
       const split = fragmented.length >> 1;
       await echo("fragmented", inlineText, () => {
         socket.send(fragmented.slice(0, split), { fin: false });
-        socket.send(fragmented.slice(split), { fin: true });
+        socket.send("", { fin: false });
+        socket.send(fragmented.slice(split), { fin: false });
+        socket.send("", { fin: true });
       });
       // Inflated size stays bounded by the authenticated frame limit.
       const closed = once(socket, "close");
