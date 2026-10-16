@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   readMemoryRecallMetadata,
   type MemorySource,
@@ -33,7 +34,7 @@ export type MemoryDatabaseFacts = {
 
 /** One bounded snapshot; retained text and embeddings never cross this boundary. */
 export function readMemoryDatabaseFacts(
-  db: DatabaseSync,
+  db: EngineConnection,
   hasVectorTable = tableExists(db, MEMORY_INDEX_VECTOR_TABLE),
 ): MemoryDatabaseFacts {
   const query = getNodeSqliteKysely<{
