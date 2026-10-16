@@ -109,7 +109,9 @@ export function runManagedHandoffSentinelOwnerRequest(
 }
 
 /** A new installed-runtime process owns config/driver loading after candidate schema changes. */
-export async function runManagedHandoffSentinelChild(input: ManagedHandoffSentinelRequest) {
+export async function executeInstalledHandoffSentinelOperation(
+  input: ManagedHandoffSentinelRequest,
+) {
   const assertCurrent = prepareAuthority(input, true);
   assertCurrent();
   const env = process.env;

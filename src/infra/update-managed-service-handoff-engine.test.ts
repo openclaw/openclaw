@@ -135,7 +135,7 @@ describe.skipIf(!connection || process.platform === "win32")(
               }
               await fs.appendFile(
                 recoveryModulePath,
-                `${sourceRuntimeImport}\nconst sentinelRuntime = await import(${JSON.stringify(sentinelRuntimeUrl.href)});\nexport const { runManagedHandoffSentinelChild } = sentinelRuntime;\n`,
+                `${sourceRuntimeImport}\nconst sentinelRuntime = await import(${JSON.stringify(sentinelRuntimeUrl.href)});\nexport const runManagedHandoffSentinelChild = sentinelRuntime.executeInstalledHandoffSentinelOperation;\n`,
               );
               if (outcome === "consumed") {
                 // Model the restored Gateway consuming the first failure notice while

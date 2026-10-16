@@ -54,4 +54,4 @@ export const assertForegroundUpdateOrigin = serviceHandoff(
 
 export const runManagedHandoffSentinelChild = createLazyRuntimeMethodBinder(
   () => import("../infra/update-managed-service-handoff-sentinel.js"),
-)((runtime) => runtime.runManagedHandoffSentinelChild);
+)((runtime) => runtime.executeInstalledHandoffSentinelOperation);

@@ -181,10 +181,10 @@ describe.skipIf(!connection)("managed handoff successor socket on PostgreSQL", (
             if (message === "handoff-bound") { process.off("message", ready); resolve(); }
           }));
           try {
-            const { runManagedHandoffSentinelChild } = await import(${JSON.stringify(runtimeUrl.href)});
+            const { executeInstalledHandoffSentinelOperation } = await import(${JSON.stringify(runtimeUrl.href)});
             const { request, outcome } = JSON.parse(readFileSync(process.argv[2], "utf8"));
-            const inspected = await runManagedHandoffSentinelChild(request);
-            const recorded = await runManagedHandoffSentinelChild({ ...request, operation: {
+            const inspected = await executeInstalledHandoffSentinelOperation(request);
+            const recorded = await executeInstalledHandoffSentinelOperation({ ...request, operation: {
               kind: "record", input: { ...outcome, expectedRevision: inspected.revision },
             } });
             process.stdout.write(JSON.stringify({ inspected, recorded }));
