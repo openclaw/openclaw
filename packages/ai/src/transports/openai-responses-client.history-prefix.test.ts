@@ -15,13 +15,16 @@ import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-clien
 import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
+import {
+  completedResponse,
+  outputItem,
+  userMessage,
+  wireMessage,
+  wireCall,
+} from "./openai-stream-cases.test-support.js";
 
 const model = createModel({
-  id: "gpt-5.4",
-  name: "Synthetic prefix replay",
   compat: { supportsResponsesContinuation: true },
-  contextWindow: 128_000,
-  maxTokens: 1024,
 });
 
 function reasoningItem(id: string, encrypted_content: string | null | undefined) {
@@ -29,35 +32,19 @@ function reasoningItem(id: string, encrypted_content: string | null | undefined)
 }
 
 function callItem(id: string, args = {}) {
-  return {
-    type: "function_call",
-    id: `fc_${id}`,
-    call_id: `call_${id}`,
-    name: "cache_probe",
-    arguments: JSON.stringify(args),
-    async: true,
-  };
+  return { ...wireCall(id, "cache_probe", JSON.stringify(args)), async: true };
 }
 
-function thinking(id: string, encryptedContent: string | null | undefined) {
-  return {
-    type: "thinking",
-    thinking: "",
-    thinkingSignature: JSON.stringify({
-      id,
-      type: "reasoning",
-      summary: [],
-      content: [],
-      encrypted_content: encryptedContent,
-    }),
-  };
+function thinking(id: string, encrypted_content: string | null | undefined) {
+  const signature = { id, type: "reasoning", summary: [], content: [], encrypted_content };
+  return { type: "thinking", thinking: "", thinkingSignature: JSON.stringify(signature) };
 }
 
 it("preserves terminal reasoning bytes from warm continuation through cold transcript replay", async () => {
   const sessionId = "reasoning-container-prefix";
   const context: Context = {
     systemPrompt: "Stable instructions.",
-    messages: [{ role: "user", content: "Synthetic runtime context.", timestamp: 0 }],
+    messages: [userMessage("Synthetic runtime context.", 0)],
     tools: [
       { name: "cache_probe", description: "Synthetic probe", parameters: { type: "object" } },
     ],
@@ -99,41 +86,22 @@ it("preserves terminal reasoning bytes from warm continuation through cold trans
       const output = [
         reasoningItem(`rs_${id}`, `encrypted_${id}`),
         requests.length % 3 !== 0
-          ? {
-              type: "function_call",
-              id: `fc_${id}`,
-              call_id: `call_${id}`,
-              name: "cache_probe",
-              arguments: "{}",
-            }
-          : {
-              type: "message",
-              id: `msg_${id}`,
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: "Synthetic answer.", annotations: [] }],
-            },
+          ? wireCall(id, "cache_probe")
+          : wireMessage(`msg_${id}`, "Synthetic answer."),
       ];
       history.set(id, [...effectiveInput, ...output]);
       const events = [
         ...output.flatMap((item, output_index) => [
-          { type: "response.output_item.added", output_index, item },
-          {
-            type: "response.output_item.done",
+          outputItem("added", item, output_index),
+          outputItem(
+            "done",
+            item.type === "reasoning" ? { ...item, encrypted_content: `streamed_${id}_` } : item,
             output_index,
-            item:
-              item.type === "reasoning" ? { ...item, encrypted_content: `streamed_${id}_` } : item,
-          },
+          ),
         ]),
-        {
-          type: "response.completed",
-          response: {
-            id,
-            status: "completed",
-            output,
-            usage: { input_tokens: 100, output_tokens: 10, total_tokens: 110 },
-          },
-        },
+        completedResponse(id, output, {
+          usage: { input_tokens: 100, output_tokens: 10, total_tokens: 110 },
+        }),
       ];
       return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
         headers: { "content-type": "text/event-stream" },
@@ -144,7 +112,7 @@ it("preserves terminal reasoning bytes from warm continuation through cold trans
     const stream = createOpenAIResponsesTransportStreamFn();
     for (let turn = 1; turn <= 4; turn++) {
       if (turn === 3) {
-        context.messages.push({ role: "user", content: "Updated instructions.", timestamp: 3 });
+        context.messages.push(userMessage("Updated instructions.", 3));
       }
       if (turn === 4) {
         cleanupSessionResources(sessionId);
@@ -153,11 +121,7 @@ it("preserves terminal reasoning bytes from warm continuation through cold trans
         );
         context.messages = JSON.parse(persistedTranscript);
       }
-      context.messages.push({
-        role: "user",
-        content: `Before hook.\nVisible turn ${turn}.\nAfter hook.`,
-        timestamp: turn,
-      });
+      context.messages.push(userMessage(`Before hook.\nVisible turn ${turn}.\nAfter hook.`, turn));
       for (let step = 0; step < 3; step++) {
         const response = await stream(model, context, {
           apiKey: "synthetic-prefix-key",
@@ -189,79 +153,51 @@ it("preserves terminal reasoning bytes from warm continuation through cold trans
     }
     const reopenedReasoning = prefixes[9]?.history[2];
     assert(reopenedReasoning);
-    expect(JSON.parse(reopenedReasoning)).toEqual({
-      type: "reasoning",
-      id: "rs_response_1",
-      summary: [],
-      content: [],
-      encrypted_content: "encrypted_response_1",
-    });
+    expect(JSON.parse(reopenedReasoning)).toEqual(
+      reasoningItem("rs_response_1", "encrypted_response_1"),
+    );
   } finally {
     configureAiTransportHost(host);
     cleanupSessionResources(sessionId);
   }
 });
 
-it.each(["terminal-ciphertext", undefined, null])(
-  "settles async transcript prefixes with terminal ciphertext %s",
-  async (encryptedContent) => {
-    const output = createOpenAIResponsesAssistantOutput(model);
-    const reasoning = reasoningItem("rs_async", "streamed-ciphertext");
-    const call = callItem("async");
-    let terminalSeen = false;
-    const snapshots: unknown[] = [];
-    await processResponsesStream(
-      (async function* () {
-        yield { type: "response.output_item.done", output_index: 0, item: reasoning };
-        yield { type: "response.output_item.done", output_index: 1, item: call };
-        terminalSeen = true;
-        yield {
-          type: "response.completed",
-          response: {
-            id: "resp_async",
-            status: "completed",
-            output: [{ ...reasoning, encrypted_content: encryptedContent }, call],
-          },
-        };
-      })(),
-      output,
-      {
-        push(event) {
-          if (event.type === "toolcall_end") {
-            const snapshot = sanitizeTranscriptMessage(event.partial);
-            assert(snapshot.role === "assistant");
-            snapshots.push({ terminalSeen, reasoning: snapshot.content[0] });
-          }
-        },
-      },
-      model,
-      { asyncToolExecution: true },
-    );
-    expect(snapshots).toEqual([
-      {
-        terminalSeen: true,
-        reasoning: thinking("rs_async", encryptedContent),
-      },
-    ]);
-  },
-);
-
-it.each(["stream error", "error event", "abort", "missing terminal"])(
-  "delivers completed async calls with item-done reasoning after %s",
-  async (ending) => {
-    const output = createOpenAIResponsesAssistantOutput(model);
+it.each<{ ending: string; encryptedContent?: string | null }>([
+  { ending: "completed", encryptedContent: "terminal-ciphertext" },
+  { ending: "completed", encryptedContent: undefined },
+  { ending: "completed", encryptedContent: null },
+  { ending: "stream error" },
+  { ending: "error event" },
+  { ending: "abort" },
+  { ending: "missing terminal" },
+])(
+  "settles async transcript prefixes after $ending (ciphertext: $encryptedContent)",
+  async ({ ending, encryptedContent }) => {
+    const completed = ending === "completed";
     const controller = new AbortController();
-    const reasoning = reasoningItem("rs_interrupted", "item-done-ciphertext");
+    const reasoningId = completed ? "rs_async" : "rs_interrupted";
+    const ciphertext = completed ? "streamed-ciphertext" : "item-done-ciphertext";
+    const reasoning = reasoningItem(reasoningId, ciphertext);
+    const ids = completed ? ["async"] : ["1", "2"];
+    const calls = completed
+      ? [callItem("async")]
+      : [1, 2].map((index) =>
+          Object.assign(callItem(String(index), { index }), { status: "completed" }),
+        );
+    let terminalSeen = false;
     const snapshots: unknown[] = [];
     const result = processResponsesStream(
       (async function* () {
-        yield { type: "response.output_item.done", output_index: 0, item: reasoning };
-        for (let index = 1; index <= 2; index++) {
-          yield {
-            type: "response.output_item.done",
-            output_index: index,
-            item: { ...callItem(String(index), { index }), status: "completed" },
-          };
+        yield outputItem("done", reasoning);
+        for (const [index, call] of calls.entries()) {
+          yield outputItem("done", call, index + 1);
+        }
+        if (completed) {
+          terminalSeen = true;
+          yield completedResponse("resp_async", [
+            { ...reasoning, encrypted_content: encryptedContent },
+            ...calls,
+          ]);
         }
         if (ending === "stream error") {
           throw new Error("Synthetic disconnect");
@@ -273,13 +209,16 @@ it.each(["stream error", "error event", "abort", "missing terminal"])(
           controller.abort();
         }
       })(),
-      output,
+      createOpenAIResponsesAssistantOutput(model),
       {
         push(event) {
           if (event.type === "toolcall_end") {
+            const transcript = sanitizeTranscriptMessage(event.partial);
+            assert(transcript.role === "assistant");
             snapshots.push({
+              terminalSeen,
               toolCall: structuredClone(event.toolCall),
-              transcript: sanitizeTranscriptMessage(event.partial),
+              transcript,
             });
           }
         },
@@ -287,29 +226,33 @@ it.each(["stream error", "error event", "abort", "missing terminal"])(
       model,
       { asyncToolExecution: true, signal: controller.signal },
     );
-    await expect(result).rejects.toThrow(
-      ending === "stream error"
-        ? "Synthetic disconnect"
-        : ending === "error event"
-          ? "Synthetic provider error"
-          : ending === "abort"
-            ? /abort/i
-            : "OpenAI Responses stream ended before a terminal response event",
-    );
+    if (completed) {
+      await result;
+    } else {
+      await expect(result).rejects.toThrow(
+        ending === "stream error"
+          ? "Synthetic disconnect"
+          : ending === "error event"
+            ? "Synthetic provider error"
+            : ending === "abort"
+              ? /abort/i
+              : "OpenAI Responses stream ended before a terminal response event",
+      );
+    }
     expect(snapshots).toEqual(
-      [1, 2].map((index) => ({
+      ids.map((id) => ({
+        terminalSeen: completed,
         toolCall: {
           type: "toolCall",
-          id: `call_${index}|fc_${index}`,
+          id: `call_${id}|fc_${id}`,
           name: "cache_probe",
-          arguments: { index },
+          arguments: completed ? {} : { index: Number(id) },
           async: true,
         },
         transcript: expect.objectContaining({
           content: [
-            thinking("rs_interrupted", "item-done-ciphertext"),
-            expect.objectContaining({ id: "call_1|fc_1" }),
-            expect.objectContaining({ id: "call_2|fc_2" }),
+            thinking(reasoningId, completed ? encryptedContent : ciphertext),
+            ...ids.map((callId) => expect.objectContaining({ id: `call_${callId}|fc_${callId}` })),
           ],
         }),
       })),
