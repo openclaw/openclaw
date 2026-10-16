@@ -183,6 +183,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       }
       await Promise.all(children.splice(0).map(({ exited }) => exited));
       closeOpenClawStateDatabaseForTest();
+      vi.useRealTimers();
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
     });
@@ -241,6 +242,47 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       await expectRestartRefused("GATEWAY_RESTART_PREPARATION_REFUSED");
       expect(lifecycleRuntimeLogs.join("\n")).toContain("Gateway was not signaled");
     });
+
+    it.each(["gateway", "foreign process", "timeout"] as const)(
+      "waits for a native startup owner before restart admission: %s",
+      async (publication) => {
+        const native = await spawnServingChild();
+        const published = publication === "foreign process" ? await spawnServingChild() : native;
+        const waiting = Promise.withResolvers<void>();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        service.readRuntime
+          .mockResolvedValueOnce({ status: "running", pid: native.pid })
+          .mockImplementation(async () => {
+            if (publication !== "timeout") {
+              setTimeout(() => writeLegacyLock(published), 100);
+            }
+            waiting.resolve();
+            return { status: "running", pid: native.pid };
+          });
+        let recorded: unknown;
+        service.restart.mockImplementationOnce(async () => {
+          recorded = readIntent();
+          return { outcome: "completed" };
+        });
+        const result = runServiceRestart(createGatewayServiceRunArgs()).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        await expect(
+          Promise.race([waiting.promise.then(() => "waiting"), result.then(() => "settled")]),
+        ).resolves.toBe("waiting");
+        expect(service.restart).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(publication === "timeout" ? 45_000 : 200);
+        if (publication === "gateway") {
+          await expect(result).resolves.toEqual({ value: true });
+          expect(recorded).toEqual({ pid: native.pid, reason: "gateway.restart" });
+        } else {
+          await expect(result).resolves.toHaveProperty("error");
+          expect(service.restart).not.toHaveBeenCalled();
+          expect(readIntent()).toBeUndefined();
+        }
+      },
+    );
 
     it.each(["dead pid", "mismatched start time"] as const)(
       "permits stopped-service startup without intent for a legacy lock with %s",

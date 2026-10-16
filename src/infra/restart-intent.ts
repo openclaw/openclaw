@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 // Persists short-lived gateway restart intent for supervisor SIGTERM handoff.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { gatewayServiceCommandMatchesRoot } from "../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
@@ -92,10 +93,7 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
 }): Promise<GatewayRestartIntentLegacyProcess | undefined> {
   opts.assertCurrent();
   try {
-    if (
-      readGatewayOwnerLease({ env: opts.env, current: true }) !== undefined ||
-      !existsSync(resolveGatewayLockPaths(opts.env).stateLockPath)
-    ) {
+    if (readGatewayOwnerLease({ env: opts.env, current: true }) !== undefined) {
       return undefined;
     }
     const pid = asPositiveSafeInteger(opts.runtimePid);
@@ -125,6 +123,26 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
       getFileLockProcessStartTime(pid, opts.env) !== startTime
     ) {
       return undefined;
+    }
+    // Service activation can precede publication of either lock or owner lease.
+    // Wait for that evidence; an unpublished native PID alone never authorizes a signal.
+    const deadline = Date.now() + resolveGatewayStartupTiming().deadlineMs;
+    const { stateLockPath } = resolveGatewayLockPaths(opts.env);
+    while (
+      !existsSync(stateLockPath) &&
+      readGatewayOwnerLease({ env: opts.env, current: true }) === undefined
+    ) {
+      opts.assertCurrent();
+      if (
+        Date.now() >= deadline ||
+        !isPidAlive(pid) ||
+        getFileLockProcessStartTime(pid, opts.env) !== startTime
+      ) {
+        return undefined;
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 200);
+      });
     }
     return { pid, startTime };
   } catch {
