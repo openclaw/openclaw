@@ -71,6 +71,22 @@ describe("toSanitizedMarkdownHtml", () => {
     });
   });
 
+  describe("channel-authored lists", () => {
+    const markdownList =
+      "- **Option A:** Run `example --check`.\n- **Option B:** See [the documentation](https://example.com/docs).";
+
+    it("renders a Markdown list from a channel reply as a readable list", () => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(markdownList));
+      expect(Array.from(fragment.querySelectorAll("li"), (item) => item.textContent)).toEqual([
+        "Option A: Run example --check.",
+        "Option B: See the documentation.",
+      ]);
+      expect(fragment.querySelector("strong")?.textContent).toBe("Option A:");
+      expect(fragment.querySelector("code")?.textContent).toBe("example --check");
+      expect(fragment.querySelector("a")?.getAttribute("href")).toBe("https://example.com/docs");
+    });
+  });
+
   describe("images", () => {
     it("does not add a role marker for an empty image label inside a role header", () => {
       const fragment = htmlFragment(

@@ -141,7 +141,14 @@ describe("telegram actions contract", () => {
     const plain = agentPrompt?.inboundFormattingHints?.({ cfg, accountId: "plain" });
 
     expect(rich?.text_markup).toBe("markdown_telegram_rich");
-    expect(rich?.rules.join("\n")).toContain("<details>");
+    expect(rich?.rules.join("\n")).toContain(
+      "Ordinary lists, checklists (`- [ ]`, `- [x]`), bold, italic, inline code and links = Markdown",
+    );
+    expect(rich?.rules.join("\n")).toContain("`[label](url)`");
+    expect(rich?.rules.join("\n")).toContain(
+      "authored HTML shows up as literal tags in Control UI",
+    );
+    expect(rich?.rules.join("\n")).not.toContain("structured bullets=`<ul><li>`");
     expect(plain?.text_markup).toBe("markdown");
     expect(plain?.rules[0]).toMatch(/^Telegram rich OFF\./);
     // `<details>` guidance lives only in the contract, not in a second capability route.
