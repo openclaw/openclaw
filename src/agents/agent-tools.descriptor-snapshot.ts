@@ -166,6 +166,7 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
           const shared = published?.[index];
           if (
             shared &&
+            shared.descriptor.name === entry.descriptor.name &&
             shared.source === entry.source &&
             shared.outputSource === entry.outputSource &&
             shared.descriptor.description === entry.descriptor.description &&
