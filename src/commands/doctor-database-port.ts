@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { withConfigWriteLock } from "../config/write-lock.js";
 import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
 import { resolveDatabaseEngineInput } from "../infra/database-engine/config.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import {
   runDatabasePortTask,
   type DatabasePortInspection,
@@ -32,6 +33,7 @@ import {
 } from "../infra/database-port-recovery.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { createVerifiedSqliteSnapshot } from "../infra/sqlite-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   assertDatabaseArtifact,
@@ -96,6 +98,15 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
   const engines = resolveDatabaseFamilyEngines(config);
   const from = engines[ctx.family ?? "state"],
     to = options.to!;
+  if (getDatabaseEngineInput("state")) {
+    // Both migration gates and resource discovery need cold PostgreSQL facts from a worker.
+    const activate = await preparePluginMetadataMachineStateAsync({
+      env: ctx.env,
+      stateDir: ctx.stateDir,
+      artifactPreservingReadOnly: true,
+    });
+    activate();
+  }
   await assertDatabasePortPluginMigrationsComplete({
     config,
     env: ctx.env,

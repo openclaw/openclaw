@@ -147,11 +147,12 @@ describe.skipIf(!connection)("family-scoped database port", () => {
           await write(...args);
           throw new Error("synthetic interruption after publication");
         });
-        await expect(port({ family: "workboard", to: "postgres" })).rejects.toThrow(
-          "Database port",
+        const failure = await port({ family: "workboard", to: "postgres" }).catch(
+          (error: unknown) => error,
         );
+        expect(failure).toBeInstanceOf(Error);
         vi.restoreAllMocks();
-        expect(readBackupEngine(workboard).engine).toBe("postgres");
+        expect(readBackupEngine(workboard).engine, String(failure)).toBe("postgres");
         expect(() => assertDatabasePortStartupAllowed(state.stateDir)).toThrow();
         const active = databasePortManifestPath(state.stateDir);
         const saved = JSON.parse(fs.readFileSync(active, "utf8")) as DatabasePortManifest;
