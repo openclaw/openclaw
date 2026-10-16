@@ -52,6 +52,22 @@ const enAgentsHome = {
     publisher: "@openclaw",
     workspaceFiles: "Workspace files",
     viewAll: "View all",
+    aboutFile: "About {name}",
+    filePurpose: {
+      agents: "Operating instructions, priorities, and workspace conventions for the agent.",
+      soul: "The agent's persona, tone, and boundaries.",
+      user: "Stable preferences, communication style, and context about the person the agent helps.",
+      identity: "The agent's name, style, emoji, and avatar.",
+      boot: "A startup checklist run when the boot-md hook is enabled.",
+      bootstrap: "One-time first-run setup instructions, removed after setup is complete.",
+      memory: "Curated long-term facts and decisions for private sessions.",
+      dailyMemory: "Daily memory notes, available for the agent to look up when needed.",
+      tools:
+        "Retired tool notes. Local tool conventions now belong in the Tools section of AGENTS.md.",
+      heartbeat:
+        "Retired heartbeat checklist. Manage recurring instructions through heartbeat monitors.",
+      generic: "An additional workspace file included with this Claw.",
+    },
     skillsSection: "Skills",
     automations: "Automations",
     integrations: "Integrations",

@@ -88,7 +88,7 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
             ...workflowOperator,
             version: "1.2.0",
             agentName: "Workflow Operator",
-            workspaceFiles: 2,
+            workspaceFiles: 5,
             skills: 1,
             plugins: 1,
             mcpServers: 0,
@@ -97,6 +97,9 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
               instructions: [
                 { name: "AGENTS.md", source: "workspace/AGENTS.md", excerpt: agentsExcerpt },
                 { name: "SOUL.md", source: "workspace/SOUL.md", excerpt: soulExcerpt },
+                { name: "USER.md", source: "workspace/USER.md" },
+                { name: "BOOTSTRAP.md", source: "BOOTSTRAP.md" },
+                { name: "notes/context.md", source: "notes/context.md" },
               ],
               skills: [
                 { name: "@openclaw/travel-research", version: "1.2.0", excerpt: skillExcerpt },
@@ -308,6 +311,28 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
         );
         expect(await publisher.getByRole("img", { name: "Official" }).count()).toBe(1);
         expect(await detail.getByRole("heading", { name: "Workspace files" }).count()).toBe(1);
+        const workspace = detail.locator(".plugin-capabilities").first();
+        expect(await workspace.locator("h2 > span").textContent()).toBe("5");
+        const help = workspace.getByRole("button", { name: "About SOUL.md" });
+        await workspace.getByRole("button", { name: "SOUL.md", exact: true }).focus();
+        await page.keyboard.press("Tab");
+        expect(await help.evaluate((button) => button === document.activeElement)).toBe(true);
+        const tooltip = workspace.locator("openclaw-tooltip").first();
+        await tooltip.locator("[role=tooltip]").waitFor({ state: "visible" });
+        expect(await tooltip.getByRole("tooltip").textContent()).toContain(
+          "persona, tone, and boundaries",
+        );
+        expect(await gateway.getRequests("claws.catalog.preview")).toHaveLength(0);
+        if (capture) {
+          const dir = createControlUiE2eArtifactDir(`claws-add-${viewport.name}`);
+          await page.screenshot({ path: `${dir}/file-purpose.png`, animations: "disabled" });
+        }
+        await page.keyboard.press("Escape");
+        await tooltip.locator("[role=tooltip]").waitFor({ state: "hidden" });
+        await help.click();
+        await tooltip.locator("[role=tooltip]").waitFor({ state: "visible" });
+        expect(await gateway.getRequests("claws.catalog.preview")).toHaveLength(0);
+        await page.keyboard.press("Escape");
         const fileDescriptions = detail
           .locator(".plugin-capabilities")
           .first()
@@ -370,6 +395,28 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
         if (capture) {
           const dir = createControlUiE2eArtifactDir(`claws-add-${viewport.name}`);
           await page.screenshot({ path: `${dir}/detail.png`, animations: "disabled" });
+        }
+        await gateway.setMethodResponse("claws.catalog.preview", {
+          preview: { kind: "instruction", name: "SOUL.md", content: "# Soul preview" },
+        });
+        await workspace.getByRole("button", { name: "View all", exact: true }).click();
+        const preview = page.locator("openclaw-file-preview-modal");
+        await preview.locator(".item[data-path='USER.md']").waitFor();
+        expect(await preview.locator(".item").count()).toBe(5);
+        await preview.getByRole("heading", { name: "Soul preview", exact: true }).waitFor();
+        if (capture) {
+          const dir = createControlUiE2eArtifactDir(`claws-add-${viewport.name}`);
+          await page.screenshot({ path: `${dir}/all-files.png`, animations: "disabled" });
+        }
+        for (const name of ["USER.md", "BOOTSTRAP.md", "notes/context.md"]) {
+          await gateway.setMethodResponse("claws.catalog.preview", {
+            preview: { kind: "instruction", name, content: `# Preview ${name}` },
+          });
+          await preview.locator(`.item[data-path="${name}"]`).click();
+          await preview.getByRole("heading", { name: `Preview ${name}`, exact: true }).waitFor();
+          expect((await gateway.getRequests("claws.catalog.preview")).at(-1)?.params).toMatchObject(
+            { name },
+          );
         }
       } finally {
         await context.close();

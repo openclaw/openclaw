@@ -36,6 +36,61 @@ function createDetail(
 }
 
 describe("Claws on Agents Home", () => {
+  it.each([
+    {
+      names: ["AGENTS.md", "SOUL.md", "USER.md", "notes/context.md"],
+      featured: ["SOUL.md", "AGENTS.md"],
+    },
+    { names: ["USER.md", "notes/context.md"], featured: ["USER.md", "notes/context.md"] },
+    { names: ["IDENTITY.md"], featured: ["IDENTITY.md"] },
+  ])("counts release files and previews $names", async ({ names, featured }) => {
+    const { detail } = createDetail({ clawsEnabled: true, workspaceFileNames: names });
+    await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
+    const section = detail.querySelector(".plugin-capabilities")!;
+    expect(section.querySelector("h2 > span")?.textContent).toBe(String(names.length));
+    const titles = [...section.querySelectorAll(".plugin-capability__copy strong")].map(
+      (node) => node.textContent,
+    );
+    expect(titles).toEqual([...featured, ...(names.length > featured.length ? ["View all"] : [])]);
+  });
+
+  it("opens every release file from View all without treating help as navigation", async () => {
+    const names = ["AGENTS.md", "SOUL.md", "USER.md", "BOOTSTRAP.md", "notes/context.md"];
+    const { detail, request } = createDetail({ clawsEnabled: true, workspaceFileNames: names });
+    await vi.waitFor(() =>
+      expect(detail.querySelector(".claws-workspace-file__info")).not.toBeNull(),
+    );
+    const section = detail.querySelector(".plugin-capabilities")!;
+    section.querySelector<HTMLButtonElement>(".claws-workspace-file__info")!.click();
+    expect(
+      request.mock.calls.filter(([method]) => method === "claws.catalog.preview"),
+    ).toHaveLength(0);
+    const viewAll = [...section.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "View all",
+    )!;
+    expect(viewAll.querySelector("openclaw-tooltip")).toBeNull();
+    viewAll.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "claws.catalog.preview",
+        expect.objectContaining({ name: "SOUL.md" }),
+      ),
+    );
+    const preview = detail.querySelector("openclaw-file-preview-modal")!;
+    expect(preview.files.map((file) => file.path)).toEqual(names);
+    for (const name of names) {
+      preview.dispatchEvent(
+        new CustomEvent("file-preview-select", { detail: name, bubbles: true }),
+      );
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "claws.catalog.preview",
+          expect.objectContaining({ name }),
+        ),
+      );
+    }
+  });
+
   it("shows official Claws and opens their dedicated route", async () => {
     const { page, navigate, request, ensureConfigLoaded } = createPage({ clawsEnabled: true });
     await vi.waitFor(() => expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
