@@ -12,6 +12,7 @@ import { runGit, runGitBuffered } from "../agents/worktrees/git.js";
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
 import { GIT_TIMEOUT_MS } from "../infra/git-exec.js";
 import type { GitCheckoutDiffInput, GitReadOperations } from "../infra/git-read-operations.js";
+import { isSqliteFilePath } from "../infra/sqlite-file-path.js";
 import { parseDiffInventoryZ, parseNameStatusZ, splitPatchByFile } from "./session-diff-parser.js";
 import {
   loadSessionDiffBranchMetadata,
@@ -444,6 +445,11 @@ async function fingerprintBaselineCandidate(params: {
     return target === undefined
       ? undefined
       : hashBaselineDescriptor(candidate, `symlink:${target}`);
+  }
+  // Even a raw close in a Worker releases the Gateway's SQLite POSIX locks.
+  // Skip before opening: fs-safe's hardlink rejection also closes its descriptor.
+  if (initial.nlink !== 1 || isSqliteFilePath(absolutePath)) {
+    return undefined;
   }
   const opened = await params.directory
     ?.open(`.${nodePath.sep}${relativePath}`)

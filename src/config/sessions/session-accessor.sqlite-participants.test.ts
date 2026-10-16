@@ -20,6 +20,7 @@ import {
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureRuntimeConfigAsyncReader } from "../io.js";
 import {
@@ -113,10 +114,13 @@ describe("SQLite session participants", () => {
       const read = () => listSessionEntriesCore({ ...scope, projection: "list" })[0]?.entry;
       read();
       const database = openOpenClawAgentDatabase(scope);
-      const reads = trackSqliteStatementExecutions(database.db, ["participants"], (sql) =>
-        sql.startsWith('select "session_key", "identity_namespace", "actor_id"')
-          ? "participants"
-          : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["participants"],
+        (sql) =>
+          sql.startsWith('select "session_key", "identity_namespace", "actor_id"')
+            ? "participants"
+            : null,
       );
       try {
         for (let index = 0; index < 100; index++) {
@@ -286,14 +290,14 @@ describe("SQLite session participants", () => {
         }
         runOpenClawAgentWriteTransaction((db) => {
           if (mutation.endsWith("before")) {
-            mutate(db.db);
+            mutate(requireNativeSqliteDatabase(db.db));
           }
           recordSessionParticipant(target, {
             identity: profile(write === "inserted-target" ? "b" : "a"),
             promptedAt: 20,
           });
           if (mutation === "participant-after") {
-            mutate(db.db);
+            mutate(requireNativeSqliteDatabase(db.db));
           }
         }, scope);
         expect(listSessionParticipantsReadOnly(target).get(target.sessionKey)).toHaveLength(
@@ -504,8 +508,11 @@ describe("SQLite session participants", () => {
             ...(selected ? { sessionKeys: [sessionKey] } : {}),
           });
         read();
-        const executions = trackSqliteStatementExecutions(database.db, ["metadata"], (sql) =>
-          sql.includes('from "session_nodes"') && sql.includes("entry_json") ? "metadata" : null,
+        const executions = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(database.db),
+          ["metadata"],
+          (sql) =>
+            sql.includes('from "session_nodes"') && sql.includes("entry_json") ? "metadata" : null,
         );
         try {
           for (const [identity, promptedAt, order] of [
@@ -676,10 +683,13 @@ describe("SQLite session participants", () => {
             input: { scope, params: { identity: remote("second"), promptedAt } },
           }),
         );
-      const reads = trackSqliteStatementExecutions(database.db, ["projection"], (sql) =>
-        sql.startsWith('select "session_key", "identity_namespace", "actor_id"')
-          ? "projection"
-          : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["projection"],
+        (sql) =>
+          sql.startsWith('select "session_key", "identity_namespace", "actor_id"')
+            ? "projection"
+            : null,
       );
       try {
         expect(record(30)).toEqual({
@@ -913,8 +923,10 @@ describe("SQLite session participants", () => {
       database.db
         .prepare("UPDATE session_participants SET first_prompted_at = NULL WHERE session_key = ?")
         .run(second.sessionKey);
-      const reads = trackSqliteStatementExecutions(database.db, ["participants"], (sql) =>
-        sql.includes('from "session_participants"') ? "participants" : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["participants"],
+        (sql) => (sql.includes('from "session_participants"') ? "participants" : null),
       );
       try {
         runOpenClawAgentWriteTransaction(() => {
@@ -985,8 +997,10 @@ describe("SQLite session participants", () => {
         rows.find((row) => row.identity.type === "profile" && row.identity.id === "profile-0")
           ?.contributionCount,
       ).toBe(2);
-      const reads = trackSqliteStatementExecutions(target.db, ["participants"], (sql) =>
-        sql.includes('from "session_participants"') ? "participants" : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(target.db),
+        ["participants"],
+        (sql) => (sql.includes('from "session_participants"') ? "participants" : null),
       );
       try {
         expect(

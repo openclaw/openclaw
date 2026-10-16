@@ -6,6 +6,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
@@ -51,7 +52,10 @@ it("publishes canonical side metadata through cold, warm, and field-only writes"
           }),
         scope,
       );
-    const current = () => readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey);
+    const current = () =>
+      readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))?.get(
+        scope.sessionKey,
+      );
     const owner: NonNullable<SessionEntry["owner"]> = {
       actor: { type: "human", id: "cache-owner" },
     };
@@ -135,7 +139,7 @@ it("skips unchanged entry and snapshot writes while retaining current transcript
     // Settle the initial transcript observation before measuring unchanged rows.
     await patch({});
     const sql = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["nodes", "windows", "snapshots"],
       (query) => {
         const table = /^(?:insert into|update|delete from) "([^"]+)"/iu.exec(query)?.[1];
@@ -251,7 +255,7 @@ it.each(["entry", "target"] as const)(
         addSideTables("first-member");
       }, scope);
       const sql = trackSqliteStatementExecutions(
-        database.db,
+        requireNativeSqliteDatabase(database.db),
         ["participants", "windows", "metadata", "watermarks"],
         (query) =>
           /^select\b.*\bfrom "session_participants"/iu.test(query)

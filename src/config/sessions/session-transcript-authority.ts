@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
   hasSqliteCommitReceiptCoverage,
@@ -33,7 +33,7 @@ import type {
 
 const staged = resolveGlobalSingleton(
   Symbol.for("openclaw.transcriptAuthorityStaged"),
-  () => new WeakMap<DatabaseSync, Map<string, SessionTranscriptAuthorityReceipt>>(),
+  () => new WeakMap<EngineConnection, Map<string, SessionTranscriptAuthorityReceipt>>(),
 );
 const prepared = resolveGlobalSingleton(
   Symbol.for("openclaw.transcriptAuthorityChanges"),
@@ -139,7 +139,7 @@ export function publishUnchangedSessionTranscriptAuthority(
   publishTranscriptFact(database, sessionKey, { kind: "unchanged" });
 }
 
-export function readStagedSessionTranscriptAuthority(database: { db: DatabaseSync }) {
+export function readStagedSessionTranscriptAuthority(database: { db: EngineConnection }) {
   const records = staged.get(database.db);
   // Actor-held state stays with its actor; a symbolic owner cannot become a file receipt.
   const transferable = [...(records?.values() ?? [])].filter(
@@ -150,7 +150,7 @@ export function readStagedSessionTranscriptAuthority(database: { db: DatabaseSyn
 
 /** A following entry write consumes the transcript owner's staged watermark. */
 export function readStagedSessionTranscriptUpdatedAt(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   sessionId: string,
 ): number | undefined {
   let updatedAt: number | undefined;

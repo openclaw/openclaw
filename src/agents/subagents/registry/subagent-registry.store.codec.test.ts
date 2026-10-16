@@ -33,6 +33,20 @@ it("persists the child owner and identity independently of a redirected transcri
   });
 });
 
+it.each([{ version: 2 }, { snapshot: "x".repeat(65_537) }])(
+  "keeps interrupted results when stored operator evidence is invalid",
+  (operatorRecoverySource) => {
+    const entry = createRun();
+    entry.execution.outcome = { status: "error", error: "interrupted by a Gateway restart" };
+    const row = bindSubagentRunRecord(entry);
+    row.payload_json = JSON.stringify({ ...entry, operatorRecoverySource });
+    const restored = rowToSubagentRunRecord(row);
+    expect(restored?.operatorRecoverySource).toBeUndefined();
+    expect(restored?.execution.outcome).toEqual(entry.execution.outcome);
+    expect(restored?.delivery?.status).toBe("pending");
+  },
+);
+
 it.each(["reply", "no reply", "root array", "completion array"] as const)(
   "rejects invalid encoding without mutating the run: %s",
   (kind) => {

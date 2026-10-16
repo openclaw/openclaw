@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { isSessionActorCommand } from "../config/sessions/session-actor-command.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   assertTransactionUsable,
@@ -36,7 +37,7 @@ import type {
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { prepareOpenClawAgentDatabaseWorkerLease } from "./openclaw-agent-db-lease.js";
 import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
-import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema-refresh.js";
 import {
   getOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
@@ -81,6 +82,8 @@ import {
   loadAgentPendingInputOperations,
   loadAgentArchivePruningOperations,
   loadSessionRowBackfillOperations,
+  loadAgentAuthProfileOperations,
+  loadAgentSchemaInspectionOperations,
   type RegisteredAgentWorkerOperations,
 } from "./openclaw-agent-execution-operations.js";
 import {
@@ -427,6 +430,8 @@ function openAgentDatabaseBackend(
     AgentWorkerOperationContext,
     keyof RegisteredAgentWorkerOperations
   >({
+    "authProfiles.read": loadAgentAuthProfileOperations,
+    "database.schema.inspect": loadAgentSchemaInspectionOperations,
     "session.entry.read": loadAgentEntryReadOperations,
     "session.entry.readResult": loadAgentEntryReadOperations,
     "voice.session.read": loadAgentVoiceSessionOperations,
@@ -515,7 +520,8 @@ function openAgentDatabaseBackend(
         !database ||
         !identity ||
         !database.db.isOpen ||
-        normalizeDatabasePath(database.db.location() ?? "") !== identity.nativeLocation ||
+        normalizeDatabasePath(sqlPublicationAnchor(database.db).location() ?? "") !==
+          identity.nativeLocation ||
         getOpenClawAgentDatabaseIfOpen(options) !== database
       ) {
         throw new Error("Agent cleanup lost its retained native database");

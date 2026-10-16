@@ -15,6 +15,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -112,8 +113,11 @@ it("returns bounded finalization outcomes while preserving conflicts and duplica
     { sessionKey: changed.sessionKey, storePath },
     { ...changed.expectedEntry, label: "newer" },
   );
-  const snapshots = trackSqliteStatementExecutions(database.db, ["snapshot"], (sql) =>
-    /^select\b/i.test(sql) && /\bsession_entry_snapshots\b/i.test(sql) ? "snapshot" : null,
+  const snapshots = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["snapshot"],
+    (sql) =>
+      /^select\b/i.test(sql) && /\bsession_entry_snapshots\b/i.test(sql) ? "snapshot" : null,
   );
   try {
     const result = await withSqliteSessionDeletions(
@@ -155,12 +159,15 @@ it("avoids inventory projection for sequential writes with no retention candidat
   const target = { sessionKey: "agent:main:planner-0", storePath };
   const preservation = await prepareSessionMaintenancePreservation(storePath);
   onTestFinished(preservation.dispose);
-  const inventory = trackSqliteStatementExecutions(database.db, ["protection"], (sql) =>
-    sql.includes(
-      'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
-    )
-      ? "protection"
-      : null,
+  const inventory = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["protection"],
+    (sql) =>
+      sql.includes(
+        'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
+      )
+        ? "protection"
+        : null,
   );
   try {
     for (let index = 0; index < 3; index += 1) {
@@ -202,12 +209,15 @@ it("preserves current provider keys without loading unrelated protection rows", 
   onTestFinished(unregister);
   const preservation = await prepareSessionMaintenancePreservation(storePath);
   onTestFinished(preservation.dispose);
-  const inventory = trackSqliteStatementExecutions(database.db, ["protection"], (sql) =>
-    sql.includes(
-      'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
-    )
-      ? "protection"
-      : null,
+  const inventory = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["protection"],
+    (sql) =>
+      sql.includes(
+        'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
+      )
+        ? "protection"
+        : null,
   );
   const maintain = () =>
     runOpenClawAgentWriteTransaction(
@@ -271,8 +281,11 @@ it.each([false, true])(
     }
     const preservation = await prepareSessionMaintenancePreservation(storePath);
     onTestFinished(preservation.dispose);
-    const candidates = trackSqliteStatementExecutions(database.db, ["candidates"], (sql) =>
-      sql.includes("json_group_object") && sql.includes('"session_nodes"') ? "candidates" : null,
+    const candidates = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["candidates"],
+      (sql) =>
+        sql.includes("json_group_object") && sql.includes('"session_nodes"') ? "candidates" : null,
     );
     try {
       const plan = runOpenClawAgentWriteTransaction(
@@ -331,12 +344,15 @@ it("limits protection reads to active ancestry and preserves cyclic or missing p
   }
   const preservation = await prepareSessionMaintenancePreservation(storePath);
   onTestFinished(preservation.dispose);
-  const inventory = trackSqliteStatementExecutions(database.db, ["protection"], (sql) =>
-    sql.includes(
-      'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
-    )
-      ? "protection"
-      : null,
+  const inventory = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["protection"],
+    (sql) =>
+      sql.includes(
+        'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
+      )
+        ? "protection"
+        : null,
   );
   try {
     const plan = runOpenClawAgentWriteTransaction(

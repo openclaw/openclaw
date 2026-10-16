@@ -7,6 +7,7 @@ import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-p
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { isPostgresSqlConnection, sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
   resolveHistoryAnchorPageRange,
@@ -73,7 +74,7 @@ function retainHistoryWindowOwner(database: CurrentTranscriptProjection["databas
   if (historyWindowOwners.has(database)) {
     return;
   }
-  registerNodeSqliteDisposeCallback(database, () => {
+  registerNodeSqliteDisposeCallback(sqlPublicationAnchor(database), () => {
     // Closed handles must release cached pages and their connection-owned facts.
     for (const [key, cached] of recentHistoryWindows) {
       if (cached.database === database) {
@@ -393,6 +394,7 @@ export function readRecentSessionTranscriptHistoryEventsFromProjection(
   if (
     !projection.generation ||
     hasUncommittedSqliteWrites(projection.database.db) ||
+    isPostgresSqlConnection(projection.database.db) ||
     projection.database.db.location() === null ||
     options.expectedReadWindow ||
     resolveSessionTranscriptReadFence(projection.resolved)

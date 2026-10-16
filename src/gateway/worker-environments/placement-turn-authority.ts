@@ -228,7 +228,7 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
             ]),
           );
         }
-        throw changed();
+        throw new WorkerPlacementInventoryChangedError(new Set([sessionId]), changedMessage);
       }
     },
     release(this: void) {

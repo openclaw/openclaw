@@ -194,7 +194,9 @@ describe("PostgreSQL schema generation", () => {
     for (const file of [
       "state.postgres.sql",
       "state-v23-v24.postgres.sql",
+      "state-v24-v25.postgres.sql",
       "agent.postgres.sql",
+      "agent-search.postgres.sql",
       ...report.fragments.map((item) => item.file),
     ]) {
       expect(files[file], file).not.toMatch(/^(?:BEGIN;|COMMIT;|SET |CREATE SCHEMA )/m);
@@ -215,12 +217,16 @@ describe("PostgreSQL schema generation", () => {
     expect((await generatePostgresSchemas(root)).files).toEqual(generated.files);
     expect(Object.keys(generated.files).toSorted()).toEqual(
       [
+        "agent-runtime.ts",
         "agent.postgres.sql",
+        "agent-search-runtime.ts",
+        "agent-search.postgres.sql",
         ...generated.report.fragments.map((fragment) => fragment.file),
         "manifest.json",
         "portability-report.md",
         "state.postgres.sql",
         "state-v23-v24.postgres.sql",
+        "state-v24-v25.postgres.sql",
         "runtime.ts",
         "state-port.json",
       ].toSorted(),
