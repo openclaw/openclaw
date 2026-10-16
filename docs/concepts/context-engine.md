@@ -100,6 +100,26 @@ their caller-owned lifetime.
 
 For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by projecting assembled context into Codex developer instructions and the current turn prompt. Codex still owns its native thread history and native compactor.
 
+### Provider compaction ownership
+
+When the active context engine declares `info.ownsCompaction: true`, OpenClaw
+disables provider-native compaction and stored provider checkpoint replay by
+default. Set the corresponding model parameter explicitly to `true` to opt in:
+`params.responsesServerCompaction` for OpenAI Responses or
+`params.anthropicServerCompaction` for Anthropic. Engines that do not own
+compaction, including `legacy`, retain the provider's existing default-on behavior
+on eligible routes.
+
+Preexisting provider checkpoints are bypassed while this ownership guard is
+active; their stored data is not deleted. Explicit opt-in allows a matching
+provider checkpoint to take precedence over the selected engine's assembled
+context. Choose it only when you want provider-managed context to override engine
+assembly for those requests.
+
+Memory-extraction (memory flush) turns always disable provider-native compaction
+and checkpoint replay, even with explicit opt-in, so extraction can use the
+unsummarized history.
+
 ### Subagent lifecycle (optional)
 
 OpenClaw calls two optional subagent lifecycle hooks:

@@ -925,9 +925,10 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title="Server-side compaction">
-    OpenClaw enables Anthropic server-side compaction by default for direct
-    `api.anthropic.com` requests authenticated with an API key on the models
-    Anthropic documents for threshold compaction: Claude Fable 5.1, Mythos 5.1,
+    With the built-in `legacy` context engine, OpenClaw enables Anthropic
+    server-side compaction by default for direct `api.anthropic.com` requests
+    authenticated with an API key on the models Anthropic documents for threshold
+    compaction: Claude Fable 5.1, Mythos 5.1,
     Fable 5, Mythos 5, Mythos Preview, Opus 5.5, Opus 5, Opus 4.8, Opus 4.7,
     Opus 4.6, Sonnet 5.5, Sonnet 5, Sonnet 4.6, and Haiku 5.5. To turn it off
     for one model:
@@ -947,8 +948,8 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     ```
 
     Set `anthropicServerCompaction: true` to opt in another direct Claude model.
-    Memory flush turns never use server-side compaction, so they can extract
-    durable memories from the unsummarized history.
+    Defaults, explicit opt-in, stored checkpoint replay, and memory flush turns
+    follow [context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership).
 
     OpenClaw adds the `compact-2026-01-12` beta header and sends an Anthropic
     `context_management` compaction edit. The edit carries summarization
