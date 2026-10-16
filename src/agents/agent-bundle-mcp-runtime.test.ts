@@ -492,7 +492,9 @@ describe("session MCP runtime", () => {
     const listTools = mcpCatalogListing.listAllMcpTools;
     const listing = vi
       .spyOn(mcpCatalogListing, "listAllMcpTools")
-      .mockImplementation((client, _timeoutMs, signal) => listTools(client, 50, signal));
+      .mockImplementation((client, _timeoutMs, requestSignal) =>
+        listTools(client, 50, requestSignal),
+      );
     onTestFinished(() => listing.mockRestore());
     await writeListToolsMcpServer({ filePath: serverPath, logPath, hang: true });
 
@@ -3086,7 +3088,9 @@ describe("disposeSession timeout", () => {
       const listTools = mcpCatalogListing.listAllMcpTools;
       const listing = vi
         .spyOn(mcpCatalogListing, "listAllMcpTools")
-        .mockImplementation((client, _timeoutMs, signal) => listTools(client, 4_000, signal));
+        .mockImplementation((client, _timeoutMs, requestSignal) =>
+          listTools(client, 4_000, requestSignal),
+        );
       onTestFinished(() => listing.mockRestore());
       const runtime = createSessionMcpRuntime({
         sessionId: "session-catalog-single-flight",
