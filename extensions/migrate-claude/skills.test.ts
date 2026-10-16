@@ -42,6 +42,8 @@ it.each([
   } else {
     expect(result.status).toBe("error");
     expect(result.reason).toContain("not valid UTF-8");
-    await expect(fs.access(path.join(target, "SKILL.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.join(target, "SKILL.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   }
 });
