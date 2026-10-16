@@ -9,7 +9,6 @@ import {
   assertCodexTurnStartResponse,
   readCodexDynamicToolCallParams,
   readCodexErrorNotification,
-  readCodexTurnCompletedNotification,
 } from "./protocol-validators.js";
 import type { CodexThreadItem } from "./protocol.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -219,12 +218,17 @@ describe("prepareCodexServerNotification", () => {
       status: "completed",
       items: [{ id: "item-1", type: "agentMessage", text: 12 }],
     };
-    expect(readCodexTurnCompletedNotification({ threadId: "thread-1", turn })).toBeUndefined();
     expect(
-      readCodexTurnCompletedNotification({
-        threadId: "thread-1",
-        turn: { ...turn, status: "inProgress", items: [] },
-      }),
+      prepareCodexServerNotification({
+        method: "turn/completed",
+        params: { threadId: "thread-1", turn },
+      }).completedTurn,
+    ).toBeUndefined();
+    expect(
+      prepareCodexServerNotification({
+        method: "turn/completed",
+        params: { threadId: "thread-1", turn: { ...turn, status: "inProgress", items: [] } },
+      }).completedTurn,
     ).toBeUndefined();
   });
 });
