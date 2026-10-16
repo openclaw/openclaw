@@ -29,14 +29,6 @@ import { executeWorkerInference } from "./inference.js";
 import * as workerTurnOwners from "./placement-turn-claim-events.js";
 import { prepareWorkerTurnModel } from "./worker-turn-model.js";
 
-type Deps = {
-  applyStreamPolicy: typeof extraParamsRuntime.applyExtraParamsToAgent;
-  acquireRuntimeLease: typeof preparedRuntime.acquireAgentRunPreparedModelRuntime;
-  prepareModel: typeof simpleCompletionRuntime.prepareSimpleCompletionModel;
-  resolveSessionAuthSelection: typeof sessionAuthRuntime.resolveSessionAuthSelection;
-  resolveProviderStream: typeof providerStreamRuntime.registerProviderStreamForModel;
-  resolveStream: typeof streamResolutionRuntime.resolveEmbeddedAgentStream;
-};
 export type Execution = WorkerInferenceExecutionParams;
 
 afterEach(() => {
@@ -236,101 +228,97 @@ export function setup(
     createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
   } satisfies preparedRuntime.PreparedModelRuntimeSnapshot;
   let leasedPreparedModelRuntime: preparedRuntime.PreparedModelRuntimeSnapshot | undefined;
-  const prepareModel = vi.fn<Deps["prepareModel"]>(async (modelParams) => {
-    if (options.catalogOnlyModel && !modelParams.allowBundledStaticCatalogFallback) {
-      return { error: `Unknown model: ${modelParams.provider}/${modelParams.modelId}` };
-    }
-    scope.agentRuntime = modelParams.agentRuntimeId;
-    scope.preparedModelRuntime = modelParams.preparedModelRuntime === leasedPreparedModelRuntime;
-    scope.prepareWorkspace = modelParams.workspaceDir;
-    options.afterModelPreparation?.();
-    return {
-      model: bindModelLlmRuntime(logicalModel, {
-        registry: {},
-        streamSimple: fallbackStream,
-      } as never),
-      auth: {
-        apiKey: AUTH_MARKER,
-        profileId: PROFILE,
-        source: "gateway agent profile",
-        mode: "api-key",
-      },
-    };
-  });
-  const resolveAuthSelection = vi.fn<Deps["resolveSessionAuthSelection"]>(async () =>
-    entry.authProfileOverride
-      ? {
-          profileId: entry.authProfileOverride,
-          source: entry.authProfileOverrideSource === "auto" ? "auto" : "user",
-          routeRequirement: undefined,
-        }
-      : undefined,
-  );
+  const prepareModel = vi
+    .spyOn(simpleCompletionRuntime, "prepareSimpleCompletionModel")
+    .mockImplementation(async (modelParams) => {
+      if (options.catalogOnlyModel && !modelParams.allowBundledStaticCatalogFallback) {
+        return { error: `Unknown model: ${modelParams.provider}/${modelParams.modelId}` };
+      }
+      scope.agentRuntime = modelParams.agentRuntimeId;
+      scope.preparedModelRuntime = modelParams.preparedModelRuntime === leasedPreparedModelRuntime;
+      scope.prepareWorkspace = modelParams.workspaceDir;
+      options.afterModelPreparation?.();
+      return {
+        model: bindModelLlmRuntime(logicalModel, {
+          registry: {},
+          streamSimple: fallbackStream,
+        } as never),
+        auth: {
+          apiKey: AUTH_MARKER,
+          profileId: PROFILE,
+          source: "gateway agent profile",
+          mode: "api-key",
+        },
+      };
+    });
+  const resolveAuthSelection = vi
+    .spyOn(sessionAuthRuntime, "resolveSessionAuthSelection")
+    .mockImplementation(async () =>
+      entry.authProfileOverride
+        ? {
+            profileId: entry.authProfileOverride,
+            source: entry.authProfileOverrideSource === "auto" ? "auto" : "user",
+            routeRequirement: undefined,
+          }
+        : undefined,
+    );
   const observedRegistry = () => getPluginRuntimeGenerationRegistry() ?? getActivePluginRegistry();
   const stream = vi.fn<StreamFn>(() => {
     options.observeStage?.("execution", observedRegistry());
     return providerStream();
   });
   const fallbackStream = vi.fn<StreamFn>(() => providerStream());
-  const resolveProviderStream = vi.fn<Deps["resolveProviderStream"]>(() => {
+  vi.spyOn(providerStreamRuntime, "registerProviderStreamForModel").mockImplementation(() => {
     options.observeStage?.("factory", observedRegistry());
     return stream;
   });
-  const resolveStream = vi.fn<Deps["resolveStream"]>((streamParams) => {
-    scope.authProfile = streamParams.authProfileId;
-    return {
-      streamFn: streamParams.providerStreamFn ?? streamParams.currentStreamFn ?? fallbackStream,
-      strategy: "provider",
-    };
-  });
-  const applyStreamPolicy = vi.fn<Deps["applyStreamPolicy"]>(() => {
-    options.observeStage?.("policy", observedRegistry());
-    return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: undefined };
-  });
+  vi.spyOn(streamResolutionRuntime, "resolveEmbeddedAgentStream").mockImplementation(
+    (streamParams) => {
+      scope.authProfile = streamParams.authProfileId;
+      return {
+        streamFn: streamParams.providerStreamFn ?? streamParams.currentStreamFn ?? fallbackStream,
+        strategy: "provider",
+      };
+    },
+  );
+  const applyStreamPolicy = vi
+    .spyOn(extraParamsRuntime, "applyExtraParamsToAgent")
+    .mockImplementation(() => {
+      options.observeStage?.("policy", observedRegistry());
+      return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: undefined };
+    });
   const releaseRuntime = vi.fn(async () => {});
   const readPromptCacheContext = vi
     .spyOn(workerTurnOwners, "readWorkerTurnPromptCacheContext")
     .mockReturnValue({ boundaryCount: 0 });
-  const acquireRuntimeLease = vi.fn<Deps["acquireRuntimeLease"]>(async (runtimeParams) => {
-    scope.agentDir = runtimeParams.agentDir;
-    const leased = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
-    leasedPreparedModelRuntime = leased;
-    return {
-      snapshot: leased,
-      pluginGeneration: {
-        remoteCatalog: null,
-        configuredCatalogEntries: [],
-        inlineProviderModels: [],
-        pluginMetadataSnapshot: leased.metadataSnapshot,
-        pluginRegistry: leased.pluginRegistry,
-      },
-      [Symbol.asyncDispose]: releaseRuntime,
-    };
-  });
+  const acquireRuntimeLease = vi
+    .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
+    .mockImplementation(async (runtimeParams) => {
+      scope.agentDir = runtimeParams.agentDir;
+      const leased = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
+      leasedPreparedModelRuntime = leased;
+      return {
+        snapshot: leased,
+        pluginGeneration: {
+          remoteCatalog: null,
+          configuredCatalogEntries: [],
+          inlineProviderModels: [],
+          pluginMetadataSnapshot: leased.metadataSnapshot,
+          pluginRegistry: leased.pluginRegistry,
+        },
+        [Symbol.asyncDispose]: releaseRuntime,
+      };
+    });
   const readSessionEntry = vi
     .spyOn(sessionEntryRuntime, "readSessionEntryInWorker")
     .mockImplementation(async (target) => {
       expect(target).toEqual(sessionTarget);
       return entry;
     });
-  vi.spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
-    acquireRuntimeLease,
-  );
   vi.spyOn(modelSelectionRuntime, "resolveDefaultModelForAgent").mockReturnValue({
     provider: PROVIDER,
     model: MODEL,
   });
-  vi.spyOn(sessionAuthRuntime, "resolveSessionAuthSelection").mockImplementation(
-    resolveAuthSelection,
-  );
-  vi.spyOn(simpleCompletionRuntime, "prepareSimpleCompletionModel").mockImplementation(
-    prepareModel,
-  );
-  vi.spyOn(providerStreamRuntime, "registerProviderStreamForModel").mockImplementation(
-    resolveProviderStream,
-  );
-  vi.spyOn(streamResolutionRuntime, "resolveEmbeddedAgentStream").mockImplementation(resolveStream);
-  vi.spyOn(extraParamsRuntime, "applyExtraParamsToAgent").mockImplementation(applyStreamPolicy);
   vi.spyOn(
     diagnosticModelCallRuntime,
     "wrapStreamFnWithDiagnosticModelCallEvents",

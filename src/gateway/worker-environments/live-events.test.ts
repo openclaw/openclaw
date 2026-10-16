@@ -87,8 +87,10 @@ describe("worker live events", () => {
     return source;
   };
 
+  const apply = (request: Params, identity = ID) =>
+    rx.apply({ identity, request, source: sourceFor(identity), readAckedSeq });
   const ack = async (request: Params, ackedSeq = request.seq, id = ID) => {
-    expect(await rx.apply({ identity: id, request, source: sourceFor(id), readAckedSeq })).toEqual({
+    expect(await apply(request, id)).toEqual({
       ok: true,
       result: { ackedSeq },
     });
@@ -98,7 +100,7 @@ describe("worker live events", () => {
       reason === "resync-required"
         ? { reason, ackedSeq: durableAckedSeq, expectedSeq: durableAckedSeq + 1 }
         : { reason };
-    expect(await rx.apply({ identity: id, request, source: sourceFor(id), readAckedSeq })).toEqual({
+    expect(await apply(request, id)).toEqual({
       ok: false,
       details,
     });
@@ -127,6 +129,27 @@ describe("worker live events", () => {
       },
     );
   const deltas = () => events.map((event) => event.data.delta);
+  const phases = () => events.map((event) => event.data.phase);
+  const runIds = () => events.map((event) => event.runId);
+  const rows = (storePath = store) =>
+    loadSqliteTrajectoryRuntimeEventRowsSync({ agentId: "main", sessionId: SID, storePath });
+  const life = (
+    seq: number,
+    payload: Extract<WireEvent, { kind: "lifecycle" }>["payload"],
+    runId = RUN,
+  ) => live(seq, lifecycle(payload), runId);
+  const toolEvent = (seq: number, payload: Extract<WireEvent, { kind: "tool" }>["payload"]) =>
+    live(seq, tool(payload));
+  const rotate = (credentialHash: string, ackedSeq: number) =>
+    rx.rotateCredential({
+      ackedSeq,
+      credentialHash,
+      environmentId: ID.environmentId,
+      newProcessTurn: true,
+      previousCredentialHash: ID.credentialHash,
+      runEpoch: EPOCH,
+      sessionId: SID,
+    });
 
   beforeEach(async () => {
     root = sessionDirs.make();
@@ -159,43 +182,25 @@ describe("worker live events", () => {
         event.data.result = { status: "live-consumer-mutated" };
       }
     });
-    await ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    await ack(life(1, { phase: "start", startedAt: 100 }));
+    const writeTool = { name: "write", toolCallId: "call-write" };
     await ack(
-      live(
-        2,
-        tool({
-          phase: "start",
-          name: "write",
-          toolCallId: "call-write",
-          args: { path: "proof.txt", credential },
-        }),
-      ),
+      toolEvent(2, { ...writeTool, phase: "start", args: { path: "proof.txt", credential } }),
     );
     await ack(
-      live(
-        3,
-        tool({
-          phase: "result",
-          name: "write",
-          toolCallId: "call-write",
-          isError: false,
-          result: { status: "written", credential },
-        }),
-      ),
+      toolEvent(3, {
+        ...writeTool,
+        phase: "result",
+        isError: false,
+        result: { status: "written", credential },
+      }),
     );
-    const terminal = live(
-      4,
-      lifecycle({ phase: "end", startedAt: 100, endedAt: 200, stopReason: "length" }),
-    );
+    const terminal = life(4, { phase: "end", startedAt: 100, endedAt: 200, stopReason: "length" });
     await ack(terminal);
     await ack(terminal);
 
-    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
-      agentId: "main",
-      sessionId: SID,
-      storePath: store,
-    });
-    expect(rows.map((row) => row.event.type)).toEqual([
+    const persisted = rows();
+    expect(persisted.map((row) => row.event.type)).toEqual([
       "session.started",
       "tool.call",
       "tool.result",
@@ -205,14 +210,14 @@ describe("worker live events", () => {
     expect(events.find((event) => event.data.phase === "result")?.data.result).toEqual({
       status: "live-consumer-mutated",
     });
-    expect(rows[2]?.event.data).toMatchObject({
+    expect(persisted[2]?.event.data).toMatchObject({
       name: "write",
       success: true,
       result: { status: "written", credential },
     });
-    expect(rows[3]?.event.data).toMatchObject({ stopReason: "length" });
-    expect(rows[4]?.event.data).toMatchObject({ status: "success", stopReason: "length" });
-    expect(rows[1]?.event.data).toMatchObject({ args: { credential } });
+    expect(persisted[3]?.event.data).toMatchObject({ stopReason: "length" });
+    expect(persisted[4]?.event.data).toMatchObject({ status: "success", stopReason: "length" });
+    expect(persisted[1]?.event.data).toMatchObject({ args: { credential } });
   });
 
   const lifecycleCredential = ["lifecycle", "credential", "value"].join("-");
@@ -246,17 +251,13 @@ describe("worker live events", () => {
     await ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
     await ack(live(2, terminal));
 
-    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
-      agentId: "main",
-      sessionId: SID,
-      storePath: store,
-    });
-    expect(rows.slice(-2).map((row) => row.event)).toMatchObject([
+    const terminalRows = rows().slice(-2);
+    expect(terminalRows.map((row) => row.event)).toMatchObject([
       { type: "model.completed", data: { stopReason } },
       { type: "session.ended", data: { status, stopReason } },
     ]);
     if (_name === "provider errors") {
-      expect(rows.slice(-2).map((row) => row.event.data?.error)).toEqual([
+      expect(terminalRows.map((row) => row.event.data?.error)).toEqual([
         `provider failed after Bearer ${lifecycleCredential}`,
         `provider failed after Bearer ${lifecycleCredential}`,
       ]);
@@ -337,37 +338,24 @@ describe("worker live events", () => {
     const writer = holdWorkerTranscriptWriter(store);
     await writer.entered;
     let settled = false;
-    const result = rx
-      .apply({
-        readAckedSeq,
-        identity: ID,
-        source: sourceFor(),
-        request: live(1, lifecycle({ phase: "start", startedAt: 100 })),
-      })
-      .then(
-        (value) => {
-          settled = true;
-          return value;
-        },
-        (error: unknown) => {
-          settled = true;
-          return error;
-        },
-      );
+    const result = apply(life(1, { phase: "start", startedAt: 100 })).then(
+      (value) => {
+        settled = true;
+        return value;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
     try {
       await setImmediate();
-      expect(events.map((event) => event.data.phase)).toEqual(["start"]);
+      expect(phases()).toEqual(["start"]);
       expect(settled).toBe(false);
       writer.release();
       await writer.done;
       expect(await result).toBe(failure);
-      expect(
-        loadSqliteTrajectoryRuntimeEventRowsSync({
-          agentId: "main",
-          sessionId: SID,
-          storePath: store,
-        }).map((row) => row.event.type),
-      ).toEqual(["session.started"]);
+      expect(rows().map((row) => row.event.type)).toEqual(["session.started"]);
     } finally {
       writer.release();
       await writer.done;
@@ -381,21 +369,14 @@ describe("worker live events", () => {
     const writer = holdWorkerTranscriptWriter(store);
     await writer.entered;
     let settled = false;
-    const result = rx
-      .apply({
-        readAckedSeq,
-        identity: ID,
-        source,
-        request: live(1, lifecycle({ phase: "start", startedAt: 100 })),
-      })
-      .then((value) => {
-        settled = true;
-        return value;
-      });
+    const result = apply(life(1, { phase: "start", startedAt: 100 })).then((value) => {
+      settled = true;
+      return value;
+    });
     let released: Promise<void> | undefined;
     try {
       await setImmediate();
-      expect(events.map((event) => event.data.phase)).toEqual(["start"]);
+      expect(phases()).toEqual(["start"]);
       expect(settled).toBe(false);
       released = source.release();
       writer.release();
@@ -403,7 +384,7 @@ describe("worker live events", () => {
       expect(await result).toEqual({ ok: true, result: { ackedSeq: 1 } });
       await released;
       await fail(msg(2, "after source closure", 1), "invalid-event");
-      expect(events.map((event) => event.data.phase)).toEqual(["start"]);
+      expect(phases()).toEqual(["start"]);
     } finally {
       writer.release();
       await writer.done;
@@ -434,25 +415,15 @@ describe("worker live events", () => {
   });
 
   it("retires completed process fences when a new turn reuses its durable run id", async () => {
-    await ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
-    await ack(live(2, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 })));
+    await ack(life(1, { phase: "start", startedAt: 100 }));
+    await ack(life(2, { phase: "end", startedAt: 100, endedAt: 200 }));
     const credentialHash = ["next", "process", "credential"].join("-");
 
-    expect(
-      rx.rotateCredential({
-        ackedSeq: 2,
-        credentialHash,
-        environmentId: ID.environmentId,
-        newProcessTurn: true,
-        previousCredentialHash: ID.credentialHash,
-        runEpoch: EPOCH,
-        sessionId: SID,
-      }),
-    ).toBe(true);
+    expect(rotate(credentialHash, 2)).toBe(true);
 
     const nextProcess = { ...ID, credentialHash };
-    await ack(live(3, lifecycle({ phase: "start", startedAt: 300 })), 3, nextProcess);
-    expect(events.map((event) => event.data.phase)).toEqual(["start", "end", "start"]);
+    await ack(life(3, { phase: "start", startedAt: 300 }), 3, nextProcess);
+    expect(phases()).toEqual(["start", "end", "start"]);
   });
 
   it("ACKs an exact cancelled finishing event without consulting the retired source", async () => {
@@ -460,7 +431,7 @@ describe("worker live events", () => {
     const source = sourceFor();
     const receipt = vi.spyOn(source, "receiptAuthority");
     const record = vi.fn();
-    const finishing = live(1, lifecycle({ phase: "finishing", aborted: true, endedAt: 200 }));
+    const finishing = life(1, { phase: "finishing", aborted: true, endedAt: 200 });
     const owner = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
       isCancelled: () => true,
       isCancelledFinishing: (request) => request === finishing,
@@ -473,13 +444,7 @@ describe("worker live events", () => {
       expect(record).not.toHaveBeenCalled();
       expect(events).toEqual([]);
       expect(getAgentRunContext(RUN)).toBeUndefined();
-      expect(
-        loadSqliteTrajectoryRuntimeEventRowsSync({
-          agentId: "main",
-          sessionId: SID,
-          storePath: store,
-        }),
-      ).toEqual([]);
+      expect(rows()).toEqual([]);
     } finally {
       receipt.mockRestore();
       owner.mockRestore();
@@ -492,25 +457,11 @@ describe("worker live events", () => {
     const credentialHash = "replacement-process-credential";
     const runId = "replacement-worker-run";
 
-    expect(
-      rx.rotateCredential({
-        ackedSeq: 0,
-        credentialHash,
-        environmentId: ID.environmentId,
-        newProcessTurn: true,
-        previousCredentialHash: ID.credentialHash,
-        runEpoch: EPOCH,
-        sessionId: SID,
-      }),
-    ).toBe(true);
+    expect(rotate(credentialHash, 0)).toBe(true);
 
     const replacement = { ...ID, credentialHash, runId };
-    await ack(live(1, lifecycle({ phase: "start", startedAt: 300 }), runId), 1, replacement);
-    await ack(
-      live(2, lifecycle({ phase: "finishing", startedAt: 300, endedAt: 400 }), runId),
-      2,
-      replacement,
-    );
+    await ack(life(1, { phase: "start", startedAt: 300 }, runId), 1, replacement);
+    await ack(life(2, { phase: "finishing", startedAt: 300, endedAt: 400 }, runId), 2, replacement);
     expect(events.slice(-2).map((event) => event.data.phase)).toEqual(["start", "finishing"]);
   });
 
@@ -532,7 +483,7 @@ describe("worker live events", () => {
     const second = msg(2, "second", 0, "run-buffered");
     const retry = msg(2, "replacement", 1, second.runId);
     const terminal = {
-      ...live(3, lifecycle({ phase: "end", endedAt: 200 }), first.runId),
+      ...life(3, { phase: "end", endedAt: 200 }, first.runId),
       lastAckedSeq: 1,
     };
 
@@ -540,16 +491,16 @@ describe("worker live events", () => {
     await ack(first);
     expect(getAgentRunContext(first.runId)).toBeDefined();
     expect(getAgentRunContext(second.runId)).toBeUndefined();
-    expect(events.map((event) => event.runId)).toEqual([first.runId]);
+    expect(runIds()).toEqual([first.runId]);
 
     await ack(retry, 1);
     expect(getAgentRunContext(first.runId)).toBeDefined();
-    expect(events.map((event) => event.runId)).toEqual([first.runId]);
+    expect(runIds()).toEqual([first.runId]);
 
     await ack(terminal, 1);
     expect(getAgentRunContext(first.runId)).toBeDefined();
     expect(getAgentRunContext(second.runId)).toBeUndefined();
-    expect(events.map((event) => event.runId)).toEqual([first.runId]);
+    expect(runIds()).toEqual([first.runId]);
 
     await ack(retry, 3);
     await ack(terminal, 3);
@@ -567,7 +518,7 @@ describe("worker live events", () => {
     const second = msg(2, "second", 0, "run-buffered");
     const third = msg(3, "third", 0, "run-intervening");
     const terminal = {
-      ...live(4, lifecycle({ phase: "end", endedAt: 200 }), first.runId),
+      ...life(4, { phase: "end", endedAt: 200 }, first.runId),
       lastAckedSeq: 0,
     };
 
@@ -577,7 +528,7 @@ describe("worker live events", () => {
     await ack(first);
     await ack(msg(2, "replacement", 1, second.runId), 1);
 
-    expect(events.map((event) => event.runId)).toEqual([first.runId]);
+    expect(runIds()).toEqual([first.runId]);
     expect(getAgentRunContext(second.runId)).toBeUndefined();
     expect(getAgentRunContext(third.runId)).toBeUndefined();
   });
@@ -592,14 +543,7 @@ describe("worker live events", () => {
 
     await ack(second, 0);
     await ack(first);
-    expect(
-      await rx.apply({
-        readAckedSeq,
-        identity: ID,
-        source: sourceFor(),
-        request: msg(3, "overflow", 1, "run-overflow"),
-      }),
-    ).toEqual({
+    expect(await apply(msg(3, "overflow", 1, "run-overflow"))).toEqual({
       ok: false,
       details: { reason: "resync-required", ackedSeq: 1, expectedSeq: 2 },
     });
@@ -627,7 +571,7 @@ describe("worker live events", () => {
     await ack(msg(1, "active", 0, activeRunId));
     await ack(
       {
-        ...live(3, lifecycle({ phase: "end", endedAt: 200 }), activeRunId),
+        ...life(3, { phase: "end", endedAt: 200 }, activeRunId),
         lastAckedSeq: 1,
       },
       1,
@@ -648,33 +592,26 @@ describe("worker live events", () => {
   });
 
   it("keeps buffered and new trajectory writes on the admitted store after config changes", async () => {
-    await ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
-    await ack({ ...live(3, lifecycle({ phase: "end", endedAt: 200 })), lastAckedSeq: 1 }, 1);
+    await ack(life(1, { phase: "start", startedAt: 100 }));
+    await ack({ ...life(3, { phase: "end", endedAt: 200 }), lastAckedSeq: 1 }, 1);
     const replacementStore = path.join(root, "replacement.sqlite");
     await sessions.upsertSessionEntryCore(
       { agentId: "main", sessionKey: KEY, storePath: replacementStore },
       { sessionId: SID, updatedAt: 20 },
     );
     setRuntimeConfigSnapshot({ session: { store: replacementStore } });
-    await ack(live(2, tool({ phase: "start", name: "read", toolCallId: "read-a", args: {} })), 3);
+    await ack(toolEvent(2, { phase: "start", name: "read", toolCallId: "read-a", args: {} }), 3);
 
     expect(
       events.filter((event) => event.stream !== "item").map((event) => event.data.phase),
     ).toEqual(["start", "start", "end"]);
-    expect(
-      loadSqliteTrajectoryRuntimeEventRowsSync({
-        agentId: "main",
-        sessionId: SID,
-        storePath: store,
-      }).map((row) => row.event.type),
-    ).toEqual(["session.started", "tool.call", "model.completed", "session.ended"]);
-    expect(
-      loadSqliteTrajectoryRuntimeEventRowsSync({
-        agentId: "main",
-        sessionId: SID,
-        storePath: replacementStore,
-      }),
-    ).toEqual([]);
+    expect(rows().map((row) => row.event.type)).toEqual([
+      "session.started",
+      "tool.call",
+      "model.completed",
+      "session.ended",
+    ]);
+    expect(rows(replacementStore)).toEqual([]);
   });
 
   it("fences a committed reset", async () => {
@@ -702,23 +639,21 @@ describe("worker live events", () => {
   });
 
   it("fences terminal runs", async () => {
-    await ack(
-      live(1, { kind: "lifecycle", payload: { phase: "error", endedAt: 100, error: "retryable" } }),
-    );
+    await ack(life(1, { phase: "error", endedAt: 100, error: "retryable" }));
     await ack(msg(2, "recovered", 1));
     const end = events[0];
     clearAgentRunContext(RUN, end?.lifecycleGeneration, end?.contextClaimId);
     await fail(msg(3, "released", 2), "invalid-event");
 
     start({ windowSize: 2 });
-    await ack(live(1, { kind: "lifecycle", payload: { phase: "end", endedAt: 200 } }));
+    await ack(life(1, { phase: "end", endedAt: 200 }));
     await ack(msg(2, "other", 1, "run-other"));
     await fail(msg(3, "late", 2), "invalid-event");
   });
 
   it("retains a terminal fence while its run remains claimed", async () => {
     start({ windowSize: 2 });
-    await ack(live(1, { kind: "lifecycle", payload: { phase: "end", endedAt: 200 } }));
+    await ack(life(1, { phase: "end", endedAt: 200 }));
     await ack(msg(2, "other-first", 1, "run-other"));
     await ack(msg(3, "other-second", 2, "run-other"));
 
@@ -747,23 +682,19 @@ describe("worker live events", () => {
       });
       try {
         await fail(
-          live(
-            1,
-            tool({ phase: "start", name: "read", toolCallId: "revoked", args: { path: "file" } }),
-          ),
+          toolEvent(1, {
+            phase: "start",
+            name: "read",
+            toolCallId: "revoked",
+            args: { path: "file" },
+          }),
           "invalid-event",
         );
         expect(events.map((event) => event.stream)).toEqual(
           stream === "item" ? ["item"] : ["item", "tool"],
         );
         expect(diagnostic).not.toHaveBeenCalled();
-        expect(
-          loadSqliteTrajectoryRuntimeEventRowsSync({
-            agentId: "main",
-            sessionId: SID,
-            storePath: store,
-          }),
-        ).toEqual([]);
+        expect(rows()).toEqual([]);
       } finally {
         stop();
         recorder.mockRestore();
@@ -786,18 +717,8 @@ describe("worker live events", () => {
     });
 
     await ack(msg(1, "worker"));
-    await ack(live(2, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 })));
-    expect(
-      rx.rotateCredential({
-        ackedSeq: 2,
-        credentialHash: "next-process-credential-hash",
-        environmentId: ID.environmentId,
-        newProcessTurn: true,
-        previousCredentialHash: ID.credentialHash,
-        runEpoch: EPOCH,
-        sessionId: SID,
-      }),
-    ).toBe(true);
+    await ack(life(2, { phase: "end", startedAt: 100, endedAt: 200 }));
+    expect(rotate("next-process-credential-hash", 2)).toBe(true);
 
     expect(getAgentRunContext(RUN)).toBeUndefined();
     expect(
@@ -807,19 +728,16 @@ describe("worker live events", () => {
 
   it("joins a visible dispatch-owned run context without blocking its terminal", async () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    // A worker-routed turn keeps its dispatch-owned Control UI visibility. The
-    // gateway claims the run context (isControlUiVisible: true for a visible
-    // turn) before handing the turn to the remote worker; joining live events
-    // must inherit that visibility without excluding the outer terminal.
+    // Joining a dispatch-owned visible run must still admit its outer terminal.
     claimAgentRunContext(RUN, {
       ...LOCAL,
       isControlUiVisible: true,
       lifecycleGeneration,
     });
 
-    await ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    await ack(life(1, { phase: "start", startedAt: 100 }));
     await ack(msg(2, "worker", 1));
-    await ack(live(3, lifecycle({ phase: "finishing", startedAt: 100, endedAt: 200 })));
+    await ack(life(3, { phase: "finishing", startedAt: 100, endedAt: 200 }));
 
     expect(getAgentRunContext(RUN)).toMatchObject({
       ...LOCAL,
@@ -866,7 +784,7 @@ describe("worker live events", () => {
     );
     expect(gatewayClaim).toBeDefined();
 
-    await ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    await ack(life(1, { phase: "start", startedAt: 100 }));
 
     expect(getAgentRunContext(RUN)).toMatchObject({
       ...LOCAL,
@@ -901,12 +819,10 @@ describe("worker live events", () => {
       });
     const writer = holdWorkerTranscriptWriter(store);
     await writer.entered;
-    const terminal = rx.apply({
-      readAckedSeq,
-      identity: farmIdentity(1),
-      source: sourceFor(farmIdentity(1)),
-      request: farmEvent(1, 1, lifecycle({ phase: "end", endedAt: 200 })),
-    });
+    const terminal = apply(
+      farmEvent(1, 1, lifecycle({ phase: "end", endedAt: 200 })),
+      farmIdentity(1),
+    );
     let competing: ReturnType<typeof rx.apply> | undefined;
     try {
       for (const claimId of getAgentRunContextOwnership("run-farm-1")?.claimIds ?? []) {
@@ -915,7 +831,7 @@ describe("worker live events", () => {
       expect(getAgentRunContext("run-farm-1")).toBeUndefined();
       const next = farmEvent(2, 1, { kind: "assistant", payload: { text: "next", delta: "next" } });
       await fail(next, "capacity-exceeded", farmIdentity(2));
-      expect(events.map((event) => event.runId)).toEqual(["run-farm-1"]);
+      expect(runIds()).toEqual(["run-farm-1"]);
 
       const write = writes.at(-1);
       if (!write) {
@@ -923,14 +839,7 @@ describe("worker live events", () => {
       }
       // Registered after apply's Promise.all reaction, this runs after the
       // write settles but before apply resumes ACK validation.
-      competing = write.then(() =>
-        rx.apply({
-          identity: farmIdentity(2),
-          request: next,
-          source: sourceFor(farmIdentity(2)),
-          readAckedSeq,
-        }),
-      );
+      competing = write.then(() => apply(next, farmIdentity(2)));
 
       writer.release();
       await writer.done;
@@ -938,7 +847,7 @@ describe("worker live events", () => {
       expect.soft(competingResult).toEqual({ ok: false, details: { reason: "capacity-exceeded" } });
       expect(terminalResult).toEqual({ ok: true, result: { ackedSeq: 1 } });
       await ack(next, 1, farmIdentity(2));
-      expect(events.map((event) => event.runId)).toEqual(["run-farm-1", "run-farm-2"]);
+      expect(runIds()).toEqual(["run-farm-1", "run-farm-2"]);
     } finally {
       writer.release();
       await writer.done;

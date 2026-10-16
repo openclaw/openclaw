@@ -16,22 +16,39 @@ import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
+const command = () => ({ command: "true", env: {}, usePty: false });
+const failedOutcome = { status: "failed" as const, exitCode: 0, timedOut: false };
+const writeSource = (dir: string, data: string) => fs.writeFile(path.join(dir, "source.txt"), data);
+const expectSource = async (dir: string, data: string) =>
+  expect(await fs.readFile(path.join(dir, "source.txt"), "utf8")).toBe(data);
+
+function createBackend(runtimeId: string): SandboxBackendHandle {
+  return {
+    id: "docker",
+    runtimeId,
+    runtimeLabel: runtimeId,
+    workdir: "/workspace",
+    buildExecSpec: async () => ({ argv: ["true"], env: {}, stdinMode: "pipe-closed" }),
+    runShellCommand: async () => {
+      throw new Error("New shell work must remain blocked");
+    },
+  };
+}
+
+async function registerWorkspace(owner: LocalWorkspaceOwner) {
+  await insertRegistryWorktree(process.env, owner.worktree);
+  const scope = { agentId: owner.agentId, sessionKey: owner.sessionKey };
+  const { id, branch, repoRoot } = owner.worktree;
+  const entry = { sessionId: owner.sessionId, updatedAt: 1, worktree: { id, branch, repoRoot } };
+  await replaceSessionEntry(scope, entry);
+  return { scope, entry };
+}
+
 export async function proveStoppedLocalWorkspaceCheckpoint(
   owner: LocalWorkspaceOwner,
   disposeBeforeCheckpoint = false,
 ) {
-  await insertRegistryWorktree(process.env, owner.worktree);
-  const sessionScope = { agentId: owner.agentId, sessionKey: owner.sessionKey };
-  const entry = {
-    sessionId: owner.sessionId,
-    updatedAt: 1,
-    worktree: {
-      id: owner.worktree.id,
-      branch: owner.worktree.branch,
-      repoRoot: owner.worktree.repoRoot,
-    },
-  };
-  await replaceSessionEntry(sessionScope, entry);
+  const { scope, entry } = await registerWorkspace(owner);
   const controller = new AbortController();
   let hostCurrent = true;
   using projection = await prepareLocalSandboxWorkspace({
@@ -50,43 +67,25 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
   if (!projection) {
     throw new Error("Expected managed projection");
   }
-  const backend: SandboxBackendHandle = {
-    id: "docker",
-    runtimeId: "stopped-command",
-    runtimeLabel: "stopped-command",
-    workdir: "/workspace",
-    buildExecSpec: async () => ({ argv: ["true"], env: {}, stdinMode: "pipe-closed" }),
-    runShellCommand: async () => {
-      throw new Error("New shell work must remain blocked");
-    },
-  };
+  const backend = createBackend("stopped-command");
   const sandbox = createSandboxTestContext({
     overrides: { workspaceDir: projection.workspaceDir, backend },
   });
   sandbox.fsBridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
   bindLocalSandboxWorkspace(sandbox, projection);
-  const spec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
-  const laterSpec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
-  await fs.writeFile(path.join(projection.workspaceDir, "source.txt"), "stopped guest edit\n");
+  const spec = await backend.buildExecSpec(command());
+  const laterSpec = await backend.buildExecSpec(command());
+  await writeSource(projection.workspaceDir, "stopped guest edit\n");
   const reason = createAgentRunDirectAbortError();
   controller.abort(reason);
   if (disposeBeforeCheckpoint) {
     projection[Symbol.dispose]();
   }
-  const outcome = {
-    status: "failed" as const,
-    exitCode: 0,
-    timedOut: false,
-    token: spec.finalizeToken,
-  };
+  const outcome = { ...failedOutcome, token: spec.finalizeToken };
   await expect(backend.finalizeExec!(outcome)).resolves.toBeUndefined();
-  expect(await fs.readFile(path.join(owner.worktree.path, "source.txt"), "utf8")).toBe(
-    "stopped guest edit\n",
-  );
+  await expectSource(owner.worktree.path, "stopped guest edit\n");
   await expect(backend.runShellCommand({ script: "true" })).rejects.toBe(reason);
-  await expect(backend.buildExecSpec({ command: "true", env: {}, usePty: false })).rejects.toBe(
-    reason,
-  );
+  await expect(backend.buildExecSpec(command())).rejects.toBe(reason);
   await expect(
     sandbox.fsBridge.writeFile({ filePath: "late.txt", data: "must not write" }),
   ).rejects.toBe(reason);
@@ -94,14 +93,9 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
     code: "ENOENT",
   });
   if (disposeBeforeCheckpoint) {
-    await fs.writeFile(
-      path.join(projection.workspaceDir, "source.txt"),
-      "last stopped guest edit\n",
-    );
+    await writeSource(projection.workspaceDir, "last stopped guest edit\n");
     await backend.finalizeExec!({ ...outcome, token: laterSpec.finalizeToken });
-    expect(await fs.readFile(path.join(owner.worktree.path, "source.txt"), "utf8")).toBe(
-      "last stopped guest edit\n",
-    );
+    await expectSource(owner.worktree.path, "last stopped guest edit\n");
     await expect(projection.checkpoint()).rejects.toThrow(
       "Local sandbox workspace authority changed",
     );
@@ -110,14 +104,14 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
   hostCurrent = false;
   await expect(projection.checkpoint()).rejects.toThrow("Gateway owner closed");
   hostCurrent = true;
-  await fs.writeFile(path.join(projection.workspaceDir, "source.txt"), "guest conflict\n");
-  await fs.writeFile(path.join(owner.worktree.path, "source.txt"), "human conflict\n");
+  await writeSource(projection.workspaceDir, "guest conflict\n");
+  await writeSource(owner.worktree.path, "human conflict\n");
   await expect(
     backend.finalizeExec!({ ...outcome, token: laterSpec.finalizeToken }),
   ).rejects.toThrow("conflict");
-  await fs.writeFile(path.join(owner.worktree.path, "source.txt"), "stopped guest edit\n");
+  await writeSource(owner.worktree.path, "stopped guest edit\n");
   await projection.checkpoint();
-  await replaceSessionEntry(sessionScope, { ...entry, sessionId: randomUUID(), updatedAt: 2 });
+  await replaceSessionEntry(scope, { ...entry, sessionId: randomUUID(), updatedAt: 2 });
   await expect(projection.checkpoint()).rejects.toThrow(
     "Local sandbox workspace authority changed",
   );
@@ -213,32 +207,11 @@ export async function proveStoppedSandboxAuthority(
         undefined,
         captured.authority,
       );
-      const backend: SandboxBackendHandle = {
-        id: "docker",
-        runtimeId: "authority-command",
-        runtimeLabel: "authority-command",
-        workdir: "/workspace",
-        buildExecSpec: async () => ({ argv: ["true"], env: {}, stdinMode: "pipe-closed" }),
-        runShellCommand: async () => {
-          throw new Error("New shell work must remain blocked");
-        },
-      };
+      const backend = createBackend("authority-command");
       // Substitute container execution only; the authority and checkpoint owners stay real.
       const provision = vi.spyOn(backendModule, "createSandboxBackend").mockResolvedValue(backend);
       try {
-        await insertRegistryWorktree(process.env, owner.worktree);
-        await replaceSessionEntry(
-          { agentId: owner.agentId, sessionKey: owner.sessionKey },
-          {
-            sessionId: owner.sessionId,
-            updatedAt: 1,
-            worktree: {
-              id: owner.worktree.id,
-              branch: owner.worktree.branch,
-              repoRoot: owner.worktree.repoRoot,
-            },
-          },
-        );
+        await registerWorkspace(owner);
         const controller = new AbortController();
         using workspace = await resolveAttemptWorkspaceSandbox({
           config,
@@ -254,23 +227,19 @@ export async function proveStoppedSandboxAuthority(
           throw new Error("Expected managed sandbox");
         }
         expect(sandbox.workspaceSource).toBe("managed-worktree");
-        const accepted = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
-        const pending = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
-        await fs.writeFile(path.join(sandbox.workspaceDir, "source.txt"), "accepted guest edit\n");
+        const accepted = await backend.buildExecSpec(command());
+        const pending = await backend.buildExecSpec(command());
+        await writeSource(sandbox.workspaceDir, "accepted guest edit\n");
         const reason = createAgentRunDirectAbortError();
         controller.abort(reason);
         admission.close();
         captured.release();
         workspace[Symbol.dispose]();
-        const outcome = { status: "failed" as const, exitCode: 0, timedOut: false };
+        const outcome = failedOutcome;
         await backend.finalizeExec!({ ...outcome, token: accepted.finalizeToken });
-        expect(await fs.readFile(path.join(owner.worktree.path, "source.txt"), "utf8")).toBe(
-          "accepted guest edit\n",
-        );
-        await expect(
-          backend.buildExecSpec({ command: "true", env: {}, usePty: false }),
-        ).rejects.toBe(reason);
-        await fs.writeFile(path.join(sandbox.workspaceDir, "source.txt"), "revoked guest edit\n");
+        await expectSource(owner.worktree.path, "accepted guest edit\n");
+        await expect(backend.buildExecSpec(command())).rejects.toBe(reason);
+        await writeSource(sandbox.workspaceDir, "revoked guest edit\n");
         if (revoke === "operator") {
           await setCanonicalUserProfileRole(profile.id, "denied", {
             onCommitted: invalidateOperatorRolePolicy,
@@ -285,9 +254,7 @@ export async function proveStoppedSandboxAuthority(
             backend.finalizeExec!({ ...outcome, token: pending.finalizeToken }),
           ).rejects.toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
         }
-        expect(await fs.readFile(path.join(owner.worktree.path, "source.txt"), "utf8")).toBe(
-          "accepted guest edit\n",
-        );
+        await expectSource(owner.worktree.path, "accepted guest edit\n");
       } finally {
         provision.mockRestore();
         admission.close();

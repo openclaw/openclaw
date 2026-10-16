@@ -10,11 +10,11 @@ import { getAgentRunContext, getAgentRunContextOwnership } from "../../infra/age
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
-import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import * as trajectoryStore from "../../trajectory/runtime-store.sqlite.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { dispatchWorkerRequest } from "../server/ws-connection/worker-connection-dispatch.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
+import { holdWorkerTranscriptWriter } from "./live-events.test-support.js";
 import * as support from "./service.test-support.js";
 
 const fault = useSqliteWorkerFault([
@@ -85,15 +85,7 @@ describe("worker live event write settlement", () => {
         await expect(warmup.flush()).rejects.toThrow("synthetic trajectory persistence failure");
       }
 
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const reservation = runOpenClawAgentWorkerWrite(
-        { agentId: "main", path: storePath },
-        async () => {
-          entered.resolve();
-          await release.promise;
-        },
-      );
+      const writer = holdWorkerTranscriptWriter(storePath);
       const emitted = createDeferredCore();
       const phases: unknown[] = [];
       const unsubscribe = onAgentRuntimeEvent((event) => {
@@ -110,7 +102,7 @@ describe("worker live event write settlement", () => {
       let replay: Promise<Awaited<ReturnType<typeof receiver.apply>>> | undefined;
       let stopped: Promise<void> | undefined;
       try {
-        await entered.promise;
+        await writer.entered;
         request = dispatchWorkerRequest({
           request: {
             type: "req",
@@ -157,8 +149,8 @@ describe("worker live event write settlement", () => {
           expect(getAgentRunContextOwnership(identity.runId!)?.claimIds).toEqual(sourceOwnerClaims);
         }
 
-        release.resolve();
-        await reservation;
+        writer.release();
+        await writer.done;
         await request;
         await replay;
         await stopped;
@@ -198,8 +190,8 @@ describe("worker live event write settlement", () => {
           expect(close).not.toHaveBeenCalled();
         }
       } finally {
-        release.resolve();
-        await reservation;
+        writer.release();
+        await writer.done;
         await request;
         await replay;
         await stopped;

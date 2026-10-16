@@ -73,6 +73,7 @@ const PROVIDER_ERROR: WorkerInferenceTerminalOutcome = {
   reason: "provider-error",
   message: "Provider request failed",
 };
+const REJECTED_START = { ok: false, reason: "provider-error" };
 
 function hashRequest(
   identity: WorkerConnectionIdentity,
@@ -108,11 +109,44 @@ function createSink() {
   return { frames, sink, terminal: terminal.promise };
 }
 
+function rejectedReason([settled]: PromiseSettledResult<unknown>[], message: string): unknown {
+  assert(settled.status === "rejected", message);
+  return settled.reason;
+}
+
+function observeSettlement(promise: Promise<unknown> | undefined) {
+  let settled = false;
+  const markSettled = () => {
+    settled = true;
+  };
+  void promise?.then(markSettled, markSettled);
+  return () => settled;
+}
+
 describe("worker inference SQLite store", async () => {
   let root: string;
   let database: OpenClawStateDatabase;
   let nowMs: number;
   let store: WorkerInferenceStore;
+
+  function startInference(
+    manager: ReturnType<typeof createWorkerInferenceManager>,
+    sink: WorkerInferenceSink,
+    overrides: Partial<Parameters<typeof manager.start>[0]> = {},
+  ) {
+    return manager.start({
+      identity: IDENTITY,
+      request: REQUEST,
+      sink,
+      sessionTarget: {
+        agentId: "main",
+        sessionId: REQUEST.sessionId,
+        sessionKey: "agent:main:inference-store",
+        storePath: path.join(root, "sessions.sqlite"),
+      },
+      ...overrides,
+    });
+  }
 
   beforeEach(async () => {
     vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
@@ -261,12 +295,6 @@ describe("worker inference SQLite store", async () => {
       const execute = vi.fn<WorkerInferenceExecutor>(async () => PROVIDER_ERROR);
       const manager = createWorkerInferenceManager({ execute, store });
       const initial = createSink();
-      const sessionTarget = {
-        agentId: "main",
-        sessionId: REQUEST.sessionId,
-        sessionKey: "agent:main:inference-store",
-        storePath: path.join(root, "sessions.sqlite"),
-      };
       let invalid = false;
       let target: { worker: Worker; id: number; actor: number } | undefined;
       let refusalReplies = 0;
@@ -336,11 +364,7 @@ describe("worker inference SQLite store", async () => {
             return originalReceive(slot, reply, owner);
           });
         restores.push(() => replies.mockRestore());
-        const started = manager.start({
-          identity: IDENTITY,
-          request: REQUEST,
-          sessionTarget,
-          sink: initial.sink,
+        const started = startInference(manager, initial.sink, {
           revalidate: () => {
             if (invalid) {
               throw ordinary;
@@ -360,15 +384,16 @@ describe("worker inference SQLite store", async () => {
         await Promise.race([dispatched.promise, endedBeforeDispatch]);
         drain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
         const drained = Promise.allSettled([drain.drained]);
-        const [native] = await Promise.allSettled([promise]);
-        assert(native.status === "rejected", "native begin unexpectedly succeeded");
+        const native = rejectedReason(
+          await Promise.allSettled([promise]),
+          "native begin unexpectedly succeeded",
+        );
         expect(refusalReplies).toBe(1);
-        expect(hasSqliteWorkerOutcomeUnknown(native.reason)).toBe(mode === "lost-refusal-reply");
-        expect(await started).toEqual({ ok: false, reason: "provider-error" });
+        expect(hasSqliteWorkerOutcomeUnknown(native)).toBe(mode === "lost-refusal-reply");
+        expect(await started).toEqual(REJECTED_START);
         drain.start();
-        const [settled] = await drained;
-        assert(settled.status === "rejected", "accepted drain discarded begin failure");
-        expect(hasSqliteWorkerOutcomeUnknown(settled.reason)).toBe(mode === "lost-refusal-reply");
+        const settled = rejectedReason(await drained, "accepted drain discarded begin failure");
+        expect(hasSqliteWorkerOutcomeUnknown(settled)).toBe(mode === "lost-refusal-reply");
         expect(complete).not.toHaveBeenCalled();
         expect(execute).not.toHaveBeenCalled();
         expect(initial.frames).toEqual([]);
@@ -376,33 +401,23 @@ describe("worker inference SQLite store", async () => {
         drain.release();
         invalid = false;
         if (mode === "lost-refusal-reply") {
-          expect(errorGraph(settled.reason)).toContain(ordinary);
-          expect(errorGraph(settled.reason)).toContain(native.reason);
-          expect(
-            await manager.start({
-              identity: IDENTITY,
-              request: REQUEST,
-              sessionTarget,
-              sink: initial.sink,
-            }),
-          ).toEqual({ ok: false, reason: "provider-error" });
+          expect(errorGraph(settled)).toContain(ordinary);
+          expect(errorGraph(settled)).toContain(native);
+          expect(await startInference(manager, initial.sink)).toEqual(REJECTED_START);
           expect(begin).toHaveBeenCalledOnce();
           expect(complete).not.toHaveBeenCalled();
-          const [stopped] = await Promise.allSettled([manager.stop()]);
-          assert(stopped.status === "rejected", "shutdown discarded native refusal evidence");
-          expect(hasSqliteWorkerOutcomeUnknown(stopped.reason)).toBe(true);
-          expect(errorGraph(stopped.reason)).toContain(ordinary);
-          expect(errorGraph(stopped.reason)).toContain(native.reason);
+          const stopped = rejectedReason(
+            await Promise.allSettled([manager.stop()]),
+            "shutdown discarded native refusal evidence",
+          );
+          expect(hasSqliteWorkerOutcomeUnknown(stopped)).toBe(true);
+          expect(errorGraph(stopped)).toContain(ordinary);
+          expect(errorGraph(stopped)).toContain(native);
         } else {
-          expect(settled.reason).toBe(ordinary);
-          expect(native.reason).toMatchObject({ cause: ordinary });
+          expect(settled).toBe(ordinary);
+          expect(native).toMatchObject({ cause: ordinary });
           const retry = createSink();
-          const accepted = await manager.start({
-            identity: IDENTITY,
-            request: REQUEST,
-            sessionTarget,
-            sink: retry.sink,
-          });
+          const accepted = await startInference(manager, retry.sink);
           assert(accepted.ok, "known native refusal prevented legitimate retry");
           accepted.launch();
           expect(await retry.terminal).toEqual(PROVIDER_ERROR);
@@ -447,12 +462,6 @@ describe("worker inference SQLite store", async () => {
       let drain: AcceptedWorkerInferenceSessionDrain | undefined;
       let restoreReceiver: (() => void) | undefined;
       let terminalReplies = 0;
-      const sessionTarget = {
-        agentId: "main",
-        sessionId: REQUEST.sessionId,
-        sessionKey: "agent:main:inference-store",
-        storePath: path.join(root, "sessions.sqlite"),
-      };
       const successorRequest = {
         ...REQUEST,
         runId: "run-native-successor",
@@ -468,20 +477,13 @@ describe("worker inference SQLite store", async () => {
         },
       };
       const startSuccessor = (nextSink: WorkerInferenceSink) =>
-        manager.start({
+        startInference(manager, nextSink, {
           identity: successorIdentity,
           request: successorRequest,
-          sessionTarget,
-          sink: nextSink,
         });
       try {
         await manager.ready();
-        const started = await manager.start({
-          identity: IDENTITY,
-          request: REQUEST,
-          sessionTarget,
-          sink,
-        });
+        const started = await startInference(manager, sink);
         if (!started.ok) {
           throw new Error(`start failed: ${started.reason}`);
         }
@@ -519,93 +521,60 @@ describe("worker inference SQLite store", async () => {
         const cancelled = Promise.allSettled([cancellation]);
         expect(signal.aborted).toBe(true);
         const { promise: completion } = await submitted.promise;
-        const [completed] = await Promise.allSettled([completion]);
+        const failure: unknown = rejectedReason(
+          await Promise.allSettled([completion]),
+          "corrupted native terminal result unexpectedly succeeded",
+        );
         if (!committedOutcome) {
           throw new Error(
             "native terminal completion settled without intercepting its committed result",
           );
         }
-        assert(
-          completed.status === "rejected",
-          "corrupted native terminal result unexpectedly succeeded",
-        );
-        const failure: unknown = completed.reason;
         expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
-        const [cancellationResult] = await cancelled;
-        if (cancellationResult.status !== "rejected") {
-          throw new Error("native uncertainty was lost during captured cancellation");
-        }
-        expect(cancellationResult.reason).toBe(failure);
+        expect(rejectedReason(await cancelled, "cancellation lost native failure")).toBe(failure);
         if (mode === "successor") {
-          expect(await startSuccessor(createSink().sink)).toEqual({
-            ok: false,
-            reason: "provider-error",
-          });
+          expect(await startSuccessor(createSink().sink)).toEqual(REJECTED_START);
           expect(begin).toHaveBeenCalledOnce();
           expect(complete).toHaveBeenCalledOnce();
         }
         const acceptedDrain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
         drain = acceptedDrain;
-        let drainSettled = false;
-        void drain.drained.then(
-          () => {
-            drainSettled = true;
-          },
-          () => {
-            drainSettled = true;
-          },
-        );
+        const drainSettled = observeSettlement(drain.drained);
         const drained = Promise.allSettled([drain.drained]);
         acceptedDrain.start();
         expect(signal.aborted).toBe(true);
-        let stopSettled = false;
         const stopping = mode === "shutdown" ? manager.stop() : undefined;
-        void stopping?.then(
-          () => {
-            stopSettled = true;
-          },
-          () => {
-            stopSettled = true;
-          },
-        );
+        const stopSettled = observeSettlement(stopping);
         const stopped = stopping ? Promise.allSettled([stopping]) : undefined;
-        await expect(manager.cancel({ identity: IDENTITY, request: REQUEST })).resolves.toEqual({
-          ok: false,
-          reason: "provider-error",
-        });
-        expect(drainSettled).toBe(false);
-        expect(stopSettled).toBe(false);
+        await expect(manager.cancel({ identity: IDENTITY, request: REQUEST })).resolves.toEqual(
+          REJECTED_START,
+        );
+        expect(drainSettled()).toBe(false);
+        expect(stopSettled()).toBe(false);
         expect(drain.hasWork()).toBe(true);
         expect(frames).toEqual([]);
-        const readTerminal = () =>
-          database.db
+        const expectTerminal = () => {
+          const rows = database.db
             .prepare(
               "SELECT state, terminal_json FROM worker_inference_turns WHERE session_id = ? AND run_epoch = ? AND run_id = ? AND turn_id = ?",
             )
             .all(REQUEST.sessionId, REQUEST.runEpoch, REQUEST.runId, REQUEST.turnId);
-        expect(readTerminal()).toEqual([
-          { state: "terminal", terminal_json: JSON.stringify(committedOutcome) },
-        ]);
+          expect(rows).toEqual([
+            { state: "terminal", terminal_json: JSON.stringify(committedOutcome) },
+          ]);
+        };
+        expectTerminal();
 
         provider.resolve(PROVIDER_ERROR);
-        const [drainResult] = await drained;
-        assert(
-          drainResult.status === "rejected",
-          "native uncertainty was lost during inference settlement",
-        );
-        expect(drainResult.reason).toBe(failure);
+        expect(rejectedReason(await drained, "drain lost native failure")).toBe(failure);
         if (stopped) {
-          const [stopResult] = await stopped;
-          assert(stopResult.status === "rejected", "native uncertainty was lost during shutdown");
-          expect(stopResult.reason).toBe(failure);
+          expect(rejectedReason(await stopped, "shutdown lost native failure")).toBe(failure);
         }
         expect(complete).toHaveBeenCalledOnce();
         expect(terminalReplies).toBe(1);
         expect(execute).toHaveBeenCalledOnce();
         expect(frames).toEqual([]);
-        expect(readTerminal()).toEqual([
-          { state: "terminal", terminal_json: JSON.stringify(committedOutcome) },
-        ]);
+        expectTerminal();
         if (mode === "successor") {
           drain.release();
           const changedFactsIdentity: WorkerConnectionIdentity = {
@@ -627,12 +596,9 @@ describe("worker inference SQLite store", async () => {
               { ...REQUEST, modelRef: { ...REQUEST.modelRef, model: "changed-request-hash" } },
             ],
           ] as const) {
-            expect(
-              await manager.start({ identity, request, sessionTarget, sink: createSink().sink }),
-            ).toEqual({
-              ok: false,
-              reason: "provider-error",
-            });
+            expect(await startInference(manager, createSink().sink, { identity, request })).toEqual(
+              REJECTED_START,
+            );
           }
           expect(begin).toHaveBeenCalledOnce();
           const successor = createSink();
@@ -657,9 +623,7 @@ describe("worker inference SQLite store", async () => {
           expect(complete).toHaveBeenCalledTimes(2);
           expect(execute).toHaveBeenCalledTimes(2);
           expect(terminalRunIds()).toEqual([REQUEST.runId, successorRequest.runId].toSorted());
-          expect(readTerminal()).toEqual([
-            { state: "terminal", terminal_json: JSON.stringify(committedOutcome) },
-          ]);
+          expectTerminal();
           await expect(manager.stop()).rejects.toBe(failure);
           expect(complete).toHaveBeenCalledTimes(2);
           expect(terminalReplies).toBe(1);
