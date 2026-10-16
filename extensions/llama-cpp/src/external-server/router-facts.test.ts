@@ -2,6 +2,7 @@ import type {
   ProviderAppGuidedSetupContext,
   ProviderCatalogContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { expect, it } from "vitest";
 import llamaCppProviderDiscovery from "../../provider-discovery.js";
@@ -78,7 +79,7 @@ it("persists verified router facts and refreshes unknown fields without replacin
         ...context,
         modelRef: "llama-cpp/model-a",
       });
-      const saved = setup?.configPatch;
+      const saved = setup ? applyProviderAuthConfigPatch({}, setup.configPatch, setup) : undefined;
       const provider = saved?.models?.providers?.["llama-cpp"];
       if (!saved || !provider) {
         throw new Error("Expected a llama-server setup config patch");
