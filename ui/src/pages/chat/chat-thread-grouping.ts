@@ -12,6 +12,7 @@ import {
   sessionParticipantIdentityKey,
   type SenderIdentity,
 } from "../../lib/chat/sender-label.ts";
+import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantMessageIsInterrupted,
@@ -263,13 +264,19 @@ function groupChatItems(
       Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim());
     // Saved reasoning stays visible until its live owner retires the receipts.
     // Legacy mixed rows retain their tool grouping and file-link attribution.
+    // Classify after content projection; prepared outcomes may outlive their blocks.
+    const visibleContent = resolveMessageVisibleContent(item.message, normalized);
+    const normalizedRole = normalizeRoleForGrouping(normalized.role);
+    const hasPreparedActivity =
+      normalizedRole === "assistant" &&
+      visibleContent === "none" &&
+      hasVisiblePreparedActivity(item.message);
     const role =
       hasAssistantText || hasVisibleReasoning
         ? "assistant"
-        : normalizeRoleForGrouping(normalized.role);
-    // Classify after content projection and keep the fact with its group; later
-    // presentation passes reuse it; replacing a message refreshes its facts.
-    const visibleContent = resolveMessageVisibleContent(item.message, normalized);
+        : hasPreparedActivity
+          ? "tool"
+          : normalizedRole;
     const source = {
       message: item.message,
       key: item.key,

@@ -459,3 +459,21 @@ it("keeps thinking plus tool calls as activity and omits assistant rows with not
     "tool",
   ]);
 });
+
+it("retains prepared tool outcomes without content blocks as activity", () => {
+  const outcome = message("assistant", [], 1_000, {
+    activity: [
+      {
+        itemId: "read",
+        kind: "tool",
+        phase: "end",
+        name: "read",
+        title: "Read",
+        status: "blocked",
+      },
+    ],
+  });
+  expect(buildCachedChatItems(createProps({ messages: [outcome] }))).toMatchObject([
+    { kind: "group", role: "tool", messages: [{ message: outcome }] },
+  ]);
+});
