@@ -172,8 +172,8 @@ function repoPath(repo: string): string {
   return `/repos/${repo.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-function inWindow(date: string | null | undefined, window: ActivityWindow): boolean {
-  const atMs = date ? Date.parse(date) : Number.NaN;
+function inWindow(timestamp: string | null | undefined, window: ActivityWindow): boolean {
+  const atMs = timestamp ? Date.parse(timestamp) : Number.NaN;
   return atMs >= window.sinceMs && atMs < window.untilMs;
 }
 
@@ -315,8 +315,8 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         }
       };
       const addCommit = async (repo: string, commit: z.infer<typeof commitSchema>) => {
-        const date = commit.commit.committer?.date;
-        if (!inWindow(date, window)) {
+        const committedAt = commit.commit.committer?.date;
+        if (!inWindow(committedAt, window)) {
           return;
         }
         active.add(repo.toLowerCase());
@@ -325,7 +325,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
           repo,
           title: commit.commit.message.split(/\r?\n/, 1)[0] ?? "",
           url: commit.html_url,
-          atMs: Date.parse(date ?? ""),
+          atMs: Date.parse(committedAt ?? ""),
           actor: commit.author?.login ?? "",
           coauthors: coauthors(commit.commit.message, roster),
         });
@@ -568,10 +568,10 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
               if (advisory.updated_at && Date.parse(advisory.updated_at) < window.sinceMs) {
                 break;
               }
-              const date = inWindow(advisory.updated_at, window)
+              const advisoryDate = inWindow(advisory.updated_at, window)
                 ? advisory.updated_at
                 : advisory.published_at;
-              if (!inWindow(date, window)) {
+              if (!inWindow(advisoryDate, window)) {
                 continue;
               }
               const actors = new Set(
@@ -586,7 +586,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                   repo: repo.full_name,
                   title: advisory.summary,
                   url: advisory.html_url,
-                  atMs: Date.parse(date ?? ""),
+                  atMs: Date.parse(advisoryDate ?? ""),
                   actor,
                 });
               }

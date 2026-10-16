@@ -256,7 +256,7 @@ export function createWebOnMessageHandler(params: {
     };
 
     if (conversationKind === "group") {
-      const sender = getSenderIdentity(msg);
+      const groupSender = getSenderIdentity(msg);
       const metaCtx = {
         From: conversationId,
         To: msg.platform.recipientJid,
@@ -265,9 +265,9 @@ export function createWebOnMessageHandler(params: {
         ChatType: conversationKind,
         ConversationLabel: conversationId,
         GroupSubject: msg.group?.subject,
-        SenderName: sender.name ?? undefined,
-        SenderId: getPrimaryIdentityId(sender) ?? undefined,
-        SenderE164: sender.e164 ?? undefined,
+        SenderName: groupSender.name ?? undefined,
+        SenderId: getPrimaryIdentityId(groupSender) ?? undefined,
+        SenderE164: groupSender.e164 ?? undefined,
         Provider: "whatsapp",
         Surface: "whatsapp",
         OriginatingChannel: "whatsapp",
@@ -385,7 +385,7 @@ export function createWebOnMessageHandler(params: {
         const activationCommand = parseActivationCommand(commandBody);
         const ownerSender = normalizeE164(getSenderIdentity(msg, account.authDir).e164 ?? "");
         const owner =
-          !!ownerSender &&
+          ownerSender.length > 0 &&
           resolveOwnerList(
             ownerMentionConfig,
             getSelfIdentity(msg, account.authDir).e164 ?? undefined,
@@ -434,7 +434,7 @@ export function createWebOnMessageHandler(params: {
         // both facts to distinguish an always-on group from a blocked unmentioned turn.
         msg.groupMention = { wasMentioned: effectiveWasMentioned, requireMention };
         if (!shouldBypassMention && requireMention && mentionDecision.shouldSkip) {
-          if (deferMissingMention === true) {
+          if (deferMissingMention) {
             logVerbose(
               `Deferring group mention skip until audio preflight completes in ${conversationId}`,
             );

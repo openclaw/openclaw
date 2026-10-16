@@ -163,10 +163,10 @@ export function createWhatsAppInboundMessageNormalizer(options: {
           await createChannelPairingChallengeIssuer({
             channel: "whatsapp",
             accountId: policy.account.accountId,
-            upsertPairingRequest: async ({ id, meta }) =>
+            upsertPairingRequest: async ({ id: pairingId, meta }) =>
               await upsertChannelPairingRequest({
                 channel: "whatsapp",
-                id,
+                id: pairingId,
                 accountId: policy.account.accountId,
                 meta,
               }),
