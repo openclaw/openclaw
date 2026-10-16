@@ -340,6 +340,16 @@ it("retries discovery without losing the saved delivery", async () => {
   expect(io.report).not.toHaveBeenCalled();
 });
 
+it("ignores an already consumed input before checking a replaced endpoint", async () => {
+  sourceEntry = { ...sourceEntry, sessionId: "replacement" };
+  io.source.mockResolvedValue(undefined);
+  await recoverSessionSendDeliveries(context, controller().signal);
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(io.load).not.toHaveBeenCalled();
+  expect(io.report).not.toHaveBeenCalled();
+  expect(warn).not.toHaveBeenCalled();
+});
+
 it.each([
   new SessionStoreUnavailableError("main", "schema-missing"),
   new SessionStoreUnavailableError("main", "read-failed", {
