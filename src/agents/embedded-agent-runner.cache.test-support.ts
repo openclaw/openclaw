@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
+import { omitWireFields } from "./embedded-agent-runner.wire.test-support.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
 import {
   buildStableCachePrefix,
@@ -105,17 +106,9 @@ export function normalizeLiveUsage(
       : "total" in usage && typeof usage.total === "number"
         ? usage.total
         : input + output;
-  const cost =
-    "cost" in usage && usage.cost
-      ? usage.cost
-      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
   return {
-    input,
-    output,
-    cacheRead: usage.cacheRead ?? 0,
-    cacheWrite: usage.cacheWrite ?? 0,
-    totalTokens,
-    cost,
+    ...buildUsageWithNoCost({ ...usage, totalTokens }),
+    ...("cost" in usage && usage.cost ? { cost: usage.cost } : {}),
   };
 }
 
@@ -277,17 +270,13 @@ export async function runEmbeddedReleasePrefixScenario(
             effectivePayload = {
               ...payload,
               input: effectiveInput.map((item) => {
-                if (
-                  !isRecord(item) ||
-                  (item.type !== "function_call" &&
-                    !(item.type === "message" && item.role === "assistant"))
-                ) {
-                  return item;
-                }
                 // Responses may omit provider item envelopes during replay; call IDs
                 // and function-call-output envelopes remain part of the input contract.
-                const { id: _id, status: _status, ...inputItem } = item;
-                return inputItem;
+                return isRecord(item) &&
+                  (item.type === "function_call" ||
+                    (item.type === "message" && item.role === "assistant"))
+                  ? omitWireFields(item, ["id", "status"])
+                  : item;
               }),
             };
           }
@@ -307,19 +296,13 @@ export async function runEmbeddedReleasePrefixScenario(
           }
           const history = prefix.history.join("\n");
           const marker = `Reply with exactly CACHE-OK release-turn-${turn + 1}.`;
-          expect(
-            history.includes("Synthetic prefix hook before:") && history.includes(marker),
-            "prepend hook reached wire",
-          ).toBe(true);
-          expect(
-            history.includes("Synthetic prefix hook after:") && history.includes(marker),
-            "append hook reached wire",
-          ).toBe(true);
+          expect(history).toContain(marker);
+          expect(history, "prepend hook reached wire").toContain("Synthetic prefix hook before:");
+          expect(history, "append hook reached wire").toContain("Synthetic prefix hook after:");
           if (turn >= 2) {
-            expect(
-              history.includes("Synthetic skill updated."),
-              "refreshed instructions reached history",
-            ).toBe(true);
+            expect(history, "refreshed instructions reached history").toContain(
+              "Synthetic skill updated.",
+            );
           }
           requests.push({ prefix, atMs, turn });
         } catch (error) {
@@ -349,24 +332,12 @@ export async function runEmbeddedReleasePrefixScenario(
                     continue;
                   }
                   const event: unknown = JSON.parse(line.slice(6));
-                  if (
-                    !event ||
-                    typeof event !== "object" ||
-                    !("type" in event) ||
-                    event.type !== "response.completed"
-                  ) {
+                  if (!isRecord(event) || event.type !== "response.completed") {
                     continue;
                   }
-                  assert(
-                    "response" in event && event.response && typeof event.response === "object",
-                  );
+                  assert(isRecord(event.response));
                   const completed = event.response;
-                  assert(
-                    "id" in completed &&
-                      typeof completed.id === "string" &&
-                      "output" in completed &&
-                      Array.isArray(completed.output),
-                  );
+                  assert(typeof completed.id === "string" && Array.isArray(completed.output));
                   // Completion status and log probabilities are response envelopes,
                   // not replay input. Keep every model-visible field in the inherited context.
                   const output = completed.output.map((item: unknown) => {
@@ -374,7 +345,7 @@ export async function runEmbeddedReleasePrefixScenario(
                       return item;
                     }
                     if (item.type === "function_call") {
-                      const { status: _status, ...call } = item;
+                      const call = omitWireFields(item, ["status"]);
                       return {
                         ...call,
                         ...(typeof call.arguments === "string"
@@ -385,13 +356,9 @@ export async function runEmbeddedReleasePrefixScenario(
                     if (item.type === "message" && Array.isArray(item.content)) {
                       return {
                         ...item,
-                        content: item.content.map((block: unknown) => {
-                          if (!isRecord(block)) {
-                            return block;
-                          }
-                          const { logprobs: _logprobs, ...content } = block;
-                          return content;
-                        }),
+                        content: item.content.map((block: unknown) =>
+                          isRecord(block) ? omitWireFields(block, ["logprobs"]) : block,
+                        ),
                       };
                     }
                     return item;
@@ -443,21 +410,6 @@ export async function runEmbeddedReleasePrefixScenario(
         const previousPromptTokens = previous
           ? previous.input + previous.cacheRead + previous.cacheWrite
           : undefined;
-        logLiveCache(
-          JSON.stringify({
-            scenario: "release-prefix",
-            provider,
-            turn: turn + 1,
-            input: run.input,
-            cacheRead: run.cacheRead,
-            cacheWrite: run.cacheWrite,
-            output: run.output,
-            previousPromptTokens,
-            requestGapMs: turn
-              ? requests[turn * requestsPerTurn]!.atMs - requests[turn * requestsPerTurn - 1]!.atMs
-              : undefined,
-          }),
-        );
         if (previousPromptTokens !== undefined && provider !== "openai") {
           expect(previousPromptTokens, "provider minimum cacheable prefix").toBeGreaterThan(4_096);
           expect(run.cacheRead, "reuse at least 80% of the previous prompt").toBeGreaterThanOrEqual(
@@ -484,6 +436,7 @@ export async function runEmbeddedReleasePrefixScenario(
           input: usage?.input,
           cacheRead: usage?.cacheRead,
           cacheWrite: usage?.cacheWrite,
+          output: runs[Math.floor(index / requestsPerTurn)]?.output,
           promptTokens,
           cachedTokenRatio: promptTokens > 0 ? (usage?.cacheRead ?? 0) / promptTokens : 0,
           requestGapMs: result.options?.requestGapMs,
@@ -499,7 +452,7 @@ export async function runEmbeddedReleasePrefixScenario(
       }
       previousPromptTokens = promptTokens;
       expect(
-        result.options?.changes?.map((change) => change.code) ?? [],
+        usage?.changes?.map((change) => change.code) ?? [],
         "tracked cache input changes",
       ).toEqual([]);
     }

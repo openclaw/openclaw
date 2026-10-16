@@ -633,56 +633,45 @@ describe("runEmbeddedAgent", () => {
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
   });
 
-  it("backfills a trimmed session key from sessionId when the embedded run omits it", async () => {
-    const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
-    resolveSessionKeyForRequestMock.mockReturnValue({
-      sessionKey: "agent:test:resolved",
-      sessionStore: {},
-      storePath: "/tmp/session-store.json",
-    });
-    mockSuccessfulEmbeddedAttempt();
-
-    await runTestAgent({
+  it.each([
+    {
+      label: "trims the resolved key",
       sessionId: "resume-123",
-      sessionKey: "   ",
-      config: cfg,
-      provider: "openai",
-      model: "mock-1",
-    });
-
-    expect(resolveSessionKeyForRequestMock).toHaveBeenCalledWith({
-      cfg,
-      sessionId: "resume-123",
-      agentId: undefined,
-    });
-    expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:test:resolved");
-  });
-
-  it("canonicalizes the session-id fallback when a whitespace-only key cannot be resolved", async () => {
-    const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
-    resolveSessionKeyForRequestMock.mockReturnValue({
-      sessionKey: undefined,
-      sessionStore: {},
-      storePath: "/tmp/session-store.json",
-    });
-    mockSuccessfulEmbeddedAttempt();
-
-    await runTestAgent({
+      resolved: "agent:test:resolved",
+      expected: "agent:test:resolved",
+    },
+    {
+      label: "canonicalizes the unresolved fallback",
       sessionId: "resume-124",
-      sessionFile: "resume-124",
-      sessionKey: "   ",
-      config: cfg,
-      provider: "openai",
-      model: "mock-1",
-    });
-
-    expect(resolveSessionKeyForRequestMock).toHaveBeenCalledWith({
-      cfg,
-      sessionId: "resume-124",
-      agentId: undefined,
-    });
-    expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:main:resume-124");
-  });
+      resolved: undefined,
+      expected: "agent:main:resume-124",
+    },
+  ])(
+    "backfills a whitespace-only session key: $label",
+    async ({ sessionId, resolved, expected }) => {
+      const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
+      resolveSessionKeyForRequestMock.mockReturnValue({
+        sessionKey: resolved,
+        sessionStore: {},
+        storePath: "/tmp/session-store.json",
+      });
+      mockSuccessfulEmbeddedAttempt();
+      await runTestAgent({
+        sessionId,
+        sessionKey: "   ",
+        config: cfg,
+        provider: "openai",
+        model: "mock-1",
+        ...(resolved === undefined ? { sessionFile: sessionId } : {}),
+      });
+      expect(resolveSessionKeyForRequestMock).toHaveBeenCalledWith({
+        cfg,
+        sessionId,
+        agentId: undefined,
+      });
+      expect(firstRunEmbeddedAttemptParams().sessionKey).toBe(expected);
+    },
+  );
 
   it("logs when embedded session-key backfill resolution fails", async () => {
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
