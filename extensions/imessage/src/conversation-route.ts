@@ -6,7 +6,6 @@ import {
   type ConfiguredBindingRouteResult,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveIMessageInboundConversationId } from "./conversation-id.js";
 
 export async function resolveIMessageConversationRoute(params: {
@@ -77,13 +76,6 @@ export async function resolveIMessageConversationRoute(params: {
       runtimeRoute.bindingRecord.bindingId,
       undefined,
       runtimeRoute.bindingRecord.conversation,
-    );
-  }
-  if (runtimeRoute.bindingRecord && !runtimeRoute.boundSessionKey) {
-    logVerbose(`imessage: plugin-bound conversation ${conversationId}`);
-  } else if (runtimeRoute.boundSessionKey) {
-    logVerbose(
-      `imessage: routed via bound conversation ${conversationId} -> ${runtimeRoute.boundSessionKey}`,
     );
   }
   return {

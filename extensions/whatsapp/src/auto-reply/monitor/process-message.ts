@@ -309,7 +309,6 @@ export async function processMessage(params: {
       agentId: params.route.agentId,
       sessionKey: params.route.sessionKey,
       verbose: params.verbose,
-      info: params.replyLogger.info.bind(params.replyLogger),
       warn: params.replyLogger.warn.bind(params.replyLogger),
     });
   }

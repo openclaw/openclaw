@@ -107,11 +107,6 @@ export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
       void loading?.tick();
       loading?.start();
 
-      // The inbound context already resolved the sender's name for the agent;
-      // reading it back costs nothing instead of asking LINE a second time.
-      logVerbose(
-        `line: received message from ${ctxPayload.SenderName ?? ctx.userId ?? ctxPayload.From} (${ctxPayload.From})`,
-      );
       let replyTokenUsed = false;
       let turnAdopted = false;
       const ingressLifecycle = deliveryControl.turnAdoptionLifecycle;
