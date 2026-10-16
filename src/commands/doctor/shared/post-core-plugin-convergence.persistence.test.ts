@@ -11,12 +11,12 @@ import { commitPluginInstallRecordsWithConfig } from "../../../plugins/install-r
 import * as pluginInstaller from "../../../plugins/install.js";
 import {
   loadInstalledPluginIndexInstallRecords,
-  readPersistedInstalledPluginIndexInstallRecordsAsync,
+  readPersistedInstalledPluginIndexInstallRecordsAsync as readRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
 import { resolveRetainedManagedNpmInstallMarkerPath } from "../../../plugins/managed-npm-retention.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import {
-  readPersistedInstalledPluginIndexRowSync,
+  readPersistedInstalledPluginIndexRowSync as readRow,
   seedInstalledPluginIndex,
 } from "../../../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../../../plugins/test-helpers/managed-npm-plugin.js";
@@ -90,13 +90,13 @@ it.for(["managed", "registered"] as const)(
       const fence = await executor.enter(state.root, { preflight: true });
       const controller = new AbortController();
       let revocations = 0;
-      let rowAtRevocation: ReturnType<typeof readPersistedInstalledPluginIndexRowSync>;
+      let rowAtRevocation: ReturnType<typeof readRow>;
       const revoke = () => {
         if (controller.signal.aborted) {
           return;
         }
         revocations += 1;
-        rowAtRevocation = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+        rowAtRevocation = readRow({ env: state.env });
         controller.abort(new Error("plugin lease revoked while updater remains current"));
       };
       const unlink = fs.unlinkSync.bind(fs);
@@ -141,9 +141,7 @@ it.for(["managed", "registered"] as const)(
           expect(fs.readlinkSync(linkPath)).toBe(state.root);
         }
         expect(rowAtRevocation).toBeDefined();
-        expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(
-          rowAtRevocation,
-        );
+        expect(readRow({ env: state.env })).toEqual(rowAtRevocation);
         expect(fs.readFileSync(state.configPath, "utf8")).toBe(configBefore);
       } finally {
         unlinkSpy.mockRestore();
@@ -189,12 +187,12 @@ it("keeps restored indexed packages usable under a fresh owner after marker comp
   const configBefore = fs.readFileSync(state.configPath, "utf8");
   const controller = new AbortController();
   const refusal = new Error("caller revoked during marker compensation");
-  let restoredRow: ReturnType<typeof readPersistedInstalledPluginIndexRowSync>;
+  let restoredRow: ReturnType<typeof readRow>;
   const rm = fs.promises.rm.bind(fs.promises);
   const rmSpy = vi.spyOn(fs.promises, "rm").mockImplementation(async (file, options) => {
     await rm(file, options);
     if (file === markerPaths[0]) {
-      restoredRow = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+      restoredRow = readRow({ env: state.env });
       controller.abort(refusal);
     }
   });
@@ -216,10 +214,8 @@ it("keeps restored indexed packages usable under a fresh owner after marker comp
   ).rejects.toBe(refusal);
   rmSpy.mockRestore();
   expect(restoredRow).toBeDefined();
-  expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(restoredRow);
-  expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env })).toEqual(
-    records,
-  );
+  expect(readRow({ env: state.env })).toEqual(restoredRow);
+  expect(await readRecords({ env: state.env })).toEqual(records);
   expect(markerPaths.map((marker) => fs.existsSync(marker))).toEqual([false, true]);
   expect(fs.readFileSync(state.configPath, "utf8")).toBe(configBefore);
 
@@ -271,9 +267,7 @@ it("preserves the repair index when cancelled", async ({ state }) => {
     controller.abort(refusal);
     await expect(repair).rejects.toBe(refusal);
   });
-  expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env })).toEqual(
-    previous,
-  );
+  expect(await readRecords({ env: state.env })).toEqual(previous);
 });
 
 it("retains an initiating-owner read failure across install error normalization", async ({
@@ -326,9 +320,7 @@ it("retains an initiating-owner read failure across install error normalization"
     },
   });
   await expect(repair).rejects.toBe(refusal);
-  expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env })).toEqual(
-    {},
-  );
+  expect(await readRecords({ env: state.env })).toEqual({});
 });
 
 it.for(["missing-modules", "stale-link", "package-copy"] as const)(

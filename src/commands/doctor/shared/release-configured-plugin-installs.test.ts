@@ -50,6 +50,7 @@ async function collectReleaseConfiguredPluginIdsThroughDoctor(params: {
 }): Promise<{ pluginIds: string[]; channelIds: string[] }> {
   mocks.repairMissingPluginInstallsForIds.mockClear();
   await maybeRunConfiguredPluginInstallReleaseStep({
+    env: {},
     ...params,
     currentVersion: "2026.5.2",
     touchedVersion: "2026.5.1",
@@ -132,7 +133,6 @@ describe("configured plugin install release step", () => {
           },
         },
       },
-      env: {},
     });
 
     expect(result).toEqual({
@@ -145,38 +145,24 @@ describe("configured plugin install release step", () => {
     ]);
   });
 
-  it("collects provider plugins from channel-only model overrides", async () => {
-    mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
-      { pluginId: "anthropic-provider", providerId: "anthropic" },
-    ]);
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        channels: { modelByChannel: { discord: { default: "anthropic/claude-opus-4-7" } } },
-      },
-      env: {},
-    });
-
-    expect(result).toEqual({ pluginIds: ["anthropic-provider"], channelIds: [] });
-  });
-
-  it("collects external speech and web-fetch plugins selected by config", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
+  it.each([
+    {
+      source: "channel-only model overrides",
+      cfg: { channels: { modelByChannel: { discord: { default: "anthropic/claude-opus-4-7" } } } },
+      catalog: [{ pluginId: "anthropic-provider", providerId: "anthropic" }],
+      pluginIds: ["anthropic-provider"],
+    },
+    {
+      source: "external speech and web-fetch config",
       cfg: {
         agents: { defaults: { model: "groq/openai/gpt-oss-120b" } },
         tts: { provider: "gradium", providers: { inworld: {} } },
         tools: { web: { fetch: { provider: "firecrawl" } } },
       },
-      env: {},
-    });
-
-    expect(result).toEqual({
       pluginIds: ["firecrawl", "gradium", "groq", "inworld"],
-      channelIds: [],
-    });
-  });
-
-  it("collects an external media-understanding plugin selected only by media config", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
+    },
+    {
+      source: "external media-understanding config only",
       cfg: {
         tools: {
           media: {
@@ -186,39 +172,46 @@ describe("configured plugin install release step", () => {
           },
         },
       },
-      env: {},
-    });
-
-    expect(result).toEqual({ pluginIds: ["groq"], channelIds: [] });
-  });
-
-  it("collects env-only web provider plugins before auto-detection", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
+      pluginIds: ["groq"],
+    },
+    {
+      source: "environment-only web providers before auto-detection",
       cfg: {},
       env: { EXA_API_KEY: "exa-key", FIRECRAWL_API_KEY: "firecrawl-key" },
-    });
-
-    expect(result).toEqual({ pluginIds: ["exa", "firecrawl"], channelIds: [] });
-  });
-
-  it("does not collect env-only web provider plugins when search is disabled", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        tools: { web: { search: { enabled: false }, fetch: { enabled: false } } },
-      },
+      pluginIds: ["exa", "firecrawl"],
+    },
+    {
+      source: "disabled environment-only web providers",
+      cfg: { tools: { web: { search: { enabled: false }, fetch: { enabled: false } } } },
       env: { EXA_API_KEY: "exa-key", FIRECRAWL_API_KEY: "firecrawl-key" },
-    });
-
-    expect(result).toEqual({ pluginIds: [], channelIds: [] });
-  });
-
-  it("collects env-only external provider plugins before model discovery", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
+      pluginIds: [],
+    },
+    {
+      source: "environment-only external providers before model discovery",
       cfg: {},
       env: { GROQ_API_KEY: "groq-key", MODELSTUDIO_API_KEY: "qwen-key" },
+      pluginIds: ["groq", "qwen"],
+    },
+    {
+      source: "external web search and ACP config-only usage",
+      cfg: {
+        acp: { enabled: true, backend: "acpx" },
+        tools: { web: { search: { provider: "brave" } } },
+      },
+      pluginIds: ["acpx", "brave"],
+    },
+  ] satisfies Array<{
+    source: string;
+    cfg: OpenClawConfigWithLegacyRoster;
+    env?: NodeJS.ProcessEnv;
+    catalog?: Array<{ pluginId: string; providerId: string }>;
+    pluginIds: string[];
+  }>)("collects plugin ids from $source", async ({ cfg, env, catalog, pluginIds }) => {
+    mocks.resolveProviderInstallCatalogEntries.mockReturnValue(catalog ?? []);
+    expect(await collectReleaseConfiguredPluginIdsThroughDoctor({ cfg, env: env ?? {} })).toEqual({
+      pluginIds,
+      channelIds: [],
     });
-
-    expect(result).toEqual({ pluginIds: ["groq", "qwen"], channelIds: [] });
   });
 
   it("collects provider plugins from documented external provider aliases", async () => {
@@ -237,22 +230,9 @@ describe("configured plugin install release step", () => {
           providers: { gmicloud: { baseUrl: "https://api.gmi-serving.com/v1", models: [] } },
         },
       },
-      env: {},
     });
 
     expect(result).toEqual({ pluginIds: ["gmi"], channelIds: [] });
-  });
-
-  it("collects external web search and ACP runtime plugins from config-only usage", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        acp: { enabled: true, backend: "acpx" },
-        tools: { web: { search: { provider: "brave" } } },
-      },
-      env: {},
-    });
-
-    expect(result).toEqual({ pluginIds: ["acpx", "brave"], channelIds: [] });
   });
 
   it.each([
@@ -261,7 +241,6 @@ describe("configured plugin install release step", () => {
   ])("does not collect channel ids blocked by $plugins", async ({ plugins }) => {
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: { channels: { matrix: { accessToken: "test" } }, plugins },
-      env: {},
     });
     expect(result.channelIds).toStrictEqual([]);
   });
@@ -366,7 +345,6 @@ describe("configured plugin install release step", () => {
     useOfficialLobsterCatalog();
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: { plugins: { allow: ["lobster", "unofficial-custom"] } },
-      env: {},
     });
 
     expect(result).toEqual({ pluginIds: ["lobster"], channelIds: [] });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { prepareOperatorModelPolicy } from "../../../agents/operator-model-policy.js";
+import type { GatewayOperatorRoleDefinition } from "../../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import {
@@ -198,27 +199,21 @@ describe("provider rename config migration", () => {
         },
       },
     });
-    config.agents!.entries = { work: { model: "ollama/work@ollama:work" } };
-    config.gateway = {
-      roles: {
-        default: "restricted",
-        definitions: {
-          restricted: {
-            agents: "*",
-            scopes: ["operator.write"],
-            sessions: { others: "none" },
-            modelPolicy: { allow: ["ollama/*"], deny: ["ollama/blocked", "ollama/private*"] },
-          },
-        },
-      },
+    config.agents!.entries = { work: { model: "ollama/model@20261001@q4_k_m@ollama:work" } };
+    const role: GatewayOperatorRoleDefinition = {
+      agents: "*",
+      scopes: ["operator.write"],
+      sessions: { others: "none" },
+      modelPolicy: { allow: ["ollama/*"], deny: ["ollama/blocked", "ollama/private*"] },
     };
+    config.gateway = { roles: { definitions: { restricted: role } } };
     const result = applyProviderRenames(config, renames);
     expect(result.config).toMatchObject({
       fixture: {
         ...references("ollama-cloud"),
         models: { "ollama-cloud/qwen:cloud": { alias: "canonical" } },
       },
-      agents: { entries: { work: { model: "ollama-cloud/work" } } },
+      agents: { entries: { work: { model: "ollama-cloud/model@20261001@q4_k_m" } } },
     });
     expect(result.changes.filter((change) => /re-pin/i.test(change))).toHaveLength(1);
     const policy = prepareOperatorModelPolicy({
@@ -231,9 +226,6 @@ describe("provider rename config migration", () => {
     }
     expect(policy?.allows({ provider: "ollama-cloud", model: "allowed" })).toBe(true);
     expect(policy?.allows({ provider: "custom", model: "allowed" })).toBe(false);
-    expect(rewriteProviderModelRef("ollama/model@20261001@q4_k_m@ollama:default", renames)).toBe(
-      "ollama-cloud/model@20261001@q4_k_m",
-    );
     for (const ref of [
       "ollamax/model",
       "custom/model:cloud",

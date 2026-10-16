@@ -19,10 +19,8 @@ function previewNotes(
 }
 
 function warningCollector(text: string) {
-  return async (cfg: unknown) => {
-    const warnings = await collectDoctorPreviewWarnings(cfg);
-    return warnings.filter((warning) => warning.includes(text));
-  };
+  return async (cfg: unknown) =>
+    (await collectDoctorPreviewWarnings(cfg)).filter((warning) => warning.includes(text));
 }
 
 const profileWarnings = warningCollector("is configured, but configured sections");
@@ -114,14 +112,7 @@ vi.mock("./channel-doctor.js", () => ({
 
 vi.mock("./channel-plugin-blockers.js", () => ({
   scanConfiguredChannelPluginBlockers: (
-    cfg: {
-      channels?: Record<string, unknown>;
-      plugins?: {
-        allow?: string[];
-        enabled?: boolean;
-        entries?: Record<string, { enabled?: boolean }>;
-      };
-    },
+    cfg: OpenClawConfig,
     env: NodeJS.ProcessEnv = process.env,
     activationSourceConfig = cfg,
   ) => {
@@ -209,10 +200,7 @@ vi.mock("./channel-plugin-blockers.js", () => ({
 }));
 
 vi.mock("./stale-plugin-config.js", () => ({
-  scanStalePluginConfig: (cfg: {
-    plugins?: { allow?: string[]; entries?: Record<string, unknown> };
-    channels?: Record<string, unknown>;
-  }) => {
+  scanStalePluginConfig: (cfg: OpenClawConfig) => {
     const knownIds = new Set(manifestState.plugins.map((plugin) => plugin.id));
     const hits = [
       ...(cfg.plugins?.allow ?? []).map((id) => ({ id, surface: "allow" })),
@@ -391,21 +379,17 @@ describe("doctor preview warnings", () => {
         telegram: { botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" } },
       },
     } satisfies OpenClawConfig;
-    const resolvedConfig = {
+    commandSecretState.resolvedConfig = {
       channels: { telegram: { botToken: "resolved-token", allowFrom: ["@alice"] } },
-    } satisfies OpenClawConfig;
+    };
     commandSecretState.targetIds = new Set(["channels.telegram.botToken"]);
-    commandSecretState.resolvedConfig = resolvedConfig;
     commandSecretState.diagnostics = [
       "doctor preview: gateway secrets.resolve unavailable (gateway closed); resolved command secrets locally.",
     ];
 
     const { resolveCommandSecretRefsViaGateway } =
       await import("../../../cli/command-secret-gateway.js");
-    const notes = await previewNotes({
-      cfg: rawConfig,
-      env: {},
-    });
+    const notes = await previewNotes({ cfg: rawConfig, env: {} });
 
     expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith({
       config: rawConfig,
@@ -567,8 +551,9 @@ describe("doctor preview warnings", () => {
     expect(warning).not.toContain("agents.list");
   });
 
-  it("uses inherited provider alsoAllow for agent provider profile warnings", async () => {
-    const warnings = await profileWarnings({
+  it.each([
+    {
+      scope: "inherited provider alsoAllow for agent provider profiles",
       tools: { byProvider: { openai: { alsoAllow: ["exec", "process"] } } },
       agents: {
         entries: {
@@ -580,13 +565,9 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("uses model-scoped agent provider overrides for inherited provider warnings", async () => {
-    const warnings = await profileWarnings({
+    },
+    {
+      scope: "model-scoped agent overrides for inherited provider profiles",
       tools: { byProvider: { openai: { profile: "messaging" } } },
       agents: {
         entries: {
@@ -599,13 +580,13 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-    });
-
-    expect(warnings).toStrictEqual([]);
+    },
+  ])("uses $scope", async ({ tools, agents }) => {
+    expect(await profileWarnings({ tools, agents })).toStrictEqual([]);
   });
 
   it("does not warn for configured tool sections when the profile id is unknown", async () => {
-    const malformedConfig = {
+    const warnings = await profileWarnings({
       tools: {
         profile: "custom-profile",
         exec: { mode: "allowlist" },
@@ -622,9 +603,7 @@ describe("doctor preview warnings", () => {
           },
         ],
       },
-    };
-
-    const warnings = await profileWarnings(malformedConfig);
+    });
 
     expect(warnings).toStrictEqual([]);
   });

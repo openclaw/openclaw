@@ -13,7 +13,7 @@ import {
   runActivePluginPayloadSmokeCheck,
 } from "../../../plugins/active-payload-verification.js";
 import { resolvePluginNpmGenerationProjectDir } from "../../../plugins/install-paths.js";
-import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync as readRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
 import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
@@ -175,6 +175,7 @@ it.each([
       dependencies: { "@openclaw/codex": version },
     });
     const npmDir = path.join(npmRoot, "node_modules", "@openclaw", "codex");
+    const npmPackage = path.join(npmDir, "package.json");
     const npmEntry = writeCodexPackage(npmDir, OLD_EXPORT, version);
     const env: NodeJS.ProcessEnv = {
       HOME: root,
@@ -218,9 +219,9 @@ it.each([
         await seedInstalledPluginIndex(records, { config: cfg, env });
       });
       if (corrupt) {
-        fs.writeFileSync(path.join(npmDir, "package.json"), "{invalid package json");
+        fs.writeFileSync(npmPackage, "{invalid package json");
       }
-      const npmPackageBefore = fs.readFileSync(path.join(npmDir, "package.json"), "utf8");
+      const npmPackageBefore = fs.readFileSync(npmPackage, "utf8");
 
       await withPluginCache(createPluginCache(), async () => {
         const result = await runPostCorePluginConvergence({
@@ -242,12 +243,8 @@ it.each([
           ]),
         });
         expect.soft(result.changes.join("\n")).not.toContain("Refreshed stale configured plugin");
-        expect
-          .soft(fs.readFileSync(path.join(npmDir, "package.json"), "utf8"))
-          .toBe(npmPackageBefore);
-        expect
-          .soft(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env }))
-          .toEqual(records);
+        expect.soft(fs.readFileSync(npmPackage, "utf8")).toBe(npmPackageBefore);
+        expect.soft(await readRecords({ env })).toEqual(records);
         const registry = loadPluginManifestRegistryCore({ config: cfg, env });
         const selected = registry.plugins.find((plugin) => plugin.id === "codex");
         expect.soft(selected).toMatchObject({ origin: "bundled", rootDir: bundledDir });
