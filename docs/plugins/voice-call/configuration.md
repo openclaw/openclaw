@@ -18,7 +18,7 @@ starting the runtime. Commands, RPC calls, and agent tools still return the
 exact missing configuration when used.
 
 <Note>
-Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twilio.authToken`, `plugins.entries.voice-call.config.realtime.providers.*.apiKey`, `plugins.entries.voice-call.config.streaming.providers.*.apiKey`, and `plugins.entries.voice-call.config.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
+Voice-call credentials accept SecretRefs. LiveKit `livekit.apiKey` and `livekit.apiSecret` use the same resolver. `plugins.entries.voice-call.config.twilio.authToken`, `plugins.entries.voice-call.config.realtime.providers.*.apiKey`, `plugins.entries.voice-call.config.streaming.providers.*.apiKey`, and `plugins.entries.voice-call.config.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
 </Note>
 
 ```json5
@@ -28,7 +28,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
       "voice-call": {
         enabled: true,
         config: {
-          provider: "twilio", // or "telnyx" | "plivo" | "mock"
+          provider: "twilio", // or "livekit" | "telnyx" | "plivo" | "mock"
           fromNumber: "+15550001234", // or TWILIO_FROM_NUMBER for Twilio
           toNumber: "+15550005678",
           sessionScope: "per-phone", // per-phone | per-call | main
@@ -218,3 +218,62 @@ integration keys resolve into the same namespace: a normalized
 main-session/global-scope aliasing; foreign or malformed `agent:*` input
 is scoped as an opaque key under the configured agent; `global` and `unknown`
 remain global sentinels.
+
+## LiveKit SIP and native RTC
+
+Select `provider: "livekit"` to connect LiveKit SIP calls to the existing Voice
+Call realtime bridge. No separate LiveKit agent worker is required. Configure
+`realtime.enabled: true` and a configured realtime voice provider; model, voice,
+agent context, tools, delegation, call history, and playback remain owned by
+Voice Call and its selected realtime provider. LiveKit does not select a model.
+
+Minimal plugin configuration (credentials are SecretRefs):
+
+```json5 validate=false
+{
+  provider: "livekit",
+  livekit: {
+    url: "wss://livekit.example.com",
+    apiKey: { source: "env", provider: "default", id: "LIVEKIT_API_KEY" },
+    apiSecret: { source: "env", provider: "default", id: "LIVEKIT_API_SECRET" },
+    outboundTrunkId: "ST_OUTBOUND",
+    inboundTrunkIds: ["ST_INBOUND"],
+    roomPrefix: "openclaw-call-",
+  },
+  inboundPolicy: "disabled",
+  outbound: { defaultMode: "conversation" },
+  realtime: { enabled: true },
+}
+```
+
+Also set `fromNumber` to an E.164 number permitted by the outbound trunk and
+configure the selected realtime provider's credentials. Outbound-only operation
+with `inboundPolicy: "disabled"` needs no public webhook or media WebSocket:
+RTC disconnection independently ends the call.
+
+For inbound calls, configure LiveKit signed webhooks to reach Voice Call's
+`serve.path`, select the inbound trunk IDs, and use the existing inbound policy
+and caller allowlist. Configure the SIP dispatch rule to create unique rooms
+under `roomPrefix` with `maxParticipants: 2`. The plugin checks the exact SIP
+participant identity and SID before publishing microphone audio. Missing caller
+numbers, unselected trunks, or additional participants are rejected. Do not share
+these rooms with unrelated participants or another agent.
+
+`wss://` is required by default. `allowInsecureWs: true` permits `ws://` only
+with a loopback or private **literal IP address**, never a DNS name. This also
+makes server SDK API traffic unencrypted HTTP; use it only on a trusted private
+network. URLs cannot contain credentials, query strings, or fragments. Webhook
+signature verification remains mandatory even with this opt-in.
+
+The native dependency is `@livekit/rtc-node` 1.1.0 with `livekit-server-sdk`
+2.19.1. Install native optional dependencies normally; do not bundle or replace
+the RTC package's native loader. The pinned SDK ships macOS arm64/x64, Linux
+glibc arm64/x64, and Windows x64 bindings. Linux musl is not supported by this
+pin. Use the Node versions supported by the installed OpenClaw release.
+
+LiveKit requires realtime conversations: classic STT/TTS, carrier XML notify
+playback, pre-connect DTMF, and `send_dtmf` are not supported. `speak` requests
+use the selected realtime provider rather than a separate carrier TTS service.
+Twilio-specific answering-machine detection is not supplied by LiveKit. An
+interrupted process retires restored calls instead of trying to resume old RTC
+or agent-delegation sessions.

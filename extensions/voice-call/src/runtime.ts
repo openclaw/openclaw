@@ -91,6 +91,13 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
     (config.tunnel?.allowNgrokFreeTierLoopbackBypass ?? false);
 
   switch (config.provider) {
+    case "livekit": {
+      const { LiveKitProvider } = await import("./providers/livekit.js");
+      if (!config.livekit) {
+        throw new Error("LiveKit configuration is required");
+      }
+      return new LiveKitProvider(config.livekit);
+    }
     case "telnyx": {
       const { TelnyxProvider } = await import("./providers/telnyx.js");
       return new TelnyxProvider(
@@ -442,6 +449,7 @@ export async function createVoiceCallRuntime(params: {
       for (const step of [
         () => tunnelResult?.stop(),
         () => cleanupTailscaleExposure(config),
+        () => provider.stop?.(),
         () => webhookServer.stop(),
         () => delivery?.stop(),
         () => manager.stop(),
@@ -549,6 +557,15 @@ export async function createVoiceCallRuntime(params: {
     }
 
     await manager.initialize(provider, webhookUrl);
+    if (provider.name === "livekit") {
+      const { LiveKitProvider } = await import("./providers/livekit.js");
+      const handler = webhookServer.getRealtimeHandler();
+      if (!handler || !(provider instanceof LiveKitProvider)) {
+        throw new Error("LiveKit realtime bridge unavailable");
+      }
+      provider.bind(manager, handler);
+      await provider.retireRestoredCalls();
+    }
 
     log.info("[voice-call] Runtime initialized");
     log.info(`[voice-call] Webhook URL: ${webhookUrl}`);

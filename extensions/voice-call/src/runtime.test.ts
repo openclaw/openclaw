@@ -10,6 +10,7 @@ import {
   createMockSessionRuntime,
   registerFastContextMemoryProvider,
 } from "./runtime.fast-context.test-support.js";
+import { registerLiveKitRuntimeTests } from "./runtime.livekit.test-support.js";
 import { createExternalProviderConfig, createVoiceCallBaseConfig } from "./test-fixtures.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 
@@ -20,6 +21,9 @@ const mocks = vi.hoisted(() => ({
   validateProviderConfig: vi.fn(),
   managerInitialize: vi.fn(),
   managerStop: vi.fn(),
+  providerStop: vi.fn(),
+  livekitBind: vi.fn(),
+  livekitRetire: vi.fn(),
   managerGetCall: vi.fn(),
   webhookStart: vi.fn(),
   webhookStop: vi.fn(),
@@ -51,6 +55,16 @@ vi.mock("./config.js", async (importOriginal) => {
     validateProviderConfig: mocks.validateProviderConfig,
   };
 });
+
+// mock-isolation: Runtime construction uses a lifecycle-only carrier test double.
+vi.mock("./providers/livekit.js", () => ({
+  LiveKitProvider: class {
+    name = "livekit";
+    stop = mocks.providerStop;
+    bind = mocks.livekitBind;
+    retireRestoredCalls = mocks.livekitRetire;
+  },
+}));
 
 vi.mock("./manager.js", () => ({
   CallManager: class {
@@ -226,6 +240,11 @@ describe("createVoiceCallRuntime lifecycle", () => {
       (cfg: VoiceCallConfig) => cfg.twilio?.authToken,
     );
     mocks.validateProviderConfig.mockReturnValue({ valid: true, errors: [] });
+    mocks.managerInitialize.mockResolvedValue(undefined);
+    mocks.managerStop.mockResolvedValue(undefined);
+    mocks.providerStop.mockReset().mockResolvedValue(undefined);
+    mocks.livekitRetire.mockReset().mockResolvedValue(undefined);
+    mocks.managerGetCall.mockReset();
     mocks.webhookStart.mockResolvedValue("http://127.0.0.1:3334/voice/webhook");
     mocks.webhookGetRealtimeHandler.mockReturnValue({
       setPublicUrl: mocks.realtimeHandlerSetPublicUrl,
@@ -318,6 +337,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
   });
+
+  registerLiveKitRuntimeTests(mocks);
 
   it("returns an idempotent stop handler", async () => {
     const tunnelStop = vi.fn().mockResolvedValue(undefined);

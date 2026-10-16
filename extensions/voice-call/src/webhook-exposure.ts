@@ -5,6 +5,7 @@ import { isBlockedHostnameOrIp } from "../api.js";
 /** Minimal config needed to evaluate webhook exposure. */
 type VoiceCallWebhookExposureConfig = {
   provider?: string;
+  inboundPolicy?: string;
   publicUrl?: string;
   tunnel?: {
     provider?: string;
@@ -32,6 +33,15 @@ export function resolveWebhookExposureStatus(config: VoiceCallWebhookExposureCon
       ok: true,
       configured: true,
       message: "Mock provider does not need a public webhook",
+    };
+  }
+
+  if (config.provider === "livekit" && config.inboundPolicy === "disabled") {
+    return {
+      ok: true,
+      configured: true,
+      message:
+        "Outbound-only LiveKit uses RTC and does not need a public webhook; inbound calls require signed LiveKit webhooks",
     };
   }
 

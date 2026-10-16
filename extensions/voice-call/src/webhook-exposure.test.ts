@@ -1,6 +1,9 @@
 // Voice Call tests cover webhook exposure plugin behavior.
 import { describe, expect, it } from "vitest";
-import { isProviderUnreachableWebhookUrl } from "./webhook-exposure.js";
+import {
+  isProviderUnreachableWebhookUrl,
+  resolveWebhookExposureStatus,
+} from "./webhook-exposure.js";
 
 describe("webhook exposure host classification", () => {
   it.each(["http://[fd00::1]/voice/webhook", "http://[::ffff:127.0.0.1]/voice/webhook"])(
@@ -15,5 +18,21 @@ describe("webhook exposure host classification", () => {
     (url) => {
       expect(isProviderUnreachableWebhookUrl(url)).toBe(false);
     },
+  );
+});
+
+it("does not report a missing public webhook for outbound-only LiveKit", () => {
+  expect(
+    resolveWebhookExposureStatus({ provider: "livekit", inboundPolicy: "disabled" }),
+  ).toMatchObject({
+    ok: true,
+    configured: true,
+    message: expect.stringContaining("Outbound-only LiveKit"),
+  });
+  for (const provider of ["twilio", "telnyx", "plivo"]) {
+    expect(resolveWebhookExposureStatus({ provider, inboundPolicy: "disabled" }).ok).toBe(false);
+  }
+  expect(resolveWebhookExposureStatus({ provider: "livekit", inboundPolicy: "allowlist" }).ok).toBe(
+    false,
   );
 });

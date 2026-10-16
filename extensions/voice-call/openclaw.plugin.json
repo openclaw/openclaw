@@ -26,7 +26,7 @@
   "uiHints": {
     "provider": {
       "label": "Provider",
-      "help": "Use twilio, telnyx, or mock for dev/no-network."
+      "help": "Use livekit, plivo, telnyx, twilio, or mock for dev/no-network."
     },
     "fromNumber": {
       "label": "From Number",
@@ -67,6 +67,12 @@
       "label": "Telnyx Public Key",
       "sensitive": true
     },
+    "livekit.allowInsecureWs": {
+      "label": "Allow unencrypted LiveKit WS on private IPs",
+      "help": "Default false. Opt in only on a trusted private network; signaling tokens and SDK HTTP requests are unencrypted. Requires a loopback/private literal IP, not a DNS hostname. Webhook signatures remain mandatory."
+    },
+    "livekit.apiKey": { "label": "LiveKit API key", "sensitive": true },
+    "livekit.apiSecret": { "label": "LiveKit API secret", "sensitive": true },
     "twilio.accountSid": {
       "label": "Twilio Account SID"
     },
@@ -279,7 +285,7 @@
       "id": "phone-provider",
       "title": "Phone provider",
       "order": 10,
-      "properties": ["enabled", "provider", "telnyx", "twilio", "plivo", "fromNumber"]
+      "properties": ["enabled", "provider", "livekit", "telnyx", "twilio", "plivo", "fromNumber"]
     },
     {
       "id": "inbound-calls",
@@ -352,7 +358,7 @@
       },
       "provider": {
         "type": "string",
-        "enum": ["telnyx", "twilio", "plivo", "mock"]
+        "enum": ["livekit", "telnyx", "twilio", "plivo", "mock"]
       },
       "telnyx": {
         "type": "object",
@@ -366,6 +372,83 @@
           },
           "publicKey": {
             "type": "string"
+          }
+        }
+      },
+      "livekit": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "url",
+          "outboundTrunkId",
+          "inboundTrunkIds"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "allowInsecureWs": {
+                  "const": true
+                }
+              },
+              "required": [
+                "allowInsecureWs"
+              ]
+            },
+            "then": {
+              "properties": {
+                "url": {
+                  "pattern": "^(?:[wW][sS][sS]://[^/?#@]+|[wW][sS]://(?:(?:10|127)\\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])|172\\.(?:1[6-9]|2[0-9]|3[01])\\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])|192\\.168\\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])|\\[(?:[0:]+0*1|[fF][cCdD][0-9a-fA-F]{2}:[0-9a-fA-F:]+)\\])(?::[0-9]+)?)(?:/[^?#]*)?$"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "url": {
+                  "pattern": "^[wW][sS][sS]://"
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^[wW][sS][sS]?://[^/?#@]+(?:/[^?#]*)?$"
+          },
+          "allowInsecureWs": {
+            "type": "boolean",
+            "default": false
+          },
+          "apiKey": {
+            "type": [
+              "string",
+              "object"
+            ]
+          },
+          "apiSecret": {
+            "type": [
+              "string",
+              "object"
+            ]
+          },
+          "outboundTrunkId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "inboundTrunkIds": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "roomPrefix": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]{1,40}$",
+            "default": "openclaw-call-"
           }
         }
       },
@@ -1240,6 +1323,8 @@
     "compatibilityMigrationPaths": ["plugins.entries.voice-call.config"],
     "secretInputs": {
       "paths": [
+        { "path": "livekit.apiKey", "expected": "string" },
+        { "path": "livekit.apiSecret", "expected": "string" },
         { "path": "twilio.authToken", "expected": "string" },
         { "path": "realtime.providers.*.apiKey", "expected": "string" },
         { "path": "streaming.providers.*.apiKey", "expected": "string" },

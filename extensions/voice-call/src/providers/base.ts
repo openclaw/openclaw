@@ -28,9 +28,17 @@ export interface VoiceCallProvider {
    * Verify webhook signature/HMAC before processing.
    * Must be called before parseWebhookEvent.
    */
-  verifyWebhook(ctx: WebhookContext): WebhookVerificationResult;
+  verifyWebhook(
+    ctx: WebhookContext,
+  ): WebhookVerificationResult | Promise<WebhookVerificationResult>;
 
-  parseWebhookEvent(ctx: WebhookContext, options?: WebhookParseOptions): ProviderWebhookParseResult;
+  /** Stop admission and join owned carrier/audio resources. */
+  stop?(): Promise<void>;
+
+  parseWebhookEvent(
+    ctx: WebhookContext,
+    options?: WebhookParseOptions,
+  ): ProviderWebhookParseResult | Promise<ProviderWebhookParseResult>;
 
   /**
    * Consume one-time TwiML that must be served before shortcut handlers such as

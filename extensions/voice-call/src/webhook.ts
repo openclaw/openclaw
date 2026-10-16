@@ -655,7 +655,7 @@ export class VoiceCallWebhookServer {
         remoteAddress: req.socket.remoteAddress ?? undefined,
       };
 
-      const verification = this.provider.verifyWebhook(ctx);
+      const verification = await this.provider.verifyWebhook(ctx);
       if (!verification.ok) {
         this.logger.warn(`Webhook verification failed: ${verification.reason}`);
         return { statusCode: 401, body: "Unauthorized" };
@@ -716,7 +716,7 @@ export class VoiceCallWebhookServer {
           return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams);
         }
 
-        const parsed = this.provider.parseWebhookEvent(ctx, {
+        const parsed = await this.provider.parseWebhookEvent(ctx, {
           verifiedRequestKey: verification.verifiedRequestKey,
         });
         if (!isReplay && (await this.processParsedEvents(parsed.events))) {

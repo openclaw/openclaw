@@ -14,16 +14,17 @@ import {
   REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS,
   REALTIME_DISCONNECT_HANGUP_GRACE_MS,
 } from "./realtime-call-session-control.js";
+import type { RealtimeMediaTransport } from "./realtime-call-transport.js";
 import { createRealtimeHostSpeechController } from "./realtime-host-speech.js";
 import type { StreamFrameAdapter } from "./stream-frame-adapter.js";
 
 const MAX_REALTIME_WS_BUFFERED_BYTES = 1024 * 1024;
 
 export function createRealtimeCallPlayback(params: {
-  ws: WebSocket;
+  ws: RealtimeMediaTransport;
   callRecord: CallRecord;
   callSid: string;
-  adapter: StreamFrameAdapter;
+  adapter: Pick<StreamFrameAdapter, "serializeMedia" | "serializeClear" | "serializeMark">;
   harness: RealtimeVoiceSessionHarness;
   initialGreetingInstructions?: string;
   /** True when the host, not the bridge's ready trigger, decides when the opening is spoken. */

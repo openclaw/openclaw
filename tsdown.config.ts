@@ -399,6 +399,8 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@anthropic-ai/vertex-sdk",
     "@discordjs/voice",
     "@larksuiteoapi/node-sdk",
+    // Preserve Node's ESM-over-CJS exports and the native SDK's package-scope loader.
+    "@livekit/rtc-node",
     "@matrix-org/matrix-sdk-crypto-nodejs",
     "@openclaw/ai",
     // Native loaders resolve optional platform packages from their package scopes.
