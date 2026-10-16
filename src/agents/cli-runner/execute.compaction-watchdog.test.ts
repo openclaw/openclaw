@@ -100,10 +100,8 @@ function startCompaction(
   phase: "success" | "failed" | "stuck" | "tool" = "stuck",
 ) {
   const started = createDeferred<number>();
-  const release = createDeferred();
-  const ended = createDeferred<number>();
-  const ping = createDeferred();
-  const pinged = createDeferred();
+  const advance = createDeferred();
+  const advanced = createDeferred<number>();
   const finish = createDeferred();
   context.executionTarget = {
     kind: "plugin",
@@ -113,31 +111,26 @@ function startCompaction(
         yield TOOL;
       }
       started.resolve(Date.now());
-      if (phase === "success" || phase === "failed") {
-        await release.promise;
-        yield { compact_result: phase };
-        ended.resolve(Date.now());
-      } else if (phase === "tool") {
-        await ping.promise;
-        yield { type: "stream_event", event: { type: "ping" } };
-        pinged.resolve();
+      if (phase !== "stuck") {
+        await advance.promise;
+        yield phase === "tool"
+          ? { type: "stream_event", event: { type: "ping" } }
+          : { compact_result: phase };
+        advanced.resolve(Date.now());
       }
       await Promise.race([waitUntilAborted(execution), finish.promise]);
       yield RESULT;
     },
   };
-  let settled = false;
-  const run = execute(context).finally(() => {
-    settled = true;
-  });
+  const settled = vi.fn();
+  const run = execute(context).finally(settled);
   void run.catch(() => {});
   cleanups.push(async () => {
-    release.resolve();
-    ping.resolve();
+    advance.resolve();
     finish.resolve();
     await Promise.allSettled([run]);
   });
-  return { run, started, release, ended, ping, pinged, finish, isSettled: () => settled };
+  return { run, started, advance, advanced, finish, settled };
 }
 
 beforeEach(() => {
@@ -160,11 +153,11 @@ afterEach(async () => {
 it.each(["success", "failed"] as const)("releases compaction liveness after %s", async (phase) => {
   const context = contextFor(`compaction-${phase}`, phase === "success" ? NO_OUTPUT_MS : 1_000);
   const recover = phase === "success" ? diagnostics(context) : undefined;
-  const { run, started, release, ended, finish } = startCompaction(context, phase);
+  const { run, started, advance, advanced, finish } = startCompaction(context, phase);
   const startedAt = await started.promise;
   if (phase === "failed") {
-    release.resolve();
-    await ended.promise;
+    advance.resolve();
+    await advanced.promise;
     await vi.advanceTimersByTimeAsync(2_000);
     await expect(run).rejects.toThrow("produced no output");
     return;
@@ -176,8 +169,8 @@ it.each(["success", "failed"] as const)("releases compaction liveness after %s",
     activeBackendLivenessDeadlineAtMs: startedAt + WORK_GRACE_MS,
     lastProgressAgeMs: 240_000,
   });
-  release.resolve();
-  const clearedAt = await ended.promise;
+  advance.resolve();
+  const clearedAt = await advanced.promise;
   expect(snapshot(context)).toMatchObject({
     activeBackendLivenessDeadlineAtMs: clearedAt + NO_OUTPUT_MS,
   });
@@ -226,15 +219,15 @@ it("bounds compaction silence from the last record while a parsed tool is active
     resolveRunStaleThresholdMs(activity, activity.lastProgressAgeMs ?? 0, STUCK_SESSION_MS),
   ).toBe(WORK_GRACE_MS);
   await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - 60_000);
-  expect(flow.isSettled()).toBe(false);
-  flow.ping.resolve();
-  await flow.pinged.promise;
-  await vi.advanceTimersByTimeAsync(62_000);
-  expect(flow.isSettled()).toBe(false);
-  await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - 64_000);
-  expect(flow.isSettled()).toBe(false);
+  expect(flow.settled).not.toHaveBeenCalled();
+  flow.advance.resolve();
+  await flow.advanced.promise;
+  for (const elapsed of [62_000, WORK_GRACE_MS - 64_000]) {
+    await vi.advanceTimersByTimeAsync(elapsed);
+    expect(flow.settled).not.toHaveBeenCalled();
+  }
   await vi.advanceTimersByTimeAsync(4_000);
-  expect(flow.isSettled()).toBe(true);
+  expect(flow.settled).toHaveBeenCalledOnce();
   await expect(flow.run).rejects.toMatchObject({
     name: "FailoverError",
     cliTimeout: { mode: "no-output", compactionActive: true, activeToolCount: 1 },

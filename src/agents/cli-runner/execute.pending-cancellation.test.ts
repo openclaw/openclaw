@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createProcessAdapterEvents } from "../../process/supervisor/adapters/process-events.js";
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import * as failoverErrors from "../failover-error.js";
 import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
 import { executeDeps } from "./execute-deps.js";
+import { buildContext } from "./execute-events.tool-result-args.test-support.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
   setCliRunnerExecuteTestDeps,
@@ -51,71 +51,43 @@ function createTestAdapter(): TestAdapter {
     events.emitExit(code, signal);
     exit.resolve({ code, signal });
   };
-  let stdoutListener: ((chunk: string) => void) | undefined;
-  let stderrListener: ((chunk: string) => void) | undefined;
-  const adapter: TestAdapter = {
+  const onStdout = vi.fn<ChildAdapter["onStdout"]>();
+  const onStderr = vi.fn<ChildAdapter["onStderr"]>();
+  return {
     pid: 1234,
     supportsRawOutput: false,
     onExit: events.onExit,
     onError: events.onError,
-    onStdout: vi.fn((listener) => {
-      stdoutListener = listener;
-    }),
-    onStderr: (listener) => {
-      stderrListener = listener;
-    },
+    onStdout,
+    onStderr,
     wait: async () => await exit.promise,
     kill: vi.fn((signal?: NodeJS.Signals) => {
       settle(null, signal ?? "SIGTERM");
     }),
     dispose: vi.fn(() => events.clear()),
-    emitStdout: (chunk) => stdoutListener?.(chunk),
-    emitStderr: (chunk) => stderrListener?.(chunk),
+    emitStdout: (chunk) => onStdout.mock.lastCall?.[0](chunk),
+    emitStderr: (chunk) => onStderr.mock.lastCall?.[0](chunk),
     settle,
   };
-  return adapter;
 }
 
 function createRunContext(runId = "cli-run"): PreparedCliRunContext {
-  const backend = {
+  const context = buildContext(runId);
+  Object.assign(context.preparedBackend.backend, {
     command: "agent-cli",
-    args: [],
     resumeArgs: ["--resume", "{sessionId}"],
-    output: "text" as const,
-    input: "stdin" as const,
-    serialize: true,
-  };
-
-  return {
-    params: {
-      admittedRunContext: createTestAdmittedRunContext(runId),
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:main",
-      sessionFile: "/tmp/openclaw-cli-cancellation-test.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hello",
-      provider: "test-cli",
-      model: "test-model",
-      timeoutMs: 60_000,
-      runId,
-    },
-    started: Date.now(),
-    startedMonotonicMs: performance.now(),
-    workspaceDir: "/tmp",
-    backendResolved: { id: "test-cli", config: backend, bundleMcp: false },
-    executionTarget: { kind: "process" },
-    preparedBackend: { backend, env: {} },
-    reusableCliSession: { mode: "none" },
-    hadSessionFile: false,
-    contextEngineConfig: {},
-    modelId: "test-model",
-    normalizedModel: "test-model",
-    systemPrompt: "system",
-    systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    claudeSkillsPluginArgs: [],
-    authEpochVersion: 2,
-  };
+    output: "text",
+  });
+  Object.assign(context.params, {
+    sessionFile: "/tmp/openclaw-cli-cancellation-test.jsonl",
+    prompt: "hello",
+    provider: "test-cli",
+    model: "test-model",
+    timeoutMs: 60_000,
+  });
+  context.backendResolved.id = "test-cli";
+  context.modelId = context.normalizedModel = "test-model";
+  return context;
 }
 
 type PluginTarget = Extract<PreparedCliRunContext["executionTarget"], { kind: "plugin" }>;

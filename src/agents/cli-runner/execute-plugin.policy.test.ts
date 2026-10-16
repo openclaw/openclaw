@@ -344,53 +344,44 @@ describe("plugin-owned CLI native tool policy", () => {
     });
   });
 
-  it("rejects conflicting native and canonical paths before invoking policy", async () => {
-    const hook = vi.fn(async () => undefined);
-    installBeforeToolCallHook(hook, ["read"]);
-    const { context } = await createExecution({ nativeTools: ["Read"] });
-    const decision = await decideNativeTool(context, "Read", {
-      file_path: "/tmp/private.txt",
-      path: "/tmp/allowed.txt",
-    });
-    expect(decision).toMatchObject({
-      behavior: "deny",
-      message: expect.stringContaining("conflicting"),
-    });
-    expect(hook).not.toHaveBeenCalled();
-  });
-
-  it("rejects canonical edit rewrites that the native tool cannot represent", async () => {
-    const hook = vi.fn(async () => ({
-      params: {
+  it.each([
+    ["Read", { file_path: "/tmp/private.txt", path: "/tmp/allowed.txt" }, undefined, "conflicting"],
+    [
+      "Edit",
+      { file_path: "/tmp/file.txt", old_string: "before", new_string: "after" },
+      {
         edits: [
           { oldText: "first", newText: "one" },
           { oldText: "second", newText: "two" },
         ],
       },
-    }));
-    installBeforeToolCallHook(hook, ["edit"]);
-    const { context } = await createExecution({ nativeTools: ["Edit"] });
-    const decision = await decideNativeTool(context, "Edit", {
-      file_path: "/tmp/file.txt",
-      old_string: "before",
-      new_string: "after",
+      "native edit",
+    ],
+    [
+      "Bash",
+      { command: "echo approved" },
+      new Error("policy crashed"),
+      "before_tool_call hook failed",
+    ],
+  ] as const)("fails closed for %s native policy", async (tool, input, rewrite, message) => {
+    const hook = vi.fn(async () => {
+      if (rewrite instanceof Error) {
+        throw rewrite;
+      }
+      return rewrite && { params: rewrite };
     });
-    expect(decision).toMatchObject({
+    installBeforeToolCallHook(hook, tool === "Bash" ? undefined : [tool.toLowerCase()]);
+    const { context } = await createExecution({ nativeTools: [tool] });
+    expect(await decideNativeTool(context, tool, input)).toMatchObject({
       behavior: "deny",
-      message: expect.stringContaining("native edit"),
+      message: expect.stringContaining(message),
     });
-  });
-
-  it("fails closed when before_tool_call throws", async () => {
-    installBeforeToolCallHook(async () => {
-      throw new Error("policy crashed");
-    });
-    const { context } = await createExecution({ nativeTools: ["Bash"] });
-    expect(await decideNativeTool(context)).toMatchObject({
-      behavior: "deny",
-      message: expect.stringContaining("before_tool_call hook failed"),
-    });
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    if (tool === "Read") {
+      expect(hook).not.toHaveBeenCalled();
+    }
+    if (tool === "Bash") {
+      expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    }
   });
 
   it("aborts before_tool_call without reaching native approval", async () => {
