@@ -7,7 +7,13 @@ import {
   createNonExitingRuntimeEnv,
   capturePluginRegistration,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
+import {
+  applyProviderAuthConfigPatch,
+  CUSTOM_LOCAL_AUTH_MARKER,
+  ensureAuthProfileStoreAsync,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type {
   ProviderAuthContext,
   ProviderAuthMethodNonInteractiveContext,
@@ -335,7 +341,7 @@ describe("oMLX setup through the inference catalog", () => {
     const result = await configureOmlxInteractive(interactiveContext(key));
     expect(result.defaultModel).toBe(`omlx/${modelId}`);
     expect(result.configPatch?.models?.providers?.omlx?.apiKey).toBe(
-      key ? "OMLX_API_KEY" : "omlx-local",
+      key ? "omlx:default" : "omlx-local",
     );
     expect(result.profiles).toEqual(
       key
@@ -351,6 +357,97 @@ describe("oMLX setup through the inference catalog", () => {
       key ? `Bearer ${key}` : null,
     );
   });
+
+  it.each(["interactive", "noninteractive"] as const)(
+    "binds the explicit credential from initial %s setup ahead of ambient auth",
+    async (mode) => {
+      const ambientKey = "ambient-setup-key";
+      const selectedKey = "explicit-setup-key";
+      vi.stubEnv("OMLX_API_KEY", ambientKey);
+      await withOpenClawTestState({ label: "omlx-initial-credential" }, async (state) => {
+        const fetchMock = fixture();
+        fetchMock.mockImplementation(async (input) =>
+          Response.json({
+            data: new URL(input instanceof Request ? input.url : String(input)).pathname.endsWith(
+              "/embeddings",
+            )
+              ? [{ index: 0, embedding: [1, 0] }]
+              : rows,
+          }),
+        );
+        let config: OpenClawConfig;
+        if (mode === "interactive") {
+          const ctx = interactiveContext(selectedKey);
+          ctx.env = { OMLX_API_KEY: ambientKey };
+          ctx.prompter.confirm = vi.fn(async () => false);
+          const result = await configureOmlxInteractive(ctx);
+          expect(ctx.prompter.confirm).toHaveBeenCalledOnce();
+          await state.writeAuthProfiles({
+            version: 1,
+            profiles: Object.fromEntries(
+              result.profiles.map(({ profileId, credential }) => [profileId, credential]),
+            ),
+          });
+          config = applyProviderAuthConfigPatch({}, result.configPatch, result);
+        } else {
+          const ctx = nonInteractiveContext();
+          ctx.agentDir = state.agentDir();
+          ctx.opts.customApiKey = selectedKey;
+          ctx.resolveApiKey = vi.fn(async () => ({ key: selectedKey, source: "flag" as const }));
+          ctx.toApiKeyCredential = vi.fn<
+            ProviderAuthMethodNonInteractiveContext["toApiKeyCredential"]
+          >(({ provider, resolved }) => ({ type: "api_key", provider, key: resolved.key }));
+          const configured = await configureOmlxNonInteractive(ctx);
+          if (!configured) {
+            throw new Error("Missing initial oMLX setup configuration");
+          }
+          config = configured;
+        }
+        expect(new Headers(fetchMock.mock.lastCall?.[1]?.headers).get("authorization")).toBe(
+          `Bearer ${selectedKey}`,
+        );
+        const store = await ensureAuthProfileStoreAsync(state.agentDir());
+        await expect(
+          detectOmlxAvailability({ config, env: { OMLX_API_KEY: ambientKey } }),
+        ).resolves.toBe(true);
+        const discoveryAuthorization = new Headers(fetchMock.mock.lastCall?.[1]?.headers).get(
+          "authorization",
+        );
+        const adapter = capturePluginRegistration(plugin).embeddingProviders[0];
+        if (!adapter) {
+          throw new Error("Missing registered oMLX embedding provider");
+        }
+        const embedding = await adapter.create({
+          config,
+          agentDir: state.agentDir(),
+          model: "text-embedding-mini",
+        });
+        await expect(embedding.provider?.embed("orchard")).resolves.toEqual([1, 0]);
+        const chatAuth = await resolveApiKeyForProvider({
+          provider: "omlx",
+          cfg: config,
+          agentDir: state.agentDir(),
+        });
+        expect({
+          credential: store.profiles["omlx:default"],
+          binding: config.models?.providers?.omlx?.apiKey,
+          discoveryAuthorization,
+          embeddingAuthorization: new Headers(fetchMock.mock.lastCall?.[1]?.headers).get(
+            "authorization",
+          ),
+          chatKey: chatAuth.apiKey,
+          chatProfile: chatAuth.profileId,
+        }).toEqual({
+          credential: { type: "api_key", provider: "omlx", key: selectedKey },
+          binding: "omlx:default",
+          discoveryAuthorization: `Bearer ${selectedKey}`,
+          embeddingAuthorization: `Bearer ${selectedKey}`,
+          chatKey: selectedKey,
+          chatProfile: "omlx:default",
+        });
+      });
+    },
+  );
 
   it.each([
     { interactive: true, key: "replacement-key", custom: true, unavailable: false },

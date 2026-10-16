@@ -159,7 +159,7 @@ export async function configureOmlxInteractive(
     options: listing.provider.models.map((model) => ({ value: model.id, label: model.name })),
   });
   ctx.signal?.throwIfAborted();
-  listing.provider.apiKey = apiKey ? OMLX_API_KEY_ENV_VAR : OMLX_LOCAL_API_KEY;
+  listing.provider.apiKey = apiKey ? "omlx:default" : OMLX_LOCAL_API_KEY;
   const result = setupResult(listing, modelId, ctx.config);
   if (apiKey) {
     result.profiles = [
@@ -262,7 +262,9 @@ export async function configureOmlxNonInteractive(
     apiKey: resolved
       ? resolved.key === OMLX_LOCAL_API_KEY
         ? OMLX_LOCAL_API_KEY
-        : OMLX_API_KEY_ENV_VAR
+        : resolved.source === "profile"
+          ? listing.provider.apiKey
+          : "omlx:default"
       : listing.provider.apiKey,
   };
   return config;
