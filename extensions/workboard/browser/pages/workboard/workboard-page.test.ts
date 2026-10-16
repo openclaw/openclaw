@@ -11,8 +11,9 @@ import {
   createWorkboardCard,
 } from "../../lib/workboard/test/index-helpers.ts";
 import { afterWorkboardUpdate } from "../../test/settle.ts";
+import { fill, submitForm, query, queries } from "./view.test-support.ts";
 import {
-  mountPage,
+  mountPage as mountWorkboardPage,
   observeSessions,
   openBoardEditor,
   openSessionTab,
@@ -20,6 +21,11 @@ import {
   visibleToast,
   sessionPicker,
 } from "./workboard-page.test-support.ts";
+
+function mountPage(params?: Parameters<typeof mountWorkboardPage>[0]) {
+  const page = mountWorkboardPage(params);
+  return { ...page, ...queries(page.container) };
+}
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -31,87 +37,60 @@ it("loads, refreshes, and searches cards through the plugin's authenticated host
   page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
   await afterWorkboardUpdate(() => expect(page.container.textContent).toContain("Updated card"));
   expect(page.container.textContent).not.toContain("Initial card");
-  expectDefined(
-    page.container.querySelector<HTMLButtonElement>(".workboard-search-trigger"),
-    "search trigger",
-  ).click();
+  page.get<HTMLButtonElement>(".workboard-search-trigger").click();
   const input = await afterWorkboardUpdate(() => {
-    const current = expectDefined(
-      page.container.querySelector<HTMLInputElement>("#workboard-search-input"),
-      "search input",
-    );
+    const current = page.get<HTMLInputElement>("#workboard-search-input");
     expect(document.activeElement).toBe(current);
     return current;
   });
-  input.value = "Updated";
-  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  fill(input, "Updated");
   await afterWorkboardUpdate(() => {
     expect(page.workboard.state.query).toBe("Updated");
-    expect(page.container.querySelector(".workboard-filter-chip")?.textContent).toContain(
-      "Updated",
-    );
+    expect(page.find(".workboard-filter-chip")?.textContent).toContain("Updated");
   });
-  expect(page.container.querySelector("#workboard-search-input")).toBe(input);
+  expect(page.find("#workboard-search-input")).toBe(input);
   expect(document.activeElement).toBe(input);
   input.dispatchEvent(
     new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
   );
   await afterWorkboardUpdate(() =>
-    expect(document.activeElement).toBe(
-      expectDefined(
-        page.container.querySelector<HTMLButtonElement>(".workboard-search-trigger"),
-        "restored search trigger",
-      ),
-    ),
+    expect(document.activeElement).toBe(page.get<HTMLButtonElement>(".workboard-search-trigger")),
   );
   expect(page.workboard.state.query).toBe("");
 });
 
-it.each(["writer"])(
-  "keeps scope %s recoverable after the roster shrinks to one agent",
-  async (scope) => {
-    const page = mountPage();
-    page.cards([
-      createWorkboardCard({ id: "main-card", title: "Main agent task", agentId: "main" }),
-      createWorkboardCard({ id: "writer-card", title: "Writer agent task", agentId: "writer" }),
-    ]);
-    page.fixture.connection.connected = true;
-    page.fixture.notify();
-    await afterWorkboardUpdate(() =>
-      expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2),
-    );
-    page.fixture.host.agents.setScope(scope);
-    page.agents([{ id: "main" }]);
-    await page.fixture.host.agents.refresh();
-    await afterWorkboardUpdate(() =>
-      expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(1),
-    );
-    expect(page.container.textContent).toContain(
-      scope === "main" ? "Main agent task" : "Writer agent task",
-    );
-    const picker = expectDefined(
-      page.container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
-        ".workboard-agent-filter [data-test-agent-picker]",
-      ),
-      "desktop scope picker",
-    );
-    expect(picker.value).toBe(scope);
-    expect(picker.options).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ value: scope, label: scope }),
-        expect.objectContaining({ value: "", label: "All agents" }),
-      ]),
-    );
-    picker.onSelect("");
-    await afterWorkboardUpdate(() =>
-      expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2),
-    );
-    expect(page.container.textContent).toContain("Main agent task");
-    expect(page.container.textContent).toContain("Writer agent task");
-    expect(page.fixture.host.agents.scopeId).toBeNull();
-    expect(page.container.querySelector(".workboard-scope")).toBeNull();
-  },
-);
+it("keeps writer scope recoverable after the roster shrinks to one agent", async () => {
+  const scope = "writer";
+  const page = mountPage();
+  page.cards([
+    createWorkboardCard({ id: "main-card", title: "Main agent task", agentId: "main" }),
+    createWorkboardCard({ id: "writer-card", title: "Writer agent task", agentId: "writer" }),
+  ]);
+  page.fixture.connection.connected = true;
+  page.fixture.notify();
+  await afterWorkboardUpdate(() => expect(page.all(".workboard-card")).toHaveLength(2));
+  page.fixture.host.agents.setScope(scope);
+  page.agents([{ id: "main" }]);
+  await page.fixture.host.agents.refresh();
+  await afterWorkboardUpdate(() => expect(page.all(".workboard-card")).toHaveLength(1));
+  expect(page.container.textContent).toContain("Writer agent task");
+  const picker = page.get<HTMLElement & ControlUiAgentPickerProps>(
+    ".workboard-agent-filter [data-test-agent-picker]",
+  );
+  expect(picker.value).toBe(scope);
+  expect(picker.options).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ value: scope, label: scope }),
+      expect.objectContaining({ value: "", label: "All agents" }),
+    ]),
+  );
+  picker.onSelect("");
+  await afterWorkboardUpdate(() => expect(page.all(".workboard-card")).toHaveLength(2));
+  expect(page.container.textContent).toContain("Main agent task");
+  expect(page.container.textContent).toContain("Writer agent task");
+  expect(page.fixture.host.agents.scopeId).toBeNull();
+  expect(page.find(".workboard-scope")).toBeNull();
+});
 
 it("clears filters without changing the global agent context", async () => {
   const page = mountPage();
@@ -141,70 +120,46 @@ it("clears filters without changing the global agent context", async () => {
   ]);
   page.fixture.connection.connected = true;
   page.fixture.notify();
-  await afterWorkboardUpdate(() =>
-    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(3),
-  );
+  await afterWorkboardUpdate(() => expect(page.all(".workboard-card")).toHaveLength(3));
   for (const priority of ["High", "Urgent"]) {
-    expectDefined(
-      page.container.querySelector<HTMLInputElement>(
+    page
+      .get<HTMLInputElement>(
         `.workboard-filter-section__options[aria-label="Priority"] label[title="${priority}"] input`,
-      ),
-      `${priority} priority filter`,
-    ).click();
+      )
+      .click();
     await afterWorkboardUpdate(() =>
       expect(page.workboard.state.priorityFilter.size).toBe(priority === "High" ? 1 : 2),
     );
   }
-  const picker = expectDefined(
-    page.container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
-      ".workboard-agent-filter [data-test-agent-picker]",
-    ),
-    "global agent filter",
+  const picker = page.get<HTMLElement & ControlUiAgentPickerProps>(
+    ".workboard-agent-filter [data-test-agent-picker]",
   );
   picker.onSelect("main");
   await afterWorkboardUpdate(() => {
-    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(1);
-    expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).not.toBeNull();
+    expect(page.all(".workboard-card")).toHaveLength(1);
+    expect(page.find('button[aria-label="Filters, 1 active"]')).not.toBeNull();
     expect(
-      page.container.querySelector(
-        '.workboard-filter-chip--mobile button[aria-label="Remove filter: Agent: Molty"]',
-      ),
+      page.find('.workboard-filter-chip--mobile button[aria-label="Remove filter: Agent: Molty"]'),
     ).not.toBeNull();
   });
-  expectDefined(
-    page.container.querySelector<HTMLButtonElement>(".workboard-filter-clear"),
-    "clear filters",
-  ).click();
+  page.get<HTMLButtonElement>(".workboard-filter-clear").click();
   expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith("main");
   await afterWorkboardUpdate(() => {
-    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(1);
-    expect(page.container.querySelector(".workboard-board")?.textContent).toContain(
-      "Molty high task",
-    );
-    expect(page.container.querySelector(".workboard-board")?.textContent).not.toContain(
-      "Writer urgent task",
-    );
-    expect(page.container.querySelector(".workboard-board")?.textContent).not.toContain(
-      "Writer low task",
-    );
-    expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).toBeNull();
+    expect(page.all(".workboard-card")).toHaveLength(1);
+    expect(page.find(".workboard-board")?.textContent).toContain("Molty high task");
+    expect(page.find(".workboard-board")?.textContent).not.toContain("Writer urgent task");
+    expect(page.find(".workboard-board")?.textContent).not.toContain("Writer low task");
+    expect(page.find('button[aria-label="Filters, 1 active"]')).toBeNull();
     expect(
-      page.container.querySelector(
-        '.workboard-filter-chip--mobile button[aria-label="Remove filter: Agent: Molty"]',
-      ),
+      page.find('.workboard-filter-chip--mobile button[aria-label="Remove filter: Agent: Molty"]'),
     ).not.toBeNull();
   });
   expect(page.workboard.state.priorityFilter.size).toBe(0);
-  expectDefined(
-    page.container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Remove filter: Agent: Molty"]',
-    ),
-    "remove mobile agent scope",
-  ).click();
+  page.get<HTMLButtonElement>('button[aria-label="Remove filter: Agent: Molty"]').click();
   expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith(null);
   await afterWorkboardUpdate(() => {
-    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(3);
-    expect(page.container.querySelector(".workboard-filter-chip--mobile")).toBeNull();
+    expect(page.all(".workboard-card")).toHaveLength(3);
+    expect(page.find(".workboard-filter-chip--mobile")).toBeNull();
   });
 });
 
@@ -220,9 +175,7 @@ it("suspends the session summary when its page is hidden and resumes on return",
   page.fixture.notify();
   await openSessionTab(page);
   const summaries = () => [
-    ...page.container.querySelectorAll<HTMLElement & { presented: boolean }>(
-      "[data-test-session-summary]",
-    ),
+    ...page.all<HTMLElement & { presented: boolean }>("[data-test-session-summary]"),
   ];
   await afterWorkboardUpdate(() =>
     expect(summaries().some((summary) => summary.presented)).toBe(true),
@@ -300,33 +253,23 @@ it.each(["unknown"] as const)(
     page.fixture.notify();
 
     await afterWorkboardUpdate(() =>
-      expect(page.container.querySelector(".workboard-card")?.textContent).toContain("Unknown"),
+      expect(page.find(".workboard-card")?.textContent).toContain("Unknown"),
     );
     expect(openSessionButton(page.container)).toBeUndefined();
-    expect(page.container.querySelector('button[aria-label="Stop session"]')).toBeNull();
-    expectDefined(
-      page.container.querySelector<HTMLButtonElement>('button[aria-label="View details"]'),
-      "open unresolved card details",
-    ).click();
+    expect(page.find('button[aria-label="Stop session"]')).toBeNull();
+    page.get<HTMLButtonElement>('button[aria-label="View details"]').click();
     await afterWorkboardUpdate(() =>
-      expect(
-        page.container
-          .querySelector(".workboard-detail .workboard-session-badge")
-          ?.textContent?.trim(),
-      ).toBe("Ambiguous"),
+      expect(page.find(".workboard-detail .workboard-session-badge")?.textContent?.trim()).toBe(
+        "Ambiguous",
+      ),
     );
-    expect(
-      page.container.querySelector(".workboard-detail__session-row")?.getAttribute("title"),
-    ).toBe("Edit the card to select an exact session");
+    expect(page.find(".workboard-detail__session-row")?.getAttribute("title")).toBe(
+      "Edit the card to select an exact session",
+    );
     expect(observe).not.toHaveBeenCalled();
     expect(page.fixture.host.components.mountSessionSummary).not.toHaveBeenCalled();
     expect(openSessionButton(page.container)).toBeUndefined();
-    expectDefined(
-      page.container.querySelector<HTMLButtonElement>(
-        '.workboard-detail button[aria-label="Edit card"]',
-      ),
-      "recover the unresolved link",
-    ).click();
+    page.get<HTMLButtonElement>('.workboard-detail button[aria-label="Edit card"]').click();
     await afterWorkboardUpdate(() => expect(sessionPicker(page.container)).toBeDefined());
     const select = expectDefined(sessionPicker(page.container), "session link editor");
     expect(select.value).toBe(key);
@@ -371,15 +314,13 @@ it.each([
 
     await afterWorkboardUpdate(() => {
       expect(observe).toHaveBeenCalledOnce();
-      expect(
-        page.container
-          .querySelector(".workboard-detail .workboard-session-badge")
-          ?.textContent?.trim(),
-      ).toBe(label);
+      expect(page.find(".workboard-detail .workboard-session-badge")?.textContent?.trim()).toBe(
+        label,
+      );
     });
     expect(page.fixture.host.components.mountSessionSummary).not.toHaveBeenCalled();
 
-    page.container.querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')!.click();
+    page.find<HTMLButtonElement>('button[aria-label="Edit card"]')!.click();
     await afterWorkboardUpdate(() => expect(sessionPicker(page.container)).toBeDefined());
     const select = expectDefined(sessionPicker(page.container), "session picker");
     expect(select.value).toBe(localKey);
@@ -452,18 +393,14 @@ it("keeps failed metadata visible through card refreshes and recovers it with pa
   expect(visibleToast(page.container)?.textContent).toContain(
     "Agent metadata temporarily unavailable",
   );
-  expect(
-    page.container.querySelector('.workboard-card [role="img"][aria-label="Configured operator"]'),
-  ).toBeNull();
+  expect(page.find('.workboard-card [role="img"][aria-label="Configured operator"]')).toBeNull();
   expect(page.request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(1);
 
   metadataAvailable = true;
-  page.container.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
+  page.find<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
   await afterWorkboardUpdate(() =>
     expect(
-      page.container.querySelector(
-        '.workboard-card [role="img"][aria-label="Configured operator"]',
-      ),
+      page.find('.workboard-card [role="img"][aria-label="Configured operator"]'),
     ).not.toBeNull(),
   );
   expect(visibleToast(page.container)?.textContent ?? "").not.toContain(
@@ -524,7 +461,7 @@ it("keeps page failures visible in the board editor and prioritizes its save fai
       "Agent metadata temporarily unavailable",
     );
   });
-  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  submitForm(form);
   await afterWorkboardUpdate(() => {
     expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
       "Board update denied",
@@ -550,11 +487,11 @@ it.each(["canWrite", "connected"] as const)(
     page.fixture.connection.connected = true;
     page.fixture.notify();
     const form = await openBoardEditor(page);
-    const name = expectDefined(form.querySelector<HTMLInputElement>("input"), "board name");
+    const name = query<HTMLInputElement>(form, "input");
     name.value = "Release planning";
     name.dispatchEvent(new Event("input", { bubbles: true }));
     page.fixture.connection[capability] = false;
-    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    submitForm(form);
     expect(
       page.request.mock.calls.filter(([method]) => method === "workboard.boards.upsert"),
     ).toHaveLength(0);
@@ -568,13 +505,13 @@ it.each(["canWrite", "connected"] as const)(
     await afterWorkboardUpdate(() =>
       expect(form.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false),
     );
-    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    submitForm(form);
     await afterWorkboardUpdate(() => {
       expect(page.request).toHaveBeenCalledWith("workboard.boards.upsert", {
         id: "planning",
         name: "Release planning",
       });
-      expect(page.container.querySelector(".workboard-board-draft")).toBeNull();
+      expect(page.find(".workboard-board-draft")).toBeNull();
     });
   },
 );
@@ -624,46 +561,22 @@ describe("selection reconciliation", () => {
       page.fixture.connection.connected = true;
       page.fixture.notify();
       await afterWorkboardUpdate(() => expect(page.workboard.state.loaded).toBe(true));
-      expectDefined(
-        page.container.querySelector<HTMLButtonElement>('button[aria-label="View details"]'),
-        "open task details",
-      ).click();
-      await afterWorkboardUpdate(() =>
-        expect(page.container.querySelector(".workboard-detail")).not.toBeNull(),
-      );
-      expectDefined(
-        page.container.querySelector<HTMLButtonElement>(
-          '.workboard-detail button[aria-label="Edit card"]',
-        ),
-        "edit the selected task",
-      ).click();
-      await afterWorkboardUpdate(() =>
-        expect(page.container.querySelector(".workboard-draft")).not.toBeNull(),
-      );
-      const form = () =>
-        expectDefined(
-          page.container.querySelector<HTMLFormElement>(".workboard-draft"),
-          "card editor",
-        );
-      const title = expectDefined(
-        form().querySelector<HTMLInputElement>(".workboard-draft__title"),
-        "draft title",
-      );
-      const notes = expectDefined(
-        form().querySelector<HTMLTextAreaElement>(".workboard-draft__notes"),
-        "draft notes",
-      );
-      title.value = "Submitted task";
-      title.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      notes.value = "Keep these unsaved notes";
-      notes.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      page.get<HTMLButtonElement>('button[aria-label="View details"]').click();
+      await afterWorkboardUpdate(() => expect(page.find(".workboard-detail")).not.toBeNull());
+      page.get<HTMLButtonElement>('.workboard-detail button[aria-label="Edit card"]').click();
+      await afterWorkboardUpdate(() => expect(page.find(".workboard-draft")).not.toBeNull());
+      const form = () => page.get<HTMLFormElement>(".workboard-draft");
+      const title = query<HTMLInputElement>(form(), ".workboard-draft__title");
+      const notes = query<HTMLTextAreaElement>(form(), ".workboard-draft__notes");
+      fill(title, "Submitted task");
+      fill(notes, "Keep these unsaved notes");
       const pending = createDeferred<unknown>();
       let updateResult = pending.promise;
       const request = expectDefined(page.request.getMockImplementation(), "host request");
       page.request.mockImplementation((method) =>
         method === "workboard.cards.update" ? updateResult : request(method),
       );
-      form().dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      submitForm(form());
       await afterWorkboardUpdate(() =>
         expect(page.request).toHaveBeenCalledWith("workboard.cards.update", {
           id: card.id,
@@ -677,10 +590,8 @@ describe("selection reconciliation", () => {
         page.navigate("product");
       }
       await Promise.resolve();
-      const pendingTitle =
-        page.container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value;
-      const pendingNotes =
-        page.container.querySelector<HTMLTextAreaElement>(".workboard-draft__notes")?.value;
+      const pendingTitle = page.find<HTMLInputElement>(".workboard-draft__title")?.value;
+      const pendingNotes = page.find<HTMLTextAreaElement>(".workboard-draft__notes")?.value;
       const pendingBusy = form().getAttribute("aria-busy");
       const enabledControls = [
         ...form().querySelectorAll(
@@ -710,84 +621,66 @@ describe("selection reconciliation", () => {
       );
       const saved = { ...card, title: title.value, notes: notes.value, updatedAt: 2 };
       updateResult = Promise.resolve({ card: saved });
-      form().dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      submitForm(form());
       await afterWorkboardUpdate(() => expect(page.workboard.state.draftOpen).toBe(false));
       expect(
         page.request.mock.calls.filter(([method]) => method === "workboard.cards.update"),
       ).toHaveLength(2);
       expect(page.workboard.state.cards.find((entry) => entry.id === card.id)).toMatchObject(saved);
-      expect(page.container.querySelector(".workboard-draft, .workboard-detail")).toBeNull();
-      const main = expectDefined(
-        page.container.querySelector(".workboard-main"),
-        "filtered board content",
-      );
+      expect(page.find(".workboard-draft, .workboard-detail")).toBeNull();
+      const main = page.get(".workboard-main");
       expect(main.textContent).not.toContain(saved.title);
     },
   );
 
-  it.each(["detail"])(
-    "keeps a default-agent card's %s and draft when selecting its scope without metadata",
-    async (surface) => {
-      const page = mountPage();
-      const card = createWorkboardCard({ title: "Default-agent card" });
-      page.cards([card]);
-      page.fixture.connection.assistantAgentId = "research";
-      vi.mocked(page.fixture.host.agents.refresh).mockRejectedValue(
-        new Error("Agent metadata unavailable"),
-      );
-      page.fixture.connection.connected = true;
-      page.fixture.notify();
-      await afterWorkboardUpdate(() =>
-        expect(page.container.querySelector(".workboard-card")?.textContent).toContain(card.title),
-      );
-      page.container.querySelector<HTMLButtonElement>('button[aria-label="View details"]')!.click();
-      await afterWorkboardUpdate(() =>
-        expect(page.container.querySelector(".workboard-detail")).not.toBeNull(),
-      );
-      if (surface === "editor") {
-        page.container
-          .querySelector<HTMLButtonElement>('.workboard-detail button[aria-label="Edit card"]')!
-          .click();
-        await afterWorkboardUpdate(() =>
-          expect(page.container.querySelector(".workboard-draft")).not.toBeNull(),
-        );
-      }
-      const selector = surface === "editor" ? ".workboard-draft__title" : ".workboard-detail__note";
-      const input = page.container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
-      input.value = "Keep this draft";
-      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      expect(page.fixture.host.agents.defaultId).toBeNull();
-      page.fixture.host.agents.setScope("research");
-      await Promise.resolve();
+  it("keeps a default-agent card's detail and draft when selecting its scope without metadata", async () => {
+    const page = mountPage();
+    const card = createWorkboardCard({ title: "Default-agent card" });
+    page.cards([card]);
+    page.fixture.connection.assistantAgentId = "research";
+    vi.mocked(page.fixture.host.agents.refresh).mockRejectedValue(
+      new Error("Agent metadata unavailable"),
+    );
+    page.fixture.connection.connected = true;
+    page.fixture.notify();
+    await afterWorkboardUpdate(() =>
+      expect(page.find(".workboard-card")?.textContent).toContain(card.title),
+    );
+    page.find<HTMLButtonElement>('button[aria-label="View details"]')!.click();
+    await afterWorkboardUpdate(() => expect(page.find(".workboard-detail")).not.toBeNull());
+    const selector = ".workboard-detail__note";
+    const input = page.find<HTMLInputElement | HTMLTextAreaElement>(selector)!;
+    fill(input, "Keep this draft");
+    expect(page.fixture.host.agents.defaultId).toBeNull();
+    page.fixture.host.agents.setScope("research");
+    await Promise.resolve();
 
-      expect(
-        page.container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)?.value,
-      ).toBe("Keep this draft");
-      expect(page.container.querySelector(".workboard-board")?.textContent).toContain(card.title);
-      expect(page.fixture.host.agents.scopeId).toBe("research");
-    },
-  );
+    expect(page.find<HTMLInputElement | HTMLTextAreaElement>(selector)?.value).toBe(
+      "Keep this draft",
+    );
+    expect(page.find(".workboard-board")?.textContent).toContain(card.title);
+    expect(page.fixture.host.agents.scopeId).toBe("research");
+  });
 
-  it.each([{ scope: "main", visible: false }])(
-    "keeps only overlays inside scope $scope",
-    async ({ scope, visible }) => {
-      const page = mountPage();
-      page.workboard.state.cards = [createWorkboardCard({ id: "writer-card", agentId: "writer" })];
-      page.fixture.host.agents.setScope("writer");
-      await Promise.resolve();
-      Object.assign(page.workboard.state, {
-        detailCardId: "writer-card",
-        detailCommentBody: "Draft comment",
-        draftOpen: true,
-        editingCardId: "writer-card",
-      });
-      page.fixture.host.agents.setScope(scope);
-      await Promise.resolve();
-      expect(page.workboard.state.detailCardId).toBe(visible ? "writer-card" : null);
-      expect(page.workboard.state.detailCommentBody).toBe(visible ? "Draft comment" : "");
-      expect(page.workboard.state.draftOpen).toBe(visible);
-    },
-  );
+  it("dismisses overlays outside main scope", async () => {
+    const page = mountPage();
+    page.workboard.state.cards = [createWorkboardCard({ id: "writer-card", agentId: "writer" })];
+    page.fixture.host.agents.setScope("writer");
+    await Promise.resolve();
+    Object.assign(page.workboard.state, {
+      detailCardId: "writer-card",
+      detailCommentBody: "Draft comment",
+      draftOpen: true,
+      editingCardId: "writer-card",
+    });
+    page.fixture.host.agents.setScope("main");
+    await Promise.resolve();
+    expect(page.workboard.state).toMatchObject({
+      detailCardId: null,
+      detailCommentBody: "",
+      draftOpen: false,
+    });
+  });
 
   it("preserves a new-card draft across board navigation", async () => {
     const page = mountPage({ boardId: "ops" });
@@ -824,14 +717,12 @@ it("saves explicit appearance clearing without sending legacy null values", asyn
   page.fixture.connection.connected = true;
   page.fixture.notify();
   const form = await openBoardEditor(page);
-  const picker = expectDefined(
-    form.querySelector<HTMLElement & Parameters<ControlUiComponents["mountAppearancePicker"]>[1]>(
-      "[data-test-appearance-picker]",
-    ),
-    "board appearance picker",
+  const picker = query<HTMLElement & Parameters<ControlUiComponents["mountAppearancePicker"]>[1]>(
+    form,
+    "[data-test-appearance-picker]",
   );
   picker.onChange({ icon: null, color: null });
-  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  submitForm(form);
   await afterWorkboardUpdate(() =>
     expect(page.request).toHaveBeenCalledWith("workboard.boards.upsert", {
       id: "planning",

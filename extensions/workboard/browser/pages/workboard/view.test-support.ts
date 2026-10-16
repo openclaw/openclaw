@@ -27,8 +27,27 @@ export type SelectPicker = HTMLElement & ControlUiSelectPickerProps;
 export type AgentPicker = HTMLElement & ControlUiAgentPickerProps;
 
 type WorkboardRenderProps = Parameters<typeof WorkboardView>[0];
-export function createLoadedWorkboardState() {
-  const host = {};
+export function query<T extends Element = HTMLElement>(
+  root: ParentNode | null | undefined,
+  selector: string,
+): T {
+  return expectDefined(root?.querySelector<T>(selector), selector);
+}
+export function fill(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  input.value = value;
+  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+}
+export function submitForm(form: HTMLFormElement) {
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+}
+export function queries(container: HTMLElement) {
+  return {
+    get: <T extends Element = HTMLElement>(selector: string) => query<T>(container, selector),
+    find: container.querySelector.bind(container),
+    all: container.querySelectorAll.bind(container),
+  };
+}
+export function createLoadedWorkboardState(host: WorkboardRenderProps["host"] = {}) {
   const state = getWorkboardState(host);
   state.loaded = true;
   return { host, state };
@@ -98,30 +117,26 @@ export function createWorkboardView(
   overrides: Partial<WorkboardRenderProps> = {},
   host: WorkboardRenderProps["host"] = {},
 ) {
-  const state = getWorkboardState(host);
-  state.loaded = true;
+  const { state } = createLoadedWorkboardState(host);
   const container = document.createElement("div");
   const props = createWorkboardRenderProps(host, overrides);
   const renderView = (next: Partial<WorkboardRenderProps> = {}) =>
     renderInto(container, { ...props, ...next });
-  return { host, state, container, renderView };
+  return { host, state, container, renderView, ...queries(container) };
 }
 
+function findButton(root: Element, matches: (button: HTMLButtonElement) => boolean | undefined) {
+  return [...root.querySelectorAll<HTMLButtonElement>("button")].find(matches) ?? null;
+}
 export function buttonByLabel(container: Element, label: string): HTMLButtonElement | null {
-  return (
-    Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) =>
-        button.getAttribute("aria-label") === label || button.textContent?.trim() === label,
-    ) ?? null
+  return findButton(
+    container,
+    (button) => button.getAttribute("aria-label") === label || button.textContent?.trim() === label,
   );
 }
 
 export function buttonByText(container: Element, text: string): HTMLButtonElement | null {
-  return (
-    Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
-      button.textContent?.includes(text),
-    ) ?? null
-  );
+  return findButton(container, (button) => button.textContent?.includes(text));
 }
 
 export function requireButton(root: Element, label: string) {
@@ -134,15 +149,9 @@ export function textButton(root: Element, text: string) {
 
 export async function inlineEditor(container: Element, field: "title" | "notes" | "labels") {
   const trigger = await waitForFast(() =>
-    expectDefined(
-      container.querySelector<HTMLButtonElement>(`.workboard-detail__text-trigger--${field}`),
-      `.workboard-detail__text-trigger--${field}`,
-    ),
+    query<HTMLButtonElement>(container, `.workboard-detail__text-trigger--${field}`),
   );
-  const owner = expectDefined(
-    trigger.closest<HTMLElement>("workboard-inline-text"),
-    "inline editor",
-  );
+  const owner = expectDefined(trigger.closest("workboard-inline-text"), "inline editor");
   const popover = owner.querySelector<HTMLElement>("[popover]");
   if (popover) {
     popover.showPopover = vi.fn();
@@ -154,56 +163,40 @@ export async function inlineEditor(container: Element, field: "title" | "notes" 
     open: async () => {
       trigger.click();
       return waitForFast(() =>
-        expectDefined(
-          owner.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea"),
-          "input, textarea",
-        ),
+        query<HTMLInputElement | HTMLTextAreaElement>(owner, "input, textarea"),
       );
     },
   };
 }
 
-function draftPicker(container: Element, label: string) {
+function selectPicker(container: Element, selector: string, label: string) {
   return expectDefined(
-    [
-      ...container.querySelectorAll<SelectPicker>(".workboard-draft [data-test-select-picker]"),
-    ].find((picker) => picker.accessibleLabel === label),
-    `card ${label} picker`,
+    [...container.querySelectorAll<SelectPicker>(`${selector} [data-test-select-picker]`)].find(
+      (picker) => picker.accessibleLabel === label,
+    ),
+    `${label} picker`,
   );
 }
 
 export function sessionPicker(container: Element) {
-  return draftPicker(container, "Session");
+  return selectPicker(container, ".workboard-draft", "Session");
 }
 
 export function filterPicker(container: Element, label: string) {
-  return expectDefined(
-    [
-      ...container.querySelectorAll<SelectPicker>(
-        label === "Agent"
-          ? ".workboard-agent-filter [data-test-select-picker]"
-          : ".workboard-filter-popover [data-test-select-picker]",
-      ),
-    ].find((picker) => picker.accessibleLabel === label),
-    `filter picker ${label}`,
+  return selectPicker(
+    container,
+    label === "Agent" ? ".workboard-agent-filter" : ".workboard-filter-popover",
+    label,
   );
 }
 
 export function statusButton(container: Element, label: string) {
   return requireButton(
-    expectDefined(
-      container.querySelector<HTMLElement>(
-        '.workboard-status-tabs[role="group"][aria-label="Status"]',
-      ),
-      '.workboard-status-tabs[role="group"][aria-label="Status"]',
-    ),
+    query<HTMLElement>(container, '.workboard-status-tabs[role="group"][aria-label="Status"]'),
     label,
   );
 }
 
 export function toast(container: Element) {
-  return expectDefined(
-    container.querySelector<HTMLElement>("openclaw-workboard-toast:not([hidden])"),
-    "openclaw-workboard-toast:not([hidden])",
-  );
+  return query<HTMLElement>(container, "openclaw-workboard-toast:not([hidden])");
 }
