@@ -12,10 +12,7 @@ import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import type { DesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
-import {
-  DESKTOP_PANEL_TOGGLE_EVENT,
-  type DesktopPanelToggleDetail,
-} from "../panel-toggle-contract.ts";
+import type { DesktopPanelToggleDetail } from "../panel-toggle-contract.ts";
 import { SolidPanelController } from "../solid-panel-controller.ts";
 import type { DesktopAppLauncher } from "./desktop-app-launcher.ts";
 import type { DesktopAudio } from "./desktop-audio.ts";
@@ -155,9 +152,6 @@ export class DesktopPanelController extends SolidPanelController {
   }
 
   override connectedCallback(): void {
-    if (!this.embedded) {
-      window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-    }
     this.dockLayout.setSuppressed(this.suppressed);
     // The first document update owns startup; reconnects still need a fresh lookup.
     if (
@@ -169,7 +163,6 @@ export class DesktopPanelController extends SolidPanelController {
   }
 
   override disconnectedCallback(): void {
-    window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
     if (this.documentMode && this.usesAutomaticSource) {
       this.returnToPicker("pending");
     } else {
@@ -180,13 +173,6 @@ export class DesktopPanelController extends SolidPanelController {
   }
 
   override updated(changed: Map<PropertyKey, unknown>): void {
-    if (changed.has("embedded")) {
-      if (this.embedded) {
-        window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-      } else {
-        window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-      }
-    }
     if (changed.has("suppressed")) {
       const restored = this.dockLayout.setSuppressed(this.suppressed);
       if (this.suppressed) {

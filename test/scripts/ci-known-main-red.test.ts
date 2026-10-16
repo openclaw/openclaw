@@ -13,6 +13,15 @@ const repository = "openclaw/openclaw";
 const headSha = "a".repeat(40);
 const mainSha = "b".repeat(40);
 const baseSha = "c".repeat(40);
+const prContext = {
+  repository,
+  headRepository: repository,
+  token: "synthetic-token",
+  headSha,
+  pullRequestNumber: 7,
+  runId: 100,
+  runAttempt: 1,
+};
 const file = "src/gateway/example.test.ts";
 const title = "startup > recovers the session";
 const report = (test = title) => `
@@ -53,23 +62,30 @@ const job = {
 };
 const typeFile = "src/acp/control-plane/manager.preactive-cancellation.test.ts";
 const typeDiagnostic = `${typeFile}(92,14): error TS2367: This comparison appears to be unintentional.`;
-const typeReport = (diagnostic = typeDiagnostic) =>
+const staticReport = (
+  kind: "tsgo" | "oxlint",
+  config: string,
+  diagnostic: string,
+  exitCode: number,
+) =>
   [
-    "##[group]Run node scripts/run-tsgo-core-test-shards.mjs",
+    `##[group]Run node scripts/${kind === "tsgo" ? "run-tsgo-core-test-shards" : "run-oxlint"}.mjs`,
     "##[endgroup]",
     diagnostic,
-    `[ci-static:tsgo:leaf] ${JSON.stringify({
+    `[ci-static:${kind}:leaf] ${JSON.stringify({
       version: 1,
       id: "batch:0",
-      config: "test/tsconfig/tsconfig.core.test.agents-root.json",
-      exitCode: 2,
+      config,
+      exitCode,
       stdout: `${diagnostic}\n`,
       stderr: "",
     })}`,
-    '[ci-static:tsgo:completion] {"version":1,"id":"batch","planned":1,"completed":1,"leaves":["batch:0"]}',
-    '[ci-static:tsgo:step] {"version":1,"groups":1}',
-    "##[error]Process completed with exit code 2.",
+    `[ci-static:${kind}:completion] {"version":1,"id":"batch","planned":1,"completed":1,"leaves":["batch:0"]}`,
+    `[ci-static:${kind}:step] {"version":1,"groups":1}`,
+    `##[error]Process completed with exit code ${exitCode}.`,
   ].join("\n");
+const typeReport = (diagnostic = typeDiagnostic) =>
+  staticReport("tsgo", "test/tsconfig/tsconfig.core.test.agents-root.json", diagnostic, 2);
 const typeJob = {
   ...job,
   name: "check-test-types-core-5",
@@ -86,25 +102,13 @@ const lintJob = {
   name: "check-lint-extensions-3",
   steps: [{ name: "Run hosted extension lint stripe", conclusion: "failure" }],
 };
-const completeLintReport = (message = "unused import") => {
-  const diagnostic = `${lintFile}:1:10: error: ${message} (eslint(no-unused-vars))\nFound 0 warnings and 1 error.`;
-  return [
-    "##[group]Run node scripts/run-oxlint.mjs",
-    "##[endgroup]",
-    diagnostic,
-    `[ci-static:oxlint:leaf] ${JSON.stringify({
-      version: 1,
-      id: "batch:0",
-      config: "config/oxlint/typed.json",
-      exitCode: 1,
-      stdout: `${diagnostic}\n`,
-      stderr: "",
-    })}`,
-    '[ci-static:oxlint:completion] {"version":1,"id":"batch","planned":1,"completed":1,"leaves":["batch:0"]}',
-    '[ci-static:oxlint:step] {"version":1,"groups":1}',
-    "##[error]Process completed with exit code 1.",
-  ].join("\n");
-};
+const completeLintReport = (message = "unused import") =>
+  staticReport(
+    "oxlint",
+    "config/oxlint/typed.json",
+    `${lintFile}:1:10: error: ${message} (eslint(no-unused-vars))\nFound 0 warnings and 1 error.`,
+    1,
+  );
 
 function failureClassifier(
   options: {
@@ -235,13 +239,8 @@ function gateFixture(
   });
   vi.stubGlobal("fetch", api);
   return createKnownMainRed({
-    repository,
+    ...prContext,
     headRepository: options.headRepository,
-    token: "synthetic-token",
-    headSha,
-    pullRequestNumber: 7,
-    runId: 100,
-    runAttempt: 1,
   });
 }
 
@@ -252,6 +251,10 @@ afterEach(() => vi.unstubAllGlobals());
 
 const known = async (options: Parameters<typeof classify>[0] = {}) =>
   (await classify(options)).known;
+
+async function expectKnown(options: Parameters<typeof classify>[0], expected = false) {
+  expect(await known(options)).toBe(expected);
+}
 
 describe("main failure attribution", () => {
   it.each([
@@ -478,15 +481,7 @@ describe("known hourly main failures", () => {
     "keeps report attribution separate from gate eligibility (changed=%s)",
     async (changed) => {
       gateFixture({ changed: [changed ? file : "src/channels/unrelated.ts"] });
-      const result = await reportPrFailures({
-        repository,
-        headRepository: repository,
-        token: "synthetic-token",
-        headSha,
-        pullRequestNumber: 7,
-        runId: 100,
-        runAttempt: 1,
-      });
+      const result = await reportPrFailures(prContext);
       expect(result.failures[0]).toMatchObject({
         class: "pre-existing",
         mainRunId: 200,
@@ -523,13 +518,11 @@ describe("known hourly main failures", () => {
       "Test Files 1 failed",
       "- Expected\n[shard:gateway] + Received\n[shard:gateway] - { value: 1 }\n[shard:gateway] + { value: 2 }\n[shard:gateway] Test Files 1 failed",
     );
-    expect(await known({ mainReport: detailed, prReport: detailed })).toBe(true);
-    expect(
-      await known({
-        mainReport: detailed,
-        prReport: detailed.replace("+ { value: 2 }", "+ { value: 3 }"),
-      }),
-    ).toBe(false);
+    await expectKnown({ mainReport: detailed, prReport: detailed }, true);
+    await expectKnown({
+      mainReport: detailed,
+      prReport: detailed.replace("+ { value: 2 }", "+ { value: 3 }"),
+    });
   });
 
   it.each([repository, "contributor/openclaw"])(
@@ -649,7 +642,7 @@ describe("known hourly main failures", () => {
     ["outer failure after receipt", { prReport: `${report()}\nError: write failed` }],
     ["main has recovered", { mainConclusion: "success" }],
   ])("keeps %s blocking", async (_name, options) => {
-    expect(await known(options)).toBe(false);
+    await expectKnown(options);
   });
 
   it.each([
@@ -661,7 +654,7 @@ describe("known hourly main failures", () => {
   ])(
     "retires stale main evidence after subject changes: %j",
     async ({ mainChanged, known: expected }) => {
-      expect(await known({ liveMainSha: "d".repeat(40), mainChanged })).toBe(expected);
+      await expectKnown({ liveMainSha: "d".repeat(40), mainChanged }, expected);
     },
   );
 
@@ -670,12 +663,10 @@ describe("known hourly main failures", () => {
       source: 'import { subject } from "@openclaw/acp-core/runtime/types";',
       packageNames: { "acp-core": "@openclaw/acp-core" },
     };
-    expect(await known(options)).toBe(true);
-    expect(await known({ ...options, changed: ["packages/acp-core/src/other.ts"] })).toBe(false);
-    expect(await known({ ...options, changed: ["packages/unrelated/src/other.ts"] })).toBe(true);
-    expect(await known({ ...options, packageNames: { "acp-core": "external-package" } })).toBe(
-      false,
-    );
+    await expectKnown(options, true);
+    await expectKnown({ ...options, changed: ["packages/acp-core/src/other.ts"] });
+    await expectKnown({ ...options, changed: ["packages/unrelated/src/other.ts"] }, true);
+    await expectKnown({ ...options, packageNames: { "acp-core": "external-package" } });
   });
 
   it.each([
@@ -695,12 +686,10 @@ describe("known hourly main failures", () => {
     "uses legacy $failureJob.name evidence only from main",
     async ({ failureJob, signatureFile, legacy, complete }) => {
       const options = { failureJob, signatureFile, mainReport: legacy, prReport: complete };
-      expect(await known(options)).toBe(true);
-      expect(await known({ ...options, prReport: legacy })).toBe(false);
+      await expectKnown(options, true);
+      await expectKnown({ ...options, prReport: legacy });
       if (failureJob === job) {
-        expect(
-          await known({ ...options, mainReport: `${legacy}\nError: another unknown failure` }),
-        ).toBe(false);
+        await expectKnown({ ...options, mainReport: `${legacy}\nError: another unknown failure` });
       }
     },
   );
@@ -737,12 +726,10 @@ describe("known hourly main failures", () => {
     const mismatch = lint
       ? completeLintReport("unused variable")
       : typeReport(typeDiagnostic.replace("TS2367", "TS2554"));
-    expect(await known(options)).toBe(true);
-    expect(await known({ ...options, prReport: mismatch })).toBe(false);
-    expect(await known({ ...options, changed: [signatureFile] })).toBe(false);
-    expect(await known({ ...options, changed: ["packages/acp-core/src/runtime/types.ts"] })).toBe(
-      false,
-    );
+    await expectKnown(options, true);
+    await expectKnown({ ...options, prReport: mismatch });
+    await expectKnown({ ...options, changed: [signatureFile] });
+    await expectKnown({ ...options, changed: ["packages/acp-core/src/runtime/types.ts"] });
   });
 
   it.each([
@@ -771,24 +758,20 @@ describe("known hourly main failures", () => {
       prReport: completeLintReport(),
       source: 'import type { CardSessionState } from "./session-state.ts";',
     };
-    expect(await known({ ...options, prReport: lintReport })).toBe(false);
-    expect(await known(options)).toBe(true);
-    expect(await known({ ...options, changed: [lintFile] })).toBe(false);
-    expect(
-      await known({
-        ...options,
-        changed: ["extensions/workboard/browser/lib/workboard/session-state.ts"],
-      }),
-    ).toBe(false);
-    expect(
-      await known({
-        ...options,
-        mainReport: lintReport.replace(
-          "Found 0 warnings",
-          "Error: unknown lint failure\nFound 0 warnings",
-        ),
-      }),
-    ).toBe(false);
+    await expectKnown({ ...options, prReport: lintReport });
+    await expectKnown(options, true);
+    await expectKnown({ ...options, changed: [lintFile] });
+    await expectKnown({
+      ...options,
+      changed: ["extensions/workboard/browser/lib/workboard/session-state.ts"],
+    });
+    await expectKnown({
+      ...options,
+      mainReport: lintReport.replace(
+        "Found 0 warnings",
+        "Error: unknown lint failure\nFound 0 warnings",
+      ),
+    });
   });
 });
 

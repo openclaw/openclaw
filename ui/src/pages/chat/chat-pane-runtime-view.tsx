@@ -8,6 +8,7 @@ import {
   untrack,
 } from "solid-js";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
@@ -17,12 +18,21 @@ import {
   createChatProviderReview,
   type ChatProviderReviewOwner,
 } from "./chat-provider-review-controller.tsx";
+import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 
 function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
   const runtime = untrack(() => props.runtime);
   runtime.mountPanelActions();
   runtime.mountToolIcons();
+  const sources = [runtime.context.plugins, runtime.context.navigation].map((source) =>
+    projectSource(source, {
+      read: (owner) => owner,
+      subscribe: (owner, notify) => owner?.subscribe(notify) ?? (() => {}),
+      equality: "revision",
+    }),
+  );
+  onSettled(() => installChatComposerPickerDismissal(runtime.ownerDocument));
   const [presented, setPresented] = createSignal(runtime.presented);
   const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
   // Relative labels tick only while this retained pane is presented.
@@ -32,6 +42,7 @@ function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
     presented: () => presented() && visible(),
     read: () => {
       i18nRevision();
+      sources.forEach((source) => source.read());
       runtime.prepareRender();
       return runtime.render(() => providerReview);
     },

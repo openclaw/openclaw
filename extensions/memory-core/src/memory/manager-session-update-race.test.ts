@@ -26,6 +26,7 @@ import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
+import * as memoryCpuWorkerRuntime from "./manager-cpu-worker-runtime.js";
 import {
   createManagerIndexFixture,
   memoryIndexFixtureWriter,
@@ -513,7 +514,25 @@ describe("memory session update sync", () => {
     );
     const database = Reflect.get(manager, "db") as DatabaseSync;
     const sessionPath = `sessions/main/${sessionId}.jsonl`;
-    await manager.sync({ reason: "index-before-forget", force: true });
+    const reads = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryIndexRead");
+    try {
+      await manager.sync({ reason: "index-before-forget", force: true });
+      // Forget checks must not serialize the source's chunks and embeddings.
+      const sessionChecks = reads.mock.calls.flatMap(([, command]) =>
+        command.type === "session.current" ? [command.input] : [],
+      );
+      expect(sessionChecks).toEqual(
+        expect.arrayContaining([
+          { agentId: "main", sessionId },
+          { agentId: "main", sessionId: decoyId },
+        ]),
+      );
+      for (const input of sessionChecks) {
+        expect(input).toStrictEqual({ agentId: "main", sessionId: input.sessionId });
+      }
+    } finally {
+      reads.mockRestore();
+    }
     expect(
       database.prepare("SELECT path FROM memory_index_chunks WHERE path = ?").get(sessionPath),
     ).toEqual({ path: sessionPath });

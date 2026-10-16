@@ -6,7 +6,6 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -14,6 +13,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setVerbose } from "../global-state.js";
@@ -41,17 +41,6 @@ afterAll(async () => {
   await receipts.close();
 });
 afterEach(() => vi.unstubAllEnvs());
-
-// Escaped descendants outlive the root handle; no owner exposes their exit event.
-async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isPidAlive(pid)) {
-      await waitForProcessTick(25, undefined, { signal });
-    }
-  } catch (error) {
-    throw new Error(`Timed out waiting for descendant ${pid} to exit`, { cause: error });
-  }
-}
 
 describe("runCommandWithTimeout", () => {
   it.skipIf(process.platform === "win32").each(["cooperative", "forced"] as const)(
@@ -125,7 +114,7 @@ describe("runCommandWithTimeout", () => {
         await running?.catch(() => undefined);
         if (descendant && isPidAlive(descendant)) {
           process.kill(descendant, "SIGKILL");
-          await waitForDescendantExit(descendant, signal);
+          await waitForDead(descendant, signal);
         }
       }
     },
@@ -509,7 +498,7 @@ describe("runCommandBuffered", () => {
               : { code: exitCode, termination: "exit" },
           );
           vi.useRealTimers();
-          await waitForDescendantExit(descendantPid, signal);
+          await waitForDead(descendantPid, signal);
           expect(isPidAlive(descendantPid)).toBe(false);
         } finally {
           try {
@@ -541,7 +530,8 @@ describe("runCommandBuffered", () => {
             expect(isPidAlive(parent.pid)).toBe(false);
           }
           if (descendantPid !== undefined) {
-            await waitForDescendantExit(descendantPid, signal);
+            // Escaped descendants outlive the root handle; no owner exposes their exit event.
+            await waitForDead(descendantPid, signal);
             expect(isPidAlive(descendantPid)).toBe(false);
           }
         }

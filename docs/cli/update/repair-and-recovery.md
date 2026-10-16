@@ -882,6 +882,10 @@ plugins, or creating state.
 Candidate bytes still require identity verification; historical artifacts are
 listed separately as requiring verification. Protected and blocked artifacts
 include reason codes.
+Missing originals referenced by recovery manifests appear only as one aggregate
+count, without contributing recorded sizes to byte totals. Their recovery
+receipts remain available to Doctor. Interrupted disposal still appears so
+cleanup can finish it.
 
 Before applying, stop the Gateway for that same profile/state directory and wait
 for other SQLite maintenance commands to finish. Stop database readers too,
@@ -963,7 +967,7 @@ Retiring a capture deletes its whole directory, including any `candidate` and
 the rest of cleanup. An interrupted removal leaves the remainder attributed to the
 same run, so rerunning cleanup finishes it.
 
-The JSON result contains `stateDir`, `status`, `artifacts`, and `totals`. Each
+The JSON result contains `stateDir`, `status`, `artifacts`, `missingOriginals`, and `totals`. Each
 artifact reports its path, run ids, logical bytes, outcome, and reason; update
 captures also carry `kind: "update-capture"`. Totals separate candidates,
 verification-required, protected, blocked, and removed bytes, including update
@@ -971,8 +975,8 @@ captures. Removal failures exit nonzero. Keep the recovery manifests and rerun
 cleanup to finish recorded interrupted work; a retry does not delete a recreated
 file. Removed logical bytes do not promise
 equivalent physical space reclamation on cloned or snapshotted filesystems.
-When a path cannot be inspected, its logical size comes from recorded artifact
-metadata when available. Cleanup records durable intent before removal and uses
+Only present files contribute logical bytes; absent originals and disposal
+claims contribute zero. Cleanup records durable intent before removal and uses
 exclusive no-copy publication. Failures are reported; retries reconcile file
 operations that already completed. Manifest files are synchronized before removal;
 parent directories are synchronized where supported. Windows does not provide the

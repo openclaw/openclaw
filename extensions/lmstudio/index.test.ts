@@ -574,8 +574,9 @@ describe("lmstudio plugin", () => {
           lmstudio: {
             models: [
               {
-                id: "qwen3-8b-instruct",
-                name: "Qwen 3 8B Instruct",
+                id: "compact-chat",
+                name: "Compact Chat",
+                parameterCount: 4_000_000_000,
                 contextWindow: 32768,
                 contextTokens: 8192,
                 reasoning: true,
@@ -593,6 +594,7 @@ describe("lmstudio plugin", () => {
               },
               {
                 id: "bad-window",
+                parameterCount: -1,
                 contextWindow: Number.POSITIVE_INFINITY,
                 contextTokens: 4096.5,
               },
@@ -621,8 +623,9 @@ describe("lmstudio plugin", () => {
     ).toEqual([
       {
         provider: "lmstudio",
-        id: "qwen3-8b-instruct",
-        name: "Qwen 3 8B Instruct",
+        id: "compact-chat",
+        name: "Compact Chat",
+        parameterCount: 4_000_000_000,
         compat: {
           supportsUsageInStreaming: true,
           codeMode: "preferred",

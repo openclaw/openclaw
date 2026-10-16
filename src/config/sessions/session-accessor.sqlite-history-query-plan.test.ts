@@ -239,7 +239,7 @@ it("reads only appended metadata for a warm marker-heavy page and quoted message
   insertSyntheticHistory(database, scope.sessionId, 2_000, true);
   const limits = { maxMessages: 3, maxLines: 3, maxBytes: 64 * 1024 };
   const target = {
-    transcript: { ...scope, sessionFile: scope.sessionKey },
+    transcript: { ...scope, sessionFile: scope.sessionKey, storePath: database.path },
     database: { agentId: database.agentId, path: database.path },
   };
   const owner = new OpenClawAgentDatabaseReadOnlyScope();

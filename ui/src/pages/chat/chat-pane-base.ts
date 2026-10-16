@@ -67,7 +67,6 @@ import { requestChatPageUpdate } from "./chat-state-render.ts";
 import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
-import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
@@ -177,6 +176,24 @@ export abstract class ChatPaneBase extends ControllerHost {
     this.paneLifecycleRoot = this.closest("openclaw-app-shell") ?? this.element.parentElement;
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     super.connect();
+    this.chatState.addCleanup(
+      chatInputOwnerForContext(this.context).subscribe(() => this.activeChanged(this.active)),
+    );
+    this.activeChanged(this.active);
+    this.chatState.addCleanup(
+      this.context.overlays?.subscribe((snapshot) => {
+        if (this.state) {
+          this.reconcileWaitingApprovalSnapshot(snapshot.approvalQueue);
+        }
+        this.requestUpdate();
+      }) ?? (() => {}),
+    );
+    this.chatState.addCleanup(
+      this.context.runtimeConfig?.subscribe(() => {
+        this.refreshSwarmRoster();
+        this.requestUpdate();
+      }) ?? (() => {}),
+    );
     this.addEventListener(
       CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
       this.synchronizeForegroundTranscript,
@@ -658,37 +675,11 @@ export abstract class ChatPaneBase extends ControllerHost {
 
   constructor(
     readonly element: HTMLElement,
-    protected context: ApplicationContext,
+    public context: ApplicationContext,
   ) {
     super();
     observeNativeGateway(this);
     void new SubscriptionsController(this)
-      .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
-      .watchStore(
-        () => this.context && chatInputOwnerForContext(this.context),
-        () => this.activeChanged(this.active),
-      )
-      .watch(
-        () => this.context?.overlays,
-        (overlays, notify) =>
-          overlays.subscribe((snapshot) => {
-            if (this.state) {
-              this.reconcileWaitingApprovalSnapshot(snapshot.approvalQueue);
-            }
-            notify();
-          }),
-      )
-      .watch(
-        () => this.context?.runtimeConfig,
-        (runtimeConfig, notify) =>
-          runtimeConfig.subscribe(() => {
-            this.refreshSwarmRoster();
-            notify();
-          }),
-      )
-      .watchStore(() => this.context?.config)
-      .watchStore(() => this.context?.theme)
-      .watchStore(() => this.context?.plugins)
       .watch(
         () => this.resolveBoardProvider(),
         (provider, notify) => {

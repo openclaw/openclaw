@@ -1,5 +1,15 @@
 import { dynamic, type JSX } from "@solidjs/web";
-import { For, Show, createEffect, createSignal, onSettled, untrack, merge } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  flush,
+  onSettled,
+  untrack,
+  merge,
+} from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { createOverlayAnchor, type OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, findOverlayParent, type Overlay } from "../overlay-lifecycle.ts";
@@ -46,7 +56,10 @@ export type MenuItem = {
   type?: "checkbox" | "radio";
   class?: string;
   variant?: "danger";
-  children?: readonly MenuEntry[];
+  /** Lazy branches construct their entries on first open. */
+  children?: readonly MenuEntry[] | (() => readonly MenuEntry[]);
+  /** Opt this branch into the parent menu's idle preparation. */
+  prewarm?: boolean;
   content?: JSX.Element;
   trigger?: JSX.Element;
   closeOnSelect?: boolean;
@@ -83,6 +96,8 @@ export type MenuProps = {
   items: readonly MenuEntry[];
   /** Defer until opened; "while-open" releases transient content after the exit. */
   lazy?: boolean | "while-open";
+  /** Prepare a closed menu in idle slices after its page content has settled. */
+  prewarm?: boolean;
   trigger?: JSX.Element;
   children?: JSX.Element;
   class?: JSX.HTMLAttributes<HTMLDivElement>["class"];
@@ -159,6 +174,19 @@ export function Menu(props: BranchProps): JSX.Element {
   }));
   const direction = () => props.dir ?? (document.documentElement.dir === "rtl" ? "rtl" : "ltr");
   const lazy = untrack(() => props.lazy);
+  let cancelPrewarm: (() => void) | undefined;
+  let renderedCount = 0;
+  let extendBody: ((count: number) => void) | undefined;
+  const prewarmEnabled = createMemo(() => props.prewarm === true && !props.disabled);
+  createEffect(prewarmEnabled, (enabled) => {
+    if (enabled && lazy === true && renderedCount !== Infinity) {
+      let frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(schedulePrewarm);
+      });
+      cancelPrewarm = () => cancelAnimationFrame(frame);
+    }
+    return () => cancelPrewarm?.();
+  });
   const overlay = createOverlay(identity.id, identity.parent, {
     exclusiveGroup: "menu",
     isValid: (panel) =>
@@ -237,7 +265,18 @@ export function Menu(props: BranchProps): JSX.Element {
     pointerFocus: () => props.pointerFocus ?? "menu",
   });
   const [opened, setOpened] = createSignal(false);
-  const control = useOverlayControl(overlay, props, () => body());
+  const control = useOverlayControl(
+    overlay,
+    merge(props, {
+      onBeforeShow(event: Event) {
+        if (lazy === true && !event.defaultPrevented) {
+          prepareItems();
+        }
+        props.onBeforeShow?.(event);
+      },
+    }),
+    () => body(),
+  );
   createEffect(placement, (value) => {
     if (mounted) {
       anchorBinding?.update(trigger, value);
@@ -369,6 +408,8 @@ export function Menu(props: BranchProps): JSX.Element {
                   ),
                   role: itemRole(item().type),
                   "aria-label": item().label,
+                  "aria-checked": item().type ? (item().checked ? "true" : "false") : undefined,
+                  "aria-disabled": item().disabled ? "true" : undefined,
                   "data-value": item().id,
                 }));
                 return renderCustom ? (
@@ -394,8 +435,6 @@ export function Menu(props: BranchProps): JSX.Element {
                     class={["oc-menu-item", item().class]}
                     value={item().attributes?.value ?? item().id}
                     data-variant={item().variant}
-                    aria-checked={item().type ? (item().checked ? "true" : "false") : undefined}
-                    aria-disabled={item().disabled ? "true" : undefined}
                     disabled={item().href === undefined ? item().disabled : undefined}
                   >
                     <Show when={item().type}>
@@ -418,49 +457,60 @@ export function Menu(props: BranchProps): JSX.Element {
               };
               return (
                 <Show when={item().children} fallback={<Leaf />}>
-                  {(children) => (
-                    <Menu
-                      id={`${identity.id}-${item().id}`}
-                      label={item().label}
-                      items={children()}
-                      trigger={
-                        item().trigger ?? (
-                          <>
-                            <Show when={item().icon}>
-                              <span class="oc-menu-item__icon">{item().icon}</span>
-                            </Show>
-                            <span class={["oc-menu-item__label", item().labelClass]}>
-                              {item().label}
-                            </span>
+                  {(children) => {
+                    const childEntries = createMemo(
+                      () => {
+                        const value = children();
+                        return typeof value === "function" ? value() : value;
+                      },
+                      { lazy: true },
+                    );
+                    return (
+                      <Menu
+                        id={`${identity.id}-${item().id}`}
+                        label={item().label}
+                        lazy={lazy}
+                        prewarm={props.prewarm && item().prewarm}
+                        items={childEntries()}
+                        trigger={
+                          item().trigger ?? (
+                            <>
+                              <Show when={item().icon}>
+                                <span class="oc-menu-item__icon">{item().icon}</span>
+                              </Show>
+                              <span class={["oc-menu-item__label", item().labelClass]}>
+                                {item().label}
+                              </span>
 
-                            <Show when={item().details}>
-                              <span class="oc-menu-item__details">{item().details}</span>
-                            </Show>
-                          </>
-                        )
-                      }
-                      parent={overlay}
-                      root={menuRoot}
-                      parentBinding={binding}
-                      tabFocusTarget={props.tabFocusTarget}
-                      dir={direction()}
-                      disabled={item().disabled}
-                      triggerClass={item().class}
-                      triggerAttributes={{
-                        "data-value": item().id,
-                        value: item().attributes?.value ?? item().id,
-                        "data-shortcut": item().attributes?.["data-shortcut"],
-                        "aria-keyshortcuts": item().attributes?.["aria-keyshortcuts"],
-                        title: item().attributes?.title,
-                      }}
-                      onSelect={props.onSelect}
-                      onNavigate={props.onNavigate}
-                      onBeforeShow={(event) => item().onBeforeShow?.(event)}
-                      onEscape={(event) => props.onEscape?.(event) ?? false}
-                    >
-                      {item().content}
-                    </Menu>
-                  )}
+                              <Show when={item().details}>
+                                <span class="oc-menu-item__details">{item().details}</span>
+                              </Show>
+                            </>
+                          )
+                        }
+                        parent={overlay}
+                        root={menuRoot}
+                        parentBinding={binding}
+                        tabFocusTarget={props.tabFocusTarget}
+                        dir={direction()}
+                        disabled={item().disabled}
+                        triggerClass={item().class}
+                        triggerAttributes={{
+                          "data-value": item().id,
+                          value: item().attributes?.value ?? item().id,
+                          "data-shortcut": item().attributes?.["data-shortcut"],
+                          "aria-keyshortcuts": item().attributes?.["aria-keyshortcuts"],
+                          title: item().attributes?.title,
+                        }}
+                        onSelect={props.onSelect}
+                        onNavigate={props.onNavigate}
+                        onBeforeShow={(event) => item().onBeforeShow?.(event)}
+                        onEscape={(event) => props.onEscape?.(event) ?? false}
+                      >
+                        {item().content}
+                      </Menu>
+                    );
+                  }}
                 </Show>
               );
             }}
@@ -469,12 +519,50 @@ export function Menu(props: BranchProps): JSX.Element {
       }}
     </For>
   );
-  const body = () => (
-    <>
-      {props.children}
-      {renderEntries(() => props.items)}
-    </>
-  );
+  const body = () => {
+    const [limit, setLimit] = createSignal(renderedCount || Infinity);
+    extendBody = setLimit;
+    return (
+      <>
+        {props.children}
+        {renderEntries(() => (limit() === Infinity ? props.items : props.items.slice(0, limit())))}
+      </>
+    );
+  };
+  function prepareItems(count = Infinity) {
+    cancelPrewarm?.();
+    cancelPrewarm = undefined;
+    const partial = renderedCount > 0 && renderedCount !== Infinity;
+    renderedCount = count;
+    if (extendBody) {
+      extendBody(count);
+      // Only a partially prepared menu needs a synchronous native-focus commit.
+      if (partial && count === Infinity) {
+        flush();
+      }
+    } else {
+      control.mountBody();
+    }
+  }
+
+  function schedulePrewarm() {
+    const slice = () => {
+      prepareItems(renderedCount + 8);
+      if (renderedCount < untrack(() => props.items.length)) {
+        schedulePrewarm();
+      } else {
+        renderedCount = Infinity;
+        extendBody?.(Infinity);
+      }
+    };
+    if (typeof requestIdleCallback === "function") {
+      const idle = requestIdleCallback(slice, { timeout: 3000 });
+      cancelPrewarm = () => cancelIdleCallback(idle);
+    } else {
+      const timer = setTimeout(slice, 50);
+      cancelPrewarm = () => clearTimeout(timer);
+    }
+  }
   return (
     <div class={props.class} dir={direction()}>
       <button

@@ -7,7 +7,7 @@
       "sqlite",
       "postgres"
     ],
-    "postgresFamilies": ["state", "workboard", "logbook", "team-reports"],
+    "postgresFamilies": ["state", "agent", "workboard", "logbook", "team-reports"],
     "schemaVersions": {
       "state": 25,
       "agent": 27

@@ -5,8 +5,8 @@ import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
 } from "./chat-composer-dom.ts";
-import { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
-import { HumanMentionMenu } from "./chat-composer-mention-menu.tsx";
+import { createComposerEmojiMenu } from "./chat-composer-emoji.tsx";
+import { createHumanMentionMenu } from "./chat-composer-mention-menu.tsx";
 import { createSkillMenuState } from "./chat-composer-skill-menu.tsx";
 import { createSlashMenuState } from "./chat-composer-slash-menu.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -17,8 +17,8 @@ function createChatComposerState(): ChatComposerState {
     ...createSkillMenuState(),
     composerComposing: false,
     editRevision: 0,
-    mentionMenu: new HumanMentionMenu(),
-    emojiMenu: new ComposerEmojiMenu(),
+    mentionMenu: createHumanMentionMenu(),
+    emojiMenu: createComposerEmojiMenu(),
     composingDraft: null,
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
@@ -168,7 +168,7 @@ export function suppressStaleSubmittedDraftReplay(
 }
 
 function disposeChatComposerState(state: ChatComposerState) {
-  state.emojiMenu.close();
+  state.emojiMenu.dispose();
   state.mentionMenu.dispose();
   state.composerDraftScope = null;
   state.dictation?.dispose();

@@ -19,7 +19,7 @@ import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  applyProviderAuthConfigPatch,
+  applyProviderAuthConfigPatchWithNormalization,
   pickAuthMethod,
   restorePriorAgentsDefaultsModelUnlessOptIn,
   resolveProviderMatch,
@@ -321,12 +321,12 @@ async function persistProviderAuthResult(params: {
   const profiles = params.profiles ?? params.result.profiles;
   const persistedProfiles: ProviderAuthResult["profiles"] = [];
   // Match source and runtime rows using the config owner's canonical model identities.
-  const loginConfig = applyProviderAuthConfigPatch(params.config, {});
+  const loginConfig = applyProviderAuthConfigPatchWithNormalization(params.config, {});
   const configPatch = params.result.configPatch
     ? createProviderAuthConfigPatch(
         loginConfig,
         restorePriorAgentsDefaultsModelUnlessOptIn({
-          cfg: applyProviderAuthConfigPatch(
+          cfg: applyProviderAuthConfigPatchWithNormalization(
             loginConfig,
             profiles.length > 0
               ? withoutProviderModelPolicy(params.result.configPatch, loginConfig)

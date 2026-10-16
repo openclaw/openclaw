@@ -176,6 +176,7 @@ describe("SQLite transcript history cache", () => {
     expect(read().events).toMatchObject([{ seq: 1, event: changed }]);
     expect(
       readSessionTranscriptHistoryEventById(fixtureScope, event.id, {
+        currentOnly: true,
         maxBytes: Buffer.byteLength(JSON.stringify(event)) + 1,
       }),
     ).toBeUndefined();

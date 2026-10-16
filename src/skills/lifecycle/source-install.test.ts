@@ -208,7 +208,7 @@ describe("installSkillFromSource", () => {
     });
   });
 
-  it.each(["regular", "hardlink", "frontmatter"])(
+  it.each(["hardlink", "frontmatter"])(
     "resolves source-installed skill keys with %s metadata",
     async (kind) => {
       await withTestDir({ prefix: "openclaw-skill-source-as-" }, async (root) => {

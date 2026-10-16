@@ -2148,6 +2148,116 @@ describe("cron method validation", () => {
     }),
   );
 
+  // Creation records no host inference account for a CLI-backed model, so an
+  // edit must accept the same model ref instead of demanding a stored account.
+  const cliBackedModelRef = "anthropic/claude-sonnet-4-6";
+  const embeddedModelRef = "anthropic/claude-opus-4-6";
+  function cliBackedModelConfig(runtime = "claude-cli"): OpenClawConfig {
+    return {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {} },
+        defaults: {
+          model: { primary: cliBackedModelRef, fallbacks: [] },
+          models: {
+            [cliBackedModelRef]: { agentRuntime: { id: runtime } },
+            [embeddedModelRef]: { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com",
+            apiKey: "synthetic-unused-model-key",
+            models: ["claude-sonnet-4-6", "claude-opus-4-6"].map((id) => ({
+              id,
+              name: `Synthetic ${id}`,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200_000,
+              maxTokens: 8192,
+            })),
+          },
+        },
+      },
+    } as OpenClawConfig;
+  }
+  const cliModelPatch = (model: string) => ({
+    payload: { kind: "agentTurn", message: "updated", model },
+  });
+
+  it("accepts a CLI-backed model with a selected profile on cron.update", async () => {
+    setRuntimeConfig(cliBackedModelConfig());
+
+    const accepted = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@selected-profile`) },
+      createCronJob(),
+    );
+    expect(accepted.context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(accepted.respond);
+
+    // Control: an embedded-runtime reference still needs its stored account.
+    const refused = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${embeddedModelRef}@missing-profile`) },
+      createCronJob(),
+    );
+    expect(refused.context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(refused.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "is unavailable",
+    });
+  });
+
+  it("keeps explicit native-account validation when automatic routing defaults to CLI", async () => {
+    const cfg = cliBackedModelConfig("auto");
+    cfg.auth = {
+      order: { anthropic: ["anthropic:cli"] },
+      profiles: {
+        "anthropic:cli": { provider: "claude-cli", mode: "oauth" },
+        "anthropic:missing-api": { provider: "anthropic", mode: "api_key" },
+      },
+    };
+    setRuntimeConfig(cfg);
+
+    const refused = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@anthropic:missing-api`) },
+      createCronJob(),
+    );
+    expect(refused.context.committedUpdates).toEqual([]);
+    expectResponseError(refused.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "is unavailable",
+    });
+  });
+
+  // A bound job keeps its rejection: the store would otherwise clone its recorded
+  // account onto the CLI route while the same patch replaces the model.
+  it("keeps the stored account rejection when a bound job moves to a CLI-backed model", async () => {
+    setRuntimeConfig(cliBackedModelConfig());
+
+    const bound = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@selected-profile`) },
+      Object.assign(createCronJob(), {
+        inferenceBinding: {
+          version: 1 as const,
+          provider: "anthropic",
+          profileId: "anthropic:stored-account",
+          authorizationId: "9f2b1c0d4e5a67890123456789abcdef0123456789abcdef0123456789abcdef",
+          authRequirement: "api-key" as const,
+          source: "user" as const,
+        },
+      }),
+    );
+    expect(bound.context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(bound.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "is unavailable",
+    });
+  });
+
   it("accepts provider-prefixed announce targets when delivery.channel uses a channel alias", async () => {
     setRuntimeConfig(msteamsConfig());
 

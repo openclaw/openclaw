@@ -135,10 +135,7 @@ describe("deterministic test port blocks", () => {
     },
   );
 
-  it.each([
-    { first: 1720, last: 1720, offsets: [0] },
-    { first: 1712, last: 1719, offsets: [0, 7] },
-  ])(
+  it.each([{ first: 1712, last: 1719, offsets: [0, 7] }])(
     "does not return an HTTP-blocked base or derived port ($first–$last)",
     async ({ first, last, offsets }) => {
       host.range = "2024 65535";

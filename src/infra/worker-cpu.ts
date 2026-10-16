@@ -23,7 +23,11 @@ import {
 type WorkerMemorySample = Pick<
   NodeJS.MemoryUsage,
   "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
-> & { heapSizeLimitBytes?: number; gc?: GcSample[] };
+> & {
+  heapSizeLimitBytes?: number;
+  heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
+  gc?: GcSample[];
+};
 
 type WorkerCpuHandle = {
   readonly threadId: number;
@@ -45,6 +49,7 @@ type WorkerSource = {
     value: Pick<NodeJS.MemoryUsage, "heapUsed" | "heapTotal" | "external"> & {
       arrayBuffers?: number;
       heapSizeLimitBytes?: number;
+      heapSpaces?: WorkerMemorySample["heapSpaces"];
     };
     sampledAt: number;
   };
@@ -436,11 +441,12 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
         });
         return;
       }
-      // Known numeric payload bytes; object envelopes and GC kind labels are excluded.
+      // Known numeric payload bytes; object envelopes and GC/heap-space labels are excluded.
       recordWorkerMessage(
         "memory",
         "from_worker",
         ("heapUsed" in record ? 32 + (record.heapSizeLimitBytes === undefined ? 0 : 8) : 0) +
+          ("heapUsed" in record ? (record.heapSpaces?.length ?? 0) * 8 : 0) +
           (record.gc?.length ?? 0) * 8,
       );
       // This private port is handed off by our isolate telemetry owner, not task input.

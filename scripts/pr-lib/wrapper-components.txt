@@ -67,6 +67,7 @@ packages/memory-host-sdk/src/host/config-utils.ts
 packages/memory-host-sdk/src/host/embedding-vector.ts
 packages/memory-host-sdk/src/host/error-utils.ts
 packages/memory-host-sdk/src/host/memory-schema-base.ts
+packages/memory-host-sdk/src/host/memory-schema-catalog.ts
 packages/memory-host-sdk/src/host/memory-schema-provenance.ts
 packages/memory-host-sdk/src/host/memory-schema-recall.ts
 packages/memory-host-sdk/src/host/memory-schema-storage-migration.ts
@@ -1149,7 +1150,6 @@ src/infra/sqlite-schema-catalog-types.ts
 src/infra/sqlite-schema-catalog.ts
 src/infra/sqlite-schema-contract-assembly.ts
 src/infra/sqlite-schema-contract.ts
-src/infra/sqlite-schema-dynamic.ts
 src/infra/sqlite-schema-ensure.ts
 src/infra/sqlite-schema-facts.ts
 src/infra/sqlite-schema-fingerprint.ts
@@ -1957,6 +1957,8 @@ src/state/postgres-schema.generated/sqlite-agent-catalogs.ts
 src/state/postgres-schema.generated/sqlite-catalogs.ts
 src/state/postgres-schema.generated/sqlite-daemon-catalogs.json
 src/state/postgres-schema.generated/sqlite-daemon-catalogs.ts
+src/state/postgres-schema.generated/sqlite-memory-catalogs.json
+src/state/postgres-schema.generated/sqlite-memory-catalogs.ts
 src/state/postgres-schema.generated/sqlite-state-catalogs.json
 src/state/postgres-schema.generated/sqlite-state-catalogs.ts
 src/state/openclaw-state-db.paths.ts

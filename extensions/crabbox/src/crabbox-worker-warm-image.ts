@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   resolveCrabboxWarmImageProfileKey,
   type parseCrabboxProfile,
@@ -13,7 +12,8 @@ import {
 } from "./crabbox-worker-warm-image-allocation.js";
 import { createCrabboxWarmImageCapture } from "./crabbox-worker-warm-image-capture.js";
 import {
-  createCheckpointCommands,
+  checkpointCommand,
+  deleteCheckpoint,
   parseCheckpointAvailability,
   type CheckpointContext,
   type MaintenanceContext,
@@ -51,7 +51,6 @@ type LeaseContext = CheckpointContext & {
 
 export function createCrabboxWarmImageManager(dependencies: {
   state: CrabboxState;
-  runCommand: CrabboxCommandRunner;
   warn: (message: string) => void;
   prepareCapture: (
     context: LeaseContext & { profile: CrabboxProfile; sourcePreparationTimeoutMs: number },
@@ -78,7 +77,6 @@ export function createCrabboxWarmImageManager(dependencies: {
       dependencies.warn(message);
     }
   };
-  const { checkpointCommand, deleteCheckpoint } = createCheckpointCommands(dependencies.runCommand);
   const imageExpired = (image: WarmImageRecord) =>
     !image.pinned &&
     (image.lastDemandAtMs === null || Date.now() - image.lastDemandAtMs >= policy.retainUnusedMs);
@@ -684,18 +682,15 @@ export function createCrabboxWarmImageManager(dependencies: {
       held,
       deleteImage,
       retireImage,
-      checkpointCommand,
       prepareCapture: dependencies.prepareCapture,
     }),
 
     startContext: createCrabboxWarmImageStartContext,
     allocate: createCrabboxWarmImageAllocation({
       state: dependencies.state,
-      runCommand: dependencies.runCommand,
       lookupLease,
       selectAllocation,
       openStore,
-      checkpointCommand,
       policy,
       assertCurrent,
     }),

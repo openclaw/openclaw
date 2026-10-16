@@ -31,6 +31,8 @@ describe("Control UI service worker cache versioning", () => {
       URL,
       caches: {
         delete: cacheDelete,
+        match: async (_url: string, { cacheName }: { cacheName: string }) =>
+          cacheName.startsWith("openclaw-control-") ? {} : undefined,
         keys: async () => [
           "openclaw-control-oldest",
           "openclaw-control-older",
@@ -59,7 +61,6 @@ describe("Control UI service worker cache versioning", () => {
     expect(cacheDelete.mock.calls).toEqual([
       ["openclaw-control-oldest"],
       ["openclaw-control-older"],
-      ["openclaw-control-previous"],
     ]);
     for (const page of included) {
       expect(page.postMessage).toHaveBeenCalledExactlyOnceWith(

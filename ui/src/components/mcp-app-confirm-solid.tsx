@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { onSettled, Show } from "solid-js";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { McpAppConfirm } from "./mcp-app-confirm.ts";
@@ -14,6 +14,12 @@ export function McpAppConfirmation(props: { confirmation: McpAppConfirm; revisio
   return (
     <Show when={pending()} keyed>
       {(decision) => {
+        let strip: HTMLDivElement | undefined;
+        onSettled(() => {
+          if (strip?.isConnected && props.confirmation.current === decision) {
+            strip.focus({ preventScroll: true });
+          }
+        });
         const question = () =>
           t(decision.kind === "message" ? "mcpApp.confirmMessage" : "mcpApp.confirmFile");
         return (
@@ -22,7 +28,7 @@ export function McpAppConfirmation(props: { confirmation: McpAppConfirm; revisio
             role="alertdialog"
             aria-label={`${decision.title}: ${question()}`}
             tabindex="-1"
-            ref={props.confirmation.focusStrip}
+            ref={(element) => (strip = element)}
             onKeyDown={(event) => {
               if (event.key === "Escape" || event.key === "Enter") {
                 event.stopPropagation();

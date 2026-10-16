@@ -27,6 +27,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function frameMessage(frame: HTMLIFrameElement, data: object, ports: MessagePort[] = []) {
+  window.dispatchEvent(
+    new MessageEvent("message", {
+      source: frame.contentWindow,
+      origin: new URL(frame.src).origin,
+      data,
+      ports,
+    }),
+  );
+}
+function keyDown(target: EventTarget | undefined, key: string, altKey = false) {
+  target?.dispatchEvent(
+    new KeyboardEvent("keydown", { key, altKey, bubbles: true, cancelable: true }),
+  );
+}
+
 function stubBoardDocumentFetch(read: () => Promise<Response>): void {
   const originalFetch = globalThis.fetch;
   vi.stubGlobal("fetch", ((input, init) => {
@@ -67,14 +83,7 @@ describe("openclaw-board-view", () => {
         ready.resolve(message.params);
       }
     });
-    const receive = (data: object) =>
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: frame.contentWindow,
-          origin: new URL(frame.src).origin,
-          data,
-        }),
-      );
+    const receive = (data: object) => frameMessage(frame, data);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(view.querySelectorAll("openclaw-panel-loading-skeleton")).toHaveLength(1);
     expect(view.querySelector("openclaw-panel-loading-skeleton")).toBe(skeleton);
@@ -121,13 +130,10 @@ describe("openclaw-board-view", () => {
     expect(reload).toHaveBeenCalledExactlyOnceWith(source);
     expect(frameLoadFailed).not.toHaveBeenCalled();
     expect(view.querySelector("iframe")).toBe(frame);
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: new URL(source).origin,
-        data: { method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: source } },
-      }),
-    );
+    frameMessage(frame, {
+      method: "ui/notifications/sandbox-proxy-ready",
+      params: { sandboxUrl: source },
+    });
     await vi.advanceTimersByTimeAsync(0);
     await settleCells(view);
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -158,15 +164,7 @@ describe("openclaw-board-view", () => {
     });
     const cell = view.querySelector("openclaw-board-widget-cell")!;
     const frame = cell.querySelector("iframe")!;
-    const send = (data: unknown, ports: MessagePort[] = []) =>
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: frame.contentWindow,
-          origin: new URL(frame.src).origin,
-          data,
-          ports,
-        }),
-      );
+    const send = (data: object, ports: MessagePort[] = []) => frameMessage(frame, data, ports);
     send({ method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: frame.src } });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     const bridgeChannel = new MessageChannel();
@@ -464,9 +462,8 @@ describe("openclaw-board-view", () => {
       viewId: "mcp-app-renewed",
       expiresAtMs: 71_000,
     }));
-    const source = snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] });
     const view = await mount({
-      snapshot: source,
+      snapshot: snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] }),
       callbacks: callbacks({ widgetAppView, refreshWidgetAppView }),
     });
     expect(widgetAppView).toHaveBeenCalledWith("alpha", 1);
@@ -489,9 +486,8 @@ describe("openclaw-board-view", () => {
       expiresAtMs: Date.now() + 60_000,
     }));
     const applyOps = vi.fn(async () => undefined);
-    const source = snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] });
     const view = await mount({
-      snapshot: source,
+      snapshot: snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] }),
       callbacks: callbacks({ applyOps, widgetAppView, refreshWidgetAppView }),
       context: gatewayContext(null),
     });
@@ -564,8 +560,10 @@ describe("openclaw-board-view", () => {
           finishGrant = resolve;
         }),
     );
-    const source = snapshot({ widgets: [boardWidget({ grantState: "pending" })] });
-    const view = await mount({ snapshot: source, callbacks: callbacks({ grant }) });
+    const view = await mount({
+      snapshot: snapshot({ widgets: [boardWidget({ grantState: "pending" })] }),
+      callbacks: callbacks({ grant }),
+    });
     const allow = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]');
     const reject = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-reject"]');
     expect(view.querySelector("iframe")).toBeNull();
@@ -616,8 +614,10 @@ describe("openclaw-board-view", () => {
 
   it("keeps a rejected widget inert and removable", async () => {
     const applyOps = vi.fn(async () => undefined);
-    const source = snapshot({ widgets: [boardWidget({ grantState: "rejected" })] });
-    const view = await mount({ snapshot: source, callbacks: callbacks({ applyOps }) });
+    const view = await mount({
+      snapshot: snapshot({ widgets: [boardWidget({ grantState: "rejected" })] }),
+      callbacks: callbacks({ applyOps }),
+    });
     expect(view.querySelector('[data-test-id="board-rejected"]')).not.toBeNull();
     expect(view.querySelector("iframe")).toBeNull();
     view.querySelector<HTMLButtonElement>('[data-test-id="board-rejected"] button')?.click();
@@ -664,13 +664,7 @@ describe("openclaw-board-view", () => {
     }
 
     cells[0]?.focus();
-    cells[0]?.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowRight",
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    keyDown(cells[0], "ArrowRight");
     await vi.waitFor(() => expect(document.activeElement).toBe(cells[1]));
     await vi.waitFor(() => expect(cells[1]?.getAttribute("tabindex")).toBe("0"));
   });
@@ -679,14 +673,7 @@ describe("openclaw-board-view", () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount({ callbacks: callbacks({ applyOps }) });
     const secondCell = view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')[1];
-    secondCell?.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowLeft",
-        altKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    keyDown(secondCell, "ArrowLeft", true);
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "beta", position: 0 }]),
     );
@@ -700,14 +687,7 @@ describe("openclaw-board-view", () => {
     const view = await mount({ callbacks: callbacks({ applyOps }) });
     const menuButton = view.querySelector<HTMLButtonElement>(".board-widget__menu-trigger");
     menuButton?.focus();
-    menuButton?.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowRight",
-        altKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    keyDown(menuButton ?? undefined, "ArrowRight", true);
     await Promise.resolve();
     expect(document.activeElement).toBe(menuButton);
     expect(applyOps).not.toHaveBeenCalled();

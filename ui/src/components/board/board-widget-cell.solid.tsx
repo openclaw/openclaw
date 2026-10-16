@@ -54,7 +54,7 @@ import {
   BoardWidgetRejected,
 } from "./board-widget-cell-render.solid.tsx";
 import { BoardWidgetError } from "./board-widget-error.tsx";
-import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
+import { BoardWidgetFrameOwner } from "./board-widget-frame.tsx";
 import { BoardWidgetMenu } from "./board-widget-menu.tsx";
 
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
@@ -128,7 +128,7 @@ function BoardWidgetCellContent(
     sessionKey: () => untrack(() => props.sessionKey ?? ""),
     widget: () => untrack(() => props.widget),
   });
-  const frame = new BoardWidgetFrameLifecycle({
+  const frame = new BoardWidgetFrameOwner({
     active: () => untrack(active),
     connected: () => connected,
     loadingCovered: () => props.loadingCovered ?? false,
@@ -141,7 +141,6 @@ function BoardWidgetCellContent(
       host.closest("openclaw-board-view")?.scrollBy({ top: deltaY, behavior: "auto" }),
     requestUpdate,
     resolveFrameUrl: () => props.widgetFrameUrl,
-    root: () => host,
     widget: () => untrack(() => props.widget),
   });
   const state = createMemo(() => {

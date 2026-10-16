@@ -37,6 +37,10 @@ import {
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import {
+  createOpenClawAgentDatabasePathMatcher,
+  isSameOpenClawAgentDatabasePath,
+} from "../state/openclaw-agent-db.paths.js";
+import {
   collectCanonicalSessionRepairGroups,
   resolveCanonicalSessionDestination,
   type CanonicalSessionCandidate,
@@ -167,7 +171,8 @@ function mergeCanonicalSessionEntryCandidates(
         ? winner.entry.updatedAt
         : 0;
     const incomingPreferred =
-      candidate.sqlitePath === destinationPath && candidate.sessionKey === candidate.canonicalKey;
+      isSameOpenClawAgentDatabasePath(candidate.sqlitePath, destinationPath) &&
+      candidate.sessionKey === candidate.canonicalKey;
     if (
       !winner ||
       incomingUpdatedAt > selectedUpdatedAt ||
@@ -221,7 +226,7 @@ function selectCanonicalSessionCandidate(
   const authoritativeStamp =
     requiredCandidates.find(
       (candidate) =>
-        candidate.sqlitePath === destination.sqlitePath &&
+        isSameOpenClawAgentDatabasePath(candidate.sqlitePath, destination.sqlitePath) &&
         candidate.sessionKey === candidate.canonicalKey,
     )?.entry ??
     mergeCanonicalSessionEntryCandidates(requiredCandidates, destination.sqlitePath)?.entry;
@@ -244,8 +249,10 @@ function resolveSingleDatabaseCanonicalRepairGroup(
   const selected = selectCanonicalSessionCandidate(candidates, params);
   if (
     !selected ||
-    selected.winner.sqlitePath !== selected.destination.sqlitePath ||
-    candidates.some((candidate) => candidate.sqlitePath !== selected.destination.sqlitePath)
+    candidates.some(
+      (candidate) =>
+        !isSameOpenClawAgentDatabasePath(candidate.sqlitePath, selected.destination.sqlitePath),
+    )
   ) {
     return undefined;
   }
@@ -383,16 +390,20 @@ async function repairCanonicalSessionGroup(
   await ensureTranscriptGenerationsForCanonicalRepair(candidates);
   const winner = selected.winner;
   const destination = selected.destination;
+  const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
+  const databaseKey = isSameDatabasePath.createIndex();
   const byDatabase = new Map<string, CanonicalSessionCandidate[]>();
   for (const candidate of candidates) {
-    const group = byDatabase.get(candidate.sqlitePath) ?? [];
+    const key = databaseKey(candidate.sqlitePath);
+    const group = byDatabase.get(key) ?? [];
     group.push(candidate);
-    byDatabase.set(candidate.sqlitePath, group);
+    byDatabase.set(key, group);
   }
 
-  const destinationStore = byDatabase.get(destination.sqlitePath) ?? [];
+  const destinationStore = byDatabase.get(databaseKey(destination.sqlitePath)) ?? [];
   const archivedDirectories = new Set<string>();
-  if (winner.sqlitePath !== destination.sqlitePath) {
+  const winnerInDestination = isSameDatabasePath(winner.sqlitePath, destination.sqlitePath);
+  if (!winnerInDestination) {
     const generationIds = new Set([
       ...listSessionGenerationIdsForCanonicalRepair({
         agentId: winner.agentId,
@@ -453,13 +464,13 @@ async function repairCanonicalSessionGroup(
     allowCanonicalRepair: true,
     afterUpsertsInTransaction: (destinationDatabase) => {
       applyCanonicalDestinationArtifacts({
-        copyWinnerAlias: winner.sqlitePath === destination.sqlitePath,
+        copyWinnerAlias: winnerInDestination,
         database: destinationDatabase,
         destinationStore,
         rehomeDeliveries: true,
         winner,
       });
-      if (winner.sqlitePath !== destination.sqlitePath) {
+      if (!winnerInDestination) {
         copySessionOwnedStateForCanonicalRepair({
           canonicalKey: winner.canonicalKey,
           destinationDatabase,
@@ -481,7 +492,7 @@ async function repairCanonicalSessionGroup(
   }
 
   for (const [sqlitePath, storeCandidates] of byDatabase) {
-    if (sqlitePath === destination.sqlitePath) {
+    if (isSameDatabasePath(sqlitePath, destination.sqlitePath)) {
       continue;
     }
     const storeCandidate = storeCandidates[0]!;
@@ -571,8 +582,10 @@ export async function repairCanonicalSessionKeys(params: {
           );
           if (
             !nextSingleDatabaseGroup ||
-            nextSingleDatabaseGroup.selected.destination.sqlitePath !==
-              singleDatabaseGroup.selected.destination.sqlitePath
+            !isSameOpenClawAgentDatabasePath(
+              nextSingleDatabaseGroup.selected.destination.sqlitePath,
+              singleDatabaseGroup.selected.destination.sqlitePath,
+            )
           ) {
             break;
           }

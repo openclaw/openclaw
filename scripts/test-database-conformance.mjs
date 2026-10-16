@@ -61,6 +61,7 @@ const targets =
         "extensions/memory-core/src/memory/manager-embedding-cache.postgres.test.ts",
         "extensions/memory-core/src/memory/manager-source-index-kernel.postgres.test.ts",
         "extensions/memory-core/src/memory/manager-publication.postgres.test.ts",
+        "extensions/memory-core/src/memory/manager-search.postgres.test.ts",
         "src/gateway/server-database-engine.postgres.test.ts",
         "src/transcripts/meeting-chronology.postgres.test.ts",
       ];

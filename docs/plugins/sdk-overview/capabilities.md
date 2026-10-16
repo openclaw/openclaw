@@ -328,8 +328,12 @@ previous value across reload. Refresh with `secrets.reload`; capability failure
 does not retain an old key.
 
 `plugins.inspect` reports configuration, credential readiness, current callability,
-last success, usage, latency, and bounded unavailable counts. Counts are
-instance-local diagnostics, not durable audit records or write authority.
+last success, usage, latency, and bounded unavailable counts. `credentialReady: true`
+means the provider's local `isReady()` confirmed prepared credentials. `false`
+means readiness is unconfirmed or unavailable, not necessarily that credentials
+are missing. Omitting `isReady()` leaves evaluation eligible; returning `false`
+blocks it. `callable` separately reports current admission, not guaranteed success.
+Counts are instance-local diagnostics, not durable audit records or write authority.
 
 For discovery, declare static `decisionModels` entries in the provider manifest
 with `provider`, `id`, and `name`. Each provider must be owned by

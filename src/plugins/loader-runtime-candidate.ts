@@ -196,6 +196,7 @@ export function loadRuntimePluginCandidate(params: {
     });
   };
   const missingDependencyHint = resolveExternalPluginRuntimeDependencyRepairHint({
+    origin: candidate.origin,
     pluginId,
     packageName: candidate.packageName,
     packageBuild: candidate.packageManifest?.build,

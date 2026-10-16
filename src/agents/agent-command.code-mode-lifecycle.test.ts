@@ -59,16 +59,19 @@ it("retains command admission through Code Mode disposal, not detached external 
     let rawWork: Promise<ReturnType<typeof jsonResult>> | undefined;
     let first: Promise<unknown> | undefined;
     let next: Promise<unknown> | undefined;
-    let firstSettled = false;
-    let rawSettled = false;
-    let cleanupSettled = false;
+    const expectOrder = (...names: string[]) => {
+      let previous = -1;
+      for (const eventName of names) {
+        const index = events.indexOf(eventName);
+        expect(index).toBeGreaterThan(previous);
+        previous = index;
+      }
+    };
     const lifecycle = vi.spyOn(harness.subscription, "runToolLifecycle");
     const held = pluginToolWithExecute("held_target", "Ignore cancellation", async () => {
       rawWork = (async () => {
-        events.push("raw:start");
         rawStarted.resolve();
         await releaseRaw.promise;
-        rawSettled = true;
         events.push("raw:settled");
         return jsonResult({ late: true });
       })();
@@ -101,7 +104,6 @@ it("retains command admission through Code Mode disposal, not detached external 
         if (params.owner === COMMAND_ADMISSION_OWNER && params.scope === target.storePath) {
           commandAdmissions += 1;
           if (commandAdmissions === 2) {
-            events.push("successor:queued");
             successorQueued.resolve();
           }
         }
@@ -140,14 +142,12 @@ it("retains command admission through Code Mode disposal, not detached external 
               "retained Code Mode owner",
             );
             const dispose = owner.continuation.dispose.bind(owner.continuation);
-            // Hold the actual worker cleanup, not an unrelated command callback.
-            // runWait must join this disposal before command admission can release.
+            // Hold real worker disposal: command admission must join it.
             vi.spyOn(owner.continuation, "dispose").mockImplementation(async () => {
               events.push("cleanup:start");
               cleanupStarted.resolve();
               await releaseCleanup.promise;
               await dispose();
-              cleanupSettled = true;
               events.push("cleanup:settled");
             });
             await withinTest(rawStarted.promise, signal);
@@ -162,7 +162,7 @@ it("retains command admission through Code Mode disposal, not detached external 
             harness.runAbortController.abort(new Error("Stop this command"));
             waiting.resolve();
             const completed = await result;
-            expect(cleanupSettled).toBe(true);
+            expect(events).toContain("cleanup:settled");
             return resultDetails(completed);
           } finally {
             harness.dispose();
@@ -170,13 +170,12 @@ it("retains command admission through Code Mode disposal, not detached external 
         },
         harness.runAbortController.signal,
       ).finally(() => {
-        firstSettled = true;
         events.push("command:settled");
       });
       void first.catch(() => {});
       await withinTest(waiting.promise, signal);
       await withinTest(cleanupStarted.promise, signal);
-      expect(events.indexOf("cleanup:start")).toBeGreaterThan(events.indexOf("command:cancel"));
+      expectOrder("command:cancel", "cleanup:start");
 
       next = execute(successorRunId, () =>
         runUntilCompleted({
@@ -187,14 +186,15 @@ it("retains command admission through Code Mode disposal, not detached external 
       );
       void next.catch(() => {});
       await withinTest(successorQueued.promise, signal);
-      expect(firstSettled).toBe(false);
+      expect(events).not.toContain("command:settled");
       expect(effect.execute).not.toHaveBeenCalled();
-      const busy = createGatewayActiveWorkSnapshot();
-      expect(busy.idle).toBe(false);
-      expect(busy.counts.sessionAdmissions).toBe(1);
-      expect(busy.blockers).toContainEqual(
-        expect.objectContaining({ kind: "session-admission", count: 1 }),
-      );
+      expect(createGatewayActiveWorkSnapshot()).toMatchObject({
+        idle: false,
+        counts: { sessionAdmissions: 1 },
+        blockers: expect.arrayContaining([
+          expect.objectContaining({ kind: "session-admission", count: 1 }),
+        ]),
+      });
 
       releaseCleanup.resolve();
       expect(await withinTest(first, signal)).toMatchObject({ status: "failed", code: "aborted" });
@@ -202,18 +202,10 @@ it("retains command admission through Code Mode disposal, not detached external 
         status: "completed",
         value: { successor: true },
       });
-      expect(rawSettled).toBe(false);
+      expect(events).not.toContain("raw:settled");
       expect(effect.execute).toHaveBeenCalledOnce();
       expect(createGatewayActiveWorkSnapshot().counts.sessionAdmissions).toBe(0);
-      expect(events).toEqual(
-        expect.arrayContaining(["cleanup:settled", "admission:released", "successor:effect"]),
-      );
-      expect(events.indexOf("admission:released")).toBeGreaterThan(
-        events.indexOf("cleanup:settled"),
-      );
-      expect(events.indexOf("successor:effect")).toBeGreaterThan(
-        events.indexOf("admission:released"),
-      );
+      expectOrder("cleanup:settled", "admission:released", "successor:effect");
 
       const publishedUpdates = updates.mock.calls.length;
       releaseRaw.resolve();
@@ -223,8 +215,7 @@ it("retains command admission through Code Mode disposal, not detached external 
       expect(events.filter((event) => event === "raw:settled")).toHaveLength(1);
       expect(late.execute).not.toHaveBeenCalled();
       expect(updates).toHaveBeenCalledTimes(publishedUpdates);
-      expect(testing.activeRuns.size).toBe(0);
-      expect(testing.resumingRunIds.size).toBe(0);
+      expect([testing.activeRuns.size, testing.resumingRunIds.size]).toEqual([0, 0]);
     } finally {
       try {
         releaseCleanup.resolve();

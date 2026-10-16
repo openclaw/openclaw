@@ -39,6 +39,7 @@ import {
   isOllamaCloudOrigin,
   OLLAMA_CLOUD_PROVIDER_ID,
   OLLAMA_DEFAULT_BASE_URL,
+  OLLAMA_DEFAULT_MAX_TOKENS,
 } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { applyOllamaThinkingFloor } from "./model-reasoning.js";
@@ -146,19 +147,21 @@ function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefi
     return configured;
   }
   const effective = model.contextTokens;
-  if (effective === undefined || effective <= 0) {
-    return undefined;
-  }
-  return Math.floor(effective);
+  return effective !== undefined && effective > 0 ? Math.floor(effective) : undefined;
 }
 
 function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, unknown> {
-  const options = pickOllamaParams(model.params, OLLAMA_OPTION_PARAM_KEYS);
   const numCtx = resolveOllamaNativeNumCtx(model);
-  if (numCtx !== undefined) {
-    options.num_ctx = numCtx;
-  }
-  return options;
+  return {
+    num_predict:
+      model.maxTokens ??
+      Math.min(
+        OLLAMA_DEFAULT_MAX_TOKENS,
+        model.contextTokens ?? model.contextWindow ?? OLLAMA_DEFAULT_MAX_TOKENS,
+      ),
+    ...pickOllamaParams(model.params, OLLAMA_OPTION_PARAM_KEYS),
+    ...(numCtx !== undefined ? { num_ctx: numCtx } : {}),
+  };
 }
 
 function pickOllamaParams(
@@ -183,12 +186,9 @@ function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>):
 }
 
 function resolveStreamingTextDelta(previousText: string, nextText: string): string {
-  if (nextText.startsWith(previousText)) {
-    return nextText.slice(previousText.length);
-  }
   // Sanitizers may rewrite previously accumulated content. Fall back to
   // re-emitting the latest complete text so downstream partial state converges.
-  return nextText;
+  return nextText.startsWith(previousText) ? nextText.slice(previousText.length) : nextText;
 }
 
 export function buildOllamaChatRequest(params: {

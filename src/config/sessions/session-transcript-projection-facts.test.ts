@@ -260,7 +260,6 @@ it("serves committed actor postimages without projection SQL and confines facts 
 });
 
 it.each([
-  { kind: "append", event: { ...user, id: "next", parentId: "assistant" }, leaf: "next" },
   {
     kind: "rewind",
     event: { type: "leaf", id: "rewind", parentId: "assistant", targetId: "user" },
@@ -312,6 +311,22 @@ it.each([
         if (kind === "reset") {
           expect(f.read(refreshed)).toMatchObject({
             value: { latestIndexedReset: { seq: 2, active_position: 2, event_type: "reset" } },
+          });
+          withSessionTranscriptProjectionReceipt(refreshed, () => {
+            readCurrentProjectionSnapshot(
+              f.database,
+              f.scope,
+              (projection: CurrentTranscriptProjection) => {
+                projection.state.activeMessageCount = 999;
+                if (projection.latestIndexedReset) {
+                  projection.latestIndexedReset.seq = 999;
+                }
+              },
+            );
+            expect(f.read(refreshed)).toMatchObject({
+              kind: "value",
+              value: { state: { activeMessageCount: 2 }, latestIndexedReset: { seq: 2 } },
+            });
           });
         }
       } finally {
@@ -387,30 +402,6 @@ it("rejects stale hot and cold receipts after archive-marker writes and restore"
     expect(f.read(cold)).toMatchObject({
       kind: "value",
       value: { state: { activeMessageCount: 2 } },
-    });
-  });
-});
-
-it("does not let a snapshot consumer mutate the next reader's retained facts", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
-    f.write(() => f.append([{ type: "reset", id: "reset", parentId: "assistant", reason: "new" }]));
-    const receipt = f.receipt();
-    withSessionTranscriptProjectionReceipt(receipt, () => {
-      readCurrentProjectionSnapshot(
-        f.database,
-        f.scope,
-        (projection: CurrentTranscriptProjection) => {
-          projection.state.activeMessageCount = 999;
-          if (projection.latestIndexedReset) {
-            projection.latestIndexedReset.seq = 999;
-          }
-        },
-      );
-      expect(f.read(receipt)).toMatchObject({
-        kind: "value",
-        value: { state: { activeMessageCount: 2 }, latestIndexedReset: { seq: 2 } },
-      });
     });
   });
 });

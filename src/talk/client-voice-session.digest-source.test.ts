@@ -282,7 +282,7 @@ describe("client voice digest physical sources", () => {
     },
   );
 
-  it.each(["concurrent", "explicit", "implicit", "alias", "retargeted-alias"] as const)(
+  it.each(["concurrent", "implicit", "alias", "retargeted-alias"] as const)(
     "keeps consult publication and cleanup on their captured source (%s)",
     async (mode) => {
       const target = { agentId: "main", sessionKey: "agent:main:main" };

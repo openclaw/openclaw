@@ -7,6 +7,7 @@ import type { PortDescriptor } from "../infra/database-engine/port-descriptor.js
 import {
   inspectDatabasePort,
   materializeDatabasePort,
+  readDatabasePortAllocations,
 } from "../infra/database-engine/port.worker.js";
 import { sha256File } from "../infra/directory-durability.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -64,6 +65,11 @@ export async function exportPostgresBackup(params: {
       storeId: anchor.storeId,
       assertCurrent: params.assertCurrent,
     });
+    // The portable image uses SQLite allocation, while a matched PG restore retains its sequence.
+    verification.allocations = await readDatabasePortAllocations(
+      { engine: "postgres", db: client, namespace: anchor.namespace },
+      descriptor,
+    );
   }
   const sanitizedDifferences: string[] = [];
   params.assertCurrent();

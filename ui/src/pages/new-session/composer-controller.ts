@@ -6,8 +6,8 @@ import {
   observeTextareaOverflow,
   scheduleTextareaHeightAdjustment,
 } from "../chat/components/chat-composer-dom.ts";
-import { ComposerEmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
-import { HumanMentionMenu } from "../chat/components/chat-composer-mention-menu.tsx";
+import { createComposerEmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
+import { createHumanMentionMenu } from "../chat/components/chat-composer-mention-menu.tsx";
 import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.types.ts";
 import {
   createSkillMenuState,
@@ -33,8 +33,8 @@ export function createNewSessionComposerTextarea() {
     critterVisit: Math.random(),
     skillMenuState: createSkillMenuState(),
     slashMenuState: createSlashMenuState(),
-    mentionMenu: new HumanMentionMenu(),
-    emojiMenu: new ComposerEmojiMenu(),
+    mentionMenu: createHumanMentionMenu(),
+    emojiMenu: createComposerEmojiMenu(),
     composing: false,
     // SAFETY: Beforeinput fills this optional selection snapshot.
     mentionInput: undefined as HumanMentionInput | undefined,
@@ -117,6 +117,7 @@ export function createNewSessionComposerTextarea() {
       client: GatewayBrowserClient | null,
       agentId: string,
       draftOwnerKey: string,
+      onMenuClosed: () => void,
     ) {
       const normalizedAgentId = agentId.trim();
       if (control.ownsSkillCommands(client, normalizedAgentId, draftOwnerKey)) {
@@ -127,7 +128,11 @@ export function createNewSessionComposerTextarea() {
       skillCommandAgentId = normalizedAgentId;
       skillCommandDraftOwnerKey = draftOwnerKey;
       control.emojiMenu.close();
+      const menuWasOpen = control.skillMenuState.skillMenuOpen;
       resetSkillMenuState(control.skillMenuState);
+      if (menuWasOpen) {
+        onMenuClosed();
+      }
     },
     ownsSkillCommands(
       client: GatewayBrowserClient | null,
@@ -141,7 +146,7 @@ export function createNewSessionComposerTextarea() {
       );
     },
     disconnect() {
-      control.emojiMenu.close();
+      control.emojiMenu.dispose();
       control.composing = false;
       control.mentionMenu.dispose();
       skillCommandClient = null;

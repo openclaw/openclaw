@@ -41,7 +41,7 @@ export class ChatTranscriptController implements SolidController {
       const initialOffset = savedPosition?.anchorToEnd ? null : (savedPosition?.scrollTop ?? null);
       this.activeSessionKey = sessionKey;
       this.sessionVirtualizer = new ChatSessionVirtualizerHost(
-        this.host,
+        () => this.host.requestUpdate(),
         initialOffset,
         (position) => saveChatSessionScrollPosition(paneId, sessionKey, position),
         this.callbacks,

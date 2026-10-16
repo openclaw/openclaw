@@ -2,6 +2,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { StageSandboxMediaResult } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
@@ -62,6 +63,7 @@ async function prestageMediaPathOffloads(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
+  workspaceDir?: string;
   skillLibrarySelections?: SkillSnapshot["librarySelections"];
   existingSkillsSnapshot?: SkillSnapshot;
   abortSignal: AbortSignal;
@@ -96,7 +98,8 @@ async function prestageMediaPathOffloads(params: {
       return refsByManagedPath(mediaPathRefs);
     }
 
-    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    const configuredWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    const workspaceDir = params.workspaceDir ?? configuredWorkspaceDir;
     if (getAgentWorkspaceAccess(workspaceDir, "prepareTurnAttachments")?.prepareTurnAttachments) {
       return refsByManagedPath(mediaPathRefs);
     }
@@ -105,7 +108,7 @@ async function prestageMediaPathOffloads(params: {
           await (
             await import("../../skills/runtime/session-snapshot.js")
           ).resolveReusableWorkspaceSkillSnapshot({
-            workspaceDir,
+            workspaceDir: configuredWorkspaceDir,
             config: params.cfg,
             agentId: params.agentId,
             existingSnapshot: params.existingSkillsSnapshot,
@@ -311,6 +314,11 @@ export async function prepareChatSendAttachments(params: {
             cfg,
             sessionKey,
             agentId,
+            workspaceDir: resolveIngressWorkspaceOverrideForSessionRun({
+              spawnedBy: stagingEntry?.spawnedBy,
+              workspaceDir: stagingEntry?.spawnedWorkspaceDir,
+              cwd: stagingEntry?.spawnedCwd,
+            }),
             skillLibrarySelections: selectedSkills,
             existingSkillsSnapshot: stagingEntry?.skillsSnapshot,
             abortSignal: activeRunAbort.controller.signal,
