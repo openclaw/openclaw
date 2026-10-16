@@ -1,4 +1,4 @@
-import { createEffect, untrack } from "solid-js";
+import { createEffect, createMemo, untrack } from "solid-js";
 import { createDesktopFullscreen } from "../desktop-fullscreen.ts";
 import { usePanelController } from "../solid-panel-controller.ts";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
@@ -19,6 +19,13 @@ export function DesktopPanelContent(props: { controller: DesktopPanelController 
   controller.fullscreenMode = fullscreen;
   createEffect(fullscreen.active, () => controller.dockLayout.syncReservation());
   usePanelController(controller);
+  const sessionClient = createMemo(() => {
+    const current = controller.read();
+    return current.available && current.suppliedEnvironments === null ? current.client : null;
+  });
+  createEffect(sessionClient, (client) =>
+    client ? controller.sessionSource.subscribe(client) : undefined,
+  );
   return (
     <>
       {controller.read().available &&
