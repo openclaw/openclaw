@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
@@ -263,40 +264,33 @@ const withAutomationGateway =
   async () => {
     const provider = await startAutomationProvider();
     const owner = createQaGatewayChild();
-    const transport = channel
-      ? await createQaCrablineTransportAdapter({
-          outputDir: suite.artifactDir,
-          transportPolicy: { senderAllowlist: ["100001", "100002", "100003"] },
-          selection: {
-            channel: "telegram",
-            channelDriver: "crabline",
-            capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-            providerReadinessArtifactPath: "crabline-provider-readiness.json",
-          },
-        })
-      : undefined;
-    const errors: unknown[] = [];
-    try {
-      const gateway = await startGateway(owner, provider.baseUrl, transport);
-      await transport?.waitReady({ gateway });
-      await run(gateway, provider, transport);
-    } catch (error) {
-      errors.push(error);
-    }
-    const stopped = await owner.stop({
-      preserveToDir: path.join(suite.artifactDir, channel ? "gateway" : "recovery-gateway"),
-    });
-    errors.push(...stopped.errors);
-    for (const stop of [() => transport?.cleanupAfterGatewayStop(), () => provider.stop()]) {
-      try {
-        await stop();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length) {
-      throw new AggregateError(errors, "Control UI automation proof failed");
-    }
+    let acquiredTransport: Awaited<ReturnType<typeof createQaCrablineTransportAdapter>> | undefined;
+    await runQaGatewayFixture(
+      async () => {
+        const transport = channel
+          ? await createQaCrablineTransportAdapter({
+              outputDir: suite.artifactDir,
+              transportPolicy: { senderAllowlist: ["100001", "100002", "100003"] },
+              selection: {
+                channel: "telegram",
+                channelDriver: "crabline",
+                capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
+                providerReadinessArtifactPath: "crabline-provider-readiness.json",
+              },
+            })
+          : undefined;
+        acquiredTransport = transport;
+        const gateway = await startGateway(owner, provider.baseUrl, transport);
+        await transport?.waitReady({ gateway });
+        await run(gateway, provider, transport);
+      },
+      () =>
+        stopQaGatewayFixture(owner, {
+          preserveToDir: path.join(suite.artifactDir, channel ? "gateway" : "recovery-gateway"),
+        }),
+      () => acquiredTransport?.cleanupAfterGatewayStop(),
+      () => provider.stop(),
+    );
   };
 
 suite.define(() => {

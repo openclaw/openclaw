@@ -44,6 +44,7 @@ export class SqliteWorkerInputAdmission {
     dispatch: () => Promise<T>,
     signal?: AbortSignal,
     reuse?: () => Promise<T | undefined>,
+    sharedState = false,
   ): Promise<T> {
     if (
       this.opens.size >= this.owner.maxPendingOpens ||
@@ -57,11 +58,11 @@ export class SqliteWorkerInputAdmission {
     const settled = createDeferredCore();
     this.opens.add(settled.promise);
     const release = this.retain(bytes);
-    // Physical-file identity must be published before admitting another open alias.
+    // Serialize aliases within each owner class without holding shared state behind agent scans.
     const enqueue = () =>
       runQueuedStoreWrite({
         queues: this.openQueue,
-        storePath: "sqlite-open",
+        storePath: sharedState ? "sqlite-shared-state-open" : "sqlite-open",
         label: "SQLite worker open",
         fn: dispatch,
         signal,

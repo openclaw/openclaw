@@ -757,6 +757,8 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
     onAgentEvent: params.onAgentEvent,
+    onAttemptStart: params.onAttemptStart,
+    onAttemptTerminalReplaced: params.onAttemptTerminalReplaced,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     onDeferredLifecycleOwner: params.deferredLifecycle?.adopt,
     onDeferredLifecycleAbort: params.deferredLifecycle?.abort,

@@ -52,6 +52,7 @@ export { isIngressAdoptionLostError } from "./ingress-drain-state.js";
 
 /** Default claim→adoption stall before applying the shared retry disposition. */
 export const DEFAULT_INGRESS_ADOPTION_STALL_MS = 5 * 60 * 1000;
+export const DEFAULT_INGRESS_START_LIMIT = 32;
 
 type DeferredLaneOccupancy = "hold" | "release";
 
@@ -134,7 +135,7 @@ export function createChannelIngressDrain<
   const formatError = options.formatError ?? formatErrorMessage;
   const orderBy = options.orderBy ?? "received";
   const scanLimit = Math.max(1, Math.floor(options.scanLimit ?? 100));
-  const startLimit = options.startLimit ?? 32;
+  const startLimit = options.startLimit ?? DEFAULT_INGRESS_START_LIMIT;
   const deferredLaneOccupancy = options.deferredLaneOccupancy ?? "hold";
   const activeByClaim = new Map<string, ActiveHandlerState<TPayload, TMetadata>>();
   const laneOwnerByKey = new Map<string, ActiveHandlerState<TPayload, TMetadata>>();

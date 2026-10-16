@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { LogLevel, type ChatClientOptions } from "@twurple/chat";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
@@ -22,6 +23,7 @@ const mockJoin = vi.fn().mockResolvedValue(undefined);
 const mockSay = vi.fn().mockResolvedValue(undefined);
 const mockQuit = vi.fn();
 const mockUnbind = vi.fn();
+const mockChatClientConstructor = vi.fn<(options: ChatClientOptions) => void>();
 
 const defaultUserInfo = {
   userName: "testuser",
@@ -68,6 +70,10 @@ const mockOnRefreshFailure = vi.fn();
 
 vi.mock("@twurple/chat", () => ({
   ChatClient: class {
+    constructor(options: ChatClientOptions) {
+      mockChatClientConstructor(options);
+    }
+
     onMessage = mockOnMessage;
     onAuthenticationSuccess = mockOnAuthenticationSuccess;
     onAuthenticationFailure = mockOnAuthenticationFailure;
@@ -168,6 +174,48 @@ describe("TwitchClientManager", () => {
   });
 
   describe("getClient", () => {
+    it("omits incoming IRC content from parse failures while forwarding other diagnostics", async () => {
+      await manager.getClient(testAccount);
+      const options = expectDefined(
+        mockChatClientConstructor.mock.calls[0]?.[0],
+        "Twurple client options",
+      );
+      const custom = expectDefined(options.logger?.custom, "Twurple logger bridge");
+      const log = typeof custom === "function" ? custom : custom.log;
+      vi.clearAllMocks();
+
+      log(
+        LogLevel.ERROR,
+        "Error parsing message: line without command received: :synthetic-private-irc-line",
+      );
+      log(
+        LogLevel.ERROR,
+        'Error parsing message: required parameter "channel" did not validate against channel validation: "synthetic-private-irc-parameter"',
+      );
+      log(LogLevel.CRITICAL, "connection failed");
+      log(LogLevel.ERROR, "Refreshing the access token failed: refresh rejected");
+      log(LogLevel.WARNING, "No valid token available; trying to refresh");
+      log(LogLevel.INFO, "Disconnected");
+      log(LogLevel.DEBUG, "diagnostic");
+      log(LogLevel.TRACE, "trace diagnostic");
+
+      expect(mockLogger.error).toHaveBeenNthCalledWith(1, "Twitch IRC message parsing failed");
+      expect(mockLogger.error).toHaveBeenNthCalledWith(2, "Twitch IRC message parsing failed");
+      expect(mockLogger.error).toHaveBeenNthCalledWith(3, "connection failed");
+      expect(mockLogger.error).toHaveBeenNthCalledWith(
+        4,
+        "Refreshing the access token failed: refresh rejected",
+      );
+      expect(mockLogger.error).toHaveBeenCalledTimes(4);
+      expect(mockLogger.warn).toHaveBeenCalledExactlyOnceWith(
+        "No valid token available; trying to refresh",
+      );
+      expect(mockLogger.info).toHaveBeenCalledExactlyOnceWith("Disconnected");
+      expect(mockLogger.debug).toHaveBeenNthCalledWith(1, "diagnostic");
+      expect(mockLogger.debug).toHaveBeenNthCalledWith(2, "trace diagnostic");
+      expect(mockLogger.debug).toHaveBeenCalledTimes(2);
+    });
+
     it("publishes ready and recovering from authentication and disconnect events", async () => {
       await manager.getClient(testAccount);
       expect(statusSink).toHaveBeenCalledWith(

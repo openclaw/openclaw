@@ -26,6 +26,7 @@ import {
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import {
   captureLifecycleDatabaseScope,
+  prepareSqliteScope,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
@@ -97,7 +98,7 @@ export async function searchSessionTranscripts(
           path: preparedDatabase.path,
           env: params.env,
         }
-      : resolveSqliteReadScope(params),
+      : await prepareSqliteScope({ ...params, sessionKey: params.sessionKey ?? "" }),
   );
   const options = toDatabaseOptions(scope);
   const request = {

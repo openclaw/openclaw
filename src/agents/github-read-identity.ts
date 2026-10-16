@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
@@ -11,6 +12,7 @@ import { registerSecretValueForRedaction } from "../logging/secret-redaction-reg
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation } from "../process/spawn-diagnostics.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import type { GitHubCredentialReader } from "./github-credential-reader.js";
 import { resolveGitHubHost } from "./github-host-runtime.js";
 
 const GITHUB_IDENTITY_COMMAND_TIMEOUT_MS = 15_000;
@@ -250,6 +252,7 @@ export async function readNativeGitHubToken(
 export type GitHubIdentityPreparation = {
   config: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
+  readNativeCredential?: GitHubCredentialReader;
   agentId: string;
   env?: NodeJS.ProcessEnv;
 };
@@ -259,6 +262,10 @@ export type GitHubReadIdentityStarter = <T>(start: () => T) => Promise<Awaited<T
 export type GitHubReadIdentityPreparation = GitHubIdentityPreparation & {
   /** Fixed public capabilities ignore the repository host; other reads use its configured issuer. */
   issuer?: "github.com";
+  /** Only request owners that await revoke before returning may mint App credentials. */
+  allowAppInstallation?: boolean;
+  /** Restrict App admission and issuance to this configured owner/repository. */
+  requestedRepository?: string;
   /** Account display facts may refresh in the background; never grants write authority. */
   allowStale?: boolean;
   getCurrentConfig: () => OpenClawConfig;
@@ -301,6 +308,7 @@ export type GitHubReadIdentitySelection = Readonly<{
   accountId: number;
 }>;
 type GitHubReadAuthority = {
+  revoke?: () => Promise<void>;
   stale?: true;
   cacheScope: string;
   assertSelected: () => void;
@@ -356,4 +364,30 @@ export function createGitHubReadIdentity(
   return params.token === undefined
     ? { ...authority, token: undefined, selection: Object.freeze(params.selection) }
     : { ...authority, token: params.token, selection: Object.freeze(params.selection) };
+}
+
+export async function readGitAuthor(env: NodeJS.ProcessEnv, cwd: string) {
+  const result = await runGitHubIdentityCommand(
+    ["git", "config", "--null", "--get-regexp", "^user\\.(name|email)$"],
+    { ...env, GIT_NO_LAZY_FETCH: "1" },
+    cwd,
+  );
+  const author: { name: string | null; email: string | null } = { name: null, email: null };
+  if (result.code !== 0) {
+    return author;
+  }
+  for (const entry of result.stdout.toString("utf8").split("\0")) {
+    const separator = entry.indexOf("\n");
+    if (separator < 0) {
+      continue;
+    }
+    const key = entry.slice(0, separator);
+    const value = readNonBlankString(entry.slice(separator + 1))?.trim() ?? null;
+    if (key === "user.name") {
+      author.name = value;
+    } else if (key === "user.email") {
+      author.email = value;
+    }
+  }
+  return author;
 }

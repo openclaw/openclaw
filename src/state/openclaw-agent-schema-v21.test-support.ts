@@ -36,7 +36,7 @@ export function materializeV21WorkerAgentDatabase(stateDir: string): string {
   return databasePath;
 }
 
-/** Preserve session/board setup while replacing unused compact storage with its frozen old shape. */
+/** Preserve session/board setup while replacing unused storage with its frozen old shape. */
 export function restoreEmptyV21StorageForHistoricalFixture(database: DatabaseSync): void {
   const tables = [
     "transcript_events",

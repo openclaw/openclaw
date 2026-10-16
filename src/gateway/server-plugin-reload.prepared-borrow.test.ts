@@ -553,9 +553,9 @@ describe("published Gateway plugin services", () => {
   // Protect the service-to-agent-tool contract through the actual replacement loader.
   // Existing visitor tests only start an already-enabled plugin; registry recovery
   // fixtures substitute their own candidate loader and do not resolve agent tools.
-  it.each(["cold start", "hot enable"] as const)(
+  it.for(["cold start", "hot enable"] as const)(
     "%s lets a published agent runtime use the visitor service",
-    async (mode) => {
+    async (mode, { signal }) => {
       await withOpenClawTestState({ label: "plugin-hot-runtime-store" }, async (state) => {
         const pluginId = "visitor-access";
         const toolName = "visitor_revoke";
@@ -799,8 +799,8 @@ describe("published Gateway plugin services", () => {
           assert(record);
           const gatewayInstance = getPluginInstance(record);
           assert(gatewayInstance);
-          // Startup catalog refresh owns a temporary lease unrelated to the agent run.
-          await gatewayInstance.waitForRetainedWork(runtime.requestEntryLifetime.signal);
+          // Settle startup/catalog work before measuring the independent agent-run lease.
+          await gatewayInstance.waitForRetainedWork(signal);
           const retainedBeforeRun = gatewayInstance.retainedWorkCount;
           runLease = await withPluginRuntimeRegistryScope(registryOwner.registry, () =>
             acquireAgentRunPreparedModelRuntime(

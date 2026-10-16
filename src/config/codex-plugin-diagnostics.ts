@@ -1,5 +1,8 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
-import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  parseModelCatalogRef,
+  type ModelCatalogRef as ModelRoute,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -32,11 +35,6 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 
 const CODEX_PLUGIN_ID = "codex";
 const OPENAI_PROVIDER_ID = "openai";
-
-type ModelRoute = {
-  provider: string;
-  modelId: string;
-};
 
 function codexPluginEntryEnabled(cfg: OpenClawConfig): boolean | undefined {
   for (const [pluginId, entry] of Object.entries(cfg.plugins?.entries ?? {})) {

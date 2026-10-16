@@ -173,7 +173,7 @@ describe("check-max-lines-ratchet", () => {
     expect(main(root, ["--base", "origin/main"])).toBe(0);
   });
 
-  it("falls back to main when no merge base is available", () => {
+  it("rejects unavailable ancestry with an explicit prepared-base recovery", () => {
     const root = tempDirs.make("openclaw-max-lines-disconnected-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
@@ -189,7 +189,11 @@ describe("check-max-lines-ratchet", () => {
     git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     git(root, ["checkout", "release"]);
 
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(main(root)).toBe(1);
+    expect(errors).toHaveBeenCalledWith(
+      "Could not resolve ratchet merge base for origin/main; provide reachable history or --base <prepared-ref> --no-merge-base.",
+    );
   });
 
   it("checks staged content instead of unstaged worktree edits", () => {

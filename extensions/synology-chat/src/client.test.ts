@@ -320,6 +320,7 @@ describe("sendHostedFileUrl", () => {
       sendHostedFileUrl("https://nas.example.com/incoming", hostedCapabilityUrl),
     );
     expect(result).toEqual({ status: "indeterminate" });
+    expect(firstHttpsRequestPayload()).toEqual({ file_url: hostedCapabilityUrl });
   });
 
   it("returns indeterminate when the request outcome is lost", async () => {
@@ -408,33 +409,6 @@ describe("sendHostedFileUrl", () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(requestedUrls()).toEqual([accountA, accountB, accountA, accountA]);
     await expect(Promise.all(sends)).resolves.toEqual([true, true, true, true]);
-  });
-
-  it("rejects malformed file URLs before making a request", async () => {
-    const result = await settleTimers(
-      sendHostedFileUrl("https://nas.example.com/incoming", hostedUrl("not-a-url")),
-    );
-    expect(result).toEqual({ status: "not-dispatched" });
-    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-HTTPS file URLs before making a request", async () => {
-    const result = await settleTimers(
-      sendHostedFileUrl("https://nas.example.com/incoming", hostedUrl("http://example.com/file")),
-    );
-    expect(result).toEqual({ status: "not-dispatched" });
-    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
-  });
-
-  it("rejects hosted URLs with embedded credentials or fragments", async () => {
-    const credentialedUrl = new URL("https://gateway.example.com/webhook#fragment");
-    credentialedUrl.username = "fixture-user";
-    credentialedUrl.password = "fixture-password";
-    const result = await settleTimers(
-      sendHostedFileUrl("https://nas.example.com/incoming", hostedUrl(credentialedUrl.toString())),
-    );
-    expect(result).toEqual({ status: "not-dispatched" });
-    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 });
 

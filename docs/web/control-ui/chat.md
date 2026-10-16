@@ -952,7 +952,12 @@ and attached automations; it reuses their existing actions rather than duplicati
 their data. The former pull-request and task-progress bars are not repeated above
 the composer.
 
-The expanded progress card’s options include **Don’t show task progress again**.
+The progress header shows the current step, not a completed-step total. Its
+options menu stays available when the card is expanded or collapsed and contains
+**Refresh task progress** and **Hide this card**. Hiding the card does not stop
+the task. Clearing saved progress for everyone is a separate menu action.
+
+The options also include **Don’t show task progress again**.
 This turns off the existing browser-local **Show task progress cards** preference
 and offers **Undo**. It does not stop work or delete saved progress. Session details
 remain available, as do dashboard progress widgets and session hover previews.
