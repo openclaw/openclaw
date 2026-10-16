@@ -566,7 +566,8 @@ export function cleanStaleGatewayProcessesSync(
     // Even an already-exited PID can leave its socket bound briefly; always join port release.
     waitForPortFreeSync(port);
     return killed;
-  } catch {
+  } catch (error) {
+    restartLog.warn(`stale gateway process cleanup failed: ${formatErrorMessage(error)}`);
     return [];
   }
 }
