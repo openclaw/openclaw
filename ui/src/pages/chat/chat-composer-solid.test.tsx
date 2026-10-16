@@ -42,8 +42,8 @@ function mountComposer(initial: ChatComposerProps) {
 }
 
 function mountOwnedComposer(overrides: Partial<ChatComposerProps> = {}) {
-  const requestUpdate = vi.fn();
-  const owner = createChatState<ChatPageHost>({ requestUpdate, updateComplete: Promise.resolve() });
+  const invalidate = vi.fn();
+  const owner = createChatState<ChatPageHost>({ invalidate, updateComplete: Promise.resolve() });
   const state = createPageState(
     createInitializationContext(),
     owner.createRenderLifecycle(),
@@ -83,11 +83,11 @@ function mountOwnedComposer(overrides: Partial<ChatComposerProps> = {}) {
       .dispatchEvent(
         new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
       );
-  return { owner, state, view, requestUpdate, input, enter };
+  return { owner, state, view, invalidate, input, enter };
 }
 
 it("updates edits and history from the draft owner without redrawing the pane", () => {
-  const { owner, state, view, requestUpdate } = mountOwnedComposer();
+  const { owner, state, view, invalidate } = mountOwnedComposer();
   const textarea = view.container.querySelector("textarea")!;
   textarea.value = "An ordinary edit";
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
@@ -111,7 +111,7 @@ it("updates edits and history from the draft owner without redrawing the pane", 
   });
   flush();
   expect(textarea.value).toBe("Earlier input");
-  expect(requestUpdate).not.toHaveBeenCalled();
+  expect(invalidate).not.toHaveBeenCalled();
 
   const draftChanged = vi.fn();
   onTestFinished(owner.composerDraft.subscribe(draftChanged));
