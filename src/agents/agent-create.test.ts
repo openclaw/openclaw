@@ -208,7 +208,9 @@ describe("createAgent", () => {
           {
             ...outcome,
             paths:
-              "paths" in outcome ? [...outcome.paths] : ["/tmp/legacy.sqlite", "/tmp/owner.sqlite"],
+              "paths" in outcome && outcome.paths
+                ? [...outcome.paths]
+                : ["/tmp/legacy.sqlite", "/tmp/owner.sqlite"],
             sourceKeys: ["agent:main:main", "agent:robby:main"],
           },
         ],

@@ -29,6 +29,7 @@ const addChannelAllowFromStoreEntryMock = vi.hoisted(() => vi.fn());
 const removeChannelAllowFromStoreEntryMock = vi.hoisted(() => vi.fn());
 type ConfigEdit = { nextConfig: OpenClawConfig; result?: unknown };
 
+// mock-isolation: Keep config reads and conditional writes inside the command fixture.
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
   readConfigFileSnapshot: readConfigFileSnapshotMock,

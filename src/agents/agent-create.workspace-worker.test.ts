@@ -159,7 +159,9 @@ it("records operator and agent creation provenance after roster commits", async 
 it("publishes guided staging atomically with env references preserved across preparation", async () => {
   const state = await createState("state-only");
   vi.stubEnv("GUIDED_STAGE_TOKEN", "synthetic-read-value");
-  onTestFinished(() => vi.unstubAllEnvs());
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
   const config = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
   await state.writeConfig({
     ...config,

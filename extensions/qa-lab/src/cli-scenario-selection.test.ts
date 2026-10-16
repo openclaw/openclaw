@@ -11,6 +11,7 @@ vi.mock("openclaw/plugin-sdk/qa-runner-runtime", async (importOriginal) => ({
   listQaRunnerCliContributions: () => [],
 }));
 
+// mock-isolation: Capture CLI routing without starting scenario runners or Gateways.
 vi.mock("./cli.runtime.js", () => ({ runQaProfileCommand, runQaSuiteCommand }));
 
 import { registerQaLabCli } from "./cli.js";

@@ -227,6 +227,9 @@ describe("Gateway agent command execution identity", () => {
   it("preserves trusted spawn facts across internal option preparation", () => {
     const facts = {
       ingress: { kind: "api", boundary: "sessions_spawn.subagent", state: "present" },
+      invoker: { state: "present", kind: "agent", rawPrincipalRef: "main" },
+      applicableGrants: [{ rawGrantRef: "tool:sessions_spawn", state: "present" }],
+      assurance: [],
       spawnAdmission: "[null,[]]",
     } as const;
     const prepared = {

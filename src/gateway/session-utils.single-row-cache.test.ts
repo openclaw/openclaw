@@ -29,10 +29,14 @@ function withStore(
   return () =>
     withStateDirEnv("openclaw-single-row-", async () => {
       config.setRuntimeConfigSnapshot(cfg, cfg);
-      await run({
-        now: Math.floor(Date.now() / 1_000) * 1_000 + 100,
-        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: MAIN_AGENT_ID }),
-      }).finally(() => rowReader.dispose());
+      try {
+        await run({
+          now: Math.floor(Date.now() / 1_000) * 1_000 + 100,
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: MAIN_AGENT_ID }),
+        });
+      } finally {
+        await rowReader.dispose();
+      }
     });
 }
 

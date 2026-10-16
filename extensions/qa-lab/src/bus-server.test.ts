@@ -97,7 +97,7 @@ describe("qa-bus server", () => {
   const stops: Array<() => Promise<void>> = [];
   async function fixture(state = createQaBusState()) {
     const bus = await startQaBusServer({ state });
-    stops.push(bus.stop);
+    stops.push(() => bus.stop());
     return {
       ...bus,
       state,

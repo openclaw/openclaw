@@ -37,6 +37,7 @@ import {
   resolveCrabboxProvisionBaseTimeoutMs,
 } from "./crabbox-worker-timeouts.js";
 
+// mock-isolation: Exercise provider lifecycle without downloading or executing a managed binary.
 vi.mock("./crabbox-managed-binary.js", () => ({ ensureManagedCrabboxBinary: vi.fn() }));
 
 vi.mock("openclaw/plugin-sdk/secret-egress-runtime", async (importOriginal) => ({
@@ -193,7 +194,7 @@ function recordedProvider(
 ) {
   const calls: string[][] = [];
   const commands: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
-  const provider = providerWithRunner((argv, options) => {
+  const provider = providerWithRunner(async (argv, options) => {
     calls.push(argv);
     commands.push({ argv, options });
     const run = typeof script === "function" ? script : script[argv[1]!];
@@ -721,7 +722,7 @@ it.each([
     "Crabbox AWS inspect must attest that no instance profile is attached",
     "install-node",
   ],
-] as const)("stops the fixed lease on %s", async (_name, patch, message, setup) => {
+] as const)("stops the fixed lease on %s", async (_name, patch, message, setup?: string) => {
   let inspections = 0;
   const { provider, calls } = recordedProvider(async (argv) =>
     readyResult(argv, argv[1] === "inspect" && setup && inspections++ === 0 ? {} : patch),

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewayAgentRow } from "../api/types.ts";
+import type { RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
@@ -27,6 +28,7 @@ import {
   createLazyElementSpec,
   createRosterRefreshContext,
   resetAppHostTestGlobals,
+  type ShellKeyboardState,
   type TestOptionalCustomElement,
   stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
@@ -42,7 +44,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import { COMMAND_PALETTE_ELEMENT } from "./lazy-custom-element.ts";
+import { COMMAND_PALETTE_ELEMENT, type LazyCustomElementRequests } from "./lazy-custom-element.ts";
 import {
   persistLazyShellAction,
   readLazyShellAction,
@@ -69,18 +71,16 @@ function createRouteSessions() {
   return sessions;
 }
 
-type ShellTestState = Omit<
-  ReturnType<typeof createShellOwner>,
-  "runtime" | "commandPaletteElement" | "commandPaletteTarget" | "lastWorkspaceLocation"
-> & {
-  runtime: { context: ApplicationContext };
-  commandPaletteElement: TestOptionalCustomElement;
-  commandPaletteTarget: unknown;
-  lastWorkspaceLocation: { routeId: string; search: string } | null;
-  shellGateway: ShellGatewayOwner;
-  shellNavigation: ShellNavigationOwner;
-  handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
-  ensureRuntimeConfig: ShellGatewayOwner["ensureRuntimeConfig"];
+type ShellInitializationState = {
+  routeState: { routeId?: string };
+  ensureAgentsList: (
+    snapshot: ApplicationGatewaySnapshot,
+    agents: ApplicationContext["agents"],
+  ) => void;
+  ensureRuntimeConfig: (
+    snapshot: ApplicationGatewaySnapshot,
+    runtimeConfig: ApplicationContext["runtimeConfig"],
+  ) => void;
 };
 
 type I18nRecoveryWiring = {
@@ -90,17 +90,45 @@ type I18nRecoveryWiring = {
   };
 };
 
-function createTestShell(context?: ApplicationContext) {
-  const shell = createShellOwner() as unknown as ShellTestState;
-  if (context) {
-    shell.runtime = { context };
-  }
-  return shell;
-}
+type ShellServerPreferencesState = {
+  runtime: { context: ApplicationContext };
+  shellGateway: ShellGatewayOwner;
+};
+
+type ShellLifecycle = Pick<ShellChromeEventState, "connect" | "disconnect">;
+
+type ShellLazySurfaceState = ShellKeyboardState &
+  ShellLifecycle & {
+    commandPaletteElement: TestOptionalCustomElement;
+    lazyCustomElements: LazyCustomElementRequests;
+    openPalette: () => void;
+    restorePendingLazyAction: () => void;
+  };
+
+type ShellUiCommandState = ShellKeyboardState & {
+  handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
+};
 
 function roster(defaultId: string, agents: GatewayAgentRow[]): AgentsListResult {
   return { defaultId, mainKey: "main", scope: "per-sender", agents };
 }
+
+type ShellChromeEventState = {
+  runtime: { context: ApplicationContext };
+  navDrawerOpen: boolean;
+  handleShellNavDrawerToggle: (event: Event) => void;
+  openPalette: () => void;
+  connect: () => void;
+  disconnect: () => void;
+};
+
+type ShellNavDrawerCloseState = { element: HTMLElement } & ShellChromeEventState & {
+    desktopNavigationExpanded: boolean;
+    navDrawerTrigger: HTMLElement | null;
+    closeNavDrawer: (options?: { restoreFocus?: boolean }) => void;
+    handleWindowResize: () => void;
+    toggleNavigationSurface: () => void;
+  };
 
 function createDragEvent(type: "dragover" | "drop", types: string[]) {
   const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
@@ -109,8 +137,18 @@ function createDragEvent(type: "dragover" | "drop", types: string[]) {
   return { dataTransfer, event };
 }
 
-function configureLazyPaletteShell(element: TestOptionalCustomElement, openPalette: () => void) {
-  const shell = createTestShell();
+type ShellSettingsSearchLoadState = {
+  runtime: {
+    context: ApplicationContext;
+  };
+  handleSettingsSearchQueryChange: (query: string) => Promise<void>;
+};
+
+function configureLazyPaletteShell(
+  element: TestOptionalCustomElement,
+  openPalette: () => void,
+): ShellLazySurfaceState {
+  const shell = createShellOwner() as unknown as ShellLazySurfaceState;
   shell.commandPaletteElement = element;
   Object.defineProperty(shell, "updateComplete", {
     configurable: true,
@@ -126,10 +164,7 @@ function configureLazyPaletteShell(element: TestOptionalCustomElement, openPalet
   return shell;
 }
 
-async function withConnectedShell(
-  shell: Pick<ShellTestState, "connect" | "disconnect">,
-  run: () => void | Promise<void>,
-) {
+async function withConnectedShell(shell: ShellLifecycle, run: () => void | Promise<void>) {
   shell.connect();
   try {
     await run();
@@ -141,6 +176,37 @@ async function withConnectedShell(
 afterEach(() => {
   resetAppHostTestGlobals();
 });
+
+type ShellEpochState = {
+  navDrawerOpen: boolean;
+  navDrawerTrigger: HTMLElement | null;
+  lastWorkspaceLocation: { routeId: string; search: string } | null;
+  activeSessionKey: string;
+  commandPaletteTarget: unknown;
+  settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
+  disconnect: () => void;
+};
+
+type ShellRouteCommitState = {
+  runtime: { context: ApplicationContext };
+  activeSessionKey: string;
+  didConsiderNativeRouteRestore: boolean;
+  shellNavigation: ShellNavigationOwner;
+};
+
+type ShellCustodianRouteState = {
+  custodianMinimizeRequestId: number;
+  shellNavigation: ShellNavigationOwner;
+};
+
+type ShellSessionNavigationState = {
+  runtime: { context: ApplicationContext };
+  activeSessionKey: string;
+  routeState: { routeId?: RouteId };
+  navigate: (routeId: RouteId) => void;
+  handleCommandPaletteSlashCommand: (command: string) => void;
+  recoverNotFoundRoute: () => boolean;
+};
 
 describe("OpenClaw shell context lifecycle", () => {
   setupSidebarTest();
@@ -243,7 +309,7 @@ describe("OpenClaw shell source initialization", () => {
   });
 
   it("clears retained presentation when its context epoch ends", () => {
-    const shell = createTestShell();
+    const shell = createShellOwner() as unknown as ShellEpochState;
     const trigger = document.createElement("button");
     shell.navDrawerOpen = true;
     shell.navDrawerTrigger = trigger;
@@ -257,18 +323,17 @@ describe("OpenClaw shell source initialization", () => {
 
     shell.disconnect();
 
-    expect(shell).toMatchObject({
-      navDrawerOpen: false,
-      navDrawerTrigger: null,
-      lastWorkspaceLocation: null,
-      activeSessionKey: "",
-      commandPaletteTarget: undefined,
-    });
+    expect(shell.navDrawerOpen).toBe(false);
+    expect(shell.navDrawerTrigger).toBeNull();
+    expect(shell.lastWorkspaceLocation).toBeNull();
+    expect(shell.activeSessionKey).toBe("");
+    expect(shell.commandPaletteTarget).toBeUndefined();
     expect(shell.settingsPreloadTimers.size).toBe(0);
   });
 
   it("initializes replacement capabilities even when the Gateway client is unchanged", () => {
-    const shell = createTestShell();
+    const shell = createShellOwner() as unknown as ShellInitializationState &
+      Pick<ShellLifecycle, "disconnect">;
     shell.routeState = { routeId: "usage" };
     const client = {} as GatewayBrowserClient;
     const snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
@@ -311,15 +376,18 @@ describe("OpenClaw shell source initialization", () => {
 describe("OpenClaw shell route session commits", () => {
   it("preserves catalog identity when routing a slash-command draft", () => {
     const navigate = vi.fn();
-    const shell = createTestShell({
-      basePath: "",
-      agents: { state: { agentsList: { defaultId: "research", mainKey: "main" } } },
-      agentSelection: { state: { selectedId: "research" } },
-      gateway: { snapshot: { hello: null } },
-      sessions: createRouteSessions(),
-      chatSubmissions: createChatSubmissions(),
-      navigate,
-    } as unknown as ApplicationContext);
+    const shell = createShellOwner() as unknown as ShellSessionNavigationState;
+    shell.runtime = {
+      context: {
+        basePath: "",
+        agents: { state: { agentsList: { defaultId: "research", mainKey: "main" } } },
+        agentSelection: { state: { selectedId: "research" } },
+        gateway: { snapshot: { hello: null } },
+        sessions: createRouteSessions(),
+        chatSubmissions: createChatSubmissions(),
+        navigate,
+      } as unknown as ApplicationContext,
+    };
     shell.activeSessionKey = "catalog:claude:gateway%3Alocal:thread-1";
     shell.routeState = { routeId: "chat" };
 
@@ -334,18 +402,21 @@ describe("OpenClaw shell route session commits", () => {
   it("defers an unscoped not-found fallback until agent defaults are connected", () => {
     const replace = vi.fn();
     const snapshot = { phase: "connecting", hello: null };
-    const shell = createTestShell({
-      basePath: "",
-      agents: {
-        state: { agentsList: { defaultId: "research", mainKey: "workspace" } },
-      },
-      agentSelection: { set: vi.fn(), state: { selectedId: null } },
-      gateway: { setSessionKey: vi.fn(), snapshot },
-      sessions: createRouteSessions(),
-      chatSubmissions: createChatSubmissions(),
-      placementStartup: { get: vi.fn(() => null) },
-      replace,
-    } as unknown as ApplicationContext);
+    const shell = createShellOwner() as unknown as ShellSessionNavigationState;
+    shell.runtime = {
+      context: {
+        basePath: "",
+        agents: {
+          state: { agentsList: { defaultId: "research", mainKey: "workspace" } },
+        },
+        agentSelection: { set: vi.fn(), state: { selectedId: null } },
+        gateway: { setSessionKey: vi.fn(), snapshot },
+        sessions: createRouteSessions(),
+        chatSubmissions: createChatSubmissions(),
+        placementStartup: { get: vi.fn(() => null) },
+        replace,
+      } as unknown as ApplicationContext,
+    };
     shell.activeSessionKey = "main";
     shell.routeState = { routeId: "chat" };
 
@@ -362,15 +433,18 @@ describe("OpenClaw shell route session commits", () => {
     const calls: string[] = [];
     const setAgent = vi.fn((agentId: string | null) => calls.push(`agent:${agentId}`));
     const setSessionKey = vi.fn((sessionKey: string) => calls.push(`session:${sessionKey}`));
-    const shell = createTestShell({
-      gateway: {
-        snapshot: { phase: "stopped", client: null, sessionKey: "agent:main:session-a" },
-        setSessionKey,
-      },
-      agentSelection: { set: setAgent },
-      sessions: createRouteSessions(),
-      chatSubmissions: createChatSubmissions(),
-    } as unknown as ApplicationContext);
+    const shell = createShellOwner() as unknown as ShellRouteCommitState;
+    shell.runtime = {
+      context: {
+        gateway: {
+          snapshot: { phase: "stopped", client: null, sessionKey: "agent:main:session-a" },
+          setSessionKey,
+        },
+        agentSelection: { set: setAgent },
+        sessions: createRouteSessions(),
+        chatSubmissions: createChatSubmissions(),
+      } as unknown as ApplicationContext,
+    };
     shell.activeSessionKey = "agent:main:session-a";
     shell.didConsiderNativeRouteRestore = true;
 
@@ -392,7 +466,7 @@ describe("OpenClaw shell route session commits", () => {
   });
 
   it("retains the custodian leave transition through an unresolved route state", () => {
-    const shell = createTestShell();
+    const shell = createShellOwner() as unknown as ShellCustodianRouteState;
 
     shell.shellNavigation.updateRouteState({ routeId: "custodian" });
     shell.shellNavigation.updateRouteState({});
@@ -445,7 +519,8 @@ describe("OpenClaw shell server preferences", () => {
       // reconcileServerUiPrefs only accepts the current context's capability.
       runtimeConfig,
     } as unknown as ApplicationContext;
-    const shell = createTestShell(context);
+    const shell = createShellOwner() as unknown as ShellServerPreferencesState;
+    shell.runtime = { context };
 
     await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
 
@@ -483,9 +558,10 @@ describe("OpenClaw shell settings search", () => {
       ensureLoaded: vi.fn(() => Promise.resolve()),
       ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
     } as unknown as ApplicationContext["runtimeConfig"];
-    const shell = createTestShell({
-      runtimeConfig: firstRuntimeConfig,
-    } as unknown as ApplicationContext);
+    const shell = createShellOwner() as unknown as ShellSettingsSearchLoadState;
+    shell.runtime = {
+      context: { runtimeConfig: firstRuntimeConfig } as unknown as ApplicationContext,
+    };
 
     const load = shell.handleSettingsSearchQueryChange("browser");
     shell.runtime = {
@@ -504,7 +580,10 @@ describe("OpenClaw shell settings search", () => {
       ensureLoaded: vi.fn(() => Promise.resolve()),
       ensureSchemaLoaded: vi.fn(() => Promise.reject(new Error("schema unavailable"))),
     } as unknown as ApplicationContext["runtimeConfig"];
-    const shell = createTestShell({ runtimeConfig } as unknown as ApplicationContext);
+    const shell = createShellOwner() as unknown as ShellSettingsSearchLoadState;
+    shell.runtime = {
+      context: { runtimeConfig } as unknown as ApplicationContext,
+    };
 
     await expect(shell.handleSettingsSearchQueryChange("browser")).resolves.toBeUndefined();
 
@@ -542,7 +621,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   });
 
   it("prevents unhandled window file drops without overriding accepted targets", () => {
-    const shell = createTestShell();
+    const shell = createShellOwner() as unknown as ShellChromeEventState;
     const acceptedDropTarget = document.createElement("div");
     const nativeFileInput = document.createElement("input");
     nativeFileInput.type = "file";
@@ -582,7 +661,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   });
 
   it("keeps focus in place when the navigation drawer closes without restoration", () => {
-    const shell = createTestShell();
+    const shell = createShellOwner() as ShellNavDrawerCloseState;
     const trigger = document.body.appendChild(document.createElement("button"));
     const restoreTriggerFocus = vi.spyOn(trigger, "focus");
     shell.navDrawerOpen = true;
@@ -599,7 +678,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   it("closes an open navigation drawer before moving its sidebar into desktop layout", async () => {
     await import("../components/app-sidebar.tsx");
     vi.stubGlobal("matchMedia", () => ({ matches: false }));
-    const shell = createTestShell();
+    const shell = createShellOwner() as ShellNavDrawerCloseState;
     const updateNavigation = vi.fn();
     shell.runtime = {
       context: {
@@ -642,9 +721,12 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     );
     const openPalette = vi.fn();
     const trigger = document.createElement("button");
-    const shell = createTestShell({
-      navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
-    } as unknown as ApplicationContext);
+    const shell = createShellOwner() as unknown as ShellChromeEventState;
+    shell.runtime = {
+      context: {
+        navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
+      } as unknown as ApplicationContext,
+    };
     Object.defineProperty(shell, "commandPalette", {
       configurable: true,
       value: { isOpen: false, openPalette, togglePalette: vi.fn() },
@@ -741,39 +823,52 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
     window.addEventListener(UI_COMMAND_EVENT, uiCommandEvent);
     window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, pluginPanelEvent);
-    const shell = createTestShell({
-      basePath: "",
-      navigation: { update },
-      gateway: { setSessionKey, snapshot: { hello: null } },
-      agents: { state: { agentsList: { mainKey: "main" } } },
-      agentSelection: { state: { selectedId: "main" }, set: setAgent },
-      sessions: createRouteSessions(),
-      chatSubmissions: createChatSubmissions(),
-      navigate,
-    } as unknown as ApplicationContext);
+    const shell = createShellOwner() as unknown as ShellUiCommandState;
+    shell.runtime = {
+      context: {
+        basePath: "",
+        navigation: { update },
+        gateway: { setSessionKey, snapshot: { hello: null } },
+        agents: { state: { agentsList: { mainKey: "main" } } },
+        agentSelection: { state: { selectedId: "main" }, set: setAgent },
+        sessions: createRouteSessions(),
+        chatSubmissions: createChatSubmissions(),
+        navigate,
+      } as unknown as ApplicationContext,
+    };
 
-    const command = (payload: unknown) =>
-      shell.handleGatewayEvent({ event: "ui.command", payload });
-    command({ command: { kind: "sidebar", visible: false } });
-    command({
-      command: {
-        kind: "panel",
-        panel: "terminal",
-        open: true,
-        dock: "right",
-        terminalSessionId: "terminal-agent-1",
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: { command: { kind: "sidebar", visible: false } },
+    });
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        command: {
+          kind: "panel",
+          panel: "terminal",
+          open: true,
+          dock: "right",
+          terminalSessionId: "terminal-agent-1",
+        },
       },
     });
-    command({
-      command: {
-        kind: "split",
-        direction: "right",
-        sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        command: {
+          kind: "split",
+          direction: "right",
+          sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+        },
       },
     });
-    command({
-      command: { kind: "focus", sessionKey: "agent:main:other" },
-      sessionKey: "agent:main:source",
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        command: { kind: "focus", sessionKey: "agent:main:other" },
+        sessionKey: "agent:main:source",
+      },
     });
 
     expect(update).toHaveBeenCalledWith({ navCollapsed: true });
@@ -800,15 +895,18 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         },
       }),
     );
-    command({
-      sessionKey: "global",
-      agentId: "writer",
-      command: {
-        kind: "panel",
-        panel: "plugin",
-        pluginId: "review",
-        panelId: "document",
-        open: true,
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        sessionKey: "global",
+        agentId: "writer",
+        command: {
+          kind: "panel",
+          panel: "plugin",
+          pluginId: "review",
+          panelId: "document",
+          open: true,
+        },
       },
     });
     expect(setAgent).toHaveBeenLastCalledWith("writer");
@@ -844,7 +942,8 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       ]),
       selectedId: "main",
     });
-    const shell = createTestShell(harness.context);
+    const shell = createShellOwner() as unknown as ShellUiCommandState;
+    shell.runtime = { context: harness.context };
 
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });
     await vi.advanceTimersByTimeAsync(100);
@@ -864,7 +963,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       next: roster("main", [{ id: "fallback" }, { id: "main" }]),
       selectedId: "writer",
     });
-    const shell = createTestShell();
+    const shell = createShellOwner() as unknown as ShellUiCommandState;
     shell.runtime = { context: harness.context };
 
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });
@@ -901,7 +1000,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       next: unchanged,
       selectedId: "main",
     });
-    const shell = createTestShell();
+    const shell = createShellOwner() as unknown as ShellUiCommandState;
     shell.runtime = { context: harness.context };
 
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });

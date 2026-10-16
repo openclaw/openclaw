@@ -102,7 +102,7 @@ type Owner = ReturnType<ReturnType<typeof fixture>["manager"]>;
 type Allocation = Parameters<Owner["allocate"]>[0];
 const record = () => openWarmImageStore().entries()[0]?.value;
 const snapshot = () => structuredClone(openWarmImageStore().entries());
-const retainPrevious = {
+const retainPrevious: CrabboxWarmImagePolicy = {
   refreshAfterMs: 86_400_000,
   retainUnusedMs: 14 * 86_400_000,
   keepPrevious: 1,

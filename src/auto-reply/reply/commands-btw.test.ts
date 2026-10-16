@@ -11,6 +11,7 @@ import { createMockTypingController } from "./test-helpers.js";
 
 const runBtwSideQuestionMock = vi.hoisted(() => vi.fn<typeof runBtwSideQuestion>());
 
+// mock-isolation: Capture the side-question request without starting a model turn.
 vi.mock("../../agents/btw.js", () => ({
   runBtwSideQuestion: runBtwSideQuestionMock,
 }));

@@ -9,11 +9,11 @@ function publisher<T>(initial: T) {
   const listeners = new Set<(next: T) => void>();
   return {
     read: () => value,
-    subscribe(listener: (next: T) => void) {
+    subscribe: (listener: (next: T) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    publish(next: T) {
+    publish: (next: T) => {
       value = next;
       for (const listener of listeners) {
         listener(next);

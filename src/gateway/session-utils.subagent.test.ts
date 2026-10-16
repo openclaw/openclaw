@@ -29,15 +29,17 @@ import { useSessionStoreFixture } from "./session-utils.test-support.js";
 const rowReader = createResidentSessionRowReader();
 async function withRegistry<T>(fn: () => Promise<T>, resetRuntimeConfig = false) {
   return withRawStateDirEnv("openclaw-session-subagent-", () =>
-    withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, () =>
-      fn().finally(async () => {
+    withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
+      try {
+        return await fn();
+      } finally {
         await rowReader.dispose();
         if (resetRuntimeConfig) {
           resetConfigRuntimeState();
         }
         await closeOpenClawStateDatabaseAsync();
-      }),
-    ),
+      }
+    }),
   );
 }
 

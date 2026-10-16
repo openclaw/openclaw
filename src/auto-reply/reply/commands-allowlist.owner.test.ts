@@ -122,7 +122,9 @@ async function withPausedWrite(
 beforeEach(({ onTestFinished }) => {
   beforeConfigEdit.mockReset();
   const previous = captureActivePluginRegistrySnapshot();
-  onTestFinished(() => rollbackStagedPluginRegistry(previous));
+  onTestFinished(() => {
+    rollbackStagedPluginRegistry(previous);
+  });
   const allowlist = buildLegacyDmAccountAllowlistAdapter({
     channelId: "discord",
     resolveAccount: ({ cfg, accountId }) =>

@@ -23,7 +23,7 @@ const capabilities = {
   inputAudioFormats: [],
   outputAudioFormats: [],
 };
-const unexpectedSession = async () => {
+const unexpectedSession = () => {
   throw new Error("catalog must not create a session");
 };
 const providerFields = <T>(isConfiguredAsync: T, id = "sample") => ({

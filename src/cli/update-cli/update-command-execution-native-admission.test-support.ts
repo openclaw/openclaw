@@ -23,11 +23,10 @@ import {
 } from "./update-command-execution.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { updateGitInstall } from "./update-command-git.js";
-import type { PackageInstallUpdateParams } from "./update-command-package.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import * as verification from "./update-command-verification.js";
 
-type Candidate = Pick<PackageInstallUpdateParams, "validateCandidate">;
+type Candidate = { validateCandidate: (root: string) => Promise<unknown> };
 
 async function executeOwned(
   dir: string,

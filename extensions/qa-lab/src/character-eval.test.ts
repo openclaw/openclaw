@@ -1,3 +1,4 @@
+// Qa Lab tests cover character eval plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,13 +20,7 @@ function makeJudgeReply(rankings: TestJudgeRanking[]) {
   return JSON.stringify({ rankings });
 }
 
-const primaryModel = "openai/gpt-5.6-luna";
-const kimi = "moonshot/kimi-k2.5";
-function makeRanking(model: string, rank = 1, score = 8, summary = "ok"): TestJudgeRanking {
-  return { model, rank, score, summary };
-}
-
-function makeRunJudge(rankings = [makeRanking(primaryModel)]) {
+function makeRunJudge(rankings: TestJudgeRanking[]) {
   return vi.fn(async (_params: CharacterRunJudgeParams) => makeJudgeReply(rankings));
 }
 
@@ -33,20 +28,38 @@ function defaultModelTranscript(model: string) {
   return `USER Alice: hi\n\nASSISTANT openclaw: reply from ${model}`;
 }
 
-function makeRunSuite(
-  transcriptForModel: (model: string) => string = defaultModelTranscript,
-  overrides: SuiteOverrides = {},
-) {
+function makeReplySuiteResult(params: CharacterRunSuiteParams, transcript?: string) {
+  return makeSuiteResult({
+    outputDir: params.outputDir,
+    model: params.primaryModel,
+    transcript: transcript ?? defaultModelTranscript(params.primaryModel),
+  });
+}
+
+function makeRunSuite(transcriptForModel: (model: string) => string = defaultModelTranscript) {
   return vi.fn(async (params: CharacterRunSuiteParams) =>
-    makeSuiteResult(params, { transcript: transcriptForModel(params.primaryModel), ...overrides }),
+    makeReplySuiteResult(params, transcriptForModel(params.primaryModel)),
   );
 }
 
 function createConcurrencyGate(expectedActive: number) {
   let active = 0;
   let maxActive = 0;
-  const started = Promise.withResolvers<void>();
-  const released = Promise.withResolvers<void>();
+  let releaseStartedTasks = false;
+  let resolveExpectedActive: () => void = () => {};
+  const expectedActiveReached = new Promise<void>((resolve) => {
+    resolveExpectedActive = resolve;
+  });
+  const taskReleases: Array<() => void> = [];
+  const releaseQueuedTasks = () => {
+    if (!releaseStartedTasks) {
+      return;
+    }
+    let releaseTask: (() => void) | undefined;
+    while ((releaseTask = taskReleases.shift())) {
+      releaseTask();
+    }
+  };
 
   return {
     get maxActive() {
@@ -56,37 +69,65 @@ function createConcurrencyGate(expectedActive: number) {
       active += 1;
       maxActive = Math.max(maxActive, active);
       if (active >= expectedActive) {
-        started.resolve();
+        resolveExpectedActive();
       }
-      await released.promise;
+      await new Promise<void>((resolve) => {
+        taskReleases.push(resolve);
+        releaseQueuedTasks();
+      });
       try {
         return await work();
       } finally {
         active -= 1;
       }
     },
-    waitForExpectedActive: () => started.promise,
-    releaseStartedTasks: () => released.resolve(),
+    async waitForExpectedActive(): Promise<void> {
+      await expectedActiveReached;
+    },
+    releaseStartedTasks(): void {
+      releaseStartedTasks = true;
+      releaseQueuedTasks();
+    },
   };
 }
 
-type SuiteOverrides = {
-  transcript?: string;
+async function makeSuiteResult(params: {
+  outputDir: string;
+  model: string;
+  transcript: string;
+  resultStatus?: "pass" | "fail";
   summaryStatus?: "pass" | "fail";
+  summaryFailedCount?: number;
   runStatus?: "running" | "completed";
-};
-
-async function makeSuiteResult(params: CharacterRunSuiteParams, overrides: SuiteOverrides = {}) {
-  const summaryStatus = overrides.summaryStatus ?? "pass";
-  const summaryFailedCount = summaryStatus === "fail" ? 1 : 0;
+}) {
+  const resultStatus = params.resultStatus ?? "pass";
+  const summaryStatus = params.summaryStatus ?? resultStatus;
+  const summaryFailedCount = params.summaryFailedCount ?? (summaryStatus === "fail" ? 1 : 0);
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
   await fs.mkdir(params.outputDir, { recursive: true });
-  const summary = {
-    run: { status: overrides.runStatus ?? "completed" },
-    counts: { total: 1, passed: summaryFailedCount > 0 ? 0 : 1, failed: summaryFailedCount },
-    scenarios: [{ name: "Character vibes", status: summaryStatus, steps: [] }],
-  };
-  await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+  await fs.writeFile(
+    summaryPath,
+    `${JSON.stringify(
+      {
+        run: { status: params.runStatus ?? "completed" },
+        counts: {
+          total: 1,
+          passed: summaryFailedCount > 0 ? 0 : 1,
+          failed: summaryFailedCount,
+        },
+        scenarios: [
+          {
+            name: "Character vibes",
+            status: summaryStatus,
+            steps: [],
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
   return {
     outputDir: params.outputDir,
     evidencePath: path.join(params.outputDir, "qa-evidence.json"),
@@ -101,12 +142,12 @@ async function makeSuiteResult(params: CharacterRunSuiteParams, overrides: Suite
       [
         {
           name: "Character vibes",
-          status: "pass",
+          status: resultStatus,
           steps: [
             {
-              name: `transcript for ${params.primaryModel}`,
+              name: `transcript for ${params.model}`,
               status: "pass",
-              details: overrides.transcript ?? defaultModelTranscript(params.primaryModel),
+              details: params.transcript,
             },
           ],
         },
@@ -115,28 +156,39 @@ async function makeSuiteResult(params: CharacterRunSuiteParams, overrides: Suite
   } satisfies QaSuiteResult;
 }
 
+function requireRunSuiteParams(runSuite: ReturnType<typeof vi.fn>, index = 0) {
+  const params = runSuite.mock.calls[index]?.[0] as CharacterRunSuiteParams | undefined;
+  if (!params) {
+    throw new Error(`runSuite call ${index} missing`);
+  }
+  return params;
+}
+
+function requireRunJudgeParams(runJudge: ReturnType<typeof vi.fn>, index = 0) {
+  const params = runJudge.mock.calls[index]?.[0] as CharacterRunJudgeParams | undefined;
+  if (!params) {
+    throw new Error(`runJudge call ${index} missing`);
+  }
+  return params;
+}
+
 function expectFirstRunFailure(
   result: Awaited<ReturnType<typeof runQaCharacterEval>>,
   expected: { model: string; error: string },
 ) {
-  expect(result.runs[0]).toMatchObject({ ...expected, status: "fail" });
+  const run = result.runs[0];
+  expect(run?.model).toBe(expected.model);
+  expect(run?.status).toBe("fail");
+  expect(run?.error).toBe(expected.error);
 }
 
 describe("runQaCharacterEval", () => {
   let tempRoot: string;
 
-  function runEval(params: Partial<QaCharacterEvalParams>) {
+  function runEval(params: QaCharacterEvalParams) {
     return runQaCharacterEval({
       repoRoot: tempRoot,
       outputDir: path.join(tempRoot, "character"),
-      models: [primaryModel],
-      judgeModels: [primaryModel],
-      runSuite: makeRunSuite(),
-      runJudge: makeRunJudge(
-        (params.models ?? [primaryModel]).map((ref, index) =>
-          makeRanking(ref, index + 1, 8 - index),
-        ),
-      ),
       ...params,
     });
   }
@@ -155,39 +207,44 @@ describe("runQaCharacterEval", () => {
     );
     const runJudge = makeRunJudge([
       {
-        ...makeRanking(primaryModel, 1, 9.1, "Most natural."),
+        model: "openai/gpt-5.6-luna",
+        rank: 1,
+        score: 9.1,
+        summary: "Most natural.",
         strengths: ["vivid"],
         weaknesses: ["none"],
       },
       {
-        ...makeRanking("codex-cli/test-model", 2, 7, "Readable but flatter."),
+        model: "codex-cli/test-model",
+        rank: 2,
+        score: 7,
+        summary: "Readable but flatter.",
         strengths: ["coherent"],
         weaknesses: ["less funny"],
       },
     ]);
 
     const result = await runEval({
-      models: [primaryModel, "codex-cli/test-model", primaryModel],
+      models: ["openai/gpt-5.6-luna", "codex-cli/test-model", "openai/gpt-5.6-luna"],
       scenarioId: "character-vibes-gollum",
       candidateFastMode: true,
+      judgeModels: ["openai/gpt-5.6-luna"],
       runSuite,
       runJudge,
     });
 
     expect(runSuite).toHaveBeenCalledTimes(2);
-    expect(runSuite.mock.calls[0]?.[0]).toMatchObject({
-      providerMode: "live-frontier",
-      primaryModel,
-      alternateModel: primaryModel,
-      fastMode: true,
-      scenarioIds: ["character-vibes-gollum"],
-    });
-    expect(runJudge.mock.calls[0]?.[0]).toMatchObject({
-      judgeModel: primaryModel,
-      judgeThinkingDefault: "xhigh",
-      judgeFastMode: true,
-      timeoutMs: 300_000,
-    });
+    const firstRunParams = requireRunSuiteParams(runSuite);
+    expect(firstRunParams.providerMode).toBe("live-frontier");
+    expect(firstRunParams.primaryModel).toBe("openai/gpt-5.6-luna");
+    expect(firstRunParams.alternateModel).toBe("openai/gpt-5.6-luna");
+    expect(firstRunParams.fastMode).toBe(true);
+    expect(firstRunParams.scenarioIds).toEqual(["character-vibes-gollum"]);
+    const judgeParams = requireRunJudgeParams(runJudge);
+    expect(judgeParams.judgeModel).toBe("openai/gpt-5.6-luna");
+    expect(judgeParams.judgeThinkingDefault).toBe("xhigh");
+    expect(judgeParams.judgeFastMode).toBe(true);
+    expect(judgeParams.timeoutMs).toBe(300_000);
     expect(result.judgments).toHaveLength(1);
     expect(result.judgments[0]?.rankings.map((ranking) => ranking.model)).toEqual([
       "openai/gpt-5.6-luna",
@@ -214,21 +271,27 @@ describe("runQaCharacterEval", () => {
     const firstModel = "ollama/qwen3.5:9b";
     const secondModel = "ollama/qwen3.5/9b";
     const models = [firstModel, secondModel];
-    const firstRunWritten = Promise.withResolvers<void>();
-    const secondRunWritten = Promise.withResolvers<void>();
+    let releaseSecondRun: () => void = () => {};
+    let releaseFirstRun: () => void = () => {};
+    const firstRunWritten = new Promise<void>((resolve) => {
+      releaseSecondRun = resolve;
+    });
+    const secondRunWritten = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
     const runSuite = vi.fn(async (params: CharacterRunSuiteParams) => {
       const markerPath = path.join(params.outputDir, "model-marker.txt");
       await fs.mkdir(params.outputDir, { recursive: true });
       if (params.primaryModel === secondModel) {
-        await firstRunWritten.promise;
+        await firstRunWritten;
       }
       await fs.writeFile(markerPath, `${params.primaryModel}\n`, "utf8");
-      const result = await makeSuiteResult(params);
+      const result = await makeReplySuiteResult(params);
       if (params.primaryModel === firstModel) {
-        firstRunWritten.resolve();
-        await secondRunWritten.promise;
+        releaseSecondRun();
+        await secondRunWritten;
       } else {
-        secondRunWritten.resolve();
+        releaseFirstRun();
       }
       return result;
     });
@@ -236,23 +299,51 @@ describe("runQaCharacterEval", () => {
     const result = await runEval({
       models,
       candidateConcurrency: 2,
+      judgeModels: ["openai/gpt-5.6-luna"],
       runSuite,
+      runJudge: makeRunJudge([
+        { model: firstModel, rank: 1, score: 8, summary: "first" },
+        { model: secondModel, rank: 2, score: 7, summary: "second" },
+      ]),
     });
 
     expect(runSuite).toHaveBeenCalledTimes(2);
     expect.soft(new Set(result.runs.map((run) => run.outputDir)).size).toBe(models.length);
-    const summaryPaths = result.runs.flatMap((run) =>
-      "summaryPath" in run ? [run.summaryPath] : [],
-    );
-    expect.soft(new Set(summaryPaths).size).toBe(models.length);
-    const markers = await Promise.all(
-      result.runs.map((run) => fs.readFile(path.join(run.outputDir, "model-marker.txt"), "utf8")),
-    );
-    expect.soft(markers).toEqual(models.map((model) => `${model}\n`));
+    expect
+      .soft(
+        new Set(result.runs.flatMap((run) => ("summaryPath" in run ? [run.summaryPath] : []))).size,
+      )
+      .toBe(models.length);
+    await expect
+      .soft(
+        Promise.all(
+          result.runs.map((run) =>
+            fs.readFile(path.join(run.outputDir, "model-marker.txt"), "utf8"),
+          ),
+        ),
+      )
+      .resolves.toEqual(models.map((model) => `${model}\n`));
   });
 
   it("creates a unique default output directory under repo artifacts", async () => {
-    const result = await runEval({ outputDir: undefined });
+    const runSuite = makeRunSuite(() => "USER Alice: hi\n\nASSISTANT openclaw: default dir reply");
+    const runJudge = makeRunJudge([
+      {
+        model: "openai/gpt-5.6-luna",
+        rank: 1,
+        score: 8,
+        summary: "solid",
+        strengths: ["clear"],
+        weaknesses: [],
+      },
+    ]);
+
+    const result = await runEval({
+      outputDir: undefined,
+      models: ["openai/gpt-5.6-luna"],
+      runSuite,
+      runJudge,
+    });
 
     expect(path.dirname(result.outputDir)).toBe(path.join(tempRoot, ".artifacts", "qa-e2e"));
     expect(path.basename(result.outputDir)).toMatch(/^character-eval-[a-z0-9]+-[a-f0-9]{8}$/u);
@@ -267,13 +358,24 @@ describe("runQaCharacterEval", () => {
       expect(params.prompt).not.toContain("openai/gpt-5.6-luna");
       expect(params.prompt).not.toContain("codex-cli/test-model");
       return makeJudgeReply([
-        makeRanking("candidate-02", 1, 9.1, "Better vibes."),
-        makeRanking("candidate-01", 2, 7.4, "Solid."),
+        {
+          model: "candidate-02",
+          rank: 1,
+          score: 9.1,
+          summary: "Better vibes.",
+        },
+        {
+          model: "candidate-01",
+          rank: 2,
+          score: 7.4,
+          summary: "Solid.",
+        },
       ]);
     });
 
     const result = await runEval({
-      models: [primaryModel, "codex-cli/test-model"],
+      models: ["openai/gpt-5.6-luna", "codex-cli/test-model"],
+      judgeModels: ["openai/gpt-5.6-luna"],
       judgeBlindModels: true,
       runSuite,
       runJudge,
@@ -303,15 +405,23 @@ describe("runQaCharacterEval", () => {
     },
     {
       description: "duplicated ranks",
-      rankings: [makeRanking(primaryModel), makeRanking(kimi, 1, 7)],
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+        { model: "moonshot/kimi-k2.5", rank: 1, score: 7, summary: "ok" },
+      ],
     },
     {
       description: "an unknown candidate",
-      rankings: [makeRanking(primaryModel), makeRanking("unknown/candidate", 2, 7, "unknown")],
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+        { model: "unknown/candidate", rank: 2, score: 7, summary: "unknown" },
+      ],
     },
   ])("marks a judge with $description as failed", async ({ rankings }) => {
     const result = await runEval({
-      models: [primaryModel, kimi],
+      models: ["openai/gpt-5.6-luna", "moonshot/kimi-k2.5"],
+      judgeModels: ["openai/gpt-5.6-luna"],
+      runSuite: makeRunSuite(),
       runJudge: makeRunJudge(rankings),
     });
 
@@ -323,22 +433,20 @@ describe("runQaCharacterEval", () => {
   });
 
   it("defaults to the character eval model panel when no models are provided", async () => {
-    const panel = [
-      [primaryModel, "medium", true],
-      ["openai/gpt-5.2", "xhigh", true],
-      ["openai/gpt-5", "xhigh", true],
-      ["anthropic/claude-opus-4-8", "high", false],
-      ["anthropic/claude-sonnet-4-6", "high", false],
-      ["zai/glm-5.1", "high", false],
-      [kimi, "high", false],
-      ["google/gemini-3.1-pro-preview", "high", false],
-    ] as const;
     const runSuite = makeRunSuite();
-    const runJudge = makeRunJudge(panel.map(([model], index) => makeRanking(model, index + 1)));
+    const runJudge = makeRunJudge([
+      { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+      { model: "openai/gpt-5.2", rank: 2, score: 7.5, summary: "ok" },
+      { model: "openai/gpt-5", rank: 3, score: 7.2, summary: "ok" },
+      { model: "anthropic/claude-opus-4-8", rank: 4, score: 7, summary: "ok" },
+      { model: "anthropic/claude-sonnet-4-6", rank: 5, score: 6.8, summary: "ok" },
+      { model: "zai/glm-5.1", rank: 6, score: 6.3, summary: "ok" },
+      { model: "moonshot/kimi-k2.5", rank: 7, score: 6.2, summary: "ok" },
+      { model: "google/gemini-3.1-pro-preview", rank: 8, score: 6, summary: "ok" },
+    ]);
 
     await runEval({
       models: [],
-      judgeModels: undefined,
       runSuite,
       runJudge,
     });
@@ -350,27 +458,45 @@ describe("runQaCharacterEval", () => {
         params.thinkingDefault,
         params.fastMode,
       ]),
-    ).toEqual(panel);
-    expect(runJudge).toHaveBeenCalledTimes(2);
-    expect(runJudge.mock.calls.map(([params]) => params)).toMatchObject([
-      { judgeModel: primaryModel, judgeThinkingDefault: "xhigh", judgeFastMode: true },
-      {
-        judgeModel: "anthropic/claude-opus-4-8",
-        judgeThinkingDefault: "high",
-        judgeFastMode: false,
-      },
+    ).toEqual([
+      ["openai/gpt-5.6-luna", "medium", true],
+      ["openai/gpt-5.2", "xhigh", true],
+      ["openai/gpt-5", "xhigh", true],
+      ["anthropic/claude-opus-4-8", "high", false],
+      ["anthropic/claude-sonnet-4-6", "high", false],
+      ["zai/glm-5.1", "high", false],
+      ["moonshot/kimi-k2.5", "high", false],
+      ["google/gemini-3.1-pro-preview", "high", false],
     ]);
+    expect(runJudge).toHaveBeenCalledTimes(2);
+    expect(runJudge.mock.calls.map(([params]) => params.judgeModel)).toEqual([
+      "openai/gpt-5.6-luna",
+      "anthropic/claude-opus-4-8",
+    ]);
+    expect(runJudge.mock.calls.map(([params]) => params.judgeThinkingDefault)).toEqual([
+      "xhigh",
+      "high",
+    ]);
+    expect(runJudge.mock.calls.map(([params]) => params.judgeFastMode)).toEqual([true, false]);
   });
 
   it("runs candidate models with bounded concurrency while preserving result order", async () => {
     const runGate = createConcurrencyGate(2);
     const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
-      runGate.run(() => makeSuiteResult(params)),
+      runGate.run(() => makeReplySuiteResult(params)),
     );
+    const runJudge = makeRunJudge([
+      { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+      { model: "anthropic/claude-sonnet-4-6", rank: 2, score: 7, summary: "ok" },
+      { model: "moonshot/kimi-k2.5", rank: 3, score: 6, summary: "ok" },
+    ]);
+
     const resultPromise = runEval({
-      models: [primaryModel, "anthropic/claude-sonnet-4-6", kimi],
+      models: ["openai/gpt-5.6-luna", "anthropic/claude-sonnet-4-6", "moonshot/kimi-k2.5"],
       candidateConcurrency: 2,
+      judgeModels: ["openai/gpt-5.6-luna"],
       runSuite,
+      runJudge,
     });
 
     await runGate.waitForExpectedActive();
@@ -387,18 +513,24 @@ describe("runQaCharacterEval", () => {
   it("defaults candidate and judge concurrency to sixteen", async () => {
     const runGate = createConcurrencyGate(16);
     const judgeGate = createConcurrencyGate(16);
-    const models = Array.from({ length: 20 }, (_, index) => `provider/model-${index + 1}`);
     const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
-      runGate.run(() => makeSuiteResult(params)),
+      runGate.run(() => makeReplySuiteResult(params)),
     );
-    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
-      judgeGate.run(() =>
-        makeJudgeReply(models.map((model, index) => makeRanking(model, index + 1, 10 - index))),
-      ),
-    );
+    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) => {
+      return await judgeGate.run(() =>
+        makeJudgeReply(
+          Array.from({ length: 20 }, (_, index) => ({
+            model: `provider/model-${index + 1}`,
+            rank: index + 1,
+            score: 10 - index,
+            summary: "ok",
+          })),
+        ),
+      );
+    });
 
     const resultPromise = runEval({
-      models,
+      models: Array.from({ length: 20 }, (_, index) => `provider/model-${index + 1}`),
       judgeModels: Array.from({ length: 20 }, (_, index) => `judge/model-${index + 1}`),
       runSuite,
       runJudge,
@@ -442,18 +574,15 @@ describe("runQaCharacterEval", () => {
       model: "codex/gpt-5.6-luna",
       expectedReason: "internal harness/meta text leaked into transcript",
     },
-    {
-      title: "marks raw tool failure transcripts as failed output",
-      transcript: "ASSISTANT OpenClaw QA: ⚠️ ✍️ Write: to /tmp/precious.html failed",
-      model: "qwen/qwen3.5-plus",
-      expectedReason: "tool failure leaked into transcript",
-    },
   ])("$title", async ({ transcript, model, expectedReason }) => {
     const runSuite = makeRunSuite(() => transcript);
+    const runJudge = makeRunJudge([{ model, rank: 1, score: 0.5, summary: "failed" }]);
+
     const result = await runEval({
       models: [model],
+      judgeModels: ["openai/gpt-5.6-luna"],
       runSuite,
-      runJudge: makeRunJudge([makeRanking(model, 1, 0.5, "failed")]),
+      runJudge,
     });
 
     expectFirstRunFailure(result, {
@@ -463,9 +592,24 @@ describe("runQaCharacterEval", () => {
   });
 
   it("marks candidates failed when the suite summary has failed scenarios", async () => {
+    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
+      makeSuiteResult({
+        outputDir: params.outputDir,
+        model: params.primaryModel,
+        transcript: "USER Alice: hi\n\nASSISTANT openclaw: outwardly fine",
+        summaryStatus: "fail",
+        summaryFailedCount: 1,
+      }),
+    );
+    const runJudge = makeRunJudge([
+      { model: "openai/gpt-5.6-luna", rank: 1, score: 0.5, summary: "failed" },
+    ]);
+
     const result = await runEval({
-      runSuite: makeRunSuite(defaultModelTranscript, { summaryStatus: "fail" }),
-      runJudge: makeRunJudge([makeRanking(primaryModel, 1, 0.5, "failed")]),
+      models: ["openai/gpt-5.6-luna"],
+      judgeModels: ["openai/gpt-5.6-luna"],
+      runSuite,
+      runJudge,
     });
 
     expect(result.runs[0]?.status).toBe("fail");
@@ -473,13 +617,22 @@ describe("runQaCharacterEval", () => {
   });
 
   it("rejects a candidate whose suite summary is still running", async () => {
+    const model = "openai/gpt-5.6-luna";
     const result = await runEval({
-      runSuite: makeRunSuite(defaultModelTranscript, { runStatus: "running" }),
-      runJudge: makeRunJudge([makeRanking(primaryModel, 1, 0.5, "failed")]),
+      models: [model],
+      judgeModels: [model],
+      runSuite: async (params) =>
+        makeSuiteResult({
+          outputDir: params.outputDir,
+          model,
+          transcript: "USER Alice: hi\n\nASSISTANT openclaw: partial reply",
+          runStatus: "running",
+        }),
+      runJudge: makeRunJudge([{ model, rank: 1, score: 0.5, summary: "failed" }]),
     });
 
     expect(result.runs[0]).toMatchObject({
-      model: primaryModel,
+      model,
       status: "fail",
       error: expect.stringContaining("still running"),
     });
@@ -487,9 +640,16 @@ describe("runQaCharacterEval", () => {
 
   it("rejects a passing suite with a user-only conversation", async () => {
     const transcript = "USER Alice: hello?";
+    const runSuite = makeRunSuite(() => transcript);
+    const runJudge = makeRunJudge([
+      { model: "openai/gpt-5.6-luna", rank: 1, score: 0.5, summary: "no reply" },
+    ]);
+
     const result = await runEval({
-      runSuite: makeRunSuite(() => transcript),
-      runJudge: makeRunJudge([makeRanking(primaryModel, 1, 0.5, "no reply")]),
+      models: ["openai/gpt-5.6-luna"],
+      judgeModels: ["openai/gpt-5.6-luna"],
+      runSuite,
+      runJudge,
     });
 
     expectFirstRunFailure(result, {
@@ -500,13 +660,41 @@ describe("runQaCharacterEval", () => {
     expect(result.runs[0]?.transcript).toBe(transcript);
   });
 
+  it("marks raw tool failure transcripts as failed output", async () => {
+    const runSuite = makeRunSuite(
+      () => "ASSISTANT OpenClaw QA: ⚠️ ✍️ Write: to /tmp/precious.html failed",
+    );
+    const runJudge = makeRunJudge([
+      { model: "qwen/qwen3.5-plus", rank: 1, score: 0.5, summary: "failed" },
+    ]);
+
+    const result = await runEval({
+      models: ["qwen/qwen3.5-plus"],
+      judgeModels: ["openai/gpt-5.6-luna"],
+      runSuite,
+      runJudge,
+    });
+
+    expectFirstRunFailure(result, {
+      model: "qwen/qwen3.5-plus",
+      error: "tool failure leaked into transcript",
+    });
+  });
+
   it("lets explicit candidate thinking override the default panel", async () => {
     const runSuite = makeRunSuite();
+    const runJudge = makeRunJudge([
+      { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+      { model: "moonshot/kimi-k2.5", rank: 2, score: 7, summary: "ok" },
+    ]);
+
     await runEval({
-      models: [primaryModel, kimi],
+      models: ["openai/gpt-5.6-luna", "moonshot/kimi-k2.5"],
       candidateThinkingDefault: "medium",
       candidateThinkingByModel: { "moonshot/kimi-k2.5": "high" },
+      judgeModels: ["openai/gpt-5.6-luna"],
       runSuite,
+      runJudge,
     });
 
     expect(runSuite.mock.calls.map(([params]) => params.thinkingDefault)).toEqual([
@@ -517,10 +705,13 @@ describe("runQaCharacterEval", () => {
 
   it("lets model-specific options override candidate and judge defaults", async () => {
     const runSuite = makeRunSuite();
-    const runJudge = makeRunJudge([makeRanking(primaryModel), makeRanking(kimi, 2, 7)]);
+    const runJudge = makeRunJudge([
+      { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+      { model: "moonshot/kimi-k2.5", rank: 2, score: 7, summary: "ok" },
+    ]);
 
     await runEval({
-      models: [primaryModel, kimi],
+      models: ["openai/gpt-5.6-luna", "moonshot/kimi-k2.5"],
       candidateFastMode: true,
       candidateThinkingDefault: "medium",
       candidateModelOptions: {
@@ -535,14 +726,16 @@ describe("runQaCharacterEval", () => {
       runJudge,
     });
 
-    expect(runSuite.mock.calls.map(([params]) => params)).toMatchObject([
-      { thinkingDefault: "xhigh", fastMode: false },
-      { thinkingDefault: "medium", fastMode: true },
+    expect(runSuite.mock.calls.map(([params]) => params.thinkingDefault)).toEqual([
+      "xhigh",
+      "medium",
     ]);
-    expect(runJudge.mock.calls.map(([params]) => params)).toMatchObject([
-      { judgeThinkingDefault: "xhigh", judgeFastMode: true },
-      { judgeThinkingDefault: "high", judgeFastMode: false },
+    expect(runSuite.mock.calls.map(([params]) => params.fastMode)).toEqual([false, true]);
+    expect(runJudge.mock.calls.map(([params]) => params.judgeThinkingDefault)).toEqual([
+      "xhigh",
+      "high",
     ]);
+    expect(runJudge.mock.calls.map(([params]) => params.judgeFastMode)).toEqual([true, false]);
   });
 
   it("keeps failed model runs in the report for grader context", async () => {
