@@ -1,4 +1,3 @@
-import type { Server } from "node:http";
 import { BedrockRuntimeClient, ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime";
 import type { Context, Model, UserMessage } from "openclaw/plugin-sdk/llm";
 import { expect, vi } from "vitest";
@@ -113,19 +112,3 @@ export const toolDelta = (contentBlockIndex: number, input: string) => ({
 export const textDelta = (text: string) => ({
   contentBlockDelta: { contentBlockIndex: 0, delta: { text } },
 });
-export async function listen(server: Server) {
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected loopback listener");
-  }
-  return `http://127.0.0.1:${address.port}`;
-}
-export async function closeServer(server: Server) {
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
