@@ -19,7 +19,12 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createCronTool } from "../agents/tools/cron-tool.js";
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import type { SystemAgentToolOptions } from "../agents/tools/system-agent-tool.js";
-import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../config/config.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  getRuntimeConfig,
+  resolveConfigPath,
+} from "../config/config.js";
+import { readCurrentConfigForPolicyCheckAsync } from "../config/io.runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
@@ -82,7 +87,36 @@ export async function resolveOpenClawToolsForMcp(
   if (!agentSessionKey) {
     return tools;
   }
-  const config = params.config ?? getRuntimeConfig();
+  const policyScope = { agentSessionKey, agentId: params.agentId };
+  const allowed = await filterToolsByAgentPolicy(tools, {
+    ...policyScope,
+    config: params.config ?? getRuntimeConfig(),
+  });
+  return allowed.map((tool) =>
+    Object.assign({}, tool, {
+      execute: async (...args: Parameters<AnyAgentTool["execute"]>) => {
+        const current = await readCurrentConfigForPolicyCheckAsync({
+          configPath: resolveConfigPath(),
+          env: process.env,
+        });
+        const stillAllowed = await filterToolsByAgentPolicy([tool], {
+          ...policyScope,
+          config: current,
+        });
+        if (stillAllowed.length === 0) {
+          throw new Error(`${tool.name} is no longer allowed by the configured tool policy`);
+        }
+        return await tool.execute(...args);
+      },
+    }),
+  );
+}
+
+async function filterToolsByAgentPolicy(
+  tools: AnyAgentTool[],
+  params: { agentSessionKey: string; agentId?: string; config: OpenClawConfig },
+): Promise<AnyAgentTool[]> {
+  const { agentSessionKey, config } = params;
   const context = resolveToolsMcpSessionContext({ agentSessionKey, agentId: params.agentId });
   const effective = resolveEffectiveToolPolicy({
     config,
