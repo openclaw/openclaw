@@ -27,6 +27,8 @@ const presentation = {
 };
 const access = "sk-oauthreviewredaction1234567890zzzz";
 const refresh = "ya29.oauthreviewredaction1234567890yyyy";
+const login = "openclaw models auth login --provider";
+const claudeLogin = `claude auth login && ${login} anthropic --method cli`;
 
 describe("OAuthManagerRefreshError", () => {
   it.each<{
@@ -120,25 +122,25 @@ it.each([
     "openai",
     "auth",
     "openai:default",
-    "Re-authenticate with `openclaw models auth login --provider openai --profile-id 'openai:default'`.",
+    `Re-authenticate with \`${login} openai --profile-id 'openai:default'\`.`,
   ],
   [
     "openai",
     "auth_permanent",
     "openai:default",
-    "Re-authenticate with `openclaw models auth login --provider openai --profile-id 'openai:default'`.",
+    `Re-authenticate with \`${login} openai --profile-id 'openai:default'\`.`,
   ],
   [
     "claude-cli",
     "session_expired",
     "anthropic:claude-cli",
-    "Re-authenticate with `claude auth login && openclaw models auth login --provider anthropic --method cli --profile-id 'anthropic:claude-cli'`.",
+    `Re-authenticate with \`${claudeLogin} --profile-id 'anthropic:claude-cli'\`.`,
   ],
   [
     "anthropic",
     "auth",
     "anthropic:api-key",
-    "Re-authenticate with `openclaw models auth login --provider anthropic --profile-id 'anthropic:api-key'`.",
+    `Re-authenticate with \`${login} anthropic --profile-id 'anthropic:api-key'\`.`,
   ],
   [
     "google-gemini-cli",
@@ -156,16 +158,8 @@ it.each([
 );
 
 it.each([
-  [
-    "openai",
-    "Work Profile",
-    "openclaw models auth login --provider openai --profile-id 'Work Profile'",
-  ],
-  [
-    "openai",
-    "openai:work`slot",
-    "openclaw models auth login --provider openai --profile-id 'openai:work`slot'",
-  ],
+  ["openai", "Work Profile", `${login} openai --profile-id 'Work Profile'`],
+  ["openai", "openai:work`slot", `${login} openai --profile-id 'openai:work\`slot'`],
 ] as const)("quotes recovery commands for %s / %s", (provider, profileId, expected) => {
   const command = buildOAuthRefreshFailureLoginCommand(provider, { profileId });
   expect(command).toBe(expected);
@@ -180,7 +174,7 @@ it.each([
   [
     "OAuth token refresh failed for openai: invalid_grant",
     { provider: "openai", reason: "invalid_grant" },
-    "openclaw models auth login --provider openai",
+    `${login} openai`,
   ],
   [
     "OAuth token refresh failed for openai: token_invalidated. Please sign in again.",
@@ -195,13 +189,13 @@ it.each([
   [
     "Provider claude-cli failed: Failed to authenticate. API Error: 401 Invalid authentication credentials",
     { provider: "claude-cli", reason: "revoked" },
-    "claude auth login && openclaw models auth login --provider anthropic --method cli",
+    claudeLogin,
   ],
   ["Provider openai failed: Failed to authenticate. API Error: 401 Unauthorized", null, undefined],
-] as const)("classifies only OAuth refresh display messages: %s", (message, expected, login) => {
+] as const)("classifies only OAuth refresh display messages: %s", (message, expected, command) => {
   expect(classifyOAuthRefreshFailure(message)).toEqual(expected);
-  if (login) {
-    expect(buildOAuthRefreshFailureLoginCommand(expected?.provider)).toBe(login);
+  if (command) {
+    expect(buildOAuthRefreshFailureLoginCommand(expected?.provider)).toBe(command);
   }
 });
 
@@ -224,37 +218,29 @@ const cliFailure = {
 };
 
 it.each([
-  {
-    name: "typed metadata without display-message parsing",
-    error: new OAuthRefreshFailureError({ ...typedFailure, ...diagnostics }),
-    expected: {
-      provider: typedFailure.provider,
-      profileId: typedFailure.profileId,
-      ...diagnostics,
-    },
-  },
-  {
-    name: "typed metadata through a wrapper cause",
-    error: new Error("wrapped", { cause: new OAuthRefreshFailureError(typedFailure) }),
-    expected: {
-      provider: typedFailure.provider,
-      profileId: typedFailure.profileId,
-      reason: "invalid_grant",
-    },
-  },
-  {
-    name: "failover raw-error fallback",
-    error: new FailoverError("Authentication refresh failed", {
+  [
+    "typed metadata without display-message parsing",
+    new OAuthRefreshFailureError({ ...typedFailure, ...diagnostics }),
+    { provider: typedFailure.provider, profileId: typedFailure.profileId, ...diagnostics },
+  ],
+  [
+    "typed metadata through a wrapper cause",
+    new Error("wrapped", { cause: new OAuthRefreshFailureError(typedFailure) }),
+    { provider: typedFailure.provider, profileId: typedFailure.profileId, reason: "invalid_grant" },
+  ],
+  [
+    "failover raw-error fallback",
+    new FailoverError("Authentication refresh failed", {
       reason: "auth_permanent",
       provider: "openai",
       profileId: "openai:work",
       rawError: "OAuth token refresh failed for openai: refresh_token_invalidated",
     }),
-    expected: { provider: "openai", profileId: "openai:work", reason: "token_invalidated" },
-  },
-  {
-    name: "structured cause precedence over raw text",
-    error: new FailoverError("Authentication refresh failed", {
+    { provider: "openai", profileId: "openai:work", reason: "token_invalidated" },
+  ],
+  [
+    "structured cause precedence over raw text",
+    new FailoverError("Authentication refresh failed", {
       reason: "auth_permanent",
       provider: "openai",
       rawError: "OAuth token refresh failed for openai: refresh_token_reused",
@@ -265,25 +251,21 @@ it.each([
         summary: "Please sign in again.",
       }),
     }),
-    expected: {
-      provider: "openai",
-      reason: "refresh_token_reused",
-      summary: "Please sign in again.",
-    },
-  },
-  {
-    name: "structured Claude CLI 401 without a provider prefix",
-    error: new FailoverError(
+    { provider: "openai", reason: "refresh_token_reused", summary: "Please sign in again." },
+  ],
+  [
+    "structured Claude CLI 401 without a provider prefix",
+    new FailoverError(
       "Failed to authenticate. API Error: 401 Invalid authentication credentials",
       cliFailure,
     ),
-    expected: { provider: "claude-cli", reason: "revoked" },
-  },
-  {
-    name: "structured Claude CLI logout without a provider prefix",
-    error: new FailoverError("Not logged in · Please run /login", cliFailure),
-    expected: { provider: "claude-cli", reason: "sign_in_again" },
-  },
-])("classifies $name", ({ error, expected }) => {
+    { provider: "claude-cli", reason: "revoked" },
+  ],
+  [
+    "structured Claude CLI logout without a provider prefix",
+    new FailoverError("Not logged in · Please run /login", cliFailure),
+    { provider: "claude-cli", reason: "sign_in_again" },
+  ],
+] as const)("classifies %s", (_name, error, expected) => {
   expect(classifyOAuthRefreshFailureError(error)).toEqual(expected);
 });

@@ -1,8 +1,3 @@
-/**
- * Tests auth profile ordering and provider compatibility.
- * Covers manifest auth aliases, configured order, cooldown state, AWS SDK
- * profiles, and OpenAI/Codex compatibility.
- */
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -178,47 +173,39 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toStrictEqual(["fixture-provider:oauth", "fixture-provider:key"]);
   });
 
-  it.each([["valid first", ["openai:valid", "openai:expired"]]])(
-    "prefers live OAuth before expired OAuth when %s",
-    (_caseName, profileIds) => {
-      const now = Date.now();
-      const profiles: AuthProfileStore["profiles"] = {
-        "openai:expired": oauthCred({
-          provider: "openai",
-          access: "expired-access",
-          refresh: "expired-refresh",
-          expires: now - 60_000,
-        }),
-        "openai:valid": oauthCred({
-          provider: "openai",
-          access: "valid-access",
-          refresh: "valid-refresh",
-          expires: now + 60_000,
-        }),
-      };
-      const orderedProfiles: AuthProfileStore["profiles"] = {};
-      for (const profileId of profileIds) {
-        const profile = profiles[profileId];
-        if (profile) {
-          orderedProfiles[profileId] = profile;
-        }
-      }
-
-      expect(
-        resolveAuthProfileOrder({
-          store: {
-            version: 1,
-            profiles: orderedProfiles,
-            usageStats: {
-              "openai:expired": { lastUsed: 0 },
-              "openai:valid": { lastUsed: 10_000 },
-            },
+  it("prefers live OAuth before expired OAuth", () => {
+    const now = Date.now();
+    const profiles: AuthProfileStore["profiles"] = {
+      "openai:expired": oauthCred({
+        provider: "openai",
+        access: "expired-access",
+        refresh: "expired-refresh",
+        expires: now - 60_000,
+      }),
+      "openai:valid": oauthCred({
+        provider: "openai",
+        access: "valid-access",
+        refresh: "valid-refresh",
+        expires: now + 60_000,
+      }),
+    };
+    expect(
+      resolveAuthProfileOrder({
+        store: {
+          version: 1,
+          profiles: {
+            "openai:valid": profiles["openai:valid"],
+            "openai:expired": profiles["openai:expired"],
           },
-          provider: "openai",
-        }),
-      ).toStrictEqual(["openai:valid", "openai:expired"]);
-    },
-  );
+          usageStats: {
+            "openai:expired": { lastUsed: 0 },
+            "openai:valid": { lastUsed: 10_000 },
+          },
+        },
+        provider: "openai",
+      }),
+    ).toStrictEqual(["openai:valid", "openai:expired"]);
+  });
 
   it.each(["read-only", "execution"] as const)(
     "orders expired and active cooldowns in %s mode without read-only housekeeping",
@@ -271,32 +258,16 @@ describe("resolveAuthProfileOrder", () => {
       },
     };
 
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: {
-            "fixture-provider": ["fixture-provider:missing"],
-          },
-        },
-      },
+    const params = {
       store,
       provider: "fixture-provider",
+      cfg: { auth: { order: { "fixture-provider": ["fixture-provider:missing"] } } },
+    };
+    expect(resolveAuthProfileOrder(params)).toStrictEqual([]);
+    expect(resolveAuthProfileOrderWithMetadata(params)).toStrictEqual({
+      profileIds: [],
+      hasExplicitOrder: true,
     });
-
-    expect(order).toStrictEqual([]);
-    expect(
-      resolveAuthProfileOrderWithMetadata({
-        cfg: {
-          auth: {
-            order: {
-              "fixture-provider": ["fixture-provider:missing"],
-            },
-          },
-        },
-        store,
-        provider: "fixture-provider",
-      }),
-    ).toStrictEqual({ profileIds: [], hasExplicitOrder: true });
   });
 
   it.each(["cooldown", "block"] as const)(

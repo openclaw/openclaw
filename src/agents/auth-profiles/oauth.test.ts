@@ -49,6 +49,12 @@ afterAll(() => {
 function cfgFor(profileId: string, provider: string, mode: "api_key" | "token" | "oauth") {
   return { auth: { profiles: { [profileId]: { provider, mode } } } } satisfies OpenClawConfig;
 }
+const token = (overrides: Partial<Extract<AuthProfileCredential, { type: "token" }>> = {}) =>
+  ({ type: "token", provider: "anthropic", token: "tok-123", ...overrides }) as const;
+const unavailable = (result: Promise<unknown>) =>
+  expect(result).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
+const scoped = (result: Promise<unknown>) =>
+  expect(result).resolves.toMatchObject({ apiKey: "synthetic-scoped-credential" });
 function resolveCredential(
   credential: AuthProfileCredential,
   mode = credential.type,
@@ -90,15 +96,7 @@ describe("resolveApiKeyForProfile", () => {
 
   it("accepts token credentials when config mode is oauth", async () => {
     await expect(
-      resolveCredential(
-        {
-          type: "token",
-          provider: "anthropic",
-          token: "tok-123",
-          expires: Date.now() + 60_000,
-        },
-        "oauth",
-      ),
+      resolveCredential(token({ expires: Date.now() + 60_000 }), "oauth"),
     ).resolves.toEqual({ apiKey: "tok-123", provider: "anthropic", email: undefined });
   });
 
@@ -106,28 +104,11 @@ describe("resolveApiKeyForProfile", () => {
     { mode: "api_key" as const, provider: "anthropic" },
     { mode: "token" as const, provider: "openai" },
   ])("rejects incompatible profile configuration: $provider/$mode", async ({ mode, provider }) => {
-    await expect(
-      resolveCredential(
-        {
-          type: "token",
-          provider: "anthropic",
-          token: "tok-123",
-        },
-        mode,
-        provider,
-      ),
-    ).resolves.toBeNull();
+    await expect(resolveCredential(token(), mode, provider)).resolves.toBeNull();
   });
 
   it("returns null for token credentials with invalid expiry", async () => {
-    await expect(
-      resolveCredential({
-        type: "token",
-        provider: "anthropic",
-        token: "tok-123",
-        expires: Number.NaN,
-      }),
-    ).resolves.toBeNull();
+    await expect(resolveCredential(token({ expires: Number.NaN }))).resolves.toBeNull();
   });
 
   it("uses current expired metadata before applying degraded owner state", async () => {
@@ -239,7 +220,7 @@ describe("setup-owned SecretRef materialization", () => {
           },
         },
         async () => {
-          await expect(resolve()).resolves.toMatchObject({ apiKey: "synthetic-scoped-credential" });
+          await scoped(resolve());
           let releaseRetained: (() => void) | undefined;
           const retained = new Promise<void>((done) => {
             releaseRetained = done;
@@ -250,40 +231,32 @@ describe("setup-owned SecretRef materialization", () => {
           };
           if (settlement === "abort") {
             controller.abort();
-            await expect(resolve()).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
+            await unavailable(resolve());
           } else if (settlement === "replacement") {
             setRuntimeAuthProfileStoreSnapshot({
               version: 1,
               profiles: { [profileId]: { ...source, key: "synthetic-new-owner-credential" } },
             });
-            await expect(resolve()).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
+            await unavailable(resolve());
           } else if (settlement === "nested") {
             await withSetupCredentialAccess({ profileId }, async () => {
-              await expect(resolve()).resolves.toMatchObject({
-                apiKey: "synthetic-scoped-credential",
-              });
+              await scoped(resolve());
               await runOutsideSetupCredentialAccess(async () => {
-                await expect(resolve()).rejects.toMatchObject({
-                  code: "SECRET_SURFACE_UNAVAILABLE",
-                });
+                await unavailable(resolve());
               });
-              await expect(resolve()).resolves.toMatchObject({
-                apiKey: "synthetic-scoped-credential",
-              });
+              await scoped(resolve());
             });
           } else if (settlement === "other-profile") {
             await withSetupCredentialAccess({ profileId: "openai:another-setup" }, async () => {
-              await expect(resolve()).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
+              await unavailable(resolve());
             });
           } else if (settlement === "other-store") {
-            await expect(resolve("/unrelated/setup-owner")).rejects.toMatchObject({
-              code: "SECRET_SURFACE_UNAVAILABLE",
-            });
+            await unavailable(resolve("/unrelated/setup-owner"));
           }
         },
       );
       expect(readAfterClose).toBeDefined();
-      await expect(readAfterClose!()).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
+      await unavailable(readAfterClose!());
       if (settlement === "replacement") {
         await expect(resolve()).resolves.toMatchObject({
           apiKey: "synthetic-new-owner-credential",

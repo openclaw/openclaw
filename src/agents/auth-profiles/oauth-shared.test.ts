@@ -149,12 +149,9 @@ it("isolates runtime OAuth overlays without structuredClone", () => {
   }
 });
 
-const minimax = credential({
-  provider: "minimax-portal",
-  access: "minimax-access",
-  refresh: "minimax-refresh",
-  expires: 1,
-});
+const minimax = credential({ provider: "minimax-portal" });
+const anthropic = credential({ provider: "anthropic" });
+const openai = credential();
 const provenanceCases: {
   name: string;
   store: RuntimeAuthProfileStore;
@@ -168,24 +165,14 @@ const provenanceCases: {
       version: 1,
       runtimeExternalProfileIds: ["minimax:minimax-cli"],
       profiles: {
-        "anthropic:claude-cli": credential({
-          provider: "anthropic",
-          access: "old-access",
-          refresh: "old-refresh",
-          expires: 1,
-        }),
+        "anthropic:claude-cli": anthropic,
         "minimax:minimax-cli": minimax,
       },
     },
     overlays: [
       {
         profileId: "anthropic:claude-cli",
-        credential: credential({
-          provider: "anthropic",
-          access: "new-access",
-          refresh: "new-refresh",
-          expires: 2,
-        }),
+        credential: anthropic,
       },
     ],
     expectedIds: ["anthropic:claude-cli", "minimax:minimax-cli"],
@@ -210,23 +197,13 @@ const provenanceCases: {
       runtimeCredentialSources: {
         "openai:default": { databasePath: "synthetic-owner.sqlite", provider: "openai" },
       },
-      profiles: {
-        "openai:default": credential({
-          access: "persisted-access",
-          refresh: "persisted-refresh",
-          expires: 1,
-        }),
-      },
+      profiles: { "openai:default": openai },
     },
     overlays: [
       {
         profileId: "openai:default",
         persistence: "persisted",
-        credential: credential({
-          access: "external-access",
-          refresh: "external-refresh",
-          expires: 2,
-        }),
+        credential: openai,
       },
     ],
   },

@@ -44,6 +44,46 @@ import { reconcileWhamBlock } from "./usage-reduction.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+function managerWith(overrides: Partial<Parameters<typeof createOAuthManager>[0]>) {
+  return createOAuthManager({
+    canRefreshCredential: async () => true,
+    refreshCredential: async () => null,
+    buildApiKey: async (_provider, current) => current.access,
+    readBootstrapCredential: () => null,
+    ...overrides,
+  });
+}
+
+function resolve(
+  manager: ReturnType<typeof createOAuthManager>,
+  profileId: string,
+  credential: OAuthCredential,
+  options: Partial<Parameters<typeof manager.resolveOAuthAccess>[0]> = {},
+) {
+  return manager.resolveOAuthAccess({
+    profileId,
+    credential,
+    store: { version: 1, profiles: { [profileId]: credential } },
+    ...options,
+  });
+}
+
+async function withoutDatabase<T>(run: () => T): Promise<Awaited<T>> {
+  const sql = observeMainThreadSql();
+  const requests = vi.spyOn(Worker.prototype, "postMessage");
+  try {
+    return await run();
+  } finally {
+    try {
+      sql.expectIdle();
+      expect(requests).not.toHaveBeenCalled();
+    } finally {
+      sql.restore();
+      requests.mockRestore();
+    }
+  }
+}
+
 function fixture() {
   const owner = ensureProfileForEmail("personal-race@example.test");
   const credential: OAuthCredential = {
@@ -122,16 +162,7 @@ it("retains a personal credential pin across unlink without SQL or worker reques
       provider: credential.provider,
       assertCurrent() {},
     });
-    const sql = observeMainThreadSql();
-    const requests = vi.spyOn(Worker.prototype, "postMessage");
-    try {
-      expect(readCurrent()).toEqual(credential);
-      sql.expectIdle();
-      expect(requests).not.toHaveBeenCalled();
-    } finally {
-      sql.restore();
-      requests.mockRestore();
-    }
+    await withoutDatabase(() => expect(readCurrent()).toEqual(credential));
   });
 });
 
@@ -340,7 +371,7 @@ it.each(["capability", "format"] as const)(
       const { profileId, credential, replacement, replace } = fixture();
       const refreshCredential = vi.fn(async () => replacement);
       let changed = false;
-      const manager = createOAuthManager({
+      const manager = managerWith({
         canRefreshCredential: async () => {
           if (stage === "capability") {
             replace();
@@ -355,7 +386,6 @@ it.each(["capability", "format"] as const)(
           }
           return current.access;
         },
-        readBootstrapCredential: () => null,
       });
       if (stage === "format") {
         updateUserModelAuthProfile(profileId, (profile) => {
@@ -363,11 +393,7 @@ it.each(["capability", "format"] as const)(
           return true;
         });
       }
-      const resolving = manager.resolveOAuthAccess({
-        store: { version: 1, profiles: { [profileId]: credential } },
-        profileId,
-        credential,
-      });
+      const resolving = resolve(manager, profileId, credential);
       if (stage === "format") {
         await expect(resolving).rejects.toThrow("changed during provider preparation");
       } else {
@@ -386,17 +412,11 @@ it("accepts refreshed credentials with undefined optionals without repeating pro
     const buildApiKey = vi.fn(
       async (_provider: string, current: OAuthCredential) => current.access,
     );
-    const manager = createOAuthManager({
-      canRefreshCredential: async () => true,
+    const manager = managerWith({
       refreshCredential,
       buildApiKey,
-      readBootstrapCredential: () => null,
     });
-    const result = await manager.resolveOAuthAccess({
-      profileId,
-      credential,
-      store: { version: 1, profiles: { [profileId]: credential } },
-    });
+    const result = await resolve(manager, profileId, credential);
     expect(result).toStrictEqual({ apiKey: replacement.access, credential: replacement });
     expect(readUserModelAuthProfile(profileId)?.credential).toStrictEqual(replacement);
     expect(refreshCredential).toHaveBeenCalledTimes(1);
@@ -413,20 +433,14 @@ it("rechecks a live pin after refresh and never discloses a revoked selection", 
       authProfileId: profileId,
     });
     expect(pin).toBeDefined();
-    const manager = createOAuthManager({
-      canRefreshCredential: async () => true,
+    const manager = managerWith({
       refreshCredential: async () => {
         linkEmail("personal-race@example.test", successor.id);
         return replacement;
       },
-      buildApiKey: async (_provider, value) => value.access,
-      readBootstrapCredential: () => null,
     });
     await expect(
-      manager.resolveOAuthAccess({
-        store: { version: 1, profiles: { [profileId]: credential } },
-        profileId,
-        credential,
+      resolve(manager, profileId, credential, {
         validateCredential() {
           if (!pin?.isCurrent()) {
             throw new Error("Synthetic pin revoked");
@@ -444,41 +458,18 @@ it("resolves and accepts published personal credentials without SQL or worker re
     const observe = vi.fn<(observation: CanonicalAuthProfileCredentialObservation) => void>();
     await withPersonalAuthProfileStore(profileId, async (owner) => {
       await owner.read();
-      const withoutDatabase = async <T>(run: () => Promise<T>) => {
-        const sql = observeMainThreadSql();
-        const requests = vi.spyOn(Worker.prototype, "postMessage");
-        try {
-          return await run();
-        } finally {
-          try {
-            sql.expectIdle();
-            expect(requests).not.toHaveBeenCalled();
-          } finally {
-            sql.restore();
-            requests.mockRestore();
-          }
-        }
-      };
       await withCanonicalAuthProfileCredentialObserver(observe, async () => {
         expect(await withoutDatabase(() => owner.accept(credential))).toEqual(credential);
         replace();
         await expect(withoutDatabase(() => owner.accept(credential))).rejects.toThrow(
           "changed during provider preparation",
         );
-        const manager = createOAuthManager({
+        const manager = managerWith({
           canRefreshCredential: async () => false,
-          refreshCredential: async () => null,
-          buildApiKey: async (_provider, current) => current.access,
-          readBootstrapCredential: () => null,
         });
         expect(
           await withoutDatabase(() =>
-            manager.resolveOAuthAccess({
-              personalStore: owner,
-              profileId,
-              credential,
-              store: { version: 1, profiles: { [profileId]: credential } },
-            }),
+            resolve(manager, profileId, credential, { personalStore: owner }),
           ),
         ).toEqual({ apiKey: replacement.access, credential: replacement });
       });
@@ -495,7 +486,7 @@ it.each(["capability", "refresh"] as const)(
   async (stage) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { profileId, credential, replacement } = fixture();
-      const manager = createOAuthManager({
+      const manager = managerWith({
         canRefreshCredential: async (input) => {
           if (stage === "capability") {
             input.accountId = "synthetic-other-account";
@@ -508,14 +499,8 @@ it.each(["capability", "refresh"] as const)(
           }
           return { ...replacement, accountId: input.accountId };
         },
-        buildApiKey: async (_provider, value) => value.access,
-        readBootstrapCredential: () => null,
       });
-      const resolving = manager.resolveOAuthAccess({
-        profileId,
-        credential,
-        store: { version: 1, profiles: { [profileId]: credential } },
-      });
+      const resolving = resolve(manager, profileId, credential);
       if (stage === "capability") {
         expect(await resolving).toEqual({ apiKey: replacement.access, credential: replacement });
       } else {
