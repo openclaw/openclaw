@@ -1,5 +1,6 @@
 import {
   findNormalizedProviderValue,
+  isCloudModelRef,
   normalizeProviderId,
 } from "openclaw/plugin-sdk/model-ref-parse";
 import type {
@@ -7,7 +8,6 @@ import type {
   ProviderNormalizeResolvedModelContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { isCloudModelRef } from "openclaw/plugin-sdk/provider-model-shared";
 import type {
   ModelProviderConfig,
   ProviderToolSearchPolicyContext,
