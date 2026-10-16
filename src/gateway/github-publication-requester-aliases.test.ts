@@ -44,6 +44,11 @@ const fixture = createRequesterPublicationFixture.bind(undefined, checkpoint);
 const email = "publication-guest@example.test";
 type PolicyFixture = Awaited<ReturnType<typeof createRequesterPolicyFixture>>;
 
+const forBackends = <T extends string>(changes: readonly T[]) =>
+  (["local", "repository"] as const).flatMap((backend) =>
+    changes.map((change) => ({ backend, change })),
+  );
+
 function captureGuest(f: PolicyFixture) {
   return createGitHubPublicationRequesterFixture({
     profileId: f.guestProfile,
@@ -144,11 +149,7 @@ describe("shared GitHub publication requester alias bindings", () => {
     },
   );
 
-  it.each(
-    (["local", "repository"] as const).flatMap((backend) =>
-      (["captured alias", "later alias"] as const).map((change) => ({ backend, change })),
-    ),
-  )(
+  it.each(forBackends(["captured alias", "later alias"] as const))(
     "binds queued $backend Visitor publication when $change changes",
     async ({ backend, change }) => {
       const f = await fixture(backend);
@@ -232,14 +233,7 @@ describe("shared GitHub publication requester alias bindings", () => {
     },
   );
 
-  it.each(
-    (["local", "repository"] as const).flatMap((backend) =>
-      (["later alias removed", "request cancelled"] as const).map((change) => ({
-        backend,
-        change,
-      })),
-    ),
-  )(
+  it.each(forBackends(["later alias removed", "request cancelled"] as const))(
     "checks the accepted $backend policy during an immediate retry with $change",
     async ({ backend, change }) => {
       const f = await fixture(backend);
@@ -333,14 +327,10 @@ describe("shared GitHub publication requester alias bindings", () => {
   );
 
   it.each(
-    (["local", "repository"] as const).flatMap((backend) =>
-      (["profile preparation is unavailable", "a profile mutation is unsettled"] as const).map(
-        (availability) => ({ backend, availability }),
-      ),
-    ),
+    forBackends(["profile preparation is unavailable", "a profile mutation is unsettled"] as const),
   )(
-    "keeps an accepted $backend request pending when $availability",
-    async ({ backend, availability }) => {
+    "keeps an accepted $backend request pending when $change",
+    async ({ backend, change: availability }) => {
       const f = await fixture(backend);
       await withVisitors(f, async () => {
         const original = await captureGuest(f);

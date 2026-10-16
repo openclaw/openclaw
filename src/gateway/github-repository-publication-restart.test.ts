@@ -87,21 +87,17 @@ describe("repository checkpoint GitHub publication", () => {
       await restartPersonalPublicationFixture(person);
       const preparedStatus = await person.coordinator.preparePersonalStatus(first.requestId);
       using _ = { [Symbol.dispose]: () => preparedStatus?.release() };
-      const pending = await person.coordinator.personalStatusAsync(
-        person.action,
-        person.action,
-        first.requestId,
-        preparedStatus,
-      );
-      expect(pending?.confirmation?.workspaceTree).toBe(f.first.workspaceTree);
-      await expect(
+      const status = (action = person.action) =>
         person.coordinator.personalStatusAsync(
-          { ...person.action, owner: person.otherOwner },
+          action,
           person.action,
           first.requestId,
           preparedStatus,
-        ),
-      ).rejects.toThrow();
+        );
+      const receipt = () => readRepositoryGitHubPublication(first.requestId);
+      const pending = await status();
+      expect(pending?.confirmation?.workspaceTree).toBe(f.first.workspaceTree);
+      await expect(status({ ...person.action, owner: person.otherOwner })).rejects.toThrow();
       if (boundary === "move") {
         await patchSessionEntryCore(
           {
@@ -116,14 +112,7 @@ describe("repository checkpoint GitHub publication", () => {
           { replaceEntry: true },
         );
         expect(mocks.loadSession(SESSION_KEY).entry.repositoryWorkspaceId).toBeUndefined();
-        expect(
-          await person.coordinator.personalStatusAsync(
-            person.action,
-            person.action,
-            first.requestId,
-            preparedStatus,
-          ),
-        ).toMatchObject({
+        expect(await status()).toMatchObject({
           result: { status: "failed", code: "session_changed" },
           confirmation: null,
         });
@@ -131,11 +120,11 @@ describe("repository checkpoint GitHub publication", () => {
       }
       if (boundary === "reset") {
         await f.closeSession("reset");
-        const status = await callPersonalPublicationRpc(person, "sessions.github.status", {
+        const response = await callPersonalPublicationRpc(person, "sessions.github.status", {
           sessionKey: SESSION_KEY,
           requestId: first.requestId,
         });
-        expect(status[1]).toMatchObject({
+        expect(response[1]).toMatchObject({
           result: { status: "failed", code: "session_changed" },
           confirmation: null,
         });
@@ -195,9 +184,7 @@ describe("repository checkpoint GitHub publication", () => {
         });
         expect(aborted[2].details.leaseAcquisition.elapsedMs).toBeGreaterThanOrEqual(0);
         expect(f.runtime.effects).toEqual(["push"]);
-        expect(readRepositoryGitHubPublication(first.requestId)?.checkpoint_ref).toBe(
-          original.checkpoint_ref,
-        );
+        expect(receipt()?.checkpoint_ref).toBe(original.checkpoint_ref);
       }
       let confirmed = await callPersonalPublicationRpc(
         person,
@@ -224,7 +211,7 @@ describe("repository checkpoint GitHub publication", () => {
               },
         );
         expect(f.runtime.effects).toEqual(["push"]);
-        expect(readRepositoryGitHubPublication(first.requestId)).toEqual(original);
+        expect(receipt()).toEqual(original);
         if (boundary === "held") {
           return;
         }
@@ -242,12 +229,10 @@ describe("repository checkpoint GitHub publication", () => {
       }
       expect(confirmed[0], JSON.stringify(confirmed[2])).toBe(true);
       expect(confirmed[1]).toMatchObject({ status: "published", url });
-      expect(readRepositoryGitHubPublication(first.requestId)?.checkpoint_ref).toBe(
-        original.checkpoint_ref,
-      );
-      expect(readRepositoryGitHubPublication(first.requestId)?.pushed_head_commit).toBe(
-        f.runtime.head,
-      );
+      expect(receipt()).toMatchObject({
+        checkpoint_ref: original.checkpoint_ref,
+        pushed_head_commit: f.runtime.head,
+      });
       expect(f.runtime.effects).toEqual(["push", "pull_request"]);
       expect(f.runtime.uploaded.size).toBe(1);
     },

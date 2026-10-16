@@ -45,6 +45,16 @@ const createRequesters = async () => {
   return { ...f, local: f.local };
 };
 
+function mockTargetHead(head: () => string) {
+  const transport = mocks.runCommand.getMockImplementation()!;
+  mocks.runCommand.mockImplementation(async (args, options) => {
+    if (args[0] === "gh" && args.some((arg: string) => arg.includes("/git/ref/heads/"))) {
+      return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: head() }));
+    }
+    return await transport(args, options);
+  });
+}
+
 describe("accepted GitHub workflow publication", () => {
   installGitHubPublicationTestHarness({
     creatorEmail: "publication-guest@example.test",
@@ -256,13 +266,7 @@ describe("accepted GitHub workflow publication", () => {
       await workspace.git("commit", "-m", "common workflow baseline");
       let targetHead = await workspace.git("rev-parse", "HEAD");
       await workspace.git("update-ref", "refs/heads/main", targetHead);
-      const transport = mocks.runCommand.getMockImplementation()!;
-      mocks.runCommand.mockImplementation(async (args, options) => {
-        if (args[0] === "gh" && args.some((arg: string) => arg.includes("/git/ref/heads/"))) {
-          return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: targetHead }));
-        }
-        return await transport(args, options);
-      });
+      mockTargetHead(() => targetHead);
       if (kind !== "first") {
         await fs.writeFile(path.join(workspace.cwd, "artifact.txt"), "first source change\n");
         expect(
@@ -368,13 +372,7 @@ describe("accepted GitHub workflow publication", () => {
     );
     await workspace.git("reset", "--hard", source);
     let targetHead = base;
-    const transport = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (args, options) => {
-      if (args[0] === "gh" && args.some((arg: string) => arg.includes("/git/ref/heads/"))) {
-        return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: targetHead }));
-      }
-      return await transport(args, options);
-    });
+    mockTargetHead(() => targetHead);
     await fs.writeFile(path.join(workspace.cwd, "artifact.txt"), "ordinary source\n");
     expect(await f.coordinator.requestForSessionV2(f.request("first", f.guest))).toMatchObject({
       status: "published",

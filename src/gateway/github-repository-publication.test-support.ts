@@ -363,6 +363,7 @@ export async function createRepositoryPublicationFixture(
     throw new Error("Unexpected GitHub endpoint " + endpoint);
   });
   const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+  const coordinator = createTestGitHubPublicationCoordinator({ placements });
   return {
     git,
     baseCommit,
@@ -387,6 +388,17 @@ export async function createRepositoryPublicationFixture(
         await sessionOwner.reset(placements);
       }
     },
-    coordinator: createTestGitHubPublicationCoordinator({ placements }),
+    coordinator,
+    publish(
+      idempotencyKey: string,
+      options: Partial<Parameters<typeof coordinator.requestForSessionV2>[0]> = {},
+    ) {
+      return coordinator.requestForSessionV2({
+        agentId: "main",
+        sessionKey: session.sessionKey,
+        idempotencyKey,
+        ...options,
+      });
+    },
   };
 }
