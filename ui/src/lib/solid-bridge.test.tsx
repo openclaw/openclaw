@@ -4,10 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
 import { ShellLayoutBoundary } from "../app/shell-layout-traits-solid.tsx";
-import { ApplicationProvider, useApplication } from "../lib/reactive/context.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { collectGarbageForTest } from "../test-helpers/garbage-collection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { ApplicationProvider, useApplication } from "./reactive/context.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
 
 type Props = { label: string; enabled: boolean; count: number; payload: object | null };
@@ -469,7 +469,7 @@ it("releases the old provider when a nearer provider takes over without moving t
 
 it("publishes an imperatively mounted page's layout traits to the existing shell owner", async () => {
   defineSolidBridge(
-    "openclaw-solid-lit-layout-test",
+    "openclaw-solid-native-layout-test",
     (props: { active: boolean }) => (
       <ShellLayoutBoundary traits={{ toolbarHeader: props.active }}>
         <h1>Page header</h1>
@@ -482,7 +482,7 @@ it("publishes an imperatively mounted page's layout traits to the existing shell
   document.body.append(main);
   const owner = new ShellLayoutOwner();
   owner.contentRef(main);
-  const host = document.createElement("openclaw-solid-lit-layout-test") as SolidBridgeElement<{
+  const host = document.createElement("openclaw-solid-native-layout-test") as SolidBridgeElement<{
     active: boolean;
   }>;
   main.append(host);

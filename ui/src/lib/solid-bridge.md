@@ -70,8 +70,7 @@ exactly once, unconditionally, as the only children of a stable outlet. The call
 owns the whole outlet, including nodes and markers added by later updates. The
 range is parked before root disposal and restored on reconnect. Existing `slot`
 attributes remain intact; primitives own their named-content semantics. Do not
-split, clone, or independently clear the caller's range. Remaining template-valued
-properties are opaque values for their content renderer, never Solid JSX.
+split, clone, or independently clear the caller's range.
 
 The tooltip uses native shadow slots for default triggers and named rich content.
 Its caller range remains directly under the host; Solid owns the shadow renderer.

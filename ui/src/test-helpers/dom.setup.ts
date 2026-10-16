@@ -13,13 +13,6 @@ if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
   vi.doMock("../app/boot-capabilities.ts", () => ({ unsupportedControlUiBrowser: false }));
 }
 
-// Lit emits a one-time dev-mode warning in test builds. Pre-mark it as issued
-// so broad UI suites stay signal-heavy instead of repeating the same console.warn.
-const issuedWarnings = ((globalThis as { litIssuedWarnings?: Set<string> }).litIssuedWarnings ??=
-  new Set<string>());
-
-issuedWarnings.add("dev-mode");
-
 // JSDOM has no Web Animations API; native overlay tests use an empty animation list.
 if (typeof Element !== "undefined" && !("getAnimations" in Element.prototype)) {
   Object.defineProperty(Element.prototype, "getAnimations", {

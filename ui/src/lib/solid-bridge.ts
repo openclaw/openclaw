@@ -10,8 +10,8 @@ import {
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
-import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { JSX } from "../types/solid-elements.d.ts";
+import { ApplicationProvider } from "./reactive/context.ts";
 
 type Property<T> = {
   default: T;
@@ -293,7 +293,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       this.#unsubscribe = undefined;
       const outlet = this.#start?.parentNode;
       if (this.#content && outlet && outlet !== this.#content) {
-        // A final Lit ChildPart has no end marker and can append to this outlet.
+        // Caller-owned nodes may be appended to the outlet after mounting.
         this.#content.append(...outlet.childNodes);
       }
       this.#dispose?.();

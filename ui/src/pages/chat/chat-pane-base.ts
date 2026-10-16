@@ -25,7 +25,7 @@ import type { PresencePayload } from "../../app/user-profile.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import type { SessionPanelToggleSlot } from "../../components/session-panel-toggle-buffer.ts";
 import { SessionProgressCardController } from "../../components/session-progress-card-controller.ts";
-import { I18nController } from "../../i18n/lib/lit-controller.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import type {
   BoardCommandEvent,
   BoardProvider,
@@ -33,6 +33,7 @@ import type {
 } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
+import { PollController } from "../../lib/reactive/poll-controller.ts";
 import type { GitHubPublicationBinding } from "../../lib/sessions/session-capability.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -47,7 +48,6 @@ import {
   SubscriptionsController,
   viewState,
 } from "../../lib/subscriptions-controller.ts";
-import { PollController } from "../../lit/poll-controller.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
@@ -85,7 +85,6 @@ import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout-types.ts";
 
 export abstract class ChatPaneBase extends ControllerHost {
-  protected readonly i18nController = new I18nController(this);
   private readonly changedProperties = new Map<PropertyKey, unknown>();
   private completeUpdate: (() => void) | undefined;
   private commitPromise: Promise<boolean> | undefined;
@@ -673,6 +672,7 @@ export abstract class ChatPaneBase extends ControllerHost {
     super();
     observeNativeGateway(this);
     void new SubscriptionsController(this)
+      .watchStore(() => i18n)
       .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
       .watchStore(
         () => this.context && chatInputOwnerForContext(this.context),

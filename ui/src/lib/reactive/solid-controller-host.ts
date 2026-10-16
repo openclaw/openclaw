@@ -32,7 +32,7 @@ export function useSolidControllerHost(dependencies?: () => unknown) {
       controllers.delete(controller);
     },
     requestUpdate() {
-      // Like Lit's willUpdate, changes during owner reconciliation belong to this commit.
+      // Changes during owner reconciliation belong to this commit.
       if (!updating && !disposed) {
         setRevision((value) => value + 1);
       }

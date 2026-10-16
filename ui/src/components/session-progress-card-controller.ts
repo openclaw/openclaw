@@ -1,10 +1,13 @@
 import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import type {
+  SolidController,
+  SolidControllerHost,
+} from "../lib/reactive/solid-controller-host.ts";
 import {
   sessionProgressCardsForGateway,
   type SessionProgressCardStore,
 } from "../lib/session-progress-cards.ts";
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 
 type SessionProgressCardControllerOptions = {
   gateway: () => ApplicationGateway | null | undefined;

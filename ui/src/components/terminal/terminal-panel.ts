@@ -1,9 +1,9 @@
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import type { ApplicationContext } from "../../app/context.ts";
 import { terminalFontFamily } from "../../app/terminal-font.ts";
+import { renderSolidSnapshot } from "../../lib/dom/solid-snapshot.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { SubscriptionsController } from "../../lib/subscriptions-controller.ts";
-import { renderSolidSnapshot } from "../../lit/solid-snapshot.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
 import { terminalPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
 import { notifyPanelHostedTabsChanged } from "../panel-hosted-tabs.ts";

@@ -8,7 +8,7 @@ import {
   layout,
 } from "../../lib/board/grid.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board.css";
 import { BoardTabs } from "./board-tabs.tsx";

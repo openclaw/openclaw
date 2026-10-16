@@ -6,15 +6,15 @@ import {
 import type { GatewayBrowserClient, GatewayEventListener } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import {
+  useSolidControllerHost,
+  type SolidController,
+  type SolidControllerHost,
+} from "../lib/reactive/solid-controller-host.ts";
+import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import {
-  useSolidControllerHost,
-  type SolidController,
-  type SolidControllerHost,
-} from "../lit/solid-controller-host.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";

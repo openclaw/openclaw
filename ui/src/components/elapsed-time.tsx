@@ -2,7 +2,7 @@ import { createEffect, createMemo, createSignal } from "solid-js";
 import { formatDurationCompact, formatDurationHuman } from "../lib/format-duration.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 
 type ElapsedTimeProps = {
   startMs: number | null;

@@ -2,9 +2,12 @@ import type { ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import { createMemo } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import {
+  useSolidControllerHost,
+  type SolidControllerHost,
+} from "../lib/reactive/solid-controller-host.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
 import { ControllerHost } from "../lib/subscriptions-controller.ts";
-import { useSolidControllerHost, type SolidControllerHost } from "../lit/solid-controller-host.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";

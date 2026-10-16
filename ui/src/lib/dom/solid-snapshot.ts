@@ -1,7 +1,7 @@
 import { insert, type JSX } from "@solidjs/web";
 import { createRoot, runWithOwner } from "solid-js";
 
-// Legacy Lit consumers need inert artwork, not a second live Solid root.
+// Imperative consumers need inert artwork, not a second live Solid root.
 export function renderSolidSnapshot(view: () => JSX.Element): DocumentFragment {
   return runWithOwner(null, () =>
     createRoot((dispose) => {
