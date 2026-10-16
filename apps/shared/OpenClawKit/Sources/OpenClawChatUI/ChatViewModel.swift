@@ -142,7 +142,7 @@ public final class OpenClawChatViewModel {
     public private(set) var sessionKey: String {
         didSet {
             syncContextUsageFraction()
-            syncActiveSessionRunIDsFromCurrentSession()
+            syncActiveSessionMetadata()
         }
     }
 
@@ -163,6 +163,8 @@ public final class OpenClawChatViewModel {
 
     public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     private(set) var timelineRevision: UInt64 = 0
+    // Capped or filtered rosters can omit the active row. Reset this projection with session-owned state.
+    var retainedActiveSession: OpenClawChatSessionEntry?
     var legacySessions: [OpenClawChatSessionEntry] = []
 
     public internal(set) var sidebarData: OpenClawChatSessionSidebarData?
@@ -1263,6 +1265,7 @@ extension OpenClawChatViewModel {
         self.narration = ChatNarration()
         self.isShowingCachedTranscript = false
         self.hasAppliedLiveHistory = false
+        self.retainedActiveSession = nil
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         self.runMessageScopesByRunID.removeAll()
         self.provisionalFinalMessagesByID.removeAll()

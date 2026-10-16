@@ -96,6 +96,49 @@ describe("Codex one-shot cleanup receipts", () => {
     clearRuntimeConfigSnapshot();
   });
 
+  it("reuses the shared process across background turns that release their MCP resources", async () => {
+    const responses: Record<string, unknown> = {
+      initialize: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+      "thread/start": threadStartResult(),
+      "turn/start": turnStartResult(),
+    };
+    const harness = createInferenceReadyClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line) as { id?: number; method: string };
+        if (request.id !== undefined) {
+          send({ id: request.id, result: responses[request.method] ?? {} });
+        }
+      },
+    });
+    const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    for (let index = 0; index < 2; index++) {
+      const params = createParams(
+        path.join(tempDir, `background-${index}.jsonl`),
+        path.join(tempDir, "workspace"),
+      );
+      params.cleanupBundleMcpOnRunEnd = true;
+      setRuntimeConfigSnapshot(params.config ?? {});
+      const run = runCodexAppServerAttempt(params, {
+        bindingStore: testCodexAppServerBindingStore,
+      });
+      try {
+        await run.waitForTurnAccepted();
+        harness.send({
+          method: "turn/completed",
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+        });
+        expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+        expect(harness.client.getCloseError()).toBeUndefined();
+      } finally {
+        await run.catch(() => undefined);
+      }
+    }
+    expect(start).toHaveBeenCalledOnce();
+    expect(
+      harness.writes.filter((line) => JSON.parse(line).method === "thread/unsubscribe"),
+    ).toHaveLength(2);
+  });
+
   it("uses host-owned tools for strict one-shot Codex runs", async () => {
     const responses: Record<string, unknown> = {
       initialize: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
@@ -131,6 +174,7 @@ describe("Codex one-shot cleanup receipts", () => {
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
     const run = runCodexAppServerAttempt(params, { bindingStore: testCodexAppServerBindingStore });
     try {
+      await run.waitForTurnAccepted();
       const start = await waitForHarnessRequest(harness, "thread/start");
       expect(start.params).toMatchObject({ config: { "features.code_mode": false } });
       const { dynamicTools } = start.params as { dynamicTools: CodexDynamicToolSpec[] };

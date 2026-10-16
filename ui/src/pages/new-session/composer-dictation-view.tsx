@@ -1,7 +1,6 @@
 import { createMemo } from "solid-js";
 import {
   ComposerDictationSendAction,
-  renderComposerDictationStatusSolid,
   renderComposerVoiceButtonSolid as ComposerVoiceButton,
   renderMicrophonePickerSolid as MicrophonePicker,
 } from "../chat/components/chat-composer-controls.tsx";
@@ -27,15 +26,4 @@ export function NewSessionDictationView(props: {
       />
     </>
   );
-}
-
-export function NewSessionDictationStatus(props: {
-  control: NewSessionDictationControl;
-  renderRevision?: object;
-}) {
-  const status = createMemo(() => {
-    void props.renderRevision;
-    return renderComposerDictationStatusSolid(props.control.controller);
-  });
-  return <>{status()}</>;
 }

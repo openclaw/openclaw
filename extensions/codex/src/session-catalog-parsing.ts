@@ -1,7 +1,7 @@
 import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { CodexThreadStatus, CodexThreadTurnsListResponse } from "./app-server/protocol.js";
+import type { CodexThreadTurnsListResponse } from "./app-server/protocol.js";
 import {
   CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES,
   CODEX_INTERACTIVE_THREAD_SOURCE_KINDS,
@@ -87,17 +87,14 @@ export function selectCodexCatalogPreviewInput(value: string): string {
 
 /** Detach the small preview from V8's potentially large sliced-string backing store. */
 export function truncateCodexCatalogPreview(
-  value: unknown,
+  value: string,
   sanitize: typeof sanitizeTerminalText,
 ): string {
-  const preview =
-    typeof value === "string"
-      ? boundedCatalogString(
-          sanitize(value.replace(/\s+/g, " ")),
-          MAX_SESSION_PREVIEW_LENGTH,
-          "truncate",
-        )
-      : undefined;
+  const preview = boundedCatalogString(
+    sanitize(value.replace(/\s+/g, " ")),
+    MAX_SESSION_PREVIEW_LENGTH,
+    "truncate",
+  );
   return Buffer.from(preview ?? "", "utf8").toString("utf8");
 }
 
@@ -120,7 +117,7 @@ export function codexCatalogThreadName(value: unknown): string | null | undefine
 }
 
 export function codexCatalogThreadStatus(
-  status: CodexThreadStatus | null | undefined,
+  status: Record<string, unknown> | null | undefined,
 ): Pick<CodexSessionCatalogSession, "status" | "activeFlags"> {
   const activeFlags: string[] = [];
   if (status?.type === "active" && Array.isArray(status.activeFlags)) {

@@ -83,7 +83,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected subscribeSessionRepositoryContext(): void {
     this.chatState.addCleanup(
-      projectsForGateway(this.context.gateway).subscribe(() => this.requestUpdate()),
+      projectsForGateway(this.context.gateway).subscribe(() => this.invalidate()),
     );
     const sessionPullRequests = sessionPullRequestsForGateway(this.context.gateway);
     this.chatState.addCleanup(
@@ -127,7 +127,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     this.sessionPullRequestsStatus = status;
     this.dismissedSessionPullRequestIds = dismissed;
     if (changed) {
-      this.requestUpdate();
+      this.invalidate();
     }
   }
 
@@ -243,7 +243,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       return;
     }
     this.dismissedSessionPullRequestIds = dismissChatPullRequest(sessionKey, id);
-    this.requestUpdate();
+    this.invalidate();
   }
 
   protected deferSessionHydrationUntilTranscript(
@@ -339,6 +339,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
       method: "sessions.patch",
       params: { key: row.key, unread: false, agentId },
+      sessionScope: true,
+      session: row,
     });
     // Read-only navigation must remain silent: absence of mutation access is
     // not an operation failure and should not latch the unread retry guard.
@@ -397,6 +399,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       const access = readSessionMethodAccess(this.context.gateway.snapshot, {
         method: "sessions.patch",
         params: { key: run.key, unread: false, agentId },
+        sessionScope: true,
+        session: run,
       });
       if (!access.allowed) {
         continue;
@@ -570,6 +574,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       resolveChatAgentId(state) === agentId;
     if (!older) {
       this.catalogLoading = true;
+      this.invalidate();
       this.catalogCursor = undefined;
       this.olderCursorsSeen.clear();
       this.historyObserverArmed = false;
@@ -621,6 +626,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           page.nextCursor === requestedOlderCursor ||
           this.olderCursorsSeen.has(page.nextCursor));
       this.catalogMessages = nextMessages;
+      this.invalidate();
       this.catalogCursor = olderExhausted ? undefined : page.nextCursor;
       state.lastError = null;
       scheduleChatScroll(state, !older);

@@ -63,6 +63,39 @@ workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
 
+Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
+current selected repository base into this session's existing local managed
+workspace. The Gateway fetches with its host identity and preserves saved guest
+files, ignored guest data, and empty directories. The operation returns the exact
+`baseCommit`, changed paths, and conflicting paths; it does not publish or change
+the GitHub pull request. It accepts no repository, URL, arbitrary ref, other
+session, or pull-request selector.
+
+Resolve any reported conflicts in the same workspace, then repeat `refresh_base`
+with `conflictsResolved: true` and the returned `baseCommit`. This acknowledges
+that exact pending integration, including a deliberate choice to keep an unchanged
+binary file. Without acknowledgment, a retry keeps reporting conflicts. Remaining
+text conflict markers block completion. On completion, the calling sandbox imports
+only the selected base commit and source tree through bounded stdin, then stages
+its current source. Guest HEAD, branches, and commit history remain unchanged.
+The result includes `review: { mode: "local", base: "<commit>" }`. Run tests and
+normal Auto Review with that exact target after refresh or conflict resolution,
+then publish to update the same draft. Reviewing against the old guest HEAD would
+also include upstream-only changes. The operation requires the prepared sandbox
+of the current agent; a direct RPC cannot supply another runtime. Publication
+refuses a pending integration and never silently merges new base changes into
+reviewed files. A retry or restart settles the existing retained source result
+through the workspace journal; host merge ancestry remains outside guest Git
+metadata. Worktree removal is deferred while the host integration is pending;
+finish refresh before retrying archive cleanup. Existing privileged PR actions
+still require full operator write access.
+
+Finish refresh and conflict resolution before downgrading. An interrupted transfer
+retains a source result that earlier Gateways reject instead of applying as ordinary
+workspace synchronization. Once both copies accept the transfer, that result is
+cleaned and native merge state owns any remaining conflict resolution. Return to a
+version supporting `refresh_base` to finish either pending phase.
+
 The private checkout is writable with `none` or `rw` workspace access; explicit
 `ro` remains read-only. This does not make the shared agent workspace writable.
 Other sandbox backends cannot use this local managed-project projection and
@@ -97,6 +130,11 @@ return to a supporting version before continuing guest work.
 With the OpenShell backend, `mirror` mode still uses the local workspace as the source of truth between exec turns, and `remote` mode uses the remote OpenShell workspace as the source of truth after the initial seed. The same access rules apply: `none` permits private workspace writes, while `ro` disables writes.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
+For a managed project session, attachments on follow-up messages use that
+session's private checkout, including after its worktree has been created.
+Attachment staging retains the managed workspace owner until the copy settles.
+If the worktree is removed while an attachment is being read, staging stops
+before creating its input directory or file; the original attachment remains available.
 
 `image_generate`, `video_generate`, and `music_generate` also copy locally saved
 outputs into a private, Git-ignored directory under `media/inbound/` in the

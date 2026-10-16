@@ -8,7 +8,6 @@ import {
   merge,
   onCleanup,
   onSettled,
-  untrack,
 } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -138,9 +137,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
     () => menu.read().highlightedValue,
     (value) => {
       if (value && surface) {
-        const option = document.getElementById(
-          untrack(() => menu.read().getItemProps({ value }).id),
-        );
+        const option = document.getElementById(menu.read().getItemProps({ value }).id);
         if (option && surface.contains(option)) {
           revealInScrollRegion(surface, option);
         }
@@ -171,20 +168,21 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
     },
   );
   onCleanup(() => overlay.dispose());
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (next) {
+      props.onOpen();
+    } else {
+      setQuery("");
+    }
+  };
   onSettled(() => {
     overlay.bindSurface(surface);
     overlay.bindTrigger(input);
     overlay.setParent(findOverlayParent(field));
     const anchor = createOverlayAnchor(surface);
     anchor.update(field);
-    const unsubscribe = overlay.subscribe((next) => {
-      setOpen(next);
-      if (next) {
-        untrack(() => props.onOpen());
-      } else {
-        setQuery("");
-      }
-    });
+    const unsubscribe = overlay.subscribe(handleOpenChange);
     return () => {
       unsubscribe();
       anchor.dispose();
@@ -211,9 +209,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
   return (
     <openclaw-multi-select class={props.class}>
       <div
-        ref={(node) => {
-          field = node;
-        }}
+        ref={(node) => (field = node)}
         class={["multi-select", { "multi-select--open": open() }]}
         data-disabled={props.disabled ? "" : undefined}
         onClick={(event) => {
@@ -253,9 +249,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
           }}
         </For>
         <input
-          ref={(node) => {
-            input = node;
-          }}
+          ref={(node) => (input = node)}
           id={`${id}-trigger`}
           data-menu-trigger={id}
           class="multi-select__input"
@@ -284,9 +278,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
       </div>
       <div
         {...menu.content()}
-        ref={(node) => {
-          surface = node;
-        }}
+        ref={(node) => (surface = node)}
         class="multi-select__popup multi-select__menu oc-overlay"
         popover="manual"
         role="listbox"

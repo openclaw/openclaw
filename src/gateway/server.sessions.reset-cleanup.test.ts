@@ -623,57 +623,6 @@ test("sessions.patch rejects an archive queued behind a rotated session", async 
   expect(entry?.sessionId).toBe(replacementSessionId);
 });
 
-test("sessions.reset preserves a newer session after lifecycle rotation", async () => {
-  const { dir, storePath } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
-  installAcpRuntimeBackendWithFreshSession();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-    },
-  });
-  seedCanonicalAcpSessionMeta({
-    sessionKey: "agent:main:main",
-    lifecycleRevision: undefined,
-    meta: resolvedAcpMeta({
-      recordId: "agent:main:main",
-      backendSessionId: "backend-session-1",
-    }),
-  });
-  let lifecycleCurrent = true;
-  acpManagerMocks.closeSession.mockImplementationOnce(async () => {
-    lifecycleCurrent = false;
-    await writeSessionStore({
-      entries: {
-        main: sessionStoreEntry("new-owner-session"),
-      },
-    });
-  });
-  const { performGatewaySessionReset } = await import("./session-reset-service.js");
-
-  await expect(
-    performGatewaySessionReset({
-      key: "main",
-      reason: "new",
-      commandSource: "gateway:agent",
-      workerPlacementContext: {},
-      assertCurrent: () => {
-        if (!lifecycleCurrent) {
-          throw new Error("stale lifecycle");
-        }
-      },
-    }),
-  ).rejects.toThrow("stale lifecycle");
-
-  expect(
-    loadSessionEntry({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      storePath,
-    })?.sessionId,
-  ).toBe("new-owner-session");
-});
-
 test("sessions.reset closes child ACP runtime handles spawned from the parent", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");

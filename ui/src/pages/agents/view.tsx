@@ -2,7 +2,7 @@ import { Show, Switch, Match, createMemo } from "solid-js";
 import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { handleCopyButton } from "../../components/copy-button.ts";
+import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import {
   SettingsEmpty,

@@ -15,6 +15,7 @@ import {
   ensureSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { prepareComparisonClaimsFromStores } from "./legacy-main-session-key-scan.js";
 import { readClaim, readComparisonClaim } from "./legacy-main-session-migration-claims.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
@@ -47,19 +48,23 @@ it("compares retained history without acquiring Doctor deletion custody", () => 
   }, options);
   const database = openOpenClawAgentDatabase(options);
   const store = { databaseAgentId: "main", ownerStorePath: pathname, path: pathname };
-  const observed = trackSqliteStatementExecutions(database.db, ["node", "input"], (sql) => {
-    if (!/^select /i.test(sql)) {
-      return null;
-    }
-    if (/\b(?:session_pending_inputs|session_input_completions)\b/.test(sql)) {
-      return "input";
-    }
-    return /\b(?:board_widgets|board_tabs|session_members|session_participants|session_progress_cards|session_suggestions|session_reactions|heartbeat_outcomes)\b/.test(
-      sql,
-    ) || sql.startsWith('select "legacy_acp_migration_json" ')
-      ? "node"
-      : null;
-  });
+  const observed = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["node", "input"],
+    (sql) => {
+      if (!/^select /i.test(sql)) {
+        return null;
+      }
+      if (/\b(?:session_pending_inputs|session_input_completions)\b/.test(sql)) {
+        return "input";
+      }
+      return /\b(?:board_widgets|board_tabs|session_members|session_participants|session_progress_cards|session_suggestions|session_reactions|heartbeat_outcomes)\b/.test(
+        sql,
+      ) || sql.startsWith('select "legacy_acp_migration_json" ')
+        ? "node"
+        : null;
+    },
+  );
   try {
     const comparison = readComparisonClaim(database, store, key, "agent:ops:chat");
     expect(comparison).toMatchObject({

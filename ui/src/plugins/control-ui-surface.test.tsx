@@ -177,6 +177,9 @@ describe("native plugin surface", () => {
       { wrapper: provider.wrapper },
     );
     await waitForSolid(() => expect(mounted).toHaveLength(1));
+    expect(
+      view.container.querySelector("openclaw-plugin-view[data-plugin-composer]"),
+    ).not.toBeNull();
     expect(view.getByText("Companion")).toBeDefined();
     const first = mounted[0]!;
     first.props.setDraft("Current");

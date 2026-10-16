@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
@@ -114,7 +115,7 @@ describe("memory entry origins", () => {
       await expect(
         fs.access(resolveOpenClawAgentSqlitePath({ agentId: "main" })),
       ).rejects.toThrow();
-      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+      const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
       const version = db.prepare("PRAGMA user_version").get();
       db.exec("DROP TABLE IF EXISTS memory_entry_origins");
 
@@ -135,6 +136,9 @@ describe("memory entry origins", () => {
       expect(
         db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'").get(),
       ).toEqual({ name: "memory_entry_origins" });
+      expect(
+        db.prepare("SELECT wr FROM pragma_table_list WHERE name = 'memory_entry_origins'").get(),
+      ).toEqual({ wr: 1 });
       expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
       expect(transactionAdmissions).toBe(2);
       await recordMemoryEntryOrigins({
@@ -219,7 +223,7 @@ describe("memory entry origins", () => {
   });
 
   it("lazily persists forgotten sessions without recreating tombstones on reads or repeat writes", async () => {
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const version = db.prepare("PRAGMA user_version").get();
     const revisionBefore = db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get();
     db.exec("DROP TABLE IF EXISTS memory_session_tombstones");
@@ -274,7 +278,7 @@ describe("memory entry origins", () => {
   });
 
   it("publishes committed tombstones and forgets facts when their table is recreated", () => {
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     ensureMemorySessionTombstones(db);
     expect(hasMemorySessionTombstone(db, "main", "committed")).toBe(false);
     recordMemorySessionTombstonesInDatabase(db, {
@@ -355,7 +359,7 @@ describe("memory entry origins", () => {
     ]);
     await expect(
       withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
-        deleteMemoryEntryOriginsInDatabase(db, {
+        deleteMemoryEntryOriginsInDatabase(requireNativeSqliteDatabase(db), {
           agentId: "main",
           entryKeys: ["kept"],
           sessionIds: selected("session", "session-3"),
@@ -479,12 +483,15 @@ describe("memory entry origins", () => {
     ]) {
       await expect(
         withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
-          deleteMemoryEntryOriginsInDatabase(db, { agentId: "main", ...filter }),
+          deleteMemoryEntryOriginsInDatabase(requireNativeSqliteDatabase(db), {
+            agentId: "main",
+            ...filter,
+          }),
         ),
       ).resolves.toBe(0);
     }
     expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(original);
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const calibration = "UPDATE memory_entry_origins SET observed_at = observed_at WHERE 0";
     const readCalibration = "SELECT entry_key FROM memory_entry_origins WHERE 0";
     const observation = observeHostDataSql();
@@ -651,7 +658,7 @@ export function bindSqliteWorkerBackend(input, context) {
           origin(key, key),
         ),
       });
-      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+      const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
       db.prepare(
         "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'memory', 1, 2, ?, 'fts-only', ?, x'', 1000)",
       ).run(
@@ -713,7 +720,7 @@ export function bindSqliteWorkerBackend(input, context) {
       agentId: "main",
       origins: [origin("calibration", "calibration-session")],
     });
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const calibration = "UPDATE memory_entry_origins SET observed_at = observed_at WHERE 0";
     const readCalibration = "SELECT entry_key FROM memory_entry_origins WHERE 0";
     const observation = observeHostDataSql();

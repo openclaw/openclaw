@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
 import { CodexCatalogCurrency } from "./session-catalog-currency.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import {
   measureCatalogLists,
   nativeCatalogFixture as fixture,

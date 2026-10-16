@@ -18,14 +18,14 @@ const REPAIR = { repairStringLiterals: true } as const;
 
 describe("transport failure diagnostics", () => {
   it.each(["error", "data"] as const)(
-    "logs complete raw response.%s before transcript projection, omitting generated content",
+    "logs failure metadata without response.%s prose or generated content",
     (bodyField) => {
       const host = getAiTransportHost();
       const logWarn = vi.fn();
       const body = {
         code: "invalid_prompt",
         type: "invalid_request_error",
-        message: "x".repeat(6000),
+        message: `PRIVATE PROMPT ${"x".repeat(6000)}`,
       };
       const output = createOpenAIResponsesAssistantOutput({
         provider: "openai",
@@ -41,6 +41,7 @@ describe("transport failure diagnostics", () => {
             code: body.code,
             request_id: "req_fixture",
             errorType: body.type,
+            cause: Object.assign(new Error("PRIVATE CAUSE"), { code: "ECONNRESET" }),
             response: {
               id: "resp_fixture",
               [bodyField]: body,
@@ -54,14 +55,16 @@ describe("transport failure diagnostics", () => {
           status: 400,
           code: "invalid_prompt",
           type: "invalid_request_error",
-          message: body.message,
-          body,
+          causeName: "Error",
+          causeCode: "ECONNRESET",
           requestId: "req_fixture",
           responseId: "resp_fixture",
         });
         expect(output.errorType).toBe("invalid_request_error");
         expect(output.errorBody?.length).toBeLessThan(6000);
         expect(JSON.stringify(logWarn.mock.calls)).not.toContain("PRIVATE OUTPUT");
+        expect(JSON.stringify(logWarn.mock.calls)).not.toContain("PRIVATE PROMPT");
+        expect(JSON.stringify(logWarn.mock.calls)).not.toContain("PRIVATE CAUSE");
       } finally {
         configureAiTransportHost(host);
       }

@@ -90,6 +90,7 @@ Update instructions at owner; no competing rules here.
 - Proof selection/reuse/gaps: [policy](.agents/skills/openclaw-testing/SKILL.md#select-the-proof); docs-only: docs sanity + `git diff --check`.
 - **Visual changes** need inspected, sanitized before/after screenshots in chat and embedded in PR before merge or completion ([gate](.agents/skills/openclaw-pr-maintainer/references/media.md#screenshot-completion-gate)).
 - Before nontrivial code commit/landing: follow [fresh review](.agents/skills/openclaw-pr-maintainer/SKILL.md#review-and-publish).
+- ClawSweeper reviews each PR automatically once, when it opens or leaves draft. Later pushes get no review until someone comments `@clawsweeper re-review`; post it once branch, body, and proof are current ([review flow](docs/reference/pull-request-review-flow.md#clawsweeper)).
 
 ### Execution gotchas
 
@@ -118,7 +119,7 @@ Read matching guides in full; commands and details stay with them.
 - **Plugins/SDK:** [plugins](extensions/AGENTS.md), [loader](src/plugins/AGENTS.md), [SDK](src/plugin-sdk/AGENTS.md) (owns public boundary expansion, including outside callers).
 - **Channels/message actions:** [channel boundary](src/channels/AGENTS.md), [channel responsibilities](docs/plugins/sdk-channel-plugins.md).
 - **Agent tools, prompts, admission, lifecycle:** [agents](src/agents/AGENTS.md), [Gateway](src/gateway/AGENTS.md).
-- **Control UI:** [UI guide](ui/AGENTS.md), including state shared with other Gateway clients.
+- **Control UI:** [UI guide](ui/AGENTS.md), including state shared with other Gateway clients. Before writing, reviewing, or refactoring Solid code (Control UI, plugin views, Canvas hosts), read the [Solid skill](.agents/skills/solid/SKILL.md) and the installed `solid-js` cheatsheet it points to.
 - **Storage:** [database schemas](docs/reference/database-schemas.md) and subpages; read approval checkpoint before schema, transaction, retention, recovery changes.
 - **Config migration:** [Doctor transforms](docs/gateway/doctor/config-migrations.md), never new runtime compatibility readers.
 - **Audit/identity:** [audit doctrine](docs/gateway/audit.md); provenance = opt-in, never authorization; changes to collection, reader scope, retained fields, bounds, contracts need approval.

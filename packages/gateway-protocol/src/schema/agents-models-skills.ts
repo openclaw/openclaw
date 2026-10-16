@@ -563,6 +563,7 @@ export const GitHubIdentityFactsSchema = closedObject({
     Type.Literal("native"),
     Type.Literal("managed-pat"),
     Type.Literal("managed-oauth"),
+    Type.Literal("app-installation"),
   ]),
   credentialState: Type.Union([
     Type.Literal("available"),

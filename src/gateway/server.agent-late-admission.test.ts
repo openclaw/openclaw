@@ -105,7 +105,13 @@ describe("Gateway close during agent admission", () => {
     vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
       commandStarted.resolve();
       await releaseCommand.promise;
-      return { payloads: [{ text: "late provider reply" }], meta: { durationMs: 1 } };
+      return {
+        payloads: [{ text: "late provider reply" }],
+        meta: {
+          durationMs: 1,
+          terminalReply: { disposition: "visible", text: "late provider reply" },
+        },
+      };
     });
     try {
       const { ws } = await harness.openClient();

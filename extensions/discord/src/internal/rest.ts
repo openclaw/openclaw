@@ -47,9 +47,11 @@ type RequestDispatchData = {
   effect: ReturnType<typeof captureEffectAuthority>;
 };
 
+export const DISCORD_REST_TIMEOUT_MS = 15_000;
+
 const defaultOptions = {
   baseUrl: "https://discord.com/api",
-  timeout: 15_000,
+  timeout: DISCORD_REST_TIMEOUT_MS,
   queueRequests: true,
 };
 

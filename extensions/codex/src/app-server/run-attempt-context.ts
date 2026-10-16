@@ -23,6 +23,7 @@ import {
 } from "./context-engine-projection.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
+import type { JsonValue } from "./protocol.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
@@ -142,6 +143,9 @@ export async function prepareCodexAttemptContext(
     await bootstrapHarnessContextEngine({
       hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
+      ...(runtimeParams.authoredContextTokenCap && effectiveContextTokenBudget
+        ? { tokenBudget: effectiveContextTokenBudget }
+        : {}),
       sessionId: runtimeParams.sessionId,
       sessionKey: contextSessionKey,
       sessionFile: runtimeParams.sessionFile,
@@ -217,11 +221,21 @@ export async function prepareCodexAttemptContext(
         : undefined,
       watchedSessionsContext,
     });
-  const promptState = {
+  const promptState: {
+    promptText: string;
+    promptContextRange: CodexProjectedContextRange | undefined;
+    developerInstructions: string;
+    contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
+    historyBootstrapItems: JsonValue[] | undefined;
+    historyDeltaItems: JsonValue[] | undefined;
+    noEngineContinuityProjectionApplied: boolean;
+  } = {
     promptText: params.prompt,
-    promptContextRange: undefined as CodexProjectedContextRange | undefined,
+    promptContextRange: undefined,
     developerInstructions: baseDeveloperInstructions,
-    contextEngineProjection: undefined as CodexContextEngineThreadBootstrapProjection | undefined,
+    contextEngineProjection: undefined,
+    historyBootstrapItems: undefined,
+    historyDeltaItems: undefined,
     // Set by the no-engine continuity appliers; gates calibration recording so a
     // dense direct or active-engine prompt can never persist a density sample
     // that later shrinks continuity history it did not measure.

@@ -444,6 +444,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     status?: PersistedSessionRunStatus;
     /** Compact user-facing reason for the latest failed or timed-out run. */
     lastRunError?: string;
+    /** The latest failed run is diagnostic-only, not a request for the user to retry. */
+    suppressErrorNotice?: boolean;
     /**
      * Session-level stop cutoff captured when /stop is received.
      * Messages at/before this boundary are skipped to avoid replaying

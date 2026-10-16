@@ -8,13 +8,15 @@ import {
 } from "../../commands/doctor/shared/update-phase.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveDaemonRuntimePinStorePath } from "../../daemon/runtime-pin-store.js";
+import { resolveClientCredentialStorePath } from "../../infra/client-credential-store.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
-  readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,
   updateStateSchemaVersionsMatch,
-} from "../../infra/update-candidate-state.js";
+} from "../../infra/update-candidate-state.versions.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
@@ -80,6 +82,8 @@ export async function inspectActivatedUpdateState(
           (entry) =>
             entry !== shared &&
             !shared?.retainedAgentPaths?.includes(entry.path) &&
+            entry.path !== resolveClientCredentialStorePath(env) &&
+            entry.path !== resolveDaemonRuntimePinStorePath(env) &&
             entry.userVersion !== null &&
             entry.userVersion !== candidateSchemaVersions.agent,
         )

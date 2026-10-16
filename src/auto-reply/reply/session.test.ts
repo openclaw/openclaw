@@ -871,7 +871,7 @@ describe("initSessionState thread forking", () => {
         }),
       ).rejects.toThrow(
         locked
-          ? /cannot be replaced while model selection is locked.*WebChat.*Resume in new session/i
+          ? /cannot be replaced while model selection is locked.*WebChat and use Resume\./i
           : /ended during restart recovery/i,
       );
 

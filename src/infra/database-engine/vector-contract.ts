@@ -27,6 +27,7 @@ export type VectorIndex = {
   readonly table: string;
   readonly alias: string;
   readonly rowShape: VectorRowShape;
+  readonly postgres?: { source: string; key: string; embedding: string; dimensions: number };
 };
 
 /** @experimental Caller-owned scope and projection around native vector candidates. */

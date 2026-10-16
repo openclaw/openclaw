@@ -134,7 +134,6 @@ describe.runIf("__vitest_browser__" in globalThis)("shared control theme inherit
     const pickerTrigger = host.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
     const pickerMenu = host.querySelector(".picker-select__menu")!;
     const pickerList = host.querySelector<HTMLElement>('[role="listbox"]')!;
-    const currentOption = host.querySelector<HTMLElement>('[role="option"][data-value="fr"]')!;
     const activeTab = host.querySelector("#theme-first-tab")!;
     const inactiveTab = host.querySelector("#theme-second-tab")!;
 
@@ -177,6 +176,7 @@ describe.runIf("__vitest_browser__" in globalThis)("shared control theme inherit
       await expect.element(menu).not.toBeVisible();
       await expect.element(pickerList).toHaveFocus();
       await userEvent.keyboard("{End}");
+      const currentOption = host.querySelector<HTMLElement>('[role="option"][data-value="fr"]')!;
       await expect
         .poll(() => pickerList.getAttribute("aria-activedescendant"))
         .toBe(currentOption.id);

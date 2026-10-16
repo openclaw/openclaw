@@ -344,7 +344,7 @@ describe("main session recovery state", () => {
     ).toMatchObject({ kind: "admitted_recovery" });
     expect(entry).toMatchObject({
       abortedLastRun: false,
-      pendingFinalDelivery: { kind: "replayable", text: "captured reply", createdAt: 1 },
+      pendingFinalDelivery: { kind: "replayable", text: " captured reply ", createdAt: 1 },
       restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }],
       mainRestartRecovery: {
         revision: 3,

@@ -175,16 +175,6 @@ export function createSessionRowProjectionFixture(params: {
     },
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
-    observeGeneration() {
-      const observedRevision = revision;
-      let active = true;
-      return {
-        isCurrent: (row) => active && revision === observedRevision && projection.isCurrent(row),
-        dispose() {
-          active = false;
-        },
-      };
-    },
     readPreparedRowContext: () => rowContext,
     readPreparedSpawnedBy(query) {
       const row = describe(query);
@@ -204,6 +194,7 @@ export function createSessionRowProjectionFixture(params: {
           (!query.storePath || row.storeTarget.storePath === query.storePath),
       ),
     describe,
+    readPreview: () => undefined,
     readSource: () => undefined,
     readMembership: (query) => describe(query)?.membership,
     // This row-only fixture cannot certify the resident owner's complete ancestry graph.

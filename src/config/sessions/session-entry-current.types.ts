@@ -3,6 +3,7 @@ import type { SessionEntry } from "./types.js";
 /** Identity is parser-validated; optional owner values retain their exact stored semantics. */
 export type SessionEntryCurrentFacts = {
   sessionId: string;
+  createdVia?: unknown;
   incognito?: SessionEntry["incognito"];
   modelSelectionLocked?: SessionEntry["modelSelectionLocked"];
   pluginOwnerId?: SessionEntry["pluginOwnerId"];

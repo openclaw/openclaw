@@ -6,6 +6,7 @@ import {
   createOAuthRefreshCredential,
 } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/types.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
@@ -357,7 +358,6 @@ async function textStatus(options: StatusOptions = {}) {
 const requireRecord = createRequireRecord("object", "label-not-object");
 
 function requireArray(value: unknown, label: string): unknown[] {
-  expect(Array.isArray(value)).toBe(true);
   if (!Array.isArray(value)) {
     throw new Error(`${label} was not an array`);
   }
@@ -375,8 +375,7 @@ function requireProvider(providers: unknown, provider: string) {
 }
 
 function expectResolveAgentDirCalledFor(agentId: string) {
-  const hasCall = mocks.resolveAgentDir.mock.calls.some((call) => call[1] === agentId);
-  expect(hasCall).toBe(true);
+  expect(mocks.resolveAgentDir.mock.calls.some((call) => call[1] === agentId)).toBe(true);
 }
 
 function configureAgentScope(overrides: {
@@ -415,7 +414,7 @@ function configureStatus(params: {
   providerModels?: ModelDefinitionConfig[];
   catalog?: unknown[];
   routeVariants?: unknown[];
-  utilityModel?: string;
+  utilityModel?: AgentModelConfig;
   modelPolicyAllow?: string[];
 }) {
   const config = statusConfig(params.primary, params.fallbacks);
@@ -775,10 +774,10 @@ describe("modelsStatusCommand auth overview", () => {
     expect(text).toContain("runtime=unavailable");
   });
 
-  it("flags a utility model whose route needs api-key auth despite an OAuth-healthy primary", async () => {
+  it("flags a utility fallback whose route needs api-key auth despite an OAuth-healthy primary", async () => {
     configureStatus({
       primary: "openai/gpt-5.5",
-      utilityModel: "openai/gpt-5.6",
+      utilityModel: { primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.6"] },
       profiles: {
         "openai:default": createOAuthRefreshCredential({
           access: "oauth-access",
@@ -788,7 +787,8 @@ describe("modelsStatusCommand auth overview", () => {
     });
 
     const { payload } = await jsonStatus({ check: true });
-    expect(payload.utilityModel).toEqual({ ref: "openai/gpt-5.6", source: "config" });
+    expect(payload.utilityModel).toEqual({ ref: "openai/gpt-5.5", source: "config" });
+    expect(payload.utilityFallbacks).toEqual(["openai/gpt-5.6"]);
     expect(payload.auth.modelRouteIssues).toEqual([
       {
         kind: "missing-auth",

@@ -94,7 +94,7 @@ export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }
   );
 }
 
-export type ChatNoticeRecovery = Pick<
+type ChatNoticeRecovery = Pick<
   ChatThreadProps,
   "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun"
 >;

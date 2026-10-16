@@ -61,6 +61,33 @@ describe("update CLI shared helpers", () => {
     runCommandWithTimeout.mockResolvedValue(successfulCommandResult);
   });
 
+  it("refreshes standalone completion without a loose launcher", async () => {
+    await withTestDir({ prefix: "completion-standalone-" }, async (root) => {
+      const runtime = path.join(root, "runtime");
+      const executable = path.join(root, "openclaw");
+      await fs.mkdir(runtime);
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          mode: "jit",
+          executable: { path: "openclaw" },
+          runtime: { path: "runtime" },
+          openclaw: { version: "2026.10.15" },
+          bun: { version: "1.3.0" },
+        }),
+      );
+
+      await expect(tryWriteCompletionCache(runtime, true, 500, executable)).resolves.toBe(
+        "completed",
+      );
+      expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
+        [executable, "completion", "--write-state"],
+        expect.objectContaining({ cwd: runtime, timeoutMs: 500 }),
+      );
+    });
+  });
+
   it.each([false, true])(
     "does not hide uncertain completion cleanup (uncertain=%s)",
     async (uncertain) => {

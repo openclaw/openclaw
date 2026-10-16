@@ -67,7 +67,7 @@ describe("experimental admitted search capabilities", () => {
     expect(() => owner.fullText!.rank(owner.text.notes!)).toThrow("not admitted");
   });
 
-  it("preserves adapter labels and diagnoses unavailable PostgreSQL operations", () => {
+  it("preserves adapter labels and refuses unadmitted PostgreSQL descriptors", () => {
     expect(databaseEngineAdapters.sqlite.capabilities).toEqual({
       fullText: "fts5",
       vector: "sqlite-vec",
@@ -76,18 +76,17 @@ describe("experimental admitted search capabilities", () => {
       fullText: "tsvector",
       vector: null,
     });
-    const admitted = admitStoreSearch(
-      {
-        databasePath: "/synthetic/anchor.sqlite",
-        input: {
-          connection: "postgresql://localhost/synthetic",
-          schemaPrefix: "fixture",
+    expect(() =>
+      admitStoreSearch(
+        {
+          databasePath: "/synthetic/anchor.sqlite",
+          input: {
+            connection: "postgresql://localhost/synthetic",
+            schemaPrefix: "fixture",
+          },
         },
-      },
-      indexes,
-    );
-    expect(admitted.fullText).toBeNull();
-    expect(admitted.vector).toBeNull();
-    expect(admitted.diagnostics.join("; ")).toMatch(/PostgreSQL.*unavailable.*SQLite/);
+        indexes,
+      ),
+    ).toThrow("admitted worker connection");
   });
 });

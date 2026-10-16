@@ -10,7 +10,7 @@ import type {
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
-import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
+import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button-state.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
@@ -28,10 +28,9 @@ import type {
   ChatStreamSegment,
 } from "../../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
-import type { PresentationValue } from "../../../lit/presentation-binding.ts";
 // Pane-local search, context menus, selection actions, and presentation resets.
-import { solidContent } from "../../../lit/solid-content.tsx";
 import type { TurnRecapWatch } from "../chat-progress.ts";
 import type { SubagentRoster } from "../chat-spawned-subagent.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
@@ -59,7 +58,6 @@ import {
   removeChatSelectionPopup,
 } from "./chat-selection-popup.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
-import { TranscriptSearch } from "./chat-transcript-search.tsx";
 
 registerChatMessageMetadataEnglish();
 
@@ -316,15 +314,6 @@ export function resetThreadPresentation(paneId?: string, owner?: ParentNode) {
     transcriptStates.clear();
   }
   resetChatThreadState(paneId);
-}
-
-export function renderTranscriptSearch(paneId: string, requestUpdate: () => void) {
-  const state = getTranscriptState(paneId);
-  return solidContent(TranscriptSearch, {
-    state,
-    requestUpdate,
-    onClose: () => closeTranscriptSearch(state, requestUpdate),
-  });
 }
 
 export function closeTranscriptSearch(state: ChatThreadState, requestUpdate: () => void): void {

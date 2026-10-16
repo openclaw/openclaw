@@ -115,6 +115,8 @@ export type RunEmbeddedAgentParams = {
   modelRun?: boolean;
   /** Setup can reject unavailable endpoints without spending the session retry budget. */
   retryConnectionErrors?: boolean;
+  /** Auxiliary callers can defer transient provider failures to their own scheduler. */
+  retryTransientErrors?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
   disableTrajectory?: boolean;
   /**

@@ -54,11 +54,13 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { loadApnsRegistration } from "./push-apns.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { acquireStartupMigrationLeaseWithWait } from "./startup-migration-checkpoint.js";
+import { migrateDaemonRuntimePins } from "./state-migrations.daemon-runtime-pins.js";
 import {
   autoMigrateLegacyState as autoMigrateLegacyStateWithSurfaces,
   detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
   runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
 } from "./state-migrations.doctor.js";
+import { expectMissingPath } from "./state-migrations.filesystem.test-support.js";
 import { expectRecoveryPredicateRefusedAfterRepair } from "./state-migrations.ingress-lifecycle.test-support.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
@@ -179,18 +181,6 @@ const tempDirs = createTrackedTempDirs();
 const APNS_DEVICE_FIELD = "token";
 
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
-async function expectMissingPath(targetPath: string): Promise<void> {
-  let statError: NodeJS.ErrnoException | undefined;
-  try {
-    await fs.stat(targetPath);
-  } catch (error) {
-    statError = error as NodeJS.ErrnoException;
-  }
-  expect(statError).toBeInstanceOf(Error);
-  expect(statError?.code).toBe("ENOENT");
-  expect(statError?.path).toBe(targetPath);
-  expect(statError?.syscall).toBe("stat");
-}
 
 legacyChannelStateMigrationEntries.entries = [
   {
@@ -640,6 +630,7 @@ describe("state migrations", () => {
       cfg.agents = { entries: { main: {} } };
       const databasePath = openOpenClawStateDatabase({ env }).path;
       await closeStateDatabaseForTest();
+      expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
       const draft = path.join(
         stateDir,
         "skill-workshop",
@@ -2399,49 +2390,6 @@ describe("state migrations", () => {
     expect(result.changes).toContain("Migrated 2 ACP session metadata rows → shared SQLite state");
   });
 
-  it.each([
-    {
-      relativePath: "delivery-queue/failed/failed.json",
-      contents: { id: "retired", payloads: [{ text: "preserve this message" }] },
-    },
-    {
-      relativePath: "restart-sentinel.json.doctor-importing",
-      contents: {
-        version: 1,
-        payload: { kind: "update", status: "ok", ts: 123, message: "Update completed" },
-      },
-    },
-    {
-      relativePath: "plugin-binding-approvals.json",
-      contents: {
-        version: 1,
-        approvals: [
-          {
-            pluginRoot: "/synthetic/plugin",
-            pluginId: "fixture",
-            channel: "telegram",
-            accountId: "default",
-            approvedAt: 123,
-          },
-        ],
-      },
-    },
-  ])("refuses retired state files before any state writes: $relativePath", async (fixture) => {
-    const { root, stateDir, env } = createMigrationContext(await createTempDir());
-    const sourcePath = path.join(stateDir, fixture.relativePath);
-    const original = `${JSON.stringify(fixture.contents, null, 2)}\n`;
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, original);
-    const params = { cfg: createConfig(), env, homedir: () => root };
-
-    for (const migrate of [detectLegacyStateMigrations, autoMigrateLegacyState]) {
-      await expect(migrate(params)).rejects.toThrow("Upgrade through OpenClaw 2026.9.7");
-      await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(original);
-      await expectMissingPath(`${sourcePath}.migrated`);
-      await expectMissingPath(resolveOpenClawStateSqlitePath(env));
-    }
-  });
-
   it("ignores a leftover update-check cache instead of refusing", async () => {
     const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const sourcePath = path.join(stateDir, "update-check.json");
@@ -2462,6 +2410,7 @@ describe("state migrations", () => {
 
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
     expect(detected.preview.filter((line) => line.startsWith("- Shared SQLite schema:"))).toEqual([
+      "- Shared SQLite schema: subagent recovery → original operator authority required",
       "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
       "- Shared SQLite schema: tables → SQLite STRICT typing",
     ]);
@@ -2619,7 +2568,7 @@ describe("state migrations", () => {
       config: cfg,
       env,
       onStepReceipt: (receipt) => {
-        if (receipt.id === "plugin-install-index") {
+        if (receipt.id === "retired-core-state") {
           openOpenClawStateDatabase({ env }).db.exec("PRAGMA query_only = ON;");
         }
       },

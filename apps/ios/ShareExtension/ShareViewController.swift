@@ -56,21 +56,14 @@ final class ShareViewController: UIViewController {
     }
 
     private func prepareDraft() async {
-        let traceId = UUID().uuidString
         ShareGatewayRelaySettings.saveLastEvent("Share opened.")
         self.composeView.apply(.preparing)
-        self.logger.info("share begin trace=\(traceId, privacy: .public)")
         let extracted = await self.extractSharedContent()
         let payload = extracted.payload
         self.pendingAttachments = extracted.attachments.map(\.payload)
         self.attachmentBlockReason = ShareAttachmentBlockReason.resolve(
             hasImageProcessingError: extracted.attachmentError != nil,
             summary: extracted.attachmentSummary)
-        self.logger.info("share payload trace=\(traceId, privacy: .public)")
-        self.logger.info(
-            "share payload title=\(payload.title?.count ?? 0) text=\(payload.text?.count ?? 0)")
-        self.logger.info(
-            "share attachments hasURL=\(payload.url != nil) images=\(self.pendingAttachments.count)")
         let message = ShareDraftComposer.compose(from: payload)
         self.composeView.setDraft(message)
         self.composeView.setAttachmentPreviews(extracted.attachments.map(\.preview))

@@ -137,13 +137,6 @@ it.each(["Node runtime"])("binds the selected profile to effective argv for a %s
     ],
   };
   spawnSync.mockReturnValue({ status: 0, stdout: JSON.stringify(task) });
-  vi.spyOn(fs, "readFile").mockResolvedValue(
-    Buffer.from(
-      ["@echo off", 'set "OPENCLAW_PROFILE=default"', argv.map((arg) => `"${arg}"`).join(" ")].join(
-        "\r\n",
-      ),
-    ),
-  );
   const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_WINDOWS_TASK_NAME: taskName };
   await expect(readScheduledTaskCommand(env, { requireLoaded: true })).rejects.toThrow(
     "Effective Scheduled Task service command could not be inspected.",

@@ -801,6 +801,7 @@ suite.define(() => {
         } else {
           await expect.poll(() => effort.count()).toBe(1);
           await expect.poll(() => effort.getAttribute("aria-label")).toBe("Speed: Standard");
+          await effort.click();
           await expect
             .poll(() =>
               composer.locator('[data-chat-speed-option="on"]').getAttribute("aria-checked"),

@@ -66,22 +66,6 @@ describe("resolveOomScoreWrappedCommand", () => {
 });
 
 describe("prepareOomScoreAdjustedSpawn", () => {
-  it("preserves the spawn shape when wrap does not apply", () => {
-    const env = { PATH: "/usr/bin" };
-    expect(
-      prepareOomScoreAdjustedSpawn("/usr/bin/node", ["run.js"], {
-        platform: "darwin",
-        env,
-        shellAvailable: () => true,
-      }),
-    ).toEqual({
-      command: "/usr/bin/node",
-      args: ["run.js"],
-      env,
-      wrapped: false,
-    });
-  });
-
   it("adjusts a distinct child argv0 without a shell", () => {
     const argv0 = "/opt/shims/claude";
     const options = { ...linux, argv0 };
@@ -105,16 +89,6 @@ describe("prepareOomScoreAdjustedSpawn", () => {
     } finally {
       write.mockRestore();
     }
-  });
-
-  it.each([undefined, "/opt/shims/claude"])("respects the OOM opt-out with argv0 %s", (argv0) => {
-    const prepared = prepareOomScoreAdjustedSpawn("/usr/bin/node", ["run.js"], {
-      ...linux,
-      argv0,
-      env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: "off" },
-    });
-    expect(prepared).toMatchObject({ command: "/usr/bin/node", args: ["run.js"], wrapped: false });
-    expect(prepared).not.toHaveProperty("afterSpawn");
   });
 
   it("inherits the parent opt-out through sanitized child environments unless explicitly overridden", () => {

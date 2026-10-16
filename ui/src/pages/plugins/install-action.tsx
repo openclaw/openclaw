@@ -23,7 +23,7 @@ export type PluginInstallActionProps = {
   onInstall?: () => void;
 };
 
-export type PluginInstallActionElement = HTMLElement & { dismiss(): void };
+type PluginInstallActionElement = HTMLElement & { dismiss(): void };
 
 export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.Element {
   let host!: HTMLElement;
@@ -217,7 +217,10 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
                 <For each={props.progress!.activities}>
                   {(activity) => (
                     <li
-                      class={`plugin-install-progress__activity plugin-install-progress__activity--${activity.status}`}
+                      class={[
+                        "plugin-install-progress__activity",
+                        `plugin-install-progress__activity--${activity.status}`,
+                      ]}
                     >
                       <span class="plugin-install-progress__icon" aria-hidden="true">
                         {activity.status === "completed" ? (

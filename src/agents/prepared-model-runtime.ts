@@ -137,11 +137,7 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
   retainOwner: retainPublishedModelRuntimeOwner,
   isGatewayLifecycleActive: () => gatewayLifecycleActive,
   getConfiguredOwner: (agentId) =>
-    resolveConfiguredOwner(owners, {
-      agentId,
-      agentDir: ".",
-      config: {},
-    }),
+    resolveConfiguredOwner(owners, { agentId, agentDir: ".", config: {} }),
   getPendingReplacement: (agentId) =>
     getAdmissionReplacement({ agentId, agentDir: ".", config: {} })?.promise,
   isStartupPending: () => pendingModelRuntimeReplacement?.degraded === true,
@@ -173,7 +169,6 @@ export function cancelPreparedModelRuntimeRefresh(): void {
 
 async function closeModelRuntime(error: Error): Promise<void> {
   refreshRequestEpoch += 1;
-  remoteCatalogPublication.cancel(error);
   authPublication.reset(error);
   pendingModelRuntimeReplacement?.reject(error);
   pendingModelRuntimeReplacement = undefined;
@@ -566,7 +561,7 @@ export function refreshPreparedModelRuntimeSnapshots(
             void publicationQueue
               .enqueue(async () => {
                 if (isPublicationCurrent()) {
-                  await drainPendingAuthMutations(publish);
+                  await drainPendingAuthMutations(publish, options.pluginMetadataSnapshot);
                 }
               })
               .catch((error: unknown) => log.warn(`startup auth refresh failed: ${String(error)}`));
@@ -643,6 +638,7 @@ export function refreshPreparedModelRuntimeSnapshots(
           // The final queue check, dispatch rebuild, and replacement resolution are one synchronous
           // commit. A mutation before it is adopted; a mutation after it starts a new auth transaction.
           commitReplacement,
+          options.pluginMetadataSnapshot,
         );
       if (replacement?.degraded) {
         await publicationQueue.enqueue(drain);
@@ -665,7 +661,10 @@ export function refreshPreparedModelRuntimeSnapshots(
   return publicationQueue.complete(publication, isPublicationCurrent, options, startup);
 }
 
-async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
+async function drainPendingAuthMutations(
+  commit?: () => void,
+  pluginMetadataSnapshot?: PreparedModelRuntimeRefreshOptions["pluginMetadataSnapshot"],
+): Promise<void> {
   await authPublication.drain({
     owners,
     publish: async (ownersToPublish, includeCredentialProviders, reuseGenerations) =>
@@ -674,6 +673,7 @@ async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
         owners,
         agentBuildCompletions,
         buildTimeoutMs: modelRuntimeBuildTimeoutMs,
+        pluginMetadataSnapshot,
         ...(includeCredentialProviders ? { includeCredentialProviders: true } : {}),
         selectPluginGeneration: reuseGenerations ? (owner) => owner.pluginGeneration : undefined,
       }),

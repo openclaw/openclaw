@@ -19,7 +19,6 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createAgentDedupeLifecycle } from "../agent-turn/agent-dedupe-lifecycle.js";
@@ -221,7 +220,6 @@ it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
         cfg: getRuntimeConfig(),
         request: { message: "Continue durable input", idempotencyKey: runId },
         runId,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
         agentDedupeKeys: [key],
         suppressVisibleSessionEffects: false,
         privateCompletion: true,

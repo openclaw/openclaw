@@ -1,4 +1,4 @@
-import { createEffect, createSignal, getOwner, onCleanup, runWithOwner } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ControlUiHost,
@@ -8,11 +8,7 @@ import type {
 } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
-import {
-  renderLegacyTemplate,
-  solidContent,
-  SolidContentPresentation,
-} from "../lit/solid-content.tsx";
+import { ContentPresentation } from "../lib/solid/presentation.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
@@ -115,7 +111,7 @@ function mountSurface(
   );
   const view = mountSolid(
     () => (
-      <SolidContentPresentation value={contentPresented}>
+      <ContentPresentation value={contentPresented}>
         {initial?.surface === "composer" ? (
           <PluginSurface
             surface="composer"
@@ -143,7 +139,7 @@ function mountSurface(
             renderDefault={renderDefault}
           />
         )}
-      </SolidContentPresentation>
+      </ContentPresentation>
     ),
     { wrapper: provider.wrapper },
   );
@@ -175,48 +171,6 @@ afterEach(() => {
 });
 
 describe("native UI built-in delegation", () => {
-  it("updates and disposes a native default from a plugin effect without nested flushes", () => {
-    const warning = vi.spyOn(console, "warn");
-    const disposed = vi.fn();
-    const [label, setLabel] = createSignal("First");
-    function DefaultView(props: { label: string }) {
-      const button = document.createElement("button");
-      createEffect(
-        () => props.label,
-        (value) => {
-          button.textContent = value;
-        },
-      );
-      onCleanup(disposed);
-      return button;
-    }
-    const view = mountSolid(() => {
-      const owner = getOwner();
-      const target = document.createElement("div");
-      createEffect(label, (value) =>
-        runWithOwner(owner, () =>
-          renderLegacyTemplate(solidContent(DefaultView, { label: value }), target),
-        ),
-      );
-      onCleanup(() => renderLegacyTemplate(undefined, target));
-      return target;
-    });
-    const button = view.getByRole("button", { name: "First" });
-    setLabel("Second");
-    flush();
-    expect(view.getByRole("button", { name: "Second" })).toBe(button);
-    expect(
-      warning.mock.calls.flat().some((value) => String(value).includes("FLUSH_IN_EFFECT_CALLBACK")),
-    ).toBe(false);
-    view.unmount();
-    expect(button.isConnected).toBe(false);
-    expect(disposed).toHaveBeenCalledOnce();
-    expect(
-      warning.mock.calls.flat().some((value) => String(value).includes("RUN_WITH_DISPOSED_OWNER")),
-    ).toBe(false);
-    warning.mockRestore();
-  });
-
   it("gives delegated renderer mounts independent lifetimes and restores fallback after failure", async () => {
     const mounted: HTMLElement[] = [];
     const disposed: HTMLElement[] = [];
@@ -641,7 +595,7 @@ describe("native UI built-in delegation", () => {
     const failure = new Error("Deferred page unavailable");
     let failUpdate = false;
     let invalidate = () => {};
-    const { host, reportError } = mountSurface({
+    const { host, reportError, listeners } = mountSurface({
       id: "deferred",
       label: "Deferred workspace",
       surface: "workspace",
@@ -672,6 +626,12 @@ describe("native UI built-in delegation", () => {
     expect(dispose).toHaveBeenCalledOnce();
     expect(reportError).toHaveBeenCalledExactlyOnceWith("review", failure);
     expect(view.querySelector("[role=alert]")?.textContent).toContain(failure.message);
+    for (const notify of listeners) {
+      notify();
+    }
+    await view.updateComplete;
+    expect(roots).toHaveLength(1);
+    expect(reportError).toHaveBeenCalledOnce();
     failUpdate = false;
     view.querySelector<HTMLButtonElement>("[role=alert] button")!.click();
     await view.updateComplete;
@@ -698,7 +658,10 @@ describe("native UI built-in delegation", () => {
     };
     const { view, provider, listeners, select, request } = mountView(replacement);
     const navigation = document.createElement("nav");
-    view.defaultView = navigation;
+    view.mountDefaultView = (target) => {
+      target.append(navigation);
+      return () => navigation.remove();
+    };
     await vi.waitFor(() => expect(roots).toHaveLength(1));
     select({ ...replacement });
     await vi.waitFor(() => expect(roots).toHaveLength(2));

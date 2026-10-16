@@ -153,6 +153,7 @@ export async function restoreUpdateDatabaseBackup(params: {
           assertOwned();
           const generations = await readUpdateDatabaseGenerationsIsolated(paths, {
             env: params.env,
+            pluginOwners: backup.pluginOwners,
           });
           assertOwned();
           if (!isDeepStrictEqual(generations, params.expectedGenerations)) {
@@ -203,14 +204,16 @@ export async function restoreUpdateDatabaseBackup(params: {
             directory: entry.exportDirectory,
             anchorPath: snapshotPath,
             config,
+            pluginOwners: backup.pluginOwners,
             profile: "exact",
-            expectedSource: { storeId: entry.storeId, namespace: entry.namespace },
             assertCurrent: assertOwned,
+            preserveUpdateHistory: entry.path === sharedPath,
+            expectedSource: { storeId: entry.storeId, namespace: entry.namespace },
           });
           sources[sources.indexOf(entry)] = { ...entry, ...prepared, snapshotPath };
           displaced.push(`PostgreSQL namespace ${entry.namespace}`);
         }
-        if (paths.includes(sharedPath)) {
+        if (paths.includes(sharedPath) && shared?.engine !== "postgres") {
           if (!shared) {
             throw new Error(
               "Database rollback cannot preserve update history without its shared snapshot.",

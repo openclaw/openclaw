@@ -30,7 +30,7 @@ export function renderExecExitLabel(exit: {
   if (exit.exitSignal != null) {
     return `signal ${exit.exitSignal}`;
   }
-  return typeof exit.exitCode === "number" ? `code ${exit.exitCode}` : "unknown exit code";
+  return exit.exitCode != null ? `code ${exit.exitCode}` : "unknown exit code";
 }
 
 /** Render the text shown in exec progress updates, including warnings first. */

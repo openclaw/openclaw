@@ -92,16 +92,32 @@ suite.define(() => {
           current.locator(".chat-pane__branch-copy"),
           current.locator(".chat-pane__branch-active svg"),
         ]);
-        const infoIconBox = await info.locator("svg").boundingBox();
+        // Measure one DOM generation so a rerender cannot detach an icon between reads.
+        const { infoIconBox, headline, textBox, checkBox, checkIconBox } =
+          await menuSurface.evaluate((surface) => {
+            const active = surface.querySelector('.chat-pane__branch-item[data-active="true"]');
+            const measure = (element: Element | null) => {
+              if (
+                !element?.isConnected ||
+                !element.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+              ) {
+                return null;
+              }
+              const { x, y, width, height } = element.getBoundingClientRect();
+              return width > 0 && height > 0 ? { x, y, width, height } : null;
+            };
+            return {
+              infoIconBox: measure(surface.querySelector(".chat-pane__versions-info svg")),
+              headline: active?.querySelector(".chat-pane__branch-headline")?.textContent,
+              textBox: measure(active?.querySelector(".chat-pane__branch-copy") ?? null),
+              checkBox: measure(active?.querySelector(".chat-pane__branch-active") ?? null),
+              checkIconBox: measure(active?.querySelector(".chat-pane__branch-active svg") ?? null),
+            };
+          });
         expect(infoIconBox).not.toBeNull();
-        expect(await current.locator(".chat-pane__branch-headline").textContent()).toBe(
-          "A simpler way to stay organized",
-        );
-        const textBox = await current.locator(".chat-pane__branch-copy").boundingBox();
-        const checkBox = await current.locator(".chat-pane__branch-active").boundingBox();
+        expect(headline).toBe("A simpler way to stay organized");
         expect(textBox).not.toBeNull();
         expect(checkBox).not.toBeNull();
-        const checkIconBox = await current.locator(".chat-pane__branch-active svg").boundingBox();
         expect(checkIconBox).not.toBeNull();
         expect(
           Math.abs(

@@ -1,16 +1,16 @@
-import { LitElement, html } from "lit";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { page } from "vitest/browser";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import { TranscriptTestHost } from "../test-helpers/chat-transcript-native.tsx";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
-class EndFollowFixture extends LitElement {
+class EndFollowFixture extends TranscriptTestHost {
   followEnabled = true;
-  readonly transcript = new ChatTranscriptController(this, () => "end-follow-browser", {
+  readonly transcript = createTranscriptTestOwner(this, () => "end-follow-browser", {
     canFollowEnd: () => this.followEnabled,
   });
   viewportHeight = 400;
@@ -18,45 +18,57 @@ class EndFollowFixture extends LitElement {
   earlierRowHeight = 400;
   lastRowHeight = 900;
 
-  protected override createRenderRoot() {
-    return this;
+  private readonly viewport = document.createElement("div");
+  private readonly thread = document.createElement("div");
+  private readonly earlier = document.createElement("div");
+  private readonly last = document.createElement("div");
+  private readonly dock = document.createElement("div");
+  private readonly content = [this.viewport, this.dock];
+  private appliedEarlierRowHeight: number | undefined;
+  private appliedLastRowHeight: number | undefined;
+
+  constructor() {
+    super();
+    this.viewport.className = "chat-thread-viewport";
+    this.thread.className = "chat-thread";
+    this.thread.style.overflowAnchor = "none";
+    this.viewport.append(this.thread);
+    this.earlier.textContent = "Earlier";
+    this.last.textContent = "Growing run";
+    this.dock.className = "chat-prs";
+    this.dock.style.cssText = "position: relative; height: 38px; margin-top: -38px";
+    this.dock.textContent = "Pull request";
   }
 
-  protected override render() {
+  override renderTranscript = () => {
+    this.viewport.style.cssText = `height: ${this.viewportHeight}px; flex: none; padding: 0 0 ${this.viewportPadding}px`;
+    // Preserve intrinsic DOM growth when only the controller requests a render.
+    if (this.appliedEarlierRowHeight !== this.earlierRowHeight) {
+      this.earlier.style.height = `${this.earlierRowHeight}px`;
+      this.appliedEarlierRowHeight = this.earlierRowHeight;
+    }
+    if (this.appliedLastRowHeight !== this.lastRowHeight) {
+      this.last.style.height = `${this.lastRowHeight}px`;
+      this.appliedLastRowHeight = this.lastRowHeight;
+    }
     const rows: TranscriptRow[] = [
-      {
-        kind: "content",
-        key: "earlier",
-        content: html`<div style=${`height: ${this.earlierRowHeight}px`}>Earlier</div>`,
-      },
-      {
-        kind: "content",
-        key: "growing-run",
-        content: html`<div style=${`height: ${this.lastRowHeight}px`}>Growing run</div>`,
-      },
+      { kind: "content", key: "earlier", content: this.earlier },
+      { kind: "content", key: "growing-run", content: this.last },
     ];
-    return html`
-      <div
-        class="chat-thread-viewport"
-        style=${`height: ${this.viewportHeight}px; flex: none; padding: 0 0 ${this.viewportPadding}px`}
-      >
-        <div class="chat-thread" style="overflow-anchor: none">
-          ${this.transcript.renderSession("agent:main:end-follow", (session) => {
-            session.setContentReady(true);
-            return session.render(
-              rows,
-              (row) => (row.kind === "content" ? row.content : null),
-              null,
-              false,
-            );
-          })}
-        </div>
-      </div>
-      <div class="chat-prs" style="position: relative; height: 38px; margin-top: -38px">
-        Pull request
-      </div>
-    `;
-  }
+    const content = this.transcript.renderSession("agent:main:end-follow", (session) => {
+      session.setContentReady(true);
+      return session.render(
+        rows,
+        (row) => (row.kind === "content" ? row.content : null),
+        null,
+        false,
+      );
+    });
+    if (content.parentElement !== this.thread) {
+      this.thread.replaceChildren(content);
+    }
+    return this.content;
+  };
 }
 customElements.define("test-transcript-end-follow", EndFollowFixture);
 
@@ -534,4 +546,56 @@ it("publishes padding changes when either viewport box stays the same size", asy
   await expect.poll(() => thread.clientHeight).toBe(420);
   expect(getComputedStyle(thread).paddingBottom).toBe("60px");
   expect(distance()).toBe(0);
+});
+
+it("holds the canceled viewport after a smooth journey's automatic final approach", async () => {
+  const { host, thread, extent, distance } = await mountEndFollowFixture(0);
+  const earlier = host.querySelector<HTMLElement>('[data-virtual-row-key="earlier"]')!;
+  const nativeScrollTo = thread.scrollTo.bind(thread);
+  let finalApproach = false;
+  let grewNearEnd = false;
+  let canceledOffset: number | undefined;
+  function observeScroll(options?: ScrollToOptions): void;
+  function observeScroll(x: number, y: number): void;
+  function observeScroll(options: ScrollToOptions | number | undefined, y?: number): void {
+    if (typeof options === "number") {
+      nativeScrollTo(options, y ?? 0);
+    } else {
+      finalApproach ||= grewNearEnd && options?.behavior === "auto";
+      nativeScrollTo(options);
+    }
+  }
+  thread.scrollTo = observeScroll;
+  const listener = new AbortController();
+  const canceled = new Promise<number>((resolve) => {
+    thread.addEventListener(
+      "scroll",
+      () => {
+        if (canceledOffset !== undefined) {
+          return;
+        }
+        if (finalApproach) {
+          canceledOffset = thread.scrollTop;
+          earlier.style.height = "442px";
+          host.transcript.cancelScroll();
+          resolve(canceledOffset);
+        } else if (!grewNearEnd && distance() <= thread.clientHeight) {
+          grewNearEnd = true;
+          host.lastRowHeight += 48;
+          host.requestUpdate();
+        }
+      },
+      { capture: true, signal: listener.signal },
+    );
+  });
+  try {
+    host.transcript.scrollToEnd({ behavior: "smooth" });
+    const offset = await canceled;
+    await settleFrames();
+    expect(extent.offsetHeight).toBe(1390);
+    expect(thread.scrollTop).toBe(offset);
+  } finally {
+    listener.abort();
+    thread.scrollTo = nativeScrollTo;
+  }
 });

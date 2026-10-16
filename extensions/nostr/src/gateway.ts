@@ -18,7 +18,6 @@ import {
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
-import type { MetricEvent } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
 import { getNostrRuntime } from "./runtime.js";
@@ -277,21 +276,14 @@ export async function startNostrGatewayAccount(
         onEose: (relays) => {
           ctx.log?.debug?.(`[${account.accountId}] EOSE received from relays: ${relays}`);
         },
-        onMetric: (event: MetricEvent) => {
-          if (event.name.startsWith("event.rejected.")) {
-            ctx.log?.debug?.(
-              `[${account.accountId}] Metric: ${event.name} ${JSON.stringify(event.labels)}`,
-            );
-          } else if (event.name === "relay.circuit_breaker.open") {
-            ctx.log?.warn?.(
-              `[${account.accountId}] Circuit breaker opened for relay: ${event.labels?.relay}`,
-            );
-          } else if (event.name === "relay.circuit_breaker.close") {
-            ctx.log?.info?.(
-              `[${account.accountId}] Circuit breaker closed for relay: ${event.labels?.relay}`,
-            );
-          } else if (event.name === "relay.error") {
-            ctx.log?.debug?.(`[${account.accountId}] Relay error: ${event.labels?.relay}`);
+        onRejected: (reason) => {
+          ctx.log?.debug?.(`[${account.accountId}] Event rejected: ${reason}`);
+        },
+        onCircuitBreakerChange: (relay, state) => {
+          if (state === "open") {
+            ctx.log?.warn?.(`[${account.accountId}] Circuit breaker opened for relay: ${relay}`);
+          } else {
+            ctx.log?.info?.(`[${account.accountId}] Circuit breaker closed for relay: ${relay}`);
           }
         },
       });

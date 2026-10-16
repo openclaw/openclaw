@@ -2,11 +2,21 @@ import type { JSX } from "@solidjs/web";
 // Controller for the Memory destination page. The URL owns the active tab;
 // this element projects Settings agent selection into Overview status and
 // consumes the global configuration controllers used by Settings.
-import { createEffect, createSignal, onCleanup, onSettled, Show, untrack } from "solid-js";
-import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onSettled,
+  Show,
+  untrack,
+} from "solid-js";
+import type { ControlUiSettingsSnapshot } from "../../../../src/plugin-sdk/control-ui-settings.js";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -19,18 +29,19 @@ import {
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
-import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { t, getLocale, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import { ControlUiSettingsPresentation } from "../../plugins/control-ui-settings-view.solid.tsx";
 import {
   resolveConfiguredDreaming,
   resolveDreamingConfigPathSupport,
   type DreamingConfigPathSupport,
 } from "../agents/memory/dreaming.ts";
 import { AgentMemoryPanel } from "../agents/memory/memory-panel.tsx";
-import { dreamingConfigPath } from "./memory-defaults.ts";
-import { MemoryDreamingControls } from "./memory-dreaming.tsx";
+import { createCuratedSettingsEditor } from "./curated-settings-editor.ts";
+import { curatedSettingsPresentation } from "./curated-settings-presentation.ts";
+import { CuratedSettingsPanel } from "./curated-settings.tsx";
 import { MemoryMemories } from "./memory-memories.tsx";
-import { MemoryOverview, type MemoryOverviewStatus } from "./memory-overview.tsx";
 import {
   canonicalMemoryRouteLocation,
   memoryTabForRoute,
@@ -56,6 +67,9 @@ registerEnglishCatalog(registerSettingsEnglish);
 /** Explicit-off sentinel; resolveSlotSelection maps it to an `off` selection. */
 const MEMORY_SLOT_OFF = "none";
 const MEMORY_SLOT_PATH = ["plugins", "slots", "memory"];
+// This compatible Dreaming placement is owned by Memory Core; the current engine
+// remains the config owner, including custom engines and same-ID overrides.
+const DREAMING_SETTINGS = curatedSettingsPresentation("memory-dreaming-settings");
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 
@@ -86,6 +100,9 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const agentSelection = projectAgentSelection(application.settingsAgentSelection);
   const runtime = projectRuntimeConfig(application.runtimeConfig);
   const agents = projectAgents(application.agents);
+  const dreamingConfigOwner = createMemo(
+    () => resolveConfiguredDreaming(currentConfigObject(runtime.read().state)).pluginId,
+  );
   const [catalog, setCatalog] = createSignal<MemoryCatalog>({
     kind: "unavailable",
   });
@@ -102,13 +119,16 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   const [addonRefreshWarnings, setAddonRefreshWarnings] = createSignal(new Map<string, string>());
 
-  let previousSelectedAgentId: string | null = null;
-
-  const [overviewStatus, setOverviewStatus] = createSignal<MemoryOverviewStatus>({
-    kind: "idle",
-  });
-
-  const [probingEmbeddings, setProbingEmbeddings] = createSignal(false);
+  let settingsEpoch = 0;
+  const settingsListeners = new Set<() => void>();
+  const [settingsRevision, setSettingsRevision] = createSignal(0, { ownedWrite: true });
+  function retireOverviewReads() {
+    settingsEpoch += 1;
+    setSettingsRevision(settingsEpoch);
+    for (const notify of settingsListeners) {
+      notify();
+    }
+  }
 
   const [support, setSupport] = createSignal<DreamingConfigPathSupport>("unknown");
 
@@ -117,11 +137,6 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   let pagePluginGeneration: number | undefined = undefined;
 
   let pageCatalogRequest = 0;
-
-  let pageOverviewRequest: {
-    connection: CatalogConnection;
-    agentId: string;
-  } | null = null;
 
   let pageSupportPluginId: string | null = null;
 
@@ -198,18 +213,11 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     setEngineOutcome(null);
     setAddonBusy(new Set<string>());
     setAddonRefreshWarnings(new Map());
-    pageOverviewRequest = null;
-    setProbingEmbeddings(false);
+    retireOverviewReads();
     if (!client || !connected) {
       setCatalog({
         kind: "unavailable",
       });
-      if (activeTab() === "overview") {
-        setOverviewStatus({
-          kind: "error",
-          message: t("memoryPage.overview.hero.gatewayOffline"),
-        });
-      }
       return;
     }
     setCatalog({
@@ -224,13 +232,11 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   function refreshPluginReads(client: GatewayClient, connection: CatalogConnection) {
     // Publication supersedes reads, not the connection or a mutation waiting on its receipt.
-    pageOverviewRequest = null;
-    setProbingEmbeddings(false);
+    retireOverviewReads();
     pageSupportPluginId = null;
     pageSupportProbe = null;
     syncSupport(application.runtimeConfig);
     void loadCatalog(client, connection);
-    void loadOverviewStatus();
   }
 
   async function loadCatalog(client: GatewayClient, connection: CatalogConnection) {
@@ -258,100 +264,6 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       return;
     }
     setCatalog(nextCatalog);
-  }
-
-  function selectAgent(agentId: string | null) {
-    if (previousSelectedAgentId === agentId) {
-      return;
-    }
-    previousSelectedAgentId = agentId;
-    pageOverviewRequest = null;
-    setOverviewStatus({
-      kind: "idle",
-    });
-    setProbingEmbeddings(false);
-    void loadOverviewStatus();
-  }
-
-  async function loadOverviewStatus(
-    options: {
-      force?: boolean;
-      probeEmbeddings?: boolean;
-    } = {},
-  ) {
-    if (activeTab() !== "overview") {
-      return;
-    }
-    if (resolveMemoryEngineSelection(props.configObject).kind === "off") {
-      pageOverviewRequest = null;
-      setOverviewStatus({
-        kind: "idle",
-      });
-      setProbingEmbeddings(false);
-      return;
-    }
-    const connection = pageConnection;
-    const client = connection?.connected ? connection.client : null;
-    const agentId = application.settingsAgentSelection.state.selectedId;
-    if (!connection || !client) {
-      setOverviewStatus({
-        kind: "error",
-        message: t("memoryPage.overview.hero.gatewayOffline"),
-      });
-      setProbingEmbeddings(false);
-      return;
-    }
-    if (!agentId) {
-      return;
-    }
-    if (
-      !options.force &&
-      pageOverviewRequest?.connection === connection &&
-      pageOverviewRequest.agentId === agentId
-    ) {
-      return;
-    }
-    const probeEmbeddings = options.probeEmbeddings === true;
-    const request = {
-      connection,
-      agentId,
-    };
-    pageOverviewRequest = request;
-    setProbingEmbeddings(probeEmbeddings);
-    if (!probeEmbeddings) {
-      setOverviewStatus({
-        kind: "loading",
-      });
-    }
-    try {
-      const payload = await client.request<DoctorMemoryStatusPayload>("doctor.memory.status", {
-        agentId,
-        ...(probeEmbeddings
-          ? {
-              probe: true,
-            }
-          : {}),
-      });
-      if (!active || pageOverviewRequest !== request) {
-        return;
-      }
-      setOverviewStatus({
-        kind: "ready",
-        payload,
-      });
-    } catch (error) {
-      if (!active || pageOverviewRequest !== request) {
-        return;
-      }
-      setOverviewStatus({
-        kind: "error",
-        message: formatUiError(error),
-      });
-    } finally {
-      if (pageOverviewRequest === request) {
-        setProbingEmbeddings(false);
-      }
-    }
   }
 
   function engineState(selection: MemoryEngineSelection): MemoryPluginState {
@@ -570,55 +482,39 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     });
   }
 
-  function patchDreaming(path: readonly string[], value: unknown) {
-    if (props.mutationDisabled) {
-      return;
-    }
-    const config = currentConfigObject(application.runtimeConfig.state);
-    const writePath = dreamingConfigPath(resolveConfiguredDreaming(config).pluginId, path);
-    if (value === undefined) {
-      application.runtimeConfig.removeFormValue(writePath);
-      return;
-    }
-    application.runtimeConfig.patchForm(writePath, value);
-  }
+  const editCuratedSettings = createCuratedSettingsEditor(DREAMING_SETTINGS, {
+    read: () => currentConfigObject(application.runtimeConfig.state),
+    parameters: (config) => ({ configOwner: resolveConfiguredDreaming(config).pluginId }),
+    canEdit: () =>
+      active &&
+      !props.mutationDisabled &&
+      application.runtimeConfig.state.connected &&
+      application.gateway.snapshot.phase === "connected" &&
+      readGatewayOperatorAccess(application.gateway.snapshot).canAdmin,
+    patch: (path, value) => application.runtimeConfig.patchForm(path, value),
+    remove: (path) => application.runtimeConfig.removeFormValue(path),
+  });
 
   function navigateTab(tab: MemoryTab) {
     application.navigate("memory", {
       pathname: pathForMemoryTab(tab, application.basePath),
     });
   }
-  let previousTab: MemoryTab | undefined;
   createEffect(
     () => props.routeData,
     () => {
-      const nextTab = activeTab();
-      const changed = previousTab !== undefined && previousTab !== nextTab;
-      previousTab = nextTab;
-      if (changed) {
-        pageOverviewRequest = null;
-        setProbingEmbeddings(false);
-      }
       syncRouteAgent();
       syncCanonicalLocation();
-      if (changed) {
-        void loadOverviewStatus();
-      }
     },
   );
   // Owner notifications are synchronous: a disconnect/reconnect pair must retire
   // pending reads even when Solid batches both publications into one render.
   onSettled(() => {
     const unsubscribe = [
-      agentSelection.subscribe(() =>
-        untrack(() => selectAgent(agentSelection.read().state.selectedId)),
-      ),
       gateway.subscribe(() => untrack(() => syncGateway(gateway.read().snapshot))),
       runtime.subscribe(() => untrack(() => syncSupport(application.runtimeConfig))),
-      agents.subscribe(() => untrack(() => void loadOverviewStatus())),
     ];
     syncRouteAgent();
-    selectAgent(agentSelection.read().state.selectedId);
     syncGateway(gateway.read().snapshot);
     return () => {
       for (const stop of unsubscribe) {
@@ -626,24 +522,9 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       }
     };
   });
-  let previousEngine: string | null | undefined;
-  createEffect(
-    () => selectedEngineId(resolveMemoryEngineSelection(props.configObject)),
-    (engine) => {
-      const changed = previousEngine !== undefined && engine !== previousEngine;
-      previousEngine = engine;
-      if (!changed) {
-        return;
-      }
-      pageOverviewRequest = null;
-      setProbingEmbeddings(false);
-      void loadOverviewStatus();
-    },
-  );
   onCleanup(() => {
     active = false;
     pageConnection = null;
-    pageOverviewRequest = null;
     pageSupportProbe = null;
     addonNoticeOperations.clear();
   });
@@ -651,7 +532,57 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const engineSelection = () => resolveMemoryEngineSelection(props.configObject);
   const currentEngineState = () => engineState(engineSelection());
   const agentId = () => agentSelection.read().state.selectedId;
-  const agentError = () => (agentId() ? null : agents.read().agentsError);
+  function readOverviewSettingsSnapshot(): ControlUiSettingsSnapshot {
+    // Track the projections, but read authority directly from each live owner.
+    agentSelection.read();
+    gateway.read();
+    runtime.read();
+    agents.read();
+    settingsRevision();
+    const selection = resolveMemoryEngineSelection(
+      currentConfigObject(application.runtimeConfig.state) ?? {},
+    );
+    const id = selectedEngineId(selection);
+    const entry = findMemoryPlugin(catalog(), id);
+    return {
+      agentId: application.settingsAgentSelection.state.selectedId,
+      agentsLoading: application.agents.state.agentsLoading,
+      agentsError: application.agents.state.agentsError,
+      engine: {
+        kind: selection.kind,
+        id,
+        availability:
+          catalog().kind === "ready" && id && !entry?.installed
+            ? "missing"
+            : engineState(selection),
+      },
+      connected: application.gateway.snapshot.phase === "connected",
+      connectionEpoch: settingsEpoch,
+      routeIntent: JSON.stringify([
+        props.routeData?.pathname,
+        props.routeData?.search,
+        props.routeData?.hash,
+      ]),
+      locale: getLocale(),
+    };
+  }
+
+  function subscribeOverviewSettings(listener: () => void) {
+    settingsListeners.add(listener);
+    const stops = [
+      agentSelection.subscribe(listener),
+      gateway.subscribe(listener),
+      runtime.subscribe(listener),
+      agents.subscribe(listener),
+      i18n.subscribe(listener),
+    ];
+    return () => {
+      settingsListeners.delete(listener);
+      for (const stop of stops) {
+        stop();
+      }
+    };
+  }
 
   return (
     <openclaw-memory-settings>
@@ -680,22 +611,18 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
         memoryImportHref={props.memoryImportHref}
         canImportMemory={readGatewayOperatorAccess(gateway.read().snapshot).canAdmin}
         overview={
-          <MemoryOverview
-            agentId={agentId()}
-            engineSelection={engineSelection()}
-            engineDisabled={currentEngineState() === "disabled"}
-            status={agentError() ? { kind: "error", message: agentError()! } : overviewStatus()}
-            probingEmbeddings={probingEmbeddings()}
-            onRefresh={() =>
-              agentId()
-                ? void loadOverviewStatus({ force: true })
-                : void application.agents.ensureList()
-            }
-            onProbeEmbeddings={() =>
-              void loadOverviewStatus({ force: true, probeEmbeddings: true })
-            }
-            onNavigate={navigateTab}
-          />
+          <ShellLayoutBoundary traits={{ settingsPage: true }}>
+            <ControlUiSettingsPresentation
+              application={application}
+              placement={{ section: "memory", panel: "overview" }}
+              readSnapshot={readOverviewSettingsSnapshot}
+              subscribe={subscribeOverviewSettings}
+              navigate={navigateTab}
+              refreshAgents={() => {
+                void application.agents.ensureList();
+              }}
+            />
+          </ShellLayoutBoundary>
         }
         memories={
           <MemoryMemories
@@ -715,11 +642,14 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
         editor={activeTab() === "settings" ? props.buildEditor() : null}
         dreamingSettings={
           activeTab() === "settings" ? (
-            <MemoryDreamingControls
+            <CuratedSettingsPanel
+              presentation={DREAMING_SETTINGS}
+              parameters={{ configOwner: dreamingConfigOwner() }}
+              messageParameters={{ plugin: dreamingConfigOwner() }}
               config={currentConfigObject(runtime.read().state)}
               support={support()}
               disabled={props.mutationDisabled}
-              onPatch={patchDreaming}
+              onPatch={editCuratedSettings}
             />
           ) : null
         }

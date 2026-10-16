@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
+import { assertNoSymlinkParents, readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
@@ -207,17 +207,14 @@ async function buildDevelopmentSnapshot(params: {
 
     let readWorkspaceByteLength = 0;
     for (const { sourcePath, opened } of openedSources) {
-      const bytes = await opened.handle.readFile();
-      if (bytes.byteLength > MAX_MANAGED_FILE_BYTES) {
-        return {
-          ok: false,
-          diagnostics: [
-            workspaceSourceDiagnostic(
-              new FsSafeError("too-large", "workspace source grew while reading"),
-              sourcePath,
-            ),
-          ],
-        };
+      let bytes: Buffer;
+      try {
+        bytes = await readFileHandleBounded(opened.handle, MAX_MANAGED_FILE_BYTES);
+      } catch (error) {
+        if (error instanceof FsSafeError && error.code === "too-large") {
+          return { ok: false, diagnostics: [workspaceSourceDiagnostic(error, sourcePath)] };
+        }
+        throw error;
       }
       readWorkspaceByteLength += bytes.byteLength;
       if (readWorkspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {

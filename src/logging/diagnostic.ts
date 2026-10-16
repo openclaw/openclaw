@@ -54,10 +54,7 @@ import {
   isTerminalDiagnosticProgressReason,
   type SessionAttentionClassification,
 } from "./diagnostic-session-attention.js";
-import {
-  logWithSessionDiagnosticContext,
-  retireSessionDiagnosticLogs,
-} from "./diagnostic-session-context.js";
+import { logWithSessionDiagnosticContext } from "./diagnostic-session-context.js";
 import {
   requestStuckSessionRecovery,
   resetDiagnosticSessionRecoveryCoordinatorForTest,
@@ -386,13 +383,6 @@ export function logWebhookReceived(params: DiagnosticLogParams<"webhook.received
     return;
   }
   webhookStats.received += 1;
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `webhook received: channel=${params.channel} type=${params.updateType ?? "unknown"} chatId=${
-        params.chatId ?? "unknown"
-      } total=${webhookStats.received}`,
-    );
-  }
   emitDiagnosticEvent({
     type: "webhook.received",
     channel: params.channel,
@@ -407,15 +397,6 @@ export function logWebhookProcessed(params: DiagnosticLogParams<"webhook.process
     return;
   }
   webhookStats.processed += 1;
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `webhook processed: channel=${params.channel} type=${
-        params.updateType ?? "unknown"
-      } chatId=${params.chatId ?? "unknown"} duration=${params.durationMs ?? 0}ms processed=${
-        webhookStats.processed
-      }`,
-    );
-  }
   emitDiagnosticEvent({
     type: "webhook.processed",
     channel: params.channel,
@@ -456,15 +437,6 @@ export function logMessageReceived(params: DiagnosticLogParams<"message.received
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `message received: channel=${params.channel ?? "unknown"} chatId=${
-        params.chatId ?? "unknown"
-      } messageId=${params.messageId ?? "unknown"} sessionId=${
-        params.sessionId ?? "unknown"
-      } sessionKey=${params.sessionKey ?? "unknown"} source=${params.source}`,
-    );
-  }
   emitDiagnosticEvent({
     type: "message.received",
     sessionId: params.sessionId,
@@ -480,13 +452,6 @@ export function logMessageReceived(params: DiagnosticLogParams<"message.received
 export function logMessageDispatchStarted(params: DiagnosticLogParams<"message.dispatch.started">) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
-  }
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `message dispatch started: channel=${params.channel ?? "unknown"} sessionId=${
-        params.sessionId ?? "unknown"
-      } sessionKey=${params.sessionKey ?? "unknown"} source=${params.source}`,
-    );
   }
   emitDiagnosticEvent({
     type: "message.dispatch.started",
@@ -559,15 +524,6 @@ export function logSessionTurnCreated(params: DiagnosticLogParams<"session.turn.
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `session turn created: runId=${params.runId} sessionId=${
-        params.sessionId ?? "unknown"
-      } sessionKey=${params.sessionKey ?? "unknown"} agentId=${
-        params.agentId ?? "unknown"
-      } channel=${params.channel ?? "unknown"} trigger=${params.trigger}`,
-    );
-  }
   emitDiagnosticEvent({
     type: "session.turn.created",
     runId: params.runId,
@@ -590,7 +546,6 @@ export function logSessionStateChange(
     return;
   }
   const state = getDiagnosticSessionState(params);
-  const isProbeSession = state.sessionId?.startsWith("probe-") ?? false;
   const prevState = state.state;
   state.state = params.state;
   touchDiagnosticSessionState(state);
@@ -600,15 +555,6 @@ export function logSessionStateChange(
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
     state.activeQueuedTurn = false;
-  }
-  if (!isProbeSession && diag.isEnabled("debug")) {
-    diag.debug(
-      `session state: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
-        state.sessionKey ?? "unknown"
-      } prev=${prevState} new=${params.state} reason="${params.reason ?? ""}" queueDepth=${
-        state.queueDepth
-      }`,
-    );
   }
   emitDiagnosticEvent({
     type: "session.state",
@@ -749,7 +695,6 @@ function logSessionAttention(
     level:
       classification.eventType === "session.long_running" && queueDepth <= 0 ? "debug" : "warn",
     sessionKey: params.sessionKey,
-    activeSessionId: params.sessionId,
     format: (sessionFields) => {
       const detailFields = [formatSessionActivityLogFields(activity), sessionFields]
         .filter(Boolean)
@@ -798,37 +743,86 @@ function logSessionAttention(
 let heartbeatJob: GatewayScheduledJob | undefined;
 let detachHeartbeatOwner: (() => void) | undefined;
 let lastDiagnosticHeartbeatTickAt: number | undefined;
+let updateHeartbeatOptions:
+  | ((config?: OpenClawConfig, opts?: StartDiagnosticHeartbeatOptions) => void)
+  | undefined;
+
+function stopDiagnosticObservations() {
+  stopDiagnosticGcObserver();
+  lastDiagnosticHeartbeatTickAt = undefined;
+  stopDiagnosticRunActivityTracking();
+  retireDiagnosticSessionObservations();
+  stopDiagnosticLivenessSampler();
+  stopDiagnosticStabilityRecorder();
+  uninstallDiagnosticStabilityFatalHook();
+}
 
 export function startGatewayDiagnosticHeartbeat(
   scheduler: GatewayScheduler,
-  config?: OpenClawConfig,
-  opts?: StartDiagnosticHeartbeatOptions,
+  initialConfig?: OpenClawConfig,
+  initialOpts?: StartDiagnosticHeartbeatOptions,
 ) {
-  if (!areDiagnosticsEnabledForProcess() || !isDiagnosticsEnabled(config)) {
+  if (scheduler.signal.aborted) {
     return;
   }
-  // The heartbeat owns run-activity event tracking for its full lifecycle.
-  // Importing diagnostic helpers must not seed process-global listeners.
-  startDiagnosticRunActivityTracking();
-  startDiagnosticStabilityRecorder();
-  installDiagnosticStabilityFatalHook();
-  reconcileDiagnosticGcObserver();
   if (heartbeatJob) {
+    updateHeartbeatOptions?.(initialConfig, initialOpts);
     return;
   }
-  // Gateway supplies its lifecycle-owned monitor; other runtimes retain the
-  // built-in sampler. Never allocate two perf monitors for one heartbeat.
-  if (!opts?.sampleLiveness) {
-    startDiagnosticLivenessSampler();
-  }
-  const livenessGraceUntil =
-    opts?.startupGraceMs != null && opts.startupGraceMs > 0
-      ? scheduler.now() + opts.startupGraceMs
-      : 0;
-  lastDiagnosticHeartbeatTickAt = scheduler.now();
-  const tick = () => {
-    // Reuse this tick for exporter demand changes; GC collection never adds a timer.
+  let config = initialConfig;
+  let opts = initialOpts;
+  let observing = false;
+  let ownsLivenessSampler = false;
+  let livenessGraceUntil = 0;
+  const reconcileObservations = () => {
+    // Collection policy is explicit process/heartbeat state, not recovery's config lookup.
+    if (!areDiagnosticsEnabledForProcess() || !isDiagnosticsEnabled(config)) {
+      if (observing) {
+        stopDiagnosticObservations();
+        observing = false;
+        ownsLivenessSampler = false;
+      }
+      return false;
+    }
+    if (!observing) {
+      startDiagnosticRunActivityTracking();
+      startDiagnosticStabilityRecorder();
+      installDiagnosticStabilityFatalHook();
+      lastDiagnosticHeartbeatTickAt = scheduler.now();
+      livenessGraceUntil =
+        opts?.startupGraceMs != null && opts.startupGraceMs > 0
+          ? scheduler.now() + opts.startupGraceMs
+          : 0;
+      observing = true;
+    }
+    // Gateway supplies its own monitor; SDK callers retain the built-in sampler.
+    const needsLivenessSampler = !opts?.sampleLiveness;
+    if (needsLivenessSampler !== ownsLivenessSampler) {
+      if (needsLivenessSampler) {
+        startDiagnosticLivenessSampler();
+      } else {
+        stopDiagnosticLivenessSampler();
+      }
+      ownsLivenessSampler = needsLivenessSampler;
+    }
     reconcileDiagnosticGcObserver();
+    return true;
+  };
+  updateHeartbeatOptions = (nextConfig, nextOptions) => {
+    config = nextConfig;
+    opts = nextOptions;
+    reconcileObservations();
+  };
+  reconcileObservations();
+  const tick = () => {
+    if (scheduler.signal.aborted || heartbeatJob !== job) {
+      return;
+    }
+    if (!reconcileObservations()) {
+      // Critical pressure still retires idle Workers without diagnostic collection or callbacks.
+      emitDiagnosticMemorySample(undefined, false);
+      return;
+    }
     emitChildProcessSpawnSample();
     let heartbeatConfig = config;
     if (!heartbeatConfig) {
@@ -887,9 +881,6 @@ export function startGatewayDiagnosticHeartbeat(
       emitDiagnosticLivenessWarning(livenessSample, work, now);
     }
 
-    diag.debug(
-      `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${work.activeCount} waiting=${work.waitingCount} queued=${work.queuedCount} nextWakeAtMs=${scheduler.nextWakeAtMs ?? "none"}`,
-    );
     emitDiagnosticEvent({
       type: "diagnostic.heartbeat",
       webhooks: {
@@ -1004,16 +995,10 @@ export function startGatewayDiagnosticHeartbeat(
 export function stopGatewayDiagnosticHeartbeat() {
   detachHeartbeatOwner?.();
   detachHeartbeatOwner = undefined;
-  retireSessionDiagnosticLogs();
-  stopDiagnosticGcObserver();
   heartbeatJob?.cancel();
   heartbeatJob = undefined;
-  lastDiagnosticHeartbeatTickAt = undefined;
-  stopDiagnosticRunActivityTracking();
-  retireDiagnosticSessionObservations();
-  stopDiagnosticLivenessSampler();
-  stopDiagnosticStabilityRecorder();
-  uninstallDiagnosticStabilityFatalHook();
+  updateHeartbeatOptions = undefined;
+  stopDiagnosticObservations();
 }
 
 function resetDiagnosticStateForTest(): void {

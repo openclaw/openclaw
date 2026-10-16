@@ -226,6 +226,7 @@ export async function maybeRestartService(params: {
       return await failed();
     }
   }
+  const original = params.originalManagedServiceRuntime;
   let activation = {
     ...params,
     signal: run?.deadline?.signal,
@@ -241,6 +242,15 @@ export async function maybeRestartService(params: {
       recordServiceReconciliationWarnings(params.result, warnings, run, assertCurrent),
     onTimedStep: (step: UpdateStepResult) => recordServiceTimedStep(params.result, step, run),
   };
+  if (original && !original.definition.runtimePin) {
+    if (!original.version) {
+      throw new Error("Original service runtime or schema support was not verified.");
+    }
+    activation.refreshServiceEnv = activation.serviceRuntimeRefreshRequired = false;
+    activation.nodeRunner = original.nodeRunner;
+    activation.expectedGatewayIdentity = { version: original.version, buildId: original.buildId };
+    activation.serviceUpdateVerdict = original.service.serviceUpdateVerdict;
+  }
   const verdict = activation.serviceUpdateVerdict;
   let preserveDefinition =
     verdict?.kind === "unresolved" || (verdict?.kind === "owned" && !verdict.refreshDefinition);
@@ -445,6 +455,7 @@ export async function maybeRestartService(params: {
     return verification.ok ? ("ok" as const) : undefined;
   };
 
+  const expectedIdentity = activation.expectedGatewayIdentity ?? activation.result.after;
   if (!activation.shouldRestart) {
     if (!activation.opts.json) {
       defaultRuntime.log(theme.muted("Gateway: updater restart skipped (--no-restart)."));
@@ -454,7 +465,8 @@ export async function maybeRestartService(params: {
         await verifyUpdatedGateway({
           ...activation,
           purpose: "package-replacement",
-          expectedVersion: normalizeOptionalString(activation.result.after?.version),
+          expectedVersion: normalizeOptionalString(expectedIdentity?.version),
+          expectedBuildId: normalizeOptionalString(expectedIdentity?.buildId),
           waitForStartup: false,
         });
       } catch (error) {
@@ -483,7 +495,6 @@ export async function maybeRestartService(params: {
   }
 
   try {
-    const expectedIdentity = activation.expectedGatewayIdentity ?? activation.result.after;
     let expectedGatewayVersion = normalizeOptionalString(expectedIdentity?.version);
     const expectedGatewayBuildId = normalizeOptionalString(expectedIdentity?.buildId);
     const canVerifyUpdatedGatewayByVersion =
@@ -514,7 +525,6 @@ export async function maybeRestartService(params: {
             requirePluginHealth: false,
             serviceEnv: activation.serviceEnv,
             requireRunningService: true,
-            settle: { probes: 12 },
             assertCurrent,
           });
           assertCurrent();
@@ -691,12 +701,8 @@ export async function maybeRestartService(params: {
       // The installed CLI owns restart retries; observe its final health result
       // without another native mutation.
       const healthy = await verifyRestartedGateway(
-        normalizeOptionalString(
-          (activation.expectedGatewayIdentity ?? activation.result.after)?.version,
-        ),
-        normalizeOptionalString(
-          (activation.expectedGatewayIdentity ?? activation.result.after)?.buildId,
-        ),
+        normalizeOptionalString(expectedIdentity?.version),
+        normalizeOptionalString(expectedIdentity?.buildId),
         { requireRunningService: true, recoverHealth: false },
       );
       return healthy ?? (await failed("restart-health-failed"));

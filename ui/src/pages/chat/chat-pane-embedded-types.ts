@@ -8,18 +8,30 @@ import type {
   BrowserTabTarget,
 } from "../../components/browser/browser-target.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import type { PresentationValue } from "../../lit/presentation-binding.ts";
+import type { PresentationValue } from "../../lib/presentation.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
 import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
+import type { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import type {
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
-import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
+import type { ChatProps } from "./chat-view-frame.ts";
+import type {
+  SessionWorkspaceProps,
+  SessionWorkspaceState,
+} from "./components/chat-session-workspace-types.ts";
+import type { SidebarSelection } from "./components/chat-sidebar-content-types.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
+
+export type ChatDetailSlotProps = {
+  chat: ChatProps;
+  content: SidebarSelection;
+  host: ChatPageHost;
+  requestUpdate: () => void;
+};
 
 export type SidebarPanelDefinitionParams = {
   panePresentation?: PresentationValue;
@@ -57,9 +69,9 @@ export type SidebarPanelDefinitionParams = {
   onDesktopFocusTargetChange: (
     target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>,
   ) => void;
-  dashboard: SidebarPanelDefinition["content"];
-  workspace: SidebarPanelDefinition["content"];
-  renderDetail: (content: SidebarContent) => SidebarPanelDefinition["content"];
+  dashboard: Parameters<typeof ChatBoardPanel>[0] | null;
+  workspace: SessionWorkspaceProps | undefined;
+  detail: Omit<ChatDetailSlotProps, "content">;
   digest: SessionObserverDigest | null;
   activeRunId: string | null;
   pullRequests: ControlUiSessionPullRequest[];
@@ -77,4 +89,11 @@ export type SidebarPanelDefinitionParams = {
   discussionSourceGeneration: number;
   pluginPanels: ControlUiRegistration<ControlUiPanel>[];
   isPluginPanelPresented: (slot: SidebarSlotId) => PresentationValue;
+};
+
+/** The retained panel chooses its native view from the existing sidebar slot. */
+export type SidebarPanelData = SidebarPanelDefinitionParams & {
+  workspaceState: SessionWorkspaceState;
+  detailContent: SidebarSelection | null;
+  detailPresentation: PresentationValue;
 };

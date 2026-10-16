@@ -149,6 +149,95 @@ describe("doctor generated plugin model catalog migration", () => {
     expect(readCatalogCacheRow(agentDir, "zai")).toEqual(malformedBefore);
   });
 
+  it("repairs only partial retained costs and persists the repair across reopening", async () => {
+    const agentDir = createAgentDir();
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("ollama")]: generatedCatalog("ollama"),
+        [encodePluginModelCatalogRelativePath("anthropic")]: generatedCatalog("anthropic"),
+      },
+    });
+    await closeOpenClawAgentDatabasesAsync(agentDir);
+    const partial = {
+      id: "partial",
+      cost: { input: 1, output: 2, tieredPricing: [{ input: 3, output: 4 }] },
+    };
+    const unchanged = [
+      { id: "priced", cost: { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 } },
+      { id: "unpriced" },
+      { id: "null-cost", cost: null },
+      { id: "scalar-cost", cost: 3 },
+      { id: "array-cost", cost: [] },
+      { id: "null-rate", cost: { input: null, output: 2 } },
+      { id: "string-rate", cost: { input: "1", output: 2 } },
+    ];
+    const provider = {
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      apiKey: "preserved-provider-test-key",
+      models: [partial, ...unchanged],
+    };
+    const retained = JSON.stringify({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: { ollama: provider },
+    });
+    const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+    try {
+      database
+        .prepare(
+          "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
+        )
+        .run(retained, "plugin-model-catalog-v1", "ollama");
+    } finally {
+      database.close();
+    }
+    const before = readCatalogCacheRow(agentDir, "ollama");
+    const sibling = readCatalogCacheRow(agentDir, "anthropic");
+    await expect(
+      maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir], false)),
+    ).resolves.toEqual({ detected: 1, migrated: 0, repaired: 0, warnings: [] });
+    expect(readCatalogCacheRow(agentDir, "ollama")).toEqual(before);
+    expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(sibling);
+
+    const params = migrationParams([agentDir]);
+    await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toEqual({
+      detected: 1,
+      migrated: 0,
+      repaired: 1,
+      warnings: [],
+    });
+    expect(params.note).toHaveBeenCalledWith(
+      expect.stringContaining("completed the cost of 1 model row(s)"),
+      "Doctor changes",
+    );
+    await closeOpenClawAgentDatabasesAsync(agentDir);
+    const repaired = readCatalogCacheRow(agentDir, "ollama");
+    expect(JSON.parse(repaired.value_json)).toEqual({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: {
+        ollama: {
+          ...provider,
+          models: [
+            { ...partial, cost: { ...partial.cost, cacheRead: 0, cacheWrite: 0 } },
+            ...unchanged,
+          ],
+        },
+      },
+    });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toContainEqual({
+      pluginId: "ollama",
+      contents: repaired.value_json,
+    });
+    expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(sibling);
+
+    await expect(
+      maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
+    ).resolves.toEqual({ detected: 0, migrated: 0, repaired: 0, warnings: [] });
+    expect(readCatalogCacheRow(agentDir, "ollama")).toEqual(repaired);
+    expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(sibling);
+  });
+
   it("does not report a repair when SQLite rejects the planned update", async () => {
     const agentDir = createAgentDir();
     const relativePath = encodePluginModelCatalogRelativePath("nvidia");

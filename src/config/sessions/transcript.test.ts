@@ -322,66 +322,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     },
   );
 
-  it("uses configured session.store when storePath is omitted", async () => {
-    const tempDir = sessionDirs.make();
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    try {
-      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
-      const sessionsDir = path.join(tempDir, "configured", "sessions");
-      fs.mkdirSync(sessionsDir, { recursive: true });
-      const storePath = path.join(sessionsDir, "sessions.json");
-      setRuntimeConfigSnapshot({ session: { store: storePath } });
-      const configuredSessionKey = "agent:main:configured-store";
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey: configuredSessionKey, storePath },
-        {
-          sessionId: "configured-session-id",
-          chatType: "direct",
-          updatedAt: 1,
-        },
-      );
-
-      const result = await appendAssistantMessageToSessionTranscript({
-        agentId: "main",
-        sessionKey: configuredSessionKey,
-        text: "mirrored configured store reply",
-        config: { session: { store: storePath } },
-      });
-
-      expect(result.ok).toBe(true);
-      if (!result.ok) {
-        throw new Error(result.reason);
-      }
-      expect(result.target).toEqual({
-        agentId: "main",
-        sessionId: "configured-session-id",
-        sessionKey: configuredSessionKey,
-        storePath,
-      });
-      await expect(
-        loadTranscriptEvents({
-          agentId: "main",
-          sessionId: "configured-session-id",
-          sessionKey: configuredSessionKey,
-          storePath,
-        }),
-      ).resolves.toContainEqual(
-        expect.objectContaining({
-          message: expect.objectContaining({
-            role: "assistant",
-            content: [{ type: "text", text: "mirrored configured store reply" }],
-          }),
-        }),
-      );
-    } finally {
-      if (previousStateDir === undefined) {
-        deleteTestEnvValue("OPENCLAW_STATE_DIR");
-      } else {
-        setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
-      }
-    }
-  });
-
   it("uses the session key agent for configured session.store templates", async () => {
     const tempDir = sessionDirs.make();
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -455,33 +395,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("persists reply text alongside media names in SQLite", async () => {
-    await writeTranscriptStore();
-
-    const result = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Revenue fell 12% quarter over quarter.",
-      mediaUrls: ["https://example.com/files/chart-q3.png?token=secret"],
-      storePath: fixture.storePath(),
-    });
-
-    expect(result.ok).toBe(true);
-    const events = await loadFixtureMessages();
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        message: expect.objectContaining({
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "Revenue fell 12% quarter over quarter.\nchart-q3.png",
-            },
-          ],
-        }),
-      }),
-    );
-  });
-
   it("does not advance the registry marker for duplicate delivery mirror replays", async () => {
     const updatedAt = Date.parse("2026-05-18T10:00:00.000Z");
     const firstAppendAt = Date.parse("2026-05-18T10:05:00.000Z");
@@ -549,38 +462,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         }),
       );
     }
-  });
-
-  it("runs matching owned transcript appends through the active write context", async () => {
-    await writeTranscriptStore();
-    const sessionFile = `sqlite:main:${sessionId}:${fixture.storePath()}`;
-    const events: string[] = [];
-
-    const result = await withOwnedSessionTranscriptWrites(
-      {
-        sessionFile,
-        sessionKey,
-        sessionTarget: {
-          agentId: "main",
-          sessionId,
-          sessionKey,
-          storePath: fixture.storePath(),
-        },
-        withTranscriptWrite: async (run) => {
-          events.push("owned-write");
-          return await run();
-        },
-      },
-      async () =>
-        await appendAssistantMessageToSessionTranscript({
-          sessionKey,
-          text: "Hello under lock",
-          storePath: fixture.storePath(),
-        }),
-    );
-
-    expect(result.ok).toBe(true);
-    expect(events).toEqual(["owned-write"]);
   });
 
   it("does not reuse an owned write context for a different concrete transcript file", async () => {

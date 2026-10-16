@@ -13,10 +13,8 @@ import {
 import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
-  createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
-  createLazyRuntimeSurface,
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
 import {
@@ -35,7 +33,7 @@ import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
 import { subscribeRuntimeSessionChanges } from "./session-changes.js";
-import type { PluginRuntimeBase, PluginRuntimeFactory, PluginRuntime } from "./types.js";
+import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
 const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("../../tts/runtime-api.js"));
@@ -106,27 +104,6 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
     ),
     describeVideoFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeVideoFile),
     transcribeAudioFile: bindMediaUnderstandingRuntime((runtime) => runtime.transcribeAudioFile),
-  };
-}
-
-function createRuntimeLlmFacade(getConfig: PluginRuntimeBase["getConfig"]): PluginRuntime["llm"] {
-  const loadAcquireLocalService = createLazyRuntimeMethod(
-    () => import("../../agents/provider-local-service.js"),
-    (runtime) => runtime.createConfiguredProviderLocalServiceAcquirer(getConfig),
-  );
-  const loadLlm = createLazyRuntimeSurface(
-    () => import("./runtime-llm.runtime.js"),
-    (m) =>
-      m.createRuntimeLlm({
-        getConfig,
-        authority: {
-          allowComplete: true,
-        },
-      }),
-  );
-  return {
-    acquireLocalService: loadAcquireLocalService,
-    complete: createLazyRuntimeMethod(loadLlm, (llm) => llm.complete),
   };
 }
 
@@ -330,6 +307,8 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     decisions: {
       evaluate: async (...args) =>
         (await import("../../decisions/runtime.js")).evaluateDecision(...args),
+      evaluateV2: async (...args) =>
+        (await import("../../decisions/runtime.js")).evaluateDecisionV2(...args),
     },
     gateway: _options.gateway ?? createRuntimeGateway(),
     config: base.config,
@@ -390,7 +369,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
         (await import("../../music-generation/runtime.js")).generateMusic(params),
       listProviders: (params) => listMusicGenerationProviders(params?.config),
     },
-    llm: createRuntimeLlmFacade(base.getConfig),
+    llm: base.llm,
   };
   // SDK consumers retain these getter-only descriptors after lazy runtime materialization.
   for (const key of [

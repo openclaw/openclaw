@@ -83,7 +83,7 @@ describe("tsgo core test shards", () => {
       ["src/agents/models-config.merge.test.ts", "agents-root"],
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
       ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
-      ["ui/src/components/agent-avatar-face.test.ts", "ui-components"],
+      ["ui/src/components/agent-avatar-face.test.tsx", "ui-components"],
       ["ui/src/e2e/chat-send-ack-ownership.e2e.test.ts", "ui-e2e-chat"],
       ["ui/src/e2e/about.e2e.test.ts", "ui-e2e"],
       ["ui/src/test-helpers/control-ui-e2e.test.ts", "ui-e2e"],

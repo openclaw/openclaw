@@ -79,10 +79,6 @@ export {
   MEMORY_INDEX_VECTOR_TABLE,
 } from "./host/memory-schema.js";
 export {
-  loadSqliteVecExtension,
-  loadSqliteVecExtensionFromPath,
-} from "../../../src/infra/database-engine/sqlite-vec.js";
-export {
   readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,
   readMemoryRecallMetadata,

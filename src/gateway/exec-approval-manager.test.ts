@@ -170,7 +170,7 @@ describe("ExecApprovalManager", () => {
     expect(manager.getLiveSnapshot(record.id)).toBeNull();
   });
 
-  it("ignores a stale cleanup callback after handoff restarts the grace period", async (testContext) => {
+  it("cancels old cleanup and restarts the grace period after handoff", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
     const timers = scheduled.wakes;
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -180,12 +180,14 @@ describe("ExecApprovalManager", () => {
     const staleCleanup = timers.find((timer) => timer.delayMs === 15_000);
 
     const release = manager.retainForHandoff(record.id);
+    expect(staleCleanup).toMatchObject({ atMs: 16_000, cancelled: true });
     now.mockReturnValue(2_000);
     release?.();
     const cleanupTimers = timers.filter((timer) => timer.delayMs === 15_000);
     expect(cleanupTimers).toHaveLength(2);
 
-    await runTimer(staleCleanup);
+    expect(cleanupTimers[1]).toMatchObject({ atMs: 17_000, cancelled: false });
+    now.mockReturnValue(16_000);
     expect(manager.getLiveSnapshot(record.id)).toMatchObject({ decision: "allow-once" });
     await runTimer(cleanupTimers[1]);
     expect(manager.getLiveSnapshot(record.id)).toBeNull();

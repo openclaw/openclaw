@@ -12,6 +12,7 @@ import { WIZARD_COPY } from "./wizard-copy.ts";
 registerModelSetupEnglish();
 
 export type WizardViewProps = {
+  onDialogRef?: (element: import("../../components/modal-dialog.ts").OpenClawModalDialog) => void;
   mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
   refreshWarning: string | null;
@@ -44,6 +45,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   return (
     <Show when={props.state.phase !== "idle"}>
       <openclaw-modal-dialog
+        ref={(element) => props.onDialogRef?.(element)}
         label={t(copy().dialog)}
         onModal-cancel={() => (canCancel() ? props.onCancel() : props.onClose())}
       >

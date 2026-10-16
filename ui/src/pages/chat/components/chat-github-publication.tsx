@@ -2,13 +2,13 @@ import { createMemo, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
+import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
   personalGitHubPublicationSelection,
   selectedGitHubPublisher,
   type GitHubPublicationView,
 } from "../../../lib/sessions/github-publication-controller.ts";
-import type { PresentationValue } from "../../../lit/presentation-binding.ts";
 import { GitHubPublicationMenu } from "./chat-github-publication-menu.tsx";
 
 registerGitHubEnglish();

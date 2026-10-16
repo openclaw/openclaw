@@ -284,7 +284,7 @@ export async function startDebugProxyServer(params: {
             recordTargetEvent({
               direction: "inbound",
               kind: "response",
-              status: upstreamRes.statusCode ?? undefined,
+              status: upstreamRes.statusCode,
               headersJson: JSON.stringify(redactedCaptureHeaders(upstreamRes.headers)),
               ...finishBodyPreviewCapture(responseCapture),
             });

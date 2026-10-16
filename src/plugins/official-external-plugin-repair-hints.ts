@@ -48,11 +48,12 @@ export function tracksPluginDependencyStatus(candidate: {
  * dependencies stay plugin-local, so a moved or pruned checkout leaves the dist link dangling.
  */
 export function resolveExternalPluginRuntimeDependencyRepairHint(candidate: {
+  origin: string;
   pluginId: string;
   packageName?: string;
   packageBuild?: { bundledDist?: boolean };
 }): string | undefined {
-  if (!isExternallyDistributedPlugin(candidate)) {
+  if (!tracksPluginDependencyStatus(candidate)) {
     return undefined;
   }
   // Only the official package that owns this canonical id earns its install command; a foreign

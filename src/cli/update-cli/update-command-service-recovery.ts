@@ -5,10 +5,8 @@ import { withGatewayServiceOperationLock } from "../../daemon/service-operation-
 import { resolveGatewayService, type GatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
-import {
-  readUpdateStateSchemaVersions,
-  resolveUpdateStateContentVersion,
-} from "../../infra/update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
+import { resolveUpdateStateContentVersion } from "../../infra/update-candidate-state.versions.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   getUpdateRun,
@@ -150,7 +148,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
       ? (snapshot) => params.onProgress?.("recovery", renderRestartDiagnostics(snapshot).join("; "))
       : undefined,
     supervisorKeepsAlive: true,
-    settle: { probes: 12 },
   });
   assertCurrent();
   return { health, launchAgentRecovery };
@@ -538,7 +535,6 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       assertCurrent,
       onProgress: (stage, reason) =>
         defaultRuntime[params.jsonMode ? "error" : "log"](`Gateway recovery (${stage}): ${reason}`),
-      settle: { probes: 12 },
     });
     assertCurrent();
     if (!health.healthy || health.runtime.status !== "running") {

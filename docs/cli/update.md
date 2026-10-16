@@ -778,9 +778,10 @@ performs.
 
 ## Options
 
-Post-core repair Doctor and `openclaw update finalize` run without a separate
-per-Doctor deadline unless the operator supplies `--timeout`. A fresh post-core
-process receives the operator choice separately from its internal step allowance.
+Post-core repair Doctor uses the supplied step allowance when `--timeout` is
+omitted. An explicit `--timeout` takes precedence, and the overall update budget
+still bounds the Doctor process. On expiry, the updater stops the worker tree
+before continuing through its existing maintenance-warning or recovery path.
 Older targets retain their existing allowance and deadline behavior.
 
 When `--timeout` is omitted, current CLI and RPC finalization do not add an aggregate
@@ -831,7 +832,7 @@ Use `openclaw update status` and Doctor for recovery guidance.
 | `--dry-run`                                      | Preview planned actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.                                                                                                                                                                                                                                     |
 | `--admission <auto\|installed>`                  | Choose candidate admission when supported (`auto`, the default), or force installed admission checks. This option has no environment-variable form. Dry runs always use installed checks.                                                                                                                                                                         |
 | `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                                      |
-| `--timeout <seconds>`                            | Optional overall update budget in seconds, shared by activation, readiness, recovery, and native service commands. Omit to let package installation, deferred lifecycle scripts, and candidate Doctor finish without a work deadline; checks and recovery retain their own bounds.                                                                                |
+| `--timeout <seconds>`                            | Optional overall update budget in seconds, shared by activation, readiness, recovery, and native service commands. Without it, package installation and deferred lifecycle scripts have no work deadline; candidate Doctor, checks, and recovery retain their step bounds.                                                                                        |
 | `--drain-timeout <seconds>`                      | Immutable installations only: override the drain budget before interruption, independently of canary/readiness deadlines. Also accepted by `update recover`; healthy recovery never stops the process.                                                                                                                                                            |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                                                   |
 | `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                                               |
@@ -848,8 +849,10 @@ updater's managed restart. The running Gateway restarts itself when its watcher
 detects the replaced installation, because the old runtime can lose required
 chunks during the package swap. Before publication, the updater prints this
 warning and includes it in JSON update history. It checks the observed Gateway
-version without waiting for startup; unavailable readiness or a version that has
-not switched yet leaves the package update successful with a warning. State
+version and, when available, the expected build ID without waiting for startup.
+A same-version Gateway on a different build is not verified as the replacement.
+Unavailable readiness or an identity that has not switched yet leaves the package
+update successful with a warning. State
 verification blocked by another process or handed off to the newer schema is
 deferred to the candidate. Keep recovery backups and run `openclaw update status`
 and `openclaw doctor` after startup completes. Unrelated update failures retain

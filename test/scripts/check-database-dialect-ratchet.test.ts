@@ -173,6 +173,12 @@ it("retains SQLite JSONB debt without counting PostgreSQL catalog constructors",
     "src/sqlite.ts",
     'const sql = "SELECT jsonb_object(), jsonb_array(), jsonb_extract(value), jsonb_group_array(value) FROM facts";',
   );
+  for (const owner of ["postgres-search-schema", "postgres-vector"]) {
+    write(
+      `src/infra/database-engine/${owner}.ts`,
+      'const sql = "SELECT openclaw_vector(embedding, 3)";',
+    );
+  }
   expect(inventory(root)).toMatchObject([
     {
       file: "src/sqlite.ts",
@@ -182,7 +188,24 @@ it("retains SQLite JSONB debt without counting PostgreSQL catalog constructors",
   expect(inventory(root).map((row) => row.matches.length)).toEqual([4]);
 });
 
-it("excludes generated PostgreSQL SQL while retaining SQLite JSON debt", () => {
+it("distinguishes PostgreSQL staging from SQLite temporary schemas", () => {
+  const { root, write } = fixture();
+  write(
+    "extensions/memory-core/src/memory/manager-publication-postgres.ts",
+    'db.exec("CREATE TEMP TABLE memory_stage (ordinal BIGINT)"); db.exec("SELECT rowid FROM t");',
+  );
+  write("src/sqlite.ts", 'db.exec("CREATE TEMP TABLE stage (id INTEGER)");');
+  expect(inventory(root)).toMatchObject([
+    {
+      file: "extensions/memory-core/src/memory/manager-publication-postgres.ts",
+      matches: [{ construct: "rowid" }],
+    },
+    { file: "src/sqlite.ts", matches: [{ construct: "temp-schema" }] },
+  ]);
+  expect(inventory(root).map((row) => row.matches.length)).toEqual([1, 1]);
+});
+
+it("excludes generated PostgreSQL SQL and captured catalogs while retaining SQLite JSON debt", () => {
   const { root, write, git } = fixture();
   write("src/sqlite.ts", "export {};\n");
   git("add", ".");
@@ -194,6 +217,12 @@ it("excludes generated PostgreSQL SQL while retaining SQLite JSON debt", () => {
     write(
       `src/state/postgres-schema.generated/${file}`,
       "SELECT value ->> 'id' FROM json_each('{}'::json);",
+    );
+  }
+  for (const store of ["state", "agent"]) {
+    write(
+      `src/state/postgres-schema.generated/sqlite-${store}-catalogs.ts`,
+      "export const catalog = { sql: \"CREATE TABLE events AS SELECT json_extract(body, '$') FROM payloads\" };",
     );
   }
   expect(changedProductionFiles(root, base, false)).toEqual([]);
@@ -318,3 +347,54 @@ it.each([
     }
   },
 );
+
+it("excludes owned physical layouts while retaining runtime rowid and non-owner layout debt", () => {
+  const { root, write, git } = fixture();
+  const owners = [
+    "src/state/openclaw-agent-schema.sql",
+    "src/state/openclaw-state-schema.sql",
+    "packages/memory-host-sdk/src/memory-entry-origins.ts",
+    "src/state/sqlite-table-layout-migration.ts",
+  ];
+  const ddl = "CREATE TABLE items (id TEXT PRIMARY KEY) STRICT, WITHOUT ROWID;";
+  const source = (file: string, sql: string) =>
+    file.endsWith(".sql") ? sql : `db.exec(${JSON.stringify(sql)});`;
+  for (const file of owners) {
+    write(file, "");
+  }
+  git("add", ".");
+  git("commit", "-qm", "base");
+  const base = git("rev-parse", "HEAD");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  for (const file of owners) {
+    write(file, source(file, ddl));
+  }
+  expect(main(root, ["--base", base])).toBe(0);
+  expect(inventory(root)).toMatchObject(
+    owners.toSorted().map((file) => ({
+      file,
+      matches: [
+        { construct: "without-rowid", group: "engine-maintenance", owner: true },
+        { construct: "rowid", group: "engine-maintenance", owner: true },
+      ],
+    })),
+  );
+  const owner = "src/state/sqlite-table-layout-migration.ts";
+  write(owner, source(owner, `${ddl} SELECT rowid FROM items;`));
+  expect(main(root, ["--base", base])).toBe(1);
+  expect(
+    inventory(root)
+      .find((row) => row.file === owner)
+      ?.matches.at(-1),
+  ).toMatchObject({
+    construct: "rowid",
+    group: "design",
+    owner: false,
+  });
+  write("src/consumer.ts", source("src/consumer.ts", ddl));
+  expect(inventory(root).find((row) => row.file === "src/consumer.ts")?.matches).toMatchObject([
+    { construct: "without-rowid", group: "mechanical", owner: false },
+    { construct: "rowid", group: "design", owner: false },
+  ]);
+});

@@ -2,6 +2,7 @@ import { getObserver } from "@solidjs/signals";
 import { insert, type JSX } from "@solidjs/web";
 import {
   createEffect,
+  createMemo,
   createRoot,
   getOwner,
   onCleanup,
@@ -12,11 +13,17 @@ import {
 } from "solid-js";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
+import { createSessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
+import { createSessionAttention } from "./session-attention.ts";
+import { createSessionOwnerFilterQuery } from "./session-owner-filter.ts";
+import { createSidebarScroll } from "./sidebar-context-controller.ts";
+import { createSidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
+import { createSidebarPeople } from "./sidebar-people.ts";
 
 export { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 
@@ -48,16 +55,54 @@ function disconnectSidebarOwner(host: HTMLElement): void {
 function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Element {
   host.style.display = "contents";
   const context = useApplication();
-  const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(props, context, host);
+  const catalog = createSidebarNavigationCatalog(context, () => props.navigationView, host);
+  const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(catalog, props, context, host);
+  owner.navigationCatalog = catalog;
   owner.bindInputs(props, context);
+  owner.attention = createSessionAttention(
+    context,
+    owner.attentionQuestions,
+    host,
+    () => props.navigationVisible,
+  );
+  const scroll = createSidebarScroll(owner);
   const projection = projectSource(owner, {
     read: (current) => current,
     subscribe: (current, notify) => current.subscribe(notify),
     equality: "revision",
   });
+  const snapshot = owner.snapshot;
+  const snapshotProjection = projectOwner(snapshot, (current) => current.read());
+  const snapshotPending = createMemo(() => snapshotProjection.read().pending);
+  const snapshotModel = createMemo(() => snapshotProjection.read().model);
+  const people = (owner.peopleView = createSidebarPeople(owner, owner.people, () => {
+    Object.values(props);
+    return projection.read();
+  }));
+  const prepared = createMemo(
+    () => {
+      projection.revision();
+      snapshotPending();
+      snapshotModel();
+      Object.values(props);
+      // Snapshot capture keeps observing Pages after its navigation view closes.
+      void catalog.dashboards;
+      // Synchronous owners release boot snapshots and restore query state before row consumers read.
+      snapshot.synchronize();
+      owner.prepareRender();
+      owner.pinnedSessions.synchronize();
+      return owner;
+    },
+    { equals: false },
+  );
+  createSessionOwnerFilterQuery(owner.sessionOwnerFilter, prepared, () =>
+    context.sessions.listSnapshot(owner.sessionData.sessionListQuery(owner.expandedAgentId())),
+  );
   const presentationRevision = createParkedProjection(
     () => {
       Object.values(props);
+      snapshotPending();
+      snapshotModel();
       return projection.revision();
     },
     () => props.navigationVisible,
@@ -83,8 +128,15 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     owner.sessionData,
     owner.sessionOrganizer,
     owner.people,
-    owner.navigationCatalog,
   ].forEach(observe);
+  owner.sessionPullRequests = createSessionPullRequestIndicators({
+    getConnected: () => prepared().isConnected && props.connected,
+    getPresented: () => props.navigationVisible,
+    getRows: () => prepared().readSessionPullRequestRows(),
+    getSelectedAgentId: () => prepared().selectedAgentIdForSessions(),
+    getGateway: () => prepared().sessionDataContext?.gateway,
+    getSessions: () => prepared().sessionDataContext?.sessions,
+  });
   const solidOwner = getOwner();
   const mountDefaultView = (target: HTMLElement) =>
     runWithOwner(solidOwner, () =>
@@ -114,15 +166,40 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       />
     </Show>
   );
-  const content = hostView.renderSidebar(Sessions);
+  const content = hostView.renderSidebar(Sessions, scroll, {
+    pending: snapshotPending,
+    saved: () => {
+      // Preparation can clear a receipt without publishing another model.
+      projection.revision();
+      return snapshotProjection.read().saved;
+    },
+  });
   createEffect(
     () => {
-      projection.revision();
-      // Props remain on the bridge's live object; source changes refresh its subscriptions.
-      Object.values(props);
-      owner.prepareRender();
+      prepared();
+      people.capture();
+      scroll.capture();
     },
-    () => untrack(() => owner.commitRender()),
+    () =>
+      untrack(() => {
+        owner.commitRender();
+        snapshot.capture();
+        people.syncRendered();
+        scroll.restore();
+        // The projection owns the display deadline; this mounted view owns its timer.
+        const deadline = owner.sessionProjection.subtitleDeadline;
+        if (owner.isConnected && Number.isFinite(deadline)) {
+          const timer = globalThis.setTimeout(
+            () => {
+              owner.sessionProjection.invalidate();
+              owner.requestUpdate();
+            },
+            Math.max(0, deadline - Date.now()),
+          );
+          return () => globalThis.clearTimeout(timer);
+        }
+        return undefined;
+      }),
   );
   onSettled(() => {
     sidebarOwners.set(host, owner);

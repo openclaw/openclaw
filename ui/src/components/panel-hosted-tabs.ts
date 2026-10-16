@@ -1,8 +1,4 @@
-import type {
-  emptyLegacyContent,
-  LegacyDirectiveResult,
-  LegacyTemplateResult,
-} from "../lit/solid-content.tsx";
+import type { JSX } from "@solidjs/web";
 
 export const PANEL_HOSTED_TABS_CHANGE_EVENT = "openclaw:panel-hosted-tabs-change";
 
@@ -28,7 +24,7 @@ export type PanelHostedTab = {
   url?: string;
   /** Explicit icon URL; takes precedence over hostname lookup and `icon`. */
   favicon?: string;
-  icon?: LegacyTemplateResult | Node | LegacyDirectiveResult;
+  icon?: JSX.Element;
   title?: string | null;
   statusLabel?: string | null;
   badge?: string | null;
@@ -39,11 +35,7 @@ export type PanelHostedTabsElement = HTMLElement & {
   readonly hostedTabs: PanelHostedTab[];
   readonly activeHostedTabId: string | null;
   /** Header actions while this panel is the active side panel; rendered by the host in light DOM. */
-  readonly hostedActions?:
-    | LegacyTemplateResult
-    | Node
-    | typeof emptyLegacyContent
-    | LegacyDirectiveResult;
+  readonly hostedActions?: HTMLElement;
   selectHostedTab(id: string): void;
   closeHostedTab(id: string): Promise<void>;
 };

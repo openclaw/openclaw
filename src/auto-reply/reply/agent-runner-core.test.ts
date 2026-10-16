@@ -34,9 +34,7 @@ it.each([false, true])(
         sessionCtx: {},
       });
       expect(reply?.text).toBe(
-        armed
-          ? SILENT_REPLY_TOKEN
-          : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+        armed ? undefined : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
       );
     } finally {
       replyOperation.complete();

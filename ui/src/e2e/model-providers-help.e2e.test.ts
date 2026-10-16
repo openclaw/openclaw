@@ -102,6 +102,7 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
         await expect
           .poll(() => modelPickerValue(utilityField.locator("openclaw-select-picker")))
           .toBe("__openclaw_automatic_utility__");
+        await utilityField.locator(".picker-select__trigger").click();
         await expect
           .poll(() =>
             utilityField
@@ -110,6 +111,7 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
               .then((value) => value?.trim()),
           )
           .toBe("Auto");
+        await page.keyboard.press("Escape");
 
         if (recordVisuals) {
           await page.screenshot({

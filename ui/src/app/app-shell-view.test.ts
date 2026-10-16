@@ -2,43 +2,113 @@
 
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { render } from "@solidjs/testing-library";
-import { flush } from "solid-js";
+import { createComponent, createRoot, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { ApplicationProvider } from "../lib/reactive/context.ts";
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
+import "../plugins/control-ui-view.solid.tsx";
 import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import "../plugins/control-ui-view.solid.tsx";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
 import { ShellOwner } from "./app-host.tsx";
-import { connectLegacyApplicationContext } from "./app-root-lit.ts";
 import { renderApplicationShell } from "./app-shell-view.tsx";
 import { bootstrapApplication } from "./bootstrap.ts";
+import { NATIVE_HISTORY_STATE_EVENT } from "./native-web-chrome.ts";
 
 setupSidebarTest();
 
 async function mountShell() {
   const runtime = bootstrapApplication();
-  const owner = new ShellOwner(document.createElement("openclaw-app-shell"), runtime);
+  const { owner, dispose } = createRoot((disposeRoot) => ({
+    owner: new ShellOwner(document.createElement("openclaw-app-shell"), runtime),
+    dispose: disposeRoot,
+  }));
   owner.routeState = { routeId: "chat" };
-  const disconnectContext = connectLegacyApplicationContext(owner.element, runtime.context);
   document.body.append(owner.element);
-  const view = render(() => renderApplicationShell(owner), {
-    container: owner.element,
-  });
+  const view = render(
+    () =>
+      createComponent(ApplicationProvider, {
+        host: owner.element,
+        value: runtime.context,
+        get children() {
+          return renderApplicationShell(owner);
+        },
+      }),
+    {
+      container: owner.element,
+    },
+  );
   onTestFinished(() => {
     view.unmount();
-    disconnectContext();
     owner.disconnect();
+    dispose();
     runtime.stop();
   });
   await Promise.resolve();
   flush();
   return { owner, runtime, view };
 }
+
+it("updates native history buttons only while connected and refreshes them on reconnect", async () => {
+  Object.assign(window, {
+    __OPENCLAW_NATIVE_WEB_CHROME__: true,
+    __OPENCLAW_NATIVE_HISTORY__: { canGoBack: false, canGoForward: true },
+  });
+  onTestFinished(() => {
+    Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_WEB_CHROME__");
+    Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_HISTORY__");
+  });
+  const { owner, view } = await mountShell();
+  owner.connect();
+  // This view fixture leaves the router stopped; restore its selected route after connection.
+  owner.routeState = { routeId: "chat" };
+  await vi.dynamicImportSettled();
+  await waitForSolid(() => {
+    expect(
+      view.container.querySelector<HTMLButtonElement>(".macos-titlebar-controls__back")?.disabled,
+    ).toBe(true);
+    expect(
+      view.container.querySelector<HTMLButtonElement>(".macos-titlebar-controls__forward")
+        ?.disabled,
+    ).toBe(false);
+  });
+  const back = view.container.querySelector<HTMLButtonElement>(".macos-titlebar-controls__back")!;
+  const forward = view.container.querySelector<HTMLButtonElement>(
+    ".macos-titlebar-controls__forward",
+  )!;
+  const publish = (canGoBack: boolean, canGoForward: boolean) =>
+    window.dispatchEvent(
+      new CustomEvent(NATIVE_HISTORY_STATE_EVENT, { detail: { canGoBack, canGoForward } }),
+    );
+
+  publish(true, false);
+  await waitForSolid(() => {
+    expect(back.disabled).toBe(false);
+    expect(forward.disabled).toBe(true);
+  });
+  owner.disconnect();
+  publish(false, true);
+  flush();
+  expect(back.disabled).toBe(false);
+  expect(forward.disabled).toBe(true);
+
+  owner.connect();
+  owner.routeState = { routeId: "chat" };
+  await waitForSolid(() => {
+    expect(back.disabled).toBe(true);
+    expect(forward.disabled).toBe(false);
+  });
+  publish(true, false);
+  await waitForSolid(() => {
+    expect(back.disabled).toBe(false);
+    expect(forward.disabled).toBe(true);
+  });
+});
 
 it("reserves session geometry before page mount and clears it on other routes", async () => {
   const { owner, view } = await mountShell();
@@ -209,6 +279,38 @@ it("keeps the mobile New Session action live across selection and access changes
   expect(action.hasAttribute("aria-disabled")).toBe(false);
 });
 
+it("clears navigation resize feedback when the drag ends or its divider disconnects", async () => {
+  const { view } = await mountShell();
+  const shell = view.container.querySelector(".shell")!;
+  const divider =
+    view.container.querySelector<HTMLElementTagNameMap["resizable-divider"]>(".sidebar-resizer")!;
+  divider.measureSize = () => 1000;
+  await divider.updateComplete;
+  const start = () =>
+    divider.dispatchEvent(
+      new PointerEvent("pointerdown", { button: 0, pointerId: 7, bubbles: true }),
+    );
+
+  start();
+  flush();
+  expect(shell.classList.contains("shell--nav-resizing")).toBe(true);
+  window.dispatchEvent(new Event("blur"));
+  flush();
+  expect(shell.classList.contains("shell--nav-resizing")).toBe(false);
+
+  start();
+  flush();
+  expect(shell.classList.contains("shell--nav-resizing")).toBe(true);
+  divider.remove();
+  // The bridge retains a root through same-turn relocation, then ends the drag.
+  await Promise.resolve();
+  flush();
+  expect(shell.classList.contains("shell--nav-resizing")).toBe(false);
+  window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 7 }));
+  flush();
+  expect(shell.classList.contains("shell--nav-resizing")).toBe(false);
+});
+
 it("keeps the focused gateway retry button across shell and error updates", async () => {
   vi.stubGlobal(
     "matchMedia",
@@ -231,7 +333,6 @@ it("keeps the focused gateway retry button across shell and error updates", asyn
   expect(document.activeElement).toBe(retry);
 
   snapshot.mockReturnValue({ ...disconnected, lastError: "Connection refused" });
-  owner.navResizing = true;
   owner.invalidate();
   flush();
 
@@ -282,10 +383,12 @@ it("restores the delegated shell after a pending update and can select another w
   };
   const selected = vi.spyOn(runtime.context.plugins, "selectedReplacement");
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.routeState = { routeId: "plugins" };
   owner.invalidate();
   flush();
   selected.mockImplementation((surface) => (surface === "workspace" ? replacement : undefined));
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -308,6 +411,7 @@ it("restores the delegated shell after a pending update and can select another w
   // A pending plugin update cannot remove the shell restored directly on Dashboard.
   plugin!.props = { sessionKey: "agent:main:updated", routeId: "dashboard" };
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -319,6 +423,7 @@ it("restores the delegated shell after a pending update and can select another w
   expect(shell?.isConnected).toBe(true);
 
   selected.mockImplementation((surface) => (surface === "workspace" ? replacement : undefined));
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   plugin =
@@ -344,6 +449,7 @@ it("restores the delegated shell after a pending update and can select another w
   expect(shell?.isConnected).toBe(true);
 
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   owner.routeState = { routeId: "dashboard" };
@@ -371,6 +477,7 @@ it("restores the delegated shell after a pending update and can select another w
   owner.invalidate();
   flush();
   selected.mockImplementation((surface) => (surface === "workspace" ? customWorkspace : undefined));
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -396,6 +503,7 @@ it("restores the delegated shell after a pending update and can select another w
   expect(view.container.querySelector("openclaw-app-sidebar")).toBe(sidebar);
 
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   owner.routeState = { routeId: "dashboard" };

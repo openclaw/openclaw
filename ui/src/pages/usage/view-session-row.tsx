@@ -1,6 +1,6 @@
 import { createMemo, Show } from "solid-js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
-import { handleCopyButton } from "../../components/copy-button.ts";
+import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
 export function SessionBarRow(props: {

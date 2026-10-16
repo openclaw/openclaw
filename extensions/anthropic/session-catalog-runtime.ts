@@ -10,7 +10,7 @@ import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS } from "./cli-c
 import { adoptedSourceKey, CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
 
 export function currentClaudeSessionCatalogConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
+  return api.runtime.config.current() as OpenClawConfig;
 }
 
 type BoundClaudeSource = { adopted: boolean; hostId: string; threadId: string };

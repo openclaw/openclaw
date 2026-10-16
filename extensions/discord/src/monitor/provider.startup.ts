@@ -12,9 +12,9 @@ import {
   type DiscordCommand,
   type Modal,
 } from "../internal/discord.js";
+import { DISCORD_REST_TIMEOUT_MS } from "../internal/rest.js";
 import { VoicePlugin } from "../internal/voice.js";
 import { parseApplicationIdFromToken } from "../probe.js";
-import { DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import type { DiscordDmPolicy } from "./dm-command-auth.js";
@@ -136,15 +136,9 @@ export async function fetchDiscordBotIdentity(params: {
   client: Pick<Client, "fetchUser">;
   token?: string;
   runtime: RuntimeEnv;
-  logStartupPhase: (phase: string, details?: string) => void;
 }) {
-  params.logStartupPhase("fetch-bot-identity:start");
   const parsedBotUserId = parseApplicationIdFromToken(params.token ?? "");
   if (parsedBotUserId) {
-    params.logStartupPhase(
-      "fetch-bot-identity:done",
-      `botUserId=${parsedBotUserId} botUserName=<missing> source=token`,
-    );
     return { botUserId: parsedBotUserId, botUserName: undefined };
   }
 
@@ -153,7 +147,6 @@ export async function fetchDiscordBotIdentity(params: {
     botUser = await params.client.fetchUser("@me");
   } catch (err) {
     params.runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
-    params.logStartupPhase("fetch-bot-identity:error", String(err));
     throw new Error("Failed to resolve Discord bot identity", { cause: err });
   }
 
@@ -163,14 +156,9 @@ export async function fetchDiscordBotIdentity(params: {
   if (!botUserId) {
     const details = 'fetchUser("@me") returned no usable id';
     params.runtime.error?.(danger(`discord: failed to fetch bot identity: ${details}`));
-    params.logStartupPhase("fetch-bot-identity:error", details);
     throw new Error("Failed to resolve Discord bot identity");
   }
 
-  params.logStartupPhase(
-    "fetch-bot-identity:done",
-    `botUserId=${botUserId} botUserName=${botUserName ?? "<missing>"}`,
-  );
   return { botUserId, botUserName };
 }
 

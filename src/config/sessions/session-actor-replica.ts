@@ -3,7 +3,7 @@ import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import {
   readPreparedSessionEntryChange,
@@ -284,7 +284,7 @@ function discard(cell: ReplicaCell): void {
 
 function retainEntry(cell: ReplicaCell, entry: SessionActorEntryFacts): void {
   discard(cell);
-  cell.entry = freezeJsonSnapshot(entry);
+  cell.entry = freezeTrustedJsonSnapshot(entry);
   cell.bytes = estimateReplicaBytes(entry);
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
@@ -301,11 +301,12 @@ function retainSnapshot(
   }
   const previousTranscript = cell.transcript;
   discard(cell);
-  // Freeze borrowed entry facts once per installed revision, not on every read.
-  freezeJsonSnapshot(state.target);
-  freezeJsonSnapshot(state.entry);
-  freezeJsonSnapshot(state.members);
-  freezeJsonSnapshot(state.participants);
+  // Worker-decoded facts are plain data. Protect borrowed reads without inspecting
+  // their shape again; unchanged frozen subtrees retain their identity.
+  freezeTrustedJsonSnapshot(state.target);
+  freezeTrustedJsonSnapshot(state.entry);
+  freezeTrustedJsonSnapshot(state.members);
+  freezeTrustedJsonSnapshot(state.participants);
   Object.freeze(state.dependencySessionIds);
   Object.freeze(state.transcript.watermark);
   cell.snapshot = state;

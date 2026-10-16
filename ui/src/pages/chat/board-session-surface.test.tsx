@@ -2,7 +2,7 @@
 
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
-import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { BoardSessionSurface, type BoardSessionSurfaceProps } from "./board-session-surface.tsx";

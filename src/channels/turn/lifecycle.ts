@@ -104,11 +104,10 @@ type ChannelDeliveryOperation<T extends { payload: ReplyPayload }> = {
 type PendingChannelDeliveryAttempt = {
   payload: ReplyPayload;
   info: ChannelDeliveryInfo;
+  result: ChannelDeliveryResult | void;
+  releaseCustody?: () => void;
   emitMessageSent?: ReturnType<typeof createMessageSentEmitter>["emitMessageSent"];
-} & (
-  | { state: "fulfilled"; result: ChannelDeliveryResult | void }
-  | { state: "rejected"; error: unknown }
-);
+};
 
 export function assembleResolvedChannelTurn<
   TDispatchResult,
@@ -264,66 +263,70 @@ async function settleFailedPendingFinalDelivery(
   }
 }
 
+function emitChannelDeliveryFailure(
+  payload: ReplyPayload,
+  error: unknown,
+  emitMessageSent: PendingChannelDeliveryAttempt["emitMessageSent"],
+): void {
+  const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
+  if (!isPlatformMessageNotDispatchedError(error)) {
+    emitMessageSent?.({
+      success: false,
+      content: partial?.content ?? payload.text ?? "",
+      error: formatErrorMessage(error),
+      messageId: resolveChannelDeliveryMessageId(partial),
+    });
+  }
+}
+
 async function settleChannelDeliveryAttempt(
   attempt: PendingChannelDeliveryAttempt,
   onDelivered: AnyChannelDeliveryAdapter["onDelivered"] | undefined,
   onFinalizationError?: (error: unknown) => Promise<void> | void,
 ): Promise<void> {
-  const emitFailure = (error: unknown): void => {
-    const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
-    if (!isPlatformMessageNotDispatchedError(error)) {
+  try {
+    let finalized: ChannelDeliveryResult | undefined;
+    try {
+      finalized = attempt.result || undefined;
+      if (finalized?.finalization) {
+        finalized = { ...finalized, ...(await finalized.finalization), finalization: undefined };
+      }
+    } catch (error: unknown) {
+      if (error instanceof PendingFinalDeliveryNotOwnedError) {
+        // Deferred provider admission must also leave the earlier attempt untouched.
+        return;
+      }
+      try {
+        await onFinalizationError?.(error);
+      } catch {
+        // Error observers are best-effort and must not replace the native settlement failure.
+      }
+      await settleFailedPendingFinalDelivery(attempt.payload, error);
+      emitChannelDeliveryFailure(attempt.payload, error, attempt.emitMessageSent);
+      throw toErrorObject(error, "channel delivery finalization failed");
+    }
+
+    const pending = isReplyDispatchDeliveryPending(finalized);
+    if (!pending && finalized?.visibleReplySent !== false) {
       attempt.emitMessageSent?.({
-        success: false,
-        content: partial?.content ?? attempt.payload.text ?? "",
-        error: formatErrorMessage(error),
-        messageId: resolveChannelDeliveryMessageId(partial),
+        success: true,
+        content: finalized?.content ?? attempt.payload.text ?? "",
+        messageId: resolveChannelDeliveryMessageId(finalized),
       });
     }
-  };
-  if (attempt.state === "rejected") {
-    emitFailure(attempt.error);
-    return;
-  }
-
-  let finalized: ChannelDeliveryResult | undefined;
-  try {
-    finalized = attempt.result || undefined;
-    if (finalized?.finalization) {
-      finalized = { ...finalized, ...(await finalized.finalization), finalization: undefined };
-    }
-  } catch (error: unknown) {
-    if (error instanceof PendingFinalDeliveryNotOwnedError) {
-      // Deferred provider admission must also leave the earlier attempt untouched.
-      return;
-    }
-    try {
-      await onFinalizationError?.(error);
-    } catch {
-      // Error observers are best-effort and must not replace the native settlement failure.
-    }
-    await settleFailedPendingFinalDelivery(attempt.payload, error);
-    emitFailure(error);
-    throw toErrorObject(error, "channel delivery finalization failed");
-  }
-
-  const pending = isReplyDispatchDeliveryPending(finalized);
-  if (!pending && finalized?.visibleReplySent !== false) {
-    attempt.emitMessageSent?.({
-      success: true,
-      content: finalized?.content ?? attempt.payload.text ?? "",
-      messageId: resolveChannelDeliveryMessageId(finalized),
+    await settleReplyPendingFinalDelivery(
+      attempt.payload,
+      pending ? "unknown" : finalized?.visibleReplySent === false ? "suppressed" : "delivered",
+    );
+    await runChannelDeliveryObserver({
+      onDelivered,
+      payload: attempt.payload,
+      info: attempt.info,
+      result: finalized,
     });
+  } finally {
+    attempt.releaseCustody?.();
   }
-  await settleReplyPendingFinalDelivery(
-    attempt.payload,
-    pending ? "unknown" : finalized?.visibleReplySent === false ? "suppressed" : "delivered",
-  );
-  await runChannelDeliveryObserver({
-    onDelivered,
-    payload: attempt.payload,
-    info: attempt.info,
-    result: finalized,
-  });
 }
 
 async function applyRoutedDirectMessageSending(params: {
@@ -550,36 +553,25 @@ async function dispatchChannelTurnWithDeliveryOwner(
         }
       }
     } catch (error: unknown) {
-      if (error instanceof PendingFinalDeliveryNotOwnedError) {
-        // Leave the earlier attempt's ambiguous or terminal custody untouched.
-        return { visibleReplySent: false };
-      }
-      await settleFailedPendingFinalDelivery(effectivePayload, error);
-      if (delivery.observeMessageSent) {
-        await settleChannelDeliveryAttempt(
-          {
-            state: "rejected",
-            payload: effectivePayload,
-            info: directInfo,
-            error,
-            emitMessageSent: emitMessageSentForDelivery,
-          },
-          delivery.onDelivered,
-        );
-      }
-      throw error;
-    } finally {
-      if (releaseCustody && result?.finalization) {
-        void result.finalization.then(releaseCustody, releaseCustody);
-      } else {
+      try {
+        if (error instanceof PendingFinalDeliveryNotOwnedError) {
+          // Leave the earlier attempt's ambiguous or terminal custody untouched.
+          return { visibleReplySent: false };
+        }
+        await settleFailedPendingFinalDelivery(effectivePayload, error);
+        if (delivery.observeMessageSent) {
+          emitChannelDeliveryFailure(effectivePayload, error, emitMessageSentForDelivery);
+        }
+        throw error;
+      } finally {
         releaseCustody?.();
       }
     }
     const attempt: PendingChannelDeliveryAttempt = {
-      state: "fulfilled",
       payload: effectivePayload,
       info: directInfo,
       result,
+      releaseCustody,
       emitMessageSent: emitMessageSentForDelivery,
     };
     if (result?.finalization) {
@@ -659,7 +651,6 @@ async function dispatchChannelTurnWithDeliveryOwner(
                     }
                     const { reason: _reason, ...deliveryInfo } = info;
                     suppressedAttempts.push({
-                      state: "fulfilled",
                       payload,
                       info: deliveryInfo,
                       result: createSuppressedChannelDeliveryResult({ reason: info.reason }),

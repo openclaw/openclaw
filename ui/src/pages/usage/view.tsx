@@ -318,7 +318,7 @@ export function renderUsage(props: UsageProps) {
                 />
                 <button
                   class="btn btn--sm primary"
-                  onClick={() => props.callbacks.filters.onRefresh()}
+                  onClick={() => void props.callbacks.filters.onRefresh()}
                   disabled={props.data.loading}
                 >
                   {t("common.refresh")}
@@ -461,7 +461,7 @@ export function renderUsage(props: UsageProps) {
             </div>
           ) : undefined
         ) : isEmpty() ? (
-          renderUsageEmptyState(props.callbacks.filters.onRefresh)
+          renderUsageEmptyState(() => void props.callbacks.filters.onRefresh())
         ) : (
           <>
             <Show

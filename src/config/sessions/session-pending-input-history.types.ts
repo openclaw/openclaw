@@ -7,6 +7,7 @@ export type PendingInputHistoryQuery = {
   before?: number;
   id?: string;
   includeTotal?: false;
+  sessionSendRecovery?: true;
 };
 export type PendingInputHistorySnapshot = {
   rows: SessionPendingInputRow[];

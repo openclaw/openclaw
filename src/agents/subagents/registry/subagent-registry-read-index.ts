@@ -16,7 +16,10 @@ export function createSubagentSessionListReadIndex(
   let memory = new Map(
     Array.from(subagentRuns, ([id, entry]) => [
       id,
-      copySubagentRunRuntimeOwner(entry, immutableSubagentRunSessionList(entry)),
+      copySubagentRunRuntimeOwner(
+        entry,
+        Object.freeze({ ...immutableSubagentRunSessionList(entry) }),
+      ),
     ]),
   );
   let revision = 0;
@@ -52,7 +55,10 @@ export function createSubagentSessionListReadIndex(
         memory = new Map(
           Array.from(subagentRuns, ([id, entry]) => [
             id,
-            copySubagentRunRuntimeOwner(entry, immutableSubagentRunSessionList(entry)),
+            copySubagentRunRuntimeOwner(
+              entry,
+              Object.freeze({ ...immutableSubagentRunSessionList(entry) }),
+            ),
           ]),
         );
         revision++;
@@ -65,7 +71,10 @@ export function createSubagentSessionListReadIndex(
           const resident = subagentRuns.get(id);
           const owner =
             resident &&
-            copySubagentRunRuntimeOwner(resident, immutableSubagentRunSessionList(resident));
+            copySubagentRunRuntimeOwner(
+              resident,
+              Object.freeze({ ...immutableSubagentRunSessionList(resident) }),
+            );
           const previousOwner = memory.get(id);
           const sameOwner = previousOwner === owner || isSameSubagentRunOwner(previousOwner, owner);
           if (!sameOwner || !isDeepStrictEqual(index.inputs.runs.get(id), row)) {

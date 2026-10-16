@@ -3612,9 +3612,14 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .agent-chat__recent-time {
+  /* The timestamp never yields width: the name and subtitle truncate first, so
+     every row keeps a one-line timestamp flush with the right edge. */
+  flex: none;
   margin-left: auto;
   color: var(--muted);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: end;
   white-space: nowrap;
 }
 

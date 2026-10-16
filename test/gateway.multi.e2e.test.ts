@@ -10,6 +10,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
 import { requireGatewayRecord } from "../src/gateway/test-helpers.assertions.js";
 import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 import {
@@ -148,14 +149,41 @@ describe("gateway multi-instance e2e", () => {
     "preserves scheduler runtime across a scheduler-disabled Gateway edit",
     { timeout: E2E_TIMEOUT_MS },
     async () => {
+      const model = buildMockOpenAiResponsesProvider("http://127.0.0.1:9/v1", "scheduler-canary");
       const manager = await createOpenClawTestInstance({
         name: "cron-passive-manager",
-        config: { cron: { enabled: false }, plugins: { enabled: false } },
+        config: {
+          cron: { enabled: false },
+          plugins: { enabled: false },
+          agents: {
+            defaults: {
+              model: { primary: model.modelRef },
+              models: { [model.modelRef]: { agentRuntime: { id: "openclaw" } } },
+            },
+          },
+          models: {
+            mode: "replace",
+            providers: {
+              [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
+            },
+          },
+        },
         env: { OPENCLAW_SKIP_CRON: "0" },
       });
       let managerClient: GatewayClient | undefined;
       await runQaGatewayFixture(
         async () => {
+          // Creation captures a durable account; only the injected offline runner executes it.
+          await manager.state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              "openai:cron-passive-manager": {
+                type: "api_key",
+                provider: "openai",
+                key: "synthetic-cron-scheduler-key",
+              },
+            },
+          });
           await manager.startGateway();
           managerClient = await connectGatewayStatusClient(manager);
           const canary = await managerClient.request<{ id: string }>("cron.add", {
@@ -164,7 +192,12 @@ describe("gateway multi-instance e2e", () => {
             schedule: { kind: "every", everyMs: 3_600_000 },
             sessionTarget: "isolated",
             wakeMode: "now",
-            payload: { kind: "agentTurn", message: "run canary", toolsAllow: [] },
+            payload: {
+              kind: "agentTurn",
+              model: "openai/gpt-4.1@openai:cron-passive-manager",
+              message: "run canary",
+              toolsAllow: [],
+            },
             delivery: { mode: "none" },
           });
           const target = await managerClient.request<{ id: string }>("cron.add", {

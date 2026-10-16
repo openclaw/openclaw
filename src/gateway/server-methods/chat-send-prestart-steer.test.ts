@@ -113,6 +113,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         initialOperation.attachBackend({
           kind: "embedded",
           runId,
+          terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
           toolAuthorityFingerprint: initialOperation.bindToolAuthorityRoute(followupRun.run),
           cancel: () => {},
           messageInjectionV2: {

@@ -63,10 +63,32 @@ export const GitHubPublicationActionSchema = closedObject({
     Type.Union([Type.Literal("merge"), Type.Literal("squash"), Type.Literal("rebase")]),
   ),
 });
-export const SessionGitHubActionParamsSchema = closedObject({
-  ...GitHubPublicationActionSchema.properties,
-  sessionKey: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
+export const GitHubBaseRefreshSchema = closedObject({
+  action: Type.Literal("refresh_base"),
+  conflictsResolved: Type.Optional(Type.Boolean()),
+  // Equality check against the pending integration, never a ref selector.
+  baseCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}(?:[a-f0-9]{24})?$" })),
+});
+export const SessionGitHubActionParamsSchema = Type.Union([
+  closedObject({
+    ...GitHubPublicationActionSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    ...GitHubBaseRefreshSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
+]);
+export const SessionGitHubBaseRefreshResultSchema = closedObject({
+  status: stringLiteralUnion(["current", "refreshed", "conflicts"]),
+  repository: NonEmptyString,
+  baseBranch: NonEmptyString,
+  baseCommit: NonEmptyString,
+  changedPaths: Type.Array(Type.String()),
+  conflictPaths: Type.Array(Type.String()),
+  review: Type.Optional(closedObject({ mode: Type.Literal("local"), base: NonEmptyString })),
 });
 
 const SessionGitHubPublicationBaseSchema = {
@@ -202,6 +224,7 @@ export const SessionGitHubOptionsResultSchema = closedObject({
   latestShared: Type.Union([SessionGitHubStatusResultSchema, Type.Null()]),
 });
 
+export type SessionGitHubBaseRefreshResult = Static<typeof SessionGitHubBaseRefreshResultSchema>;
 export type GitHubPublicationPublisher = Static<typeof GitHubPublicationPublisherSchema>;
 export type GitHubPublicationAction = Static<typeof GitHubPublicationActionSchema>;
 export type SessionGitHubActionParams = Static<typeof SessionGitHubActionParamsSchema>;

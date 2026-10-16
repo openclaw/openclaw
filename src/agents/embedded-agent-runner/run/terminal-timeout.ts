@@ -102,6 +102,7 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
       systemPromptReport: input.attempt.systemPromptReport,
       finalPromptText: input.attempt.finalPromptText,
       finalAssistantVisibleText: input.terminalPrepared.finalAssistantVisibleText,
+      terminalReply: input.terminalPrepared.preparedTerminalReply.terminalReply,
       finalAssistantRawText: input.terminalPrepared.finalAssistantRawText,
       ...(input.terminalPrepared.finalAssistantMessageRawText !== undefined
         ? { finalAssistantMessageRawText: input.terminalPrepared.finalAssistantMessageRawText }

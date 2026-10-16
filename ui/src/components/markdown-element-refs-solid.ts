@@ -3,9 +3,30 @@ import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationBinding,
   type PresentationValue,
-} from "../lit/presentation-binding.ts";
+} from "../lib/presentation.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { LinkReaderPrefetchOwner } from "./link-reader-prefetch-owner.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
+
+function createPresentationReader(onHide: () => void) {
+  let binding: PresentationBinding | undefined;
+  let stop: (() => void) | undefined;
+  const changed = () => {
+    if (binding?.isPresented() === false) {
+      onHide();
+    }
+  };
+  onCleanup(() => stop?.());
+  return (value: PresentationValue) => {
+    const next = typeof value === "boolean" ? undefined : value;
+    if (binding?.owner !== next?.owner) {
+      stop?.();
+      stop = next && listen(next.owner, PRESENTATION_CHANGED_EVENT, changed);
+    }
+    binding = next;
+    return typeof value === "boolean" ? value : value.isPresented();
+  };
+}
 
 export function linkReaderPrefetchRef(
   values: () => readonly [sessionKey: string, presented: PresentationValue, connected: boolean],
@@ -14,12 +35,7 @@ export function linkReaderPrefetchRef(
   let root: HTMLElement | undefined;
   let mounted = true;
   let owner: LinkReaderPrefetchOwner | undefined;
-  let binding: PresentationBinding | undefined;
-  const presentationChanged = () => {
-    if (binding?.isPresented() === false) {
-      owner?.hide();
-    }
-  };
+  const readPresentation = createPresentationReader(() => owner?.hide());
   createEffect(
     () => [element(), ...values()] as const,
     ([nextRoot, sessionKey, presented, connected]) => {
@@ -28,23 +44,12 @@ export function linkReaderPrefetchRef(
         root = nextRoot;
         owner = root ? new LinkReaderPrefetchOwner(() => mounted) : undefined;
       }
-      const nextBinding = typeof presented === "boolean" ? undefined : presented;
-      if (binding?.owner !== nextBinding?.owner) {
-        binding?.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, presentationChanged);
-        nextBinding?.owner.addEventListener(PRESENTATION_CHANGED_EVENT, presentationChanged);
-      }
-      binding = nextBinding;
-      owner?.update(
-        root,
-        sessionKey,
-        typeof presented === "boolean" ? presented : presented.isPresented(),
-        connected,
-      );
+      const active = readPresentation(presented);
+      owner?.update(root, sessionKey, active, connected);
     },
   );
   onCleanup(() => {
     mounted = false;
-    binding?.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, presentationChanged);
     owner?.disconnect();
   });
   return setElement;
@@ -56,12 +61,7 @@ export function markdownBlocksRef(
   const [element, setElement] = createSignal<HTMLElement>();
   let root: HTMLElement | undefined;
   let owner: MarkdownBlocks | undefined;
-  let binding: PresentationBinding | undefined;
-  const presentationChanged = () => {
-    if (binding?.isPresented() === false) {
-      owner?.update(false);
-    }
-  };
+  const readPresentation = createPresentationReader(() => owner?.update(false));
   createEffect(
     () => [element(), presented()] as const,
     ([nextRoot, value]) => {
@@ -70,17 +70,11 @@ export function markdownBlocksRef(
         root = nextRoot;
         owner = root ? new MarkdownBlocks(root) : undefined;
       }
-      const nextBinding = typeof value === "boolean" ? undefined : value;
-      if (binding?.owner !== nextBinding?.owner) {
-        binding?.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, presentationChanged);
-        nextBinding?.owner.addEventListener(PRESENTATION_CHANGED_EVENT, presentationChanged);
-      }
-      binding = nextBinding;
-      owner?.update(typeof value === "boolean" ? value : value.isPresented());
+      const active = readPresentation(value);
+      owner?.update(active);
     },
   );
   onCleanup(() => {
-    binding?.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, presentationChanged);
     owner?.dispose();
   });
   return setElement;

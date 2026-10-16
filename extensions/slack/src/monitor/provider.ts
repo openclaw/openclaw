@@ -27,7 +27,7 @@ import {
 } from "../client-options.js";
 import { createSlackStartupAuthClient, createSlackWebClient } from "../client.js";
 import { formatSlackError } from "../errors.js";
-import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
+import { normalizeSlackWebhookPath } from "../http/paths.js";
 import { registerSlackInstallationState } from "../installation-identity-state.js";
 import { setSlackDefaultSendIdentity } from "../send.js";
 import {
@@ -47,7 +47,7 @@ import {
   type SlackInstallationIdentity,
 } from "./enterprise-install.js";
 import { registerSlackCommonEvents, registerSlackWorkspaceEvents } from "./events.js";
-import { createSlackHttpRequestHandler } from "./http-handler.js";
+import { createSlackHttpRequestHandler, registerSlackHttpHandler } from "./http-handler.js";
 import { createSlackDurableIngress } from "./ingress.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { openSlackPresenceCooldownStore } from "./presence-cooldown-store.js";

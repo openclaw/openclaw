@@ -161,6 +161,6 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
   };
 }
 
-function normalizeMaxPages(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 20;
+function normalizeMaxPages(value: number | undefined): number {
+  return value !== undefined && Number.isFinite(value) && value > 0 ? Math.floor(value) : 20;
 }

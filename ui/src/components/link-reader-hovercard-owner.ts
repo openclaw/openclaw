@@ -4,7 +4,7 @@ import type {
   ControlUiLinkReaderPreview,
 } from "../../../src/shared/control-ui-link-reader.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { i18n } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { clearLinkPreviews, loadLinkPreview } from "../lib/link-preview.ts";
 import { anchorFromNavigationEvent, composedParent } from "../lib/navigation-click.ts";
@@ -65,6 +65,7 @@ export class HovercardOwner {
       this.seeds = {
         client: this.host.client,
         agentId: this.host.agentId,
+        sessionKey: this.host.sessionKey,
         generation: this.host.client?.connectionGeneration,
         recoveryScope: this.host.client?.recoveryScope,
         previews: this.host.previewSeeds,
@@ -117,6 +118,7 @@ export class HovercardOwner {
   private seeds: {
     client: GatewayBrowserClient | null;
     agentId: string | undefined;
+    sessionKey: string | undefined;
     generation: number | undefined;
     recoveryScope: string | undefined;
     previews: readonly ControlUiLinkReaderPreview[];
@@ -128,6 +130,7 @@ export class HovercardOwner {
       !seeds ||
       seeds.client !== this.host.client ||
       seeds.agentId !== this.host.agentId ||
+      seeds.sessionKey !== this.host.sessionKey ||
       seeds.generation !== this.host.client?.connectionGeneration ||
       seeds.recoveryScope !== this.host.client?.recoveryScope
     ) {
@@ -676,15 +679,20 @@ export class HovercardOwner {
     const client = this.host.client;
     const context = this.previewContext;
     const agentId = this.host.agentId;
+    const sessionKey = this.host.sessionKey;
     const load = async (): Promise<ControlUiLinkReaderPreview> => {
       const method = target.reader.linkReader.previewMethod;
       if (!client || !method || !this.host.readers.includes(target.reader)) {
         throw new Error("Link preview requires an available reader");
       }
+      if (target.reader.linkReader.sessionScoped && !sessionKey) {
+        throw new Error(t("linkReader.sessionRequired"));
+      }
       const response = await client.request<ControlUiLinkReaderPreview>(
         method,
         {
           ...(agentId ? { agentId } : {}),
+          ...(target.reader.linkReader.sessionScoped ? { sessionKey } : {}),
           url: target.href,
         },
         { signal: controller.signal },
@@ -703,6 +711,7 @@ export class HovercardOwner {
             this.cache.get(key) === entry &&
             client === this.host.client &&
             agentId === this.host.agentId &&
+            sessionKey === this.host.sessionKey &&
             client &&
             previewContextFor(client, agentId) === context
           ) {

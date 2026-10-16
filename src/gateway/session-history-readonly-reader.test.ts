@@ -29,6 +29,7 @@ import {
 } from "../state/openclaw-agent-db-readonly-scope.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../state/openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
@@ -247,7 +248,7 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
       if (!retained.found) {
         throw new Error("expected retained history reader");
       }
-      const connection = retained.value;
+      const connection = requireNativeSqliteDatabase(retained.value);
       const reader = createReadonlySessionHistoryReader(target);
       const read = () =>
         scope.run(target.database, () =>

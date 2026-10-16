@@ -85,8 +85,7 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
   const folderValue = liveValue(() => props.params.place.folder);
   const deviceFolderValue = liveValue(() => props.params.place.deviceFolder?.path ?? "");
   const view = createMemo(() => {
-    const { context, data, gateway, place, submitting, pendingPlacement, requestUpdate } =
-      props.params;
+    const { context, data, gateway, place, submitting, pendingPlacement, onChange } = props.params;
     const browser = place.browser;
     const { machineClass, os } = place.cloudSelection;
     const nativeTerminal = catalog.isTarget(data);
@@ -129,7 +128,7 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
         id,
         cloudProfiles,
         submitting || pendingPlacement,
-        requestUpdate,
+        onChange,
       );
 
     return {

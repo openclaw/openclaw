@@ -1,7 +1,7 @@
 /** Captured destination identity and live generation facts for ordinary session events. */
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
+import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
   readToolAllowlistIntersection,
@@ -164,11 +164,9 @@ export async function captureSessionEventTargetForHost(
       deliveryContext: structuredClone(deliveryContextFromSession(entry)),
       chatType: resolveEffectiveReplyRoute({ ctx: { InternalTurnSource: "event" }, entry })
         .chatType,
-      settings: structuredClone(
-        producerSettings
-          ? narrowSessionEventSettings(producerSettings, destinationSettings)
-          : destinationSettings,
-      ),
+      settings: producerSettings
+        ? narrowSessionEventSettings(producerSettings, destinationSettings)
+        : structuredClone(destinationSettings),
     };
     targetScopes.set(target, { env });
     return target;
@@ -345,8 +343,9 @@ export function intersectSessionEventToolsAllow(
   if (restrictions.length === 0) {
     return undefined;
   }
+  const matchers = restrictions.map((restriction) => createRuntimeToolMatcher(restriction));
   const candidates = [...new Set(restrictions.flat())].filter((name) =>
-    restrictions.every((restriction) => isRuntimeToolAllowed(name, restriction)),
+    matchers.every((matches) => matches(name)),
   );
   return attachToolAllowlistIntersection(candidates, restrictions);
 }

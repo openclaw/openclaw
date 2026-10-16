@@ -264,6 +264,23 @@ export async function listSessionPendingInputs(
   };
 }
 
+/** Select replay candidates in the worker; the delivery owner still validates their authority. */
+export async function readSessionSendRecoveryPage(
+  scope: Scope,
+  options: { before?: number } = {},
+): Promise<Omit<SessionPendingInputPage, "total">> {
+  const { rows, nextBefore } = await readPendingInputRows(scope, {
+    ...options,
+    limit: 20,
+    includeTotal: false,
+    sessionSendRecovery: true,
+  });
+  return {
+    items: rows.toReversed().map(projectSessionPendingInput),
+    ...(nextBefore !== undefined ? { nextBefore } : {}),
+  };
+}
+
 /** Prompt context needs only the bounded page, never the full retained-input count. */
 export async function readSessionPendingInputContext(
   scope: Scope,

@@ -1,4 +1,5 @@
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
@@ -89,7 +90,7 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
       context.admit("commit");
       let entered = false;
       try {
-        return runWithSqliteBusyTimeout(db, 0, () =>
+        const run = () =>
           runSqliteImmediateTransactionSync(
             db,
             () => {
@@ -100,8 +101,8 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
               operationLabel: `sessions.transcript-index.${command.type}`,
               beginLockFailureReporting: "suppress",
             },
-          ),
-        );
+          );
+        return isPostgresSqlConnection(db) ? run() : runWithSqliteBusyTimeout(db, 0, run);
       } catch (error) {
         if (entered || !isSqliteLockError(error)) {
           throw error;

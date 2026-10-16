@@ -1,4 +1,3 @@
-import { html } from "lit";
 import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, onTestFinished } from "vitest";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
@@ -48,22 +47,32 @@ describe("ChatWorkingIndicator", () => {
       { kind: "reading-indicator", key: "task-first", startedAt: 1 },
       { outputTokens: 4_100 },
     );
-    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+    expect(container.querySelector(".chat-bubble.chat-reading-indicator")).not.toBeNull();
     draw({
       outputTokens: 4_100,
-      subagentActivity: html`<div class="task-first-probe">Backend implementation</div>`,
+      subagentActivity: {
+        rows: [
+          {
+            key: "agent:main:subagent:backend",
+            label: "Backend implementation",
+            status: "running",
+            listed: true,
+            session: { key: "agent:main:subagent:backend", kind: "direct", updatedAt: 1 },
+          },
+        ],
+      },
     });
-    const task = container.querySelector(".task-first-probe");
+    const task = container.querySelector(".chat-subagent-activity");
     const status = container.querySelector(".chat-working-indicator");
     expect(task).not.toBeNull();
     expect(status?.classList.contains("chat-working-indicator--supporting")).toBe(true);
     expect(task!.compareDocumentPosition(status!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
+    expect(container.querySelector(".chat-bubble.chat-reading-indicator")).toBeNull();
     expect(status?.textContent).toContain("4.1k output tokens");
     draw({ outputTokens: 4_100 });
-    expect(container.querySelector(".task-first-probe")).toBeNull();
+    expect(container.querySelector(".chat-subagent-activity")).toBeNull();
     expect(container.querySelector(".chat-working-indicator--supporting")).toBeNull();
-    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+    expect(container.querySelector(".chat-bubble.chat-reading-indicator")).not.toBeNull();
   });
 
   it("selects the working glyph independently of the mascot and keeps text when hidden", () => {
@@ -77,7 +86,7 @@ describe("ChatWorkingIndicator", () => {
     draw({ workingIndicator: "brand" });
     expect(container.querySelector(".chat-reading-indicator--brand")).not.toBeNull();
     draw({ workingIndicator: "none", workingPhrases: [] });
-    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
+    expect(container.querySelector(".chat-bubble.chat-reading-indicator")).toBeNull();
     expect(
       container
         .querySelector(".chat-working-indicator__status > span")
@@ -109,7 +118,7 @@ describe("ChatWorkingIndicator", () => {
       { kind: "reading-indicator", key: findRenderKey(true), startedAt: 1 },
       { waitingApproval: true },
     );
-    const bubble = container.querySelector(".chat-reading-indicator");
+    const bubble = container.querySelector(".chat-bubble.chat-reading-indicator");
     expect(bubble).not.toBeNull();
     expect(
       [...bubble!.classList].filter((name) => name.startsWith("chat-reading-indicator--")),
@@ -123,11 +132,11 @@ describe("ChatWorkingIndicator", () => {
     );
     const details = container.querySelector("details")!;
     details.open = true;
-    const glyph = container.querySelector(".chat-reading-indicator")!;
+    const glyph = container.querySelector(".chat-bubble.chat-reading-indicator")!;
     draw({ bubbleMode: true, outputTokens: 27 });
     expect(container.querySelector("details")).toBe(details);
     expect(details.open).toBe(true);
-    expect(container.querySelector(".chat-reading-indicator")).toBe(glyph);
+    expect(container.querySelector(".chat-bubble.chat-reading-indicator")).toBe(glyph);
     expect(container.textContent).toContain("27 output tokens");
   });
 });

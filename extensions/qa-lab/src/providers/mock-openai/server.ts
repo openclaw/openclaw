@@ -919,11 +919,7 @@ async function buildResponsesPayload(
   }
   if (terminalCompletionCase && terminalTurn?.kind === "completion") {
     const visibleRepresentation =
-      terminalCompletionCase === "silent"
-        ? QA_SUBAGENT_TERMINAL_MARKERS.silent
-        : terminalCompletionCase === "empty"
-          ? QA_SUBAGENT_TERMINAL_MARKERS.empty
-          : undefined;
+      terminalCompletionCase === "silent" ? QA_SUBAGENT_TERMINAL_MARKERS.silent : undefined;
     if (visibleRepresentation) {
       if (completedToolName === "message") {
         return buildAssistantEvents("");
@@ -945,10 +941,9 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents(visibleRepresentation);
     }
-    // The direct delivery fallback owns visible, restart, and sanitized fallback
-    // results. Use explicit silence so generic empty-response recovery cannot
-    // replay the historical spawn before that fallback runs.
-    return buildAssistantEvents("NO_REPLY");
+    // Empty output exercises direct fallback. Exact NO_REPLY is intentional
+    // silence and must not be used as a missing-answer fixture.
+    return buildAssistantEvents("");
   }
   const terminalWorkerCase = terminalTurn?.kind === "worker" ? terminalTurn.caseName : undefined;
   if (terminalWorkerCase) {

@@ -103,6 +103,9 @@ does not depend on the browser returning.
 Accepted `sessions_send` agent updates recover from their saved input and original
 delivery ID. Temporary admission, worker capacity, and storage-readiness failures
 get up to three attempts, waiting 5 seconds and then 10 seconds between attempts.
+Recovery preserves the accepted identity when older saved delivery metadata omitted
+an unset lifecycle revision during JSON storage. An identical completed input returns
+its recorded outcome; it does not start another turn. Changed input still conflicts.
 Each attempt checks the original source and destination sessions and current
 communication permission again. Reset, replaced, archived, or permission-denied
 sessions stop automatic delivery. Unknown failures and exhausted retries leave the
@@ -397,6 +400,20 @@ pending placement subphase, such as
 `reconcile.publications`. These joins keep the worker transports and shared
 database available until accepted effects have recorded their outcomes.
 
+Worker-environment shutdown also names its computer, inference, transfer, tunnel,
+and accepted-operation joins. For an attached worker, shutdown stops the exact
+remote environment before draining its workspace queue: a foreground command
+can hold that queue until the stop cancels it. Remote stop and drain acknowledgments
+share at most ten seconds of the remaining process cleanup budget. An unreachable
+worker keeps its durable attachment for cleanup on reconnect; it is not reported
+as physically stopped. Local writes and transfer cleanup still settle before
+database retirement.
+
+The core `shutdown completed` message precedes final process cleanup. Slow-step
+diagnostics continue through managed local services, snapshot cleanup, log
+flushing, watchdog retirement, and shared-state closure, so a delay after that
+message can be attributed to its remaining owner.
+
 A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must
@@ -620,11 +637,11 @@ restart and verification. Unchanged plugins do not run another full Doctor pass.
 
 After activation, the updater verifies that the managed service is running and
 owns its port, the Gateway hello handshake matches the expected version/build
-identity, a 12-check health settle passes, plugins and channels are healthy, and
+identity, health checks pass, plugins and channels are healthy, and
 `/readyz` returns HTTP 200. Update verification does not use model inference.
 Startup receives the update's existing per-step `--timeout` budget (1800 seconds
-by default), including migration and listener initialization, followed by the
-12-check settle window. On the first update from an older release, the old updater
+by default), including migration, listener initialization, and readiness checks.
+On the first update from an older release, the old updater
 invokes the newly installed CLI but does not pass that readiness budget. The
 candidate recognizes the existing update marker and, once the managed process is
 running, uses the five-minute startup watchdog instead of the standalone
@@ -828,11 +845,23 @@ interrupted by a restart and to continue from the existing transcript. If a
 final reply had already been produced but not delivered, its text is included
 so the agent can deliver it instead of redoing the work.
 
-Startup recovery prepares one continuation at a time. Automatic continuations
-execute in the one-wide background command lane, retaining its slot until the turn
-finishes. Interactive turns use the main lane, so a large recovery backlog cannot
-fill their execution slots. Later interrupted turns keep their durable claims
-while waiting; a long recovered turn delays other automatic continuations.
+Startup recovery prepares continuations in interruption-time order across session
+stores. Automatic continuations execute in a dedicated restart-recovery command
+lane with up to four turns running at once. Each session still runs one turn at a
+time, and each recovered turn retains its lane slot until it finishes. Interactive
+turns and unrelated background work keep their own execution slots. Later
+interrupted turns retain their durable claims while waiting for recovery capacity.
+Transient startup or store-admission failures use bounded backoff without clearing
+those claims.
+
+When a new user message or a retry of an accepted chat turn initiates recovery,
+that recovery uses the main lane for both admission and execution. It does not
+wait behind unrelated background work. Existing recovery owners are not
+preempted, and normal main-lane concurrency limits and per-session ordering
+still apply. Detached queued followups and unattended retries use the
+restart-recovery lane. This changes only in-process scheduling, not stored recovery
+claims, retry budgets, configuration, or upgrade behavior.
+
 Optional startup database maintenance and page-cache warming wait for this
 backlog to drain; runtime timers and cron startup proceed independently. Deferred
 database admissions join the same startup scheduler. Shutdown stops new preparation and
@@ -914,16 +943,20 @@ clear this residue from older sessions, so it cannot block a completed subagent'
 requester turn. Interrupted work and pending delivery keep their recovery custody.
 
 After the durable budget is exhausted, the session is tombstoned instead of
-looping forever. Inspect the failed session and use `/new` or `/reset` to start a
-replacement. `openclaw doctor --fix` can repair a stale aborted flag that
-conflicts with a tombstone, but it does not re-enable that recovery cycle.
+looping forever. The unfinished task remains available: inspect the failed
+session and use **Resume** in WebChat to continue in place with current operator
+authority. In other channels, `/new` or `/reset` starts a replacement.
+`openclaw doctor --fix` can repair a stale aborted flag that conflicts with a
+tombstone, but it does not re-enable that automatic recovery cycle. See
+[Session recovery](/concepts/session#gateway-restart-recovery) for tool-safety restrictions
+and the CLI-runtime replacement fallback.
 
 If you message the failed session again in a channel, OpenClaw sends a short
 recovery reminder through that channel and logs each rejected message at warn
 level with the session key, recovery reason, and recovery command. Repeated
 reminders are suppressed in a bounded memory cache. Resetting or deleting the
 session, or restarting the Gateway, clears that suppression. Sessions with locked
-model selection instead direct you to **Resume in new session** in WebChat.
+model selection instead direct you to **Resume** in WebChat.
 
 Every retry reuses one durable dispatch identifier, so an ambiguous connection
 failure cannot start the same recovery twice. Completed Control UI turns also
@@ -1204,6 +1237,17 @@ existing restart delivery and continuation behavior.
 - **Metrics:** recovery activity is exported via
   [Prometheus](/gateway/prometheus) as `openclaw_session_recovery_total` and
   `openclaw_session_recovery_age_seconds`.
+- **Startup timing:** the `sidecars.subagent-recovery` completion line includes
+  `readersMs`, `deliveryMs`, `execMs`, `registryLoadMs`, and `registryActivationMs`
+  at the normal info level. These elapsed times include dependency loading and
+  waits for workers or database admission. Within `deliveryMs`,
+  `deliveryNoticesMs` measures blocked-notice selection and persistence, and
+  `retryWaitMs` measures retry backoff; these nested totals are not additional
+  phase time. Notice selection can wait for database writer admission even
+  when an unchanged notice does not need another write. Set
+  `OPENCLAW_GATEWAY_STARTUP_TRACE=1` to also log each individual span. The phase
+  runs after readiness; its duration does not measure time until the Gateway
+  can accept connections.
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `agents/subagent-registry`
   subsystems. Every startup pass includes bounded skip counts by reason such as

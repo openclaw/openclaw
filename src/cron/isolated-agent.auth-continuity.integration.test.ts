@@ -364,6 +364,7 @@ describe("legacy cron jobs without a recorded account through the real embedded 
     openaiApiKey?: string;
     storedProfile: boolean;
     personalFirst?: boolean;
+    cooledFirst?: boolean;
     migrate?: boolean;
   }) {
     return await withOpenClawTestState(
@@ -447,6 +448,23 @@ describe("legacy cron jobs without a recorded account through the real embedded 
           });
           cfg.auth = { ...cfg.auth, order: { openai: [authProfileId, platformId] } };
         }
+        if (params.cooledFirst) {
+          await persistAuthProfileBatch({
+            profiles: [
+              {
+                profileId: otherPlatformId,
+                credential: { type: "api_key", provider: "openai", key: "synthetic-other-key" },
+              },
+            ],
+          });
+          cfg.auth = { ...cfg.auth, order: { openai: [platformId, otherPlatformId] } };
+          await updateAuthProfileStoreWithLock({
+            updater(store) {
+              store.usageStats = { [platformId]: { cooldownUntil: Date.now() + 60_000 } };
+              return true;
+            },
+          });
+        }
         await state.writeConfig(cfg);
         setRuntimeConfigSnapshot(cfg);
         const stored: CronStoredJob = {
@@ -470,6 +488,16 @@ describe("legacy cron jobs without a recorded account through the real embedded 
               maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
             )
           : undefined;
+        if (params.cooledFirst) {
+          // The rate limit ends before the next scheduled run.
+          await updateAuthProfileStoreWithLock({
+            updater(store) {
+              store.usageStats = {};
+              return true;
+            },
+          });
+          clearRuntimeAuthProfileStoreSnapshots();
+        }
         const job = (await loadCronJobsStore(storePath)).jobs[0]!;
         try {
           const result = await runCronIsolatedAgentTurn({
@@ -513,6 +541,21 @@ describe("legacy cron jobs without a recorded account through the real embedded 
     const { result, requests, migration, job } = await runLegacyJob({
       storedProfile: true,
       personalFirst: true,
+      migrate: true,
+    });
+
+    expect(migration?.changes.join("\n")).toContain(`retain ${platformId}`);
+    expect(job.inferenceBinding).toMatchObject({ profileId: platformId });
+    expect(result.status, result.error).toBe("ok");
+    expect(requests).toEqual([
+      { url: `${openaiUrl}/responses`, authorization: `Bearer ${platformKey}` },
+    ]);
+  });
+
+  it("records the usual account even while it is rate-limited during Doctor", async () => {
+    const { result, requests, migration, job } = await runLegacyJob({
+      storedProfile: true,
+      cooledFirst: true,
       migrate: true,
     });
 

@@ -357,7 +357,7 @@ export type CodexThread = {
   turns?: CodexTurn[];
 };
 
-export type CodexThreadStatus =
+type CodexThreadStatus =
   | { type: "notLoaded" }
   | { type: "idle" }
   | { type: "systemError" }
@@ -478,7 +478,6 @@ export type CodexGetAccountResponse = {
 };
 
 type CodexModelProviderCapabilitiesReadResponse = {
-  namespaceTools: boolean;
   imageGeneration: boolean;
   webSearch: boolean;
 };

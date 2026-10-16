@@ -1,14 +1,23 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { JSX } from "@solidjs/web";
-import { createSignal, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import { vi } from "vitest";
-import type { SolidController, SolidControllerHost } from "../../../lit/solid-controller-host.ts";
+import type {
+  SolidController,
+  SolidControllerHost,
+} from "../../../lib/reactive/solid-controller-host.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import type { ChatThreadProps } from "../components/chat-thread-interactions.ts";
+import {
+  closeTranscriptSearch,
+  getTranscriptState,
+  type ChatThreadProps,
+} from "../components/chat-thread-interactions.ts";
 import { ChatThread } from "../components/chat-thread-view.tsx";
-import type { ChatTranscriptController } from "../components/chat-transcript-controller.ts";
+import type { ChatTranscript } from "../components/chat-transcript-controller.ts";
+import { withTranscriptTestLifecycle } from "../components/chat-transcript-owner.test-support.ts";
+import { TranscriptSearch } from "../components/chat-transcript-search.tsx";
 import type { ChatTranscriptSession } from "../components/chat-transcript-session.ts";
 import {
   flushDeferredRowPrune,
@@ -18,27 +27,67 @@ import {
 class ThreadFixture {
   constructor(
     readonly props: ChatThreadProps,
-    readonly transcript: ChatTranscriptController,
+    readonly transcript: ChatTranscript,
+    readonly search?: () => void,
   ) {}
 }
 
-type NativeContent = JSX.Element | ThreadFixture;
+class SearchFixture {
+  constructor(
+    readonly paneId: string,
+    readonly requestUpdate: () => void,
+  ) {}
+}
+
+type NativeContent = JSX.Element | ThreadFixture | SearchFixture;
 const mounts = new WeakMap<HTMLElement, { update(value: NativeContent): void; unmount(): void }>();
 
 function Content(props: { value: NativeContent }) {
   const thread = () => (props.value instanceof ThreadFixture ? props.value : undefined);
+  const search = createMemo(() => {
+    const value = props.value;
+    if (value instanceof SearchFixture) {
+      return value;
+    }
+    if (value instanceof ThreadFixture && value.search) {
+      return new SearchFixture(value.props.paneId, value.search);
+    }
+    return undefined;
+  });
   return (
     <>
+      <Show when={search()}>
+        {(value) => (
+          <TranscriptSearch
+            revision={value()}
+            state={getTranscriptState(value().paneId)}
+            requestUpdate={value().requestUpdate}
+            onClose={() =>
+              closeTranscriptSearch(getTranscriptState(value().paneId), value().requestUpdate)
+            }
+          />
+        )}
+      </Show>
       <Show when={thread()}>
         {(value) => <ChatThread props={value().props} transcript={value().transcript} />}
       </Show>
-      {props.value instanceof ThreadFixture ? undefined : props.value}
+      {props.value instanceof ThreadFixture || props.value instanceof SearchFixture
+        ? undefined
+        : props.value}
     </>
   );
 }
 
-export function renderChatThread(props: ChatThreadProps, transcript: ChatTranscriptController) {
-  return new ThreadFixture(props, transcript);
+export function renderChatThread(
+  props: ChatThreadProps,
+  transcript: ChatTranscript,
+  options?: { search: () => void },
+) {
+  return new ThreadFixture(props, transcript, options?.search);
+}
+
+export function renderTranscriptSearch(paneId: string, requestUpdate: () => void) {
+  return new SearchFixture(paneId, requestUpdate);
 }
 
 /** Retain native components between commits, including moves of session-owned row roots. */
@@ -68,7 +117,7 @@ export function render(value: NativeContent, container: HTMLElement): void {
 
 export class TranscriptTestHost extends HTMLElement implements SolidControllerHost {
   readonly transcriptRoot = document.createElement("div");
-  renderTranscript: () => JSX.Element = () => null;
+  renderTranscript: () => NativeContent = () => null;
   committedRenders = 0;
   private readonly controllers = new Set<SolidController>();
   private pending: Promise<boolean> | undefined;
@@ -95,7 +144,11 @@ export class TranscriptTestHost extends HTMLElement implements SolidControllerHo
     for (const controller of this.controllers) {
       controller.hostDisconnected?.();
     }
-    render(null, this.transcriptRoot);
+    queueMicrotask(() => {
+      if (!this.isConnected) {
+        render(null, this.transcriptRoot);
+      }
+    });
   }
 
   requestUpdate() {
@@ -128,7 +181,7 @@ export class TranscriptTestHost extends HTMLElement implements SolidControllerHo
 export async function mountTestTranscript(
   paneId: string,
   initialRows: readonly TestContentRow[],
-  transcript = createTestTranscript(paneId),
+  transcript: ChatTranscript = createTestTranscript(paneId),
 ) {
   const container = document.body.appendChild(document.createElement("div"));
   let currentSession: ChatTranscriptSession;
@@ -147,16 +200,16 @@ export async function mountTestTranscript(
       }),
       container,
     );
-    transcript.hostUpdated();
+    transcript.update();
     flush();
   };
-  transcript.hostConnected();
+  transcript.start();
   renderRows(initialRows);
   await flushDeferredRowPrune();
   return {
     container,
     renderRows,
-    transcript,
+    transcript: withTranscriptTestLifecycle(transcript),
     get session() {
       return currentSession;
     },
@@ -186,7 +239,7 @@ export function numberedContentRows(length: number): TestContentRow[] {
   }));
 }
 
-export function mcpRangeRows(appContent: unknown): TestContentRow[] {
+export function mcpRangeRows(appContent: JSX.Element): TestContentRow[] {
   return Array.from({ length: 24 }, (_, index) => ({
     kind: "content" as const,
     key: `row:${index}`,

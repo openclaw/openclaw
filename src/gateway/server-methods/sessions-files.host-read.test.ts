@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   setRuntimeConfigSnapshot,
@@ -12,10 +12,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   assistantToolCall,
-  IMAGE_PREVIEW_FIXTURES,
   createSessionFilesHandlerInvoker,
+  createSessionFilesClient,
   createSessionFileDownloadClient,
-  fetchSessionFileDownload,
   createVisibleMessagesMock,
   expectError,
   expectOkPayload,
@@ -64,9 +63,15 @@ vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
 
 const sessionKey = "agent:main:main";
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
-const listFiles = () => invoke("sessions.files.list", { sessionKey });
 const outsideDirs = useAutoCleanupTempDirTracker(afterEach);
-const outsideFile = () => path.join(outsideDirs.make("session-files-outside-"), "outside.txt");
+function outsideFile(content?: string) {
+  const file = path.join(outsideDirs.make("session-files-outside-"), "outside.txt");
+  if (content !== undefined) {
+    fs.writeFileSync(file, content, "utf8");
+  }
+  return file;
+}
+const outsideBoundary = { type: "session_file_not_found", reason: "outside_session_boundary" };
 const mockVisibleMessages = createVisibleMessagesMock(hoisted.readDelta);
 
 let workspaceRoot: string;
@@ -115,375 +120,245 @@ function prepareHostFileRead(
     withSessionTurnAuthority: async (_target, consume) => consume(entry),
   };
   setRuntimeConfigSnapshot(cfg);
-  return { context, options, entry };
+  return {
+    context,
+    options,
+    entry,
+    files: createSessionFilesClient(invoke, () => ({ sessionKey, context, options })),
+  };
 }
 
-describe("sessions.files host read boundary", () => {
-  it("downloads original binary bytes beyond preview limits with safe HTTP metadata and ranges", async () => {
+it("downloads original binary bytes beyond preview limits with safe HTTP metadata and ranges", async () => {
+  using connection = createSessionFileDownloadClient();
+  const fixture = prepareHostFileRead({ permissionMode: "read-only" });
+  const filename = "résumé original.zip";
+  const bytes = Buffer.alloc(8 * 1024 * 1024 + 17, 0xff);
+  bytes.write("PK\x03\x04", "binary");
+  fs.writeFileSync(path.join(workspaceRoot, filename), bytes);
+  const download = await fixture.files.ok("download", filename, undefined, connection);
+  expect(download).toMatchObject({ filename, mimeType: "application/zip" });
+  const fetched = await connection.fetch(download.url);
+  expect(fetched.response.statusCode).toBe(200);
+  expect(Buffer.from(fetched.body as Uint8Array).equals(bytes)).toBe(true);
+  expect(fetched.response.getHeader("content-disposition")).toContain("attachment;");
+  expect(fetched.response.getHeader("content-disposition")).toContain(
+    "filename*=UTF-8''r%C3%A9sum%C3%A9%20original.zip",
+  );
+  expect(fetched.response.getHeader("content-type")).toBe(download.mimeType);
+  expect(fetched.response.getHeader("cache-control")).toBe("private, no-store");
+  const head = await connection.fetch(download.url, "HEAD");
+  expect(head.body).toBeUndefined();
+  expect(head.response.getHeader("content-length")).toBe(String(bytes.length));
+  const range = await connection.fetch(download.url, "GET", {
+    range: "bytes=524280-524300",
+  });
+  expect(range.response.statusCode).toBe(206);
+  expect(Buffer.from(range.body as Uint8Array)).toEqual(bytes.subarray(524280, 524301));
+  using other = createSessionFileDownloadClient();
+  expect((await other.fetch(download.url)).response.statusCode).toBe(404);
+  fs.writeFileSync(path.join(workspaceRoot, filename), "replacement");
+  expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
+});
+
+it("rejects workspace escapes and links before granting downloads", async () => {
+  using connection = createSessionFileDownloadClient();
+  const fixture = prepareHostFileRead({ permissionMode: "read-only" });
+  const outsidePath = outsideFile("private");
+  fs.symlinkSync(outsidePath, path.join(workspaceRoot, "link"));
+  for (const filePath of [outsidePath, "../outside", "link"]) {
+    await fixture.files.error("download", filePath, undefined, connection);
+  }
+});
+
+it.each([
+  ["txt", 97, ""],
+  ["pdf", 0xff, "%PDF-1.7"],
+  ["zip", 0xff, "PK\x03\x04"],
+] as const)(
+  "downloads Full Access host %s bytes without assistant-media policy",
+  async (extension, fill, header) => {
     using connection = createSessionFileDownloadClient();
-    const fixture = prepareHostFileRead({ permissionMode: "read-only" });
-    const filename = "résumé original.zip";
-    const bytes = Buffer.alloc(8 * 1024 * 1024 + 17, 0xff);
-    bytes.write("PK\x03\x04", "binary");
-    fs.writeFileSync(path.join(workspaceRoot, filename), bytes);
-    const download = expectOkPayload(
-      await invoke(
-        "sessions.files.download",
-        { sessionKey, path: filename },
-        fixture.context,
-        connection,
-      ),
-    );
+    const filename = "original." + extension;
+    const outsidePath = path.join(outsideDirs.make("session-download-host-"), filename);
+    const bytes = Buffer.alloc(600_003, fill);
+    bytes.write(header, "binary");
+    fs.writeFileSync(outsidePath, bytes);
+    const fixture = prepareHostFileRead({ permissionMode: "full" });
+    const download = await fixture.files.ok("download", outsidePath, undefined, {
+      ...fixture.options,
+      ...connection,
+    });
     expect(download.filename).toBe(filename);
-    expect(download.mimeType).toBe("application/zip");
-    const fetched = await fetchSessionFileDownload(connection.client, download.url);
-    expect(fetched.response.statusCode).toBe(200);
-    expect(Buffer.from(fetched.body as Uint8Array).equals(bytes)).toBe(true);
-    expect(fetched.response.getHeader("content-disposition")).toContain("attachment;");
-    expect(fetched.response.getHeader("content-disposition")).toContain(
-      "filename*=UTF-8''r%C3%A9sum%C3%A9%20original.zip",
-    );
-    expect(fetched.response.getHeader("content-type")).toBe(download.mimeType);
-    expect(fetched.response.getHeader("cache-control")).toBe("private, no-store");
-    const head = await fetchSessionFileDownload(connection.client, download.url, "HEAD");
-    expect(head.body).toBeUndefined();
-    expect(head.response.getHeader("content-length")).toBe(String(bytes.length));
-    const range = await fetchSessionFileDownload(connection.client, download.url, "GET", {
-      range: "bytes=524280-524300",
+    const result = await connection.fetch(download.url);
+    expect(result.response.statusCode).toBe(200);
+    expect(Buffer.from(result.body as Uint8Array).equals(bytes)).toBe(true);
+    fixture.entry.permissionMode = "read-only";
+    expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
+    await fixture.files.error("download", outsidePath, undefined, {
+      ...fixture.options,
+      ...connection,
     });
-    expect(range.response.statusCode).toBe(206);
-    expect(Buffer.from(range.body as Uint8Array)).toEqual(bytes.subarray(524280, 524301));
-    using other = createSessionFileDownloadClient();
-    expect((await fetchSessionFileDownload(other.client, download.url)).response.statusCode).toBe(
-      404,
-    );
-    fs.writeFileSync(path.join(workspaceRoot, filename), "replacement");
-    expect(
-      (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
-    ).toBe(404);
-  });
+  },
+);
 
-  it("rejects workspace escapes and links before granting downloads", async () => {
-    using connection = createSessionFileDownloadClient();
-    const fixture = prepareHostFileRead({ permissionMode: "read-only" });
-    const outsidePath = outsideFile();
-    fs.writeFileSync(outsidePath, "private");
-    fs.symlinkSync(outsidePath, path.join(workspaceRoot, "link"));
-    for (const filePath of [outsidePath, "../outside", "link"]) {
-      expectError(
-        await invoke(
-          "sessions.files.download",
-          { sessionKey, path: filePath },
-          fixture.context,
-          connection,
-        ),
-      );
-    }
-  });
+it.each<[string, Partial<InternalSessionEntry>?, OpenClawConfig?]>([
+  ["read-only mode", { permissionMode: "read-only" }],
+  ["global filesystem policy", undefined, { tools: { fs: { workspaceOnly: true } } }],
+  ["required sandbox in full mode", { permissionMode: "full", sandbox: "required" }],
+  [
+    "configured sandbox in full mode",
+    { permissionMode: "full" },
+    { agents: { defaults: { sandbox: { mode: "all" } } } },
+  ],
+  ["exec-node placement", { execNode: "build-mac" }],
+])(
+  "contains previews under %s without disclosing outside file existence",
+  async (_label, entry, cfg) => {
+    const outsidePath = outsideFile("outside\n");
+    const fixture = prepareHostFileRead(entry, cfg);
+    mockVisibleMessages([assistantToolCall("read", { path: outsidePath })]);
 
-  it.each(["txt", "pdf", "zip"])(
-    "downloads Full Access host %s bytes without assistant-media policy",
-    async (extension) => {
-      using connection = createSessionFileDownloadClient();
-      const filename = "original." + extension;
-      const outsidePath = path.join(outsideDirs.make("session-download-host-"), filename);
-      const bytes = Buffer.alloc(600_003, extension === "txt" ? 97 : 0xff);
-      if (extension === "pdf") {
-        bytes.write("%PDF-1.7");
-      }
-      if (extension === "zip") {
-        bytes.write("PK\x03\x04", "binary");
-      }
-      fs.writeFileSync(outsidePath, bytes);
-      const fixture = prepareHostFileRead({ permissionMode: "full" });
-      const download = expectOkPayload(
-        await invoke(
-          "sessions.files.download",
-          { sessionKey, path: outsidePath },
-          fixture.context,
-          { ...fixture.options, ...connection },
-        ),
-      );
-      expect(download.filename).toBe(filename);
-      const result = await fetchSessionFileDownload(connection.client, download.url);
-      expect(result.response.statusCode).toBe(200);
-      expect(Buffer.from(result.body as Uint8Array).equals(bytes)).toBe(true);
-      fixture.entry.permissionMode = "read-only";
-      expect(
-        (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
-      ).toBe(404);
-      expectError(
-        await invoke(
-          "sessions.files.download",
-          { sessionKey, path: outsidePath },
-          fixture.context,
-          { ...fixture.options, ...connection },
-        ),
-      );
-    },
-  );
-
-  it.each<{
-    label: string;
-    entry?: Partial<InternalSessionEntry>;
-    cfg?: OpenClawConfig;
-  }>([
-    { label: "read-only mode", entry: { permissionMode: "read-only" } },
-    { label: "global filesystem policy", cfg: { tools: { fs: { workspaceOnly: true } } } },
-    {
-      label: "required sandbox in full mode",
-      entry: { permissionMode: "full", sandbox: "required" },
-    },
-    {
-      label: "configured sandbox in full mode",
-      entry: { permissionMode: "full" },
-      cfg: { agents: { defaults: { sandbox: { mode: "all" } } } },
-    },
-    { label: "exec-node placement", entry: { execNode: "build-mac" } },
-  ])(
-    "contains previews under $label without disclosing outside file existence",
-    async ({ entry, cfg }) => {
-      const outsidePath = outsideFile();
-      fs.writeFileSync(outsidePath, "outside\n", "utf8");
-      const fixture = prepareHostFileRead(entry, cfg);
-      mockVisibleMessages([assistantToolCall("read", { path: outsidePath })]);
-
-      for (const requestedPath of [
-        outsidePath,
-        path.relative(workspaceRoot, outsidePath),
-        "~/.openclaw-outside-preview.txt",
-        `${outsidePath}.missing`,
-      ]) {
-        const error = expectError(
-          await invoke(
-            "sessions.files.get",
-            {
-              sessionKey,
-              path: requestedPath,
-            },
-            fixture.context,
-            fixture.options,
-          ),
-        );
-
-        expect(error.details).toMatchObject({
-          path: requestedPath,
-          type: "session_file_not_found",
-          reason: "outside_session_boundary",
-        });
-      }
-      const inRoot = expectOkPayload(
-        await invoke(
-          "sessions.files.get",
-          {
-            sessionKey,
-            path: "src/readme.md",
-          },
-          fixture.context,
-          fixture.options,
-        ),
-      );
-      expect(inRoot.file.content).toBe("# Read me\n");
-    },
-  );
-
-  it("requires a current local placement observation before using host file scope", async () => {
-    const outsidePath = outsideFile();
-    fs.writeFileSync(outsidePath, "outside\n", "utf8");
-    const fixture = prepareHostFileRead({ permissionMode: "full" });
-    const error = expectError(
-      await invoke(
-        "sessions.files.get",
-        {
-          sessionKey,
-          path: outsidePath,
-        },
-        { getRuntimeConfig: fixture.context.getRuntimeConfig },
-        fixture.options,
-      ),
-    );
-    expect(error.details).toMatchObject({
-      type: "session_file_not_found",
-      reason: "outside_session_boundary",
-    });
-  });
-
-  it("canonicalizes host previews and lists outside touched-file metadata without edit tokens", async () => {
-    const outsidePath = outsideFile();
-    const aliasPath = path.join(path.dirname(outsidePath), "alias.txt");
-    fs.writeFileSync(outsidePath, "outside\n", "utf8");
-    fs.symlinkSync(outsidePath, aliasPath);
-    const fixture = prepareHostFileRead(
-      { permissionMode: "full" },
-      { tools: { fs: { workspaceOnly: true } } },
-    );
-    mockVisibleMessages([assistantToolCall("read", { path: aliasPath })]);
-
-    for (const requestedPath of [aliasPath, path.relative(workspaceRoot, aliasPath)]) {
-      const payload = expectOkPayload(
-        await invoke(
-          "sessions.files.get",
-          {
-            sessionKey,
-            path: requestedPath,
-          },
-          fixture.context,
-          fixture.options,
-        ),
-      );
-      expect(payload.file).toMatchObject({
-        content: "outside\n",
-        contentEncoding: "utf8",
-        path: fs.realpathSync(outsidePath),
-        workspacePath: fs.realpathSync(outsidePath),
-        missing: false,
-        previewKind: "text",
+    for (const requestedPath of [
+      outsidePath,
+      path.relative(workspaceRoot, outsidePath),
+      "~/.openclaw-outside-preview.txt",
+      `${outsidePath}.missing`,
+    ]) {
+      expect((await fixture.files.error("get", requestedPath)).details).toMatchObject({
+        path: requestedPath,
+        ...outsideBoundary,
       });
-      expect(payload.file).not.toHaveProperty("hash");
     }
-    const list = expectOkPayload(
-      await invoke("sessions.files.list", { sessionKey }, fixture.context, fixture.options),
-    );
-    expect(list.files).toEqual([
-      expect.objectContaining({
-        path: fs.realpathSync(outsidePath),
-        workspacePath: fs.realpathSync(outsidePath),
-        size: 8,
-        missing: false,
-      }),
-    ]);
-    expect(list.files[0]).not.toHaveProperty("content");
-    expect(list.files[0]).not.toHaveProperty("hash");
-    const hidden = expectOkPayload(await listFiles());
-    expect(hidden.files).toEqual([]);
-    const hardlinkedPath = path.join(path.dirname(outsidePath), "hardlinked.txt");
-    fs.linkSync(outsidePath, hardlinkedPath);
-    const hardlinked = expectOkPayload(
-      await invoke(
-        "sessions.files.get",
-        { sessionKey, path: hardlinkedPath },
-        fixture.context,
-        fixture.options,
-      ),
-    );
-    expect(hardlinked.file).toMatchObject({ content: "outside\n", missing: false });
-  });
+    const inRoot = await fixture.files.ok("get", "src/readme.md");
+    expect(inRoot.file.content).toBe("# Read me\n");
+  },
+);
 
-  it("rechecks the file policy after reading before publishing host content", async () => {
-    const outsidePath = outsideFile();
-    fs.writeFileSync(outsidePath, "outside\n", "utf8");
-    const fixture = prepareHostFileRead({ permissionMode: "full" });
+it("canonicalizes host previews and lists outside touched-file metadata without edit tokens", async () => {
+  const outsidePath = outsideFile("outside\n");
+  const aliasPath = path.join(path.dirname(outsidePath), "alias.txt");
+  fs.symlinkSync(outsidePath, aliasPath);
+  const fixture = prepareHostFileRead(
+    { permissionMode: "full" },
+    { tools: { fs: { workspaceOnly: true } } },
+  );
+  mockVisibleMessages([assistantToolCall("read", { path: aliasPath })]);
+
+  for (const requestedPath of [aliasPath, path.relative(workspaceRoot, aliasPath)]) {
+    const payload = await fixture.files.ok("get", requestedPath);
+    expect(payload.file).toMatchObject({
+      content: "outside\n",
+      contentEncoding: "utf8",
+      path: fs.realpathSync(outsidePath),
+      workspacePath: fs.realpathSync(outsidePath),
+      missing: false,
+      previewKind: "text",
+    });
+    expect(payload.file).not.toHaveProperty("hash");
+  }
+  const list = await fixture.files.ok("list");
+  expect(list.files).toEqual([
+    expect.objectContaining({
+      path: fs.realpathSync(outsidePath),
+      workspacePath: fs.realpathSync(outsidePath),
+      size: 8,
+      missing: false,
+    }),
+  ]);
+  expect(list.files[0]).not.toHaveProperty("content");
+  expect(list.files[0]).not.toHaveProperty("hash");
+  const hidden = expectOkPayload(await invoke("sessions.files.list", { sessionKey }));
+  expect(hidden.files).toEqual([]);
+  const hardlinkedPath = path.join(path.dirname(outsidePath), "hardlinked.txt");
+  fs.linkSync(outsidePath, hardlinkedPath);
+  const hardlinked = await fixture.files.ok("get", hardlinkedPath);
+  expect(hardlinked.file).toMatchObject({ content: "outside\n", missing: false });
+});
+
+it.each(["missing placement", "revoked policy"])("rejects host content after %s", async (mode) => {
+  const outsidePath = outsideFile("outside\n");
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+  if (mode === "revoked policy") {
     const readWorkspaceFile = workspaceFs.readWorkspaceFile;
     vi.spyOn(workspaceFs, "readWorkspaceFile").mockImplementation(async (...args) => {
       const result = await readWorkspaceFile(...args);
       fixture.entry.permissionMode = "workspace";
       return result;
     });
-    const error = expectError(
-      await invoke(
-        "sessions.files.get",
-        {
-          sessionKey,
-          path: outsidePath,
-        },
-        fixture.context,
-        fixture.options,
-      ),
-    );
-    expect(error.details).toMatchObject({
-      type: "session_file_not_found",
-      reason: "outside_session_boundary",
-    });
-  });
+  }
+  const context =
+    mode === "missing placement"
+      ? { getRuntimeConfig: fixture.context.getRuntimeConfig }
+      : fixture.context;
+  expect((await fixture.files.error("get", outsidePath, context)).details).toMatchObject(
+    outsideBoundary,
+  );
+});
 
-  it("keeps host previews bounded and classifies image and unsupported bytes", async () => {
-    const fixture = prepareHostFileRead();
-    const outsidePath = outsideFile();
-    const cases = [
-      { bytes: IMAGE_PREVIEW_FIXTURES[0].bytes, previewKind: "image" },
-      {
-        bytes: Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.alloc(64, 7)]),
-        previewKind: "unsupported",
-      },
-      { bytes: Buffer.alloc(256 * 1024 + 1, "x"), previewKind: "too_large" },
-    ];
-    for (const { bytes, previewKind } of cases) {
-      fs.writeFileSync(outsidePath, bytes);
-      const result = await invoke(
-        "sessions.files.get",
-        { sessionKey, path: outsidePath },
-        fixture.context,
-        fixture.options,
-      );
-      if (previewKind === "too_large") {
-        expect(expectError(result).details).toMatchObject({
-          type: "session_file_too_large",
-          maxPreviewBytes: 256 * 1024,
-          size: bytes.length,
+it("keeps host previews bounded and classifies image and unsupported bytes", async () => {
+  const fixture = prepareHostFileRead();
+  const outsidePath = outsideFile();
+  const cases = [
+    { bytes: Buffer.from("GIF89a", "ascii"), previewKind: "image" },
+    { bytes: Buffer.from("SQLite format 3\0"), previewKind: "unsupported" },
+    { bytes: Buffer.alloc(256 * 1024 + 1, "x"), previewKind: "too_large" },
+  ];
+  for (const { bytes, previewKind } of cases) {
+    fs.writeFileSync(outsidePath, bytes);
+    const result = await fixture.files.request("get", outsidePath);
+    if (previewKind === "too_large") {
+      expect(expectError(result).details).toMatchObject({
+        type: "session_file_too_large",
+        maxPreviewBytes: 256 * 1024,
+        size: bytes.length,
+      });
+    } else {
+      const { file } = expectOkPayload(result);
+      expect(file.previewKind).toBe(previewKind);
+      expect(file).not.toHaveProperty("hash");
+      if (previewKind === "image") {
+        expect(file).toMatchObject({
+          content: bytes.toString("base64"),
+          contentEncoding: "base64",
         });
       } else {
-        const { file } = expectOkPayload(result);
-        expect(file.previewKind).toBe(previewKind);
-        expect(file).not.toHaveProperty("hash");
-        if (previewKind === "image") {
-          expect(file.content).toBe(bytes.toString("base64"));
-          expect(file.contentEncoding).toBe("base64");
-        } else {
-          expect(file).not.toHaveProperty("content");
-        }
+        expect(file).not.toHaveProperty("content");
       }
     }
-  });
+  }
+});
 
-  it.runIf(process.platform !== "win32")(
-    "rejects host directories and symlinks to special files",
-    async () => {
-      const fixture = prepareHostFileRead();
-      const link = outsideFile();
-      fs.symlinkSync("/dev/null", link);
-      for (const requestedPath of [path.dirname(link), link]) {
-        const error = expectError(
-          await invoke(
-            "sessions.files.get",
-            {
-              sessionKey,
-              path: requestedPath,
-            },
-            fixture.context,
-            fixture.options,
-          ),
-        );
-        expect(error.details.type).toBe("session_file_not_found");
-      }
-    },
-  );
-
-  it("rejects escaped and symlinked write targets without touching outside files", async () => {
-    const outsidePath = outsideFile();
-    const escapedPath = path.join(path.dirname(outsidePath), "missing.txt");
-    const escapedName = path.relative(path.dirname(workspaceRoot), escapedPath);
-    const outsideContent = "outside\n";
-    fs.writeFileSync(outsidePath, outsideContent, "utf8");
-    fs.symlinkSync(outsidePath, path.join(workspaceRoot, "linked.txt"));
-    const fixture = prepareHostFileRead({ permissionMode: "full" });
-
-    for (const requestedPath of [outsidePath, `../${escapedName}`, "linked.txt"]) {
-      const error = expectError(
-        await invoke(
-          "sessions.files.set",
-          {
-            sessionKey,
-            path: requestedPath,
-            content: "replaced\n",
-            expectedHash: hashContent(outsideContent),
-          },
-          fixture.context,
-          fixture.options,
-        ),
+it.runIf(process.platform !== "win32")(
+  "rejects host directories and symlinks to special files",
+  async () => {
+    const fixture = prepareHostFileRead();
+    const link = outsideFile();
+    fs.symlinkSync("/dev/null", link);
+    for (const requestedPath of [path.dirname(link), link]) {
+      expect((await fixture.files.error("get", requestedPath)).details.type).toBe(
+        "session_file_not_found",
       );
-      expect(["session_file_not_found", "session_file_unsafe"]).toContain(error.details.type);
     }
-    expect(fs.readFileSync(outsidePath, "utf8")).toBe(outsideContent);
-    expect(fs.existsSync(escapedPath)).toBe(false);
-  });
+  },
+);
+
+it("rejects escaped and symlinked write targets without touching outside files", async () => {
+  const outsidePath = outsideFile();
+  const escapedPath = path.join(path.dirname(outsidePath), "missing.txt");
+  const escapedName = path.relative(path.dirname(workspaceRoot), escapedPath);
+  const outsideContent = "outside\n";
+  fs.writeFileSync(outsidePath, outsideContent, "utf8");
+  fs.symlinkSync(outsidePath, path.join(workspaceRoot, "linked.txt"));
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+
+  for (const requestedPath of [outsidePath, `../${escapedName}`, "linked.txt"]) {
+    const error = await fixture.files.error("set", {
+      path: requestedPath,
+      content: "replaced\n",
+      expectedHash: hashContent(outsideContent),
+    });
+    expect(["session_file_not_found", "session_file_unsafe"]).toContain(error.details.type);
+  }
+  expect(fs.readFileSync(outsidePath, "utf8")).toBe(outsideContent);
+  expect(fs.existsSync(escapedPath)).toBe(false);
 });

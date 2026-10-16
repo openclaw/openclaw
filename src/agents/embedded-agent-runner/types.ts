@@ -19,7 +19,7 @@ import type { McpConnectAction } from "../mcp-connect-action.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { ModelRef } from "../model-ref-shared.js";
-import type { ReplyDeliveryState } from "../reply-completion.js";
+import type { ReplyDeliveryState, ReplyExpectation } from "../reply-completion.js";
 import type { AgentRuntimeCredentialSource } from "../runtime-plan/types.js";
 import type { NormalizedUsage } from "../usage.js";
 
@@ -183,10 +183,12 @@ export type EmbeddedAgentRunMeta = {
     | "idle_timeout_circuit_breaker"
     | "provider_review_continuation";
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
-  terminalReplyKind?: "silent-empty";
   /** An exact, successfully settled tool batch intentionally completed the turn without a reply. */
   intentionalTerminalCompletion?: "tool-batch";
   terminalReply?: AgentRunTerminalReplySnapshot;
+  terminalReplyExpectation?: ReplyExpectation;
+  /** Retain a failed internal result without a user-facing retry notice. */
+  suppressErrorNotice?: boolean;
   yielded?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
   yieldAcknowledgment?: string;
@@ -271,6 +273,7 @@ export type EmbeddedAgentRunResult = {
     mediaUrls?: string[];
     replyToId?: string;
     isError?: boolean;
+    isStatusNotice?: boolean;
     isReasoning?: boolean;
     /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
     isCommentary?: boolean;

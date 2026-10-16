@@ -15,6 +15,7 @@ type CheckpointTransform = (text: string, settleBefore: number) => TextCheckpoin
 export type TextFilter = {
   transform: (text: string) => string;
   checkpoint?: CheckpointTransform;
+  boundaryWhitespaceOnly?: true;
 } & ({ activationTokens: readonly string[] } | { create: () => TextProjector });
 
 /** Preserve append provenance while a probe proves that the canonical transform is identity. */
@@ -136,7 +137,7 @@ function createCheckpointTransform(project: CheckpointTransform): (text: string)
   };
 }
 
-export function createActivatedProjector(
+function createActivatedProjector(
   filter: Extract<TextFilter, { activationTokens: readonly string[] }>,
 ): TextProjector {
   const activation = new RegExp(filter.activationTokens.map(escapeRegExp).join("|"), "i");
@@ -171,7 +172,13 @@ export function createTextProjection(filters: readonly TextFilter[]) {
   }));
   let source = "";
   let text = "";
+  let trimStart = 0;
+  let trimEnd = 0;
+  let onlyBoundaryWhitespaceChanged = true;
+  let matchesTrimmedSource: boolean | undefined;
   const project = (value: TextProjection) => {
+    onlyBoundaryWhitespaceChanged = true;
+    matchesTrimmedSource = undefined;
     let input = value;
     for (const stage of stages) {
       // Replacements can expose earlier syntax, so every downstream probe starts fresh.
@@ -179,7 +186,11 @@ export function createTextProjection(filters: readonly TextFilter[]) {
         stage.projector =
           "create" in stage.filter ? stage.filter.create() : createActivatedProjector(stage.filter);
       }
-      input = stage.projector(input);
+      const next = stage.projector(input);
+      if (!stage.filter.boundaryWhitespaceOnly && next !== input && next.text !== input.text) {
+        onlyBoundaryWhitespaceChanged = false;
+      }
+      input = next;
     }
     return input;
   };
@@ -190,7 +201,21 @@ export function createTextProjection(filters: readonly TextFilter[]) {
     get text() {
       return text;
     },
+    get matchesTrimmedSource(): boolean {
+      // Padding-only stages preserve the source span. Real transforms still need
+      // an exact comparison when their output happens to have the same length.
+      return (matchesTrimmedSource ??=
+        text.length === Math.max(0, trimEnd - trimStart) &&
+        (onlyBoundaryWhitespaceChanged || source.startsWith(text, trimStart)));
+    },
     append(delta: string, preparedSource?: string): TextProjection {
+      if (trimEnd === 0) {
+        trimStart += delta.length - delta.trimStart().length;
+      }
+      const contentLength = delta.trimEnd().length;
+      if (contentLength > 0) {
+        trimEnd = source.length + contentLength;
+      }
       // A validated cumulative snapshot already owns these bytes; rebuilding its
       // rope would copy the growing reply again when a consumer reads it.
       source = preparedSource ?? source + delta;
@@ -204,6 +229,8 @@ export function createTextProjection(filters: readonly TextFilter[]) {
     },
     replace(value: string): TextProjection {
       source = value;
+      trimStart = value.length - value.trimStart().length;
+      trimEnd = value.trimEnd().length;
       const next = project({ text: source, delta: null });
       next.delta = null;
       text = next.text;
@@ -246,6 +273,7 @@ export function trimTextFilter(
   options?: { preserveCodeIndentation?: boolean },
 ): TextFilter {
   return {
+    boundaryWhitespaceOnly: true,
     transform: (text) =>
       mode === "none"
         ? text

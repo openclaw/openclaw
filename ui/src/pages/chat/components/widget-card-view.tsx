@@ -30,9 +30,9 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme } from "../../../lib/widget-theme.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
 import { CanvasWidgetMount } from "./canvas-widget-mount.tsx";
 import "./browser-tab-card.tsx";
 import {
@@ -485,7 +485,7 @@ function widgetActionsPlacementRef(
   enabled: () => boolean,
   options: () => WidgetCardOptions | undefined,
 ) {
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   const active = createMemo(() => presented() && enabled());
   let element: HTMLElement | undefined;
   createEffect(

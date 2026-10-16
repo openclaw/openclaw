@@ -90,7 +90,7 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
             break;
           case "remove":
             if (!systemOwned()) {
-              props.onRemove(props.job);
+              void props.onRemove(props.job);
             }
             break;
         }

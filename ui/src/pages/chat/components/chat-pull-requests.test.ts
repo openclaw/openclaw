@@ -67,6 +67,12 @@ describe("ChatPullRequests", () => {
     container.remove();
   });
 
+  it("keeps unknown diff counts absent rather than inventing zeroes", () => {
+    paint({ pullRequests: [pullRequest({ additions: undefined, deletions: 0 })] });
+    expect(container.querySelector(".chat-pr__additions")).toBeNull();
+    expect(container.querySelector(".chat-pr__deletions")?.textContent).toBe("−0");
+  });
+
   it("does not call account discovery Publishing before any publication is admitted", () => {
     paintChatPullRequests(
       {

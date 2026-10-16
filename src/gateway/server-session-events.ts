@@ -54,7 +54,6 @@ import {
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
-type GenerationObservation = ReturnType<SessionRowProjection["observeGeneration"]>;
 
 function hasCompleteTranscriptTarget(update: InternalSessionTranscriptUpdate): boolean {
   return Boolean(
@@ -100,7 +99,6 @@ export function createTranscriptUpdateBroadcastHandler(params: {
     const lifecycleRevision =
       suppliedRevision ??
       (update.message !== undefined ? lifecycleOwner?.lifecycleRevision : undefined);
-    const queuedUpdate = lifecycleRevision ? { ...update, lifecycleRevision } : update;
     const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
     const markerCaptured =
       legacyMarker && !hasCompleteTranscriptTarget(update)
@@ -120,10 +118,17 @@ export function createTranscriptUpdateBroadcastHandler(params: {
     if (agentScope === null) {
       return Promise.resolve();
     }
-    const markerObservation =
-      projection && legacyMarker && !hasCompleteTranscriptTarget(update) && !markerCaptured
-        ? projection.observeGeneration(legacyMarker)
-        : undefined;
+    // Without an original incarnation, notify history instead of retargeting inline bytes.
+    const queuedUpdate =
+      projection &&
+      legacyMarker &&
+      !hasCompleteTranscriptTarget(update) &&
+      !markerCaptured &&
+      !lifecycleRevision
+        ? { ...update, message: undefined }
+        : lifecycleRevision
+          ? { ...update, lifecycleRevision }
+          : update;
     // Raw global is per-agent storage identity; its qualified aliases must share a lane.
     const laneKey =
       sessionKey && agentScope?.[1]
@@ -208,12 +213,10 @@ export function createTranscriptUpdateBroadcastHandler(params: {
           agentScope,
           projection,
           markerCaptured,
-          markerObservation,
           sessionKey ? undefined : joinQueue,
         );
       } finally {
         keyReady.resolve(undefined);
-        markerObservation?.dispose();
       }
     });
     const settled = task.then(
@@ -259,7 +262,6 @@ async function handleTranscriptUpdateBroadcast(
   capturedAgentScope: SessionEventAgentScope | undefined,
   projection: SessionRowProjection | undefined,
   markerCaptured: ReturnType<SessionRowProjection["capture"]>,
-  markerObservation: GenerationObservation | undefined,
   joinQueue?: (key: string) => Promise<void>,
 ): Promise<void> {
   const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
@@ -318,16 +320,7 @@ async function handleTranscriptUpdateBroadcast(
     return;
   }
   const publicationStorePath = targetStorePath ?? compatibleLegacyMarker?.storePath;
-  const markerOwner = compatibleLegacyMarker
-    ? projection?.capture({
-        agentId: compatibleLegacyMarker.agentId,
-        key: sessionKey,
-        storePath: compatibleLegacyMarker.storePath,
-      })
-    : undefined;
-  const markerIsCurrent = () =>
-    (!markerCaptured || projection?.isCurrent(markerCaptured)) &&
-    (!markerObservation || (markerOwner && markerObservation.isCurrent(markerOwner)));
+  const markerIsCurrent = () => !markerCaptured || projection?.isCurrent(markerCaptured);
   if (!markerIsCurrent()) {
     return;
   }
@@ -370,11 +363,7 @@ async function handleTranscriptUpdateBroadcast(
       return;
     }
   }
-  const lifecycleRevision =
-    normalizeOptionalString(update.lifecycleRevision) ??
-    (markerObservation
-      ? normalizeOptionalString(markerOwner?.entry?.lifecycleRevision)
-      : undefined);
+  const lifecycleRevision = normalizeOptionalString(update.lifecycleRevision);
   const lifecycleIsCurrent = () => {
     if (!lifecycleRevision) {
       return true;
@@ -602,15 +591,15 @@ export function createLifecycleEventBroadcastHandler(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
-  return async (event: SessionLifecycleEvent): Promise<void> => {
+  return async (emittedEvent: SessionLifecycleEvent): Promise<void> => {
     const connIds = params.sessionEventSubscribers.getAll();
     if (!hasSessionChangeReceivers(connIds)) {
       return;
     }
     const agentScope = resolveSessionEventAgentScope(
       getRuntimeConfig(),
-      event.sessionKey,
-      normalizeOptionalString(event.agentId),
+      emittedEvent.sessionKey,
+      normalizeOptionalString(emittedEvent.agentId),
       true,
     );
     if (!agentScope) {
@@ -618,23 +607,23 @@ export function createLifecycleEventBroadcastHandler(params: {
     }
     const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = agentScope;
     const privateBroadcastScope = resolvePrivateSessionEventBroadcastScope(
-      event.sessionKey,
+      emittedEvent.sessionKey,
       agentScope,
     );
     const broadcastOptions = { ...privateBroadcastScope, dropIfSlow: true };
     // Key-only lifecycle deletes invalidate membership; a later row is not deletion evidence.
     if (
-      event.reason === "delete" ||
+      emittedEvent.reason === "delete" ||
       !routingAgentId ||
       (!eventAgentId && !compatibilityOwnerAgentId)
     ) {
       params.broadcastToConnIds(
         "sessions.changed",
         {
-          sessionKey: event.sessionKey,
+          sessionKey: emittedEvent.sessionKey,
           ...(eventAgentId ? { agentId: eventAgentId } : {}),
-          reason: event.reason,
-          ...(event.catalogChanged ? { catalogChanged: true } : {}),
+          reason: emittedEvent.reason,
+          ...(emittedEvent.catalogChanged ? { catalogChanged: true } : {}),
           ts: Date.now(),
         },
         connIds,
@@ -643,8 +632,18 @@ export function createLifecycleEventBroadcastHandler(params: {
       return;
     }
     const projection = params.getSessionRowProjection?.();
-    const query = { key: event.sessionKey, agentId: routingAgentId };
+    const query = { key: emittedEvent.sessionKey, agentId: routingAgentId };
     const captured = projection?.capture(query);
+    // Discovery has no original incarnation: publish current facts, not the old event's fields.
+    const event: SessionLifecycleEvent =
+      projection && !captured
+        ? {
+            sessionKey: emittedEvent.sessionKey,
+            agentId: emittedEvent.agentId,
+            reason: "updated",
+            ...(emittedEvent.catalogChanged ? { catalogChanged: true } : {}),
+          }
+        : emittedEvent;
     const readActiveState = (session: { key: string; sessionId?: string }) =>
       resolveVisibleActiveSessionRunState({
         context: params,
@@ -667,66 +666,60 @@ export function createLifecycleEventBroadcastHandler(params: {
             sessionId: captured?.entry?.sessionId,
           })
         : undefined;
-    const observation = !captured ? projection?.observeGeneration(query) : undefined;
-    try {
-      // Committed lifecycle publications settle with the Gateway, not their producer's scope.
-      await runOutsideAsyncWorkScope(() =>
-        withPreparedEventRow(projection, query, (read, ancestors) => {
-          const current = captured ?? projection?.capture(query);
-          if (
-            params.getSessionRowProjection?.() !== projection ||
-            (projection && (!current || !projection.isCurrent(current))) ||
-            (observation && (!current || !observation.isCurrent(current)))
-          ) {
-            return;
-          }
-          const record = read?.describe(query);
-          const sessionRow = record && read?.present(record);
-          const activeRunState = capacityState ?? (sessionRow ? readActiveState(sessionRow) : null);
-          params.broadcastToConnIds(
-            "sessions.changed",
-            {
-              sessionKey: event.sessionKey,
-              ...(eventAgentId ? { agentId: eventAgentId } : {}),
-              reason: event.reason,
-              ...(event.catalogChanged ? { catalogChanged: true } : {}),
-              parentSessionKey: event.parentSessionKey,
+    // Committed lifecycle publications settle with the Gateway, not their producer's scope.
+    await runOutsideAsyncWorkScope(() =>
+      withPreparedEventRow(projection, query, (read, ancestors) => {
+        const current = captured ?? projection?.capture(query);
+        if (
+          params.getSessionRowProjection?.() !== projection ||
+          (projection && (!current || !projection.isCurrent(current)))
+        ) {
+          return;
+        }
+        const record = read?.describe(query);
+        const sessionRow = record && read?.present(record);
+        const activeRunState = capacityState ?? (sessionRow ? readActiveState(sessionRow) : null);
+        params.broadcastToConnIds(
+          "sessions.changed",
+          {
+            sessionKey: event.sessionKey,
+            ...(eventAgentId ? { agentId: eventAgentId } : {}),
+            reason: event.reason,
+            ...(event.catalogChanged ? { catalogChanged: true } : {}),
+            parentSessionKey: event.parentSessionKey,
+            label: event.label,
+            displayName: event.displayName,
+            ts: Date.now(),
+            ...buildGatewaySessionSnapshot({
+              sessionRow,
+              includeSession: true,
+              agentId: eventAgentId,
               label: event.label,
               displayName: event.displayName,
-              ts: Date.now(),
-              ...buildGatewaySessionSnapshot({
-                sessionRow,
-                includeSession: true,
-                agentId: eventAgentId,
-                label: event.label,
-                displayName: event.displayName,
-                parentSessionKey: event.parentSessionKey,
-                activeRunState,
-              }),
-              ...(event.swarmGroupId
-                ? {
-                    swarmGroupId: event.swarmGroupId,
-                    kind: event.kind,
-                    text: event.text,
-                  }
-                : {}),
-            },
-            connIds,
-            {
-              dropIfSlow: true,
-              ...(read && projection
-                ? {
-                    prepareSessionProjection: prepareSessionEventProjection(projection, read, {
-                      ancestors,
-                    }),
-                  }
-                : {}),
-            },
-          );
-        }),
-      );
-    } finally {
-      observation?.dispose();
-    }
+              parentSessionKey: event.parentSessionKey,
+              activeRunState,
+            }),
+            ...(event.swarmGroupId
+              ? {
+                  swarmGroupId: event.swarmGroupId,
+                  kind: event.kind,
+                  text: event.text,
+                }
+              : {}),
+          },
+          connIds,
+          {
+            dropIfSlow: true,
+            ...(read && projection
+              ? {
+                  prepareSessionProjection: prepareSessionEventProjection(projection, read, {
+                    ancestors,
+                  }),
+                }
+              : {}),
+          },
+        );
+      }),
+    );
   };
 }

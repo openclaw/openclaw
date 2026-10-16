@@ -359,6 +359,7 @@ async function settleHistoricalDelivery(
 export const codexNativeTaskAssignmentMigration = {
   id: "codex-native-task-assignments",
   label: "Codex native pending assignments",
+  sqliteOnly: { family: "state" },
   collectBackupResources: (params) => [{ path: databasePath(params), kind: "sqlite" }],
   async detectLegacyState(params) {
     return (await inspect(params)).length > 0

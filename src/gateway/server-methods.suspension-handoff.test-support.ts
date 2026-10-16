@@ -41,7 +41,7 @@ export function registerSuspensionHandoffLifecycleTests() {
       }
       try {
         if (change === "expiry") {
-          await vi.advanceTimersByTimeAsync(115_000);
+          await vi.advanceTimersByTimeAsync(40_000);
         }
         const status = () =>
           dispatch({

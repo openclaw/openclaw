@@ -13,6 +13,10 @@ import {
 } from "./workspace-manifest.js";
 import { applyWorkspace, gitInit, manifestFor } from "./workspace-recovery.test-support.js";
 import {
+  localWorkspaceBaseRefreshRef,
+  requireWorkerResultStorageRef,
+} from "./workspace-result-inventory.js";
+import {
   applyStagedWorkerWorkspaceResult,
   cleanupWorkerWorkspaceResultRef,
   deleteStagedWorkerWorkspaceResult,
@@ -134,6 +138,13 @@ describe("worker workspace reconciliation", () => {
         "Cloud workspace result claim id is invalid",
       );
     }
+    const refresh = localWorkspaceBaseRefreshRef("a".repeat(64));
+    expect(refresh).toBe(`refs/openclaw/workspace-base-refresh/${"a".repeat(64)}`);
+    expect(requireWorkerResultStorageRef(refresh)).toBe(refresh);
+    expect(() => localWorkspaceBaseRefreshRef("claim-id")).toThrow("identity is invalid");
+    expect(() => requireWorkerResultStorageRef(refresh + "/extra")).toThrow("reference is invalid");
+    expect(() => preparedWorkerWorkspaceResultRef(refresh)).toThrow("reference is invalid");
+    expect(() => cleanupWorkerWorkspaceResultRef(refresh)).toThrow("reference is invalid");
   });
 
   it("applies the candidate before publishing its recovery ref", async () => {

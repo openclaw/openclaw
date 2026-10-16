@@ -25,8 +25,6 @@ export class ShellLayoutOwner {
   private readonly reporters = new Map<object, { host: Element; traits: ShellLayoutTraits }>();
   private content?: Element;
 
-  constructor(private readonly onChange: () => void = () => {}) {}
-
   readonly contentRef = (content: Element | undefined) => {
     if (content === this.content) {
       return;
@@ -56,13 +54,11 @@ export class ShellLayoutOwner {
     }
     this.reporters.set(token, { host, traits: { ...traits } });
     this.apply();
-    this.onChange();
   }
 
   clear(token: object) {
     if (this.reporters.delete(token)) {
       this.apply();
-      this.onChange();
     }
   }
 
@@ -82,13 +78,6 @@ export class ShellLayoutOwner {
     return traits;
   }
 
-  get className(): string {
-    const traits = this.current;
-    return TRAITS.filter(([key]) => traits[key])
-      .map(([, className]) => className)
-      .join(" ");
-  }
-
   private apply() {
     const traits = this.current;
     for (const [key, className] of TRAITS) {
@@ -96,7 +85,7 @@ export class ShellLayoutOwner {
     }
   }
 
-  hostDisconnected() {
+  dispose() {
     this.reporters.clear();
     this.apply();
   }

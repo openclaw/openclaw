@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-const STALL_MS = 1_000;
+const STALL_MS = 250;
 const MAX_PENDING_STALLS = 8;
 
 type Stall = { elapsedMs: number; task: string; taskMs: number };
@@ -14,9 +14,7 @@ const taskState = resolveGlobalSingleton<MainThreadTaskState>(
 );
 
 /** Name code-owned work only; request text, paths, and identifiers do not belong in labels. */
-export function runWithMainThreadTask<T>(name: string, run: () => Promise<T>): Promise<T>;
-export function runWithMainThreadTask<T>(name: string, run: () => T): T;
-export function runWithMainThreadTask(name: string, run: () => unknown): unknown {
+export function runWithMainThreadTask<T>(name: string, run: () => T): T {
   const observer = taskState.observer;
   if (!observer) {
     return run();
@@ -64,14 +62,16 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       delayMaxMs = 0;
     },
     enter(name) {
+      const enteredAt = now();
       const ownsTurn = !active;
       if (ownsTurn) {
         active = true;
-        startedAt = segmentAt = now();
+        startedAt = segmentAt = enteredAt;
         task = longestTask = "unattributed";
         longestMs = 0;
+      } else {
+        segment(enteredAt);
       }
-      segment(now());
       const previous = task;
       task = name;
       return () => {
@@ -82,7 +82,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
           active = false;
           const elapsedMs = at - startedAt;
           delayMaxMs = Math.max(delayMaxMs, elapsedMs);
-          if (elapsedMs > STALL_MS) {
+          if (elapsedMs >= STALL_MS) {
             if (pending.length < MAX_PENDING_STALLS) {
               pending.push({ elapsedMs, task: longestTask, taskMs: longestMs });
             } else {

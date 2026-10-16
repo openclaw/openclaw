@@ -26,6 +26,7 @@ export function createMountedPanes(
     Record<
       | "chat.history"
       | "chat.startup"
+      | "models.authStatus"
       | "models.list"
       | "sessions.describe"
       | "sessions.list"
@@ -38,6 +39,7 @@ export function createMountedPanes(
     if (
       method === "chat.history" ||
       method === "chat.startup" ||
+      method === "models.authStatus" ||
       method === "models.list" ||
       method === "sessions.describe" ||
       method === "sessions.list" ||
@@ -107,6 +109,8 @@ export function createMountedPanes(
     Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
     pane.context = context;
     pane.sessionKey = sessionKey;
+    // Composer and transcript state belongs to each mounted presentation.
+    pane.presentationId = crypto.randomUUID();
     Object.assign(pane, { agentId: paneAgentId });
     panes.push(pane);
     Reflect.set(pane, "state", undefined);

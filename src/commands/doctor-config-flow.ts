@@ -154,7 +154,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
-  const configRepairWarnings: string[] = [];
+  const configRepairWarnings: string[] = [...(preflight.warnings ?? [])];
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
     fixHint: string,
@@ -510,6 +510,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         : {}),
     });
     state = repairSequence.state;
+    configRepairWarnings.push(...repairSequence.warningNotes);
     if (referenceSource) {
       referenceSource.installedPluginIdRecovery = new Map([
         ...installedPluginRecovery.recovery,

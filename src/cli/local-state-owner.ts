@@ -47,6 +47,8 @@ export async function runWithLocalStateOwner<T>(params: {
   recoveryCommand?: string;
   /** Internal manifest-bound recovery; never routed to or borrowed from a running owner. */
   databasePortRecovery?: DatabasePortRecoveryIntent;
+  /** Engine transitions retire native handles while retaining exclusive schema custody. */
+  databasePortMaintenance?: true;
   requiredCapabilities?: readonly string[];
   scopes?: readonly OperatorScope[];
   timeoutMs?: number;
@@ -61,7 +63,7 @@ export async function runWithLocalStateOwner<T>(params: {
 }): Promise<T> {
   localOwnerAssertion.getStore()?.();
   const databasePortRecovery = params.databasePortRecovery
-    ? Object.freeze({ ...params.databasePortRecovery })
+    ? { ...params.databasePortRecovery }
     : undefined;
   const selectedEnv = { ...process.env };
   const selectedStateDir = resolveStateDir(selectedEnv);
@@ -71,8 +73,7 @@ export async function runWithLocalStateOwner<T>(params: {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: resolveConfigPath(selectedEnv, selectedStateDir),
   };
-  const input =
-    typeof params.params === "function" ? params.params : structuredClone(params.params);
+  const input = params.params;
   const scopes: OperatorScope[] = [...(params.scopes ?? ["operator.admin"])];
   const [
     {
@@ -175,8 +176,7 @@ export async function runWithLocalStateOwner<T>(params: {
     }
     const { callGateway, isGatewayClientRequestError } = await import("../gateway/call.js");
     let dispatched = false;
-    const gatewayInput =
-      typeof input === "function" ? structuredClone(await input(controller.signal)) : input;
+    const gatewayInput = typeof input === "function" ? await input(controller.signal) : input;
     try {
       assertTargetCurrent();
       // The transport owns reduced connection config; full runtime loading can write state.
@@ -261,7 +261,7 @@ export async function runWithLocalStateOwner<T>(params: {
       // A losing acquisition has not entered the domain or opened a writable database.
       lock = await acquireGatewayLock({
         env,
-        role: "agent-embedded",
+        role: params.databasePortMaintenance ? "sqlite-maintenance" : "agent-embedded",
         allowInTests: true,
         databasePortRecovery,
       });
@@ -277,19 +277,21 @@ export async function runWithLocalStateOwner<T>(params: {
     if (!lock) {
       return refuse(new Error("Offline state ownership was not acquired"));
     }
-    const resources = createOpenClawDatabaseMaintenanceScope({
-      assertOwnerCurrent: () => lock.assertCurrent(),
-      assertDatabaseAccess: lock.assertDatabaseAccess,
-    });
+    const resources = params.databasePortMaintenance
+      ? undefined
+      : createOpenClawDatabaseMaintenanceScope({
+          assertOwnerCurrent: () => lock.assertCurrent(),
+          assertDatabaseAccess: lock.assertDatabaseAccess,
+        });
     let uncertainCleanup = false;
     try {
-      return await resources.run(() => runLocal(lock.assertCurrent));
+      return await (resources ?? lock).run(() => runLocal(lock.assertCurrent));
     } catch (error) {
       uncertainCleanup = hasCommandProcessCleanupError(error);
       throw error;
     } finally {
       // Failed cleanup keeps physical custody; release cannot race accepted worker/native work.
-      await resources.close();
+      await resources?.close();
       // Stop lending this owner, but keep physical custody until uncertain children exit.
       const retained = uncertainCleanup ? tryBorrowGatewayStateOwner(databasePath) : undefined;
       await lock.release();

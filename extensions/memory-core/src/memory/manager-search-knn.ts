@@ -19,7 +19,7 @@ export type VectorKnnRequest = {
 };
 export type VectorKnnResponse = { rows: VectorKnnRow[]; fallbackScanRequired: boolean };
 
-export const MEMORY_VECTOR_INDEX = {
+const MEMORY_VECTOR_INDEX = {
   chunks: {
     table: MEMORY_INDEX_VECTOR_TABLE,
     alias: "v",

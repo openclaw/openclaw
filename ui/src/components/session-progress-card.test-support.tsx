@@ -1,6 +1,6 @@
 import { Virtualizer } from "@tanstack/virtual-core";
 import { Show } from "solid-js";
-import { SolidContentPresentation } from "../lit/solid-content.tsx";
+import { ContentPresentation } from "../lib/solid/presentation.ts";
 import { TranscriptEndAnchor } from "../pages/chat/components/chat-transcript-end-anchor.ts";
 import {
   observeTranscriptOffset,
@@ -81,7 +81,7 @@ type Input = SessionProgressCardProps & { transcript?: boolean; showTranscript?:
 type FixtureProps = { input: Input; presented: boolean };
 function Fixture(props: FixtureProps) {
   return (
-    <SolidContentPresentation value={() => props.presented}>
+    <ContentPresentation value={() => props.presented}>
       <Show when={props.input.transcript} fallback={<SessionProgressCard {...props.input} />}>
         <div class="chat-main">
           <Show when={props.input.showTranscript !== false}>
@@ -90,7 +90,7 @@ function Fixture(props: FixtureProps) {
           <SessionProgressCard {...props.input} />
         </div>
       </Show>
-    </SolidContentPresentation>
+    </ContentPresentation>
   );
 }
 const mounts = new WeakMap<

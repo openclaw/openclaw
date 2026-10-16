@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -10,7 +9,10 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
-import { mountChatPaneHeader } from "./components/chat-pane-header.test-support.ts";
+import {
+  mountChatPaneHeader,
+  renderPaneHeaderInto,
+} from "./components/chat-pane-header.test-support.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { openSlot, promoteSidebarPanel, setSidebarOpen } from "./sidebar-layout.ts";
 
@@ -21,26 +23,28 @@ it("keeps content actions and focus in Layout across plugin panel swaps", async 
   });
   const slot = "plugin:fixture/notes";
   const refresh = vi.fn();
+  const refreshButton = document.createElement("button");
+  refreshButton.setAttribute("aria-label", "Refresh notes");
+  refreshButton.textContent = "Refresh notes";
+  refreshButton.addEventListener("click", refresh);
   const definitions: SidebarPanelDefinition[] = [
     ...sidebarPanelDefinitions(),
     {
       slot,
       label: "Fixture notes",
-      icon: html``,
+      icon: sidebarPanelDefinitions()[0]!.icon,
       available: true,
-      content: html`Notes`,
-      loading: html`Loading notes`,
+      content: "Notes",
+      loading: { variant: "files", label: "Loading notes" },
       empty: { description: "No notes" },
-      headerAction: html`<button aria-label="Refresh notes" @click=${refresh}>
-        Refresh notes
-      </button>`,
+      headerAction: refreshButton,
     },
   ];
   state.sidebarLayout = promoteSidebarPanel(openSlot({ columns: [] }, slot), slot);
   const container = document.body.appendChild(document.createElement("div"));
   onTestFinished(() => container.remove());
   const paint = () => {
-    render(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         { key: state.sessionKey, kind: "direct", updatedAt: 0 },

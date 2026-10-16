@@ -2,7 +2,7 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { projectSubagentStatus } from "../chat-subagent-wait.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ChatDetailsContext, ChatDetailsEnvironment } from "./chat-details-environment.tsx";
@@ -94,47 +94,49 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     </div>
                   )}
                 </div>
-                <div class="chat-details__meta-actions">
-                  <details class="chat-details__participants">
-                    <summary>
-                      <Icon name="users" />
-                      <span>
-                        {t("chat.sessionDetails.participants", { count: String(count()) })}
-                      </span>
-                      <Icon name="chevronDown" />
-                    </summary>
-                    {owner() && (
-                      <div class="chat-details__person">
-                        <span>{t("chat.sessionDetails.owner")}</span>
-                        <span>{owner()?.label || owner()?.id || owner()?.type}</span>
-                      </div>
-                    )}
-                    <For each={people()}>
-                      {(person) => (
+                <Show when={count() > 0}>
+                  <div class="chat-details__meta-actions">
+                    <details class="chat-details__participants">
+                      <summary>
+                        <Icon name="users" />
+                        <span>
+                          {t("chat.sessionDetails.participants", { count: String(count()) })}
+                        </span>
+                        <Icon name="chevronDown" />
+                      </summary>
+                      {owner() && (
                         <div class="chat-details__person">
-                          <ChatAuthorAvatar
-                            sender={{
-                              id: person.identity.id,
-                              name: person.label || person.identity.id,
-                              identity: person.identity,
-                              profileAvatarUrl: person.avatarUrl,
-                            }}
-                          />
-                          <span title={person.label || person.identity.id}>
-                            {person.label || person.identity.id}
-                          </span>
+                          <span>{t("chat.sessionDetails.owner")}</span>
+                          <span>{owner()?.label || owner()?.id || owner()?.type}</span>
                         </div>
                       )}
-                    </For>
-                    {count() > people().length && (
-                      <div class="chat-details__muted">
-                        {t("chat.sessionDetails.moreParticipants", {
-                          count: String(count() - people().length),
-                        })}
-                      </div>
-                    )}
-                  </details>
-                </div>
+                      <For each={people()}>
+                        {(person) => (
+                          <div class="chat-details__person">
+                            <ChatAuthorAvatar
+                              sender={{
+                                id: person.identity.id,
+                                name: person.label || person.identity.id,
+                                identity: person.identity,
+                                profileAvatarUrl: person.avatarUrl,
+                              }}
+                            />
+                            <span title={person.label || person.identity.id}>
+                              {person.label || person.identity.id}
+                            </span>
+                          </div>
+                        )}
+                      </For>
+                      {count() > people().length && (
+                        <div class="chat-details__muted">
+                          {t("chat.sessionDetails.moreParticipants", {
+                            count: String(count() - people().length),
+                          })}
+                        </div>
+                      )}
+                    </details>
+                  </div>
+                </Show>
                 <ChatDetailsEnvironment details={props.props!} presented={active()} />
                 <ChatDetailsContext details={props.props!} presented={active()} />
                 {subagents().length > 0 && (

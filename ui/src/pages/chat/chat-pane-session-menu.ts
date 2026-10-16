@@ -179,7 +179,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.connectedClient === client &&
       this.connectionGeneration === generation
     ) {
-      this.headerPlatform = platform;
+      if (this.headerPlatform !== platform) {
+        this.headerPlatform = platform;
+        this.invalidate();
+      }
     }
   }
 
@@ -355,7 +358,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
             const patch = headerSessionMetadataPatch(action, currentSession);
-            await operations.patchSession(host, currentSession, patch, scope);
+            await operations.patchSession(host, currentSession, patch, scope, {
+              sessionScope: action.kind === "toggle-unread",
+            });
           }
           break;
         }
@@ -455,7 +460,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       clientGatewayUrl: scope.client.gatewayUrl,
       scope,
     };
-    this.requestUpdate();
+    this.invalidate();
   }
 
   protected closeContinueInTerminalDialog(): void {
@@ -463,7 +468,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return;
     }
     this.continueInTerminalDialog = null;
-    this.requestUpdate();
+    this.invalidate();
   }
 
   protected currentContinueInTerminalCommand(row: GatewaySessionRow | undefined): string | null {
@@ -533,15 +538,20 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     this.headerRenameSession = { key: row.key, sessionId: row.sessionId, label: row.label };
     this.headerRenameInitialValue = resolveSessionRenameValue(row);
     this.headerRenameValue = this.headerRenameInitialValue;
+    this.invalidate();
     void this.updateComplete.then(() => {
-      const input = this.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
+      const input = this.element.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
       input?.focus();
       input?.select();
     });
   }
 
   protected cancelHeaderRename(): void {
+    if (!this.headerRenameSession) {
+      return;
+    }
     this.headerRenameSession = null;
+    this.invalidate();
   }
 
   protected commitHeaderRename(): void {
@@ -555,6 +565,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       session.label,
     );
     this.headerRenameSession = null;
+    this.invalidate();
     const state = this.state;
     if (!state || !patch) {
       return;
@@ -654,17 +665,19 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       }
     }
     await Promise.all(loads);
-    this.requestUpdate();
+    this.invalidate();
   }
 
   protected showHeaderCopied(action: ChatPaneHeaderAction): void {
     this.headerCopiedAction = action;
+    this.invalidate();
     if (this.headerCopiedTimer !== null) {
       window.clearTimeout(this.headerCopiedTimer);
     }
     this.headerCopiedTimer = window.setTimeout(() => {
       this.headerCopiedAction = null;
       this.headerCopiedTimer = null;
+      this.invalidate();
     }, 1_500);
   }
 

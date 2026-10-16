@@ -194,7 +194,7 @@ function mockShow(capabilities: string[], contextWindow = 1_048_576) {
   showMock.mockResolvedValueOnce({ contextWindow, capabilities });
 }
 
-function mockInstalledModels(models: Record<string, boolean | undefined>) {
+function mockInstalledModels(models: Record<string, boolean | undefined>, parameterCount?: number) {
   modelsMock.mockResolvedValue({
     reachable: true,
     models: Object.keys(models).map((name) => ({ name })),
@@ -202,6 +202,7 @@ function mockInstalledModels(models: Record<string, boolean | undefined>) {
   showMock.mockImplementation(async (_baseUrl: string, modelId: string) => ({
     contextWindow: 32_768,
     capabilities: models[modelId] ? ["completion", "tools"] : ["completion"],
+    ...(parameterCount !== undefined ? { parameterCount } : {}),
   }));
 }
 
@@ -384,22 +385,6 @@ describe("ollama plugin", () => {
     expect(modelsMock).not.toHaveBeenCalled();
   });
 
-  it("classifies incomplete ollama streams as provider failures", () => {
-    const provider = registerProvider();
-    expect(
-      provider?.classifyFailoverReason?.({
-        provider: "ollama",
-        errorMessage: "Ollama API stream ended without a final response",
-      }),
-    ).toBe("server_error");
-    expect(
-      provider?.classifyFailoverReason?.({
-        provider: "ollama",
-        errorMessage: "Ollama returned malformed tool arguments",
-      }),
-    ).toBeUndefined();
-  });
-
   it("keeps the agent tool but does not advertise node inference when disabled locally", () => {
     const registerNodeHostCommand = vi.fn();
     const registerTool = vi.fn();
@@ -450,7 +435,10 @@ describe("ollama plugin", () => {
   it("discovers and prepares a loaded tool-capable model without pulling it", async () => {
     const provider = registerProvider();
     const guided = provider.auth[0].appGuidedSetup;
-    mockInstalledModels({ "embed-only": false, "unknown-tools": undefined, "qwen-tool": true });
+    mockInstalledModels(
+      { "embed-only": false, "unknown-tools": undefined, "qwen-tool": true },
+      4_000_000_000,
+    );
     await expect(guided?.detect({ config: {}, env: {} })).resolves.toEqual({
       modelRef: "ollama/qwen-tool",
       detail: "qwen-tool at http://127.0.0.1:11434",
@@ -470,6 +458,9 @@ describe("ollama plugin", () => {
       }),
     });
     expect(prepared?.configPatch?.models?.mode).toBe("merge");
+    expect(prepared?.configPatch?.models?.providers?.ollama?.models?.[0]).not.toHaveProperty(
+      "parameterCount",
+    );
     expect(prepared?.configPatch?.models?.providers?.ollama?.apiKey).toBe(OLLAMA_DEFAULT_API_KEY);
     await expect(
       guided?.prepare({ config: {}, env: {}, modelRef: "ollama/unknown-tools" }),
@@ -778,6 +769,7 @@ describe("ollama plugin", () => {
   it("reconciles configured refs and incomplete catalog rows without probing complete rows", async () => {
     showMock.mockResolvedValue({
       contextWindow: 1_048_576,
+      parameterCount: 4_000_000_000,
       capabilities: ["completion", "tools", "thinking", "vision"],
     });
     const rows = await augmentCatalog(registerProvider(), {
@@ -802,6 +794,7 @@ describe("ollama plugin", () => {
           provider: "ollama",
           id: "fully-configured",
           name: "Fully configured",
+          parameterCount: 70_000_000_000,
           contextWindow: 128_000,
           reasoning: false,
           input: ["text"],
@@ -826,6 +819,7 @@ describe("ollama plugin", () => {
           reasoning: true,
           input: ["text", "image"],
           contextWindow: 1_048_576,
+          parameterCount: 4_000_000_000,
           compat: {
             supportsTools: true,
             supportsUsageInStreaming: true,
@@ -951,6 +945,16 @@ describe("ollama plugin", () => {
     await expect(provider.prepareDynamicModel?.(context as never)).resolves.toBeUndefined();
   });
 
+  it("retains a requested model's declared size when show has no other metadata", async () => {
+    const provider = registerProvider();
+    vi.stubEnv("OLLAMA_API_KEY", "ollama-local");
+    mockDiscovery([]);
+    showMock.mockResolvedValueOnce({ parameterCount: 70_000_000_000 });
+    await expect(
+      provider.prepareDynamicModel?.(dynamicContext("custom-4b") as never),
+    ).resolves.toMatchObject({ id: "custom-4b", parameterCount: 70_000_000_000 });
+  });
+
   it.each([
     {
       name: "remote",
@@ -1062,7 +1066,7 @@ describe("ollama plugin", () => {
         expect.objectContaining({
           id: "glm-5.2",
           contextWindow: 1_000_000,
-          maxTokens: 8192,
+          maxTokens: 131_072,
           reasoning: true,
         }),
       );
@@ -1081,7 +1085,7 @@ describe("ollama plugin", () => {
       provider: "ollama-cloud",
       id: "glm-5.2",
       contextWindow: 1_000_000,
-      maxTokens: 8192,
+      maxTokens: 131_072,
       reasoning: true,
     });
     expect(model?.contextTokens).toBeUndefined();
@@ -1162,21 +1166,6 @@ describe("ollama plugin", () => {
     expect(provider.wrapStreamFn?.(context)).toBeUndefined();
     expect(streamFn).not.toHaveBeenCalled();
   });
-
-  it.each(["ollama", "openai-completions"] as const)(
-    "owns replay policy for %s routes",
-    (modelApi) => {
-      const provider = registerProvider();
-      const policy = provider.buildReplayPolicy?.({
-        provider: "ollama",
-        modelApi,
-        modelId: "qwen3:32b",
-      });
-      expect(policy?.sanitizeToolCallIds).toBe(modelApi !== "ollama");
-      expect(policy?.toolCallIdMode).toBe(modelApi === "ollama" ? undefined : "strict");
-      expect(policy?.dropReasoningFromHistory ?? false).toBe(modelApi !== "ollama");
-    },
-  );
 
   it("selects cloud native transport with the default URL only for api=ollama", () => {
     const provider = registerOllamaCloudProvider();

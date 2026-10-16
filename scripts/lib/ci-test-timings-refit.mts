@@ -40,6 +40,21 @@ export type CiTimingRun = {
 type Samples = Map<string, number[]>;
 type WorkerCeilings = Map<string, Set<number | "unspecified" | "ambiguous">>;
 
+function normalizeTimingLog(text: string): string {
+  // Quoted child output remains nested; only gh's outer job/step columns are removed.
+  return stripVTControlCharacters(text).replace(
+    /^(?!\d{4}-\d\d-\d\dT[\d:.]+Z(?:\s|$))[^\t\r\n]+\t[^\t\r\n]+\t(?=\d{4}-\d\d-\d\dT[\d:.]+Z(?:\s|$))/gmu,
+    "",
+  );
+}
+
+/** Dispatch inputs are recorded in job environment headers, not the runs API. */
+export function isCiTimingRuntimeTrial(text: string): boolean {
+  return /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_CI_TEST_RUNTIME_POLICY: (?:bun-all|dual-all)\s*$/mu.test(
+    normalizeTimingLog(text),
+  );
+}
+
 type RuntimeTimingGroup = Omit<
   NodeTestShardGroup,
   "runner" | "requiresDist" | "pretestBuildMode" | "includePatterns"
@@ -1048,7 +1063,16 @@ export function refitTestTimings(
       .map((observation) => [runtimePlacementTimingIdentity(observation), observation]),
   );
   const uniqueRuns = new Map<number, CiTimingRun>();
+  const trialRunIds = new Set(
+    runs
+      .filter((run) => run.logs.some((log) => isCiTimingRuntimeTrial(log.text)))
+      .map((run) => run.id),
+  );
   for (const run of runs) {
+    // Exclude the whole run, including other attempts, from sampling and pruning.
+    if (trialRunIds.has(run.id)) {
+      continue;
+    }
     const retained = uniqueRuns.get(run.id);
     if (retained) {
       retained.logs.push(...run.logs);
@@ -1061,7 +1085,8 @@ export function refitTestTimings(
       uniqueRuns.set(run.id, { ...run, logs: [...run.logs] });
     }
   }
-  for (const run of uniqueRuns.values()) {
+  const acceptedRuns = [...uniqueRuns.values()];
+  for (const run of acceptedRuns) {
     const current = {
       uiE2e: new Map<string, number[]>(),
       repoE2e: new Map<string, number[]>(),
@@ -1075,12 +1100,7 @@ export function refitTestTimings(
       github: new Map<string, number[]>(),
     };
     for (const log of run.logs) {
-      // `gh run view --log` adds job/step columns outside the timestamped record.
-      // A timestamped child line may quote that format; its contents stay nested.
-      const text = stripVTControlCharacters(log.text).replace(
-        /^(?!\d{4}-\d\d-\d\dT[\d:.]+Z(?:\s|$))[^\t\r\n]+\t[^\t\r\n]+\t(?=\d{4}-\d\d-\d\dT[\d:.]+Z(?:\s|$))/gmu,
-        "",
-      );
+      const text = normalizeTimingLog(log.text);
       if (log.kind === "release-packed") {
         readPackedReleaseLog(text, log.labels, current.github);
       } else if (log.kind === "tooling") {
@@ -1156,7 +1176,7 @@ export function refitTestTimings(
   }
 
   const completeInventoryRuns = new Set(
-    [...uniqueRuns.values()]
+    acceptedRuns
       .filter(
         (run) => run.completeInventory && !run.logs.some((log) => log.kind === "release-packed"),
       )
@@ -1171,8 +1191,10 @@ export function refitTestTimings(
   const keepOverhead =
     measuredOverhead === undefined ||
     (oldOverhead !== undefined && Math.abs(measuredOverhead - oldOverhead) <= oldOverhead * 0.15);
-  const runIds = [...new Set(runs.map((run) => run.id))].toSorted((a, b) => a - b);
-  const pullRequestRunIds = runs.filter((run) => run.pullRequestMergeRef).map((run) => run.id);
+  const runIds = acceptedRuns.map((run) => run.id).toSorted((a, b) => a - b);
+  const pullRequestRunIds = acceptedRuns
+    .filter((run) => run.pullRequestMergeRef)
+    .map((run) => run.id);
   function refitRuntime(profile: "blacksmith" | "github"): RuntimePlacementTiming[] {
     return Object.entries(
       refitMap(
@@ -1243,7 +1265,7 @@ export function refitTestTimings(
         : Math.round(measuredOverhead * 10) / 10,
     },
     updatedAt:
-      runs
+      acceptedRuns
         .map((run) => run.createdAt.slice(0, 10))
         .toSorted()
         .at(-1) ??

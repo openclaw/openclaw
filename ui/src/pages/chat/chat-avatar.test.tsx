@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
@@ -20,16 +19,8 @@ import {
 import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAvatarUrl } from "./chat-state-route.ts";
-import { ChatAuthorAvatar, renderChatAuthorAvatar } from "./components/chat-author-avatar.ts";
+import { ChatAuthorAvatar } from "./components/chat-author-avatar.ts";
 import { ChatWelcome } from "./components/chat-welcome.tsx";
-
-const legacyContainers: HTMLElement[] = [];
-
-function createLegacyContainer() {
-  const container = document.createElement("div");
-  legacyContainers.push(container);
-  return container;
-}
 
 function imageResponse() {
   return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } });
@@ -193,21 +184,23 @@ it.each([["/console", "sample-bot", "1000000001", true]] as const)(
       },
     };
     const identity = { ...sender.identity };
-    const container = createLegacyContainer();
-    render(
-      renderChatAuthorAvatar(sender, "chat-author-avatar", undefined, {
-        key: "agent:main:main",
-        channelAvatarUrl:
-          basePath + "/__openclaw__/channel-avatar/agent%3Amain%3Amain?v=portrait-1",
-        origin: {
-          provider: "telegram",
-          accountId: "sample-bot",
-          chatType: "direct",
-          from: "telegram:1000000001",
-        },
-      }),
-      container,
-    );
+    const { container } = mountSolid(() => (
+      <ChatAuthorAvatar
+        sender={sender}
+        class="chat-author-avatar"
+        channelAvatar={{
+          key: "agent:main:main",
+          channelAvatarUrl:
+            basePath + "/__openclaw__/channel-avatar/agent%3Amain%3Amain?v=portrait-1",
+          origin: {
+            provider: "telegram",
+            accountId: "sample-bot",
+            chatType: "direct",
+            from: "telegram:1000000001",
+          },
+        }}
+      />
+    ));
     expect(Boolean(container.querySelector("openclaw-channel-avatar"))).toBe(matches);
     expect(container.querySelector("[role=img]")?.getAttribute("aria-label")).toBe("Riley Adams");
     expect(sender.identity).toEqual(identity);
@@ -298,10 +291,6 @@ function pendingUntilAbort<T>(signal: AbortSignal | null | undefined): Promise<T
 }
 
 afterEach(() => {
-  for (const container of legacyContainers) {
-    render(nothing, container);
-  }
-  legacyContainers.length = 0;
   cleanupSolid();
   setAvatarGatewayOrigin(null);
   vi.useRealTimers();
@@ -582,6 +571,27 @@ describe("refreshChatAvatar", () => {
     invalidateChatAvatarCache(sibling);
   });
 
+  it("keeps a working avatar across repeated failed replacements until the identity clears it", async () => {
+    const host = avatarHost();
+    const identities = identityCapability(host);
+    const fetchAvatar = mockAvatarFetch();
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:working-avatar");
+    await refreshChatAvatar(host);
+    identities.invalidate(["main"]);
+    host.request.mockResolvedValue({ agentId: "main", name: "Main", avatar: "/avatar/main?v=2" });
+    fetchAvatar.mockResolvedValue(new Response(null, { status: 503 }));
+    await refreshChatAvatar(host);
+    expect(host.chatAvatarUrl).toBe("blob:working-avatar");
+    await refreshChatAvatar(host);
+    expect(host.chatAvatarUrl).toBe("blob:working-avatar");
+    expect(fetchAvatar).toHaveBeenCalledTimes(2);
+    identities.invalidate(["main"]);
+    host.request.mockResolvedValue({ agentId: "main", name: "Main", avatar: "🦉" });
+    await refreshChatAvatar(host);
+    expect(host.chatAvatarUrl).toBeNull();
+    invalidateChatAvatarCache(host);
+  });
+
   it("keeps a live waiter's shared avatar when a stale waiter settles under cache pressure", async () => {
     const host = avatarHost();
     const avatar = createDeferred<Response>();
@@ -776,6 +786,10 @@ describe("refreshSenderAgentAvatars", () => {
     host.chatMessages = forwardedMessages("research");
     await refreshSenderAgentAvatars(host);
     expect(host.senderAgentAvatars?.get("research")).toBe("blob:working-forward");
+    host.chatMessages = forwardedMessages("research");
+    await refreshSenderAgentAvatars(host);
+    expect(host.senderAgentAvatars?.get("research")).toBe("blob:working-forward");
+    expect(fetchAvatar).toHaveBeenCalledTimes(2);
     host.connected = false;
     await refreshSenderAgentAvatars(host);
     expect(host.senderAgentAvatars?.size).toBe(0);
@@ -992,9 +1006,8 @@ describe("attributed sender avatars", () => {
 
     setIdentity({ ...sender });
     flush();
-    expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
-      true,
-    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".is-pending")).toBeNull();
     expect(container.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
   });
 });

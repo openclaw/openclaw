@@ -245,10 +245,10 @@ describe("post-plugin update readiness", () => {
   );
 
   it.each([
-    { phase: "pre-plugin", operatorPolicy: "external", timeout: undefined, expected: undefined },
+    { phase: "pre-plugin", operatorPolicy: "external", timeout: undefined, expected: 5_000 },
     { phase: "post-plugin", operatorPolicy: "external", timeout: "3", expected: 3_000 },
     { phase: "pre-plugin", operatorPolicy: undefined, timeout: "3", expected: 3_000 },
-    { phase: "post-plugin", operatorPolicy: undefined, timeout: undefined, expected: undefined },
+    { phase: "post-plugin", operatorPolicy: undefined, timeout: undefined, expected: 5_000 },
   ] as const)(
     "keeps parent service authority and the operator deadline in $phase Doctor ($operatorPolicy, $timeout)",
     async ({ phase, operatorPolicy, timeout, expected }) => {

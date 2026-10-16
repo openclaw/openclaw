@@ -86,28 +86,24 @@ function collectTranscribedAudioAttachmentIndices(
   // Image/video descriptions are lossy derived context, so the original attachment
   // must stay available to multimodal models and downstream tools.
   const transcribedAudioIndices = new Set<number>();
-  if (Array.isArray(ctx.MediaUnderstanding)) {
-    for (const output of ctx.MediaUnderstanding) {
-      if (
-        output.kind === "audio.transcription" &&
-        isValidAttachmentIndex(output.attachmentIndex, attachmentCount)
-      ) {
-        transcribedAudioIndices.add(output.attachmentIndex);
-      }
+  for (const output of ctx.MediaUnderstanding ?? []) {
+    if (
+      output.kind === "audio.transcription" &&
+      isValidAttachmentIndex(output.attachmentIndex, attachmentCount)
+    ) {
+      transcribedAudioIndices.add(output.attachmentIndex);
     }
   }
-  if (Array.isArray(ctx.MediaUnderstandingDecisions)) {
-    for (const decision of ctx.MediaUnderstandingDecisions) {
-      if (decision.capability !== "audio" || decision.outcome !== "success") {
-        continue;
-      }
-      for (const attachment of decision.attachments) {
-        if (
-          attachment.chosen?.outcome === "success" &&
-          isValidAttachmentIndex(attachment.attachmentIndex, attachmentCount)
-        ) {
-          transcribedAudioIndices.add(attachment.attachmentIndex);
-        }
+  for (const decision of ctx.MediaUnderstandingDecisions ?? []) {
+    if (decision.capability !== "audio" || decision.outcome !== "success") {
+      continue;
+    }
+    for (const attachment of decision.attachments) {
+      if (
+        attachment.chosen?.outcome === "success" &&
+        isValidAttachmentIndex(attachment.attachmentIndex, attachmentCount)
+      ) {
+        transcribedAudioIndices.add(attachment.attachmentIndex);
       }
     }
   }
@@ -161,10 +157,11 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
       output.kind === "image.description" ? [output.attachmentIndex] : [],
     ) ?? [],
   );
-  const media = visibleEntries.map((entry) => ({
-    ...entry.fact,
-    ...(describedImageIndices.has(entry.index) ? { hydrationSuppressed: true } : {}),
-  }));
+  const media = visibleEntries.map((entry) =>
+    describedImageIndices.has(entry.index)
+      ? { ...entry.fact, hydrationSuppressed: true }
+      : entry.fact,
+  );
   const mediaIndexes = visibleEntries.map((entry) => entry.index);
   const count = visibleEntries.length;
   const lines = visibleEntries.map((entry, index) =>

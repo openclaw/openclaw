@@ -84,14 +84,14 @@ function createPluginChat(replacement: ControlUiReplacement<"composer">) {
       );
       onTestFinished(() => {
         view.unmount();
-        current.transcript.hostDisconnected();
+        current.transcript.dispose();
         lifetime.abort();
         provider.remove();
       });
     }
     flush();
-    props.transcript.hostConnected();
-    props.transcript.hostUpdated();
+    props.transcript.start();
+    props.transcript.update();
     flush();
   }
   return { provider, render, refresh: () => render(current), reportError };

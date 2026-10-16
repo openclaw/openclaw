@@ -50,9 +50,8 @@ export interface ShellViewHost extends ShellLazyOverlayHost {
   readonly desktopNavigationExpanded: boolean;
   readonly execApprovalElement: OptionalCustomElement;
   readonly onboardingMemoryImportElement: OptionalCustomElement;
-  readonly nativeHistoryState: NativeHistoryState;
+  readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
-  navResizing: boolean;
   readonly shellLayout: ShellLayoutOwner;
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
@@ -80,6 +79,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost {
 }
 
 export function readShellView(host: ShellViewHost) {
+  // Imperative preparation consumes current owner facts; it must not widen view dependencies.
   untrack(() => host.prepareView());
   const context = host.context;
   const runtime = host.runtime;
@@ -211,10 +211,7 @@ export function readShellView(host: ShellViewHost) {
     sessionScope: true,
   });
   const newSessionDisabledReason = newSessionAccess.allowed ? undefined : newSessionAccess.reason;
-  const workspaceReplacement =
-    activeRoute === "plugins" || activeRoute === "plugin-settings"
-      ? undefined
-      : context.plugins.selectedReplacement("workspace");
+  const workspacePluginsEnabled = activeRoute !== "plugins" && activeRoute !== "plugin-settings";
   const uiSettings = context.theme.settings;
   // Unknown profile preferences are not absence. Keep the first shell paint
   // image-free so a saved None choice cannot download artwork before hydration.
@@ -266,7 +263,7 @@ export function readShellView(host: ShellViewHost) {
   const shellConnectionStatus =
     (navigationSurfaceHidden ||
       (settingsTakeover
-        ? host.settingsSidebar.renderer === null
+        ? host.settingsSidebar.renderer() === null
         : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT))) &&
     !nativeEmbed &&
     !onboarding &&
@@ -385,7 +382,7 @@ export function readShellView(host: ShellViewHost) {
     shellWidth,
     selectedAgentId,
     newSessionDisabledReason,
-    workspaceReplacement,
+    workspacePluginsEnabled,
     uiSettings,
     backgroundReady,
     chatLikeRoute,

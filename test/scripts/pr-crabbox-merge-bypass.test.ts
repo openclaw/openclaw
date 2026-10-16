@@ -571,8 +571,8 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
       remote) [ "$2 $3" = 'get-url origin' ] || exit 19; echo 'https://github.com/openclaw/openclaw.git';;
       merge-tree) echo candidate-tree;;
       diff) case "$*" in
-        'diff --name-only ${headSha}..${headSha}') ;;
-        'diff --name-only ${headSha}..${mainSha}'|'diff --name-only ${headSha}..${advancedMainSha}') echo fixture-mainline.txt;;
+        'diff --name-only --no-renames ${headSha}..${headSha}') ;;
+        'diff --name-only --no-renames ${headSha}..${mainSha}'|'diff --name-only --no-renames ${headSha}..${advancedMainSha}') echo fixture-mainline.txt;;
         *) echo "unexpected fixture git: $*" >&2; exit 19;;
       esac;;
       rev-parse) case "$2" in

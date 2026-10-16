@@ -89,6 +89,25 @@ describe("processDiscordMessage provider preview hook safety", () => {
 });
 
 describe("processDiscordMessage draft streaming final delivery", () => {
+  it("replaces a raw trailing-token preview with the prepared final answer", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({ text: "answer\n\nNO_REPLY" });
+      await params?.dispatcher.sendFinalReply({ text: "answer" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const ctx = await createAutomaticDraftContext({
+      discordConfig: { streaming: { mode: "partial" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith("answer\n\nNO_REPLY");
+    expectFreshFinalText("answer");
+    expect(draftStream.clear).toHaveBeenCalled();
+    expect(draftStream.messageId()).toBeUndefined();
+  });
+
   it("preserves a delivered final when its first stale-preview cleanup fails", async () => {
     registerHooks("message_sent");
     const draftStream = createMockDraftStream();

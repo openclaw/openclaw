@@ -153,7 +153,7 @@ export function enqueueChannelIngressInDatabase(
     laneKey?: string;
   },
 ): { accepted: boolean; row: ChannelIngressRow } {
-  const inserted = executeSqliteQuerySync(
+  const inserted = executeSqliteQueryTakeFirstSync(
     db,
     getQueue(db)
       .insertInto("channel_ingress_events")
@@ -170,15 +170,15 @@ export function enqueueChannelIngressInDatabase(
         updated_at: input.now,
         attempts: 0,
       })
-      .onConflict((conflict) => conflict.columns(["queue_name", "event_id"]).doNothing()),
+      .onConflict((conflict) => conflict.columns(["queue_name", "event_id"]).doNothing())
+      .returningAll(),
   );
+  if (inserted) {
+    return { accepted: true, row: inserted };
+  }
   let row = selectRow(db, input.queueName, input.id);
   if (!row) {
     throw new Error(`Failed to read channel ingress event ${input.queueName}/${input.id}`);
-  }
-  const accepted = affectedRows(inserted) > 0;
-  if (accepted && !baseRecord(row)) {
-    throw new Error(`Corrupt payload_json in channel ingress event ${input.queueName}/${input.id}`);
   }
   if (row.status === "claimed" && !claimedRecord(row)) {
     throw new Error(`Corrupt claimed channel ingress event ${input.queueName}/${input.id}`);
@@ -190,7 +190,7 @@ export function enqueueChannelIngressInDatabase(
       throw new Error(`Failed to read corrupt ingress tombstone ${input.queueName}/${input.id}`);
     }
   }
-  return { accepted, row };
+  return { accepted: false, row };
 }
 
 export function claimChannelIngressInDatabase(
@@ -200,15 +200,7 @@ export function claimChannelIngressInDatabase(
 ): ChannelIngressRow | null {
   // Start the lease after worker admission, not while waiting for the writer.
   const transitionAt = now();
-  const row = selectRow(db, input.queueName, input.id);
-  if (!row || row.status !== "pending") {
-    return null;
-  }
-  if (!baseRecord(row)) {
-    tombstoneCorruptRow(db, row, transitionAt, "corrupt_payload");
-    return null;
-  }
-  executeSqliteQuerySync(
+  const row = executeSqliteQueryTakeFirstSync(
     db,
     getQueue(db)
       .updateTable("channel_ingress_events")
@@ -222,9 +214,18 @@ export function claimChannelIngressInDatabase(
       })
       .where("queue_name", "=", input.queueName)
       .where("event_id", "=", input.id)
-      .where("status", "=", "pending"),
+      .where("status", "=", "pending")
+      .returningAll(),
   );
-  return selectRow(db, input.queueName, input.id) ?? null;
+  if (!row) {
+    return null;
+  }
+  if (!baseRecord(row)) {
+    // The claim and corrupt-payload tombstone settle in the same worker transaction.
+    tombstoneCorruptRow(db, row, transitionAt, "corrupt_payload");
+    return null;
+  }
+  return row;
 }
 
 export function claimNextChannelIngressInDatabase(
@@ -548,7 +549,7 @@ export function resubmitChannelIngressInDatabase(
   if (row.payload_json === "null" || !parseFailedPayload(row.payload_json).ok) {
     return { kind: "unrecoverable", row };
   }
-  executeSqliteQuerySync(
+  const updated = executeSqliteQueryTakeFirstSync(
     db,
     getQueue(db)
       .updateTable("channel_ingress_events")
@@ -568,9 +569,9 @@ export function resubmitChannelIngressInDatabase(
       })
       .where("queue_name", "=", input.queueName)
       .where("event_id", "=", input.id)
-      .where("status", "=", "failed"),
+      .where("status", "=", "failed")
+      .returningAll(),
   );
-  const updated = selectRow(db, input.queueName, input.id);
   if (!updated) {
     throw new Error(
       `Failed to read resubmitted channel ingress event ${input.queueName}/${input.id}`,

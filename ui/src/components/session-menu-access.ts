@@ -60,7 +60,7 @@ export function sessionMenuReasons(params: {
       params: { patch },
     });
   };
-  const unreadReason = batchPatchReason({ unread: true });
+  const unreadReason = batchPatchReason({ unread: true }, true);
   const categoryReason = batchPatchReason({ category: null });
   const lifecycleRows = batchRows ?? [session];
   const archiveReason = lifecycleRows.some((row) => !row.sessionId?.trim())

@@ -141,7 +141,7 @@ function seedClaudeCliAllowlist(
   return next;
 }
 
-export function buildAnthropicCliMigrationResult(config: OpenClawConfig): ProviderAuthResult {
+export function buildAnthropicCliMigrationResult(config: OpenClawConfig) {
   const defaults = config.agents?.defaults;
   const rewrittenModel = rewriteModelSelection(config);
   const rewrittenModels = rewriteModelEntryMap(defaults?.models);
@@ -174,5 +174,5 @@ export function buildAnthropicCliMigrationResult(config: OpenClawConfig): Provid
         ? [`Migrated allowlist entries: ${rewrittenModels.migrated.join(", ")}.`]
         : []),
     ],
-  };
+  } satisfies ProviderAuthResult;
 }

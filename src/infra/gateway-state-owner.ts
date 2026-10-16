@@ -398,7 +398,13 @@ export function acquireGatewayStateOwner(params: {
     );
   }
   const payload = params.payload
-    ? { ...params.payload, ownerId: params.payload.ownerId ?? randomUUID() }
+    ? {
+        ...(params.payload.role === "sqlite-maintenance"
+          ? defaultPayload(params.databasePath)
+          : {}),
+        ...params.payload,
+        ownerId: params.payload.ownerId ?? randomUUID(),
+      }
     : defaultPayload(params.databasePath);
   const owner: ProcessOwner = {
     kind: "process",

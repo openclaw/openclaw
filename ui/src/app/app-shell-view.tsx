@@ -1,6 +1,6 @@
 import "../lib/toast-host.ts";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
 import { renderGatewayStatus } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
@@ -16,6 +16,7 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
+import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
 import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
 import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
@@ -53,6 +54,7 @@ export function renderApplicationShell(host: ShellViewHost): SolidJSX.Element {
 
 function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
   let content!: HTMLElement;
+  const [navResizing, setNavResizing] = createSignal(false);
   const view = createMemo(() => {
     props.host.shellRevision();
     return readShellView(props.host);
@@ -66,6 +68,7 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
   // The web-chrome flag remains a reactive view read for the current host path.
   const legacyMacChrome = () =>
     !view().nativeWebChrome && document.documentElement.classList.contains("openclaw-native-macos");
+  // Lazy registrations and the native sidebar consume committed shell presentation.
   createEffect(view, (state) => {
     props.host.lazyCustomElements.requestWhileActive(
       props.host.onboardingMemoryImportElement,
@@ -108,7 +111,7 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
               view().collapsedControls && view().homePanelAvailable && !view().railAvailable,
             "shell--connection-status": Boolean(view().shellConnectionStatus),
             "shell--floating-attention": floatingSidebarAttentionVisible(view().floatingUpdateCard),
-            "shell--nav-resizing": (props.host.shellRevision(), props.host.navResizing),
+            "shell--nav-resizing": navResizing(),
           },
         ]}
         data-background-managed={
@@ -129,10 +132,8 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
           <openclaw-macos-titlebar-controls
             inert={view().navDrawerOpen}
             prop:historyOnly={view().settingsTakeover}
-            prop:canGoBack={(props.host.shellRevision(), props.host.nativeHistoryState.canGoBack)}
-            prop:canGoForward={
-              (props.host.shellRevision(), props.host.nativeHistoryState.canGoForward)
-            }
+            prop:canGoBack={props.host.nativeHistoryState().canGoBack}
+            prop:canGoForward={props.host.nativeHistoryState().canGoForward}
           />
         </Show>
         <Show when={!view().nativeEmbed}>
@@ -239,7 +240,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             <Show when={view().settingsTakeover} fallback={props.host.navigationSidebar}>
               <LazySettingsSidebar
                 loader={props.host.settingsSidebar}
-                revision={props.host.shellRevision()}
                 sidebarProps={view().settingsSidebarProps}
               />
             </Show>
@@ -261,14 +261,8 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             prop:maxRatio={(NAV_WIDTH_MAX + view().railWidth) / view().shellWidth}
             aria-valuetext={`${view().expandedNavWidth} pixels`}
             title={t("nav.resize")}
-            onResize-start={() => {
-              props.host.navResizing = true;
-              props.host.invalidate();
-            }}
-            onResize-end={() => {
-              props.host.navResizing = false;
-              props.host.invalidate();
-            }}
+            onResize-start={() => setNavResizing(true)}
+            onResize-end={() => setNavResizing(false)}
             onResize={(event: CustomEvent<{ splitRatio: number }>) =>
               props.host.resizeNavigation(event.detail.splitRatio)
             }
@@ -278,7 +272,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
           id="control-ui-main"
           class={[
             "content",
-            (props.host.shellRevision(), props.host.shellLayout.className),
             {
               "content--chat": view().chatLikeRoute,
               "content--workbench": view().workbenchRoute,
@@ -324,7 +317,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
           <Show when={view().embedNavigation}>
             <LazySettingsSidebar
               loader={props.host.settingsSidebar}
-              revision={props.host.shellRevision()}
               sidebarProps={view().settingsSidebarProps}
             />
           </Show>
@@ -420,7 +412,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
         </Show>
         <DevicePairSetup
           loader={props.host.devicePairSetup}
-          revision={props.host.shellRevision()}
           props={{
             open: view().overlaySnapshot.devicePairSetupOpen,
             lifecycle: view().overlaySnapshot.devicePairSetupLifecycle,
@@ -453,31 +444,27 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
       </div>
     </div>
   );
-  // A plugin may move the default workspace into its mountDefault target. Solid
-  // keeps owning that tree while the temporary Lit plugin host owns only its slot.
   return (
     <Show when={routeReady()} fallback={<ConnectingSplash />}>
-      <Show when={view().workspaceReplacement} fallback={workspace}>
-        <openclaw-plugin-view
-          prop:surface="workspace"
-          prop:props={{
-            sessionKey: (props.host.shellRevision(), props.host.activeSessionKey),
-            agentId: resolveUiSelectedSessionAgentId(
-              {
-                assistantAgentId:
-                  view().context.agentSelection.state.selectedId ??
-                  view().gatewaySnapshot.assistantAgentId,
-                agentsList: view().context.agents.state.agentsList,
-                hello: view().gatewaySnapshot.hello,
-              },
-              props.host.activeSessionKey,
-            ),
-            routeId: view().activeRoute,
-          }}
-          prop:defaultView={workspace}
-          prop:presented={true}
-        />
-      </Show>
+      <PluginSurface
+        surface="workspace"
+        enabled={view().workspacePluginsEnabled}
+        props={{
+          sessionKey: (props.host.shellRevision(), props.host.activeSessionKey),
+          agentId: resolveUiSelectedSessionAgentId(
+            {
+              assistantAgentId:
+                view().context.agentSelection.state.selectedId ??
+                view().gatewaySnapshot.assistantAgentId,
+              agentsList: view().context.agents.state.agentsList,
+              hello: view().gatewaySnapshot.hello,
+            },
+            props.host.activeSessionKey,
+          ),
+          routeId: view().activeRoute,
+        }}
+        renderDefault={() => workspace}
+      />
     </Show>
   );
 }

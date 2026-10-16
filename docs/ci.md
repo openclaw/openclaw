@@ -35,6 +35,11 @@ Agent auth-store admission and configured model-owner changes explicitly select
 the Gateway agent-config readiness suite. Its lazy startup path is not fully
 visible to the bounded import graph; the owner watch preserves overlap coverage.
 
+Gateway close and run-shutdown owner changes likewise select the Gateway
+detached-execution shutdown and late-admission suites. `server.close()` reaches
+those owners through the kernel's lazy shutdown runtime, beyond the bounded
+import graph.
+
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 

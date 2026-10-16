@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../lit/presentation-binding.ts";
+import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../lib/presentation.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { linkReaderPrefetchRef, markdownBlocksRef } from "./markdown-element-refs-solid.ts";
@@ -87,6 +87,23 @@ it("parks native thread work on hide and releases it when the Solid owner unmoun
       expect(observed.has(code)).toBe(true);
       expect(idleScans.size).toBe(1);
     });
+    const nextOwner = new EventTarget();
+    let nextVisible = true;
+    updatePresentation({ owner: nextOwner, isPresented: () => nextVisible });
+    await waitForSolid(() => expect(observed.has(code)).toBe(true));
+    visible = false;
+    presentationOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    expect(observed.has(code)).toBe(true);
+    expect(idleScans.size).toBe(1);
+    nextVisible = false;
+    nextOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    expect(observed.size).toBe(0);
+    expect(idleScans.size).toBe(0);
+    updatePresentation(true);
+    await waitForSolid(() => expect(observed.has(code)).toBe(true));
+    nextOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    expect(observed.has(code)).toBe(true);
+    expect(idleScans.size).toBe(1);
     view.unmount();
     expect(observed.size).toBe(0);
     expect(idleScans.size).toBe(0);

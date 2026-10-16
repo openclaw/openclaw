@@ -63,7 +63,9 @@ describe("AppSidebar agent roster pins", () => {
       const link = pin.querySelector<HTMLAnchorElement>("a")!;
       expect(new URL(link.href).pathname).toBe(`/chat/${id}/pinned`);
       // The expanded Sessions group still presents its owning agent once.
-      const avatar = sidebar.querySelector(`[data-agent-id="${id}"] .identity-avatar--agent`);
+      const avatar = sidebar.querySelector(
+        `[data-agent-group="${id}"] .sidebar-agent-roster__header .identity-avatar--agent`,
+      );
       expect(avatar).not.toBeNull();
       if (id === "working") {
         expect(avatar?.querySelector("img.identity-avatar__image")?.getAttribute("src")).toBe(

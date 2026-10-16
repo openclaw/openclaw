@@ -24,7 +24,8 @@ export function runPostgresTransactionSync<T>(
 ): T {
   assertPostgresTransactionUsable(db);
   assertPostgresOperationCurrent();
-  return withSqlitePostCommitPublications(sqlPublicationAnchor(db), () => {
+  const anchor = sqlPublicationAnchor(db);
+  return withSqlitePostCommitPublications(anchor, () => {
     const nested = db.isTransaction && !reserved;
     try {
       if (nested) {
@@ -36,6 +37,7 @@ export function runPostgresTransactionSync<T>(
             : `BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(${db.advisoryLockKey})`,
         );
       }
+      const mutationRevision = db.mutationRevision;
       const result = operation();
       assertSyncTransactionResult(result);
       assertPostgresTransactionUsable(db);
@@ -43,8 +45,14 @@ export function runPostgresTransactionSync<T>(
         db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       } else {
         const scope = currentSqliteWorkerOperationAdmission.getStore();
-        if (!readOnly && scope?.active) {
-          deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(db), {});
+        if (
+          !readOnly &&
+          scope?.active &&
+          db.mutationRevision !== mutationRevision &&
+          !scope.owner.pendingReceipts?.has(anchor)
+        ) {
+          // A domain's staged receipt already settles this commit with its typed facts.
+          deferSqliteWorkerCommitReceipt(anchor, {});
         }
         const commit = () => {
           assertPostgresOperationCurrent();

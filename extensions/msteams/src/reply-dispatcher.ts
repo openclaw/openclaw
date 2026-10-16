@@ -19,7 +19,6 @@ import {
   type OpenClawConfig,
   type MSTeamsReplyStyle,
   type ReplyPayload,
-  type RuntimeEnv,
 } from "../runtime-api.js";
 import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
@@ -47,7 +46,6 @@ export function createMSTeamsReplyDispatcher(params: {
   agentId: string;
   sessionKey: string;
   accountId?: string;
-  runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
   app: MSTeamsApp;
   conversationRef: StoredConversationReference;
@@ -385,9 +383,6 @@ export function createMSTeamsReplyDispatcher(params: {
       const errMsg = formatUnknownError(err);
       const classification = classifyMSTeamsSendError(err);
       const hint = formatMSTeamsSendErrorHint(classification);
-      params.runtime.error?.(
-        `msteams ${info.kind} reply failed: ${errMsg}${hint ? ` (${hint})` : ""}`,
-      );
       params.log.error("reply failed", {
         kind: info.kind,
         error: errMsg,

@@ -106,6 +106,7 @@ export class GatewayRpcDiagnostics {
   }
 
   static async runHandler(
+    method: string,
     invoke: () => Promise<void> | void,
     diagnostics?: GatewayRpcDiagnostics,
   ): Promise<void> {
@@ -122,10 +123,7 @@ export class GatewayRpcDiagnostics {
     }
     let outcome: "returned" | "threw" = "returned";
     try {
-      await runWithMainThreadTask(
-        diagnostics ? `gateway:rpc:${diagnostics.method}` : "gateway:rpc",
-        invoke,
-      );
+      await runWithMainThreadTask(`gateway:rpc:${method}`, invoke);
     } catch (error) {
       outcome = "threw";
       throw error;

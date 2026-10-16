@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { persistCompactionBoundaryWithSessionEntryInWorker } from "../../config/sessions/session-accessor.sqlite-compaction.js";
@@ -23,6 +22,7 @@ import {
   parseTranscriptAppendRefusal,
   SessionTranscriptWriterClaimReboundError,
 } from "../../config/sessions/session-transcript-writer-claim-error.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
@@ -68,7 +68,7 @@ export function bindSqliteWorkerBackend(
   _input: undefined,
   nativeContext: {
     databasePath: string;
-    database: DatabaseSync;
+    database: EngineConnection;
     admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
   },
 ): Omit<SqliteWorkerBackend<SessionMetadataWorkerOperations>, "close"> & { close(): undefined } {

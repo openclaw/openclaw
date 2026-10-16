@@ -487,7 +487,9 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
           }}
           trigger={
             <>
-              <SharingIcon visibility={visibility()} />
+              <span aria-hidden="true">
+                <SharingIcon visibility={visibility()} />
+              </span>
               <span>{t("chat.sessionSharing.share")}</span>
             </>
           }

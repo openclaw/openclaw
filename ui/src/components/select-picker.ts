@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import { solidContent } from "../lit/solid-content.tsx";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { PickerOption, PickerParams } from "./select-picker-types.ts";
 import { PickerContent } from "./select-picker-view.tsx";
 import "../styles/select-picker.css";
@@ -60,8 +59,4 @@ export function Picker<Option extends PickerOption>(props: {
 
 export function pickerClass(params: { variant?: "submenu"; sheet?: boolean; className?: string }) {
   return `settings-select picker-select ${params.variant === "submenu" ? "picker-select--submenu" : ""} ${params.sheet ? "picker-select--sheet" : ""} ${params.className ?? ""}`;
-}
-
-export function renderPicker<Option extends PickerOption>(params: PickerParams<Option>) {
-  return solidContent(Picker<Option>, { params });
 }

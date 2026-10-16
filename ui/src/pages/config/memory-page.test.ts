@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
 import { setPluginEnabled, type PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -39,7 +38,7 @@ function visibleTab(element: HTMLElement): "overview" | "memories" | "dreams" | 
   if (panel.querySelector("openclaw-memory-memories")) {
     return "memories";
   }
-  return panel.querySelector(".memory-overview") ? "overview" : "settings";
+  return panel.querySelector('[data-settings-view="memory/overview"]') ? "overview" : "settings";
 }
 
 function selectTab(element: HTMLElement, tab: string) {
@@ -382,63 +381,6 @@ describe("MemorySettingsPage catalog state", () => {
 });
 
 describe("MemorySettingsPage tab routing", () => {
-  it("probes embeddings through the guarded overview request and renders the result", async () => {
-    const probe = deferred<DoctorMemoryStatusPayload>();
-    const initial: DoctorMemoryStatusPayload = {
-      agentId: "main",
-      provider: "local",
-      embedding: { ok: false, checked: false },
-    };
-    const { element, request } = createPage({
-      configObject: {},
-      memoryStatus: (_agentId, shouldProbe) =>
-        shouldProbe ? probe.promise : Promise.resolve(initial),
-    });
-    element.routeData = memoryTabRoute("overview");
-    mountMemoryPage(element);
-    try {
-      await waitForSolid(() =>
-        expect(
-          [...element.querySelectorAll<HTMLButtonElement>("button")].some(
-            (button) => button.textContent?.trim() === "Test",
-          ),
-        ).toBe(true),
-      );
-      const testButton = [...element.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Test",
-      );
-      testButton?.click();
-
-      await waitForSolid(() =>
-        expect(request).toHaveBeenCalledWith("doctor.memory.status", {
-          agentId: "main",
-          probe: true,
-        }),
-      );
-      await waitForSolid(() =>
-        expect(
-          [...element.querySelectorAll<HTMLButtonElement>("button")].find(
-            (button) => button.textContent?.trim() === "Testing…",
-          )?.disabled,
-        ).toBe(true),
-      );
-
-      probe.resolve({
-        agentId: "main",
-        provider: "local",
-        embedding: { ok: false, checked: true, error: "embedding probe failed" },
-      });
-      await waitForSolid(() => expect(element.textContent).toContain("embedding probe failed"));
-      expect(
-        [...element.querySelectorAll<HTMLButtonElement>("button")].some(
-          (button) => button.textContent?.trim() === "Test",
-        ),
-      ).toBe(false);
-    } finally {
-      element.remove();
-    }
-  });
-
   it("renders every canonical tab path and honors browser history restoration", async () => {
     const navigate = vi.fn();
     const { element } = createPage({ configObject: {}, catalog: [], navigate });
@@ -453,7 +395,7 @@ describe("MemorySettingsPage tab routing", () => {
       expect(navigate).toHaveBeenCalledWith("memory", { pathname: "/settings/memory" });
       element.routeData = memoryTabRoute("overview");
       flush();
-      expect(visibleTab(element)).toBe("overview");
+      await waitForSolid(() => expect(visibleTab(element)).toBe("overview"));
 
       // The router feeding an older history entry back must restore that tab.
       element.routeData = memoryTabRoute("settings");
@@ -568,66 +510,47 @@ describe("MemorySettingsPage tab routing", () => {
     },
   );
 
-  it("loads Overview status once per activation, Settings agent change, and reconnect", async () => {
-    const memoryStatus = vi.fn((agentId: string) =>
-      Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
-    );
-    const { element, request, setPhase, settingsAgentSelection } = createPage({
+  it("mounts the presentation for the Settings agent and retires it on reconnect", async () => {
+    const { element, settingsViews, setPhase, settingsAgentSelection } = createPage({
       configObject: {},
       agents: [{ id: "main" }, { id: "research" }],
       selectedAgentId: "research",
-      memoryStatus,
+      routeData: memoryTabRoute("overview"),
     });
-    element.routeData = memoryTabRoute("overview");
     mountMemoryPage(element);
     try {
-      await waitForSolid(() => expect(memoryStatus).toHaveBeenCalledTimes(1));
-      expect(memoryStatus).toHaveBeenLastCalledWith("research", false);
-      flush();
-      expect(
-        request.mock.calls.filter(([method]) => method === "doctor.memory.status"),
-      ).toHaveLength(1);
-
+      await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.agentId).toBe("research"));
+      const first = settingsViews.at(-1)!;
       expect(element.querySelectorAll("openclaw-agent-select")).toHaveLength(0);
-      expect(element.textContent).not.toContain("Agent view");
       settingsAgentSelection.set("main");
-      await waitForSolid(() => expect(memoryStatus).toHaveBeenLastCalledWith("main", false));
+      await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main"));
+      expect(first.context.signal.aborted).toBe(true);
+      const current = settingsViews.at(-1)!;
       settingsAgentSelection.setScope(null);
       flush();
-      expect(memoryStatus).toHaveBeenCalledTimes(2);
-      settingsAgentSelection.set("research");
-      await waitForSolid(() => expect(memoryStatus).toHaveBeenLastCalledWith("research", false));
-
+      expect(settingsViews.at(-1)).toBe(current);
       setPhase("disconnected");
       setPhase("connected");
-      await waitForSolid(() => expect(memoryStatus).toHaveBeenCalledTimes(4));
+      expect(current.context.signal.aborted).toBe(true);
+      await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.connected).toBe(true));
     } finally {
       element.remove();
     }
   });
 
-  it("reloads status when one pinned engine replaces another", async () => {
-    const memoryStatus = vi.fn((agentId: string) =>
-      Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
-    );
-    const { element } = createPage({
+  it("passes a replaced pinned engine to a new presentation", async () => {
+    const { element, settingsViews } = createPage({
       configObject: { plugins: { slots: { memory: "engine-a" } } },
       catalog: [engine("engine-a", true), engine("engine-b", true)],
-      memoryStatus,
+      routeData: memoryTabRoute("overview"),
     });
-    element.routeData = memoryTabRoute("overview");
     mountMemoryPage(element);
     try {
-      await waitForSolid(() => expect(memoryStatus).toHaveBeenCalledTimes(1));
-
+      await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.engine.id).toBe("engine-a"));
+      const first = settingsViews.at(-1)!;
       element.configObject = { plugins: { slots: { memory: "engine-b" } } };
-      await waitForSolid(() => expect(memoryStatus).toHaveBeenCalledTimes(2));
-      await waitForSolid(() => {
-        expect(element.querySelector(".memory-overview__hero h2")?.textContent).toBe(
-          "Memory is awake",
-        );
-        expect(element.textContent).toContain("engine-b");
-      });
+      await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.engine.id).toBe("engine-b"));
+      expect(first.context.signal.aborted).toBe(true);
     } finally {
       element.remove();
     }
@@ -636,7 +559,7 @@ describe("MemorySettingsPage tab routing", () => {
   it.each([["main"], ["research", "main"]])(
     "keeps newer sidebar intent when a pending Memory link mounts (%j)",
     async (...choices: string[]) => {
-      const { element, settingsAgentSelection, request } = createPage({
+      const { element, settingsAgentSelection, settingsViews } = createPage({
         configObject: {},
         agents: [{ id: "main" }, { id: "research" }],
         routeData: memoryRoute("/settings/memory?agent=research"),
@@ -652,11 +575,9 @@ describe("MemorySettingsPage tab routing", () => {
       }
       mountMemoryPage(element);
       try {
-        await waitForSolid(() =>
-          expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" }),
-        );
+        await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main"));
         expect(settingsAgentSelection.state.selectedId).toBe("main");
-        expect(request).not.toHaveBeenCalledWith("doctor.memory.status", { agentId: "research" });
+        expect(settingsViews.some((view) => view.snapshot.agentId === "research")).toBe(false);
       } finally {
         element.remove();
       }
@@ -686,61 +607,57 @@ describe("MemorySettingsPage tab routing", () => {
     }
   });
 
-  it("refreshes the current Overview after a same-connection plugin publication", async () => {
-    const first = deferred<DoctorMemoryStatusPayload>();
-    const second = deferred<DoctorMemoryStatusPayload>();
-    const memoryStatus = vi.fn().mockReturnValueOnce(first.promise).mockReturnValue(second.promise);
-    const { element, publishPluginGeneration } = createPage({ configObject: {}, memoryStatus });
-    element.routeData = memoryTabRoute("overview");
-    mountMemoryPage(element);
-    try {
-      await waitForSolid(() => expect(memoryStatus).toHaveBeenCalledOnce());
-      publishPluginGeneration(1);
-      await waitForSolid(() => expect(memoryStatus).toHaveBeenCalledTimes(2));
-      second.resolve({
-        agentId: "main",
-        provider: "local",
-        embedding: { ok: false, checked: true, error: "current embedding status" },
+  it.each(["plugin publication", "boot", "client"])(
+    "retires callbacks and pending RPCs synchronously after %s changes",
+    async (change) => {
+      const pending = deferred<unknown>();
+      const fixture = createPage({
+        configObject: {},
+        routeData: memoryTabRoute("overview"),
+        settingsRequest: () => pending.promise,
       });
-      await waitForSolid(() => expect(element.textContent).toContain("current embedding status"));
-      first.resolve({
-        agentId: "main",
-        provider: "local",
-        embedding: { ok: false, checked: true, error: "obsolete embedding status" },
-      });
-      await first.promise;
-      flush();
-      expect(element.textContent).not.toContain("obsolete embedding status");
-      publishPluginGeneration(1);
-      flush();
-      expect(memoryStatus).toHaveBeenCalledTimes(2);
-    } finally {
-      first.resolve({
-        agentId: "main",
-        provider: "none",
-        embedding: { ok: false, checked: false },
-      });
-      second.resolve({
-        agentId: "main",
-        provider: "none",
-        embedding: { ok: false, checked: false },
-      });
-      element.remove();
-    }
-  });
+      const { element, settingsViews, request } = fixture;
+      mountMemoryPage(element);
+      try {
+        await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
+        const old = settingsViews.at(-1)!.context;
+        const result = old.request("settings.test");
+        if (change === "plugin publication") {
+          fixture.publishPluginGeneration(1);
+        } else if (change === "boot") {
+          fixture.setBootId("memory-boot-b");
+        } else {
+          fixture.replaceClient();
+        }
+        // No Solid flush: live transport authority must retire immediately.
+        expect(old.signal.aborted).toBe(true);
+        expect(() => old.navigate("settings")).toThrow();
+        const dispatches = request.mock.calls.length;
+        await expect(old.request("settings.test")).rejects.toThrow();
+        expect(request).toHaveBeenCalledTimes(dispatches);
+        pending.resolve("obsolete");
+        await expect(result).rejects.toThrow();
+        await waitForSolid(() => expect(settingsViews.at(-1)!.context).not.toBe(old));
+        if (change === "plugin publication") {
+          const current = settingsViews.at(-1)!.context;
+          fixture.publishPluginGeneration(1);
+          flush();
+          expect(settingsViews.at(-1)!.context).toBe(current);
+        }
+      } finally {
+        pending.resolve("done");
+        element.remove();
+      }
+    },
+  );
 
-  it("shows the offline state when Overview is activated after disconnecting elsewhere", async () => {
-    const { element, setPhase } = createPage({ configObject: {} });
+  it("passes offline state when Overview is activated after disconnecting elsewhere", async () => {
+    const { element, settingsViews, setPhase } = createPage({ configObject: {} });
     mountMemoryPage(element);
     try {
-      flush();
       setPhase("disconnected");
       element.routeData = memoryTabRoute("overview");
-      await waitForSolid(() =>
-        expect(element.textContent).toContain(
-          "The gateway is offline, so memory status is unavailable.",
-        ),
-      );
+      await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.connected).toBe(false));
     } finally {
       element.remove();
     }
@@ -782,6 +699,118 @@ describe("MemorySettingsPage dreaming support", () => {
         first.resolve({ type: "object" });
         second.resolve({ type: "object" });
         element.remove();
+      }
+    },
+  );
+});
+
+describe("plugin-owned Dreaming settings entrypoint", () => {
+  it.each([
+    { configOwner: "custom-memory", catalog: "unavailable" },
+    { configOwner: "memory-core", catalog: "same-ID override" },
+  ])(
+    "keeps the complete presentation available for $configOwner with an unknown schema and $catalog catalog",
+    async ({ configOwner, catalog }) => {
+      const schema = deferred<unknown>();
+      const patchForm = vi.fn();
+      const { element, runtimeConfig } = createPage({
+        configObject: {
+          plugins: {
+            slots: { memory: configOwner },
+            entries: {
+              [configOwner]: {
+                config: { dreaming: { phases: { light: { limit: 0, enabled: false } } } },
+              },
+            },
+          },
+        },
+        listCatalog: () =>
+          catalog === "unavailable"
+            ? Promise.reject(new Error("catalog unavailable"))
+            : Promise.resolve({
+                plugins: [{ ...engine("memory-core", true, "Local Memory"), origin: "local" }],
+              }),
+        lookupSchemaPath: () => schema.promise,
+        patchForm,
+      });
+      mountMemoryPage(element);
+      try {
+        const frequency = element.querySelector<HTMLInputElement>(
+          'input[aria-label="Dreaming frequency"]',
+        );
+        expect(frequency).not.toBeNull();
+        expect(element.textContent).toContain(configOwner);
+        expect(element.textContent).toContain("REM phase");
+        const limit = element.querySelector<HTMLInputElement>('input[aria-label="Limit"]');
+        expect(limit?.value).toBe("0");
+        expect(patchForm).not.toHaveBeenCalled();
+        if (!frequency) {
+          throw new Error("Missing Dreaming frequency");
+        }
+        frequency.value = "0 4 * * *";
+        frequency.dispatchEvent(new Event("change"));
+        expect(patchForm).toHaveBeenLastCalledWith(
+          ["plugins", "entries", configOwner, "config", "dreaming", "frequency"],
+          "0 4 * * *",
+        );
+        frequency.value = "";
+        frequency.dispatchEvent(new Event("change"));
+        expect(runtimeConfig.removeFormValue).toHaveBeenCalledWith([
+          "plugins",
+          "entries",
+          configOwner,
+          "config",
+          "dreaming",
+          "frequency",
+        ]);
+        schema.resolve({ schema: { type: "object", additionalProperties: false }, children: [] });
+        await waitForSolid(() =>
+          expect(element.textContent).toContain("Not available for this engine"),
+        );
+        expect(element.querySelector('input[aria-label="Dreaming frequency"]')).toBeNull();
+      } finally {
+        schema.resolve({ type: "object" });
+        element.remove();
+      }
+    },
+  );
+
+  it.each(["owner", "disconnect", "read-only", "unmount"])(
+    "rejects an already mounted edit after %s changes",
+    async (change) => {
+      const patchForm = vi.fn();
+      const { element, runtimeConfig, setPhase, setScopes } = createPage({
+        configObject: {},
+        patchForm,
+      });
+      mountMemoryPage(element);
+      try {
+        await waitForSolid(() =>
+          expect(element.querySelector('input[aria-label="Dreaming frequency"]')).not.toBeNull(),
+        );
+        const input = element.querySelector<HTMLInputElement>(
+          'input[aria-label="Dreaming frequency"]',
+        );
+        if (!input) {
+          throw new Error("Missing Dreaming frequency");
+        }
+        if (change === "owner") {
+          runtimeConfig.state.configForm = { plugins: { slots: { memory: "custom-memory" } } };
+        } else if (change === "disconnect") {
+          setPhase("disconnected");
+        } else if (change === "read-only") {
+          setScopes(["operator.read"]);
+        } else {
+          element.remove();
+        }
+        input.value = "0 5 * * *";
+        input.dispatchEvent(new Event("change"));
+        expect(patchForm).not.toHaveBeenCalled();
+        expect(runtimeConfig.removeFormValue).not.toHaveBeenCalled();
+      } finally {
+        if (element.isConnected) {
+          element.remove();
+        }
       }
     },
   );

@@ -12,9 +12,9 @@ import {
   renderChatThread,
   mountTestTranscript,
 } from "../test-helpers/chat-transcript-native.tsx";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -56,7 +56,7 @@ describe("chat transcript geometry", () => {
         clientWidth: { get: readHostWidth },
         clientHeight: { get: readHostHeight },
       });
-      const transcript = new ChatTranscriptController(host, () => paneId);
+      const transcript = createTranscriptTestOwner(host, () => paneId);
       const rows = Array.from({ length: 100 }, (_, index) => ({
         kind: "content" as const,
         key: `row:${index}`,
@@ -84,18 +84,18 @@ describe("chat transcript geometry", () => {
       expect(readHostHeight).not.toHaveBeenCalled();
       flushFrames();
 
-      // The initial tail and saved-reader windows use the same six-row buffer
+      // The initial tail and saved-reader windows use the same two-row buffer
       // as later frames; presentation never widens it after first paint.
       const initialRenderCount = renderWindow();
       expect(initialRenderCount, JSON.stringify(renderRow.mock.calls.map(([row]) => row.key))).toBe(
-        offset === null ? 7 : 17,
+        offset === null ? 3 : 9,
       );
       const mounted = transcriptRows(container).map((row) => Number(row.dataset.index));
       expect(mounted).toEqual(expect.arrayContaining(offset === null ? [99] : [40, 44]));
       // Repeated commits and animation frames keep the same mounted window.
-      expect(renderWindow()).toBe(offset === null ? 7 : 17);
+      expect(renderWindow()).toBe(offset === null ? 3 : 9);
       flushFrames();
-      expect(renderWindow()).toBe(offset === null ? 7 : 17);
+      expect(renderWindow()).toBe(offset === null ? 3 : 9);
 
       transcript.hostDisconnected();
     },
@@ -362,11 +362,11 @@ describe("chat transcript geometry", () => {
       updateComplete: Promise.resolve(true),
     };
     const viewportChanged = vi.fn();
-    const main = new ChatTranscriptController(host, () => "pane-geometry-main", {
+    const main = createTranscriptTestOwner(host, () => "pane-geometry-main", {
       geometryEventTarget,
       onViewportResize: viewportChanged,
     });
-    const detail = new ChatTranscriptController(host, () => "pane-geometry-detail", {
+    const detail = createTranscriptTestOwner(host, () => "pane-geometry-detail", {
       geometryEventTarget,
     });
     // Another pane may precede main chat in DOM order; neither observer nor

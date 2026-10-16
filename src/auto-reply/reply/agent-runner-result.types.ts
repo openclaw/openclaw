@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type {
   AgentTurnCompletion,
@@ -37,6 +38,7 @@ export type FinalizeReplyAgentRunInput = Pick<
   activeSessionEntry: SessionEntry | undefined;
   activeSessionStore: Record<string, SessionEntry> | undefined;
   completion?: AgentTurnCompletion;
+  activitySummaryCompletion?: SessionActivitySummaryCompletion;
   prepareRestartClaimCleanup?: (entry: SessionEntry) => AgentTurnRestartClaimCleanup | undefined;
   blockReplyPipeline: BlockReplyPipeline | null;
   cfg: OpenClawConfig;

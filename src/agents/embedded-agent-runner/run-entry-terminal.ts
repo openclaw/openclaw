@@ -5,10 +5,7 @@ import {
   normalizeAgentRunTerminalReceipt,
   type AgentRunTerminalReceipt,
 } from "../agent-run-terminal-receipt.js";
-import {
-  buildAgentRunTerminalReplySnapshot,
-  normalizeAgentRunTerminalReplySnapshot,
-} from "../agent-run-terminal-reply.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import { isProviderModelRerouted } from "../provider-model-route.js";
@@ -148,22 +145,9 @@ export function buildRunEntryTerminal(params: {
 }): EmbeddedAgentRunEntryTerminal {
   const meta = params.result.meta;
   const outcome = params.outcome;
-  const internalReply = params.result.messagingToolSourceReplyPayloads?.findLast(
-    (payload) => payload.sourceReplyFinal === true,
-  );
-  let terminalReply =
-    normalizeAgentRunTerminalReplySnapshot(meta.terminalReply) ??
-    buildAgentRunTerminalReplySnapshot(
-      // Internal UI delivery still needs forwarding by A2A. Its final payload
-      // owns that reply even when the model subsequently emits NO_REPLY.
-      internalReply
-        ? { visibleText: internalReply.text }
-        : {
-            visibleText: meta.finalAssistantVisibleText,
-            rawText: meta.finalAssistantRawText,
-            terminalReplyKind: meta.terminalReplyKind,
-          },
-    );
+  let terminalReply = normalizeAgentRunTerminalReplySnapshot(meta.terminalReply) ?? {
+    disposition: "empty" as const,
+  };
   const agentMeta = meta.agentMeta;
   const normalizedTerminalReceipt =
     normalizeAgentRunTerminalReceipt(agentMeta?.terminalReceipt) ??

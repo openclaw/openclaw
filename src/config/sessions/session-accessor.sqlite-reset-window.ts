@@ -9,6 +9,7 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
   iterateUnindexedActiveTranscriptNavigation,
@@ -30,6 +31,7 @@ import {
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
+import type { SessionTranscriptContextStats } from "./session-transcript-projection-facts.types.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import {
   transcriptEventModelNavigationSql,
@@ -84,7 +86,7 @@ type VisibleMessageRange = MessageRangeSelection & {
 function cacheResetMessageWindow(key: string, entry: ResetMessageWindowCacheEntry): void {
   const { database } = entry;
   if (!resetMessageWindowOwners.has(database)) {
-    registerNodeSqliteDisposeCallback(database, () => {
+    registerNodeSqliteDisposeCallback(sqlPublicationAnchor(database), () => {
       // Path-keyed windows must not retain closed handles or replaced database contents.
       for (const [cachedKey, cached] of resetMessageWindowCache) {
         if (cached.database === database) {
@@ -693,15 +695,20 @@ export function* iterateVisibleMessageMetadata(
 }
 
 /** Reads logical transcript bytes, reusing cached retained-tail facts after resets. */
-export function readVisibleTranscriptStats(projection: CurrentTranscriptProjection): {
-  eventCount: number;
-  sizeBytes: number;
-} {
+export function readVisibleTranscriptStats(
+  projection: CurrentTranscriptProjection,
+  freshBoundary = false,
+): SessionTranscriptContextStats {
+  if (projection.contextStats) {
+    return projection.contextStats;
+  }
   if (projection.contextMetadata) {
     const { eventCount, sizeBytes } = projection.contextMetadata;
-    return { eventCount, sizeBytes };
+    return { eventCount, sizeBytes, boundaryActivePosition: -1 };
   }
-  const window = resolveTranscriptBoundaryWindow(projection, "context");
+  const window = freshBoundary
+    ? findLatestResetMessageWindow(projection, "context")
+    : resolveTranscriptBoundaryWindow(projection, "context");
   const db = getActiveTranscriptKysely(projection.database);
   const base = db
     .selectFrom("session_transcript_active_events as active")
@@ -725,5 +732,6 @@ export function readVisibleTranscriptStats(projection: CurrentTranscriptProjecti
   return {
     eventCount: (row?.event_count ?? 0) + (window?.contextPrefixEventCount ?? 0),
     sizeBytes: (row?.size_bytes ?? 0) + (window?.contextPrefixSizeBytes ?? 0),
+    boundaryActivePosition: window?.boundaryActivePosition ?? -1,
   };
 }

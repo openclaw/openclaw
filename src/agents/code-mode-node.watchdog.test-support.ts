@@ -9,8 +9,10 @@ let collectGarbage: () => void = () => {
   // Inject GC pressure that V8 does not retire first; native OOM uses the normal worker.
   setFlagsFromString("--expose_gc --no-detect-ineffective-gcs-near-heap-limit");
   // Cheap major collections must retire a near-limit worker regardless of GC time share.
-  // oxlint-disable-next-line typescript/unbound-method -- The replacement binds the original with call(this).
-  const stop = GCProfiler.prototype.stop;
+  const profilerPrototype: {
+    stop: (this: GCProfiler) => ReturnType<GCProfiler["stop"]>;
+  } = GCProfiler.prototype;
+  const stop = profilerPrototype.stop;
   mock.method(GCProfiler.prototype, "stop", function (this: GCProfiler) {
     const result = stop.call(this);
     for (const entry of result.statistics) {

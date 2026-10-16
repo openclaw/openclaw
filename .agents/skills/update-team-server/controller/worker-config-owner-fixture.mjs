@@ -371,15 +371,15 @@ if(args[0]==="update") {
     if(existing&&present("request-id")&&read("request-id")!==params.requestId) reject("suspension request changed");
     put("request-id",params.requestId);
     const failure=present("prepare-failure")?JSON.parse(read("prepare-failure")):null;
-    if(failure&&(!failure.renewal||present("active-lease"))) {
+    if(failure) {
       process.stdout.write(failure.stdout);
       process.stderr.write(failure.stderr??"");
       process.exit(failure.exit);
     }
-    const draining=persistentDrain||failure?.renewal;
+    const draining=persistentDrain;
     const sequence=existing?Number(read("lease-sequence")):Number(present("lease-sequence")?read("lease-sequence"):0)+1;
     put("lease-sequence",sequence);
-    const expiry=existing&&present("armed-handoff")?existing.expiry:Date.now()+(failure?.renewal?20000:120000);
+    const expiry=existing?existing.expiry:Date.now()+45000;
     const id=existing?existing.id:sequence===1?"fixture-preserve":"fixture-preserve-"+sequence;
     put("active-lease",JSON.stringify({id,expiry}));
     if(draining) event("suspension.draining");

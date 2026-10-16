@@ -300,6 +300,57 @@ describe("diagnostic memory", () => {
     }
   });
 
+  it("keeps rss_threshold retirement silent without consuming the report throttle", async () => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((event) => events.push(event));
+    const pressure = channel("openclaw.memory.critical");
+    const retireIdle = vi.fn();
+    pressure.subscribe(retireIdle);
+    const thresholds = {
+      rssWarningBytes: 10_000,
+      rssCriticalBytes: 3000,
+      pressureRepeatMs: 60_000,
+    };
+    try {
+      for (const now of [1000, 6000]) {
+        emitDiagnosticMemorySample(
+          { now, memoryUsage: memoryUsage({ rss: 4000 }), thresholds },
+          false,
+        );
+      }
+      await flushDiagnosticEvents();
+      expect(retireIdle).toHaveBeenCalledTimes(2);
+      expect(workerMemory.sampleTrackedWorkerMemory).not.toHaveBeenCalled();
+      expect(workerMessages.getWorkerMessageMetrics).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+
+      // Silent samples must not suppress the first diagnostic warning after re-enable.
+      for (const now of [11_000, 16_000]) {
+        emitDiagnosticMemorySample({
+          now,
+          memoryUsage: memoryUsage({ rss: 4000 }),
+          thresholds,
+        });
+      }
+      await flushDiagnosticEvents();
+      expect(retireIdle).toHaveBeenCalledTimes(4);
+      expect(events.filter((event) => event.type === "diagnostic.memory.pressure")).toEqual([
+        expect.objectContaining({ level: "critical", reason: "rss_threshold" }),
+      ]);
+      expect(events.filter((event) => event.type === "log.record")).toEqual([
+        expect.objectContaining({
+          level: "WARN",
+          message: expect.stringContaining("memory pressure: level=critical reason=rss_threshold"),
+          attributes: expect.objectContaining({ subsystem: "gateway/diagnostics/memory" }),
+        }),
+      ]);
+    } finally {
+      pressure.unsubscribe(retireIdle);
+      stop();
+    }
+  });
+
   it.each([1, 16])("measures main heap pressure against a %i GiB V8 limit", (heapGiB) => {
     const events: DiagnosticEventPayload[] = [];
     const stop = onDiagnosticEvent((event) => events.push(event));

@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
@@ -52,7 +52,7 @@ export type TranscriptReportWorkerTarget = {
 export function bindSqliteWorkerBackend(
   target: TranscriptReportWorkerTarget,
   context: {
-    database: DatabaseSync;
+    database: EngineConnection;
     databasePath: string;
     admit(
       stage: "transaction" | "commit",
@@ -64,7 +64,7 @@ export function bindSqliteWorkerBackend(
   const resolved = { ...target.resolved, env: getSqliteWorkerStateContext().environment };
   const options = toDatabaseOptions(resolved);
   const pathname = resolveOpenClawAgentSqlitePath(options);
-  const sameOwner = context.database.location()
+  const sameOwner = sqlPublicationAnchor(context.database).location()
     ? readDatabasePathIdentitySync(pathname).canonicalPath === context.databasePath
     : pathname === context.databasePath &&
       getOpenClawAgentDatabaseIfOpen(options)?.db === context.database;

@@ -26,7 +26,6 @@ import { pluginTabKey } from "./route.ts";
  */
 type BundledPluginTabView = {
   render: (props: LogbookProps) => JSX.Element;
-  stop: (host: object) => void;
 };
 
 type BundledPluginTabViewState =
@@ -60,11 +59,8 @@ const EXTERNAL_AUTH_PROBE_TIMEOUT_MS = 5_000;
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 export const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
   "logbook/logbook": async () => {
-    const [{ Logbook }, { stopLogbookPolling }] = await Promise.all([
-      import("./logbook-view.tsx"),
-      import("./logbook-controller.ts"),
-    ]);
-    return { render: Logbook, stop: stopLogbookPolling };
+    const { Logbook } = await import("./logbook-view.tsx");
+    return { render: Logbook };
   },
 };
 
@@ -75,8 +71,9 @@ export type PluginPageProps = {
 };
 
 // Auth grants and retired frame epochs must change synchronously at the effect boundary.
-// Solid observes the lifecycle; its deferred signal writes never own these facts.
-export class PluginPageLifecycle {
+// Solid observes the owner; its deferred signal writes never own these facts.
+export class PluginPageOwner {
+  private readonly listeners = new Set<() => void>();
   private disposed = false;
   bundledViewState: BundledPluginTabViewState = { status: "idle" };
   externalAuthReadyKey: string | null = null;
@@ -87,10 +84,18 @@ export class PluginPageLifecycle {
     readonly props: PluginPageProps,
     readonly context: ApplicationContext,
     private readonly host: HTMLElement,
-    private readonly notify: () => void,
   ) {
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     window.addEventListener("message", this.handlePluginSessionOpen);
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private notify() {
+    this.listeners.forEach((listener) => listener());
   }
 
   bundledViewHost: object = {};
@@ -128,6 +133,7 @@ export class PluginPageLifecycle {
 
   dispose() {
     this.disposed = true;
+    this.listeners.clear();
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     window.removeEventListener("message", this.handlePluginSessionOpen);
     this.syncPluginThemeFrame(null);
@@ -532,11 +538,7 @@ export class PluginPageLifecycle {
   }
 
   private replaceBundledViewHost() {
-    if (this.bundledViewState.status === "ready") {
-      this.bundledViewState.view.stop(this.bundledViewHost);
-    }
-    // Async controller work is keyed by host. A new host makes every completion
-    // from the retired connection epoch unreachable without coupling plugins to the renderer.
+    // A new key retires the bundled view's owner and all of its pending work.
     this.bundledViewHost = {};
   }
 

@@ -20,7 +20,6 @@ import {
   shouldHandleNavigationClick,
 } from "../../../lib/navigation-click.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import { ChatCommentPins } from "./chat-comment-pins.tsx";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
@@ -30,7 +29,7 @@ import {
   handleTranscriptPointerUp,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { ChatWelcome } from "./chat-welcome.tsx";
@@ -47,10 +46,7 @@ function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
   return true;
 }
 
-export function ChatThread(input: {
-  props: ChatThreadProps;
-  transcript: ChatTranscriptController;
-}) {
+export function ChatThread(input: { props: ChatThreadProps; transcript: ChatTranscript }) {
   let root: HTMLDivElement | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   onCleanup(() => {
@@ -96,7 +92,7 @@ export function ChatThread(input: {
   const historyHeader = () =>
     input.props.historyPagination
       ? {
-          template: solidContent(ChatHistoryBoundary, input.props.historyPagination),
+          props: input.props.historyPagination,
           height: CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
         }
       : null;

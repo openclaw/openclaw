@@ -1,16 +1,17 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { Client } from "pg";
 import type { PortDescriptor } from "../infra/database-engine/port-descriptor.js";
 import {
-  inspectDatabasePort,
   materializeDatabasePort,
+  readDatabasePortAllocations,
 } from "../infra/database-engine/port.worker.js";
 import { sha256File } from "../infra/directory-durability.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { writePostgresExportEnvelope, type PostgresExportEnvelope } from "./export-envelope.js";
+import { fingerprintPostgresGeneration, inspectPostgresGeneration } from "./postgres-generation.js";
 
 type Anchor = Pick<PostgresExportEnvelope["source"], "engine" | "storeId" | "namespace">;
 
@@ -64,6 +65,11 @@ export async function exportPostgresBackup(params: {
       storeId: anchor.storeId,
       assertCurrent: params.assertCurrent,
     });
+    // The portable image uses SQLite allocation, while a matched PG restore retains its sequence.
+    verification.allocations = await readDatabasePortAllocations(
+      { engine: "postgres", db: client, namespace: anchor.namespace },
+      descriptor,
+    );
   }
   const sanitizedDifferences: string[] = [];
   params.assertCurrent();
@@ -166,29 +172,15 @@ export async function restorePostgresBackup(params: {
     using anchor = openNodeSqliteDatabase(params.anchorPath);
     anchor.prepare("UPDATE openclaw_engine_anchor SET schema = ?").run(namespace);
   }
-  return {
-    ...(await artifact(params.anchorPath)),
-    namespace,
-  };
+  return { namespace };
 }
 
-export async function fingerprintPostgresDatabase(params: {
-  client: Client;
-  descriptor: PortDescriptor;
-  anchor: Anchor;
-}) {
-  const { client, descriptor, anchor } = params;
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        ...anchor,
-        version: descriptor.version,
-        ...(await inspectDatabasePort(
-          { engine: "postgres", db: client, namespace: anchor.namespace },
-          descriptor,
-          anchor.storeId,
-        )),
-      }),
-    )
-    .digest("hex");
+export async function fingerprintPostgresDatabase(params: { client: Client; anchor: Anchor }) {
+  const { client, anchor } = params;
+  await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+  try {
+    return fingerprintPostgresGeneration(anchor, await inspectPostgresGeneration(client, anchor));
+  } finally {
+    await client.query("ROLLBACK");
+  }
 }

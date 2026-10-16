@@ -3,7 +3,7 @@ import { mkdir, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../../../src/agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
@@ -369,6 +369,23 @@ it.skipIf(process.platform === "win32")(
           },
         });
         expect(node.identity.deviceId).toBe(identity.deviceId);
+        const nodeRequests = vi.spyOn(node.client!, "request");
+        context.onTestFinished(() => nodeRequests.mockRestore());
+        const nodeFailureEvidence = () => ({
+          failedNodeResults: nodeRequests.mock.calls.flatMap(([method, params]) =>
+            method === "node.invoke.result" &&
+            params !== null &&
+            typeof params === "object" &&
+            "ok" in params &&
+            params.ok === false
+              ? [params]
+              : [],
+          ),
+          skillInvokeIds: node!.frames
+            .filter((frame) => frame.command === "workspace.skills")
+            .map((frame) => frame.id),
+          nodeInvokeErrors: node!.invokeErrors.map(String),
+        });
         const describe = async (key: string) =>
           (await operator!.request<{ session: Session }>("sessions.describe", { key })).session;
         const history = (key: string) =>
@@ -388,6 +405,7 @@ it.skipIf(process.platform === "win32")(
               if (result.status !== "ok") {
                 record("required-native-dispatch-error", {
                   runId,
+                  ...nodeFailureEvidence(),
                   gatewayLog: gateway.logs().slice(-24_000),
                 });
                 observationFailure.reject(new Error("agent.wait: " + JSON.stringify(result)));
@@ -410,6 +428,7 @@ it.skipIf(process.platform === "win32")(
               record("chat-send-rejected", {
                 marker,
                 error: String(error),
+                ...nodeFailureEvidence(),
                 gatewayLog: gateway.logs().slice(-12_000),
               });
               throw error;
@@ -469,6 +488,7 @@ it.skipIf(process.platform === "win32")(
                 record("required-native-dispatch-error", {
                   creation,
                   timing,
+                  ...nodeFailureEvidence(),
                   gatewayLog: gateway.logs().slice(-24_000),
                 });
                 throw new Error(`${creation} ${timing} run failed before settlement`);

@@ -111,7 +111,7 @@ function resolveAutomaticJitiTsconfig(loaderFilename: string): string | undefine
   }
 }
 
-function createBunJitiImportCachePlugin(babel: {
+function createJitiImportCachePlugin(babel: {
   types: Pick<typeof import("@babel/types"), "callExpression" | "identifier">;
   template: { statements: { ast(source: string): Statement[] } };
 }) {
@@ -168,8 +168,9 @@ function createBunJitiImportCachePlugin(babel: {
   };
 }
 
-function preserveBunJitiDynamicImportResults(loader: ReturnType<typeof createJiti>): void {
-  if (!process.versions.bun || typeof loader.options?.transform !== "function") {
+// Jiti exposes partial exports during async evaluation; concurrent callers must join the first import.
+function preserveJitiDynamicImportResults(loader: ReturnType<typeof createJiti>): void {
+  if (typeof loader.options?.transform !== "function") {
     return;
   }
   const transform = loader.options.transform;
@@ -180,7 +181,7 @@ function preserveBunJitiDynamicImportResults(loader: ReturnType<typeof createJit
         ...options.babel,
         plugins: [
           ...(Array.isArray(options.babel?.plugins) ? options.babel.plugins : []),
-          createBunJitiImportCachePlugin,
+          createJitiImportCachePlugin,
         ],
       },
     });
@@ -246,6 +247,8 @@ function createPluginModuleLoader(
     const automaticTsconfig = resolveAutomaticJitiTsconfig(params.loaderFilename);
     const jitiLoader = (params.createLoader ?? createJiti)(params.loaderFilename, {
       ...jitiOptions,
+      // Old Node transforms can contain partial-import reads even when source bytes are unchanged.
+      fsCache: jitiOptions.fsCache ? path.join(jitiOptions.fsCache, "settled-imports") : false,
       ...(automaticTsconfig ? { tsconfigPaths: automaticTsconfig } : {}),
       // Source SDK aliases resolve outside node_modules, so Jiti's nativeModules
       // matcher misses them. Keep host state native while plugin source remains
@@ -283,7 +286,7 @@ function createPluginModuleLoader(
       ),
       tryNative: false,
     });
-    preserveBunJitiDynamicImportResults(jitiLoader);
+    preserveJitiDynamicImportResults(jitiLoader);
     loadWithSourceTransform = (target) => jitiLoader(toSourceTransformImportPath(target));
     return loadWithSourceTransform;
   };

@@ -6,7 +6,7 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { notifyBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
@@ -40,9 +40,9 @@ function renderImages(container: HTMLElement, images: ImageBlock[], options?: Im
     const [presented, setPresented] = createSignal(true);
     const root = mountSolid(
       () => (
-        <SolidContentPresentation value={presented}>
+        <ContentPresentation value={presented}>
           <MessageImages {...current()} />
-        </SolidContentPresentation>
+        </ContentPresentation>
       ),
       { container },
     );
@@ -590,9 +590,7 @@ describe("chat media resource lifecycle", () => {
     let root: ReturnType<typeof mountSolid> | undefined;
     const rerender = observeSubscriber(() => {
       root ??= mountSolid(
-        () => (
-          <SolidContentPresentation value={presented}>{renderImageRow()}</SolidContentPresentation>
-        ),
+        () => <ContentPresentation value={presented}>{renderImageRow()}</ContentPresentation>,
         { container },
       );
     });

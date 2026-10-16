@@ -4303,6 +4303,7 @@ td.data-table-key-col {
   color: var(--pr-merged);
 }
 
+.session-row-badge--pull-request[data-pull-request-state="closed"],
 .session-row-badge--cloud[data-placement-state="failed"],
 .session-row-badge--cloud[data-disk-space-status="critical"] {
   color: var(--danger);

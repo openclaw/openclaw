@@ -308,7 +308,7 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
     actions: ["reloadPlugins"],
     replaceChannelPlugins: true,
   },
-  { prefixes: ["gateway", "discovery"], kind: "restart" },
+  { prefixes: ["gateway", "discovery", "database"], kind: "restart" },
 ];
 
 let cachedCatalog:

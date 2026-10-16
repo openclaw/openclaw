@@ -1,5 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { createEffect, createMemo, For, onSettled, Show, untrack } from "solid-js";
+import { createEffect, createMemo, For, onSettled, Show } from "solid-js";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import {
@@ -24,6 +24,8 @@ import { isComposingKeyboardEvent } from "../lib/ime.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectAgentSelection } from "../lib/reactive/application.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { liveValue } from "../lib/reactive/live-value.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -172,15 +174,6 @@ function filterSettingsNavigationGroups(
   ].filter((group) => group.items.length > 0);
 }
 
-function syncSettingsSearchScrollShadow(nav: HTMLElement) {
-  // The nav's top padding scrolls away with its rows. Keep the fixed search
-  // region visually separated once content reaches that boundary.
-  nav
-    .closest(".settings-sidebar")
-    ?.querySelector(".settings-sidebar__search")
-    ?.classList.toggle("settings-sidebar__search--scrolled", nav.scrollTop > 0);
-}
-
 function buildAgentRosterTree(agents: AgentRosterRow[]) {
   const agentById = new Map(agents.map((agent) => [agent.id, agent]));
   const childrenById = new Map<string, AgentRosterRow[]>();
@@ -232,11 +225,7 @@ function SettingsNavigationItem(props: {
       touch,
     );
   let anchor!: HTMLAnchorElement;
-  onSettled(() => {
-    const touch = (event: TouchEvent) => preload(event, true);
-    anchor.addEventListener("touchstart", touch, { passive: true });
-    return () => anchor.removeEventListener("touchstart", touch);
-  });
+  onSettled(() => listen(anchor, "touchstart", (event) => preload(event, true), { passive: true }));
   return (
     <a
       ref={(element) => {
@@ -315,18 +304,15 @@ function SettingsBlockItem(props: { sidebar: SettingsSidebarProps; block: Settin
 }
 
 function SettingsAgentSelector(props: SettingsSidebarProps) {
-  const identities = projectOwner(
-    untrack(() => props.agentIdentity),
-    (source) => source.entries(),
-  );
-  const selection = projectAgentSelection(untrack(() => props.settingsAgentSelection));
+  const identitySource = createMemo(() => props.agentIdentity);
+  const selectionSource = createMemo(() => props.settingsAgentSelection);
+  const identities = createMemo(() => projectOwner(identitySource(), (source) => source.entries()));
+  const selection = createMemo(() => projectAgentSelection(selectionSource()));
   createEffect(
-    () => props.agentIdentity,
-    (source) => identities.replaceSource(source),
-  );
-  createEffect(
-    () => props.settingsAgentSelection,
-    (source) => selection.replaceSource(source),
+    () => [identitySource(), selection().read().state.selectedId] as const,
+    ([source, agentId]) => {
+      void source.ensure([agentId]);
+    },
   );
   const agents = createMemo(() =>
     listSelectableAgents(props.agents).map((agent) =>
@@ -351,9 +337,11 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
       <openclaw-agent-select
         prop:options={options()}
         prop:identityById={Object.fromEntries(
-          identities.read().map((identity) => [identity.agentId, identity]),
+          identities()
+            .read()
+            .map((identity) => [identity.agentId, identity]),
         )}
-        prop:value={selection.read().state.selectedId ?? ""}
+        prop:value={selection().read().state.selectedId ?? ""}
         prop:accessibleLabel={t("agentScope.label")}
         prop:menuLabel={t("agentScope.label")}
         prop:disabled={options().length <= 1}
@@ -408,74 +396,72 @@ function EmbeddedSettingsHeader(props: SettingsSidebarProps) {
   );
 }
 
-function SettingsNavigation(props: SettingsSidebarProps) {
-  const branding = projectSource(null, {
-    read: currentThemeBranding,
-    subscribe: (_source, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
-  const groups = createMemo(() => {
-    i18nRevision();
-    branding.read();
-    return filterSettingsNavigationGroups(
-      props.searchQuery,
-      props.searchBlockMatches ??
-        (props.searchParams ? findSettingsSearchBlocks(props.searchParams) : []),
-      props.canAdmin !== false,
-      props.nativeDeviceSettings ?? null,
-    );
-  });
-  return (
-    <nav
-      class="settings-sidebar__nav"
-      aria-label={t("common.settingsSections")}
-      onScroll={(event) => syncSettingsSearchScrollShadow(event.currentTarget)}
-    >
-      <Show
-        when={groups().length > 0}
-        fallback={
-          <p class="settings-sidebar__empty" role="status">
-            {t("nav.settingsSearchNoResults")}
-          </p>
-        }
-      >
-        <For each={groups()} keyed={false}>
-          {(group) => (
-            <div class="settings-sidebar__group">
-              <Show when={group().labelKey}>
-                {(label) => <div class="settings-sidebar__group-label">{t(label())}</div>}
-              </Show>
-              <For each={group().items} keyed={false}>
-                {(item) => (
-                  <>
-                    <SettingsNavigationItem
-                      sidebar={props}
-                      routeId={item().routeId}
-                      branding={branding.read()}
-                    />
-                    <For each={item().blocks} keyed={false}>
-                      {(block) => <SettingsBlockItem sidebar={props} block={block()} />}
-                    </For>
-                  </>
-                )}
-              </For>
-            </div>
-          )}
-        </For>
-      </Show>
-    </nav>
-  );
-}
-
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const query = createMemo(() => props.searchQuery);
   let searchInput: HTMLInputElement | undefined;
-  // The compiler groups native value writes with unrelated footer bindings.
-  createEffect(query, (value, previous) => {
-    if (value !== previous && searchInput) {
-      searchInput.value = value;
-    }
-  });
+  function SettingsNavigation() {
+    const branding = projectSource(null, {
+      read: currentThemeBranding,
+      subscribe: (_source, notify) => subscribeThemeBranding(notify),
+      equality: Object.is,
+    });
+    const groups = createMemo(() => {
+      i18nRevision();
+      branding.read();
+      return filterSettingsNavigationGroups(
+        props.searchQuery,
+        props.searchBlockMatches ??
+          (props.searchParams ? findSettingsSearchBlocks(props.searchParams) : []),
+        props.canAdmin !== false,
+        props.nativeDeviceSettings ?? null,
+      );
+    });
+    return (
+      <nav
+        class="settings-sidebar__nav"
+        aria-label={t("common.settingsSections")}
+        onScroll={(event) =>
+          searchInput?.parentElement?.classList.toggle(
+            "settings-sidebar__search--scrolled",
+            event.currentTarget.scrollTop > 0,
+          )
+        }
+      >
+        <Show
+          when={groups().length > 0}
+          fallback={
+            <p class="settings-sidebar__empty" role="status">
+              {t("nav.settingsSearchNoResults")}
+            </p>
+          }
+        >
+          <For each={groups()} keyed={false}>
+            {(group) => (
+              <div class="settings-sidebar__group">
+                <Show when={group().labelKey}>
+                  {(label) => <div class="settings-sidebar__group-label">{t(label())}</div>}
+                </Show>
+                <For each={group().items} keyed={false}>
+                  {(item) => (
+                    <>
+                      <SettingsNavigationItem
+                        sidebar={props}
+                        routeId={item().routeId}
+                        branding={branding.read()}
+                      />
+                      <For each={item().blocks} keyed={false}>
+                        {(block) => <SettingsBlockItem sidebar={props} block={block()} />}
+                      </For>
+                    </>
+                  )}
+                </For>
+              </div>
+            )}
+          </For>
+        </Show>
+      </nav>
+    );
+  }
   return (
     <Show
       when={props.presentation !== "embed-page"}
@@ -492,7 +478,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           <section class="settings-embed-list">
             <EmbeddedSettingsHeader {...props} />
             <SettingsAgentSelector {...props} />
-            <SettingsNavigation {...props} />
+            <SettingsNavigation />
           </section>
         }
       >
@@ -519,10 +505,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
               spellcheck="false"
               aria-label={t("nav.settingsSearchLabel")}
               placeholder={t("nav.settingsSearchPlaceholder")}
-              ref={(element) => {
-                searchInput = element;
-                element.value = query();
-              }}
+              ref={[(element) => (searchInput = element), liveValue(query)]}
               onInput={(event) => props.onSearchQueryChange(event.currentTarget.value)}
               onKeyDown={(event) => {
                 if (event.key !== "Escape" || isComposingKeyboardEvent(event)) {
@@ -541,17 +524,16 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                 type="button"
                 class="settings-sidebar__search-clear"
                 aria-label={t("nav.settingsSearchClear")}
-                onClick={(event) => {
-                  const input = event.currentTarget.parentElement?.querySelector("input");
+                onClick={() => {
                   props.onSearchQueryChange("");
-                  input?.focus();
+                  searchInput?.focus();
                 }}
               >
                 <Icon name="x" />
               </button>
             </Show>
           </div>
-          <SettingsNavigation {...props} />
+          <SettingsNavigation />
           <footer class="settings-sidebar__footer">
             <div class="settings-sidebar__connection">
               <SettingsConnectionStatus {...props} />

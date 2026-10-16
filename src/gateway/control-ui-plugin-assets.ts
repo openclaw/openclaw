@@ -87,7 +87,13 @@ function pluginState(record: PluginRecord): BrowserPluginState {
 
 function browserOwners(registry: PluginRegistry): PluginRecord[] {
   return registry.plugins
-    .filter((record) => record.enabled && record.status === "loaded" && record.controlUi)
+    .filter(
+      (record) =>
+        record.enabled &&
+        record.status === "loaded" &&
+        record.controlUi &&
+        record.controlUi.activation !== "settings-only",
+    )
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
 

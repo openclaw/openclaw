@@ -14,7 +14,7 @@ import {
   type WorkerAdmissionHandshake,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
-import { extractErrorCode, hasErrnoCode } from "../infra/errors.js";
+import { extractErrorCode, hasErrnoCode, isMissingPathError } from "../infra/errors.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -285,7 +285,14 @@ async function readReceipt(bundleDir: string): Promise<WorkerAdmissionHandshake 
       await fsp.readFile(path.join(bundleDir, INSTALL_RECEIPT), "utf8"),
     ) as unknown;
     return validateWorkerAdmissionHandshake(raw) ? raw : undefined;
-  } catch {
+  } catch (error) {
+    // Missing or malformed cache receipts are repaired by the next installation.
+    if (!isMissingPathError(error) && !(error instanceof SyntaxError)) {
+      log.warn(
+        "Worker bundle receipt read failed; treating installation as missing. Check node-host storage permissions and disk health.",
+        { errorCode: extractErrorCode(error) },
+      );
+    }
     return undefined;
   }
 }
@@ -314,7 +321,15 @@ async function validateInstalledBundle(
     const root = await fsp.realpath(bundleDir);
     const entry = await fsp.realpath(path.join(root, WORKER_BUNDLE_ENTRY_PATH));
     return isPathInside(root, entry) && (await fsp.stat(entry)).isFile();
-  } catch {
+  } catch (error) {
+    // Invalid inventory is regenerable; filesystem failures still need a diagnostic.
+    const errorCode = extractErrorCode(error);
+    if (errorCode && !isMissingPathError(error)) {
+      log.warn(
+        "Worker bundle cache read failed; treating installation as missing. Check node-host storage permissions and disk health.",
+        { errorCode },
+      );
+    }
     return false;
   }
 }
@@ -450,7 +465,7 @@ export class NodeWorkerBundleInstaller {
         }
         params.signal?.throwIfAborted();
         this.#recordInstall(input.gatewayNamespace);
-        return structuredClone(input.build);
+        return input.build;
       } catch (error) {
         if (error instanceof NodeWorkerBundleInstallError) {
           throw error;

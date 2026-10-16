@@ -107,7 +107,8 @@ vi.mock("../gateway/call.js", () => ({
   }),
 }));
 vi.mock("./deps.js", () => ({ createDefaultDeps: () => ({}) }));
-vi.mock("./plugin-registry.js", () => ({
+vi.mock("../plugins/runtime/runtime-registry-loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/runtime/runtime-registry-loader.js")>()),
   ensurePluginRegistryLoaded: programMocks.ensurePluginRegistryLoaded,
 }));
 vi.mock("../commands/doctor-config-flow.js", () => ({

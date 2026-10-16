@@ -25,6 +25,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
+  persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
@@ -521,7 +522,11 @@ it(
         });
       let batchChild = await addRecoveryChild(batchChildMarker, {
         expectsCompletionMessage: true,
-        completion: { required: true, resultText: "saved interrupted batch result" },
+        completion: {
+          required: true,
+          resultText: "saved interrupted batch result",
+          terminalReply: { disposition: "visible", text: "saved interrupted batch result" },
+        },
         delivery: { status: "delivered" },
         requesterSettleWake: {
           status: "pending",
@@ -531,6 +536,37 @@ it(
           afterRequesterYield: true,
           rearmGeneration: 1,
         },
+      });
+      const batchChildSessionId = expectDefined(
+        batchChild.childSessionIdentity?.sessionId,
+        "saved batch child session id",
+      );
+      const batchChildScope = {
+        agentId: "main",
+        sessionKey: batchChild.childSessionKey,
+        sessionId: batchChildSessionId,
+        storePath,
+      };
+      await replaceSessionEntry(batchChildScope, {
+        sessionId: batchChildSessionId,
+        updatedAt: Date.now(),
+      });
+      await persistSessionTranscriptTurn(batchChildScope, {
+        config: cfg,
+        runId: batchChild.runId,
+        expectedSessionId: batchChildSessionId,
+        touchSessionEntry: false,
+        updateMode: "none",
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              phase: "final_answer",
+              stopReason: "stop",
+              content: [{ type: "text", text: "saved interrupted batch result" }],
+            },
+          },
+        ],
       });
       batchChild = await reloadSavedBatch(batchChild);
       expect(await wakeSavedBatch(batchChild)).toBe(true);

@@ -517,9 +517,34 @@ The `linkReader` fields are:
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `hosts`         | One to sixteen exact lowercase DNS hostnames; no scheme, wildcard, or port.                                                                                                               |
 | `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable.    |
-| `detailMethod`  | Same-plugin read method receiving `{ url, agentId?, refresh? }` and returning a `ControlUiLinkReaderDocument`.                                                                            |
+| `detailMethod`  | Same-plugin read method receiving `{ url, agentId?, refresh?, section? }` and returning a `ControlUiLinkReaderDocument`.                                                                  |
 | `previewMethod` | Optional same-plugin read method receiving `{ url, agentId? }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews. |
 | `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                                  |
+
+A reader may opt into progressive detail loading with `progressive: true`.
+The host requests `section: "overview"` first; that response is a normal document
+with its title and Markdown body, an opaque `revision`, and `deferredSections`
+containing any of `"checks"`, `"files"`, and `"discussion"`. Deferred sections
+are intentional omissions, not partial upstream failures. The host can request
+checks and discussion independently and files on demand, using the same detail
+method and `section` field. Every section response still includes `url`, `title`,
+and `body` plus the selected section's fields and the same source `revision`.
+The host merges only that section's fields and rejects mismatched revisions;
+plugins must not label current mutable content with an older cached revision.
+Checks own `checks`; files own `files` and their total/truncation fields;
+discussion owns `comments` and their total/truncation fields. Each request must
+independently authorize source access and current caller lifetime. Do not retain
+caller-bound authority for another section or start work beyond the request.
+Omitting `section` retains the full-document response, including for older hosts
+and tools. Readers without `progressive: true` receive the existing full-document
+request. The existing `ControlUiLinkReaderDetailParams` and
+`ControlUiLinkReaderDocument` exports describe these fields without extra SDK aliases.
+
+A reader may set `sessionScoped: true` to receive the foreground pane's `sessionKey`
+on preview and detail requests. This is a context hint, never authority: its Gateway
+method must authorize the current operator and exact session before reading private
+data. Hovercard caches and seeds retire when that pane changes sessions. Readers
+without this flag retain the public request shape.
 
 Preview and detail requests include the selected `agentId` when available; detail
 requests also accept `refresh: true`. The receiving owner must authorize identity
@@ -583,8 +608,9 @@ item list is incomplete, including when a source could not be read. Preserve
 the document body if an optional checks request fails, and never report success
 from incomplete data. An empty complete list is `neutral`.
 
-The bundled GitHub reader reads check runs and legacy commit statuses anonymously
-for the pull request's exact head SHA, not its base or test-merge commit. It reads
+The bundled GitHub reader reads check runs and legacy commit statuses with the
+request's admitted read identity (or anonymously) for the pull request's exact
+head SHA, not its base or test-merge commit. It reads
 one page of at most 100 entries from each API and returns at most 100 items; it
 does not follow pagination links. GitHub's `filter=latest` selects check runs;
 the reader retains every distinct run ID rather than inferring workflow identity
@@ -596,9 +622,11 @@ outranks unavailable data; only complete data can produce success or neutral.
 Canceled, timed-out, stale, and action-required runs count as failures; skipped
 and neutral runs remain neutral. Partial results retain known items and an
 explicit incomplete summary. PR snapshots share the existing document cache
-for 30 seconds; an explicit refresh rereads the PR and both CI sources for that
-response's head. This surface neither evaluates required-check rules nor claims
-that a PR can merge.
+for 30 seconds. Refreshing an overview retires its cached sections; a subsequent
+checks request reads both CI sources for that overview's head. A full-document
+refresh rereads the PR and both CI sources. On-demand PR files use a fresh head
+and reject a diff if that head changes during the read. This surface neither
+evaluates required-check rules nor claims that a PR can merge.
 
 Return only bounded data appropriate for the caller. Rendered content cannot
 activate embedded app widgets, script, file actions, or code execution. Inline

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createEffect, For, Show } from "solid-js";
 import { titleForRoute, visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import type { LazyRenderer } from "../app/lazy-renderer.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
@@ -11,16 +11,10 @@ export type SettingsSidebarLoader = LazyRenderer<SettingsSidebarModule["renderSe
 
 export function LazySettingsSidebar(props: {
   loader: SettingsSidebarLoader;
-  revision: number;
   sidebarProps: SettingsSidebarProps;
 }) {
-  const state = createMemo(() => ({
-    revision: props.revision,
-    renderer: props.loader.renderer,
-    failed: props.loader.failed,
-  }));
   createEffect(
-    () => !state().renderer && !state().failed,
+    () => !props.loader.renderer() && !props.loader.failed(),
     (load) => {
       if (load) {
         props.loader.load();
@@ -29,12 +23,12 @@ export function LazySettingsSidebar(props: {
   );
   return (
     <Show
-      when={state().renderer}
+      when={props.loader.renderer()}
       keyed
       fallback={
         <SettingsSidebarFallback
           sidebarProps={props.sidebarProps}
-          failed={state().failed}
+          failed={props.loader.failed()}
           retry={() => props.loader.retry()}
         />
       }

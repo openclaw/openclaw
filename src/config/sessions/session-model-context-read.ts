@@ -59,7 +59,7 @@ export function projectSessionModelContext(
         return [payload];
       }
       if (entry === thinking || (entry === model && entry.type === "model_change")) {
-        return [entry];
+        return [{ ...entry }];
       }
       if (entry === model && entry.type === "message" && entry.message.role === "assistant") {
         return [
@@ -95,7 +95,7 @@ export function projectSessionModelContext(
       return entry;
     });
   } else {
-    contextEntries = entries.map((entry) => payloads.get(entry) ?? entry);
+    contextEntries = entries.map((entry) => payloads.get(entry) ?? { ...entry });
   }
   return {
     events: [...(header ? [header] : []), ...contextEntries],

@@ -36,9 +36,6 @@ function collectBtwMessageText(content: Message["content"]): string {
   if (typeof content === "string") {
     return content.trim();
   }
-  if (!Array.isArray(content)) {
-    return "";
-  }
   return content
     .flatMap((part) => {
       if (part.type === "text") {

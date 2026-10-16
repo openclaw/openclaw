@@ -30,7 +30,7 @@ import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 
 type PromptFailureOutcome =
   | {

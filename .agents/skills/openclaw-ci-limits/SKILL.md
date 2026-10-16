@@ -63,6 +63,16 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 
 ## Rejected Experiments
 
+- **UI blobless sparse checkout (2026-10-16):** Excluding native mobile/macOS
+  app trees removed 48.31 MiB of logical tracked content, but did not qualify as
+  a runner-cost improvement. In
+  [run 38866595993](https://github.com/openclaw/openclaw/actions/runs/38866595993),
+  the Blacksmith UI E2E checkout took 56s and the hosted browser checkout 58s;
+  same-run full UI checkouts took 22–38s. These are small, unpaired samples,
+  not a measured billing delta. Keep the full source checkout. Reconsider only
+  with lower complete checkout time and billed cost, including filtered fetch,
+  lazy materialization, and trusted-harness export; fewer logical bytes alone
+  do not establish savings.
 - **Declaration-fixture owner selection (2026-10-02):**
   `test/scripts/tsdown-declaration-fixture.ts` derives real source copies from its runtime
   entrypoint closures, so product PRs that edit one do not select the four declaration suites

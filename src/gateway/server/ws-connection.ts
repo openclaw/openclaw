@@ -12,6 +12,7 @@ import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { attachGatewayConnection, type GatewayConnectionOptions } from "./connection.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { takePublicWorkerIngress } from "./public-worker-ingress-context.js";
+import { installGatewayDeflateCodec } from "./ws-compression.js";
 import { isWsPayloadLimitError, resolveSocketAddress } from "./ws-connection-diagnostics.js";
 import type { WsOriginCheckMetrics } from "./ws-connection/message-handler-types.js";
 import {
@@ -36,10 +37,18 @@ export type AttachGatewayWsConnectionHandlerParams = GatewayConnectionOptions & 
 
 export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnectionHandlerParams) {
   const originCheckMetrics: WsOriginCheckMetrics = { hostHeaderFallbackAccepted: 0 };
+  let warnedDeflateCodec = false;
   params.wss.on("connection", (socket, upgradeReq) => {
     if (params.connectionWork.isClosing) {
       socket.terminate();
       return;
+    }
+    // Install before ws parses the first frame; the upgrade emits synchronously.
+    if (!installGatewayDeflateCodec(socket) && !warnedDeflateCodec) {
+      warnedDeflateCodec = true;
+      params.logWsControl.warn(
+        "unsupported ws permessage-deflate extension; compressed frames use the slower ws path",
+      );
     }
     let batched = false;
     Object.assign(socket, {
@@ -53,6 +62,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           batched = false;
           upgradeReq.socket.uncork();
         });
+      },
+      sendUncompressed(frame: string, callback?: (error?: Error) => void) {
+        socket.send(frame, { compress: false }, callback);
       },
     });
     const ingressSocket = socket as GatewayIngressWebSocket;

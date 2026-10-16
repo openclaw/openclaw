@@ -1,7 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionToolsVisibility } from "../../plugin-sdk/session-visibility.js";
 import {
@@ -123,6 +126,18 @@ describe("sessions_send directed policy at the tool boundary", () => {
         { agentId, sessionKey: key },
         { sessionId, updatedAt: 1, ...entry },
       );
+      await appendTranscriptMessage(
+        { agentId, sessionKey: key, sessionId },
+        {
+          message: {
+            role: "assistant",
+            __openclaw: { runId },
+            phase: "final_answer",
+            stopReason: "stop",
+            content: [{ type: "text", text: replyText }],
+          },
+        },
+      );
     }
   });
 
@@ -225,7 +240,6 @@ describe("sessions_send directed policy at the tool boundary", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    expect(gatewayMethods()).not.toContain("chat.history");
   });
 
   afterAll(async () => {
@@ -409,5 +423,6 @@ describe("sessions_send directed policy at the tool boundary", () => {
     ).rejects.toThrow("visibility");
     expectNoDispatch();
     expect(gatewayMethods()).not.toContain("sessions.search");
+    expect(gatewayMethods()).not.toContain("chat.history");
   });
 });

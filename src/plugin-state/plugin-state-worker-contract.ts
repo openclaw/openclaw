@@ -11,7 +11,7 @@ import type {
 } from "./plugin-state-store.comparison.worker.js";
 import type { PluginStateSequencedJournalParams } from "./plugin-state-store.journal.js";
 import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
-import type { PluginStateMoveEntriesParams } from "./plugin-state-store.mutations.js";
+import type { PluginStateMoveEntriesParams } from "./plugin-state-store.moves.worker.js";
 import type { PluginStateRegisterEntryParams } from "./plugin-state-store.retention.js";
 import type {
   PluginStateCompareResult,
@@ -103,7 +103,7 @@ export type PluginStateWorkerOperations = {
   };
 };
 
-export type PluginStateReadType =
+type PluginStateReadType =
   | "pluginState.lookup"
   | "pluginState.lookupMany"
   | "pluginState.entries"

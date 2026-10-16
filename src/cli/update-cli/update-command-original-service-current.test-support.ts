@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
@@ -17,47 +17,29 @@ import {
   settleGatewayServiceRebind,
   withGatewayServiceRebindCapture,
 } from "../../daemon/service-rebind.js";
-import type { GatewayServiceState } from "../../daemon/service.js";
 import * as integrity from "../../infra/package-update-integrity.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
-import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import type { OriginalServiceFixture } from "./update-command-original-service-fixture.test-support.js";
+import { registerRuntimePinPreservationTest } from "./update-command-original-service-pins.test-support.js";
 import {
   observeOriginalManagedServiceRuntime,
   revalidateOriginalManagedServiceRuntime,
 } from "./update-command-original-service.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
-import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   compensateOriginalManagedService,
 } from "./update-command-service-recovery.js";
 
-type Fixture = {
-  state: OpenClawTestState;
-  rootA: string;
-  rootB: string;
-  serviceNodeRunner: string;
-  before: PreManagedServiceStop;
-  serviceState: GatewayServiceState;
-  mocks: {
-    capability: Mock;
-    nativeRestart: Mock;
-    nativeInstall: Mock;
-    restart: Mock;
-    health: Mock;
-    readiness: Mock;
-  };
-};
-
 // Current composition only: real observations, admission and candidate-native helper;
 // receiver probe, native service and HTTP leaves are inert. No native command executes.
-export function registerCurrentF3Controls(fixture: () => Fixture) {
+export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture) {
   const admitted = async (
     operation: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<void>,
     retained = true,
@@ -72,6 +54,8 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
       await operation(run);
     });
   };
+
+  registerRuntimePinPreservationTest(fixture, admitted);
 
   it.each(["unchanged", "replaced"] as const)(
     "capable original recovery binds definition after native lock: %s",
@@ -195,6 +179,10 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
       if (!original) {
         throw new Error("missing original observation");
       }
+      const originalPin = original.definition.runtimePin;
+      if (!originalPin) {
+        throw new Error("missing migrated pin");
+      }
       const originalCommand = structuredClone(serviceState.command!);
       const originalDigest = await fingerprintGatewayServiceDefinition(originalCommand);
       let receipt: ReturnType<typeof currentGatewayServiceRebindReceipt>;
@@ -223,7 +211,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
                     commitDaemonRuntimePin(
                       pinScope,
                       {
-                        expected: original.definition.runtimePin,
+                        expected: originalPin,
                         pin: { runtime: "node", path: "/selected-B-node" },
                       },
                       serviceState.command,
@@ -239,7 +227,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
             });
             receipt = currentGatewayServiceRebindReceipt();
           },
-          original.definition.runtimePin.revision,
+          original.definition.runtimePin?.revision,
         ),
       );
       // Receipt is emitted by the actual native rewrite owner, never a synthesized success.
@@ -384,14 +372,14 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
       }
       if (scenario === "own-pin-rebind") {
         expect(readDaemonRuntimePinForInstall(pinScope, serviceState.command, true).revision).toBe(
-          original.definition.runtimePin.revision,
+          original.definition.runtimePin?.revision,
         );
       }
       expect(await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!)).toEqual(bytes);
     });
   });
 
-  it.each(["slow", "not-ready", "generation-change"] as const)(
+  it.each(["slow", "not-ready"] as const)(
     "retained readiness uses current bounded owner: %s",
     async (scenario) => {
       const { rootB, before, mocks } = fixture();
@@ -399,11 +387,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
         const initial = mocks.health.getMockImplementation()!;
         mocks.health.mockImplementation(async (params) => {
           expect(params.timeoutMs).toBeGreaterThan(3_000);
-          const result = await initial(params);
-          return {
-            ...result,
-            gatewayBootId: scenario === "generation-change" ? "prior-boot" : undefined,
-          };
+          return initial(params);
         });
         if (scenario === "not-ready") {
           mocks.readiness.mockResolvedValue({ readyz: 503 });

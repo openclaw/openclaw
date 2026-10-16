@@ -55,6 +55,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/database-engine/sqlite-vector.child.ts",
   ],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
+    "src/daemon/runtime-pin-store.ts",
     // Engine admission owns anchor metadata and schema bootstrap, not application queries.
     "src/infra/database-engine/adapters.ts",
     "src/infra/database-engine/open.ts",
@@ -62,6 +63,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-index-schema.ts",
     "src/infra/sqlite-integrity.ts",
     "src/infra/sqlite-pragma.test-support.ts",
+    "src/infra/sqlite-schema-catalog.ts",
     "src/infra/sqlite-schema-contract.ts",
     // Cross-store reservations own native BEGIN/ROLLBACK, without application queries.
     "src/infra/sqlite-source-fence.ts",
@@ -89,6 +91,9 @@ const rawSqliteAllowPathGroups = {
     // Versioned payload rebuild preserves native bytes and 64-bit physical rowids.
     "src/state/openclaw-agent-transcript-payload-migration.ts",
     "src/state/openclaw-agent-transcript-fts-schema.ts",
+    // Versioned physical-layout migrations own captured schema and table reconstruction.
+    "src/state/openclaw-agent-write-layout-migration.ts",
+    "src/state/sqlite-table-layout-migration.ts",
     "src/state/openclaw-state-db-audit-migration.ts",
     "src/state/openclaw-state-db-delivery-queue-backfill.ts",
     "src/state/openclaw-state-db-legacy-backfills.ts",
@@ -140,6 +145,7 @@ const rawSqliteAllowPathGroups = {
     "extensions/memory-core/src/memory/manager-status-presence.ts",
   ],
   "doctor SQLite maintenance and legacy state migration": [
+    "src/infra/state-migrations.daemon-runtime-pins.ts",
     "src/commands/doctor-agent-memory-schema.ts",
     "src/commands/doctor-sqlite-compact.ts",
     // Exclusive Doctor maintenance reads auto-vacuum and page-size PRAGMAs.

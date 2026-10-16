@@ -252,8 +252,14 @@ describe("Terminal panel hosted tabs", () => {
     const dock = vi.fn();
     window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
     try {
-      button(actions, "Dock to bottom").click();
+      const dockButton = button(actions, "Dock to bottom");
+      dockButton.click();
       expect(dock.mock.calls[0]?.[0].detail).toMatchObject({ dock: "bottom", open: true });
+      panel.closeTerminalPanel();
+      panel.remove();
+      await Promise.resolve();
+      dockButton.click();
+      expect(dock).toHaveBeenCalledOnce();
     } finally {
       window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
     }

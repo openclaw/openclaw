@@ -1,8 +1,9 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, createSignal, onCleanup } from "solid-js";
+import { createMemo, onCleanup } from "solid-js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
+import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
@@ -28,15 +29,13 @@ export type SidebarAgentCardProps = {
 };
 
 export function SidebarAgentCard(props: SidebarAgentCardProps) {
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const avatarLoader = new IdentityAvatarController(() => setRevision((value) => value + 1));
-  avatarLoader.hostConnected();
-  onCleanup(() => avatarLoader.hostDisconnected());
+  const avatarLoader = createIdentityAvatars();
+  onCleanup(avatarLoader.connect());
+  const avatarSource = projectOwner(avatarLoader, (owner) => owner);
   const avatar = createMemo(() => {
-    revision();
     const sourceUrl = props.avatarUrl;
     const pending = Boolean(sourceUrl?.startsWith("/") && !props.avatarAuthReady);
-    return avatarLoader.withActiveRoutes(() => {
+    return avatarSource.read().withActiveRoutes(() => {
       return {
         sourceUrl,
         pending,

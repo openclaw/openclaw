@@ -201,6 +201,7 @@ describe("runPostCorePluginConvergence", () => {
     });
     expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
       cfg,
+      repairVersionDrift: false,
       env: {
         OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
@@ -219,6 +220,7 @@ describe("runPostCorePluginConvergence", () => {
     });
     expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
       cfg,
+      repairVersionDrift: false,
       env: {
         OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.7.2-beta.7",
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
@@ -388,6 +390,7 @@ describe("runPostCorePluginConvergence", () => {
 
     expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
       cfg,
+      repairVersionDrift: false,
       env: {
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
         OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",

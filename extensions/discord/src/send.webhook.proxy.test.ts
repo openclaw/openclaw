@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { DiscordError } from "./internal/rest-errors.js";
-import { DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
+import { DISCORD_REST_TIMEOUT_MS } from "./internal/rest.js";
 import { sendWebhookMessageDiscord } from "./send.webhook.js";
 
 const { makeProxyFetchMock, recordChannelActivityMock } = vi.hoisted(() => ({

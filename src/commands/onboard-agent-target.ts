@@ -173,9 +173,13 @@ export function applyOnboardingUtilityModel(
   target: OnboardingAgentTarget,
   model: string,
 ): OpenClawConfig {
-  const utilityModel = normalizeAgentModelRefForConfig(model);
+  const primary = normalizeAgentModelRefForConfig(model);
   const entry = resolveMutableAgentEntry(config, target.agentId);
-  if (entry?.utilityModel === undefined && config.agents?.ownership !== "explicit") {
+  const writesDefaults =
+    entry?.utilityModel === undefined && config.agents?.ownership !== "explicit";
+  const existing = writesDefaults ? config.agents?.defaults?.utilityModel : entry?.utilityModel;
+  const utilityModel = typeof existing === "object" ? { ...existing, primary } : primary;
+  if (writesDefaults) {
     return {
       ...config,
       agents: { ...config.agents, defaults: { ...config.agents?.defaults, utilityModel } },

@@ -1,49 +1,31 @@
-import { nothing, svg, type TemplateResult } from "lit";
-import { unsafeSVG } from "lit/directives/unsafe-svg.js";
 import { toolIconData } from "./icon-data-tools.ts";
-import type { IconData, IconNode } from "./icon-data-types.ts";
+import type { IconAttributes, IconData, IconNode } from "./icon-data-types.ts";
 
 export const toolIcons = renderIconRegistry(toolIconData);
 
-function iconMarkup(nodes: readonly IconNode[]): string {
-  return nodes
-    .map(([tag, attributes, children]) => {
-      const attrs = Object.entries(attributes)
-        .map(
-          ([key, value]) =>
-            ` ${key}="${String(value).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;")}"`,
-        )
-        .join("");
-      return `<${tag}${attrs}>${children ? iconMarkup(children) : ""}</${tag}>`;
-    })
-    .join("");
+function renderIconNode(
+  tag: string,
+  attributes: IconAttributes,
+  children: readonly IconNode[] = [],
+) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [name, value] of Object.entries(attributes)) {
+    if (value !== undefined) {
+      node.setAttribute(name, String(value));
+    }
+  }
+  node.append(...children.map(([name, attrs, nodes]) => renderIconNode(name, attrs, nodes)));
+  return node;
 }
 
-function renderIconShapes(nodes: readonly IconNode[]) {
-  // Only the built-in geometry catalog supplies nodes; external SVG uses its sanitizer.
-  return svg`${unsafeSVG(iconMarkup(nodes))}`;
-}
-
-function renderIconData({ attributes: a, children }: IconData): TemplateResult {
-  return svg`<svg
-    viewBox=${a.viewBox ?? nothing}
-    fill=${a.fill ?? nothing}
-    stroke=${a.stroke ?? nothing}
-    stroke-width=${a["stroke-width"] ?? nothing}
-    stroke-linecap=${a["stroke-linecap"] ?? nothing}
-    stroke-linejoin=${a["stroke-linejoin"] ?? nothing}
-    style=${a.style ?? nothing}
-    class=${a.class ?? nothing}
-    width=${a.width ?? nothing}
-    height=${a.height ?? nothing}
-    aria-hidden=${a["aria-hidden"] ?? nothing}
-  >${renderIconShapes(children)}</svg>`;
-}
-
-export function renderIconRegistry<Name extends string>(data: Record<Name, IconData>) {
+function renderIconRegistry<Name extends string>(data: Record<Name, IconData>) {
   const entries = Object.fromEntries(
-    Object.entries<IconData>(data).map(([name, icon]) => [name, renderIconData(icon)]),
+    Object.entries<IconData>(data).map(([name, icon]) => [
+      name,
+      // Stored icons can appear in multiple places; each Solid insertion owns its nodes.
+      () => renderIconNode("svg", icon.attributes, icon.children),
+    ]),
   );
   // SAFETY: Mapping values retains every key of this source-owned registry.
-  return entries as Record<Name, TemplateResult>;
+  return entries as Record<Name, () => SVGElement>;
 }

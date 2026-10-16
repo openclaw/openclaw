@@ -7,7 +7,6 @@ import "./tooltip.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let container: HTMLDivElement;
-
 type Modal = HTMLElementTagNameMap["openclaw-modal-dialog"];
 type ModalPhase = "opening" | "opened" | "closing" | "closed";
 const modalEvents = {
@@ -17,8 +16,41 @@ const modalEvents = {
   closed: "overlay-after-hide",
 } as const;
 
-function modalSurface(modal: Modal) {
-  return modal;
+function element<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props: Partial<HTMLElementTagNameMap[K]> = {},
+  parent?: ParentNode,
+) {
+  const node = Object.assign(document.createElement(tag), props);
+  parent?.append(node);
+  return node;
+}
+
+function styled<K extends keyof HTMLElementTagNameMap>(tag: K, css: string) {
+  const node = element(tag);
+  node.style.cssText = css;
+  return node;
+}
+
+function manualModal(label: string, textContent: string, className = "") {
+  return element(
+    "openclaw-modal-dialog",
+    { manual: true, label, textContent, className },
+    container,
+  );
+}
+
+function backgroundTrigger() {
+  const background = element("div", {}, container);
+  const trigger = element("button", {}, background);
+  trigger.focus();
+  return { background, trigger };
+}
+
+function iframeHost() {
+  const frame = element("iframe", {}, container);
+  const doc = frame.contentDocument!;
+  return { doc, host: doc.body.appendChild(doc.createElement("div")) };
 }
 
 function modalDialog(modal: Modal) {
@@ -27,7 +59,7 @@ function modalDialog(modal: Modal) {
 
 function afterModalPhase(modal: Modal, phase: ModalPhase) {
   return new Promise<void>((resolve) => {
-    modalSurface(modal).addEventListener(modalEvents[phase], () => resolve(), { once: true });
+    modal.addEventListener(modalEvents[phase], () => resolve(), { once: true });
   });
 }
 
@@ -42,11 +74,7 @@ function motionAtModalPhase(modal: Modal, phase: "opening" | "closing") {
 }
 
 function finishModalOpening(modal: Modal) {
-  modalSurface(modal).dispatchEvent(new CustomEvent(modalEvents.opened, { bubbles: true }));
-}
-
-function commitTooltip(tooltip: HTMLElementTagNameMap["openclaw-tooltip"]) {
-  return tooltip.updateComplete;
+  modal.dispatchEvent(new CustomEvent(modalEvents.opened, { bubbles: true }));
 }
 
 function tooltipIsOpen(tooltip: HTMLElementTagNameMap["openclaw-tooltip"]) {
@@ -90,12 +118,10 @@ async function mountModal(
   await Promise.all(rendered.dialog.getAnimations().map((animation) => animation.finished));
   return { modal, dialog: rendered.dialog, name, notes };
 }
-
 describe.runIf(browserMode)("modal native focus ownership", () => {
   it("keeps a double-clicked opener's modal open and dismisses a fresh backdrop click", async () => {
     const { userEvent } = await import("vitest/browser");
-    const opener = document.createElement("button");
-    opener.textContent = "Open modal";
+    const opener = element("button", { textContent: "Open modal" });
     opener.style.cssText = "position: fixed; left: 8px; top: 8px;";
     const modal = document.createElement("openclaw-modal-dialog");
     modal.manual = true;
@@ -110,13 +136,10 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     modal.addEventListener("overlay-show", opened);
     modal.addEventListener("modal-cancel", cancelled);
     opener.addEventListener("click", () => modal.show());
-
     await userEvent.dblClick(opener);
     expect(opened).toHaveBeenCalledTimes(1);
     expect(cancelled).not.toHaveBeenCalled();
-    expect(modal.open).toBe(true);
-    expect(dialog.open).toBe(true);
-
+    expect([modal.open, dialog.open]).toEqual([true, true]);
     // The document corner is the native backdrop, outside the centered dialog.
     await userEvent.click(document.documentElement, {
       position: { x: 1, y: 1 },
@@ -138,13 +161,9 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       () => null,
     );
     const originalOverflow = getComputedStyle(document.body).overflow;
-    const modal = document.createElement("openclaw-modal-dialog");
-    modal.manual = true;
-    modal.label = "Animated dialog";
-    modal.textContent = "Opening content";
+    const modal = manualModal("Animated dialog", "Opening content");
     modal.style.setProperty("--openclaw-modal-show-duration", "1000ms");
     modal.style.setProperty("--openclaw-modal-hide-duration", "1000ms");
-    container.append(modal);
     await modal.updateComplete;
     const dialog = modalDialog(modal);
     // Keep the exit measurable even in engines that immediately remove top-layer display.
@@ -193,20 +212,17 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
         });
       });
       modal.hide();
-      expect(modal.open).toBe(false);
-      expect(dialog.open).toBe(true);
+      expect([modal.open, dialog.open]).toEqual([false, true]);
       for (const animation of opening) {
         animation.finish();
       }
       expect(getComputedStyle(dialog).opacity).toBe("1");
-
       const exiting = await Promise.race([exitStarted, hidden.then(() => [])]);
       expect(exiting.length).toBeGreaterThan(0);
       expect(completions).toBe(0);
       expect(dialog.dataset.phase).toBe("closing");
       expect(getComputedStyle(document.body).overflow).toBe("hidden");
       expect(occluded).toBe(true);
-
       for (const animation of exiting) {
         animation.finish();
       }
@@ -226,19 +242,16 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
   });
 
   it("locks the owning document until its last shadow-hosted modal closes", async () => {
-    const frame = document.createElement("iframe");
-    container.append(frame);
+    const frame = element("iframe", {}, container);
     const doc = frame.contentDocument!;
     const view = frame.contentWindow!;
     doc.body.style.minHeight = "200vh";
     const originalOverflow = view.getComputedStyle(doc.body).overflow;
-    const host = document.createElement("div");
-    doc.body.append(host);
+    const host = element("div", {}, doc.body);
     const shadow = host.attachShadow({ mode: "open" });
     const firstMount = document.createElement("div");
     const secondMount = document.createElement("div");
     shadow.append(firstMount, secondMount);
-
     const first = await mountModal(firstMount, "palette");
     expect(first.dialog.open).toBe(true);
     expect(view.getComputedStyle(doc.body).overflow).toBe("hidden");
@@ -248,7 +261,6 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     await secondHidden;
     expect(first.dialog.open).toBe(true);
     expect(view.getComputedStyle(doc.body).overflow).toBe("hidden");
-
     const firstHidden = afterModalPhase(first.modal, "closed");
     first.modal.hide();
     await firstHidden;
@@ -258,11 +270,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
   it.each(["palette", "drawer", "drawer drawer--floating"])(
     "assigns motion to the rendered interaction (%s)",
     async (variant) => {
-      const modal = document.createElement("openclaw-modal-dialog");
-      modal.manual = true;
-      modal.className = variant;
-      modal.textContent = "Motion policy";
-      container.append(modal);
+      const modal = manualModal("", "Motion policy", variant);
       await modal.updateComplete;
       modal.show();
       const dialog = modalDialog(modal);
@@ -332,7 +340,6 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       trigger.focus();
       const { modal } = await mountModal();
       modal.setReturnFocusTarget(trigger);
-
       background.inert = blocked === "inert";
       trigger.disabled = blocked === "disabled";
       modal.remove();
@@ -342,7 +349,6 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       if (moved) {
         nextTarget.focus();
       }
-
       await expect.poll(() => (moved ? nextTarget : trigger).matches(":focus")).toBe(true);
     },
   );
@@ -350,17 +356,12 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
   it.each(["inert", "disabled", "reconnected", "removed"])(
     "drops deferred focus restoration after cancellation (%s)",
     async (state) => {
-      const background = document.createElement("div");
-      const trigger = document.createElement("button");
-      background.append(trigger);
-      container.append(background);
-      trigger.focus();
+      const { background, trigger } = backgroundTrigger();
       const { modal } = await mountModal();
       let restored = false;
       trigger.addEventListener("openclaw:restore-focus", () => {
         restored = true;
       });
-
       background.inert = state !== "disabled";
       trigger.disabled = state === "disabled";
       modal.remove();
@@ -371,7 +372,6 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
         background.remove();
       }
       await Promise.resolve();
-
       expect(restored).toBe(false);
       expect(document.activeElement).not.toBe(trigger);
     },
@@ -380,13 +380,8 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
   it.each(["immediate", "queued"] as const)(
     "hands off deferred focus after an accepted close and %s removal",
     async (removal) => {
-      const background = document.createElement("div");
-      const trigger = document.createElement("button");
-      background.append(trigger);
-      container.append(background);
-      trigger.focus();
+      const { background, trigger } = backgroundTrigger();
       const { modal, dialog } = await mountModal(container, "palette");
-
       background.inert = true;
       modal.hide();
       expect(dialog.open).toBe(false);
@@ -404,7 +399,6 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
           });
         });
       }
-
       await Promise.resolve();
       expect(document.activeElement).toBe(trigger);
     },
@@ -423,20 +417,16 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       animation.pause();
       try {
         modal.hide();
-        expect(modal.open).toBe(false);
-        expect(dialog.open).toBe(true);
+        expect([modal.open, dialog.open]).toEqual([false, true]);
         modal.show();
         expect(modal.open).toBe(true);
         expect(modalDialog(modal)).toBe(dialog);
         modal.setReturnFocusTarget(mode === "replacement" ? replacement : null);
-
         const hidden = afterModalPhase(modal, "closed");
         modal.hide();
-        expect(modal.open).toBe(false);
-        expect(dialog.open).toBe(true);
+        expect([modal.open, dialog.open]).toEqual([false, true]);
         animation.finish();
         await hidden;
-
         expect(dialog.open).toBe(false);
         if (mode === "replacement") {
           expect(document.activeElement).toBe(replacement);
@@ -455,12 +445,11 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       await emulateOverlayMedia({ reducedMotion: "reduce" });
       try {
         expect(matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
-        const modal = document.createElement("openclaw-modal-dialog");
-        modal.manual = true;
-        modal.className = variant === "drawer" ? "drawer" : "";
-        modal.label = "Motion preference";
-        modal.textContent = "Settings";
-        container.append(modal);
+        const modal = manualModal(
+          "Motion preference",
+          "Settings",
+          variant === "drawer" ? "drawer" : "",
+        );
         const { dialog } = await getRenderedModalDialog(container);
         expect(dialog.open).toBe(false);
         const opening = motionAtModalPhase(modal, "opening");
@@ -469,7 +458,6 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
         expect(await opening).toEqual([]);
         await shown;
         expect(dialog.open).toBe(true);
-
         const closing = motionAtModalPhase(modal, "closing");
         const hidden = afterModalPhase(modal, "closed");
         modal.hide();
@@ -487,14 +475,11 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     async (variant) => {
       const { userEvent } = await import("vitest/browser");
       const { modal } = await mountModal(container, variant, false);
-      const content = document.createElement("section");
-      content.style.cssText = "display: flex; height: 100%; width: 100%;";
-      const scroller = document.createElement("div");
-      scroller.style.cssText = "width: 100%; min-height: 0; overflow: auto;";
+      const content = styled("section", "display: flex; height: 100%; width: 100%;");
+      const scroller = styled("div", "width: 100%; min-height: 0; overflow: auto;");
       const longContent = document.createElement("div");
       longContent.style.height = "200dvh";
-      const action = document.createElement("button");
-      action.textContent = "Bottom action";
+      const action = element("button", { textContent: "Bottom action" });
       let clicked = false;
       action.addEventListener("click", () => {
         clicked = true;
@@ -502,7 +487,6 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       scroller.append(longContent, action);
       content.append(scroller);
       modal.querySelector(".oc-modal-dialog__body")!.replaceChildren(content);
-
       await expect.poll(() => scroller.clientHeight).toBeGreaterThan(0);
       expect(scroller.clientHeight).toBeLessThanOrEqual(window.innerHeight);
       expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
@@ -529,7 +513,6 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     });
     form.append(content, action);
     body.replaceChildren(form);
-
     expect(body.clientHeight).toBeGreaterThan(0);
     expect(body.clientHeight).toBeLessThanOrEqual(dialog.clientHeight);
     expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
@@ -546,19 +529,16 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     tooltip.content = "Draft editing help";
     tooltip.anchor = notes;
     modal.getOverlayContainer()!.append(tooltip);
-    await commitTooltip(tooltip);
+    await tooltip.updateComplete;
     notes.focus();
-    await commitTooltip(tooltip);
+    await tooltip.updateComplete;
     await expect.poll(() => tooltipIsOpen(tooltip)).toBe(true);
-
     await userEvent.keyboard("{Escape}");
-
     await expect.poll(() => tooltipIsOpen(tooltip)).toBe(false);
     expect(dialog.open).toBe(true);
     expect(modal.open).toBe(true);
     expect(notes.value).toBe("Unsaved draft");
     expect(document.activeElement).toBe(notes);
-
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => dialog.open).toBe(false);
   });
@@ -567,13 +547,11 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     "preserves selected content through chrome focus and retained reopen (%s)",
     async (variant) => {
       const { userEvent } = await import("vitest/browser");
-      const trigger = document.createElement("button");
-      trigger.textContent = "Open editor";
+      const trigger = element("button", { textContent: "Open editor" });
       container.append(trigger);
       trigger.focus();
       const { modal, dialog, name, notes } = await mountModal(container, variant);
       expect(document.activeElement).toBe(name);
-
       notes.focus();
       // The opening frame calls this real native method. It must not
       // redirect text after the operator has already selected slotted content.
@@ -582,12 +560,10 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       await userEvent.keyboard("First draft");
       expect(notes.value).toBe("First draft");
       expect(name.value).toBe("Original name");
-
       await userEvent.keyboard("{Escape}");
       await expect.poll(() => dialog.open).toBe(false);
       await expect.poll(() => document.activeElement).toBe(trigger);
       expect(modal.isConnected).toBe(true);
-
       modal.show();
       await expect.poll(() => dialog.open).toBe(true);
       await expect.poll(() => document.activeElement).toBe(name);
@@ -609,14 +585,12 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     outer.modal.getOverlayContainer()!.append(nestedHost);
     const inner = await mountModal(nestedHost);
     expect(document.activeElement).toBe(inner.name);
-
     inner.notes.focus();
     inner.dialog.focus();
     expect(document.activeElement).toBe(inner.notes);
     await userEvent.keyboard("Nested draft");
     expect(inner.notes.value).toBe("Nested draft");
     expect(outer.notes.value).toBe("");
-
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => inner.dialog.open).toBe(false);
     await expect.poll(() => document.activeElement).toBe(outer.notes);
@@ -628,11 +602,9 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
   it("preserves selected content after showing inside a shadow root", async () => {
     const { userEvent } = await import("vitest/browser");
     const shadow = container.attachShadow({ mode: "open" });
-    const host = document.createElement("div");
-    shadow.append(host);
+    const host = element("div", {}, shadow);
     const { modal, dialog, name, notes } = await mountModal(host);
     expect(shadow.activeElement).toBe(name);
-
     notes.focus();
     dialog.focus();
     expect(shadow.activeElement).toBe(notes);
@@ -646,11 +618,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
   it.each(["parent", "iframe"])(
     "preserves a field created in the %s document when iframe dialog chrome receives focus",
     async (realm) => {
-      const frame = document.createElement("iframe");
-      container.append(frame);
-      const doc = frame.contentDocument!;
-      const host = doc.createElement("div");
-      doc.body.append(host);
+      const { doc, host } = iframeHost();
       const { dialog, name, notes } = await mountModal(
         host,
         "",
@@ -667,15 +635,13 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
   it("returns to an external shadow-root trigger when the modal owner is removed", async () => {
     const triggerHost = document.createElement("div");
     const triggerRoot = triggerHost.attachShadow({ mode: "open" });
-    const trigger = document.createElement("button");
-    trigger.textContent = "Open image preview";
+    const trigger = element("button", { textContent: "Open image preview" });
     triggerRoot.append(trigger);
     container.append(triggerHost);
     trigger.focus();
     const previewHost = document.createElement("div");
     const previewRoot = previewHost.attachShadow({ mode: "open" });
-    const preview = document.createElement("div");
-    previewRoot.append(preview);
+    const preview = element("div", {}, previewRoot);
     container.append(previewHost);
     const { dialog } = await mountModal(preview);
     expect(dialog.open).toBe(true);

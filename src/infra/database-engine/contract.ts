@@ -1,10 +1,34 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Kysely } from "kysely";
-import type { SqlConnection } from "../sql-connection.js";
-import type { SearchSchema, SearchStore, StoreSearchCapabilities } from "./search.js";
+import type { EngineConnection, SqlConnection } from "../sql-connection.js";
+import type { PortDescriptor } from "./port-types.js";
+import type { FullTextCapability, TextIndex, TextIndexDefinition } from "./text-contract.js";
 import type { DatabaseEngineId, DatabaseEngineInput } from "./types.js";
+import type { VectorCapability, VectorIndex } from "./vector-contract.js";
 
 export type { EngineConnection } from "../sql-connection.js";
+
+/** @experimental Existing admitted native handle or admitted worker-store descriptor. */
+export type SearchStore = EngineConnection | { databasePath: string; input?: DatabaseEngineInput };
+/** @experimental Feature-owned declarations of the existing derived indexes. */
+export type SearchSchema = {
+  text?: Record<string, TextIndexDefinition>;
+  vector?: Record<string, Omit<VectorIndex, "store">>;
+  /** Selected by the memory owner only for the explicit provider: "none" setting. */
+  mode?: "keyword-only";
+  /** Schema where the operator installed the required PostgreSQL extensions. */
+  extensionSchema?: string;
+};
+/** @experimental Null means unavailable; diagnostics name the required next step. */
+export type StoreSearchCapabilities = {
+  fullText: FullTextCapability | null;
+  vector: VectorCapability | null;
+  text: Record<string, TextIndex>;
+  vectors: Record<string, VectorIndex>;
+  diagnostics: readonly string[];
+  /** Rebuild derived PostgreSQL search state inside the owning writer transaction. */
+  rebuild?: () => void;
+};
 
 export type DatabaseErrorKind =
   | "constraint"
@@ -34,8 +58,13 @@ export type StoreSchema = {
     sql: string;
     fromSchema: PostgresSchemaDefinition;
     schema: PostgresSchemaDefinition;
+    /** Exact predecessor export needed before Doctor may advance this family. */
+    backup?: PortDescriptor;
   }[];
   postgresFragments?: readonly PostgresSchemaFragment[];
+  search?: SearchSchema;
+  /** Persisted, owner-registered derived search definitions. */
+  searchExtensions?: Record<string, SearchSchema>;
 };
 export type AdmittedStore = {
   anchor: DatabaseSync;

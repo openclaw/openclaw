@@ -141,11 +141,10 @@ export function SessionsCard(props: {
           </div>
         ) : (
           <div
-            class={
-              props.usage.display.sessionsTab === "recent"
-                ? "session-bars session-bars--recent"
-                : "session-bars"
-            }
+            class={[
+              "session-bars",
+              { "session-bars--recent": props.usage.display.sessionsTab === "recent" },
+            ]}
           >
             <SessionRows
               sessions={props.sessions}

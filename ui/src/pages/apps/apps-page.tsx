@@ -10,11 +10,11 @@ import type { McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { createMcpAppCatalog } from "../../lib/mcp-app-catalog.ts";
 import { mcpAppRouteFromSearch, resolveMcpAppRouteServer } from "../../lib/mcp-app-route.ts";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { useMcpAppCatalog } from "../../lib/reactive/mcp-app-catalog.ts";
 import { buildMacGatewayLaunchUrl } from "./gateway-launch.ts";
 import { Apps } from "./view.tsx";
 
@@ -29,7 +29,7 @@ export function AppsPage(props: AppsPageProps) {
   const selection = projectAgentSelection(context.agentSelection);
   const appSearch = createMemo(() => props.appSearch ?? "");
   const appRoute = createMemo(() => mcpAppRouteFromSearch(appSearch()));
-  const catalog = useMcpAppCatalog(
+  const catalog = createMcpAppCatalog(
     context,
     () => ({
       sessionKey: appRoute() ? gateway.read().snapshot.sessionKey : "",

@@ -315,8 +315,7 @@ export async function resolveOllamaDiscoveryResult(params: {
         ...(discoveryApiKey ? { apiKey: discoveryApiKey } : {}),
       });
       const api = explicit?.api ?? provider.api;
-      // Keep configured settings, including tool workarounds, while filling missing native
-      // thinking metadata so mandatory-thinking models keep reasoning out of answer text.
+      // Keep configured settings while filling provider-owned model size and native thinking metadata.
       const configuredModels = new Map(explicit?.models?.map((model) => [model.id, model]));
       return {
         ...(modelIds
@@ -339,11 +338,23 @@ export async function resolveOllamaDiscoveryResult(params: {
               const sameEndpoint =
                 !configured.baseUrl ||
                 resolveOllamaApiBase(configured.baseUrl) === resolveOllamaApiBase(provider.baseUrl);
-              return (configured.api ?? api) === "ollama" &&
-                sameEndpoint &&
-                configured.thinkingLevelMap === undefined &&
-                model.thinkingLevelMap
-                ? [{ ...configured, thinkingLevelMap: model.thinkingLevelMap }]
+              if (!sameEndpoint) {
+                return [];
+              }
+              const thinkingLevelMap =
+                (configured.api ?? api) === "ollama" && configured.thinkingLevelMap === undefined
+                  ? model.thinkingLevelMap
+                  : undefined;
+              return thinkingLevelMap || model.parameterCount !== undefined
+                ? [
+                    {
+                      ...configured,
+                      ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+                      ...(model.parameterCount !== undefined
+                        ? { parameterCount: model.parameterCount }
+                        : {}),
+                    },
+                  ]
                 : [];
             }
             return [

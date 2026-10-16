@@ -128,6 +128,7 @@ export function projectGatewaySessionRunState(params: {
     GatewaySessionRow,
     | "status"
     | "lastRunError"
+    | "suppressErrorNotice"
     | "subagentRunState"
     | "hasActiveSubagentRun"
     | "startedAt"
@@ -136,6 +137,7 @@ export function projectGatewaySessionRunState(params: {
   > = {
     status: entry?.status,
     lastRunError: entry?.lastRunError,
+    suppressErrorNotice: entry?.suppressErrorNotice,
     subagentRunState: undefined,
     hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
     startedAt: entry?.startedAt,

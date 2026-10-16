@@ -1,9 +1,5 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import {
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  type ChunkMode,
-} from "openclaw/plugin-sdk/reply-chunking";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
@@ -78,7 +74,7 @@ export function buildConversationReference(ref: StoredConversationReference) {
     throw new Error("Invalid stored reference: missing conversation.id");
   }
   // Legacy imported rows may only carry `bot`; see StoredConversationReference.bot.
-  const agent = ref.agent ?? ref.bot ?? undefined;
+  const agent = ref.agent ?? ref.bot;
   if (agent == null || !agent.id) {
     throw new Error("Invalid stored reference: missing agent.id");
   }
@@ -134,7 +130,7 @@ export function renderReplyPayloadsToMessages(
       );
       for (const chunk of chunks) {
         const text = chunk.trim();
-        if (text && !isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+        if (text) {
           out.push({ text });
         }
       }
@@ -152,7 +148,7 @@ async function buildActivity(
   sharePointSiteId?: string,
   mediaMaxBytes?: number,
   options?: { feedbackLoopEnabled?: boolean } & MSTeamsSendHandoff,
-): Promise<Record<string, unknown>> {
+): Promise<{ activity: Record<string, unknown>; pendingUploadId?: string }> {
   const activity: Record<string, unknown> = buildMSTeamsMessageActivity(msg.text);
 
   // Mark as AI-generated so Teams renders the "AI generated" badge.
@@ -193,10 +189,7 @@ async function buildActivity(
           description: msg.text || undefined,
         });
 
-        // Tag the activity so the caller can store the activity ID after sending
-        consentActivity["_pendingUploadId"] = uploadId;
-
-        return consentActivity;
+        return { activity: consentActivity, pendingUploadId: uploadId };
       }
 
       if (!isPersonal && !isImage) {
@@ -215,7 +208,7 @@ async function buildActivity(
           contentType,
           tokenProvider,
           siteId,
-          chatId: chatId ?? undefined,
+          chatId,
           usePerUserSharing: conversationType === "groupchat",
         });
 
@@ -228,7 +221,7 @@ async function buildActivity(
 
         activity.attachments = [buildTeamsFileInfoCard(driveItem)];
 
-        return activity;
+        return { activity };
       }
 
       // Image (any chat): use base64 (works for images in all conversation types)
@@ -245,7 +238,7 @@ async function buildActivity(
     ];
   }
 
-  return activity;
+  return { activity };
 }
 
 export async function sendMSTeamsMessages(
@@ -282,8 +275,7 @@ export async function sendMSTeamsMessages(
     message: MSTeamsRenderedMessage,
     messageIndex: number,
   ): Promise<string> => {
-    let activity: Record<string, unknown> | undefined;
-    let pendingUploadId: string | undefined;
+    let prepared: Awaited<ReturnType<typeof buildActivity>> | undefined;
     let response: unknown;
     try {
       response = await retryAsync(
@@ -291,7 +283,7 @@ export async function sendMSTeamsMessages(
           assertMSTeamsSendHandoff(params);
           // Retry failed preparation, but keep its successful I/O and SharePoint work
           // out of subsequent provider retries.
-          activity ??= await buildActivity(
+          prepared ??= await buildActivity(
             message,
             params.conversationRef,
             params.tokenProvider,
@@ -303,15 +295,9 @@ export async function sendMSTeamsMessages(
             },
           );
 
-          pendingUploadId ??=
-            typeof activity["_pendingUploadId"] === "string"
-              ? activity["_pendingUploadId"]
-              : undefined;
-          delete activity["_pendingUploadId"];
-
           assertMSTeamsSendHandoff(params);
           providerDispatchStarted = true;
-          return await sendFn(activity);
+          return await sendFn(prepared.activity);
         },
         {
           attempts: MSTEAMS_SEND_ATTEMPTS,
@@ -353,6 +339,7 @@ export async function sendMSTeamsMessages(
     await params.onMessageSent?.(messageId, messageIndex);
 
     // Store the activity ID so the accept handler can replace the consent card in-place
+    const pendingUploadId = prepared?.pendingUploadId;
     if (pendingUploadId && messageId !== "unknown") {
       setPendingUploadActivityId(pendingUploadId, messageId);
     }

@@ -155,14 +155,14 @@ describe("resolveInFlightRunSnapshot", () => {
     }
   });
 
-  it("does not surface suppressed control-token lead fragments from the live buffer", () => {
+  it("preserves literal partial control-token text from the live buffer", () => {
     expect(
       snap({
         chatAbortControllers: new Map([["run", inFlightEntry("agent:main:s")]]),
         chatRunBuffers: new Map([["run", "NO_"]]),
         sessionKey: "agent:main:s",
       }),
-    ).toEqual({ runId: "run", text: "" });
+    ).toEqual({ runId: "run", text: "NO_" });
   });
 
   it.each([

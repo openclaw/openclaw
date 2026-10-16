@@ -16,9 +16,12 @@ import {
   verifyAndRecordPostgresSchema,
   readPostgresSchema,
   verifyPostgresSchema,
+  withPostgresSearchExtensions,
 } from "./postgres-schema.js";
-import { bindStoreSearch, type SearchSchema, type SearchStore } from "./search.js";
+import { bindStoreSearch } from "./search.js";
 import type { DatabaseEngineInput } from "./types.js";
+
+export { admitStoreSearch } from "./search-admission.js";
 
 function classifyError(error: unknown): DatabaseErrorKind {
   if (!(error instanceof Error)) {
@@ -107,7 +110,7 @@ export const databaseEngineAdapters: {
         if (!store.schema.postgres) {
           throw new Error("Store has no PostgreSQL schema");
         }
-        db.exec(postgresSchemaSql(store.schema));
+        db.exec(postgresSchemaSql(store.schema, store.namespace!));
         db.prepare(
           "INSERT INTO openclaw_schema_meta (store, version, store_id) VALUES (?, ?, ?)",
         ).run(store.schema.id, store.schema.version, store.storeId!);
@@ -127,16 +130,18 @@ export const databaseEngineAdapters: {
               `Missing PostgreSQL ${store.schema.id} migration to version ${version}; use a compatible binary or restore a matching backup.`,
             );
           }
+          const snapshot = readPostgresSchema(db, store.namespace!, store.schema.id);
+          const schema = withPostgresSearchExtensions(store.schema, snapshot);
           verifyPostgresSchema(
             db,
             store.namespace!,
             {
-              ...store.schema,
+              ...schema,
               version: version - 1,
               postgres: migration.fromSchema.postgres,
               postgresFragments: migration.fromSchema.postgresFragments,
             },
-            readPostgresSchema(db, store.namespace!, store.schema.id),
+            snapshot,
           );
           db.exec(migration.sql);
           db.prepare("UPDATE openclaw_schema_meta SET version = ? WHERE store = ?").run(
@@ -144,7 +149,7 @@ export const databaseEngineAdapters: {
             store.schema.id,
           );
           verifyAndRecordPostgresSchema(db, store.namespace!, {
-            ...store.schema,
+            ...schema,
             version,
             postgres: migration.schema.postgres,
             postgresFragments: migration.schema.postgresFragments,
@@ -155,13 +160,6 @@ export const databaseEngineAdapters: {
     classifyError,
   },
 };
-
-/** @experimental Select the admitted engine once and bind its declared search indexes. */
-export function admitStoreSearch(store: SearchStore, schema: SearchSchema) {
-  const postgres =
-    "databasePath" in store ? store.input !== undefined : isPostgresSqlConnection(store);
-  return databaseEngineAdapters[postgres ? "postgres" : "sqlite"].search(store, schema);
-}
 
 /** Worker envelopes need a transaction only on PostgreSQL; native SQLite statements stay identical. */
 export function runEngineWorkerWrite<T>(

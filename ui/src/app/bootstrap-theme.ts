@@ -68,7 +68,7 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   root.dataset.theme = resolvedTheme;
   root.dataset.themeMode = resolvedMode;
   const branding = themeBranding(settings, catalogTheme);
-  syncThemeBackgroundArtwork(root, branding, resolvedMode);
+  syncThemeBackgroundArtwork(root, branding, resolvedMode, settings.background?.visibility);
   root.dataset.themeMascot = branding.mascot;
   if (branding.avatarHat) {
     root.dataset.themeAvatarHat = branding.avatarHat;

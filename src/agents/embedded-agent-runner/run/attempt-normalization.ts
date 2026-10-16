@@ -34,7 +34,7 @@ import {
   hasCompletedModelProgressForIdleBreaker,
   normalizeEmbeddedRunAttemptResult,
 } from "./run-attempt-result.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import {
   isEmbeddedRunTerminalAbort,

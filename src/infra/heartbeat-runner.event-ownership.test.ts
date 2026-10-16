@@ -24,9 +24,11 @@ import {
   getFirstReplyContext,
   seedMainSessionStore,
   seedSessionStore,
+  setHeartbeatSilentCompletion,
   setupTelegramHeartbeatPluginRuntimeForTests,
 } from "./heartbeat-runner.test-utils.js";
 import { HEARTBEAT_SKIP_CRON_IN_PROGRESS } from "./heartbeat-wake.js";
+import { PlatformMessageNotDispatchedError } from "./outbound/deliver-types.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEvent,
@@ -244,19 +246,47 @@ describe("Heartbeat cron and exec event ownership", () => {
       });
     },
   );
-  it("retains a suppressed cron reminder until delivery, then consumes it exactly once", async () => {
+  it("consumes a deliberately silent cron reminder without repeating it", async () => {
     await withHeartbeat(async (f) => {
       f.enqueue(reminder, "cron:nightly-report");
       f.replySpy
-        .mockResolvedValueOnce({ text: "No channel reply." })
-        .mockResolvedValueOnce({ text: "Reminder handled" })
+        .mockImplementationOnce(async (_ctx, options) => {
+          setHeartbeatSilentCompletion(options);
+          return undefined;
+        })
         .mockResolvedValueOnce({ text: "HEARTBEAT_OK" });
       const run = () => f.run({ reason: "interval" });
       expect((await run()).status).toBe("ran");
       expect(f.sendTelegram).not.toHaveBeenCalled();
+      expect(peekSystemEvents(f.sessionKey)).toEqual([]);
+      expectCronPrompt(getFirstReplyContext(f.replySpy), reminder);
+      expect((await run()).status).toBe("ran");
+      expect(f.replySpy).toHaveBeenCalledTimes(2);
+      expect(f.sendTelegram).not.toHaveBeenCalled();
+      const next = f.replySpy.mock.calls[1]?.[0];
+      expect(next?.InternalTurnSource).toBe("heartbeat");
+      expect(next?.Body).not.toContain(reminder);
+    });
+  });
+  it("retains a cron reminder after rejected delivery, then consumes it exactly once", async () => {
+    await withHeartbeat(async (f) => {
+      f.enqueue(reminder, "cron:nightly-report");
+      f.sendTelegram.mockRejectedValueOnce(
+        new PlatformMessageNotDispatchedError("Permanent synthetic rejection", {
+          cause: undefined,
+          retryable: false,
+        }),
+      );
+      f.replySpy
+        .mockResolvedValueOnce({ text: "Reminder handled" })
+        .mockResolvedValueOnce({ text: "Reminder handled" })
+        .mockResolvedValueOnce({ text: "HEARTBEAT_OK" });
+      const run = () => f.run({ reason: "interval" });
+      expect((await run()).status).toBe("failed");
+      expect(f.sendTelegram).toHaveBeenCalledOnce();
       expect(peekSystemEvents(f.sessionKey)).toEqual([reminder]);
       expect((await run()).status).toBe("ran");
-      expect(f.sendTelegram).toHaveBeenCalledOnce();
+      expect(f.sendTelegram).toHaveBeenCalledTimes(2);
       expect(peekSystemEvents(f.sessionKey)).toEqual([]);
       for (const [ctx] of f.replySpy.mock.calls) {
         expectCronPrompt(ctx, reminder);
@@ -264,7 +294,7 @@ describe("Heartbeat cron and exec event ownership", () => {
       }
       expect((await run()).status).toBe("ran");
       expect(f.replySpy).toHaveBeenCalledTimes(3);
-      expect(f.sendTelegram).toHaveBeenCalledOnce();
+      expect(f.sendTelegram).toHaveBeenCalledTimes(2);
       const next = f.replySpy.mock.calls[2]?.[0];
       expect(next?.InternalTurnSource).toBe("heartbeat");
       expect(next?.Body).toContain("Heartbeat monitor scratch:");

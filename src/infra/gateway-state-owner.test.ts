@@ -642,6 +642,8 @@ describe("Gateway state ownership", () => {
             fs.writeFileSync(pathname, raw);
             expect(() => assertStateDatabaseAccessAllowed(databasePath)).not.toThrow();
             expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
+            const recovered = acquireGatewayStateOwner({ databasePath });
+            recovered.release();
           } else {
             for (const role of [undefined, "gateway", "agent-embedded"] as const) {
               fs.writeFileSync(pathname, JSON.stringify({ ...record, role }));

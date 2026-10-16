@@ -30,7 +30,47 @@ import {
   summarizeColdLoadTrace,
   summarizeCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
+import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
+
+function readRigProbeSnapshot() {
+  const perf = Reflect.get(window, "__perf");
+  return {
+    atMs: performance.now(),
+    attribution: [...(Reflect.get(window, "__mutAttr") ?? new Map())],
+    mutations: structuredClone([...(perf?.mut ?? new Map())]),
+    loaf: [...(perf?.loaf ?? [])],
+    paints: [...(perf?.paints ?? [])],
+    rpc: [...(Reflect.get(window, "__wsLog") ?? [])],
+  };
+}
+
+function installWidgetReadiness() {
+  const ready = new Map<string, number>();
+  window.addEventListener("message", (event) => {
+    if (event.data?.method !== "ui/notifications/sandbox-resource-loaded") {
+      return;
+    }
+    for (const [kind, selector] of [
+      ["board", ".board-widget__frame"],
+      ["inline", ".chat-tool-card__preview-frame"],
+    ] as const) {
+      const frames = [...document.querySelectorAll<HTMLIFrameElement>(selector)];
+      const index = frames.findIndex((frame) => frame.contentWindow === event.source);
+      const key = `${kind}:${index}`;
+      if (index >= 0 && !ready.has(key)) {
+        ready.set(key, performance.now());
+      }
+    }
+  });
+  Reflect.set(window, "__readWidgetReadiness", () => ({
+    measurement:
+      "sandbox resource-loaded notification after the widget document load; not a paint timestamp",
+    firstInlineReadyMs: [...ready].find(([key]) => key.startsWith("inline:"))?.[1] ?? null,
+    firstBoardReadyMs: [...ready].find(([key]) => key.startsWith("board:"))?.[1] ?? null,
+    ready: Object.fromEntries(ready),
+  }));
+}
 
 function summarizeResponseTasks(raw: unknown[]) {
   const events = raw.map(prepareColdLoadTraceEvent);
@@ -161,12 +201,16 @@ function summarizeSidebarWindows(
 const { values } = parseArgs({
   options: {
     "warm-reload": { type: "boolean", default: false },
+    "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "probe-dir": { type: "string" },
     "live-events": { type: "boolean", default: false },
     "streaming-reply": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
     "sidebar-list-churn": { type: "boolean", default: false },
+    "sidebar-live-churn": { type: "boolean", default: false },
+    "duplicate-boot-reads": { type: "boolean", default: false },
+    "capture-ms": { type: "string", default: "0" },
     "sidebar-row-transfer": { type: "string", default: "full" },
     "bundle-dir": { type: "string" },
     runs: { type: "string", default: "3" },
@@ -185,6 +229,12 @@ if (values["warm-reload"] && !values["probe-dir"]) {
 if (values["sidebar-list-churn"] && !values["live-events"]) {
   throw new Error("sidebar-list-churn requires live-events");
 }
+if (values["sidebar-list-churn"] && values.untraced) {
+  throw new Error("sidebar-list-churn requires tracing for response task attribution");
+}
+if (values["sidebar-live-churn"] && (!values["live-events"] || values["sidebar-list-churn"])) {
+  throw new Error("sidebar-live-churn requires live-events and excludes sidebar-list-churn");
+}
 const sidebarRowTransfer = values["sidebar-row-transfer"];
 if (!["full", "delta", "interleaved"].includes(sidebarRowTransfer)) {
   throw new Error("Expected sidebar-row-transfer full, delta or interleaved");
@@ -199,6 +249,7 @@ if (sidebarView !== "sessions" && sidebarView !== "online") {
 const runs = Number(values.runs);
 const latencyMs = Number(values["latency-ms"]);
 const frameGapMs = Number(values["frame-gap-ms"]);
+const captureMs = Number(values["capture-ms"]);
 if (
   !Number.isInteger(runs) ||
   runs < 1 ||
@@ -206,9 +257,11 @@ if (
   !Number.isFinite(latencyMs) ||
   latencyMs < 0 ||
   !Number.isFinite(frameGapMs) ||
-  frameGapMs < 0
+  frameGapMs < 0 ||
+  !Number.isFinite(captureMs) ||
+  captureMs < 0
 ) {
-  throw new Error("Expected 1–20 runs and nonnegative finite wire delays");
+  throw new Error("Expected 1–20 runs and nonnegative finite wire delays and capture duration");
 }
 if (sidebarRowTransfer === "interleaved" && (runs < 14 || runs % 2 !== 0)) {
   throw new Error("Interleaved sidebar transfer requires an even run count of at least 14");
@@ -238,6 +291,8 @@ const fixture = createControlUiTeamScaleFixture({
   sandboxPort: address.port,
   liveRun: values["live-events"] || values["streaming-reply"],
   sidebarListChurn: values["sidebar-list-churn"],
+  sidebarLiveChurn: values["sidebar-live-churn"],
+  duplicateBootReads: values["duplicate-boot-reads"],
 });
 const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply() : undefined;
 const extraInitScripts = await Promise.all(
@@ -265,6 +320,15 @@ try {
     permissions: ["local-network-access"],
   });
   const page = await context.newPage();
+  const rigProbeScript = values["probe-dir"]
+    ? (
+        await Promise.all(
+          ["mutattr.init.js", "loaf-mutation.init.js", "ws-rpc-census.init.js"].map((filename) =>
+            readFile(path.resolve(values["probe-dir"]!, filename), "utf8"),
+          ),
+        )
+      ).join("\n") + `\nwindow.__readColdLoadRigProbes = ${readRigProbeSnapshot.toString()};`
+    : "";
   if (fixture.sidebarListChurn) {
     await context.exposeBinding("__teamScaleList", (_source, params: Record<string, unknown>) => {
       const { result, previousRows } = sidebarLists!.list(params);
@@ -316,6 +380,27 @@ try {
     const asset = assets.get(new URL(route.request().url()).pathname);
     return asset ? route.fulfill({ status: 200, ...asset }) : route.fallback();
   });
+  if (values["duplicate-boot-reads"]) {
+    await page.route("**/api/chat/media/outgoing/**", (route) => {
+      const asset = assets.get(new URL(route.request().url()).pathname);
+      return asset ? route.fulfill({ status: 200, ...asset }) : route.fallback();
+    });
+  }
+  if (values["sidebar-live-churn"]) {
+    await page.route("**/api/users/*/avatar?*", async (route) => {
+      const asset = fixture.assets.get(new URL(route.request().url()).pathname);
+      if (!asset) {
+        return route.fallback();
+      }
+      const { delayMs, ...response } = asset;
+      if (delayMs) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, delayMs);
+        });
+      }
+      return route.fulfill(response);
+    });
+  }
   await page.addInitScript(
     ({ key, pins }) => {
       if (window !== window.top) {
@@ -337,18 +422,9 @@ try {
       pins: fixture.sidebarEntries,
     },
   );
-  const warmProbes = values["warm-reload"]
-    ? (values["probe-dir"]
-        ? await Promise.all(
-            ["loaf-mutation.init.js", "ws-rpc-census.init.js"].map((file) =>
-              readFile(path.join(values["probe-dir"]!, file), "utf8"),
-            ),
-          )
-        : []
-      ).join("\n") + `\n(${warmReloadProbe.toString()})();`
-    : "";
+  const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
   const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
   async function settle() {
@@ -375,6 +451,10 @@ try {
         .frameLocator("iframe")
         .getByText("Team metric 12", { exact: true })
         .waitFor();
+      await page.waitForFunction(() => {
+        const ready = Reflect.get(window, "__readWidgetReadiness")();
+        return ready.firstBoardReadyMs !== null;
+      });
       await page.waitForFunction(
         (eventCount) => {
           const state = Reflect.get(window, "__coldLoad")?.read();
@@ -491,14 +571,18 @@ try {
     }
     await page.reload({ waitUntil: "domcontentloaded" });
     await settle();
-    const metrics = await page.evaluate(() => Reflect.get(window, "__coldLoad").read());
+    if (captureMs) {
+      await page.waitForFunction((duration) => performance.now() >= duration, captureMs);
+    }
+    const metrics = await page.evaluate(() => ({
+      ...Reflect.get(window, "__coldLoad").read(),
+      widgetReadiness: Reflect.get(window, "__readWidgetReadiness")(),
+    }));
     const warmReload = values["warm-reload"]
       ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
       : undefined;
     await writeFile(path.join(artifactDir, `run-${run + 1}.metrics.json`), JSON.stringify(metrics));
-    const profile = values.untraced
-      ? { profile: { nodes: [], samples: [], timeDeltas: [], startTime: 0, endTime: 0 } }
-      : await cdp.send("Profiler.stop");
+    const profile = values.untraced ? undefined : await cdp.send("Profiler.stop");
     if (!values.untraced) {
       const complete = new Promise<void>((resolve) => {
         cdp.once("Tracing.tracingComplete", () => resolve());
@@ -511,10 +595,18 @@ try {
       path.join(artifactDir, `run-${run + 1}.trace.json`),
       JSON.stringify({ traceEvents: rawTrace }),
     );
-    await writeFile(
-      path.join(artifactDir, `run-${run + 1}.cpuprofile`),
-      JSON.stringify(profile.profile),
-    );
+    if (profile) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.cpuprofile`),
+        JSON.stringify(profile.profile),
+      );
+    }
+    if (rigProbeScript) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.probes.json`),
+        JSON.stringify(await page.evaluate(readRigProbeSnapshot)),
+      );
+    }
     const trace = rawTrace.map(prepareColdLoadTraceEvent);
     const screenshots = trace.flatMap((event) =>
       event.name === "Screenshot" && event.args?.snapshot
@@ -575,12 +667,18 @@ try {
         transitionGroups,
       };
     }, screenshots);
-    const mapped = values["sidebar-list-churn"]
-      ? { profile: profile.profile, mappedFrames: 0, unmappedFrames: profile.profile.nodes.length }
-      : await mapColdLoadCpuProfile(profile.profile, {
-          assetBaseUrl: new URL("assets/", server.baseUrl).href,
-          assetDirectory: path.join(bundleDir, "assets"),
-        });
+    const mapped = !profile
+      ? undefined
+      : values["sidebar-list-churn"]
+        ? {
+            profile: profile.profile,
+            mappedFrames: 0,
+            unmappedFrames: profile.profile.nodes.length,
+          }
+        : await mapColdLoadCpuProfile(profile.profile, {
+            assetBaseUrl: new URL("assets/", server.baseUrl).href,
+            assetDirectory: path.join(bundleDir, "assets"),
+          });
     let streaming;
     if (streamingReply) {
       const composer = page.locator(".agent-chat__composer-combobox textarea").last();
@@ -709,12 +807,22 @@ try {
       const before = await readLivePresentation();
       const liveTrace: unknown[] = [];
       collectedTrace = liveTrace;
-      await cdp.send("Tracing.start", {
-        categories: "toplevel,blink.user_timing,devtools.timeline",
-        transferMode: "ReportEvents",
-      });
+      if (!values.untraced) {
+        await cdp.send("Tracing.start", {
+          categories: "toplevel,blink.user_timing,devtools.timeline",
+          transferMode: "ReportEvents",
+        });
+      }
       const listOffset = sidebarLists?.stats().length ?? 0;
-      await page.evaluate(() => Reflect.get(window, "__coldLoad").startLive());
+      await page.evaluate((captureProbes) => {
+        if (captureProbes) {
+          const read = Reflect.get(window, "__readColdLoadRigProbes");
+          Reflect.set(window, "__coldLoadRigLiveStart", read());
+          setTimeout(() => Reflect.set(window, "__coldLoadRigLateStart", read()), 5_000);
+          setTimeout(() => Reflect.set(window, "__coldLoadRigQuietStart", read()), 15_000);
+        }
+        Reflect.get(window, "__coldLoad").startLive();
+      }, Boolean(rigProbeScript));
       await page.waitForFunction(
         (count) => Reflect.get(window, "__coldLoad").readLive().sentEvents === count,
         fixture.liveEvents.length,
@@ -746,11 +854,13 @@ try {
         }
       }
       await page.evaluate(() => Reflect.get(window, "__coldLoad").finishLive());
-      const liveComplete = new Promise<void>((resolve) => {
-        cdp.once("Tracing.tracingComplete", () => resolve());
-      });
-      await cdp.send("Tracing.end");
-      await liveComplete;
+      if (!values.untraced) {
+        const liveComplete = new Promise<void>((resolve) => {
+          cdp.once("Tracing.tracingComplete", () => resolve());
+        });
+        await cdp.send("Tracing.end");
+        await liveComplete;
+      }
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.live.trace.json`),
         JSON.stringify({ traceEvents: liveTrace }),
@@ -801,6 +911,14 @@ try {
           "Observed rates use the complete capture including drain; active-stream-normalized rates charge trailing coalesced reads to the event stream.",
         plannedWindowMs,
         presentation: { before, after },
+        probes: rigProbeScript
+          ? await page.evaluate(() => ({
+              start: Reflect.get(window, "__coldLoadRigLiveStart"),
+              lateStart: Reflect.get(window, "__coldLoadRigLateStart"),
+              quietStart: Reflect.get(window, "__coldLoadRigQuietStart"),
+              end: Reflect.get(window, "__readColdLoadRigProbes")(),
+            }))
+          : undefined,
       };
       await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.live.png`) });
       await writeFile(
@@ -813,6 +931,9 @@ try {
         );
       }
     }
+    const overlays = values["overlay-probe"]
+      ? await probeColdLoadOverlays(page, artifactDir, run)
+      : undefined;
     await cdp.detach();
     const result = {
       run: run + 1,
@@ -820,14 +941,15 @@ try {
       sidebarRowTransfer: values["sidebar-list-churn"] ? runTransfer : undefined,
       ...metrics,
       trace: values.untraced ? undefined : summarizeColdLoadTrace(trace, metrics.at),
-      cpu: values.untraced ? undefined : summarizeCpuProfile(mapped.profile),
-      mappedFrames: mapped.mappedFrames,
-      unmappedFrames: mapped.unmappedFrames,
+      cpu: mapped ? summarizeCpuProfile(mapped.profile) : undefined,
+      mappedFrames: mapped?.mappedFrames,
+      unmappedFrames: mapped?.unmappedFrames,
       harnessWarnings,
       visual,
       live,
       streaming,
       warmReload,
+      overlays,
     };
     results.push(result);
     console.log(JSON.stringify(result));
@@ -854,12 +976,16 @@ try {
         sidebarView,
         streamingReply: values["streaming-reply"],
         sidebarListChurn: values["sidebar-list-churn"],
+        sidebarLiveChurn: fixture.sidebarLiveChurn,
+        duplicateBootReads: values["duplicate-boot-reads"],
+        traced: !values.untraced,
         sidebarRowTransfer,
         sidebarComparison: values["sidebar-list-churn"]
           ? "Same final client bundle; full/delta wire response A/B using the production presenter and one synthetic query/history owner. This does not measure real Gateway selection, history reset/fallback lifecycle, or server projection CPU. Node IPC is outside the measured application response task."
           : undefined,
         latencyMs,
         frameGapMs,
+        captureMs,
         results,
       },
       null,

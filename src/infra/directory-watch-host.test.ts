@@ -37,8 +37,15 @@ describe("macOS directory watch host", () => {
       // Registration is asynchronous, so the live watch first invalidates the whole directory.
       await expect(events[0]!.promise).resolves.toEqual(["change", undefined]);
       const lost = Promise.withResolvers<void>();
+      const open = fs.openSync;
+      // Retire after caller admission, before helper registration. Deleting a live
+      // Linux watch emits rename rather than the registration error under test.
+      vi.spyOn(fs, "openSync").mockImplementationOnce((...args) => {
+        const fd = open(...args);
+        fs.rmdirSync(retired);
+        return fd;
+      });
       watchDirectory(retired, () => {}).on("error", () => lost.resolve());
-      fs.rmdirSync(retired);
       await lost.promise;
 
       fs.writeFileSync(path.join(watched, "profiles"), "after");

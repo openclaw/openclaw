@@ -10,6 +10,7 @@ import { collectSecurityWarnings } from "../commands/doctor-security.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ServiceInspectionError } from "../daemon/service-inspection-error.js";
+import { seedCompletedRuntimePinMigration } from "../daemon/test-helpers/service-audit-runtime-pin.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import {
@@ -85,6 +86,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         // These cases own managed agent repair after shared-state initialization.
         materializeSharedStateDatabase(state.env);
+        await seedCompletedRuntimePinMigration(state.env);
         const interactive = outcome.startsWith("interactive-");
         const declined = outcome === "interactive-declined";
         const clean = declined || outcome.startsWith("clean-") || outcome.startsWith("update-");

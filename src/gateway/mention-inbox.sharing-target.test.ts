@@ -6,10 +6,12 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronJob } from "../cron/types.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as mentionWorker from "./mention-inbox-worker.js";
 import {
@@ -19,7 +21,10 @@ import {
   withMentionInbox,
   readMentionInbox,
 } from "./mention-inbox.test-support.js";
-import { emitSessionsChanged } from "./server-methods/session-change-event.js";
+import {
+  emitSessionsChanged,
+  emitSessionTitleChanged,
+} from "./server-methods/session-change-event.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { setSessionActivitySummaryState } from "./session-activity-summary-state.js";
 import {
@@ -30,6 +35,33 @@ import {
 import * as sessionSharing from "./session-sharing.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["runtime settlement", "agent runs", "automation"] as const)(
+  "serves the prepared mention Inbox without storage reads after %s",
+  async (publication) => {
+    await withMentionInbox(async (f) => {
+      await f.post();
+      const before = await f.call("mentions.list", {});
+      expect(before).toMatchObject({ ok: true, payload: { items: [expect.any(Object)] } });
+      const reads = vi.spyOn(sessionEntryReads, "readSessionEntriesFromStoreInWorker");
+      if (publication === "runtime settlement") {
+        const context = requestContext({});
+        context.mentionInbox = f.inbox;
+        emitSessionsChanged(
+          context,
+          { sessionKey: SESSION_KEY, agentId: "main", reason: "agent.input.settled" },
+          { accessChanged: false, rowScope: "runtime" },
+        );
+      } else if (publication === "agent runs") {
+        sessionChanges.emit({ all: true, scope: "agent-runs" });
+      } else {
+        sessionChanges.emit({ sessionKey: SESSION_KEY, agentId: "main", scope: "automation" });
+      }
+      expect(await f.call("mentions.list", {})).toEqual(before);
+      expect(reads).not.toHaveBeenCalled();
+    });
+  },
+);
 
 it("recovers background views when a session is replaced during cold target preparation", async () => {
   await withMentionInbox(async (f) => {
@@ -236,7 +268,8 @@ it("refreshes 50 connected mention views after session and viewer changes", asyn
       await f.setSession({ displayName: "Renamed conversation" });
       exactRowReads = 0;
       f.broadcast.mockClear();
-      await emit(SESSION_KEY);
+      emitSessionTitleChanged(context, { sessionKey: SESSION_KEY, agentId: "main" });
+      await invalidation.mock.results.at(-1)?.value;
       expect(exactRowReads).toBe(0);
       expect(f.broadcast).toHaveBeenCalledTimes(50);
       expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(

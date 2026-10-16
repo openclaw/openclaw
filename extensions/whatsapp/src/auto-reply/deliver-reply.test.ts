@@ -173,7 +173,6 @@ function createDelivery(
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
       replyLogger,
-      skipLog: true,
       ...overrides,
     },
   };
@@ -370,7 +369,6 @@ describe("deliverWebReply", () => {
         maxMediaBytes: 1024 * 1024,
         textLimit: 200,
         replyLogger,
-        skipLog: true,
       }),
     ).rejects.toBe(timeout);
 
@@ -389,7 +387,6 @@ describe("deliverWebReply", () => {
         maxMediaBytes: 1024 * 1024,
         textLimit: 7,
         replyLogger,
-        skipLog: true,
       }),
     ).rejects.toMatchObject({
       sentBeforeError: true,

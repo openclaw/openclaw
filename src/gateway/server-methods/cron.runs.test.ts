@@ -254,7 +254,7 @@ describe("cron.runs session visibility", () => {
     },
   );
 
-  it("searches delivery errors before paging while preserving job and session visibility", async () => {
+  it("searches full run details before paging summary views without changing visibility", async () => {
     await withCronHistory(async ({ jobId, foreignJobId, query, rows, storePath }) => {
       const storeKey = cronStoreKey(storePath);
       const template = expectDefined(rows[0], "fixture run");
@@ -279,6 +279,10 @@ describe("cron.runs session visibility", () => {
         completionStatus: row.deliveryStatus === "unknown" ? "unknown" : "failed",
         summary: "Report completed",
         deliveryError: "Synthetic recipient unavailable",
+        sessionId: `delivery-session-${index}`,
+        diagnostics: { summary: "Diagnostic-only search", entries: [] },
+        delivery: { intended: { channel: "synthetic-channel" } },
+        failureNotificationDelivery: { status: "not-delivered", error: "Notification failed" },
       }));
       runOpenClawStateWriteTransaction(({ db }) => {
         for (const entry of entries) {
@@ -296,32 +300,46 @@ describe("cron.runs session visibility", () => {
         }
       });
       for (const scope of ["job", "all"] as const) {
-        expect(
-          await query({
-            ...(scope === "job" ? { id: jobId } : { scope }),
-            query: "RECIPIENT unavailable",
-            sortDir: "asc",
-            offset: 1,
-            limit: 1,
-          }),
-        ).toHaveBeenCalledWith(
-          true,
-          {
-            entries: [
-              expect.objectContaining({
-                runId: "delivery-search-2",
-                deliveryStatus: "unknown",
-                deliveryError: "Synthetic recipient unavailable",
-              }),
-            ],
-            total: 2,
-            offset: 1,
-            limit: 1,
-            hasMore: false,
-            nextOffset: null,
-          },
-          undefined,
-        );
+        for (const view of ["summary", undefined] as const) {
+          for (const search of ["RECIPIENT unavailable", "diagnostic-only", "synthetic-channel"]) {
+            const respond = await query({
+              ...(scope === "job" ? { id: jobId } : { scope }),
+              ...(view ? { view } : {}),
+              query: search,
+              sortDir: "asc",
+              offset: 1,
+              limit: 1,
+            });
+            expect(respond).toHaveBeenCalledWith(
+              true,
+              {
+                entries: [
+                  expect.objectContaining({
+                    runId: "delivery-search-2",
+                    sessionId: "delivery-session-2",
+                    summary: "Report completed",
+                    deliveryStatus: "unknown",
+                    deliveryError: "Synthetic recipient unavailable",
+                  }),
+                ],
+                total: 2,
+                offset: 1,
+                limit: 1,
+                hasMore: false,
+                nextOffset: null,
+              },
+              undefined,
+            );
+            const page = respond.mock.calls[0]?.[1];
+            for (const field of ["diagnostics", "delivery", "failureNotificationDelivery"]) {
+              if (view === "summary") {
+                expect(page).not.toHaveProperty(`entries.0.${field}`);
+              } else {
+                expect(page).toHaveProperty(`entries.0.${field}`);
+              }
+            }
+          }
+        }
       }
     });
   });

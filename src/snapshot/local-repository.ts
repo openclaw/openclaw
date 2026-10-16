@@ -283,7 +283,6 @@ class LocalSqliteSnapshotProvider {
       };
       await writeSnapshotManifest(stagingDir, manifest);
       applyPrivateModeSync(path.join(stagingDir, SNAPSHOT_MANIFEST_FILENAME), SNAPSHOT_FILE_MODE);
-      await readSnapshotManifest(stagingDir, snapshotId);
       await syncDirectoryIfSupported(stagingDir);
 
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
@@ -342,7 +341,6 @@ class LocalSqliteSnapshotProvider {
       return { ref: { path: snapshotRefPath }, manifest };
     } catch (error) {
       await publishedDirectory?.close().catch(() => undefined);
-      publishedDirectory = undefined;
       if (snapshotDirectoryCreated) {
         publishedIdentity ??= await fs.lstat(snapshotDir, { bigint: true }).catch(() => undefined);
       }

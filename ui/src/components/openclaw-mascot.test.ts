@@ -40,3 +40,40 @@ it("replaces the animated mascot with a same-size neutral mark and restores it o
   expect(mascot.querySelector(".openclaw-mascot--neutral")).toBeNull();
   expect(requestFrame).toHaveBeenCalledTimes(2);
 });
+
+it("pauses for reduced motion and hidden documents, and cancels playback on removal", async () => {
+  const motionQuery = Object.assign(new EventTarget(), { matches: false });
+  vi.stubGlobal("matchMedia", () => motionQuery);
+  const requestFrame = vi.fn(() => 1);
+  const cancelFrame = vi.fn();
+  vi.stubGlobal("requestAnimationFrame", requestFrame);
+  vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const mascot = document.createElement("openclaw-mascot");
+  document.body.append(mascot);
+  await waitForSolid(() => expect(requestFrame).toHaveBeenCalledOnce());
+
+  motionQuery.matches = true;
+  motionQuery.dispatchEvent(Object.assign(new Event("change"), { matches: true }));
+  expect(cancelFrame).toHaveBeenCalledOnce();
+  expect(requestFrame).toHaveBeenCalledOnce();
+
+  motionQuery.matches = false;
+  motionQuery.dispatchEvent(Object.assign(new Event("change"), { matches: false }));
+  expect(requestFrame).toHaveBeenCalledTimes(2);
+
+  visibility.mockReturnValue("hidden");
+  document.dispatchEvent(new Event("visibilitychange"));
+  expect(cancelFrame).toHaveBeenCalledTimes(2);
+  expect(requestFrame).toHaveBeenCalledTimes(2);
+
+  visibility.mockReturnValue("visible");
+  document.dispatchEvent(new Event("visibilitychange"));
+  expect(requestFrame).toHaveBeenCalledTimes(3);
+
+  mascot.remove();
+  await waitForSolid(() => expect(cancelFrame).toHaveBeenCalledTimes(3));
+  document.dispatchEvent(new Event("visibilitychange"));
+  motionQuery.dispatchEvent(Object.assign(new Event("change"), { matches: false }));
+  expect(requestFrame).toHaveBeenCalledTimes(3);
+});

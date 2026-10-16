@@ -3,6 +3,7 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
+import { watchCliRespawnParent } from "../node-runtime-recovery.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
@@ -130,6 +131,7 @@ if (isEntryMain) {
 }
 
 async function runEntryMain(): Promise<void> {
+  watchCliRespawnParent();
   if (isUpdateAdmissionInvocation(resolveCliArgvInvocation(process.argv))) {
     await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv));
     return;

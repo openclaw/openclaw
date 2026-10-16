@@ -10,7 +10,7 @@ import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-h
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.native.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as maintenanceReads from "../config/sessions/session-entry-read-maintenance.js";
 import * as sessionEntryReader from "../config/sessions/session-entry-read-runtime.js";

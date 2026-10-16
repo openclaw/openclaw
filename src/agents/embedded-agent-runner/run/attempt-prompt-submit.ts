@@ -100,12 +100,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
         }
       >
     | undefined;
-  /** Observes only the first admitted foreground dispatch, not preflight/compaction. */
-  onPrimaryModelRequest?: (tools: NonNullable<Parameters<StreamFn>[1]["tools"]>) => void;
   onModelRequest?: (
     model: Parameters<StreamFn>[0],
     context: Parameters<StreamFn>[1],
-  ) => MeasuredRequestContext | undefined;
+    signal?: AbortSignal,
+  ) => MeasuredRequestContext | undefined | Promise<MeasuredRequestContext | undefined>;
   onSteeringAcknowledged: () => void;
   persistToolResultProjections: () => Promise<void>;
   prependContext?: string;
@@ -141,7 +140,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
       ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
       : undefined;
 
-  let primaryRequestObserved = false;
   const installProviderPromptHistoryTransform = (): (() => void) => {
     const baseStreamFn = activeSession.agent.streamFn;
     const basePrepareNextTurn = activeSession.agent.prepareNextTurnWithContext;
@@ -238,13 +236,18 @@ export async function submitEmbeddedAttemptPrompt(input: {
           // Observe before V2 decides: only this observation can anchor the request's
           // measured prefix. A checkpoint request is observed again as its own request.
           const requestAnchor = foregroundRequest
-            ? input.onModelRequest?.(model, requestContext)
+            ? await input.onModelRequest?.(model, requestContext, options?.signal)
             : undefined;
+          assertRequestCurrent();
           if (foregroundRequest && input.compactBeforeRequest) {
             const checkpoint = await input.compactBeforeRequest(
-              (compactionModel, compactionContext, compactionOptions) => {
-                input.assertHostActive?.();
-                input.onModelRequest?.(compactionModel, compactionContext);
+              async (compactionModel, compactionContext, compactionOptions) => {
+                await input.onModelRequest?.(
+                  compactionModel,
+                  compactionContext,
+                  compactionOptions?.signal,
+                );
+                assertRequestCurrent();
                 return baseStreamFn(compactionModel, compactionContext, compactionOptions);
               },
               model,
@@ -261,12 +264,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
                 ...requestContext,
                 messages: [...requestContext.messages, checkpoint],
               };
-              input.onModelRequest?.(model, requestContext);
+              await input.onModelRequest?.(model, requestContext, options?.signal);
             }
-          }
-          if (foregroundRequest && !primaryRequestObserved) {
-            primaryRequestObserved = true;
-            input.onPrimaryModelRequest?.(requestContext.tools ?? []);
           }
           assertRequestCurrent();
           input.assertHostActive?.();

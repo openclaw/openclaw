@@ -19,13 +19,12 @@ import {
 } from "../../infra/sqlite-worker-contract.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerTransferOwner } from "../../infra/sqlite-worker-transfer.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import { projectSessionActorAuthority } from "./session-actor-command.js";
-import { rewriteSessionActorContextMetadata } from "./session-actor-context-metadata.js";
+import { initializeSessionActorContextStats } from "./session-actor-context-stats.worker.js";
 import type {
   SessionActorOperations,
   SessionActorOutcome,
@@ -270,9 +269,7 @@ export function createSessionActorWorker(
       }
       working.hot.writeToken = pendingToken;
       if (stageResidentState(database, working)) {
-        publication.actorPostimages = new Map([
-          [sessionKey, freezeJsonSnapshot(structuredClone(working.hot))],
-        ]);
+        publication.actorPostimages = new Map([[sessionKey, structuredClone(working.hot)]]);
       }
     };
     return {
@@ -324,9 +321,9 @@ export function createSessionActorWorker(
           return run();
         }
         const working = forkSessionActorStoredState(before);
-        rewriteSessionActorContextMetadata(working, rewrite.rows);
         working.hot.version = { ...before.hot.version, sequence: before.hot.version.sequence + 1 };
         return withSessionActorTransactionState(opened, working, run, (authority) => {
+          initializeSessionActorContextStats(opened, working);
           working.hot = projectSessionActorHotState(working);
           const pendingToken = readSqliteDatabasePendingScopedWriteToken(
             opened.db,
@@ -356,13 +353,11 @@ export function createSessionActorWorker(
           }
           return {
             ...authority,
-            actorRewrite: freezeJsonSnapshot(
-              structuredClone({
-                before: before.hot.transcript.version,
-                postimage: working.hot,
-                rows: rewrite.rows,
-              }),
-            ),
+            actorRewrite: structuredClone({
+              before: before.hot.transcript.version,
+              postimage: working.hot,
+              rows: rewrite.rows,
+            }),
           };
         });
       },
@@ -448,11 +443,7 @@ export function createSessionActorWorker(
           registerParticipantOwner(opened);
           registerTranscriptRewriteOwner(opened);
           const admit = (stage: "transaction" | "commit", publication: unknown) => {
-            const revision = readSqliteNativeMutationRevision(opened.db);
             withoutSqliteDatabaseWriteScope(opened.db, () => context.admit(stage, publication));
-            if (readSqliteNativeMutationRevision(opened.db) !== revision) {
-              throw new Error("Session actor database changed during authority admission");
-            }
           };
           // The writer owns both hydration and version validation. A replica miss
           // never requires a separate read command before this transaction.
@@ -522,6 +513,7 @@ export function createSessionActorWorker(
               epoch: before.hot.version.epoch,
               sequence: before.hot.version.sequence + 1,
             };
+            initializeSessionActorContextStats(opened, working);
             working.hot = projectSessionActorHotState(working);
             recordPhase("actorProjectionMs");
             const pendingToken = readSqliteDatabasePendingScopedWriteToken(

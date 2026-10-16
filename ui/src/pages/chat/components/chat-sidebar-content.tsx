@@ -32,7 +32,6 @@ import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { emptyLegacyContent } from "../../../lit/solid-content.tsx";
 import {
   AttachmentCardHeader,
   AttachmentPreviewSkeleton,
@@ -187,7 +186,7 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
       >
         <ChatTextAttachment
           plainText={props.content.plainText ?? false}
-          actions={props.content.renderActions?.() ?? emptyLegacyContent}
+          actions={props.content.renderActions?.()}
           embedSandboxMode={props.embedSandboxMode}
           src={model().src ?? ""}
           sourceIdentity={model().sourceIdentity}

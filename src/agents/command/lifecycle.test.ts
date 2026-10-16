@@ -1,11 +1,15 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { createCliTimeoutError } from "../cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../failover-error.js";
 import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
+import {
+  createAgentAttemptLifecycleCallbacks,
+  type AgentAttemptLifecycleState,
+} from "./attempt-callbacks.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 
 const { emitAgentEvent, lifecycleLog } = vi.hoisted(() => ({
@@ -32,6 +36,86 @@ function createLifecycle(runId: string) {
 }
 
 describe("createAgentCommandLifecycle", () => {
+  it.each(["recovered", "later-failure", "preparation-failure"] as const)(
+    "selects command terminal facts after %s without an observed native start",
+    async (outcome) => {
+      emitAgentEvent.mockClear();
+      const state: AgentAttemptLifecycleState = {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      };
+      const callbacks = createAgentAttemptLifecycleCallbacks(state);
+      const lifecycle = createAgentCommandLifecycle({
+        runId: "recovered-command",
+        lifecycleGeneration: () => "generation",
+        startedAt: 100,
+        state,
+      });
+      await callbacks.onAgentEvent({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "old capacity error",
+          errorObservation: { httpStatus: 503 },
+        },
+      });
+      if (outcome === "preparation-failure") {
+        callbacks.onAttemptStart();
+      } else {
+        callbacks.onAttemptTerminalReplaced();
+      }
+      const error = outcome === "recovered" ? undefined : "new attempt failure";
+      const result = {
+        meta: {
+          durationMs: 1,
+          ...(error ? { error: { kind: "incomplete_turn" as const, message: error } } : {}),
+        },
+      };
+      const receipt = {
+        runId: "recovered-command",
+        sessionId: "session",
+        turnId: "recovery",
+        requested: { provider: "openai", model: "model" },
+        effective: { provider: "openai", model: "model", responseModel: "model" },
+        successfulToolNames: ["write"],
+        assistantTranscriptIdempotencyKey: "selected",
+        rerouted: false,
+        terminalDisposition: "visible" as const,
+      };
+      const terminal = {
+        metadata: { terminalReceipt: receipt },
+        outcome: buildAgentRunTerminalOutcome({
+          status: error ? "error" : "ok",
+          stopReason: error ? "error" : "stop",
+          error,
+        }),
+      };
+      // Exercise the same error selector and publisher used by command post-run settlement.
+      expect(lifecycle.resolveResultError(result, false)).toBe(error);
+      if (lifecycle.resolveResultError(result, false)) {
+        lifecycle.emitResultError(result, false, terminal);
+      } else {
+        lifecycle.emitEnd(terminal);
+      }
+      callbacks.onAttemptTerminalReplaced();
+      lifecycle.emitEnd(terminal);
+      expect(state.currentTurnUserMessagePersisted).toBe(true);
+      expect(state.lifecycleEnded).toBe(true);
+      expect(emitAgentEvent).toHaveBeenCalledOnce();
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      assert.isDefined(event);
+      const data = event.data;
+      expect(data).toMatchObject({
+        phase: error ? "error" : "end",
+        terminalReceipt: receipt,
+        executionSettled: true,
+      });
+      expect(data.error).toBe(error);
+      expect(data).not.toHaveProperty("errorObservation");
+    },
+  );
+
   it("publishes an outer timeout that arrives after a yielded result", () => {
     emitAgentEvent.mockClear();
     const controller = new AbortController();
