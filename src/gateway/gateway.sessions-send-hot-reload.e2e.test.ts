@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, onTestFailed } from "vitest";
-import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resetConfigOverrides } from "../config/runtime-overrides.js";
@@ -68,27 +68,11 @@ afterEach(async () => {
 });
 
 function textResponse(response: ServerResponse, text: string): void {
-  const id = randomUUID();
-  const item = {
-    type: "message",
-    id: `msg_${id}`,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${id}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-      },
-    },
-  ]);
+  writeOpenAiResponsesText(response, {
+    text,
+    messageId: `msg_${randomUUID()}`,
+    responseId: `resp_${randomUUID()}`,
+  });
 }
 
 function readTargetToolResult(raw: string): Record<string, unknown> | undefined {
@@ -105,9 +89,6 @@ async function startProvider() {
   const targetStarted = createDeferred();
   const releaseTarget = createDeferred();
   const calls: ModelCall[] = [];
-  const recordCall = (call: ModelCall) => {
-    calls.push(call);
-  };
   let targetRunId: string | undefined;
   const server = createServer((request, response) => {
     void (async () => {
@@ -135,20 +116,20 @@ async function startProvider() {
       const rawModel = body.model;
       const modelId = typeof rawModel === "string" ? rawModel : "";
       if (raw.includes(TARGET_REPLY)) {
-        recordCall({ kind: "reply", model: modelId, raw });
+        calls.push({ kind: "reply", model: modelId, raw });
         textResponse(response, "Requester received the target result.");
       } else if (raw.includes(INITIAL_PROMPT) && raw.includes("function_call_output")) {
-        recordCall({ kind: "dispatch-complete", model: modelId, raw });
+        calls.push({ kind: "dispatch-complete", model: modelId, raw });
         const result = readTargetToolResult(raw);
         targetRunId = typeof result?.runId === "string" ? result.runId : undefined;
         textResponse(response, DISPATCH_COMPLETE);
       } else if (raw.includes(TARGET_MESSAGE)) {
-        recordCall({ kind: "target", model: modelId, raw });
+        calls.push({ kind: "target", model: modelId, raw });
         targetStarted.resolve();
         await releaseTarget.promise;
         textResponse(response, TARGET_REPLY);
       } else if (raw.includes(INITIAL_PROMPT)) {
-        recordCall({ kind: "dispatch", model: modelId, raw });
+        calls.push({ kind: "dispatch", model: modelId, raw });
         expect(body.tools).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ type: "function", name: "sessions_send" }),
@@ -353,8 +334,7 @@ describe("sessions_send across prepared runtime reload", () => {
         { agentId: "target", env: process.env },
         { recentLimit: 10, agentIds: ["target"] },
       ).recent.find(({ sessionKey }) => sessionKey === "agent:target:main");
-      expect(target?.entry.status, target?.entry.lastRunError).toBe("done");
-      expect(target?.entry.lastRunError).toBeUndefined();
+      expect(target?.entry).toMatchObject({ status: "done", lastRunError: undefined });
       expect(provider.calls).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ kind: "dispatch", model: "model-a" }),

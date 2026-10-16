@@ -24,7 +24,6 @@ it(
     await runQaGatewayTestFixture(test, async ({ signal, verifyCleanup }) => {
       const observed: string[] = [];
       const accepted = new Map<string, string>();
-      const requests: string[] = [];
       const target = "agent:main:dashboard:peer-target";
       let hold = true;
       let held = false;
@@ -47,7 +46,6 @@ it(
               !JSON.stringify(item.content).includes("OpenClaw runtime context:"),
           );
           const text = JSON.stringify(input[userIndex]?.content ?? "");
-          requests.push(text.slice(0, 500));
           const sendMarker = text.match(
             /SEND_(PEER_UPDATE_[0-9]+|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE|ARCHIVED_SOURCE_UPDATE)/u,
           )?.[1];
@@ -143,6 +141,19 @@ it(
       const source = "agent:main:dashboard:peer-source";
       const resetSource = "agent:main:dashboard:reset-source";
       const revokedSource = "agent:main:dashboard:revoked-source";
+      const expectedUpdates = Array.from({ length: 5 }, (_, i) => `PEER_UPDATE_${i + 1}`);
+      const history = () =>
+        client!.request<{ pendingInputs: ChatPendingInputsPage }>(
+          "chat.history",
+          { sessionKey: target },
+          { signal },
+        );
+      const start = (sessionKey: string, message: string) =>
+        client!.request<{ runId: string }>(
+          "agent",
+          { agentId: "main", sessionKey, message, deliver: false, idempotencyKey: randomUUID() },
+          { signal },
+        );
       const archivedSource = "agent:main:dashboard:archived-source";
       try {
         const provider = buildMockOpenAiResponsesProvider(baseUrl);
@@ -197,30 +208,10 @@ it(
           );
           sessionIds.set(key, created.sessionId);
         }
-        await client.request(
-          "agent",
-          {
-            agentId: "main",
-            sessionKey: target,
-            message: "HOLD_TARGET",
-            deliver: false,
-            idempotencyKey: randomUUID(),
-          },
-          { signal },
-        );
+        await start(target, "HOLD_TARGET");
         await vi.waitFor(() => expect(held).toBe(true), { timeout: 30_000 });
         const send = async (from: string, message: string) => {
-          const sender = await client!.request<{ runId: string }>(
-            "agent",
-            {
-              sessionKey: from,
-              agentId: "main",
-              message: "SEND_" + message,
-              deliver: false,
-              idempotencyKey: randomUUID(),
-            },
-            { signal },
-          );
+          const sender = await start(from, "SEND_" + message);
           await client!.request(
             "agent.wait",
             { runId: sender.runId, timeoutMs: 30_000 },
@@ -229,18 +220,14 @@ it(
           await vi.waitFor(() => expect(accepted.has(message)).toBe(true), { timeout: 30_000 });
           return accepted.get(message);
         };
-        for (let i = 1; i <= 5; i++) {
-          await send(source, `PEER_UPDATE_${i}`);
+        for (const message of expectedUpdates) {
+          await send(source, message);
         }
         const cancelled = await send(source, "CANCELLED_UPDATE");
         await send(resetSource, "RESET_SOURCE_UPDATE");
         await send(revokedSource, "REVOKED_UPDATE");
         await send(archivedSource, "ARCHIVED_SOURCE_UPDATE");
-        const before = await client.request<{ pendingInputs: ChatPendingInputsPage }>(
-          "chat.history",
-          { sessionKey: target },
-          { signal },
-        );
+        const before = await history();
         expect(before.pendingInputs.items).toHaveLength(9);
         expect(JSON.stringify(before)).not.toContain("sessionSendDelivery");
         await client.request("chat.abort", { sessionKey: target, runId: cancelled }, { signal });
@@ -269,26 +256,15 @@ it(
         await gateway.startGateway();
         expect(gateway.child?.pid).not.toBe(firstPid);
         client = await connect();
-        await vi.waitFor(
-          () =>
-            expect(observed).toEqual([
-              "PEER_UPDATE_1",
-              "PEER_UPDATE_2",
-              "PEER_UPDATE_3",
-              "PEER_UPDATE_4",
-              "PEER_UPDATE_5",
-            ]),
-          { timeout: 60_000, interval: 200 },
-        );
+        await vi.waitFor(() => expect(observed).toEqual(expectedUpdates), {
+          timeout: 60_000,
+          interval: 200,
+        });
         await vi.waitFor(
           () => expect(gateway.logs()).toContain("Session delivery recovery blocked for "),
           { timeout: 30_000 },
         );
-        const after = await client.request<{ pendingInputs: ChatPendingInputsPage }>(
-          "chat.history",
-          { sessionKey: target },
-          { signal },
-        );
+        const after = await history();
         // History retains the cancelled receipt; only permission failures can replay.
         expect(after.pendingInputs.items.map((item) => item.state)).toEqual([
           "cancelled",
@@ -322,58 +298,15 @@ it(
         expect(gateway.logs().split("Session delivery endpoint was replaced")).toHaveLength(
           previousReplacementWarnings,
         );
-        const finalHistory = await client.request(
-          "chat.history",
-          { sessionKey: target },
-          { signal },
-        );
-        expect(JSON.stringify(finalHistory)).not.toContain("sessionSendDelivery");
-        expect(JSON.stringify(finalHistory)).toContain(
+        const finalHistory = JSON.stringify(await history());
+        expect(finalHistory).not.toContain("sessionSendDelivery");
+        expect(finalHistory).toContain(
           "current session permissions do not allow automatic delivery",
         );
-        expect(JSON.stringify(finalHistory)).toContain("session was reset or replaced");
-        expect(JSON.stringify(finalHistory)).not.toContain(`From ${archivedSource}`);
+        expect(finalHistory).toContain("session was reset or replaced");
+        expect(finalHistory).not.toContain(`From ${archivedSource}`);
         expect(gateway.logs()).not.toContain('"archived":true');
-        expect(observed).toEqual([
-          "PEER_UPDATE_1",
-          "PEER_UPDATE_2",
-          "PEER_UPDATE_3",
-          "PEER_UPDATE_4",
-          "PEER_UPDATE_5",
-        ]);
-        console.info(
-          JSON.stringify({
-            proof: "peer-input-recovery",
-            firstPid,
-            finalPid: gateway.child?.pid,
-            observed,
-          }),
-        );
-      } catch (error) {
-        if (client) {
-          console.error(
-            "Recovery input states:",
-            JSON.stringify(
-              await client
-                .request("chat.history", { sessionKey: target }, { signal })
-                .catch(String),
-            ),
-          );
-          for (const [marker, runId] of accepted) {
-            console.error(
-              "Recovery run:",
-              marker,
-              JSON.stringify(
-                await client
-                  .request("agent.wait", { runId, timeoutMs: 0 }, { signal })
-                  .catch(String),
-              ),
-            );
-          }
-        }
-        console.error("Synthetic provider user inputs:", JSON.stringify(requests));
-        console.error(gateway.logs());
-        throw error;
+        expect(observed).toEqual(expectedUpdates);
       } finally {
         await client?.stopAndWait();
         await gateway.cleanup();

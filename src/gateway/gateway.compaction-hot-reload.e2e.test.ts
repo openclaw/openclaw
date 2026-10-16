@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import {
   clearConfigCache,
@@ -19,7 +20,6 @@ import {
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
-import { redactSensitiveText } from "../logging/redact.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
   closeProvider,
@@ -32,9 +32,8 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 
 let sequence = 0;
 
-function nextId(prefix: string): string {
-  return `${prefix}-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${sequence++}`;
-}
+const nextId = (prefix: string): string =>
+  `${prefix}-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${sequence++}`;
 
 function resetGatewayState(): void {
   resetConfigOverrides();
@@ -78,32 +77,11 @@ describe("gateway compaction hot reload", () => {
           providerRequestToolNames.push(
             body.tools?.map((tool) => tool.name ?? tool.function?.name ?? "") ?? [],
           );
-          const text = summaryByModel.get(model) ?? "Primary assistant answer.";
-          const message = {
-            type: "message",
-            id: nextId("provider-message"),
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text, annotations: [] }],
-          };
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          for (const event of [
-            {
-              type: "response.output_item.added",
-              item: { ...message, status: "in_progress", content: [] },
-            },
-            { type: "response.output_item.done", item: message },
-            {
-              type: "response.completed",
-              response: {
-                status: "completed",
-                usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
-              },
-            },
-          ]) {
-            response.write(`data: ${JSON.stringify(event)}\n\n`);
-          }
-          response.end("data: [DONE]\n\n");
+          writeOpenAiResponsesText(response, {
+            text: summaryByModel.get(model) ?? "Primary assistant answer.",
+            messageId: nextId("provider-message"),
+            responseId: nextId("provider-response"),
+          });
         })().catch((error: unknown) => {
           response.writeHead(500).end(error instanceof Error ? error.message : String(error));
         });
@@ -224,11 +202,7 @@ describe("gateway compaction hot reload", () => {
             { runId: started.runId, timeoutMs: 30_000 },
             { timeoutMs: 35_000 },
           );
-          const diagnostic = redactSensitiveText(JSON.stringify(completed), { mode: "tools" })
-            .replaceAll(token, "[test-token]")
-            .replaceAll(tempHome, "[test-home]")
-            .slice(0, 4_000);
-          expect(completed.status, diagnostic).toBe("ok");
+          expect(completed.status).toBe("ok");
         };
 
         await sendChatAndWait("Warm the existing prepared model runtime.");
@@ -244,21 +218,12 @@ describe("gateway compaction hot reload", () => {
         await sendChatAndWait("Apply the hot-reloaded tool deny policy to the existing runtime.");
         expect(providerRequestToolNames.at(-1)).not.toContain("exec");
 
-        await writeConfigFile({
-          ...initialConfig,
-          agents: {
-            ...initialConfig.agents,
-            defaults: {
-              ...initialConfig.agents.defaults,
-              compaction: {
-                ...initialConfig.agents.defaults.compaction,
-                model: newCompactionModel.modelRef,
-                maxActiveTranscriptBytes: "10b",
-              },
-            },
-          },
-          tools: reloadedTools,
+        const reloadedConfig = { ...structuredClone(initialConfig), tools: reloadedTools };
+        Object.assign(reloadedConfig.agents.defaults.compaction, {
+          model: newCompactionModel.modelRef,
+          maxActiveTranscriptBytes: "10b",
         });
+        await writeConfigFile(reloadedConfig);
         await expect
           .poll(() => getRuntimeConfig().agents?.defaults?.compaction, {
             timeout: 5_000,
