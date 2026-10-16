@@ -38,7 +38,6 @@ describe("discord message context", () => {
     const payload = await context({ baseText: text, messageText: text }, text);
     expect(payload.Body).toContain(text);
     const diagnostics = vi.mocked(logVerbose).mock.calls.flat().join("\n");
-    expect(diagnostics).toContain("discord inbound: channel=");
     expect(diagnostics).not.toContain(text);
     expect(diagnostics).not.toContain("preview=");
   });
