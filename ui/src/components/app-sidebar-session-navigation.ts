@@ -47,15 +47,14 @@ import {
 } from "./app-sidebar-session-lookup.ts";
 import {
   createSidebarSessionRowsComparator,
+  createSidebarSessionSelection,
   collectKnownSidebarSessionCatalogIds,
-  extendSidebarSessionSelection,
   findProjectedSidebarSession,
   findSidebarSessionInTree,
   projectSidebarVisibleMainSession,
   resolveActiveSidebarAgent,
   resolveLatestSidebarAgentSession,
   resolveSidebarMainSessionKey,
-  toggleSidebarSessionSelection,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
 import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
@@ -238,7 +237,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
   sessionOwnershipVisibility = { filters: false, avatars: false };
 
-  selectedSessionKeys: ReadonlySet<string> = new Set();
+  private readonly sessionSelection = createSidebarSessionSelection(
+    () => this.visibleSessionRowsInOrder(),
+    () => this.requestUpdate(),
+  );
+  get selectedSessionKeys(): ReadonlySet<string> {
+    return this.sessionSelection.selectedKeys;
+  }
+  readonly clearSessionSelection = this.sessionSelection.clear;
   sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
   sessionsShowCron: boolean = loadStoredSidebarSessionsShowCron();
   sessionsShowPreview: boolean = loadStoredSidebarSessionsShowPreview();
@@ -275,7 +281,6 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
       .map((catalog) => catalog.id);
   };
 
-  private sessionSelectionAnchor: string | null = null;
   private readonly runtimeSampledAtByRow = new WeakMap<GatewaySessionRow, number>();
   readonly attentionQuestions = createQuestionPromptState(() => {});
   declare attention: SessionAttention;
@@ -482,43 +487,17 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     }
     if (!session.isChild && event.shiftKey) {
       event.preventDefault();
-      this.extendSessionSelection(session.key);
+      this.sessionSelection.extend(session.key);
       return;
     }
     if (!session.isChild && event.altKey) {
       event.preventDefault();
-      this.toggleSessionSelected(session.key);
+      this.sessionSelection.toggle(session.key);
       return;
     }
     event.preventDefault();
     this.clearSessionSelection();
     this.selectSession(session.key);
-  }
-
-  private toggleSessionSelected(key: string) {
-    const selection = toggleSidebarSessionSelection(this.selectedSessionKeys, key);
-    this.sessionSelectionAnchor = selection.anchor;
-    this.selectedSessionKeys = selection.selectedKeys;
-    this.requestUpdate();
-  }
-
-  private extendSessionSelection(key: string) {
-    const selection = extendSidebarSessionSelection({
-      rows: this.visibleSessionRowsInOrder(),
-      anchor: this.sessionSelectionAnchor,
-      key,
-    });
-    this.sessionSelectionAnchor = selection.anchor;
-    this.selectedSessionKeys = selection.selectedKeys;
-    this.requestUpdate();
-  }
-
-  clearSessionSelection() {
-    this.sessionSelectionAnchor = null;
-    if (this.selectedSessionKeys.size > 0) {
-      this.selectedSessionKeys = new Set();
-      this.requestUpdate();
-    }
   }
 
   /** Chip switching selects the agent for the application. */
