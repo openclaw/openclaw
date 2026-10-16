@@ -107,7 +107,7 @@ Their exclusively owned chunks and dependencies are removed; dependencies needed
 by retained code stay. Discovery sees only the selected set as bundled. Official
 channel and provider catalogs keep offering omitted plugins for installation,
 and configuration references receive the normal `openclaw plugins install`
-guidance. On-demand installs use the normal plugin installer and isolated state
+guidance. On-demand installs use the normal plugin installer and configured state
 directory; they do not modify the executable or its sidecar. Cached help for the
 full build is discarded so help reflects the selected artifact.
 
