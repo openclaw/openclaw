@@ -39,9 +39,7 @@ import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-naviga
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import {
-  loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarCatalogGrouping,
-  SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
   SIDEBAR_SESSION_PAGE_SIZE,
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
@@ -250,18 +248,10 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     return snapshot && Array.isArray(snapshot.gateways) ? snapshot : null;
   }
 
-  private readonly nativeGatewaysChanged = () => {
-    this.sidebarMenus.closeSessionMenu();
-    this.requestUpdate();
-  };
-  private readonly hiddenSessionCatalogsChanged = () => {
-    this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
-    this.requestUpdate();
-  };
   // Catalog rows are non-startup content. Load their renderer through the same
   // idle boundary as other sidebar chrome, then repaint when the chunk arrives.
   private catalogRenderer: SessionCatalogGroupsRenderer | null = null;
-  private readonly catalogRendererImport = createIdleImport(
+  readonly catalogRendererImport = createIdleImport(
     () => import("./app-sidebar-session-catalog-render.tsx"),
     (module) => {
       this.catalogRenderer = module.renderSessionCatalogGroups;
@@ -278,13 +268,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   override disconnectedCallback() {
-    window.removeEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
-    window.removeEventListener(
-      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
-      this.hiddenSessionCatalogsChanged,
-    );
     this.narration?.disconnect();
-    this.catalogRendererImport.dispose();
     super.disconnectedCallback();
   }
 
@@ -368,17 +352,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       );
       this.narration.sync(this.narrationSyncInput());
     });
-  }
-
-  override connectedCallback() {
-    super.connectedCallback();
-    window.addEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
-    this.hiddenSessionCatalogsChanged();
-    window.addEventListener(
-      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
-      this.hiddenSessionCatalogsChanged,
-    );
-    this.catalogRendererImport.schedule();
   }
 
   toggleSessionPin(session: SidebarRecentSession): void {
