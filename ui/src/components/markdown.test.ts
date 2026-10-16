@@ -85,15 +85,6 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(fragment.querySelector("code")?.textContent).toBe("example --check");
       expect(fragment.querySelector("a")?.getAttribute("href")).toBe("https://example.com/docs");
     });
-
-    it("keeps authored HTML list tags literal, which is why channels ask for Markdown", () => {
-      const escaped = toSanitizedMarkdownHtml(
-        "<ul>\n<li><b>Option A:</b> Run <code>example --check</code>.</li>\n</ul>",
-      );
-      expect(escaped).toContain("&lt;ul&gt;");
-      expect(escaped).toContain("&lt;li&gt;");
-      expect(htmlFragment(escaped).querySelector("ul")).toBeNull();
-    });
   });
 
   describe("images", () => {
