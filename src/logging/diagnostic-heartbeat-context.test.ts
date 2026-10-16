@@ -32,6 +32,17 @@ let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 const reply = "synthetic current assistant reply";
 const privateReply = "synthetic memory-only assistant reply";
 const incognitoKey = "agent:heartbeat:dashboard:incognito-private";
+const heartbeatOptions = {
+  testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+  sampleLiveness: () => null,
+};
+function session(label: string) {
+  return {
+    agentId: "heartbeat",
+    sessionId: `heartbeat-${label}`,
+    sessionKey: label === "incognito" ? incognitoKey : `agent:heartbeat:${label}`,
+  };
+}
 
 beforeAll(async () => {
   diagnosticsEnabled = areDiagnosticsEnabledForProcess();
@@ -42,11 +53,7 @@ beforeAll(async () => {
   setRuntimeConfigSnapshot({});
   for (const label of ["enabled", "disabled", "incognito"]) {
     const incognito = label === "incognito";
-    const scope = {
-      agentId: "heartbeat",
-      sessionKey: incognito ? incognitoKey : `agent:heartbeat:${label}`,
-      sessionId: `heartbeat-${label}`,
-    };
+    const scope = session(label);
     await replaceSessionEntry(scope, {
       sessionId: scope.sessionId,
       updatedAt: 1,
@@ -68,9 +75,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   resetDiagnosticStateForTest();
   await scheduler.stop();
-  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -97,10 +104,9 @@ it("checks memory pressure every tick without recording idle samples", async () 
     arrayBuffersBytes: 5,
   }));
   const options = {
-    testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+    ...heartbeatOptions,
     recoverStuckSession: () => undefined,
     emitMemorySample,
-    sampleLiveness: () => null,
   };
   startGatewayDiagnosticHeartbeat(scheduler, { diagnostics: { enabled: true } }, options);
 
@@ -108,11 +114,7 @@ it("checks memory pressure every tick without recording idle samples", async () 
   expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: false });
   expect(emitMemorySample.mock.contexts.at(-1)).toBe(options);
 
-  logSessionStateChange({
-    sessionId: "heartbeat-samples",
-    sessionKey: "agent:heartbeat:samples",
-    state: "processing",
-  });
+  logSessionStateChange({ ...session("samples"), state: "processing" });
   await tick();
 
   expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
@@ -124,8 +126,7 @@ it.each(["enabled", "disabled", "incognito"])(
   async (label) => {
     const enabled = label !== "disabled";
     vi.mocked(diagnosticLogger.isEnabled).mockReturnValue(enabled);
-    const sessionId = `heartbeat-${label}`;
-    const sessionKey = label === "incognito" ? incognitoKey : `agent:heartbeat:${label}`;
+    const { sessionId, sessionKey } = session(label);
     const logged = createDeferred();
     const warn = vi.spyOn(diagnosticLogger, "warn").mockImplementation((message) => {
       if (message.startsWith(`stuck session: sessionId=${sessionId} `)) {
@@ -136,11 +137,7 @@ it.each(["enabled", "disabled", "incognito"])(
     startGatewayDiagnosticHeartbeat(
       scheduler,
       {},
-      {
-        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
-        sampleLiveness: () => null,
-        recoverStuckSession: recover,
-      },
+      { ...heartbeatOptions, recoverStuckSession: recover },
     );
     logSessionStateChange({ sessionId, sessionKey, state: "processing" });
     const queries = [
@@ -149,28 +146,22 @@ it.each(["enabled", "disabled", "incognito"])(
         vi.spyOn(StatementSync.prototype, method),
       ),
     ];
-    try {
-      await tick();
-      await tick();
-      expect(recover).toHaveBeenCalled();
-      if (enabled) {
-        await logged.promise;
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining(`sessionId=${sessionId}`));
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining(`sessionKey=${sessionKey}`));
-        expect(JSON.stringify(warn.mock.calls)).not.toContain(
-          label === "incognito" ? privateReply : reply,
-        );
-        expect(JSON.stringify(warn.mock.calls)).not.toContain("lastAssistant=");
-      } else {
-        expect(warn).not.toHaveBeenCalled();
-      }
-      for (const query of queries) {
-        expect(query).not.toHaveBeenCalled();
-      }
-    } finally {
-      for (const query of queries) {
-        query.mockRestore();
-      }
+    await tick();
+    await tick();
+    expect(recover).toHaveBeenCalled();
+    if (enabled) {
+      await logged.promise;
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`sessionId=${sessionId}`));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`sessionKey=${sessionKey}`));
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(
+        label === "incognito" ? privateReply : reply,
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("lastAssistant=");
+    } else {
+      expect(warn).not.toHaveBeenCalled();
+    }
+    for (const query of queries) {
+      expect(query).not.toHaveBeenCalled();
     }
   },
 );
