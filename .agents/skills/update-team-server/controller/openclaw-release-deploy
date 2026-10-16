@@ -3925,12 +3925,21 @@ fi
 
 exec 9>"$lock_file"
 flock -n 9 || {
-		if [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == continue-frozen || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
+	if [[ "$mode" == deploy ]]; then
+		# Maintenance joins its descendants under this same lock; let it settle.
+		printf 'DEPLOY_LOCK_WAIT waiting up to 180 seconds for deployment or maintenance\n'
+		flock -w 180 -E 75 9 || {
+			lock_exit=$?
+			printf 'DEPLOY_LOCK_UNAVAILABLE exit=%s; retry after the current owner finishes\n' "$lock_exit" >&2
+			exit "$lock_exit"
+		}
+	elif [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == continue-frozen || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
 		fail 'bound maintenance action refused: canonical deployment lock is busy'
 		exit 1
+	else
+		printf 'SKIP another release deployment is running\n'
+		exit 0
 	fi
-	printf 'SKIP another release deployment is running\n'
-	exit 0
 }
 proof maintenance-idle "$ancestor_boundary" >/dev/null ||
 	fail 'scheduled maintenance has not settled; deployment admission refused'

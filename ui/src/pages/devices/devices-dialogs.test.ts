@@ -5,7 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { showInputDialog } from "../../components/input-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { createInitialDevicesState } from "../../lib/nodes/page-operations.ts";
-import { DevicesDialogController, type DevicesDialogHost } from "./devices-dialogs.ts";
+import { createDevicesDialogs, type DevicesDialogHost } from "./devices-dialogs.ts";
 
 vi.mock("../../components/input-dialog.ts", () => ({ showInputDialog: vi.fn() }));
 
@@ -37,7 +37,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("DevicesDialogController editAlias", () => {
+describe("Devices dialogs editAlias", () => {
   it("renames a paired device through the input dialog", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "device.pair.rename") {
@@ -55,7 +55,7 @@ describe("DevicesDialogController editAlias", () => {
       return null;
     });
 
-    const controller = new DevicesDialogController(
+    const controller = createDevicesDialogs(
       createHost({
         runPageTask: async (task) => task(state),
       }),
@@ -98,7 +98,7 @@ describe("DevicesDialogController editAlias", () => {
       return null;
     });
 
-    const controller = new DevicesDialogController(createHost());
+    const controller = createDevicesDialogs(createHost());
     const pending = controller.editAlias({ id: "device-1", name: "Browser" });
     await vi.waitFor(() => expect(captured).toBeDefined());
 
@@ -121,7 +121,7 @@ describe("DevicesDialogController editAlias", () => {
       return null;
     });
 
-    const controller = new DevicesDialogController(
+    const controller = createDevicesDialogs(
       createHost({
         canManagePairing: () => canManagePairing,
         runPageTask: async (task) => task(state),

@@ -2,7 +2,7 @@
 
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { render } from "@solidjs/testing-library";
-import { createComponent, flush } from "solid-js";
+import { createComponent, createRoot, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
@@ -24,7 +24,10 @@ setupSidebarTest();
 
 async function mountShell() {
   const runtime = bootstrapApplication();
-  const owner = new ShellOwner(document.createElement("openclaw-app-shell"), runtime);
+  const { owner, dispose } = createRoot((disposeRoot) => ({
+    owner: new ShellOwner(document.createElement("openclaw-app-shell"), runtime),
+    dispose: disposeRoot,
+  }));
   owner.routeState = { routeId: "chat" };
   document.body.append(owner.element);
   const view = render(
@@ -43,6 +46,7 @@ async function mountShell() {
   onTestFinished(() => {
     view.unmount();
     owner.disconnect();
+    dispose();
     runtime.stop();
   });
   await Promise.resolve();
