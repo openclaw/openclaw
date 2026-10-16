@@ -306,7 +306,7 @@ function setProgressDraftLineMetadata(
   }
 }
 
-export function copyProgressDraftLineMetadata(
+function copyProgressDraftLineMetadata(
   source: ChannelProgressDraftLine,
   target: ChannelProgressDraftLine,
   previous?: ChannelProgressDraftLine,

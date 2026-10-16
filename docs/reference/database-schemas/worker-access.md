@@ -50,6 +50,11 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Public GitHub coauthor attribution reads merge aliases, verified accounts, and
+credit preferences in one worker-owned snapshot statement. Enterprise attribution
+keeps a read transaction for its additional verified-email binding lookup. Both
+reuse profile write receipts and retain the final publication-authority check.
+
 Gateway boot history uses one `gatewayBoot.begin` writer operation to inspect
 previous boots, prune expired history, and append the current boot. The breaker
 decision excludes that new open row; a failed append preserves a successfully
@@ -105,10 +110,13 @@ runtime generation, environment, working directory, and spawn-broker owner.
 Compatible requests serialize on their slot and pass their database identity,
 command, and artifact-preserving scope on every request. Closing a caller scope
 cancels and joins its reads; it does not close an idle pooled process. Each read
-releases its native readers before its reply. Idle processes retire after one
-minute, and failed or cancelled processes retire before another request reuses
-that slot. Runtimes without qualified native SQLite close still require process
-retirement before releasing snapshot custody.
+releases its native readers before its reply. These independent processes do not
+receive the Gateway's shared-memory writer invalidations, so their local admission
+facts retire with the final native reader. Canonical auth reads can use the compact
+owner-supplied schema projection; other reads perform native admission. Idle
+processes retire after one minute, and failed or cancelled processes retire before
+another request reuses that slot. Runtimes without qualified native SQLite close
+still require process retirement before releasing snapshot custody.
 Unconfirmed native cleanup quarantines its slot without releasing that custody.
 Reads use remaining healthy capacity; four quarantined slots reject visibly
 instead of launching another process or waiting indefinitely.
@@ -177,9 +185,10 @@ agent store. Canceling a discovery request stops its wait, not schema preparatio
 
 The Gateway is the single runtime owner of its databases. Load physical format,
 schema, integrity, and canonical-index facts through the shared admission owner,
-then reuse them across handles and workers while admission retains a live
-reference. An idle reopen can reuse facts retained by another handle; closing
-the final handle retires those facts, so the next open admits the database again.
+then reuse them across handles and workers for the process lifetime. Closing
+the final handle retires its active generation, row caches, and pathname bindings,
+while explicitly process-lived physical facts remain in descriptor custody.
+Reopen identifies the file and installs those facts into a new active generation.
 Replacement files also require new admission; migration and repair owners publish
 replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
@@ -220,7 +229,8 @@ handles and settling callers. This covers durable COMMIT followed by a crash
 before receipt publication, including writes without a separate domain grant.
 The operation owner still handles unknown-outcome recovery.
 Quarantine and schema changes still invalidate their admission facts and scoped
-receipts. Final-handle closure still retires facts for physical-file readmission.
+receipts. Final-handle closure retires row facts while retaining physical validation
+and owner-published quarantine decisions.
 Canonical validation compares admitted catalog facts with the pending-table DDL
 from the schema source; fresh workers do not bootstrap a comparison database.
 Receipt metadata follows retained session scopes rather than all deleted sessions;
@@ -1312,6 +1322,12 @@ belongs to the context and writer owners at their effect boundaries.
 Released synchronous SDK readers retain their existing owners; incognito reads
 use the memory actor.
 Direct SQLite edits without owner publication are unsupported.
+
+Embedded history expands child entries through the same asynchronous reader for
+durable and incognito parents. The memory owner supplies private children; retained
+registry hints for durable children go through the entry worker. The Gateway trusts
+the child owner's selection without repeating its parent checks. A reparenting
+after the read appears on the next lookup. There is no synchronous batch fallback.
 
 Transcript search returns its read snapshot and obtains indexing readiness from
 the projection owner. It does not reread a connection revision after awaiting
@@ -3640,6 +3656,12 @@ opaque SDK lifetime guards run through its existing host grants rather than a na
 fallback. Prepared storage predicates must belong to the selected agent store.
 Receipt validity, retry behavior, schemas, retention, and update behavior are unchanged.
 
+Gateway Board operations prepare their physical target once before selecting the memory
+or durable owner. Custom stores resolve registry rows and physical ownership through the
+existing session reader worker; subsequent owner checks consume the captured logical routing
+assertion instead of discovering the target again. Registry write receipts invalidate the
+next operation's preparation. No synchronous target-discovery fallback remains in Board.
+
 Durable Board writes prepare exact session existence in the session reader and carry
 its session and lifecycle identity into one kernel check before mutation. The synchronous
 worker transaction cannot switch sessions between that check and commit. Layout updates
@@ -4971,6 +4993,15 @@ bound to the captured owner, and shutdown joins accepted work. The existing
 update behavior are unchanged. Drain inspection reads pending and claimed rows in
 one snapshot so a concurrent release cannot hide a lane head between reads.
 Shutdown joins deferred settlement even when it starts before dispatch returns.
+The drain selects each lane head from that ordered snapshot and passes its ID to
+the existing claim writer. Derived scheduling lanes preserve stored transport
+identity unless the channel's reconciliation policy permits replacing it.
+The pending-only update arbitrates
+competing owners; a refused claim leaves its lane blocked until the next pass.
+The drain does not repeat the backlog read or revalidate the entire selection
+window. A lane-policy change during the write wait takes effect on the next pass;
+channel inspection and live dispatch authority still apply before delivery.
+The shipped SDK `claimNext` API retains its standalone selection behavior.
 Accepted enqueues, claims, and resubmissions return the mutation's row directly;
 only duplicate enqueues read the retained row. Claims atomically update pending
 rows, and corrupt payloads are tombstoned in that same writer transaction.
@@ -6560,8 +6591,13 @@ keys invalidate those rows through the database owner's committed admission
 receipts; unrelated writes leave them warm. Receipts carry no credential payload.
 Rollback retires staged facts, so the next discovery reloads durable rows once.
 A write overtaking a discovery read invalidates its cached result on the next
-lookup. Credential use still checks the live credential authority at the effect;
-canonical reads, maintenance, and pinned snapshots retain their existing paths.
+lookup. Cron and MCP authorization capture reuse complete canonical rows from
+this same cache, including private credential lifetimes. Runtime-only postimages
+cannot replace current complete rows or satisfy a canonical lookup. Credential
+use checks the writer's live authorization facts at the effect without rereading
+the database; replacement, revocation, pending refresh, and uncertain settlement
+still refuse use. External writers require exclusive offline custody. Maintenance
+and pinned snapshots retain their uncached paths.
 
 Question answer and cancellation authority composes fresh tool-policy classification
 with the question owner's final session-reader batch. The original physical store,

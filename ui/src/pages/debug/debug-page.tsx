@@ -15,6 +15,7 @@ import {
 } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import "../../styles/debug-data.css";
 import { requestDebugOverlayToggle } from "./debug-overlay-contract.ts";
 import { DebugPageView } from "./view.tsx";
@@ -181,14 +182,14 @@ export function DebugPage() {
       void loadLiveDiagnostics();
     }
   };
-  document.addEventListener("visibilitychange", visibilityChanged);
+  const stopVisibility = listen(document, "visibilitychange", visibilityChanged);
   syncPolling();
   void loadDiagnostics();
   onCleanup(() => {
     disposed = true;
     invalidate();
     clearInterval(timer);
-    document.removeEventListener("visibilitychange", visibilityChanged);
+    stopVisibility();
     stopSelection();
     stopGateway();
     lifecycle.dispose();

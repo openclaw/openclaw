@@ -1,6 +1,7 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import type { SessionsUsageOverview } from "../../../../src/shared/usage-types.js";
 import type { CostDailyEntry, UsageSessionEntry } from "./types.ts";
 
 function csvEscape(value: string, neutralizeFormulas = true): string {
@@ -88,10 +89,7 @@ type QuerySuggestion = {
   value: string;
 };
 
-export type UsageFilterOptions = Record<
-  "agent" | "channel" | "provider" | "model" | "tool",
-  string[]
->;
+export type UsageFilterOptions = SessionsUsageOverview["filterOptions"];
 
 const buildQuerySuggestions = (query: string, options: UsageFilterOptions): QuerySuggestion[] => {
   const trimmed = query.trim();

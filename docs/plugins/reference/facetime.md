@@ -15,7 +15,7 @@ Experimental FaceTime realtime voice carrier for OpenClaw agents.
 ## Distribution
 
 - Package: `@openclaw/facetime`
-- Install route: npm or ClawHub: `clawhub:@openclaw/facetime`
+- Install route: npm or ClawHub: `@openclaw/facetime`
 
 ## Surface
 

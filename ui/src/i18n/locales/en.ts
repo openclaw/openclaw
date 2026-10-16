@@ -3406,8 +3406,6 @@ export const en: TranslationMap & {
       pluginSteering: {
         label: "{plugin} guidance",
       },
-      showContent: "Show content",
-      hideContent: "Hide content",
     },
     skillLearned: {
       label: "Learned",

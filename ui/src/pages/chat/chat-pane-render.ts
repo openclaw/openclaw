@@ -71,7 +71,7 @@ import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
-  private readonly notify = () => this.requestUpdate();
+  private readonly notify = () => this.invalidate();
 
   readProviderReviewState() {
     return this.state;
@@ -520,7 +520,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
                 selectedSession.key,
                 visibleWorkspaceConflict.stagedResultRef,
               );
-              this.requestUpdate();
+              this.invalidate();
             }
           : undefined,
       sessions: state.sessionsResult,

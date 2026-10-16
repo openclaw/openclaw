@@ -181,7 +181,7 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   }): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
   claim(
     id: string,
-    options?: { ownerId?: string },
+    options?: { ownerId?: string; laneKey?: string },
   ): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
   refreshClaim?(
     claim: ChannelIngressQueueClaimRef,

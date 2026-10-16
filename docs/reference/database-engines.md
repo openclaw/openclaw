@@ -13,6 +13,10 @@ Gateway keep supported stores in PostgreSQL while other stores stay on SQLite.
 The adapter owns connection setup, schema admission, transaction behavior, and
 commit notifications; stores keep their existing data and operation contracts.
 
+For provisioning, first boot, migration, and recovery procedures, see the
+[PostgreSQL operator guide](/gateway/postgresql). It also describes the current
+archive restore and mixed-engine lifecycle limits.
+
 Daemon runtime pins stay local on every engine, in
 `<state-root>/control/services.sqlite`. The daemon owner supplies typed runtime
 intent to the macOS app without requiring a running Gateway or PostgreSQL
@@ -214,11 +218,25 @@ PostgreSQL:
 
 Only the five listed families accept overrides. Unknown keys, fixed-local
 families, missing `engine`, and per-family connection/prefix options are rejected.
-`agent: { engine: "sqlite" }` is valid in mixed installations. PostgreSQL agents
-require every configurable family to select PostgreSQL, whether by default or
-override. A PostgreSQL agent combined with any SQLite family refuses with
-`DATABASE_AGENT_MIXED_POSTGRES_UNSUPPORTED` until mixed-pair conformance lands
-in PR3. The PostgreSQL default includes agent databases.
+Both SQLite and PostgreSQL agents are supported with either shared-state engine.
+The PostgreSQL default includes agent databases. For example, keep agents local
+while shared state uses PostgreSQL:
+
+```json5
+{
+  database: {
+    engine: "postgres",
+    families: { agent: { engine: "sqlite" } },
+    postgres: {
+      connection: { source: "env", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
+    },
+  },
+}
+```
+
+To use PostgreSQL agents with SQLite shared state, select `database.engine: "sqlite"`
+and `database.families.agent.engine: "postgres"`, with the same PostgreSQL connection
+configuration. Plugin families inherit the default unless explicitly overridden.
 Quarantine, managed-update, and package-activation safety journals stay local
 SQLite. Daemon runtime pins do not acquire engine overrides;
 incognito remains memory-only.
@@ -228,18 +246,19 @@ all agent databases together, or the named plugin store. Admission and anchors
 remain per physical store. Existing SQLite content refuses a PostgreSQL choice,
 and a PostgreSQL anchor refuses SQLite; never remove an anchor to switch engines.
 Changing a family's engine requires a port (not yet supported for mixed installs)
-and a Gateway restart. The current port command has no per-family scope, and
-agent port providers are not available yet. Keep existing data on its current engine.
+and a Gateway restart. The current port command has no per-family scope.
+Keep existing data on its current engine.
 
-| Configuration                                                          | Runtime support                                                                  |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| All SQLite, including no database config                               | Supported default; existing lifecycle behavior is unchanged.                     |
-| PostgreSQL default for every configurable family                       | Experimental runtime support, including agents; safety stores stay local SQLite. |
-| Fresh PostgreSQL state with SQLite agents/plugins                      | Allowed with the shared PostgreSQL configuration.                                |
-| Fresh SQLite state with PostgreSQL Workboard, Logbook, or Team Reports | Allowed with the shared PostgreSQL configuration.                                |
-| A mixture of state/plugin families with SQLite agents                  | Allowed for runtime; lifecycle commands below refuse it.                         |
-| `agent=postgres` with any configurable SQLite family                   | Refused until PR3 mixed-pair conformance; `agent=sqlite` is valid.               |
-| `agent=postgres` with every configurable family on PostgreSQL          | Allowed, including when all families explicitly override a SQLite default.       |
+| Shared state | Agent databases | Runtime support                                                                                         |
+| ------------ | --------------- | ------------------------------------------------------------------------------------------------------- |
+| SQLite       | SQLite          | Supported default; existing lifecycle behavior is unchanged.                                            |
+| PostgreSQL   | PostgreSQL      | Experimental.                                                                                           |
+| PostgreSQL   | SQLite          | Experimental; agent leases, registration, and commit participants still access PostgreSQL shared state. |
+| SQLite       | PostgreSQL      | Experimental; agent operations retain SQLite shared-state authority and commit participants.            |
+
+Workboard, Logbook, and Team Reports may independently select either supported
+engine with the same PostgreSQL connection configuration. Fixed-local safety
+stores do not acquire a PostgreSQL option.
 
 Until family-scoped recovery support lands, OpenClaw refuses database ports,
 database snapshot backup/restore, and updates for mixed-engine installations.
@@ -259,7 +278,15 @@ port stored data.
 
 Mixed storage still requires one Gateway per store. It does not add Team
 multi-node ownership, routing, or failover. Cross-family operations retain their
-existing separate commits, compensation, and lock ordering.
+existing separate commit receipts, live authority checks, compensation, and
+agent → shared lock ordering. Commit uncertainty does not authorize replay or
+compensation without a confirmed agent rollback. This adds no distributed
+transaction protocol.
+
+Local agents may avoid their own PostgreSQL round trips, but still depend on
+shared-state registration, leases, and commit participants. Lower latency is a
+hypothesis to measure for your workload, not a promise of a network-free agent
+critical path.
 
 ## Search on PostgreSQL
 
@@ -413,20 +440,19 @@ openclaw database port --to postgres
 
 Port, backup, restore, and fingerprint operations share one database-family
 provider registry. Each provider resolves its stores and supplies the generated
-schema descriptor and expected PostgreSQL catalog. **Shared state, Workboard,
-Logbook, and Team Reports are registered families.** Matrix account roots are
-state-family resources. Agent support is not enabled by this registry yet. An unrecognized PostgreSQL anchor
+schema descriptor and expected PostgreSQL catalog. **Shared state, agent,
+Workboard, Logbook, and Team Reports are registered families.** Matrix account roots are
+state-family resources. An unrecognized PostgreSQL anchor
 refuses the operation and names the supported families.
 For separately installed plugins such as Team Reports, operations load the
 selected installed plugin's schema and admission API. Keep the matching plugin
 installed for port, backup, and restore. Preflight does not require absent
 optional plugins.
 
-The command inventories existing shared state, Workboard, Logbook, and Team Reports stores,
+The command inventories existing shared state, agent, Workboard, Logbook, and Team Reports stores,
 including disabled plugin stores. A real SQLite-to-PostgreSQL port initializes
 missing shared state before capture so the config writer uses the same selected
-store after the switch. It does not create missing plugin stores or port agent
-databases. A dry run checks read-only
+store after the switch. It does not create missing plugin stores. A dry run checks read-only
 prerequisites and reports checks that still require private migration, copying,
 or a PostgreSQL privilege probe. It creates no manifest, migrated copy, or target
 namespace. Add `--json` for machine-readable results without connection strings

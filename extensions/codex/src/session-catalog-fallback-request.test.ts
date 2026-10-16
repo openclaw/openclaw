@@ -1,12 +1,11 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { nativeCatalogFixture } from "./session-catalog-resident.test-support.js";
+import { catalogFactory, nativeCatalogFixture } from "./session-catalog-resident.test-support.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 import { CodexCatalogVisiblePage, listVisiblePage } from "./session-catalog-visible-page.js";
 import {
   commandRpcMocks,
   config,
-  createCodexSessionCatalogControlFactory,
   idleThread,
   pinnedConnectionMocks,
 } from "./session-catalog.test-helpers.js";
@@ -25,7 +24,7 @@ async function saturatedHome() {
     row.recencyAt = row.updatedAt;
   }
   let now = 0;
-  const factory = createCodexSessionCatalogControlFactory({
+  const factory = catalogFactory({
     getPluginConfig: () => ({
       supervision: { enabled: true },
       appServer: {
@@ -47,6 +46,38 @@ async function saturatedHome() {
     now: () => now,
     advance: (milliseconds: number) => {
       now += milliseconds;
+    },
+  };
+}
+
+async function failingFallback() {
+  const fixture = await saturatedHome();
+  const failure = new Error("second fallback page failed");
+  let recovered = false;
+  commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
+    expect(method).toBe("thread/list");
+    expect(params.useStateDbOnly).toBe(true);
+    if (params.cursor === "page-two" && !recovered) {
+      throw failure;
+    }
+    return {
+      data: [idleThread({ id: params.cursor ? "match" : "head", source: "cli", name: "Wanted" })],
+      nextCursor: params.cursor ? undefined : "page-two",
+    };
+  });
+  const params = {
+    control: fixture.control,
+    limit: 1,
+    searchTerm: "Wanted",
+    excludedThreadIds: new Set(["head"]),
+  };
+  return {
+    ...fixture,
+    failure,
+    params,
+    search: () => listVisiblePage(params),
+    recover: () => {
+      recovered = true;
     },
   };
 }
@@ -111,36 +142,8 @@ describe("overflow catalog request budgets", () => {
   });
 
   it("backs off the complete visible fallback request when a later native page fails", async () => {
-    const fixture = await saturatedHome();
-    const failure = new Error("second fallback page failed");
-    let recovered = false;
-    commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
-      expect(method).toBe("thread/list");
-      expect(params.useStateDbOnly).toBe(true);
-      if (params.cursor === "page-two") {
-        if (!recovered) {
-          throw failure;
-        }
-        return { data: [idleThread({ id: "match", source: "cli", name: "Wanted" })] };
-      }
-      return {
-        data: [
-          idleThread({
-            id: "head",
-            source: "cli",
-            name: "Wanted",
-          }),
-        ],
-        nextCursor: "page-two",
-      };
-    });
-    const search = () =>
-      listVisiblePage({
-        control: fixture.control,
-        limit: 1,
-        searchTerm: "Wanted",
-        excludedThreadIds: new Set(["head"]),
-      });
+    const fixture = await failingFallback();
+    const { failure, search } = fixture;
 
     await expect(search()).rejects.toBe(failure);
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
@@ -157,7 +160,7 @@ describe("overflow catalog request budgets", () => {
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(6);
 
     fixture.advance(1);
-    recovered = true;
+    fixture.recover();
     expect((await search()).sessions.map((session) => session.threadId)).toEqual(["match"]);
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(8);
   });
@@ -247,30 +250,10 @@ it.each(["read count", "deadline"] as const)(
 );
 
 it("releases an abandoned exclusion-fill probe for the next catalog request", async () => {
-  const fixture = await saturatedHome();
-  const failure = new Error("second fallback page failed");
-  let recovered = false;
-  commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
-    expect(method).toBe("thread/list");
-    if (params.cursor === "page-two") {
-      if (!recovered) {
-        throw failure;
-      }
-      return { data: [idleThread({ id: "visible", name: "Wanted", source: "cli" })] };
-    }
-    return {
-      data: [idleThread({ id: "excluded", name: "Wanted", source: "cli" })],
-      nextCursor: "page-two",
-    };
-  });
-  const params = {
-    control: fixture.control,
-    limit: 1,
-    searchTerm: "Wanted",
-    excludedThreadIds: new Set(["excluded"]),
-  };
-  await expect(listVisiblePage(params)).rejects.toBe(failure);
-  await expect(listVisiblePage(params)).rejects.toBe(failure);
+  const fixture = await failingFallback();
+  const { failure, search, params } = fixture;
+  await expect(search()).rejects.toBe(failure);
+  await expect(search()).rejects.toBe(failure);
   expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
   fixture.advance(5_000);
 
@@ -279,9 +262,7 @@ it("releases an abandoned exclusion-fill probe for the next catalog request", as
   expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(5);
   abandoned.close();
 
-  recovered = true;
-  expect((await listVisiblePage(params)).sessions.map((session) => session.threadId)).toEqual([
-    "visible",
-  ]);
+  fixture.recover();
+  expect((await search()).sessions.map((session) => session.threadId)).toEqual(["match"]);
   expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(7);
 });

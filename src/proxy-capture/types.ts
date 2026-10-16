@@ -1,19 +1,19 @@
+import type { z } from "zod";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type {
+  debugProxyCaptureWriteCommandSchema,
+  debugProxyCliCommandSchema,
+} from "./cli-contract.js";
+
 // Shared debug-proxy capture schema. These records back the SQLite store, CLI
 // reports, and runtime capture events for HTTP/SSE/websocket traffic.
-export type CaptureProtocol = "http" | "https" | "sse" | "ws" | "wss" | "connect";
+type CaptureWriteCommand = z.input<typeof debugProxyCaptureWriteCommandSchema>;
+type CaptureCliCommand = z.input<typeof debugProxyCliCommandSchema>;
+export type CaptureProtocol = CaptureEventRecord["protocol"];
 
-export type CaptureDirection = "outbound" | "inbound" | "local";
+export type CaptureDirection = CaptureEventRecord["direction"];
 
-export type CaptureEventKind =
-  | "connect"
-  | "tls-handshake"
-  | "request"
-  | "response"
-  | "ws-open"
-  | "ws-frame"
-  | "ws-close"
-  | "error"
-  | "retry-link";
+export type CaptureEventKind = CaptureEventRecord["kind"];
 
 export type CaptureSessionRecord = {
   id: string;
@@ -42,36 +42,14 @@ export type SharedCaptureBlobRecord = Omit<CaptureBlobRecord, "path"> & {
   path?: never;
 };
 
-export type CaptureEventRecord = {
-  sessionId: string;
-  ts: number;
-  sourceScope: "openclaw";
-  sourceProcess: string;
-  protocol: CaptureProtocol;
-  direction: CaptureDirection;
-  kind: CaptureEventKind;
-  flowId: string;
-  method?: string;
-  host?: string;
-  path?: string;
-  status?: number;
-  closeCode?: number;
-  contentType?: string;
-  headersJson?: string;
-  dataText?: string;
-  dataBlobId?: string;
-  dataSha256?: string;
-  errorText?: string;
-  metaJson?: string;
-};
+export type CaptureEventRecord = SchemaContract<
+  Extract<CaptureWriteCommand, { type: "capture.recordEvent" }>["input"]
+>;
 
-export type CaptureQueryPreset =
-  | "double-sends"
-  | "retry-storms"
-  | "cache-busting"
-  | "ws-duplicate-frames"
-  | "missing-ack"
-  | "error-bursts";
+export type CaptureQueryPreset = Extract<
+  CaptureCliCommand,
+  { type: "capture.queryPreset" }
+>["input"]["preset"];
 
 export type CaptureQueryRow = Record<string, string | number | null>;
 

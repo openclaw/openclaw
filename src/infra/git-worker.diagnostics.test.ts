@@ -29,43 +29,40 @@ afterEach(async () => {
   logs.info.mockClear();
 });
 
-it.each([45_000, 60_001, 90_000])(
-  "reuses concurrent Git readers across %i ms polls and releases them when idle",
-  async (pollMs) => {
-    const lifecycle = () =>
-      getTrackedWorkerLifecycleSnapshot().workerLifecycle.find(
-        (worker) => worker.script === "git-operation.worker.js",
-      );
-    const starts = () => lifecycle()?.started ?? 0;
-    const idleExits = () =>
-      lifecycle()?.retired.find((entry) => entry.reason === "idle_timeout")?.count ?? 0;
-    const before = starts();
-    const exitsBefore = idleExits();
-    const poll = () =>
-      Promise.all(
-        [0, 1].map(() =>
-          runGitWorkerOperation({ type: "repository.identities", input: { roots: [] } }),
-        ),
-      );
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    try {
+it("reuses concurrent Git readers across polling intervals and releases them when idle", async () => {
+  const lifecycle = () =>
+    getTrackedWorkerLifecycleSnapshot().workerLifecycle.find(
+      (worker) => worker.script === "git-operation.worker.js",
+    );
+  const starts = () => lifecycle()?.started ?? 0;
+  const idleExits = () =>
+    lifecycle()?.retired.find((entry) => entry.reason === "idle_timeout")?.count ?? 0;
+  const before = starts();
+  const exitsBefore = idleExits();
+  const poll = () =>
+    Promise.all(
+      [0, 1].map(() =>
+        runGitWorkerOperation({ type: "repository.identities", input: { roots: [] } }),
+      ),
+    );
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  try {
+    await expect(poll()).resolves.toEqual([[], []]);
+    expect(starts() - before).toBe(2);
+    for (const pollMs of [45_000, 60_001, 90_000]) {
+      await vi.advanceTimersByTimeAsync(pollMs);
       await expect(poll()).resolves.toEqual([[], []]);
       expect(starts() - before).toBe(2);
-      for (let round = 0; round < 3; round++) {
-        await vi.advanceTimersByTimeAsync(pollMs);
-        await expect(poll()).resolves.toEqual([[], []]);
-        expect(starts() - before).toBe(2);
-      }
-      await vi.advanceTimersByTimeAsync(120_000);
-      await vi.waitFor(() => expect(idleExits() - exitsBefore).toBe(2));
-      await expect(poll()).resolves.toEqual([[], []]);
-      expect(starts() - before).toBe(4);
-    } finally {
-      await drainGlobalSingletonLifecycleState();
-      vi.useRealTimers();
     }
-  },
-);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.waitFor(() => expect(idleExits() - exitsBefore).toBe(2));
+    await expect(poll()).resolves.toEqual([[], []]);
+    expect(starts() - before).toBe(4);
+  } finally {
+    await drainGlobalSingletonLifecycleState();
+    vi.useRealTimers();
+  }
+});
 
 it.each([
   {

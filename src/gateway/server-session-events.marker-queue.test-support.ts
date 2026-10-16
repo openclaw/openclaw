@@ -110,7 +110,7 @@ export function registerTranscriptMarkerQueueTests() {
       chatAbortControllers: new Map(),
       getSessionRowProjection: () => projection,
     });
-    const tasks: Promise<void>[] = [];
+    const tasks: ReturnType<typeof handler>[] = [];
     const publications = () =>
       broadcastToConnIds.mock.calls.map(([name, payload]) => [
         name,

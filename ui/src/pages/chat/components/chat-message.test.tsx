@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { For, Show } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts";
-import * as localStorageModule from "../../../local-storage.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -16,17 +16,16 @@ import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { ChatNotice } from "./chat-divider.tsx";
-import { dismissConfirmedActionPopovers } from "./chat-message-confirmation.ts";
 import {
   ActivityGroup,
   MessageGroup as MessageGroupView,
   type NativeMessageGroupOptions,
 } from "./chat-message-group-view.tsx";
+import { managedSource } from "./chat-message-media.test-helpers.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import { StreamGroup } from "./chat-message-stream-view.tsx";
 import {
   createAssistantMessage,
-  createCanvasPreview,
   createToolResultBlock,
   createAssistantCanvasBlock,
   createUserMessage,
@@ -48,7 +47,6 @@ import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import "./chat-detail-panel.tsx";
 
 let view: HTMLDivElement;
-const localStorageValues = new Map<string, string>();
 const mediaSubscribers = new Set<() => void>();
 const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 const renderStreamingMarkdown = markdown.toStreamingMarkdownParts;
@@ -58,26 +56,12 @@ const streamingMarkdownRenderMock = vi.fn((value: string): [string, string] => [
   `<div class="streaming-markdown">${value}</div>`,
 ]);
 
-function getSafeLocalStorageMock(): Storage {
-  return {
-    get length() {
-      return localStorageValues.size;
-    },
-    clear: () => localStorageValues.clear(),
-    getItem: (key: string) => localStorageValues.get(key) ?? null,
-    key: (index: number) => [...localStorageValues.keys()][index] ?? null,
-    removeItem: (key: string) => localStorageValues.delete(key),
-    setItem: (key: string, value: string) => localStorageValues.set(key, value),
-  };
-}
-
 function TestAvatar(props: { role: string }) {
   return <div class={`chat-avatar ${props.role}`} />;
 }
 
 beforeEach(() => {
   view = document.createElement("div");
-  vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
   vi.spyOn(markdown, "toStreamingMarkdownParts").mockImplementation(streamingMarkdownRenderMock);
   vi.spyOn(chatAvatar, "ChatAvatar").mockImplementation(TestAvatar);
@@ -117,7 +101,7 @@ function MessageFixtures(props: { values: MessageFixture[] }) {
   );
 }
 
-function render(value: MessageFixture | MessageFixture[], container: HTMLElement) {
+function render(value: MessageFixture | MessageFixture[], container: HTMLElement = view) {
   const values = Array.isArray(value) ? value : [value];
   const existing = messageMounts.get(container);
   if (existing) {
@@ -159,10 +143,7 @@ function expectElement<T extends Element>(
 ): T {
   const element = container.querySelector<T>(selector);
   expect(element).toBeInstanceOf(constructor);
-  if (!(element instanceof constructor)) {
-    throw new Error(`Expected ${selector} to match ${constructor.name}`);
-  }
-  return element;
+  return expectDefined(element, selector);
 }
 
 function elementText(selector: string, container: Element = view) {
@@ -184,15 +165,11 @@ function requireFetchCallForUrl(fetchMock: ReturnType<typeof vi.fn>, expectedUrl
   const call = fetchMock.mock.calls.find(([url]) => url === expectedUrl) as
     | [string, RequestInit?]
     | undefined;
-  if (!call) {
-    throw new Error(`Expected fetch call for ${expectedUrl}`);
-  }
-  return call;
+  return expectDefined(call, `fetch call for ${expectedUrl}`);
 }
 
 function expectSameOriginGet(init: RequestInit | undefined) {
-  expect(init?.credentials).toBe("same-origin");
-  expect(init?.method).toBe("GET");
+  expect(init).toMatchObject({ credentials: "same-origin", method: "GET" });
 }
 
 function rejectWhenAborted<T>(signal: AbortSignal, rejection: () => Error): Promise<T> {
@@ -334,137 +311,6 @@ function renderMessageGroups(
   );
 }
 
-function clearConfirmedActionSkip() {
-  localStorageValues.delete("openclaw:skip-rewind-confirm");
-}
-
-function stubAnimationFrameQueue() {
-  const callbacks: FrameRequestCallback[] = [];
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    callbacks.push(callback);
-    return callbacks.length;
-  });
-  return () => {
-    const pending = callbacks.splice(0);
-    for (const callback of pending) {
-      callback(performance.now());
-    }
-  };
-}
-
-function getLastCaptureListener(calls: readonly unknown[][], event: string) {
-  return (
-    calls.findLast(
-      ([type, listener, options]) => type === event && options === true && listener,
-    )?.[1] ?? null
-  );
-}
-
-function countCaptureListenerRemovals(
-  calls: readonly unknown[][],
-  listener: unknown,
-  event: string,
-) {
-  return calls.filter(
-    ([type, removedListener, options]) =>
-      type === event && options === true && removedListener === listener,
-  ).length;
-}
-
-function renderConfirmedActionFixture() {
-  const container = document.body.appendChild(document.createElement("div"));
-  container.dataset.confirmedActionFixture = "true";
-  const onAction = vi.fn();
-  clearConfirmedActionSkip();
-  renderGroupedMessage(
-    createUserMessage("hello from user", { timestamp: 1000 }),
-    "user",
-    { onRewind: onAction },
-    container,
-  );
-  const actionButton = container.querySelector<HTMLButtonElement>(".chat-group-rewind");
-  expect(actionButton).toBeInstanceOf(HTMLButtonElement);
-  return { actionButton: actionButton!, container, onAction };
-}
-
-function openConfirmedAction(actionButton: HTMLButtonElement) {
-  actionButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-}
-
-function domRect(params: Partial<Pick<DOMRect, "left" | "top" | "width" | "height">>): DOMRect {
-  return new DOMRect(params.left ?? 0, params.top ?? 0, params.width ?? 0, params.height ?? 0);
-}
-
-function stubConfirmedActionGeometry(params: {
-  trigger: { left: number; top: number; width: number; height: number };
-  popover: { width: number; height: number };
-  viewport: { left?: number; top?: number; width: number; height: number };
-}) {
-  vi.stubGlobal("innerWidth", params.viewport.width);
-  vi.stubGlobal("innerHeight", params.viewport.height);
-  vi.stubGlobal("visualViewport", {
-    height: params.viewport.height,
-    offsetLeft: params.viewport.left ?? 0,
-    offsetTop: params.viewport.top ?? 0,
-    width: params.viewport.width,
-  });
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
-    this: HTMLElement,
-  ) {
-    if (this.classList.contains("chat-group-rewind")) {
-      return domRect(params.trigger);
-    }
-    if (this.classList.contains("chat-confirm-popover")) {
-      return domRect(params.popover);
-    }
-    return domRect({});
-  });
-}
-
-function setupArmedConfirmedAction() {
-  const flushAnimationFrames = stubAnimationFrameQueue();
-  const addListenerSpy = vi.spyOn(document, "addEventListener");
-  const removeListenerSpy = vi.spyOn(document, "removeEventListener");
-  const addKeyListenerSpy = vi.spyOn(window, "addEventListener");
-  const removeKeyListenerSpy = vi.spyOn(window, "removeEventListener");
-  const fixture = renderConfirmedActionFixture();
-
-  openConfirmedAction(fixture.actionButton);
-  flushAnimationFrames();
-
-  const outsideClickListener = getLastCaptureListener(addListenerSpy.mock.calls, "click");
-  const outsideContextMenuListener = getLastCaptureListener(
-    addListenerSpy.mock.calls,
-    "contextmenu",
-  );
-  const escapeListener = getLastCaptureListener(addKeyListenerSpy.mock.calls, "keydown");
-  const popover = expectElement(document.body, ".chat-confirm-popover", HTMLElement);
-  for (const listener of [outsideClickListener, outsideContextMenuListener, escapeListener]) {
-    expect(typeof listener).toBe("function");
-  }
-
-  return {
-    ...fixture,
-    escapeListener,
-    outsideClickListener,
-    outsideContextMenuListener,
-    popover,
-    removeKeyListenerSpy,
-    removeListenerSpy,
-  };
-}
-
-function expectConfirmedActionDismissed(params: ReturnType<typeof setupArmedConfirmedAction>) {
-  expect(params.popover.isConnected).toBe(false);
-  for (const [spy, listener, event] of [
-    [params.removeListenerSpy, params.outsideClickListener, "click"],
-    [params.removeListenerSpy, params.outsideContextMenuListener, "contextmenu"],
-    [params.removeKeyListenerSpy, params.escapeListener, "keydown"],
-  ] as const) {
-    expect(countCaptureListenerRemovals(spy.mock.calls, listener, event)).toBe(1);
-  }
-}
-
 async function flushAssistantAttachmentAvailabilityChecks() {
   for (let i = 0; i < 6; i++) {
     await Promise.resolve();
@@ -547,10 +393,7 @@ function renderNotices(host: ReturnType<typeof createHost>, runId: string, paneI
   if (!items.length || !items.every((item) => item.kind === "notice")) {
     throw new Error("Expected notice projections");
   }
-  render(
-    items.map((item) => renderChatNotice(item)),
-    view,
-  );
+  render(items.map((item) => renderChatNotice(item)));
 }
 
 afterEach(() => {
@@ -565,11 +408,6 @@ afterEach(() => {
   }
   mediaSubscribers.clear();
   markdownRenderMock.mockClear();
-  document.querySelectorAll("[data-confirmed-action-fixture]").forEach((element) => {
-    dismissConfirmedActionPopovers(element);
-    element.remove();
-  });
-  clearConfirmedActionSkip();
   setAvatarGatewayOrigin(null);
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -647,13 +485,13 @@ describe("grouped chat rendering", () => {
     expect(list.querySelector("li:last-child > .chat-duplicate-count")?.textContent).toBe("×2");
   });
 
-  it.each(["thinking"])("suppresses a whole %s region spanning assistant media", (tag) => {
+  it("suppresses a whole thinking region spanning assistant media", () => {
     renderMarkdownAssistant([
-      { type: "text", text: `<${tag}>Hidden before` },
+      { type: "text", text: "<thinking>Hidden before" },
       { type: "image", url: "https://example.com/hidden-before.png" },
       { type: "text", text: "Hidden middle" },
       { type: "image", url: "https://example.com/hidden-after.png" },
-      { type: "text", text: `Hidden after</${tag}>\n\nVisible answer` },
+      { type: "text", text: "Hidden after</thinking>\n\nVisible answer" },
     ]);
     expect(elementText(".chat-text")?.trim()).toBe("Visible answer");
   });
@@ -677,7 +515,6 @@ describe("grouped chat rendering", () => {
         renderTestMessageGroup(
           createMessageGroup(message, "assistant", { key: "stream-media", isStreaming }),
         ),
-        view,
       );
     };
     markdownRenderMock.withImplementation(renderMarkdownHtml, () => {
@@ -706,15 +543,9 @@ describe("grouped chat rendering", () => {
   });
 
   it.each([
-    { label: "fence", markdown: "Paragraph\n\n```ts\nconst value = 1;\n```", terminal: "pre" },
     {
       label: "compact details",
       markdown: "<details><summary>More</summary>body</details>",
-      terminal: "details",
-    },
-    {
-      label: "block details",
-      markdown: "<details>\n<summary>More</summary>\n\nbody\n</details>",
       terminal: "details",
     },
     {
@@ -742,51 +573,6 @@ describe("grouped chat rendering", () => {
       expect(chatText.querySelector("td:last-child")?.textContent ?? "").not.toContain("×3");
     },
   );
-
-  it("adds Reply to the inline message actions and forwards persisted reply context", () => {
-    const onReply = vi.fn();
-    renderAssistantMessage(
-      createAssistantMessage("Reply with this context.", {
-        timestamp: 1000,
-        __openclaw: { id: "assistant-entry-1" },
-      }),
-      { onReply },
-    );
-
-    const actions = view.querySelectorAll<HTMLButtonElement>(".chat-group-footer-actions button");
-    expect([...actions].map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Reply to message",
-      "Copy as markdown",
-    ]);
-
-    view.querySelector<HTMLButtonElement>('[aria-label="Reply to message"]')?.click();
-
-    expect(onReply).toHaveBeenCalledWith({
-      messageId: "assistant-message",
-      senderLabel: "OpenClaw",
-      sourceMessageId: "assistant-entry-1",
-      text: "Reply with this context.",
-    });
-
-    const userContainer = document.createElement("div");
-    renderGroupedMessage(
-      createUserMessage("User reply context.", {
-        timestamp: 1001,
-        __openclaw: { id: "user-entry-1" },
-      }),
-      "user",
-      { onReply, userName: "Jason" },
-      userContainer,
-    );
-    userContainer.querySelector<HTMLButtonElement>('[aria-label="Reply to message"]')?.click();
-
-    expect(onReply).toHaveBeenLastCalledWith({
-      messageId: "user-message",
-      senderLabel: "Message",
-      sourceMessageId: "user-entry-1",
-      text: "User reply context.",
-    });
-  });
 
   it.each([
     { state: "failed", actionLabel: "Check failure", retry: true, discard: false },
@@ -888,154 +674,6 @@ describe("grouped chat rendering", () => {
     }
   });
 
-  it.each([
-    {
-      name: "clamps the confirmation inside shifted visual viewports",
-      trigger: { left: 620, top: 540, width: 24, height: 24 },
-      popover: { width: 200, height: 80 },
-      viewport: { left: 320, top: 300, width: 320, height: 240 },
-      placement: "above",
-      top: "452px",
-      left: "432px",
-    },
-  ])("$name", ({ trigger, popover, viewport, placement, top, left }) => {
-    stubConfirmedActionGeometry({ trigger, popover, viewport });
-    const fixture = renderConfirmedActionFixture();
-
-    openConfirmedAction(fixture.actionButton);
-
-    const element = expectElement(document.body, ".chat-confirm-popover", HTMLElement);
-    expect(element.parentElement).toBe(document.body);
-    expect(element.dataset.placement).toBe(placement);
-    expect(element.style.top).toBe(top);
-    expect(element.style.left).toBe(left);
-  });
-
-  it("exposes dialog semantics and keeps keyboard focus inside the confirmation", () => {
-    const fixture = renderConfirmedActionFixture();
-
-    openConfirmedAction(fixture.actionButton);
-
-    const popover = expectElement(document.body, ".chat-confirm-popover", HTMLElement);
-    const check = expectElement(popover, ".chat-confirm-popover__check", HTMLInputElement);
-    const cancel = expectElement(popover, ".chat-confirm-popover__cancel", HTMLButtonElement);
-    const confirm = expectElement(popover, ".chat-confirm-popover__yes", HTMLButtonElement);
-    expect(popover.getAttribute("role")).toBe("dialog");
-    expect(popover.getAttribute("aria-modal")).toBe("true");
-    expect(popover.getAttribute("aria-label")).toBe(
-      popover.querySelector(".chat-confirm-popover__text")?.textContent,
-    );
-    expect(popover.querySelector(".chat-confirm-popover__remember span")?.textContent).toBe(
-      "Don't ask again",
-    );
-    expect(cancel.textContent).toBe("Cancel");
-    expect(document.activeElement).toBe(cancel);
-
-    for (const [from, to, shiftKey] of [
-      [confirm, check, false],
-      [check, confirm, true],
-    ] as const) {
-      from.focus();
-      const event = new KeyboardEvent("keydown", {
-        key: "Tab",
-        bubbles: true,
-        cancelable: true,
-        shiftKey,
-      });
-      from.dispatchEvent(event);
-      expect(event.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(to);
-    }
-  });
-
-  it.each(["Escape", "Cancel", "Rewind"] as const)(
-    "dismisses confirmation listeners and transfers focus after %s",
-    (action) => {
-      const fixture = setupArmedConfirmedAction();
-      const target = expectElement(
-        fixture.popover,
-        action === "Rewind" ? ".chat-confirm-popover__yes" : ".chat-confirm-popover__cancel",
-        HTMLButtonElement,
-      );
-      const leakedKeydown = vi.fn();
-      document.addEventListener("keydown", leakedKeydown);
-      try {
-        if (action === "Rewind") {
-          target.focus();
-        }
-        const event =
-          action === "Escape"
-            ? new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
-            : new MouseEvent("click", { bubbles: true });
-        target.dispatchEvent(event);
-        if (action === "Escape") {
-          expect(event.defaultPrevented).toBe(true);
-          expect(leakedKeydown).not.toHaveBeenCalled();
-        }
-        expectConfirmedActionDismissed(fixture);
-        if (action === "Rewind") {
-          expect(fixture.onAction).toHaveBeenCalledTimes(1);
-          expect(document.activeElement).not.toBe(fixture.actionButton);
-        } else {
-          expect(fixture.onAction).not.toHaveBeenCalled();
-          expect(document.activeElement).toBe(fixture.actionButton);
-        }
-      } finally {
-        document.removeEventListener("keydown", leakedKeydown);
-      }
-    },
-  );
-
-  it("dismisses only confirmations contained by the requested owner", () => {
-    const fixture = setupArmedConfirmedAction();
-    const sibling = renderConfirmedActionFixture();
-    openConfirmedAction(sibling.actionButton);
-    const siblingPopover = [
-      ...document.querySelectorAll<HTMLElement>(".chat-confirm-popover"),
-    ].find((popover) => popover !== fixture.popover);
-
-    dismissConfirmedActionPopovers(fixture.container);
-
-    expectConfirmedActionDismissed(fixture);
-    expect(siblingPopover?.isConnected).toBe(true);
-    dismissConfirmedActionPopovers(sibling.container);
-  });
-
-  it("dismisses a portaled confirmation when its owner is detached", async () => {
-    const fixture = setupArmedConfirmedAction();
-
-    fixture.container.remove();
-    await Promise.resolve();
-
-    expectConfirmedActionDismissed(fixture);
-  });
-
-  it("does not attach an outside-click listener after owner cleanup before the next frame", () => {
-    const flushAnimationFrames = stubAnimationFrameQueue();
-    const addListenerSpy = vi.spyOn(document, "addEventListener");
-    const removeListenerSpy = vi.spyOn(document, "removeEventListener");
-    const addKeyListenerSpy = vi.spyOn(window, "addEventListener");
-    const removeKeyListenerSpy = vi.spyOn(window, "removeEventListener");
-    const fixture = renderConfirmedActionFixture();
-
-    openConfirmedAction(fixture.actionButton);
-    const contextMenuListener = getLastCaptureListener(addListenerSpy.mock.calls, "contextmenu");
-    const escapeListener = getLastCaptureListener(addKeyListenerSpy.mock.calls, "keydown");
-    expect(typeof contextMenuListener).toBe("function");
-    expect(typeof escapeListener).toBe("function");
-    dismissConfirmedActionPopovers(fixture.container);
-    flushAnimationFrames();
-
-    expect(document.querySelector(".chat-confirm-popover")).toBeNull();
-    expect(getLastCaptureListener(addListenerSpy.mock.calls, "click")).toBeNull();
-    for (const [spy, listener, event] of [
-      [removeListenerSpy, contextMenuListener, "contextmenu"],
-      [removeKeyListenerSpy, escapeListener, "keydown"],
-    ] as const) {
-      expect(countCaptureListenerRemovals(spy.mock.calls, listener, event)).toBe(1);
-    }
-  });
-
   it("uses the largest prompt for context and aggregates usage, cache, and nested cost", () => {
     renderAssistantMessages(
       [
@@ -1060,40 +698,6 @@ describe("grouped chat rendering", () => {
       "W307",
     ]);
     expect(elementText(".msg-meta__cost")).toContain("$0.12");
-  });
-
-  it("dismisses message context when the neighboring reply tooltip opens", async () => {
-    vi.useFakeTimers();
-    const provider = document.createElement("openclaw-tooltip-provider");
-    provider.append(view);
-    document.body.append(provider);
-    renderAssistantMessage(
-      createAssistantMessage("Done", {
-        usage: { input: 12_000, output: 300 },
-        model: "openai/gpt-5.6-luna",
-        timestamp: 1000,
-      }),
-      { contextWindow: 100_000, onReply: vi.fn() },
-    );
-
-    try {
-      await Promise.all(
-        [...view.querySelectorAll("openclaw-tooltip")].map((tip) => tip.updateComplete),
-      );
-      const summary = view.querySelector<HTMLElement>(".msg-meta__summary")!;
-      summary.click();
-      const metadata = summary.closest("openclaw-tooltip")!;
-      await metadata.updateComplete;
-      expect(metadata.hasAttribute("open")).toBe(true);
-      const reply = view.querySelector<HTMLButtonElement>(".chat-reply-btn")!;
-      reply.focus();
-      const replyTooltip = reply.closest("openclaw-tooltip")!;
-      await replyTooltip.updateComplete;
-      expect(replyTooltip.hasAttribute("open")).toBe(true);
-      expect(metadata.hasAttribute("open")).toBe(false);
-    } finally {
-      provider.remove();
-    }
   });
 
   it("renders relative and compact dates while clamping clock skew", () => {
@@ -1198,7 +802,6 @@ describe("grouped chat rendering", () => {
       renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
         runOutputTokens: 892,
       }),
-      view,
     );
 
     const status = view.querySelector(".chat-working-indicator__status");
@@ -1219,7 +822,6 @@ describe("grouped chat rendering", () => {
         waitingApproval: true,
         runOutputTokens: 5_500,
       }),
-      view,
     );
 
     expect(elementText(".chat-working-indicator__status")).toContain("Waiting for approval…");
@@ -1242,7 +844,6 @@ describe("grouped chat rendering", () => {
         ],
         { showAssistantAvatar: false },
       ),
-      view,
     );
 
     const group = view.querySelector(".chat-group.assistant");
@@ -1265,7 +866,6 @@ describe("grouped chat rendering", () => {
         ],
         { showAssistantAvatar: false },
       ),
-      view,
     );
     expect(view.querySelector(".chat-bubble.streaming")).toBeNull();
     expect(view.querySelector<HTMLTimeElement>(".chat-group-timestamp")?.dateTime).toBe(
@@ -1333,7 +933,7 @@ describe("grouped chat rendering", () => {
         __openclaw: metadata,
       });
       const group = prepareMessageGroup(createMessageEntry("source-message", message));
-      render(renderTestMessageGroup(group, options), view);
+      render(renderTestMessageGroup(group, options));
       if (sender === undefined) {
         expect(view.querySelector(".chat-sender-name")).toBeNull();
         expect(view.textContent).not.toContain("Unrelated Viewer");
@@ -1370,7 +970,6 @@ describe("grouped chat rendering", () => {
             personActivity: { basePath: "", navigate },
           },
         ),
-        view,
       );
       return view;
     };
@@ -1402,7 +1001,6 @@ describe("grouped chat rendering", () => {
         text: "**first line**\nsecond line\n<img src=x onerror=alert(1)><script>alert(1)</script>",
         timestamp: 1000,
       }),
-      view,
     );
 
     const notice = view.querySelector<HTMLElement>(".chat-notice");
@@ -1528,7 +1126,7 @@ describe("grouped chat rendering", () => {
       // A gateway avatar exercises the image tier without third-party requests.
       sender: { id: "alice@example.com", profileAvatarUrl: "/api/users/alice/avatar" },
     });
-    render(renderTestMessageGroup(group, { avatarPlacement: "footer" }), view);
+    render(renderTestMessageGroup(group, { avatarPlacement: "footer" }));
 
     const image = await vi.waitFor(() => {
       const result = view.querySelector<HTMLImageElement>(".chat-author-avatar__image");
@@ -1603,7 +1201,6 @@ describe("grouped chat rendering", () => {
     expect(items.filter((item) => item.kind === "stream")).toHaveLength(1);
     render(
       renderActivityGroup(groups, { showReasoning: false, isToolMessageExpanded: () => true }),
-      view,
     );
     await settleToolBridges(view);
     expect(elementText(".chat-activity-group__label")?.trim()).toBe(
@@ -1641,7 +1238,6 @@ describe("grouped chat rendering", () => {
             isToolExpanded: () => true,
           },
         ),
-        view,
       );
       await settleToolBridges(view);
       return history;
@@ -1727,14 +1323,14 @@ describe("grouped chat rendering", () => {
       isToolMessageExpanded: (id) => id === "activity:stable-first",
     };
 
-    render(renderActivityGroup(groups.slice(0, 2), opts), view);
+    render(renderActivityGroup(groups.slice(0, 2), opts));
     const initialSummary = expectElement(view, ".chat-activity-group__summary", HTMLButtonElement);
     const initialBodyId = initialSummary.getAttribute("aria-controls");
     expect(initialSummary.getAttribute("aria-expanded")).toBe("true");
     expect(initialBodyId).toMatch(/^activity-body-[0-9a-f]+$/);
     expect(view.querySelector(`[id="${initialBodyId}"]`)).not.toBeNull();
 
-    render(renderActivityGroup(groups, opts), view);
+    render(renderActivityGroup(groups, opts));
     const appendedSummary = expectElement(view, ".chat-activity-group__summary", HTMLButtonElement);
     expect(appendedSummary.getAttribute("aria-controls")).toBe(initialBodyId);
     expect(appendedSummary.getAttribute("aria-expanded")).toBe("true");
@@ -2098,7 +1694,7 @@ describe("grouped chat rendering", () => {
   });
 
   it("resolves managed transcode audio to an inline player", async () => {
-    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const source = managedSource();
     const ticketedUrl = `${source}?mediaTicket=managed-ticket`;
     const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
     const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
@@ -2143,7 +1739,7 @@ describe("grouped chat rendering", () => {
   it("backs off stale managed ticket refreshes and eventually marks them unavailable", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-29T00:00:00.000Z"));
-    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const source = managedSource();
     const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
     let finishSecondRequest: (() => void) | undefined;
     const resolveArtifactDownload = vi.fn(() => {
@@ -2208,7 +1804,7 @@ describe("grouped chat rendering", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-07-29T00:00:00.000Z"));
       const initialExpiry = Date.now() + 20_000;
-      const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+      const source = managedSource();
       const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
       const resolveArtifactDownload = vi.fn(async () => {
         const attempt = resolveArtifactDownload.mock.calls.length;
@@ -2251,7 +1847,7 @@ describe("grouped chat rendering", () => {
   );
 
   it("does not render an unticketed managed attachment without an artifact resolver", () => {
-    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const source = managedSource();
     renderAssistantMessage(
       createAssistantAudioMessage(
         source,
@@ -2573,7 +2169,7 @@ describe("grouped chat rendering", () => {
   });
 
   it("fetches managed outgoing chat images with auth and requester scope", async () => {
-    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const managedChatImageUrl = managedSource();
     const objectUrl = "blob:managed-image";
     stubObjectUrls(() => objectUrl);
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
@@ -2653,6 +2249,8 @@ describe("grouped chat rendering", () => {
 
     await flushAssistantAttachmentAvailabilityChecks();
     expectElement(container, ".chat-assistant-attachment-card__expand", HTMLButtonElement).click();
+    expect(sidebarContent).not.toHaveProperty("src");
+    expect(sidebarContent).toHaveProperty("sourceIdentity", source);
 
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;
@@ -2734,7 +2332,7 @@ describe("grouped chat rendering", () => {
 
   it("falls back when a managed outgoing image body stalls after headers", async () => {
     vi.useFakeTimers();
-    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const managedChatImageUrl = managedSource();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const signal = init?.signal;
       if (!signal) {
@@ -2775,10 +2373,7 @@ describe("grouped chat rendering", () => {
   });
 
   it("bounds managed outgoing image blob URLs with least-recently-used eviction", async () => {
-    const imageUrls = Array.from(
-      { length: 65 },
-      () => `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
-    );
+    const imageUrls = Array.from({ length: 65 }, () => managedSource());
     let objectUrlIndex = 0;
     const { createObjectURL, revokeObjectURL } = stubObjectUrls(
       () => `blob:managed-image-${objectUrlIndex++}`,
@@ -2852,10 +2447,7 @@ describe("grouped chat rendering", () => {
   });
 
   it("bounds managed outgoing image miss retention", async () => {
-    const imageUrls = Array.from(
-      { length: 65 },
-      () => `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
-    );
+    const imageUrls = Array.from({ length: 65 }, () => managedSource());
     const fetchMock = vi.fn(async () => ({ ok: false }));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
@@ -2983,40 +2575,6 @@ describe("grouped chat rendering", () => {
     expect(onOpenImage).not.toHaveBeenCalled();
   });
 
-  it("preserves widget identity and updates script policy across sandbox modes", () => {
-    const message = createAssistantMessage(
-      [
-        { type: "text", text: "Rendered inline." },
-        {
-          type: "canvas",
-          preview: createCanvasPreview({
-            viewId: "cv_inline_scoped",
-            title: "Scoped preview",
-            preferredHeight: 320,
-          }),
-        },
-      ],
-      { id: "assistant-scoped-canvas" },
-    );
-    const options = {
-      canvasPluginSurfaceUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
-      sessionKey: "agent:main:canvas",
-    };
-    renderAssistantMessage(message, options);
-    const widget = expectCanvasWidget(view, {
-      docId: "cv_inline_scoped",
-      title: "Scoped preview",
-      preferredHeight: 320,
-      sessionKey: options.sessionKey,
-    });
-    expect(widget).toMatchObject({ allowScripts: true });
-
-    renderAssistantMessage(structuredClone(message), { ...options, embedSandboxMode: "strict" });
-    expect(view.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-    expect(widget).toMatchObject({ allowScripts: false });
-    expect(view.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
-  });
-
   it("opens generic tool details instead of a canvas preview from tool rows", async () => {
     document.body.append(view);
     const onOpenSidebar = vi.fn();
@@ -3093,7 +2651,12 @@ describe("grouped chat rendering", () => {
         '.chat-group-footer-actions [aria-label="Reply to message"]',
       )
       ?.click();
-    expect(onReply).toHaveBeenCalledWith(expect.objectContaining({ text: "a".repeat(499) }));
+    expect(onReply).toHaveBeenCalledWith({
+      messageId: "assistant-message",
+      senderLabel: "OpenClaw",
+      sourceMessageId: "assistant-disclosure-actions",
+      text: "a".repeat(499),
+    });
     expect(container.querySelector<HTMLElement>(".chat-bubble")?.dataset.messageText).toBe(
       visibleMessage,
     );

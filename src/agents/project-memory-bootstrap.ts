@@ -283,9 +283,3 @@ export async function prepareProjectMemoryBootstrap(params: {
     return [];
   }
 }
-
-export function buildProjectMemoryWriteInstruction(projectKey: string | null | undefined): string {
-  return projectKey && !/[\r\n<>]/u.test(projectKey)
-    ? `For every repository-specific memory entry you write, add <!-- project: ${projectKey} --> on the same line. Do not project-scope user-level preferences, standing intents, or facts that are not specific to this repository.`
-    : "";
-}

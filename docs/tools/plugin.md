@@ -37,10 +37,11 @@ bundled, official external, and source-only plugins, see
     openclaw plugins search "calendar"
     ```
 
-    ClawHub is the primary discovery surface for community plugins. Ordinary
-    bare package specs install from npm unless they match a bundled or official
-    plugin id. Raw `@openclaw/*` specs that match a
-    bundled plugin resolve to that bundled copy. Use an explicit source prefix
+    ClawHub is the default install source and primary discovery surface for
+    community plugins. Ordinary package specs install from ClawHub unless they
+    are bare bundled or official plugin ids without a version or tag. Scoped
+    package names, including `@openclaw/*`, always select ClawHub by default.
+    Use an explicit source prefix
     when you need one source specifically.
 
   </Step>
@@ -48,7 +49,7 @@ bundled, official external, and source-only plugins, see
   <Step title="Install the plugin">
     ```bash
     # From ClawHub.
-    openclaw plugins install clawhub:<package>
+    openclaw plugins install <package>
 
     # From npm.
     openclaw plugins install npm:<package>
@@ -119,19 +120,17 @@ bundled, official external, and source-only plugins, see
 
 | Source      | Use when                                                                       | Example                                                        |
 | ----------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| ClawHub     | You want OpenClaw-native discovery, scans, version metadata, and install hints | `openclaw plugins install clawhub:<package>`                   |
+| ClawHub     | You want OpenClaw-native discovery, scans, version metadata, and install hints | `openclaw plugins install <package>`                           |
 | npm         | You need direct npm registry or dist-tag workflows                             | `openclaw plugins install npm:<package>`                       |
 | git         | You need a branch, tag, or commit from a repository                            | `openclaw plugins install git:github.com/<owner>/<repo>@<ref>` |
 | local path  | You are developing or testing a plugin on the same machine                     | `openclaw plugins install --link ./my-plugin`                  |
 | marketplace | You are installing a Claude-compatible marketplace plugin                      | `openclaw plugins install <plugin> --marketplace <source>`     |
 
-Bare package specs have special compatibility behavior: a bare name that
-matches a bundled plugin id uses that bundled source; a bare name that matches
-an official external plugin id uses the official package catalog; any other
-bare spec installs through npm. Raw `@openclaw/*`
-specs that match bundled plugins also resolve to the bundled copy before npm
-fallback. Use `npm:@openclaw/<plugin>@<version>` to deliberately install the
-external npm package instead of the bundled copy. Use `clawhub:`, `npm:`,
+Bare plugin ids without a version or tag are shortcuts: an id that matches a
+bundled plugin uses that bundled source, and an official external plugin id uses
+the official package catalog. All package names, including `@openclaw/*`, and
+versioned or tagged specs install through ClawHub, with no automatic npm fallback.
+Use `npm:@openclaw/<plugin>@<version>` to install directly from npm. Use `clawhub:`, `npm:`,
 `git:`, or `npm-pack:` to select the source explicitly. See
 [`openclaw plugins`](/cli/plugins#install) for the full command contract.
 

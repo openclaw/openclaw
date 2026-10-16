@@ -31,7 +31,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 <Steps>
   <Step title="Install the plugin">
     ```bash
-    openclaw plugins install clawhub:@openclaw/diagnostics-prometheus
+    openclaw plugins install @openclaw/diagnostics-prometheus
     ```
   </Step>
   <Step title="Enable the plugin">

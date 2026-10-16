@@ -308,7 +308,9 @@ export function listConfiguredOwnerInputs(
         preservedWorkspaceByAgentDir?.get(agentId)?.get(agentDir) ??
         (agentId === compatibilityAgentId ? defaultWorkspaceDir : undefined);
       const preserveWorkspaceDirOnRefresh =
-        launchWorkspaceDir && !resolveAgentEntry(config, agentId)?.workspace?.trim();
+        launchWorkspaceDir &&
+        !resolveAgentEntry(config, agentId)?.workspace?.trim() &&
+        !config.agents?.defaults?.workspace?.trim();
       const workspaceDir = preserveWorkspaceDirOnRefresh
         ? launchWorkspaceDir
         : resolveAgentWorkspaceDir(config, agentId);

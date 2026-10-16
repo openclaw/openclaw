@@ -34,7 +34,7 @@ export function assertSessionGitHubTarget(
   }
 }
 
-export function sessionGitHubRepositoryUrl(identity: SessionGitHubReadIdentity): string {
+function sessionGitHubRepositoryUrl(identity: SessionGitHubReadIdentity): string {
   return `${identity.apiBaseUrl}/repos/${encodeURIComponent(identity.repository.owner)}/${encodeURIComponent(identity.repository.repo)}`;
 }
 

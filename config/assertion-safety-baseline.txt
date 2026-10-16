@@ -129,7 +129,6 @@ extensions/codex/src/app-server/native-skill-isolation.ts	1
 extensions/codex/src/app-server/plugin-activation.ts	1
 extensions/codex/src/app-server/plugin-inventory.ts	6
 extensions/codex/src/app-server/plugin-metadata-cache.ts	5
-extensions/codex/src/app-server/run-attempt-context.ts	2
 extensions/codex/src/app-server/run-attempt-resources.ts	12
 extensions/codex/src/app-server/run-attempt-runtime.ts	1
 extensions/codex/src/app-server/run-attempt-server-requests.ts	2
@@ -507,7 +506,7 @@ extensions/memory-core/src/session-backfill.ts	1
 extensions/memory-core/src/session-ingestion.ts	2
 extensions/memory-core/src/session-reset-recall-metadata.ts	3
 extensions/memory-core/src/short-term-promotion-apply.ts	1
-extensions/memory-core/src/short-term-promotion-memory-write.ts	2
+extensions/memory-core/src/short-term-promotion-memory-write.ts	1
 extensions/memory-core/src/short-term-promotion-record.ts	1
 extensions/memory-core/src/short-term-promotion-rehydrate.ts	1
 extensions/memory-core/src/standing-intents-tool.ts	1
@@ -1262,7 +1261,6 @@ src/agents/harness/context-engine-lifecycle.ts	3
 src/agents/harness/context-engine-turn-outbox.ts	1
 src/agents/harness/gateway-question.ts	4
 src/agents/harness/hook-helpers.ts	1
-src/agents/harness/lifecycle-hook-helpers.ts	1
 src/agents/harness/native-hook-relay-client.ts	2
 src/agents/harness/native-hook-relay-codec.ts	2
 src/agents/harness/selection.ts	3
@@ -2275,7 +2273,7 @@ src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
 src/plugins/hook-types.ts	2
-src/plugins/hooks.ts	8
+src/plugins/hooks.ts	7
 src/plugins/host-hook-attachments.ts	1
 src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	4
@@ -2470,7 +2468,7 @@ src/tts/tts-config.ts	4
 src/tts/tts-core.ts	1
 src/tts/tts-provider-resolution.ts	1
 src/tts/tts-request.ts	1
-src/tts/tts-settings.ts	3
+src/tts/tts-settings.ts	2
 src/tts/tts-telephony.ts	1
 src/tts/voice-models.ts	3
 src/tui/components/chat-log.ts	1
@@ -2549,7 +2547,7 @@ ui/src/components/markdown-assistant-transcript.ts	1
 ui/src/components/markdown-code-blocks.ts	1
 ui/src/components/markdown-parser.ts	1
 ui/src/components/mcp-app-theme.ts	1
-ui/src/components/session-data-controller.ts	1
+ui/src/components/session-data.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1

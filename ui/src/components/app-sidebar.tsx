@@ -71,6 +71,10 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     subscribe: (current, notify) => current.subscribe(notify),
     equality: "revision",
   });
+  const snapshot = owner.snapshot;
+  const snapshotProjection = projectOwner(snapshot, (current) => current.read());
+  const snapshotPending = createMemo(() => snapshotProjection.read().pending);
+  const snapshotModel = createMemo(() => snapshotProjection.read().model);
   const people = (owner.peopleView = createSidebarPeople(owner, owner.people, () => {
     Object.values(props);
     return projection.read();
@@ -78,11 +82,15 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const prepared = createMemo(
     () => {
       projection.revision();
+      snapshotPending();
+      snapshotModel();
       Object.values(props);
       // Snapshot capture keeps observing Pages after its navigation view closes.
       void catalog.dashboards;
       // Synchronous owners release boot snapshots and restore query state before row consumers read.
+      snapshot.synchronize();
       owner.prepareRender();
+      owner.sessionData.synchronize();
       owner.pinnedSessions.synchronize();
       return owner;
     },
@@ -92,7 +100,9 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     context.sessions.listSnapshot(owner.sessionData.sessionListQuery(owner.expandedAgentId())),
   );
   const narrationEnabled = createMemo(() => {
+    // Preparation reads narration while synchronizing the session projection.
     projection.revision();
+    snapshotModel();
     Object.values(props);
     return owner.narrationEnabled();
   });
@@ -116,6 +126,8 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const presentationRevision = createParkedProjection(
     () => {
       Object.values(props);
+      snapshotPending();
+      snapshotModel();
       return projection.revision();
     },
     () => props.navigationVisible,
@@ -179,7 +191,14 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       />
     </Show>
   );
-  const content = hostView.renderSidebar(Sessions, scroll);
+  const content = hostView.renderSidebar(Sessions, scroll, {
+    pending: snapshotPending,
+    saved: () => {
+      // Preparation can clear a receipt without publishing another model.
+      projection.revision();
+      return snapshotProjection.read().saved;
+    },
+  });
   createEffect(
     () => {
       narration()?.();
@@ -189,10 +208,12 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     },
     () =>
       untrack(() => {
+        owner.sessionData.refreshPresentation();
         owner.commitRender();
         if (owner.isConnected) {
           owner.narration?.sync(narrationInput());
         }
+        snapshot.capture();
         people.syncRendered();
         scroll.restore();
         // The projection owns the display deadline; this mounted view owns its timer.
@@ -214,11 +235,16 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     sidebarOwners.set(host, owner);
     if (host.isConnected && !owner.isConnected) {
       owner.attach();
+    } else {
+      owner.sessionData.connect();
     }
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => owner.classList.add("sidebar-r"));
     });
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      owner.sessionData.disconnect(owner.isConnected);
+    };
   });
   onCleanup(() => disconnectSidebarOwner(host));
   return content;
