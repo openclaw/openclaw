@@ -272,9 +272,7 @@ it("prepares custom board targets off-thread and observes a newly registered sto
       revision: 1,
       widgets: [{ name: "status" }],
     });
-    expect((await readBoardHtml(boardStore, target, "status"))?.html).toBe(
-      buildWidgetDocument("status", "registered owner"),
-    );
+    expect((await readBoardHtml(boardStore, target, "status"))?.html).toBe("registered owner");
     expect(host.queries).toEqual([]);
   } finally {
     host.restore();
