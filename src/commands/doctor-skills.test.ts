@@ -132,6 +132,26 @@ describe("doctor skills", () => {
       update && !available,
     );
   });
+  it("collects only unavailable skills that this agent is allowed to use", () => {
+    const unavailable = createSkill({
+      name: "missing-bin",
+      eligible: false,
+      platformIncompatible: false,
+      modelVisible: false,
+      commandVisible: false,
+      missing: { bins: ["tool"], anyBins: [], anyEnv: [], env: [], config: [], os: [] },
+    });
+    const report = createReport([
+      createSkill({ name: "ready" }),
+      unavailable,
+      createSkill({ name: "disabled", eligible: false, disabled: true }),
+      createSkill({ name: "agent-filtered", eligible: true, blockedByAgentFilter: true }),
+      createSkill({ name: "bundled-blocked", eligible: false, blockedByAllowlist: true }),
+    ]);
+
+    expect(collectUnavailableAgentSkills(report)).toEqual([unavailable]);
+  });
+
 
   it("formats unavailable skill names compactly and alphabetically", async () => {
     const calls = await runSkillDoctor([
@@ -193,6 +213,18 @@ describe("doctor skills", () => {
     expect(output).toContain("/root/.config/gh");
     expect(output).toContain("GH_CONFIG_DIR=/root/.config/gh");
   });
+  it("does not surface the GH_CONFIG_DIR hint for an ineligible skill", async () => {
+    const githubSkill = createSkill({
+      name: "github",
+      skillKey: "github",
+      eligible: false,
+      platformIncompatible: false,
+      missing: { bins: ["gh"], anyBins: [], anyEnv: [], env: [], config: [], os: [] },
+    });
+    const calls = await runSkillDoctor([githubSkill]);
+    expect(calls.some((call) => call[1] === "GitHub CLI")).toBe(false);
+  });
+
 
   it("does not offer a global disable when another agent can use the skill", async () => {
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);

@@ -438,6 +438,83 @@ describe("buildWorkspaceSkillStatus", () => {
     },
   );
 
+  it("does not surface install options for OS-scoped skills on unsupported platforms", () => {
+    if (process.platform === "win32") {
+      // Keep this simple; win32 platform naming is already explicitly handled elsewhere.
+      return;
+    }
+
+    const mismatchedOs = process.platform === "darwin" ? "linux" : "darwin";
+
+    const entry: SkillEntry = {
+      skill: createCanonicalFixtureSkill({
+        name: "os-scoped",
+        description: "test",
+        filePath: "/tmp/os-scoped",
+        baseDir: "/tmp",
+        source: "test",
+      }),
+      frontmatter: {},
+      metadata: {
+        always: true,
+        os: [mismatchedOs],
+        requires: { bins: ["fakebin"] },
+        install: [
+          {
+            id: "brew",
+            kind: "brew",
+            formula: "fake",
+            bins: ["fakebin"],
+            label: "Install fake (brew)",
+          },
+        ],
+      },
+    };
+
+    const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
+    expect(report.skills).toStrictEqual([
+      {
+        name: "os-scoped",
+        description: "test",
+        source: "test",
+        bundled: false,
+        filePath: "/tmp/os-scoped",
+        baseDir: "/tmp",
+        skillKey: "os-scoped",
+        primaryEnv: undefined,
+        emoji: undefined,
+        homepage: undefined,
+        always: true,
+        disabled: false,
+        blockedByAllowlist: false,
+        blockedByAgentFilter: false,
+        eligible: false,
+        platformIncompatible: true,
+        modelVisible: false,
+        userInvocable: true,
+        commandVisible: false,
+        requirements: {
+          anyBins: [],
+          bins: ["fakebin"],
+          config: [],
+          env: [],
+          anyEnv: [],
+          os: [mismatchedOs],
+        },
+        missing: {
+          anyBins: [],
+          bins: [],
+          config: [],
+          env: [],
+          anyEnv: [],
+          os: [mismatchedOs],
+        },
+        configChecks: [],
+        install: [],
+      },
+    ]);
+  });
+
   it("does not expose raw config values in config checks", () => {
     const secret = "discord-token-secret-abc"; // pragma: allowlist secret
     const entry: SkillEntry = {

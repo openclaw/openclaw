@@ -61,7 +61,7 @@ function createBundledSkill(params: {
     config: string[];
     os: string[];
   };
-  missing: { bins: string[]; anyBins: string[]; env: string[]; config: string[]; os: string[] };
+  missing: { bins: string[]; anyBins: string[]; env: string[]; anyEnv: string[]; config: string[]; os: string[] };
   configChecks: [];
   install: Array<{ id: string; kind: string; label: string; bins: string[] }>;
 } {
@@ -81,6 +81,7 @@ function createBundledSkill(params: {
       bins: params.bins,
       anyBins: [],
       env: params.env ?? [],
+      anyEnv: [],
       config: [],
       os: params.os ?? [],
     },
@@ -88,6 +89,7 @@ function createBundledSkill(params: {
       bins: params.bins,
       anyBins: [],
       env: params.env ?? [],
+      anyEnv: [],
       config: [],
       os: params.os ?? [],
     },

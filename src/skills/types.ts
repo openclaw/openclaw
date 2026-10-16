@@ -29,6 +29,8 @@ export type OpenClawSkillMetadata = {
     bins?: string[];
     anyBins?: string[];
     env?: string[];
+    /** Alternative env vars where any one match satisfies the requirement. */
+    anyEnv?: string[];
     config?: string[];
   };
   install?: SkillInstallSpec[];
@@ -142,6 +144,7 @@ export type SkillSnapshot = {
     skillKey?: string;
     primaryEnv?: string;
     requiredEnv?: string[];
+    anyEnv?: string[];
   }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];

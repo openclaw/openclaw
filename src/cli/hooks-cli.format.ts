@@ -42,6 +42,7 @@ const HOOK_REQUIREMENT_GROUPS = [
   ["bins", "Binaries"],
   ["anyBins", "Any binary"],
   ["env", "Environment"],
+  ["anyEnv", "Any environment"],
   ["config", "Config"],
   ["os", "OS"],
 ] as const;

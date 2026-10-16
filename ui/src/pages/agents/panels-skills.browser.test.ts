@@ -133,6 +133,7 @@ describe("agents skills panel (browser)", () => {
       bins: [],
       anyBins: ["claude", "codex", "opencode"],
       env: [],
+      anyEnv: [],
       config: [],
       os: [],
     };

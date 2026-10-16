@@ -39,7 +39,7 @@ function skill(name: string, overrides: Partial<SkillStatusEntry> = {}): SkillSt
 function report(skills: SkillStatusEntry[]): SkillStatusReport {
   return { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills };
 }
-const missing = { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] };
+const missing = { bins: ["missing-tool"], anyBins: [], env: [], anyEnv: [], config: [], os: [] };
 
 describe("skills formatting", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -119,6 +119,29 @@ describe("skills formatting", () => {
         JSON.parse(formatSkillInfo(report(entries), "requested-skill", { json: true })).name,
       ).toBe("requested-skill");
     }
+  });
+
+  it("formats skills list with missing requirements", () => {
+    const rep = report([
+      skill({
+        name: "needs-stuff",
+        eligible: false,
+        platformIncompatible: false,
+        missing: {
+          bins: ["ffmpeg"],
+          anyBins: ["rg", "grep"],
+          anyEnv: [],
+          env: ["API_KEY"],
+          config: [],
+          os: ["darwin"],
+        },
+      }),
+    ]);
+    const output = formatSkillsList(rep, { verbose: true });
+    expect(output).toContain("needs-stuff");
+    expect(output).toContain("needs setup");
+    expect(output).toContain("anyBins");
+    expect(output).toContain("os:");
   });
 
   it("rejects ambiguous exact key selectors regardless of discovery order", () => {

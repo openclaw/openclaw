@@ -59,6 +59,7 @@ export function resolveOpenClawManifestRequires(
     bins: normalizeCsvOrLooseStringList(requiresRaw.bins),
     anyBins: normalizeCsvOrLooseStringList(requiresRaw.anyBins),
     env: normalizeCsvOrLooseStringList(requiresRaw.env),
+    anyEnv: normalizeCsvOrLooseStringList(requiresRaw.anyEnv),
     config: normalizeCsvOrLooseStringList(requiresRaw.config),
   };
 }

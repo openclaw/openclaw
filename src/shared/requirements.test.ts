@@ -75,6 +75,7 @@ describe("requirements evaluation", () => {
       bins: ["node"],
       anyBins: ["bun", "deno"],
       env: ["OPENAI_API_KEY", "PRESENT"],
+      anyEnv: [],
       config: ["browser.enabled", "gateway.enabled"],
       os: ["darwin"],
     });
@@ -82,6 +83,7 @@ describe("requirements evaluation", () => {
       bins: [],
       anyBins: ["bun", "deno"],
       env: ["OPENAI_API_KEY"],
+      anyEnv: [],
       config: ["browser.enabled"],
       os: ["darwin"],
     });
@@ -106,7 +108,7 @@ describe("requirements evaluation", () => {
       },
     });
 
-    expect(result.missing).toEqual({ bins: [], anyBins: [], env: [], config: [], os: [] });
+    expect(result.missing).toEqual({ bins: [], anyBins: [], env: [], anyEnv: [], config: [], os: [] });
     expect(result.configChecks).toEqual([{ path: "browser.enabled", satisfied: false }]);
     expect(result.eligible).toBe(true);
   });
@@ -124,9 +126,33 @@ describe("requirements evaluation", () => {
       bins: [],
       anyBins: [],
       env: [],
+      anyEnv: [],
       config: [],
       os: ["darwin"],
     });
     expect(result.eligible).toBe(false);
+  });
+
+  it("defaults missing metadata to empty requirements", () => {
+    const result = evaluate();
+
+    expect(result.required).toEqual({
+      bins: [],
+      anyBins: [],
+      env: [],
+      anyEnv: [],
+      config: [],
+      os: [],
+    });
+    expect(result.missing).toEqual({
+      bins: [],
+      anyBins: [],
+      env: [],
+      anyEnv: [],
+      config: [],
+      os: [],
+    });
+    expect(result.configChecks).toStrictEqual([]);
+    expect(result.eligible).toBe(true);
   });
 });

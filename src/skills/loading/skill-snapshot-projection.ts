@@ -52,6 +52,7 @@ export function buildSkillSnapshotProjection(input: SkillSnapshotProjectionInput
       skillKey: resolveSkillKey(entry),
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
+      anyEnv: entry.metadata?.requires?.anyEnv?.slice(),
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
     ...(input.skillOverrides ? { skillOverrides: input.skillOverrides } : {}),

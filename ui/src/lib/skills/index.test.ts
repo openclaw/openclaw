@@ -114,8 +114,8 @@ function createSkillCardReport(installedVersion?: string, installedAt = 123): Sk
         modelVisible: true,
         userInvocable: true,
         commandVisible: true,
-        requirements: { anyBins: [], bins: [], env: [], config: [], os: [] },
-        missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
+        requirements: { anyBins: [], bins: [], env: [], anyEnv: [], config: [], os: [] },
+        missing: { anyBins: [], bins: [], env: [], anyEnv: [], config: [], os: [] },
         configChecks: [],
         install: [],
         ...(installedVersion

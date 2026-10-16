@@ -18,6 +18,14 @@ export type OpenClawHookMetadata = RequirementsMetadata & {
   events: string[];
   /** Optional export name (default: "default") */
   export?: string;
+  os?: string[];
+  requires?: {
+    bins?: string[];
+    anyBins?: string[];
+    env?: string[];
+    anyEnv?: string[];
+    config?: string[];
+  };
   install?: HookInstallSpec[];
 };
 

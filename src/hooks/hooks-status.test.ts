@@ -81,6 +81,7 @@ describe("hook status", () => {
         bins: [],
         anyBins: [],
         env: [],
+        anyEnv: [],
         config: [],
         os: [mismatchedOs],
       },

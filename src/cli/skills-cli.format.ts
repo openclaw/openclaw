@@ -100,6 +100,7 @@ const SKILL_REQUIREMENT_GROUPS = [
   ["bins", "Binaries"],
   ["anyBins", "Any binaries"],
   ["env", "Environment"],
+  ["anyEnv", "Any environment"],
   ["config", "Config"],
   ["os", "OS"],
 ] as const;

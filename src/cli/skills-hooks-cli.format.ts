@@ -47,9 +47,9 @@ export function formatCliRequirements(
       const required = status.requirements[key];
       const missing = status.missing[key];
       let value: string;
-      if (key === "anyBins" || key === "os") {
+      if (key === "anyBins" || key === "anyEnv" || key === "os") {
         // Missing arrays describe the whole alternative group, not individual availability.
-        const prefix = key === "anyBins" ? "any of: " : "";
+        const prefix = key === "os" ? "" : "any of: ";
         value = formatStatus(`(${prefix}${required.join(", ")})`, missing.length === 0);
       } else if (key === "config" && configChecks) {
         value = configChecks.map((check) => formatStatus(check.path, check.satisfied)).join(", ");

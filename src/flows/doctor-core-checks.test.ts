@@ -74,6 +74,7 @@ function createSkill(): SkillStatusEntry {
     requirements: {
       bins: ["openclaw-test-missing-skill-bin"],
       anyBins: [],
+      anyEnv: [],
       env: [],
       config: [],
       os: [],
@@ -81,6 +82,7 @@ function createSkill(): SkillStatusEntry {
     missing: {
       bins: ["openclaw-test-missing-skill-bin"],
       anyBins: [],
+      anyEnv: [],
       env: [],
       config: [],
       os: [],

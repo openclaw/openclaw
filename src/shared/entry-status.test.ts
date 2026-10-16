@@ -128,6 +128,39 @@ describe("shared/entry-status", () => {
     });
   });
 
+  it("returns empty requirements when metadata and frontmatter are missing", () => {
+    mockProcessPlatform("linux");
+
+    const result = evaluateEntryRequirementsForCurrentPlatform({
+      always: false,
+      entry: {},
+      hasLocalBin: () => false,
+      isEnvSatisfied: () => false,
+      isConfigSatisfied: () => false,
+    });
+
+    expect(result).toEqual({
+      required: {
+        bins: [],
+        anyBins: [],
+        env: [],
+        anyEnv: [],
+        config: [],
+        os: [],
+      },
+      missing: {
+        bins: [],
+        anyBins: [],
+        env: [],
+        anyEnv: [],
+        config: [],
+        os: [],
+      },
+      requirementsSatisfied: true,
+      configChecks: [],
+    });
+  });
+
   it.each([
     {
       name: "blank metadata suppresses frontmatter",

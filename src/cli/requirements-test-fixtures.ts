@@ -4,6 +4,7 @@ function createEmptyRequirements() {
     bins: [],
     anyBins: [],
     env: [],
+    anyEnv: [],
     config: [],
     os: [],
   };

@@ -143,7 +143,7 @@ describe("unified skill discovery", () => {
   it("keeps local results usable during remote failure and explains missing setup in the dot", () => {
     const skill = createSkill({
       eligible: false,
-      missing: { bins: ["repo-cli"], anyBins: [], env: [], config: [], os: [] },
+      missing: { bins: ["repo-cli"], anyBins: [], anyEnv: [], env: [], config: [], os: [] },
     });
     const container = renderDiscovery({
       clawhubQuery: "repo",

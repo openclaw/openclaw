@@ -72,11 +72,21 @@ export function evaluateRuntimeEligibility(
     }
   }
   const requiredAnyBins = requires.anyBins ?? [];
-  return (
-    requiredAnyBins.length === 0 ||
-    requiredAnyBins.some((bin) => params.hasBin(bin)) ||
-    Boolean(params.hasAnyRemoteBin?.(requiredAnyBins))
-  );
+  if (
+    requiredAnyBins.length > 0 &&
+    !requiredAnyBins.some((bin) => params.hasBin(bin)) &&
+    !params.hasAnyRemoteBin?.(requiredAnyBins)
+  ) {
+    return false;
+  }
+  const requiredAnyEnv = requires.anyEnv ?? [];
+  if (
+    requiredAnyEnv.length > 0 &&
+    !requiredAnyEnv.some((envName) => params.hasEnv(envName))
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function windowsPathExtensions(raw: string | undefined): string[] {
