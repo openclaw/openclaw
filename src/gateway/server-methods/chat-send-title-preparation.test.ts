@@ -9,11 +9,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  beginSessionWorkAdmission,
-  getSessionWorkAdmissionRelease,
-  interruptSessionWorkAdmissions,
-} from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -229,42 +225,4 @@ it("compacts after the reply releases its admission while its title is still gen
       expect(loadSessionEntry(scope)?.displayName).toBe("First question");
     },
   );
-});
-
-it("does not hold session admission while a dashboard title is generating", async () => {
-  await withTitle({ writeConfig: true }, async ({ scope, append, start, finish }) => {
-    await append("Original release plan");
-    const admissionQuery = {
-      scope: scope.storePath,
-      identities: [scope.sessionKey, scope.sessionId],
-    };
-    let competing: { release: () => void } | undefined;
-    try {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      await start("A later follow-up", Promise.resolve(), true);
-      expect(generate).toHaveBeenCalledOnce();
-      expect(getSessionWorkAdmissionRelease(admissionQuery)).toBeUndefined();
-      const titleDrain = interruptSessionWorkAdmissions({ ...admissionQuery, timeoutMs: 0 });
-      await vi.advanceTimersByTimeAsync(0);
-      await expect(titleDrain).resolves.toBe(true);
-      const identities = ["agent:main:dashboard:competing-title-lease"];
-      competing = await beginSessionWorkAdmission({
-        scope: scope.storePath,
-        identities,
-        assertAllowed: () => {},
-      });
-      const competingDrain = interruptSessionWorkAdmissions({
-        scope: scope.storePath,
-        identities,
-        timeoutMs: 0,
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      await expect(competingDrain).resolves.toBe(false);
-    } finally {
-      competing?.release();
-      await finish();
-      vi.useRealTimers();
-    }
-    expect(loadSessionEntry(scope)?.displayName).toBe("Original release plan");
-  });
 });

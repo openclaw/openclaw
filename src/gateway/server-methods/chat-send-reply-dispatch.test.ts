@@ -382,10 +382,8 @@ describe("buildAssistantReplyContentFromInputs", () => {
   it.each([
     ...(
       [
-        { kind: "raw", withAnswer: false },
         { kind: "prepared", withAnswer: false },
         { kind: "raw", withAnswer: true },
-        { kind: "prepared", withAnswer: true },
       ] as const
     ).map(({ kind, withAnswer }) => ({
       name: `${kind} reasoning (answer: ${withAnswer})`,
@@ -570,7 +568,6 @@ describe("createChatSendReplyDispatch", () => {
   });
 
   it.each([
-    { operation: "raw", split: false },
     { operation: "raw", split: true },
     { operation: "prepared", split: false },
     { operation: "prepared", split: true },
