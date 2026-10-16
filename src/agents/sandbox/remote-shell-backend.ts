@@ -15,6 +15,7 @@ import {
 import {
   PUBLISH_REMOTE_WORKSPACE,
   CLEANUP_REMOTE_WORKSPACE_STAGE,
+  REPLACE_REMOTE_SKILLS_WORKSPACE,
 } from "./remote-shell-bootstrap-python.js";
 import {
   buildRemoteCommand,
@@ -340,23 +341,73 @@ class RemoteShellSandboxBackendImpl {
     ) {
       return;
     }
-    await this.clearRemoteDirectory(
-      session,
-      this.params.runtimePaths.remoteSkillsWorkspaceDir,
-      signal,
-    );
+    // Check local skills before touching the remote: an interrupted refresh
+    // must never leave a half-written skills tree behind.
     const hasSkills = await isExistingDirectory(this.params.createParams.skillsWorkspaceDir);
     signal?.throwIfAborted();
+    const destination = this.params.runtimePaths.remoteSkillsWorkspaceDir;
     if (!hasSkills) {
+      // No local skills to publish: drop any stale remote skills tree.
+      await this.clearRemoteDirectory(session, destination, signal);
       return;
     }
     this.params.createParams.assertRuntimeCurrent?.();
-    await session.uploadDirectory({
-      localDir: this.params.createParams.skillsWorkspaceDir,
-      remoteDir: this.params.runtimePaths.remoteSkillsWorkspaceDir,
-      remoteRootDir: this.params.runtimePaths.runtimeRootDir,
-      signal,
-    });
+    // Upload into a staging sibling, then rotate the live tree aside and
+    // publish the staged tree atomically. A failed transfer keeps the
+    // previous complete tree instead of a partial one.
+    const staging = `${destination}.stage-${randomUUID()}`;
+    const backup = `${destination}.old-${randomUUID()}`;
+    let stagingReady = false;
+    let published = false;
+    try {
+      this.params.createParams.assertRuntimeCurrent?.();
+      await session.runCommand({
+        remoteCommand: buildRemoteCommand([
+          "/bin/sh",
+          "-c",
+          'mkdir -p -- "$1"',
+          "openclaw-sandbox-stage",
+          staging,
+        ]),
+        signal,
+      });
+      stagingReady = true;
+      this.params.createParams.assertRuntimeCurrent?.();
+      await session.uploadDirectory({
+        localDir: this.params.createParams.skillsWorkspaceDir,
+        remoteDir: staging,
+        remoteRootDir: this.params.runtimePaths.runtimeRootDir,
+        signal,
+      });
+      this.params.createParams.assertRuntimeCurrent?.();
+      await session.runCommand({
+        remoteCommand: buildRemoteCommand([
+          "python3",
+          "-c",
+          REPLACE_REMOTE_SKILLS_WORKSPACE,
+          staging,
+          destination,
+          backup,
+        ]),
+        signal,
+      });
+      published = true;
+    } finally {
+      if (stagingReady && !published) {
+        // Preserve the original failure; staging cleanup must not mask it.
+        await session
+          .runCommand({
+            remoteCommand: buildRemoteCommand([
+              "python3",
+              "-c",
+              CLEANUP_REMOTE_WORKSPACE_STAGE,
+              staging,
+            ]),
+            allowFailure: true,
+          })
+          .catch(() => undefined);
+      }
+    }
   }
 
   private async clearRemoteDirectory(
