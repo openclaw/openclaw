@@ -70,6 +70,52 @@ and `npm-stable-v1` coverage policies, artifacts, and focused rerun handles.
 The `normal_ci` child dispatches `ci.yml` with the exact target and release scope,
 without `release_gate`. Every selected failure remains blocking, including
 Windows Node failures.
+
+**Crabbox Linux runners.**
+
+Run the existing SHA-pinned dispatcher through the Crabbox controller to supply
+dedicated AWS runners for the campaign's Linux jobs:
+
+```bash
+node scripts/full-release-crabbox.mjs --max-runners 10 -- \
+  --sha <candidate-sha> --workflow-sha <tooling-sha>
+```
+
+Arguments after `--` belong to `full-release-validation-at-sha.mjs`; its frozen
+source identities, admission, witness verification, and final evidence checks
+still apply. Use tooling with `FULL_RELEASE_CRABBOX_RUNNER_CONTRACT=1` and selected child
+workflows that declare `crabbox_runner_label`. The controller supplies a unique
+`crabbox-frv-<hex>` label, provisions runners as matching jobs queue, and limits
+active task-owned leases to `--max-runners` (default 10). Capacity labels also carry
+that unique prefix, and each Linux job selects its exact campaign-and-capacity
+label. Raw Ubuntu and Blacksmith capacity labels are never registered, so jobs
+selecting those raw labels do not match. Each runner accepts one
+job, and the controller stops its lease after completion. Parent orchestration
+jobs and the Telegram QA dispatcher use GitHub-hosted Ubuntu runners so jobs
+waiting for children cannot exhaust the worker pool. Native macOS and
+Windows jobs retain their existing runners. This changes placement without
+changing test coverage or matrix concurrency limits.
+
+The operator needs a configured, authenticated AWS Crabbox broker and GitHub
+credentials that can register repository self-hosted runners. Ordinary workflow
+`GITHUB_TOKEN` permissions do not grant runner registration. Broker lease limits,
+AWS quotas, and provider capacity can still delay provisioning. Keep the
+controller running through completion. It prints the retained request path and
+owns both `--request-file` and the runner label. Inspect that request before
+recovering an interrupted dispatch, and reconcile task-owned leases before
+starting another campaign. Reattach without dispatching another run:
+
+```bash
+node scripts/full-release-crabbox.mjs --max-runners 10 --attach /path/to/full-release-request.json
+```
+
+The dispatcher packs the runner label into its existing `trusted_workflow_json`
+input, keeping the parent within GitHub's 25-input limit. The label remains part
+of the exact dispatch input witness and child
+evidence identity. A new campaign label therefore does not reuse a child sealed
+with a different runner label. The release runner-group variable continues to
+control jobs that do not select the Crabbox override.
+
 Complete campaigns (`rerun_group=all`) retain QA Smoke's
 full scenario profile and Control UI performance independently of changed paths.
 Docker seed runs all five lanes in every ordinary manual/release scope:

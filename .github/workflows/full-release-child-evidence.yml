@@ -3,6 +3,10 @@ name: Full Release Child Evidence
 on:
   workflow_call:
     inputs:
+      crabbox_runner_label:
+        description: Ephemeral Crabbox runner pool label; empty uses existing runners
+        type: string
+        default: ""
       role:
         required: true
         type: string
@@ -18,7 +22,7 @@ jobs:
   seal:
     name: Seal child receipt
     continue-on-error: true
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: ${{ inputs.crabbox_runner_label && format('{0}-{1}', inputs.crabbox_runner_label, ('ubuntu-24.04')) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04')) }}
     timeout-minutes: 10
     steps:
       - name: Checkout trusted child evidence tooling

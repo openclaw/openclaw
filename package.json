@@ -1764,6 +1764,7 @@
     "check:timed:all-types": "node --import ./scripts/tsx.mjs scripts/check-timed.mts --include-test-types",
     "check:timed:architecture": "node --import ./scripts/tsx.mjs scripts/check-timed.mts --include-architecture",
     "check:workflows": "node --import ./scripts/tsx.mjs scripts/check-workflows.mts",
+    "ci:full-release:crabbox": "node scripts/full-release-crabbox.mjs",
     "ci:full-release": "node scripts/full-release-validation-at-sha.mjs",
     "ci:git-owner:check": "node scripts/generate-ci-git-owner.mts --check",
     "ci:git-owner:gen": "node scripts/generate-ci-git-owner.mts",

@@ -3,6 +3,10 @@ name: Published driver update
 on:
   workflow_call:
     inputs:
+      crabbox_runner_label:
+        description: Ephemeral Crabbox runner pool label; empty uses existing runners
+        type: string
+        default: ""
       candidate_artifact_id:
         required: true
         type: string
@@ -16,7 +20,7 @@ permissions:
 jobs:
   update:
     name: Published driver update
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.crabbox_runner_label && format('{0}-{1}', inputs.crabbox_runner_label, 'ubuntu-24.04') || ('ubuntu-24.04') }}
     steps:
       - name: Start cell budget
         run: |

@@ -10,6 +10,7 @@ import {
 } from "../../scripts/full-release-validation-at-sha.mts";
 import {
   evaluateWorkflowExpression,
+  evaluateWorkflowRunner,
   readTrackedText,
   readWorkflow,
   type WorkflowStep,
@@ -69,8 +70,21 @@ describe("nightly Full Release Validation", () => {
     expect(text).not.toMatch(/--ref\s+main|ref:\s*["']?main["']?\s*$/mu);
     expect(Object.keys(nightly.jobs)).toEqual(["validate"]);
     expect(job.permissions).toEqual({ actions: "write", contents: "write" });
-    // The job hosts the helper's watch, so it needs the parent waiter's runner and budget.
-    expect(job["runs-on"]).toBe(frv.jobs.release_decision["runs-on"]);
+    // Scheduled validation has no Crabbox label; both waiters retain the configured pool.
+    for (const eventName of ["schedule", "workflow_dispatch"] as const) {
+      for (const runnerBackend of ["github", "hybrid", "blacksmith"] as const) {
+        for (const releaseRunnerGroup of ["", "release-validation"]) {
+          const labels =
+            runnerBackend === "github" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404";
+          const expected = releaseRunnerGroup ? { group: releaseRunnerGroup, labels } : labels;
+          for (const selector of [job["runs-on"], frv.jobs.release_decision["runs-on"]]) {
+            expect(
+              evaluateWorkflowRunner(selector, { eventName, runnerBackend, releaseRunnerGroup }),
+            ).toEqual(expected);
+          }
+        }
+      }
+    }
     expect(job["timeout-minutes"]).toBe(FULL_RELEASE_WAIT_TIMEOUT_MINUTES);
     expect(frv.jobs.release_decision["timeout-minutes"]).toBe(FULL_RELEASE_WAIT_TIMEOUT_MINUTES);
     expect(steps[0]).toMatchObject({

@@ -62,6 +62,33 @@ describe("publication dispatch frozen lane inputs", () => {
     ).toEqual({ trustedWorkflow: identity, ...intent, laneInputs: inputs });
   });
 
+  it.each(["crabbox-frv-012345abcdef", "crabbox-frv-ffffffffffff"])(
+    "binds runner placement %s in the dispatch envelope",
+    (crabboxRunnerLabel) => {
+      const intent = { validationPurpose: "diagnostic", publicationSelection: null };
+      expect(
+        decodePublicationDispatchEnvelope(
+          publicationDispatchEnvelope(null, intent, undefined, undefined, crabboxRunnerLabel),
+        ),
+      ).toEqual({ trustedWorkflow: null, ...intent, crabboxRunnerLabel });
+    },
+  );
+
+  it.each(["", "ubuntu-24.04", "crabbox-frv-ABCDEF012345", "crabbox-frv-012345abcdef-extra"])(
+    "rejects invalid runner placement %j",
+    (crabboxRunnerLabel) => {
+      expect(() =>
+        publicationDispatchEnvelope(
+          null,
+          { validationPurpose: "diagnostic", publicationSelection: null },
+          undefined,
+          undefined,
+          crabboxRunnerLabel,
+        ),
+      ).toThrow("invalid Crabbox release runner label");
+    },
+  );
+
   it.each([
     { ...baselines, upgradeBaseline: "openclaw@latest" },
     { ...baselines, upgradeSurvivorBaselines: [] },

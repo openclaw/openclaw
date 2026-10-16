@@ -5,6 +5,10 @@ run-name: ${{ inputs.dispatch_id != '' && format('OpenClaw Release Checks {0}', 
 on:
   workflow_dispatch:
     inputs:
+      crabbox_runner_label:
+        description: Ephemeral Crabbox runner pool label; empty uses existing runners
+        type: string
+        default: ""
       ref:
         description: Branch, tag, or full commit SHA to validate
         required: true
@@ -157,9 +161,10 @@ env:
 
 jobs:
   resolve_target:
-    runs-on: &linux_runner_ubuntu >-
-      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &linux_ubuntu_runner >-
+      ${{ inputs.crabbox_runner_label && format('{0}-{1}', inputs.crabbox_runner_label, ('ubuntu-24.04')) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP !=
+      '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP),
+      toJSON('ubuntu-24.04'))) || ('ubuntu-24.04')) }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -942,7 +947,7 @@ jobs:
     name: Prepare release package artifact
     needs: [resolve_target]
     if: needs.resolve_target.outputs.package_required == 'true'
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 35
     permissions:
       actions: read
@@ -1379,6 +1384,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/install-smoke-reusable.yml
     with:
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
@@ -1393,6 +1399,7 @@ jobs:
     permissions: read-all
     uses: ./.github/workflows/openclaw-cross-os-release-checks-reusable.yml
     with:
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       workflow_ref: ${{ github.sha }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       target_context_ref: ${{ inputs.target_context_ref }}
@@ -1433,6 +1440,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
@@ -1528,6 +1536,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
@@ -1577,6 +1586,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/package-acceptance.yml
     with:
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       workflow_ref: ${{ github.sha }}
@@ -1662,6 +1672,7 @@ jobs:
       contents: read
     uses: ./.github/workflows/maturity-scorecard.yml
     with:
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
       ref: ${{ needs.resolve_target.outputs.ref }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
@@ -1674,7 +1685,7 @@ jobs:
     name: Run QA Lab parity lane (${{ matrix.lane }})
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 30
     permissions:
       contents: read
@@ -1847,7 +1858,7 @@ jobs:
     name: Run QA Lab parity report
     needs: [resolve_target, qa_lab_parity_lane_release_checks]
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 20
     permissions:
       contents: read
@@ -1975,7 +1986,7 @@ jobs:
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
     # Pinned: hosted ubuntu-24.04 failed the core lane in both runs after a backend flip
     # (36639549086, 36639978260). An outage queues this lane instead of failing it.
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.crabbox_runner_label && format('{0}-{1}', inputs.crabbox_runner_label, 'blacksmith-8vcpu-ubuntu-2404') || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || 'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -2186,7 +2197,7 @@ jobs:
     name: Verify QA Lab runtime-pair lanes
     needs: [resolve_target, qa_lab_runtime_pair_lane_release_checks]
     if: always() && needs.resolve_target.result == 'success' && needs.resolve_target.outputs.qa_parity_scheduled == 'true'
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 15
     permissions:
       actions: read
@@ -2302,7 +2313,7 @@ jobs:
     name: Enforce QA Lab runtime tool coverage
     needs: [resolve_target, qa_lab_runtime_parity_release_checks]
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 15
     permissions:
       contents: read
@@ -2416,6 +2427,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/qa-live-transports-convex.yml
     with:
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
@@ -2436,6 +2448,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/qa-live-transports-convex.yml
     with:
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
@@ -2456,7 +2469,7 @@ jobs:
     outputs:
       conclusion: ${{ steps.dispatch.outputs.conclusion || steps.dispatch.outcome }}
       identity_verified: ${{ steps.dispatch.outputs.identity_verified }}
-    runs-on: *linux_runner_ubuntu
+    runs-on: ${{ inputs.crabbox_runner_label != '' && 'ubuntu-24.04' || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04')) }}
     timeout-minutes: 210
     permissions:
       actions: write
@@ -2594,7 +2607,7 @@ jobs:
     name: Run QA Lab live Discord lane
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_discord_enabled == 'true'
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 60
     permissions:
       contents: read
@@ -2699,7 +2712,7 @@ jobs:
     name: Run QA Lab live WhatsApp lane
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_whatsapp_enabled == 'true'
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 60
     concurrency:
       group: qa-live-whatsapp-shared
@@ -2788,7 +2801,7 @@ jobs:
     name: Run QA Lab live Slack lane
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_slack_enabled == 'true'
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 60
     permissions:
       contents: read
@@ -2892,7 +2905,7 @@ jobs:
       - qa_live_whatsapp_release_checks
       - qa_live_slack_release_checks
     if: always()
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     permissions:
       actions: read
       contents: read
@@ -3187,5 +3200,6 @@ jobs:
       actions: read
     uses: ./.github/workflows/full-release-child-evidence.yml
     with:
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       role: ${{ inputs.phase == 'candidate' && 'releaseChecksCandidate' || 'releaseChecksIndependent' }}
       target_sha: ${{ needs.resolve_target.outputs.revision }}

@@ -73,8 +73,13 @@ function publicationSourceDigest(value) {
 
 export function publicationSourceRequest(env) {
   const inputs = JSON.parse(env.PUBLICATION_INPUTS_JSON);
-  const { trustedWorkflow, laneInputs, qualificationAdmission, ...intent } =
-    dispatchEnvelopeFromInputs(inputs);
+  const {
+    trustedWorkflow,
+    laneInputs,
+    qualificationAdmission,
+    crabboxRunnerLabel: _crabboxRunnerLabel,
+    ...intent
+  } = dispatchEnvelopeFromInputs(inputs);
   const coverageSource = { ...inputs, extension_test_exclude_patterns_json: "[]", ...laneInputs };
   const tooling = JSON.parse(env.PUBLICATION_TOOLING_JSON);
   if (
