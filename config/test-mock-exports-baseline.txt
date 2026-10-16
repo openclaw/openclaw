@@ -3343,7 +3343,6 @@
 ["src/agents/worktrees/service.input-files.test.ts","../sandbox.js","7f14148f16c1c35cf7ccff084878e435000dce4cb05493cc39045c61fc4afded",1]
 ["src/agents/worktrees/service.source-only-filters.test.ts","./filesystem-backend.js","fea1744478c709d4d60450ffc1c8d4e8ddf041b5bce0052b3d3771a0cdb3522a",1]
 ["src/agents/worktrees/service.sparse-isolation.test.ts","./filesystem-backend.js","fea1744478c709d4d60450ffc1c8d4e8ddf041b5bce0052b3d3771a0cdb3522a",1]
-["src/audit/audit-event-writer.lifecycle.test.ts","../state/openclaw-state-worker-store.js","b4d58407d436e3a0553cb693af114f152cba184f14d31321b0ac2ff0f45b8f41",1]
 ["src/auto-reply/dispatch.delivery-order.test.ts","./reply/dispatch-from-config.js","5852349440a6514d91ba5e3f3f12010dcabc78a62d0c931f8e05fadaf30e012e",1]
 ["src/auto-reply/dispatch.test.ts","../hooks/message-hook-mappers.js","ff97b47b4ca4523240bc3bae60d1e02c1da68fa63af2871866c3d4baa5954b8a",1]
 ["src/auto-reply/dispatch.test.ts","../plugins/hook-runner-global.js","5579e34de9e81bf13b3f5cab6fecb3597e092698067bc10c16ff11306549a03f",1]
