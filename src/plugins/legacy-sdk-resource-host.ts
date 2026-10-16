@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
@@ -106,13 +107,8 @@ export class LegacyPluginSdkResourceHost {
 
   /** Projection failures still own their asynchronous release until it settles. */
   releaseClaim(claim: ResourceClaim): void {
-    const completion = Promise.resolve()
-      .then(() =>
-        AsyncWorkScope.runWhenAllIdle(
-          () => [this.work],
-          () => claim.release(),
-        ),
-      )
+    const operation = createDeferredCore();
+    const completion = operation.promise
       .catch((error: unknown) => {
         this.failures.push(error);
       })
@@ -120,6 +116,13 @@ export class LegacyPluginSdkResourceHost {
         this.pending.delete(completion);
       });
     this.pending.add(completion);
+    // Register completion before an idle release can reenter close synchronously.
+    operation.resolve(
+      AsyncWorkScope.runWhenAllIdle(
+        () => [this.work],
+        () => claim.release(),
+      ),
+    );
   }
 
   /** Fence new SDK work and join its tails before prepared resources can retire. */

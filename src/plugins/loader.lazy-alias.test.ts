@@ -242,7 +242,7 @@ describe("native plugin alias preparation", () => {
     },
   );
 
-  it("defers the full map until a workspace alias is demanded", () => {
+  it("loads a workspace alias without reading unrelated SDK artifacts", () => {
     const f = fixture();
     writeFile(f.root, "dist/retry/index.js", 'export const value = "family";');
     writeFile(
@@ -265,7 +265,7 @@ describe("native plugin alias preparation", () => {
     expect(load(f.entry)).toMatchObject({ marker: "metadata" });
     expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
     expect(load(entry)).toMatchObject({ value: "family" });
-    expect(read.mock.calls.some(([target]) => target === f.unused)).toBe(true);
+    expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
   });
 
   it("does not prepare aliases for unrelated requests or unregistered parents", async () => {

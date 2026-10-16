@@ -283,11 +283,14 @@ export async function resolveManagedNpmInstallPlan(params: {
     });
   }
   const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
-  const targetMode = await resolveEffectiveInstallMode({
-    runtime: params.runtime,
-    requestedMode: params.requestedMode,
-    targetPath: installRoot,
-  });
+  const targetMode =
+    generationUse === "retained-install" && hasRetainedManagedNpmInstallMarker(installRoot)
+      ? "update"
+      : await resolveEffectiveInstallMode({
+          runtime: params.runtime,
+          requestedMode: params.requestedMode,
+          targetPath: installRoot,
+        });
   // A new artifact directory can still update an installed plugin. Conversely,
   // reactivating a retained tree requires fresh-install policy, even for --update.
   const policyMode =

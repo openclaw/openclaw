@@ -38,7 +38,10 @@ import {
   readLegacyMigrationReceipt,
   resolveLegacyMigrationSourceKey,
 } from "./state-migrations.receipts.js";
-import { resolveLegacyProfileWorkspaceMigrationPaths } from "./state-migrations.state-dir.js";
+import {
+  resetAutoMigrateLegacyStateDirForTest,
+  resolveLegacyProfileWorkspaceMigrationPaths,
+} from "./state-migrations.state-dir.js";
 import type { LegacyStateMigrationStepReceipt } from "./state-migrations.types.js";
 
 vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
@@ -124,6 +127,7 @@ function planFixture(fixture: Awaited<ReturnType<typeof makeFixture>>) {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawAgentDatabasesForTest();
   stateDatabase.closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();

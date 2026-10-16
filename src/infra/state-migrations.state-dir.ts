@@ -18,6 +18,12 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { resolveUserPath } from "./home-dir.js";
 import { resolveLegacyProfileMigrationExceptions } from "./state-migrations.profile-scope.js";
 
+let autoMigrateStateDirChecked = false;
+
+export function resetAutoMigrateLegacyStateDirForTest() {
+  autoMigrateStateDirChecked = false;
+}
+
 type StateDirMigrationResult = {
   migrated: boolean;
   skipped: boolean;
@@ -248,9 +254,13 @@ type StateDirMigrationParams = {
   homedir?: () => string;
 };
 
-/** Relocate synchronously before its caller reacquires maintenance custody. */
+/** Reserve the once-only migration while its caller transfers maintenance custody. */
 export function prepareLegacyStateDirMigration(params: StateDirMigrationParams) {
+  if (autoMigrateStateDirChecked) {
+    return undefined;
+  }
   const result = migrateLegacyStateDirRoot(params);
+  autoMigrateStateDirChecked = true;
   return {
     stateDir: resolveStateDir(params.env ?? process.env, params.homedir ?? os.homedir),
     result,
@@ -260,7 +270,8 @@ export function prepareLegacyStateDirMigration(params: StateDirMigrationParams) 
 export async function autoMigrateLegacyStateDir(
   params: StateDirMigrationParams,
 ): Promise<StateDirMigrationResult> {
-  return prepareLegacyStateDirMigration(params).result;
+  const prepared = prepareLegacyStateDirMigration(params);
+  return prepared ? prepared.result : { migrated: false, skipped: true, changes: [], warnings: [] };
 }
 
 function migrateLegacyStateDirRoot(params: StateDirMigrationParams): StateDirMigrationResult {

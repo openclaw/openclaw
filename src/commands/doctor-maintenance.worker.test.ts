@@ -9,7 +9,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { acquireFileLock } from "../infra/file-lock.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
-import { autoMigrateLegacyStateDir } from "../infra/state-migrations.state-dir.js";
+import {
+  autoMigrateLegacyStateDir,
+  resetAutoMigrateLegacyStateDirForTest,
+} from "../infra/state-migrations.state-dir.js";
 import * as updateState from "../infra/update-candidate-state.js";
 import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
@@ -48,6 +51,7 @@ function claimHistoricalProjection(stateDir: string) {
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
+  resetAutoMigrateLegacyStateDirForTest();
 });
 
 describe("Doctor maintenance with shared-state workers", () => {

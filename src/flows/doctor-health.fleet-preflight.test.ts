@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { createLegacyStateMigrationStepReceipt } from "../infra/state-migrations.messages.js";
+import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { inspectUpdateRecoveryBackups } from "../infra/update-recovery-backup-status.js";
 import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
@@ -62,6 +63,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  resetAutoMigrateLegacyStateDirForTest();
 });
 
 function readCapturedConfig(directory: string, sourcePath: string) {

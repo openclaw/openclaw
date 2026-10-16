@@ -24,6 +24,7 @@ import {
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { runPostSessionPluginDoctorStateRepairs } from "./state-migrations.plugin-doctor.js";
+import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 
 const tempDirs = createTrackedTempDirs();
 const sessionAction = { id: "session-action", phase: "after-session-repair", doctorOnly: true };
@@ -110,6 +111,7 @@ function repair(
 afterEach(async () => {
   vi.unstubAllEnvs();
   clearPluginDoctorContractRegistryCache();
+  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
