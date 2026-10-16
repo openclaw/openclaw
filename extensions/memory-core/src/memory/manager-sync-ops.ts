@@ -605,7 +605,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           const syncProvider = this.syncProviderGeneration
             ? this.syncProviderGeneration.provider
             : this.provider;
-          const vectorIndexComplete = syncProvider === null || this.vector.available === true;
+          // Empty rebuilds have no missing vectors, even before the extension is needed.
+          const vectorIndexComplete =
+            syncProvider === null ||
+            !shadow.facts.hasIndexedChunks ||
+            this.vector.available === true;
           const nextMeta: MemoryIndexMeta = {
             model: syncProvider?.model ?? "fts-only",
             provider: syncProvider?.id ?? "none",
