@@ -58,7 +58,7 @@ function lifecycleOptions(
   config?: EmbeddedRunAttemptParams["config"],
 ) {
   return {
-    params: createParams(sessionFile, cwd, config),
+    params: { ...createParams(sessionFile, cwd, config), disableTools: false },
     cwd,
     dynamicTools: [],
     appServer: createAppServerOptions(),

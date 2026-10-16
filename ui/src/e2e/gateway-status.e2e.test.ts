@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
@@ -9,6 +8,15 @@ import { installNativeWebChrome } from "./native-nav.test-support.ts";
 import { waitForGatewayRecoveryScope } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Gateway status with native account identity" });
+const withPage = (
+  width: number,
+  run: Parameters<typeof suite.withPage>[1],
+  options: Parameters<typeof suite.withPage>[0] = {},
+) =>
+  suite.withPage(
+    { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 900 }, ...options },
+    run,
+  );
 
 async function connectionStatusOverlapsComposer(page: Page): Promise<boolean> {
   return page.evaluate(() => {
@@ -33,8 +41,8 @@ async function connectionStatusOverlapsComposer(page: Page): Promise<boolean> {
 
 suite.define(() => {
   it("keeps shared chat usable without polling operator-only surfaces", async () => {
-    await suite.withPage(
-      { viewport: { width: 1280, height: 1000 }, locale: "en-US", colorScheme: "dark" },
+    await withPage(
+      1280,
       async ({ page }) => {
         await page.clock.install();
         const sessionKey = "agent:main:scope-reader";
@@ -49,6 +57,9 @@ suite.define(() => {
           "models.authStatus",
           "config.get",
         ];
+        const forbidden = {
+          __mockError: { code: "FORBIDDEN", message: "Operator access required" },
+        };
         const gateway = await installMockGateway(page, {
           sessionKey,
           operatorScopes: ["operator.sessions.read"],
@@ -56,14 +67,7 @@ suite.define(() => {
           historyMessages: [
             { role: "assistant", content: [{ type: "text", text: "Shared discussion" }] },
           ],
-          methodResponses: Object.fromEntries(
-            operatorMethods.map((method) => [
-              method,
-              {
-                __mockError: { code: "FORBIDDEN", message: "Operator access required" },
-              },
-            ]),
-          ),
+          methodResponses: Object.fromEntries(operatorMethods.map((method) => [method, forbidden])),
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByText("Shared discussion", { exact: true }).waitFor();
@@ -89,18 +93,13 @@ suite.define(() => {
         await page.clock.runFor(5_000);
         await gateway.waitForRequest("cron.list");
       },
+      { colorScheme: "dark", serviceWorkers: "allow", viewport: { width: 1280, height: 1000 } },
     );
   });
 
   it("keeps initial recovery from moving the session frame and shows later reconnect recovery", async () => {
-    await suite.withPage(
-      {
-        viewport: { width: 390, height: 900 },
-        colorScheme: "dark",
-        reducedMotion: "no-preference",
-        locale: "en-US",
-        serviceWorkers: "block",
-      },
+    await withPage(
+      390,
       async ({ page }) => {
         const recoveryToken = "gateway-status-recovery-test";
         await page.addInitScript((token) => {
@@ -162,45 +161,34 @@ suite.define(() => {
         await waitForGatewayRecoveryScope(page);
         await expect.poll(() => connectionStatus.count()).toBe(0);
       },
+      { colorScheme: "dark", reducedMotion: "no-preference" },
     );
   });
 
   it("keeps reconnect status clear of the composer in a compact native window", async () => {
-    await suite.withPage(
-      {
-        viewport: { width: 1000, height: 900 },
-        locale: "en-US",
-        serviceWorkers: "block",
-      },
-      async ({ page }) => {
-        await installNativeWebChrome(page);
-        const gateway = await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await waitForControlUiGatewayReady(page);
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor({ state: "visible" });
-        await gateway.emitGatewayEvent("ui.command", {
-          command: { kind: "sidebar", visible: false },
-        });
-        await page.locator(".shell--nav-collapsed").waitFor({ state: "visible" });
-        await gateway.setOnline(false);
-        const retainedStatus = page.locator(
-          ".sidebar-identity-card[data-connection-status=reconnecting]",
-        );
-        await retainedStatus.waitFor({ state: "visible" });
-        expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
-        await expect.poll(() => connectionStatusOverlapsComposer(page)).toBe(false);
-      },
-    );
+    await withPage(1000, async ({ page }) => {
+      await installNativeWebChrome(page);
+      const gateway = await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForControlUiGatewayReady(page);
+      await page.locator(".agent-chat__composer-combobox textarea").waitFor({ state: "visible" });
+      await gateway.emitGatewayEvent("ui.command", {
+        command: { kind: "sidebar", visible: false },
+      });
+      await page.locator(".shell--nav-collapsed").waitFor({ state: "visible" });
+      await gateway.setOnline(false);
+      const retainedStatus = page.locator(
+        ".sidebar-identity-card[data-connection-status=reconnecting]",
+      );
+      await retainedStatus.waitFor({ state: "visible" });
+      expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
+      await expect.poll(() => connectionStatusOverlapsComposer(page)).toBe(false);
+    });
   });
 
   it("shows reconnect once with queued messages and keeps the account menu usable", async () => {
-    await suite.withPage(
-      {
-        viewport: { width: 1280, height: 900 },
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-      },
+    await withPage(
+      1280,
       async ({ page }) => {
         await page.addInitScript(() => {
           Object.assign(window, {
@@ -222,10 +210,6 @@ suite.define(() => {
         });
         const gateway = await installMockGateway(page, {
           presenceUsers: [{ self: true, id: "alex", name: "Alex", email: "alex@example.test" }],
-          historyMessages: [],
-          assistantName: "Assistant",
-          agentModel: "example/sample-model",
-          models: [{ id: "sample-model", name: "Sample model", provider: "example" }],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         await waitForControlUiGatewayReady(page);
@@ -241,22 +225,16 @@ suite.define(() => {
         const footer = page.locator(".sidebar-footer-bar");
         await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(2);
         await expect.poll(() => footer.textContent()).toContain("Reconnecting…");
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await footer.screenshot({
-            path: path.join(suite.artifactDir, "native-reconnecting.png"),
-          });
-        }
         const identityStatus = footer.locator(".sidebar-identity-card");
         expect(await identityStatus.isVisible()).toBe(true);
         expect(await identityStatus.getAttribute("aria-label")).toContain("Reconnecting…");
-        expect(await footer.locator(".sidebar-identity-card").textContent()).toContain("Alex");
-        expect(await footer.locator(".sidebar-identity-card [role=status]").count()).toBe(0);
+        expect(await identityStatus.textContent()).toContain("Alex");
+        expect(await identityStatus.locator("[role=status]").count()).toBe(0);
         const announcement = footer.locator(":scope > [role=status]");
         expect(await announcement.count()).toBe(1);
         expect(await announcement.textContent()).toContain("Reconnecting…");
         expect(await announcement.textContent()).not.toContain("in outbox");
         expect(await footer.textContent()).not.toContain("in outbox");
-        expect(await page.locator(".chat-queue__item").count()).toBe(2);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
         await page.setViewportSize({ width: 390, height: 844 });
@@ -267,16 +245,10 @@ suite.define(() => {
         await page.setViewportSize({ width: 1280, height: 900 });
         await footer.waitFor({ state: "visible" });
 
-        await footer.locator(".sidebar-identity-card").click();
+        await identityStatus.click();
         const menu = page.locator(".sidebar-identity-menu");
         await menu.getByText("Alex", { exact: true }).waitFor();
         await menu.getByText("Studio Gateway", { exact: true }).waitFor();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "outbox-account-menu.png"),
-            animations: "disabled",
-          });
-        }
         expect(await menu.locator(".sidebar-identity-menu__outbox").count()).toBe(0);
         expect(await page.locator(".chat-queue__item").count()).toBe(2);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -284,7 +256,7 @@ suite.define(() => {
         await menu.waitFor({ state: "hidden" });
         await page.setViewportSize({ width: 390, height: 844 });
         await page.getByRole("button", { name: "Expand sidebar" }).click();
-        await footer.locator(".sidebar-identity-card").click();
+        await identityStatus.click();
         await menu.getByText("Alex", { exact: true }).waitFor();
         const retry = menu.locator('[data-value="command:retry-connect"]');
         await retry.waitFor();
@@ -294,20 +266,15 @@ suite.define(() => {
         expect(bounds!.x).toBeGreaterThanOrEqual(0);
         expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
         expect(await footer.textContent()).not.toContain("in outbox");
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "outbox-account-menu-mobile.png"),
-            animations: "disabled",
-          });
-        }
         const socketCount = await gateway.getSocketCount();
         await retry.click();
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);
         await expect.poll(() => footer.textContent()).not.toContain("Reconnecting…");
-        expect(await footer.locator(".sidebar-identity-card").textContent()).toContain("Alex");
+        expect(await identityStatus.textContent()).toContain("Alex");
       },
+      { colorScheme: "dark" },
     );
   });
 });

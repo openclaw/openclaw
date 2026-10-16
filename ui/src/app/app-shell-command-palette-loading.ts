@@ -146,7 +146,7 @@ export class ShellCommandPaletteOwner {
 }
 
 /** In-memory custody outlives the loading view, until the real palette accepts it. */
-export function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "context">) {
+function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "context">) {
   type Presentation = {
     draft?: CommandPaletteInputSnapshot;
     returnFocus?: HTMLElement | null;

@@ -52,7 +52,7 @@ export default definePluginEntry({
             models,
             AbortSignal.any([
               AbortSignal.timeout(120_000),
-              ...(api.lifecycle?.signal ? [api.lifecycle.signal] : []),
+              ...(api.lifecycle.signal ? [api.lifecycle.signal] : []),
             ]),
           );
         } catch {
@@ -63,7 +63,7 @@ export default definePluginEntry({
       },
       stop: () => client.stop(),
     });
-    api.lifecycle?.onDispose?.(() => client.stop());
+    api.lifecycle.onDispose?.(() => client.stop());
     api.registerCli(
       async (context) => {
         const { registerOnnxCli } = await import("./src/cli.js");

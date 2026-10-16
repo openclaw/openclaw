@@ -84,8 +84,11 @@ activity without a completed parent turn does not invent a parent wait.
 The parent’s own working indicator remains visible while the parent is actively
 working. There is no additional waiting-status line above the composer. Once
 everything it waited on has finished, the activity rows disappear until the agent resumes. Tool rows you opened stay open through the handoff. A
-successful `sessions_yield` leaves no marker in the transcript, and its private
-continuation context stays hidden.
+successful `sessions_yield` waiting for an incoming message shows its public
+acknowledgment, or **Waiting for a message** when none was recorded. Child handoffs
+keep their existing activity rows. Private continuation context stays hidden.
+Turns with only tool calls use the usual activity rows; entries with nothing
+displayable do not leave an empty assistant reply.
 
 When the last subagent finishes, its activity row disappears and the block stays as it
 is, without a working indicator, until the turn resumes. Its answer then

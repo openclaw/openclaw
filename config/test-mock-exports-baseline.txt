@@ -7304,7 +7304,6 @@
 ["src/gateway/server-reload-handlers.test.ts","../agents/model-catalog.js","ec439b18b446053429b9e559d1202f856f0ce4d0088f39d44a20ef1fc63f5b66",1]
 ["src/gateway/server-reload-handlers.test.ts","../agents/prepared-model-runtime.js","cc9b188071991a02e2419771dd229e925f6b7914856acff9ae9de2c1895930f0",1]
 ["src/gateway/server-reload-handlers.test.ts","../hooks/gmail-watcher-lifecycle.js","1ceaada5982131340569e2e99cef5050679c96110a68a7145c01367bcbb93ee1",1]
-["src/gateway/server-reload-handlers.test.ts","../hooks/gmail-watcher.js","7c73d2ca24cec2908b25ca286e6db02a510d03df93df6de8144ce17522b06396",1]
 ["src/gateway/server-reload-handlers.test.ts","../plugins/installed-plugin-index-record-reader.js","92c09829f64aaa32593eee71b998efc6bc73cceef9cba1933c60c459dfcb300d",1]
 ["src/gateway/server-reload-handlers.test.ts","../state/openclaw-database-preflight.js","5879c39958a742588260021590aafe063c82b1766332947fc86da1fd219d7892",1]
 ["src/gateway/server-reload-hot.cron-lazy.test.ts","./server-cron.js","49662e9d0a2d35cb92ed963c7841b30ed3c08eb8065839210a42fe7d69370e1d",1]

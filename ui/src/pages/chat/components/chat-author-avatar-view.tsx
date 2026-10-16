@@ -18,7 +18,7 @@ import {
   type ResolvedIdentityAvatar,
 } from "../../../lib/identity-avatar.ts";
 
-type ChatAuthorAvatarProps = {
+export type ChatAuthorAvatarProps = {
   sender: IdentityAvatarInput | null | undefined;
   class?: string;
   agentAvatar?: { avatar?: string | null; textAvatar?: string | null };
