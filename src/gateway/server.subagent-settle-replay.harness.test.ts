@@ -142,6 +142,17 @@ describe("public yielded settle replay with real Gateway admission", () => {
     );
   }
 
+  function publishWake(entry: SubagentRunRecord, state: SubagentRunRecord["requesterSettleWake"]) {
+    const next = { ...entry, requesterSettleWake: state };
+    persistChild(next);
+    subagentRuns.set(next.runId, next);
+    bindGatewayContextResolver(next, () => kernel.gatewayRequestContext);
+    if (next.runId === child.runId) {
+      child = next;
+    }
+    return next;
+  }
+
   const finalResult = (): Exclude<Awaited<ReturnType<typeof agentCommandMock>>, void> => ({
     payloads: [{ text: "Requester synthesis is complete.", mediaUrl: null }],
     meta: { durationMs: 1, finalAssistantVisibleText: "Requester synthesis is complete." },
@@ -202,11 +213,8 @@ describe("public yielded settle replay with real Gateway admission", () => {
         requesterSessionKey,
         settledEntry,
         transitionBatch: (batch, state, onPublished) => {
-          for (const entry of batch) {
-            entry.requesterSettleWake = state;
-            persistChild(entry);
-          }
-          onPublished(batch);
+          const next = batch.map((entry) => publishWake(entry, state));
+          onPublished(next);
         },
         completeBatch,
       }),
@@ -468,11 +476,10 @@ describe("public yielded settle replay with real Gateway admission", () => {
         if (revoked && acceptedMessages.length === 2) {
           // A newer yield revokes the frozen wave during asynchronous
           // Gateway preparation, before the real SQLite owner admits it.
-          child.requesterSettleWake = {
+          publishWake(child, {
             ...child.requesterSettleWake!,
             rearmGeneration: 2,
-          };
-          persistChild();
+          });
         }
         const receipt = await realStage(scope, options);
         admittedSources.push(receipt?.message.provenance?.sourceSessionKey);
@@ -491,11 +498,8 @@ describe("public yielded settle replay with real Gateway admission", () => {
         requesterSessionKey,
         settledEntry,
         transitionBatch: (members, state, onPublished) => {
-          for (const entry of members) {
-            entry.requesterSettleWake = state;
-            persistChild(entry);
-          }
-          onPublished(members);
+          const next = members.map((entry) => publishWake(entry, state));
+          onPublished(next);
         },
         // Model the crash window after Gateway input completion commits but
         // before lifecycle durably acknowledges the dispatching wake.

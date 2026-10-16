@@ -40,7 +40,10 @@ import {
   registerSubagentResultRefreshCases,
   updateSubagentRunFixture as updateFixtureRun,
 } from "./subagent-registry-result-refresh.test-support.js";
-import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryChangesToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import { registerYieldFollowupAdoptionTests } from "./subagent-registry-yield-followup-adoption.test-support.js";
 import { registerYieldedParentCleanupCase } from "./subagent-registry-yielded-cleanup.test-support.js";
 import {
@@ -1570,6 +1573,7 @@ describe("subagent registry seam flow", () => {
       error: "Agent run ended before producing a complete result.",
     },
   ])("announces $source $kind with its terminal evidence", async ({ source, kind, error }) => {
+    mocks.persistRegistryRows.mockImplementation(saveSubagentRegistryChangesToSqlite);
     const runId = `run-${source}-${kind}`;
     const startedAt = source === "wait" ? 100 : 10;
     const endedAt = source === "wait" ? 250 : 20;
@@ -1627,7 +1631,7 @@ describe("subagent registry seam flow", () => {
           terminalReply: expect.objectContaining({ disposition: "empty" }),
         }),
       );
-      expect(findRequesterRun(runId)?.completion).toMatchObject({
+      expect(loadSubagentRegistryFromSqlite().get(runId)?.completion).toMatchObject({
         terminalReply: { disposition: "empty" },
         resultText: null,
       });
