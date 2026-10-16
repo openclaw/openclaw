@@ -62,24 +62,27 @@ const admissionSeeks = createSqliteQueryCache((db) => {
       const keys = source.withRecursive("session_keys", (query) => {
         let firstKey = query
           .selectFrom(table)
-          .select((eb) => eb.fn.min<string | null>("session_id").as("session_id"));
+          .select((eb) => [
+            eb.fn.min<string | null>("session_id").as("session_id"),
+            eb.val(1).as("depth"),
+          ]);
         if (after) {
           firstKey = firstKey.where("session_id", ">", after);
         }
-        return firstKey
-          .unionAll(
-            query
-              .selectFrom("session_keys")
-              .select((eb) =>
-                eb
-                  .selectFrom(table)
-                  .select((inner) => inner.fn.min<string | null>("session_id").as("session_id"))
-                  .whereRef(`${table}.session_id`, ">", "session_keys.session_id")
-                  .as("session_id"),
-              )
-              .where("session_id", "is not", null),
-          )
-          .limit(MAX_SESSIONS);
+        return firstKey.unionAll(
+          query
+            .selectFrom("session_keys")
+            .select((eb) => [
+              eb
+                .selectFrom(table)
+                .select((inner) => inner.fn.min<string | null>("session_id").as("session_id"))
+                .whereRef(`${table}.session_id`, ">", "session_keys.session_id")
+                .as("session_id"),
+              eb("depth", "+", 1).as("depth"),
+            ])
+            .where("session_id", "is not", null)
+            .where("depth", "<", MAX_SESSIONS),
+        );
       });
       return kysely
         .selectFrom(keys.selectFrom("session_keys").select("session_id").as("candidate"))
@@ -280,7 +283,7 @@ export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
                 kysely.deleteFrom(table).where(
                   "rowid",
                   "in",
-                  selected.map((row) => row.rowId),
+                  selected.map((orphanRow) => orphanRow.rowId),
                 ),
               ),
             ).numAffectedRows ?? 0n;
