@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { Message } from "grammy/types";
+import type { User } from "grammy/types";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
@@ -62,7 +62,7 @@ function bufferedHarness(
   });
   let updateId = 5000;
   const dispatch = (
-    message: Message.TextMessage & { chat: ReturnType<typeof groupCommand>["chat"] },
+    message: Omit<ReturnType<typeof groupCommand>, "from"> & { from: User },
     spooled = false,
   ) => {
     const update = { update_id: ++updateId, message };
