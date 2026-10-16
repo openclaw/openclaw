@@ -13,6 +13,11 @@ OpenClaw handles failures in two stages:
 1. **Auth-profile rotation** within the current provider.
 2. **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
 
+Turn usage includes completed model candidates even when their answer is discarded
+during fallback. Costs retain each candidate's price; if any completed candidate's
+price is unavailable, the total cost stays unknown. The final selected model and
+its last-call usage still determine the reported model and context-window usage.
+
 Before rotating profiles or changing models, the runner attempts bounded
 same-model recovery for temporary rate limits and provider failures. It continues
 the existing transcript, preserving partial output and completed work. The agent

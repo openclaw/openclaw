@@ -79,6 +79,8 @@ export type NormalizedUsage = {
   total?: number;
   cost?: Pick<Usage["cost"], "total" | "totalOrigin"> &
     Partial<Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite">>;
+  /** Aggregated candidate prices are authoritative, including zero and unavailable totals. */
+  costStatus?: "complete" | "unavailable";
 };
 
 export type OpenAiChatCompletionsUsage = ReturnType<typeof toOpenAiChatCompletionsUsage>;
