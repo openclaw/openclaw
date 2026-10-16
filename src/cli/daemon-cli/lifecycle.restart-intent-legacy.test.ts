@@ -106,11 +106,11 @@ function beforeIntentWriteAdmission(operation: () => void) {
   );
 }
 
-function publishUnrelatedOwner(pid = process.pid) {
+function publishOwner(pid = process.pid, supervised = false) {
   const now = Date.now();
   openOpenClawStateDatabase()
     .db.prepare(
-      `INSERT INTO state_leases
+      `INSERT OR REPLACE INTO state_leases
      (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
      VALUES ('gateway-owner', 'global', 'unrelated-owner', ?, ?, ?, ?, ?)`,
     )
@@ -120,8 +120,8 @@ function publishUnrelatedOwner(pid = process.pid) {
       JSON.stringify({
         owner: { pid, host: hostname(), startedAt: getFileLockProcessStartTime(pid) },
         port: 18789,
-        mode: "foreground",
-        supervisor: null,
+        mode: supervised ? "supervised" : "foreground",
+        supervisor: supervised ? { kind: "systemd", name: "openclaw-gateway.service" } : null,
       }),
       now,
       now,
@@ -202,6 +202,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       switch (failure) {
         case "dead pid":
           await stopServingChild(lock.pid);
+          service.readRuntime.mockResolvedValue({ status: "running", pid: lock.pid });
           break;
         case "mismatched start time":
           lock.startTime = (lock.startTime ?? 0) + 1;
@@ -233,7 +234,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
         case "stopped service with dead SQLite owner and live legacy lock": {
           const deadOwner = await spawnServingChild();
           await stopServingChild(deadOwner.pid);
-          publishUnrelatedOwner(deadOwner.pid);
+          publishOwner(deadOwner.pid);
           service.readRuntime.mockResolvedValue({ status: "stopped" });
           break;
         }
@@ -243,18 +244,34 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       expect(lifecycleRuntimeLogs.join("\n")).toContain("Gateway was not signaled");
     });
 
-    it.each(["gateway", "foreign process", "timeout"] as const)(
-      "waits for a native startup owner before restart admission: %s",
-      async (publication) => {
+    it.each([
+      ["absent", "gateway"],
+      ["absent", "foreign process"],
+      ["absent", "timeout"],
+      ["dead", "gateway"],
+      ["dead", "foreign process"],
+      ["dead", "timeout"],
+    ] as const)(
+      "waits for a native startup owner before restart admission: %s → %s",
+      async (previous, publication) => {
         const native = await spawnServingChild();
         const published = publication === "foreign process" ? await spawnServingChild() : native;
+        if (previous === "dead") {
+          const retired = await spawnServingChild();
+          publishOwner(retired.pid);
+          writeLegacyLock(retired);
+          await stopServingChild(retired.pid);
+        }
         const waiting = Promise.withResolvers<void>();
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
         service.readRuntime
           .mockResolvedValueOnce({ status: "running", pid: native.pid })
           .mockImplementation(async () => {
             if (publication !== "timeout") {
-              setTimeout(() => writeLegacyLock(published), 100);
+              setTimeout(() => {
+                writeLegacyLock(published);
+                publishOwner(published.pid, publication === "gateway");
+              }, 100);
             }
             waiting.resolve();
             return { status: "running", pid: native.pid };
@@ -307,7 +324,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       async (owner) => {
         writeLegacyLock(await spawnServingChild());
         if (owner === "unrelated SQLite owner") {
-          beforeIntentWriteAdmission(publishUnrelatedOwner);
+          beforeIntentWriteAdmission(publishOwner);
           await expectRestartRefused();
           return;
         }

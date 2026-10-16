@@ -279,9 +279,10 @@ installed updater waiting indefinitely for its exit. This fix runs in the
 updated package; the published updater and its handoff markers are unchanged.
 
 After a native service starts, restart preparation allows its verified process
-up to the normal startup deadline to publish its Gateway owner before signaling
-it. This avoids an intermittent `restart-unhealthy` result when an older updater
-starts the updated service before asking the new installation to restart it.
+up to the normal startup deadline to replace missing or dead Gateway ownership
+before signaling it. This avoids an intermittent `restart-unhealthy` result when
+an older updater starts the updated service before asking the new installation
+to restart it.
 The fix runs in the new installation, so it also applies to the next update
 from 2026.8.35. Missing ownership after the deadline and unrelated process locks
 still refuse the restart.

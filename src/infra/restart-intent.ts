@@ -93,7 +93,8 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
 }): Promise<GatewayRestartIntentLegacyProcess | undefined> {
   opts.assertCurrent();
   try {
-    if (readGatewayOwnerLease({ env: opts.env, current: true }) !== undefined) {
+    const owner = readGatewayOwnerLease({ env: opts.env, current: true });
+    if (owner && owner.state !== "dead") {
       return undefined;
     }
     const pid = asPositiveSafeInteger(opts.runtimePid);
@@ -124,14 +125,22 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
     ) {
       return undefined;
     }
-    // Service activation can precede publication of either lock or owner lease.
-    // Wait for that evidence; an unpublished native PID alone never authorizes a signal.
+    // Activation can precede publication, leaving no owner or a dead predecessor.
+    // Wait for fresh evidence; an unpublished native PID never authorizes a signal.
     const deadline = Date.now() + resolveGatewayStartupTiming().deadlineMs;
-    const { stateLockPath } = resolveGatewayLockPaths(opts.env);
-    while (
-      !existsSync(stateLockPath) &&
-      readGatewayOwnerLease({ env: opts.env, current: true }) === undefined
-    ) {
+    while (true) {
+      const published = readGatewayOwnerLease({ env: opts.env, current: true });
+      if (published && published.state !== "dead") {
+        break;
+      }
+      const legacy = readLegacyGatewayRestartLockSync(opts.env);
+      if (
+        legacy &&
+        !isPidDefinitelyDead(legacy.pid) &&
+        (!published || !isLegacyProcessInService(legacy.pid, pid))
+      ) {
+        break;
+      }
       opts.assertCurrent();
       if (
         Date.now() >= deadline ||
