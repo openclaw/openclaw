@@ -60,6 +60,8 @@ const SIBLING_BINARY = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
 
 const CLASSLESS_PROFILE = { provider: "aws", ttl: "24h", idleTimeout: "60m" };
 const PROFILE = { ...CLASSLESS_PROFILE, class: "standard", warmImage: false };
+const SETUP_PROFILE = { ...PROFILE, setup: "install-node", setupSecrets: SETUP_SECRETS };
+type ProvisionOptions = Parameters<WorkerProvider["provision"]>[2];
 const { providers, createProvider } = createProviderFixtures({
   isExecutable: (candidate) => candidate === SIBLING_BINARY,
 });
@@ -68,6 +70,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     try {
       await Promise.all([...providers].map((provider) => provider.dispose()));
     } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
       providers.clear();
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
@@ -117,7 +121,7 @@ function providerWithRawRunner(
   runCommand: CrabboxCommandRunner,
   warn?: (message: string) => void,
   sleep: (milliseconds: number) => Promise<void> = async () => {},
-): WorkerProvider {
+) {
   const provider = createProvider({
     runCommand,
     sleep,
@@ -125,7 +129,11 @@ function providerWithRawRunner(
   });
   return {
     ...provider,
-    provision: (profile, operationId, options) =>
+    provision: (
+      profile: WorkerProfile = PROFILE,
+      operationId = OPERATION_ID,
+      options?: ProvisionOptions,
+    ) =>
       provider.provision(profile, operationId, {
         assertCurrent: () => {},
         nodeRuntimeIdentity: {
@@ -162,15 +170,25 @@ function providerWithRunner(
   );
 }
 
-function failedNodeEnrollment(
-  error: Error,
-): NonNullable<Parameters<WorkerProvider["provision"]>[2]> {
+function failedNodeEnrollment(error: Error): ProvisionOptions {
   return {
     beginNodeEnrollment: async () =>
       nodeEnrollmentFixture("secret-setup-value", "Cloud worker test", async () => {
         throw error;
       }),
   };
+}
+
+function recordedProvider(
+  runCommand: CrabboxCommandRunner = async (argv) =>
+    commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" }),
+) {
+  const calls: string[][] = [];
+  const provider = providerWithRunner((argv, options) => {
+    calls.push(argv);
+    return runCommand(argv, options);
+  });
+  return { provider, calls };
 }
 
 function heartbeatFixture(run: CrabboxCommandRunner) {
@@ -226,11 +244,7 @@ describe("Crabbox worker provider", () => {
   ] as const)(
     "allocates the resolved OS (configured=%s, requested=%s)",
     async (configured, requested, targetArgs) => {
-      const calls: string[][] = [];
-      const provider = providerWithRunner(async (argv) => {
-        calls.push(argv);
-        return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
-      });
+      const { provider, calls } = recordedProvider();
       const profile = { ...PROFILE, ...(configured ? { target: configured } : {}) };
       const lease = await provider.provision(profile, OPERATION_ID, { os: requested });
       await provider.destroy({ ...lease, profile });
@@ -552,17 +566,8 @@ describe("Crabbox worker provider", () => {
         'Setup egress secret "ARTIFACT_TOKEN" was not found as a protected shared-store entry',
       ),
     );
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
-      return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
-    });
-    await expect(
-      provider.provision(
-        { ...PROFILE, setup: "install-node", setupSecrets: SETUP_SECRETS },
-        OPERATION_ID,
-      ),
-    ).rejects.toMatchObject({
+    const { provider, calls } = recordedProvider();
+    await expect(provider.provision(SETUP_PROFILE, OPERATION_ID)).rejects.toMatchObject({
       code: "cleanup_complete",
       message: expect.stringContaining("protected shared-store entry"),
     });
@@ -574,10 +579,7 @@ describe("Crabbox worker provider", () => {
       commandResult({ stdout: "--upstream-proxy-env" }),
     );
     await expect(
-      providerWithRawRunner(runCommand).provision(
-        { ...PROFILE, setup: "install-node", setupSecrets: SETUP_SECRETS },
-        OPERATION_ID,
-      ),
+      providerWithRawRunner(runCommand).provision(SETUP_PROFILE, OPERATION_ID),
     ).rejects.toThrow("update Crabbox to 0.77.0 or newer");
     expect(runCommand).toHaveBeenCalledOnce();
     expect(runCommand.mock.calls[0]?.[0]).toEqual([SIBLING_BINARY, "egress", "run", "--help"]);
@@ -598,10 +600,8 @@ describe("Crabbox worker provider", () => {
   });
 
   it("leaves a lease live when it disappears from post-setup inspection", async () => {
-    const calls: string[][] = [];
     let inspections = 0;
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
+    const { provider, calls } = recordedProvider(async (argv) => {
       if (argv[1] === "warmup") {
         return commandResult();
       }
@@ -614,16 +614,14 @@ describe("Crabbox worker provider", () => {
         : commandResult({ code: 4, stderr: `lease/server not found: ${LEASE_ID}` });
     });
 
-    await expect(
-      provider.provision({ ...PROFILE, setup: "install-node" }, OPERATION_ID),
-    ).rejects.toThrow("disappeared while waiting for SSH readiness");
+    await expect(provider.provision({ ...PROFILE, setup: "install-node" })).rejects.toThrow(
+      "disappeared while waiting for SSH readiness",
+    );
     expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect", "run", "inspect"]);
   });
 
   it("revokes the setup grant and stops the lease after a setup timeout", async () => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv, options) => {
-      calls.push(argv);
+    const { provider, calls } = recordedProvider(async (argv, options) => {
       if (argv[1] === "egress") {
         expect(options.input).toContain("trap 'rm -rf --");
         return commandResult({ code: null, killed: true, termination: "timeout" });
@@ -633,12 +631,7 @@ describe("Crabbox worker provider", () => {
       }
       return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
     });
-    await expect(
-      provider.provision(
-        { ...PROFILE, setup: "install-node", setupSecrets: SETUP_SECRETS },
-        OPERATION_ID,
-      ),
-    ).rejects.toMatchObject({
+    await expect(provider.provision(SETUP_PROFILE, OPERATION_ID)).rejects.toMatchObject({
       code: "cleanup_complete",
       message: expect.stringContaining("Crabbox profile setup did not exit normally (timeout)"),
     });
@@ -667,11 +660,9 @@ describe("Crabbox worker provider", () => {
       return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
     });
     const reason = new Error("setup cancelled");
-    const provisioning = provider.provision(
-      { ...PROFILE, setup: "install-node", setupSecrets: SETUP_SECRETS },
-      OPERATION_ID,
-      { signal: controller.signal },
-    );
+    const provisioning = provider.provision(SETUP_PROFILE, OPERATION_ID, {
+      signal: controller.signal,
+    });
     await Promise.race([setupStarted.promise, provisioning]);
     const rejection = expect(provisioning).rejects.toThrow(reason);
     controller.abort(reason);
@@ -713,64 +704,54 @@ describe("Crabbox worker provider", () => {
       });
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      await expect(provider.provision(PROFILE, OPERATION_ID)).resolves.toMatchObject({
-        leaseId: LEASE_ID,
-      });
-      expect(calls).toEqual(["warmup", "inspect", "inspect", "heartbeat", "run"]);
-    } finally {
-      try {
-        await Promise.all([...providers].map((entry) => entry.dispose()));
-      } finally {
-        vi.useRealTimers();
-      }
-    }
+
+    await expect(provider.provision()).resolves.toMatchObject({
+      leaseId: LEASE_ID,
+    });
+    expect(calls).toEqual(["warmup", "inspect", "inspect", "heartbeat", "run"]);
   });
 
   it.each([
-    {
-      name: "ready AWS metadata absent",
-      inspect: inspectJson({ providerMetadata: undefined }),
-      message: "Crabbox AWS inspect must attest that no instance profile is attached",
-    },
-    {
-      name: "malformed AWS metadata",
-      inspect: inspectJson({ providerMetadata: { instanceProfileAttached: "no" } }),
-      message: "Crabbox inspect returned invalid AWS instance profile metadata",
-    },
-    {
-      name: "malformed Tailscale state",
-      inspect: inspectJson({ tailscale: null }),
-      message: "Crabbox inspect returned invalid Tailscale state",
-    },
-    {
-      name: "different lease",
-      inspect: inspectJson({ id: "cbx_ffffffffffff" }),
-      message: "Crabbox inspect returned a different lease id",
-    },
-    {
-      name: "Tailscale enabled",
-      inspect: inspectJson({ tailscale: { enabled: true } }),
-      message: "Crabbox cloud worker lease must not have Tailscale enabled",
-    },
-    {
-      name: "fresh post-setup AWS profile",
-      inspect: inspectJson({ providerMetadata: { instanceProfileAttached: true }, ready: false }),
-      message: "Crabbox AWS inspect must attest that no instance profile is attached",
-      setup: "install-node",
-    },
-  ])("stops the fixed lease on $name", async ({ inspect, message, setup }) => {
-    const calls: string[][] = [];
+    [
+      "ready AWS metadata absent",
+      { providerMetadata: undefined },
+      "Crabbox AWS inspect must attest that no instance profile is attached",
+    ],
+    [
+      "malformed AWS metadata",
+      { providerMetadata: { instanceProfileAttached: "no" } },
+      "Crabbox inspect returned invalid AWS instance profile metadata",
+    ],
+    [
+      "malformed Tailscale state",
+      { tailscale: null },
+      "Crabbox inspect returned invalid Tailscale state",
+    ],
+    [
+      "different lease",
+      { id: "cbx_ffffffffffff" },
+      "Crabbox inspect returned a different lease id",
+    ],
+    [
+      "Tailscale enabled",
+      { tailscale: { enabled: true } },
+      "Crabbox cloud worker lease must not have Tailscale enabled",
+    ],
+    [
+      "fresh post-setup AWS profile",
+      { providerMetadata: { instanceProfileAttached: true }, ready: false },
+      "Crabbox AWS inspect must attest that no instance profile is attached",
+      "install-node",
+    ],
+  ] as const)("stops the fixed lease on %s", async (_name, patch, message, setup) => {
     let inspections = 0;
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
+    const { provider, calls } = recordedProvider(async (argv) => {
       return commandResult({
-        stdout:
-          argv[1] === "inspect" ? (setup && inspections++ === 0 ? inspectJson() : inspect) : "",
+        stdout: argv[1] === "inspect" ? inspectJson(setup && inspections++ === 0 ? {} : patch) : "",
       });
     });
     await expect(
-      provider.provision({ ...PROFILE, ...(setup ? { setup } : {}) }, OPERATION_ID),
+      provider.provision({ ...PROFILE, ...(setup ? { setup } : {}) }),
     ).rejects.toMatchObject({ code: "cleanup_complete", message });
     expect(calls.map((argv) => argv[1])).toEqual(
       setup ? ["warmup", "inspect", "run", "inspect", "stop"] : ["warmup", "inspect", "stop"],
@@ -790,7 +771,7 @@ describe("Crabbox worker provider", () => {
     });
 
     await expect(
-      provider.provision({ ...PROFILE, provider: "hetzner", desktop: true }, OPERATION_ID),
+      provider.provision({ ...PROFILE, provider: "hetzner", desktop: true }),
     ).rejects.toMatchObject({
       name: "Error",
       message: "Crabbox Hetzner desktop profiles require a managed coordinator",
@@ -820,7 +801,7 @@ describe("Crabbox worker provider", () => {
 
     const originalError = new Error("Worker node did not connect before the enrollment deadline");
     const error = await provider
-      .provision(PROFILE, OPERATION_ID, failedNodeEnrollment(originalError))
+      .provision(undefined, undefined, failedNodeEnrollment(originalError))
       .catch((cause: unknown) => cause);
 
     expect(error).toMatchObject({
@@ -906,7 +887,7 @@ describe("Crabbox worker provider", () => {
     const profile = { ...PROFILE, provider: "machine0" };
     let elapsedMs = 0;
     const inspectTimeouts: number[] = [];
-    const now = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
     const provider = providerWithRunner(async (argv, options) => {
       if (argv[1] === "warmup") {
         elapsedMs = 50 * 60_000;
@@ -924,14 +905,10 @@ describe("Crabbox worker provider", () => {
       return commandResult();
     });
 
-    try {
-      await expect(provider.provision(profile, OPERATION_ID)).resolves.toMatchObject({
-        leaseId: LEASE_ID,
-      });
-      expect(inspectTimeouts.slice(0, 2)).toEqual([5 * 60_000, 5 * 60_000]);
-    } finally {
-      now.mockRestore();
-    }
+    await expect(provider.provision(profile)).resolves.toMatchObject({
+      leaseId: LEASE_ID,
+    });
+    expect(inspectTimeouts.slice(0, 2)).toEqual([5 * 60_000, 5 * 60_000]);
   });
 
   it("reserves the granted window, diagnostics, and full AWS cleanup after late enrollment failure", async () => {
@@ -939,7 +916,7 @@ describe("Crabbox worker provider", () => {
     const budget = { nodeBootstrapTimeoutMs: 105 * 60_000 };
     let elapsedMs = 0;
     const commandTimeouts: number[] = [];
-    const now = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
     const provider = providerWithRunner(async (argv, options) => {
       if (argv[1] === "inspect" || argv[1] === "status") {
         return commandResult({ stdout: inspectJson() });
@@ -953,42 +930,36 @@ describe("Crabbox worker provider", () => {
         : commandResult();
     });
 
-    try {
-      const pending = provider.provision(profile, OPERATION_ID, {
-        ...budget,
-        beginNodeEnrollment: async () => {
-          elapsedMs = resolveCrabboxProvisionBaseTimeoutMs(profile);
-          return {
-            ...nodeEnrollmentFixture("synthetic-setup", "Bound worker", async () => {
-              elapsedMs += 10 * 60_000;
-              throw new Error("node enrollment expired");
-            }),
-            bootstrapTimeoutMs: undefined,
-          };
-        },
-      });
-      const error = await pending.catch((cause: unknown) => cause);
-      expect(WorkerProviderError.isCleanupIndeterminate(error)).toBe(true);
-      expect(error).toMatchObject({
-        code: "cleanup_indeterminate",
-        leaseId: LEASE_ID,
-        provisionError: { message: expect.stringContaining("node enrollment expired") },
-        cleanupError: {
-          message: expect.stringContaining("stop did not exit normally (timeout)"),
-        },
-      });
-      if (!WorkerProviderError.isCleanupIndeterminate(error)) {
-        throw new Error("expected indeterminate cleanup");
-      }
-      expect(error.errors).toEqual([error.provisionError, error.cleanupError]);
-
-      expect(commandTimeouts).toEqual([15 * 60_000, 60_000, CRABBOX_STOP_TIMEOUT_MS]);
-      expect(provider.resolveProvisionTimeoutMs?.(profile, budget)).toBeGreaterThanOrEqual(
-        elapsedMs,
-      );
-    } finally {
-      now.mockRestore();
+    const pending = provider.provision(profile, OPERATION_ID, {
+      ...budget,
+      beginNodeEnrollment: async () => {
+        elapsedMs = resolveCrabboxProvisionBaseTimeoutMs(profile);
+        return {
+          ...nodeEnrollmentFixture("synthetic-setup", "Bound worker", async () => {
+            elapsedMs += 10 * 60_000;
+            throw new Error("node enrollment expired");
+          }),
+          bootstrapTimeoutMs: undefined,
+        };
+      },
+    });
+    const error = await pending.catch((cause: unknown) => cause);
+    expect(WorkerProviderError.isCleanupIndeterminate(error)).toBe(true);
+    expect(error).toMatchObject({
+      code: "cleanup_indeterminate",
+      leaseId: LEASE_ID,
+      provisionError: { message: expect.stringContaining("node enrollment expired") },
+      cleanupError: {
+        message: expect.stringContaining("stop did not exit normally (timeout)"),
+      },
+    });
+    if (!WorkerProviderError.isCleanupIndeterminate(error)) {
+      throw new Error("expected indeterminate cleanup");
     }
+    expect(error.errors).toEqual([error.provisionError, error.cleanupError]);
+
+    expect(commandTimeouts).toEqual([15 * 60_000, 60_000, CRABBOX_STOP_TIMEOUT_MS]);
+    expect(provider.resolveProvisionTimeoutMs?.(profile, budget)).toBeGreaterThanOrEqual(elapsedMs);
   });
 
   it.each(["warmup", "inspect"])(
@@ -1022,7 +993,7 @@ describe("Crabbox worker provider", () => {
         return commandResult();
       };
       const profile = { ...PROFILE, desktop: failure === "warmup" };
-      await expect(providerWithRunner(runCommand).provision(profile, OPERATION_ID)).rejects.toThrow(
+      await expect(providerWithRunner(runCommand).provision(profile)).rejects.toThrow(
         "did not exit normally (timeout)",
       );
       expect(calls.map((argv) => argv[1])).toEqual(
@@ -1030,7 +1001,7 @@ describe("Crabbox worker provider", () => {
       );
       expect(live).toEqual(new Set([LEASE_ID]));
       const restarted = providerWithRunner(runCommand);
-      const lease = await restarted.provision(profile, OPERATION_ID);
+      const lease = await restarted.provision(profile);
       expect(lease.leaseId).toBe(LEASE_ID);
       expect(creates).toBe(1);
       expect(live).toEqual(new Set([LEASE_ID]));
@@ -1059,9 +1030,7 @@ describe("Crabbox worker provider", () => {
   );
 
   it("keeps authoritative absence after warmup retryable and un-stopped", async () => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
+    const { provider, calls } = recordedProvider(async (argv) => {
       if (argv[1] === "inspect") {
         return commandResult({ code: 4, stderr: `lease/server not found: ${LEASE_ID}` });
       }
@@ -1071,7 +1040,7 @@ describe("Crabbox worker provider", () => {
       return commandResult();
     });
 
-    const error = await provider.provision(PROFILE, OPERATION_ID).catch((cause: unknown) => cause);
+    const error = await provider.provision().catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     expect(error).toMatchObject({
       message: "Crabbox warmup lease was not found during inspection",
@@ -1087,9 +1056,7 @@ describe("Crabbox worker provider", () => {
       const diagnosis =
         "No available EC2 Mac Dedicated Host; allocate a host or set CRABBOX_HOST_ID";
       const secret = `sk-${"privatecredential".repeat(80)}`;
-      const calls: string[][] = [];
-      const provider = providerWithRunner(async (argv) => {
-        calls.push(argv);
+      const { provider, calls } = recordedProvider(async (argv) => {
         if (argv[1] === "warmup") {
           return commandResult({ code: 1, stderr });
         }
@@ -1102,9 +1069,7 @@ describe("Crabbox worker provider", () => {
         });
       });
 
-      const error: unknown = await provider
-        .provision(PROFILE, OPERATION_ID)
-        .catch((cause: unknown) => cause);
+      const error: unknown = await provider.provision().catch((cause: unknown) => cause);
       const originalMessage = `Crabbox warmup failed with exit code 1: ${stderr}`;
       expect(error).toBeInstanceOf(Error);
       expect(error).not.toBeInstanceOf(WorkerProviderError);
@@ -1142,7 +1107,7 @@ describe("Crabbox worker provider", () => {
   it("expires readiness at its own deadline before setup starts", async () => {
     const calls: string[] = [];
     let elapsed = 0;
-    const now = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
     const provider = providerWithRunner(
       async (argv) => {
         calls.push(argv[1]!);
@@ -1155,13 +1120,11 @@ describe("Crabbox worker provider", () => {
         elapsed += resolveCrabboxProvisionBaseTimeoutMs(PROFILE) + 1;
       },
     );
-    try {
-      await expect(
-        provider.provision({ ...PROFILE, setup: "install-node" }, OPERATION_ID),
-      ).rejects.toThrow("exceeded its provider deadline");
-    } finally {
-      now.mockRestore();
-    }
+
+    await expect(provider.provision({ ...PROFILE, setup: "install-node" })).rejects.toThrow(
+      "exceeded its provider deadline",
+    );
+
     expect(calls).toEqual(["warmup", "inspect"]);
   });
 
@@ -1213,33 +1176,29 @@ describe("Crabbox worker provider", () => {
     const idleTimeout = "1s";
     const { provider, heartbeat } = heartbeatFixture(async () => commandResult());
     const profile = { ...PROFILE, idleTimeout };
-    try {
-      await expect(provider.provision(profile, OPERATION_ID)).resolves.toMatchObject({
-        leaseId: LEASE_ID,
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(heartbeat).toHaveBeenCalledExactlyOnceWith(
-        [
-          SIBLING_BINARY,
-          "heartbeat",
-          "--provider",
-          "aws",
-          "--id",
-          LEASE_ID,
-          "--idle-timeout",
-          idleTimeout,
-          "--json",
-        ],
-        expect.objectContaining({ timeoutMs: 500 }),
-      );
-      await vi.advanceTimersByTimeAsync(499);
-      expect(heartbeat).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(heartbeat).toHaveBeenCalledTimes(2);
-    } finally {
-      await provider.destroy(lifecycleLease(LEASE_ID, profile));
-      vi.useRealTimers();
-    }
+
+    await expect(provider.provision(profile)).resolves.toMatchObject({
+      leaseId: LEASE_ID,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heartbeat).toHaveBeenCalledExactlyOnceWith(
+      [
+        SIBLING_BINARY,
+        "heartbeat",
+        "--provider",
+        "aws",
+        "--id",
+        LEASE_ID,
+        "--idle-timeout",
+        idleTimeout,
+        "--json",
+      ],
+      expect.objectContaining({ timeoutMs: 500 }),
+    );
+    await vi.advanceTimersByTimeAsync(499);
+    expect(heartbeat).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(heartbeat).toHaveBeenCalledTimes(2);
   });
 
   it("fences heartbeat before a delayed or failed teardown binary acquisition", async () => {
@@ -1290,19 +1249,15 @@ describe("Crabbox worker provider", () => {
     const { provider, heartbeat, warnings } = heartbeatFixture(async () =>
       commandResult({ code: 2, stderr: "provider=aws does not support lease heartbeat" }),
     );
-    try {
-      await expect(provider.inspect(lifecycleLease())).resolves.toEqual(active);
-      await vi.advanceTimersByTimeAsync(0);
-      await provider.inspect(lifecycleLease());
-      await vi.advanceTimersByTimeAsync(180_000);
-      expect(heartbeat).toHaveBeenCalledTimes(1);
-      expect(warnings).toEqual([
-        `Crabbox provider aws does not support heartbeat for worker lease ${LEASE_ID}; cloud worker machines may be reaped after 60m of coordinator-idle time`,
-      ]);
-    } finally {
-      await provider.destroy(lifecycleLease());
-      vi.useRealTimers();
-    }
+
+    await expect(provider.inspect(lifecycleLease())).resolves.toEqual(active);
+    await vi.advanceTimersByTimeAsync(0);
+    await provider.inspect(lifecycleLease());
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(heartbeat).toHaveBeenCalledTimes(1);
+    expect(warnings).toEqual([
+      `Crabbox provider aws does not support heartbeat for worker lease ${LEASE_ID}; cloud worker machines may be reaped after 60m of coordinator-idle time`,
+    ]);
   });
 
   it.each([
@@ -1323,46 +1278,35 @@ describe("Crabbox worker provider", () => {
     const { provider, heartbeat, warnings } = heartbeatFixture(async () =>
       attempts++ === 0 ? fail() : commandResult(),
     );
-    try {
-      await expect(provider.inspect(lifecycleLease())).resolves.toEqual(active);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(heartbeat).toHaveBeenCalledTimes(1);
-      expect(warnings).toEqual([
-        `${warning}; cloud worker machines may be reaped after 60m of coordinator-idle time`,
-      ]);
-      await vi.advanceTimersByTimeAsync(59_999);
-      expect(heartbeat).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(heartbeat).toHaveBeenCalledTimes(2);
-      expect(warnings).toHaveLength(1);
-    } finally {
-      await provider.destroy(lifecycleLease());
-      vi.useRealTimers();
-    }
+
+    await expect(provider.inspect(lifecycleLease())).resolves.toEqual(active);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heartbeat).toHaveBeenCalledTimes(1);
+    expect(warnings).toEqual([
+      `${warning}; cloud worker machines may be reaped after 60m of coordinator-idle time`,
+    ]);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(heartbeat).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(heartbeat).toHaveBeenCalledTimes(2);
+    expect(warnings).toHaveLength(1);
   });
 
   it("keeps inspection and teardown available for persisted setupEnv leases without capturing them", async () => {
     vi.useFakeTimers();
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
-      return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
-    });
+    const { provider, calls } = recordedProvider();
     const profile = {
       ...PROFILE,
       warmImage: true,
       setup: "install-node",
       setupEnv: ["ARTIFACT_TOKEN"],
     };
-    try {
-      expect(provider.resolveDestroyTimeoutMs?.(profile)).toBe(CRABBOX_STOP_TIMEOUT_MS + 20_000);
-      await expect(provider.inspect(lifecycleLease(LEASE_ID, profile))).resolves.toEqual(active);
-      await provider.destroy(lifecycleLease(LEASE_ID, profile));
-      expect(calls.map((argv) => argv[1])).toEqual(["inspect", "stop"]);
-      expect(secretEgressRuntime.withSetupSecretEgress).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+
+    expect(provider.resolveDestroyTimeoutMs?.(profile)).toBe(CRABBOX_STOP_TIMEOUT_MS + 20_000);
+    await expect(provider.inspect(lifecycleLease(LEASE_ID, profile))).resolves.toEqual(active);
+    await provider.destroy(lifecycleLease(LEASE_ID, profile));
+    expect(calls.map((argv) => argv[1])).toEqual(["inspect", "stop"]);
+    expect(secretEgressRuntime.withSetupSecretEgress).not.toHaveBeenCalled();
   });
 
   it("maps deleted leases to unknown without renewing them", async () => {
@@ -1377,29 +1321,23 @@ describe("Crabbox worker provider", () => {
       return commandResult({ stdout: inspection });
     });
     const lease = lifecycleLease();
-    try {
-      await expect(provider.inspect(lease)).resolves.toEqual(active);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(heartbeats).toHaveBeenCalledTimes(1);
-      inspection = inspectJson({ state: "deleted", ready: false });
-      await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "unknown" });
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(heartbeats).toHaveBeenCalledTimes(1);
-    } finally {
-      await provider.destroy(lease);
-      vi.useRealTimers();
-    }
+
+    await expect(provider.inspect(lease)).resolves.toEqual(active);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heartbeats).toHaveBeenCalledTimes(1);
+    inspection = inspectJson({ state: "deleted", ready: false });
+    await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "unknown" });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(heartbeats).toHaveBeenCalledTimes(1);
   });
 
   it("rejects deleted leases during provision even if SSH is ready", async () => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
+    const { provider, calls } = recordedProvider(async (argv) => {
       return argv[1] === "inspect"
         ? commandResult({ stdout: inspectJson({ state: "deleted", ready: true }) })
         : commandResult();
     });
-    await expect(provider.provision(CLASSLESS_PROFILE, OPERATION_ID)).rejects.toMatchObject({
+    await expect(provider.provision(CLASSLESS_PROFILE)).rejects.toMatchObject({
       code: "cleanup_complete",
       message: "Crabbox warmup lease entered a terminal state",
     });
@@ -1459,7 +1397,7 @@ describe("Crabbox worker provider", () => {
       );
       const operation =
         action === "warmup"
-          ? provider.provision({ ...PROFILE, provider: "machine0" }, OPERATION_ID)
+          ? provider.provision({ ...PROFILE, provider: "machine0" })
           : provider.inspect(lifecycleLease());
 
       const error = await operation.catch((cause: unknown) => cause);
@@ -1482,8 +1420,8 @@ describe("Crabbox worker provider", () => {
   it("keeps the provision deadline monotonic when the wall clock rewinds", async () => {
     let monotonicMs = 0;
     let wallClockReads = 0;
-    const performanceNowSpy = vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
-    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
+    vi.spyOn(Date, "now").mockImplementation(() => {
       wallClockReads += 1;
       return wallClockReads === 1 ? 0 : -90_000;
     });
@@ -1499,17 +1437,13 @@ describe("Crabbox worker provider", () => {
       }
       return commandResult();
     });
-    try {
-      await expect(provider.provision(PROFILE, OPERATION_ID)).resolves.toMatchObject({
-        leaseId: LEASE_ID,
-      });
-      expect(inspectTimeouts.length).toBeGreaterThan(0);
-      for (const timeoutMs of inspectTimeouts) {
-        expect(timeoutMs).toBe(CRABBOX_LIFECYCLE_TIMEOUT_MS - 60_000);
-      }
-    } finally {
-      performanceNowSpy.mockRestore();
-      dateNowSpy.mockRestore();
+
+    await expect(provider.provision()).resolves.toMatchObject({
+      leaseId: LEASE_ID,
+    });
+    expect(inspectTimeouts.length).toBeGreaterThan(0);
+    for (const timeoutMs of inspectTimeouts) {
+      expect(timeoutMs).toBe(CRABBOX_LIFECYCLE_TIMEOUT_MS - 60_000);
     }
   });
 });

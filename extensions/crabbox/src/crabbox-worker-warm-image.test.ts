@@ -26,32 +26,59 @@ import {
 } from "./crabbox-worker-warm-image.test-support.js";
 
 describe("Crabbox profile warm images", () => {
-  it("records unsupported teardown capture without failing source stop", async () => {
-    const now = 1_800_000_000_000;
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const { provider, calls, warn } = createWarmProvider(({ argv }) =>
-      argv[2] === "create"
-        ? commandResult({
-            code: 2,
-            stdout: JSON.stringify(unsupportedCaptureReceipt(LEASE_ID)),
-          })
-        : undefined,
-    );
-    await captureWarmImage(provider);
-    expect(calls.at(-1)?.argv[1]).toBe("stop");
-    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
-    const image = (await listCrabboxWarmImages(crabboxState))[0];
-    expect(image?.capture).toBeUndefined();
-    expect(image?.allocations).toEqual({});
-    expect(image?.captureUnsupported).toEqual({
-      atMs: now,
-      provider: "aws",
-      message: unsupportedCaptureReceipt(LEASE_ID).message,
-    });
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn.mock.calls[0]?.[0]).toContain("warm image capture unsupported:");
-    expect(warn.mock.calls[0]?.[0]).not.toContain("failed");
-  });
+  it.each([true, false])(
+    "stops the source and settles failed capture (unsupported=%s)",
+    async (unsupported) => {
+      const now = 1_800_000_000_000;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      let failCapture = true;
+      const receipt = unsupported
+        ? unsupportedCaptureReceipt(LEASE_ID)
+        : {
+            schema: "crabbox.checkpoint.create.failure.v1",
+            outcome: "not_submitted",
+            provider: PROFILE.provider,
+            leaseId: LEASE_ID,
+            checkpointId: CHECKPOINT_ID,
+            localReservation: "removed",
+          };
+      const { provider, calls, warn } = createWarmProvider(({ argv }) =>
+        failCapture && argv[2] === "create"
+          ? commandResult({
+              code: unsupported ? 2 : 7,
+              stdout: JSON.stringify(receipt),
+              ...(unsupported
+                ? {}
+                : { stderr: "image submission rejected; source rollback failed" }),
+            })
+          : undefined,
+      );
+      await captureWarmImage(provider);
+      expect(calls.at(-1)?.argv[1]).toBe("stop");
+      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+      expect(warn).toHaveBeenCalledOnce();
+      if (unsupported) {
+        const image = (await listCrabboxWarmImages(crabboxState))[0];
+        expect(image?.capture).toBeUndefined();
+        expect(image?.allocations).toEqual({});
+        expect(image?.captureUnsupported).toEqual({
+          atMs: now,
+          provider: "aws",
+          message: unsupportedCaptureReceipt(LEASE_ID).message,
+        });
+        expect(warn.mock.calls[0]?.[0]).toContain("warm image capture unsupported:");
+        expect(warn.mock.calls[0]?.[0]).not.toContain("failed");
+      } else {
+        expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
+        expect(warn.mock.calls[0]?.[0]).not.toContain("--recover");
+        failCapture = false;
+        calls.length = 0;
+        await captureWarmImage(provider);
+        expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
+        expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+      }
+    },
+  );
   it("rejects explicit warm images without sizing before opening setup secrets", async () => {
     const { provider, calls } = createWarmProvider();
     await expect(
@@ -82,10 +109,6 @@ describe("Crabbox profile warm images", () => {
     );
     const scrub = captureCalls[0];
     expect(scrub?.argv).toContain("--script-stdin");
-    expect(scrub?.options.input).toContain("$HOME/.openclaw/cloud-workers");
-
-    expect(scrub?.options.input).toContain('rm -rf "$worker_root"');
-    expect(scrub?.options.input).toContain('rm -rf "$HOME/.openclaw-worker/workspaces"');
     // Capture phases ride a full crabbox run/snapshot round trip; 60s starves
     // them under coordinator latency (live-measured on AWS 2026-08-26).
     expect(scrub?.options.timeoutMs).toBe(180_000);
@@ -94,40 +117,34 @@ describe("Crabbox profile warm images", () => {
       calls.reduce((total, call) => total + call.options.timeoutMs, 0),
     );
     const home = tempDirs.make("openclaw-crabbox-warm-scrub-");
-    const workspace = path.join(
-      home,
-      ".openclaw",
-      "cloud-workers",
-      LEASE_ID,
-      "node-host",
-      "gateway",
-      "workspaces",
-      "session",
+    const at = (relative: string) => path.join(home, relative);
+    const workspace = at(
+      `.openclaw/cloud-workers/${LEASE_ID}/node-host/gateway/workspaces/session`,
     );
-    const npmCache = path.join(home, ".npm", "cached-package");
-    const sshWorkspace = path.join(home, ".openclaw-worker", "workspaces", "session");
-    const bundle = path.join(home, ".openclaw-worker", "bundle-hash", "index.js");
-    const gitSeed = path.join(home, ".openclaw-worker", "git-seeds", "gateway", "seed", "file");
-    const bin = path.join(home, "bin");
-    const workdir = path.join(home, "crabbox-workdir");
+    const npmCache = at(".npm/cached-package");
+    const sshWorkspace = at(".openclaw-worker/workspaces/session");
+    const bundle = at(".openclaw-worker/bundle-hash/index.js");
+    const gitSeed = at(".openclaw-worker/git-seeds/gateway/seed/file");
+    const bin = at("bin");
+    const workdir = at("crabbox-workdir");
     const envFile = path.join(workdir, ".crabbox", "env", "forwarded.env");
     const egressEnvFile = path.join(workdir, ".crabbox", "env-setup");
     const scrubScript = path.join(workdir, ".crabbox", "scripts", "scrub.sh");
-    const tmp = path.join(home, "tmp");
+    const tmp = at("tmp");
     const setupCa = path.join(tmp, "openclaw-setup-egress.fixture", "ca.pem");
-    const fixedTmp = path.join(home, "fixed-tmp");
+    const fixedTmp = at("fixed-tmp");
     const fixedSetupCa = path.join(fixedTmp, "openclaw-setup-egress.fixed", "ca.pem");
     // Map the owned Linux /tmp root into the fixture without scanning host temporary files.
     const scrubInput = String(scrub?.options.input).replace('"/tmp"', JSON.stringify(fixedTmp));
     const unrelatedTemp = path.join(tmp, "unrelated", "keep");
     const repoConfig = path.join(workdir, ".npmrc");
-    const homeConfig = path.join(home, ".gitconfig");
+    const homeConfig = at(".gitconfig");
     const write = (file: string, contents: string) => {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, contents);
     };
     fs.mkdirSync(bin);
-    const runtimeNode = path.join(home, ".openclaw-worker", "runtime-node", "node");
+    const runtimeNode = at(".openclaw-worker/runtime-node/node");
     fs.mkdirSync(path.dirname(runtimeNode), { recursive: true });
     fs.symlinkSync(process.execPath, runtimeNode);
     fs.writeFileSync(path.join(bin, "node"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
@@ -144,7 +161,7 @@ describe("Crabbox profile warm images", () => {
     }
     const runtime = path.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
     fs.mkdirSync(runtime, { recursive: true });
-    const state = path.join(home, ".openclaw", "cloud-workers", LEASE_ID);
+    const state = at(`.openclaw/cloud-workers/${LEASE_ID}`);
     fs.symlinkSync(runtime, path.join(state, "runtime"));
     const node =
       process.platform === "linux"
@@ -200,7 +217,7 @@ describe("Crabbox profile warm images", () => {
     expect(fs.existsSync(runtime)).toBe(true);
     expect(fs.readlinkSync(runtimeNode)).toBe(process.execPath);
     for (const file of [
-      path.join(home, ".openclaw", "cloud-workers"),
+      at(".openclaw/cloud-workers"),
       sshWorkspace,
       envFile,
       egressEnvFile,
@@ -294,46 +311,6 @@ describe("Crabbox profile warm images", () => {
     },
   );
 
-  it("warns once and still stops the enrolled lease when capture was not submitted", async () => {
-    const result = commandResult({
-      code: 7,
-      stderr: "image submission rejected; source rollback failed",
-      stdout: JSON.stringify({
-        schema: "crabbox.checkpoint.create.failure.v1",
-        outcome: "not_submitted",
-        provider: PROFILE.provider,
-        leaseId: LEASE_ID,
-        checkpointId: CHECKPOINT_ID,
-        localReservation: "removed",
-      }),
-    });
-    let tearingDown = false;
-    const { provider, calls, warn } = createWarmProvider(({ argv }) => {
-      if (tearingDown && argv[2] === "create") {
-        return result;
-      }
-      return undefined;
-    });
-    const lease = await provisionWarmProfile(provider);
-    tearingDown = true;
-
-    await expect(
-      destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE }),
-    ).resolves.toBeUndefined();
-
-    expect(warn).toHaveBeenCalledOnce();
-    expect(calls.at(-1)?.argv[1]).toBe("stop");
-    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
-
-    tearingDown = false;
-    calls.length = 0;
-    expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
-    expect(warn.mock.calls[0]?.[0]).not.toContain("--recover");
-    await captureWarmImage(provider);
-    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
-    expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
-  });
-
   it("recovers enrolled class after restart", async () => {
     const initial = createWarmProvider();
     const profile = PROFILE;
@@ -349,25 +326,25 @@ describe("Crabbox profile warm images", () => {
 
     expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
 
-    restarted.calls.length = 0;
-    await provisionWarmProfile(
-      restarted.provider,
-      profile,
-      `provision:v2:${"1".repeat(64)}`,
-      "standard",
-    );
-    expect(restarted.calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
-    expect(restarted.calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
-
-    restarted.calls.length = 0;
-    await provisionWarmProfile(
-      restarted.provider,
-      profile,
-      `provision:v2:${"2".repeat(64)}`,
-      "fast",
-    );
-    const fork = restarted.calls.find(({ argv }) => argv[2] === "fork")?.argv;
-    expect(fork?.[fork.indexOf("--class") + 1]).toBe("fast");
+    for (const [digit, machineClass] of [
+      ["1", "standard"],
+      ["2", "fast"],
+    ] as const) {
+      restarted.calls.length = 0;
+      await provisionWarmProfile(
+        restarted.provider,
+        profile,
+        `provision:v2:${digit.repeat(64)}`,
+        machineClass,
+      );
+      const fork = restarted.calls.find(({ argv }) => argv[2] === "fork")?.argv;
+      if (machineClass === "standard") {
+        expect(restarted.calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
+        expect(fork).toBeUndefined();
+      } else {
+        expect(fork?.[fork.indexOf("--class") + 1]).toBe("fast");
+      }
+    }
   });
 
   it("never snapshots an inspection-only lease with a configured class", async () => {
