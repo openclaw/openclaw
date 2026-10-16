@@ -482,7 +482,7 @@ describe("harness runtime plugins", () => {
   });
 
   it("keeps standalone activation unrestricted when no complete startup base exists", () => {
-    const plan = resolveAgentRuntimePluginLoadPlan({
+    const plan = loadPlan({
       metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: {
         plugins: {
@@ -504,7 +504,7 @@ describe("harness runtime plugins", () => {
     mocks.resolveManifestActivationPlan.mockReturnValueOnce({
       entries: [{ pluginId: "custom-harness-plugin", origin: "workspace" }],
     });
-    const plan = resolveAgentRuntimePluginLoadPlan({
+    const plan = loadPlan({
       metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { allow: ["custom-harness-plugin"] } },
       workspaceDir: "/tmp/workspace",
