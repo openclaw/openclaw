@@ -23,6 +23,24 @@ const tool = createCronTool();
 const schema = tool.parameters;
 
 describe("cron model schema regressions", () => {
+  it("advertises isolated provider selection and null clears without a provider enum", () => {
+    expect(propertyAt(schema, "job.payload.webSearchProvider")).toMatchObject({
+      description: expect.stringMatching(/isolated.*agentTurn.*null to clear/),
+    });
+    for (const [webSearchProvider, accepted] of [
+      ["brave", true],
+      ["custom-search", true],
+      [null, true],
+      ["", false],
+      [" \t", false],
+      [42, false],
+    ] as const) {
+      expect(
+        Value.Check(schema, { action: "update", job: { payload: { webSearchProvider } } }),
+      ).toBe(accepted);
+    }
+  });
+
   it("reuses policy-equivalent schemas across sessions and refreshes changed policy", () => {
     const first = createCronToolSchema({ agentSessionKey: "agent:one:main" });
     expect(createCronToolSchema({ agentSessionKey: "agent:two:main" })).toBe(first);

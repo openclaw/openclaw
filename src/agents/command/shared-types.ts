@@ -152,6 +152,8 @@ export type AgentRunInputContext = {
    */
   config?: OpenClawConfig;
   toolOverrides?: SessionToolOverrides;
+  /** Explicit run-only managed search selection; never persisted as session config. */
+  webSearchProvider?: string;
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;

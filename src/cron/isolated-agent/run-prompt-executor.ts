@@ -333,6 +333,11 @@ export function createCronPromptExecutor(
           modelOverride,
           runOptions.agentHarnessRuntimeOverride,
         );
+        if (cliExecution && params.agentPayload?.webSearchProvider !== undefined) {
+          const refusal = new Error("webSearchProvider is not supported with CLI backends.");
+          recordModelFallbackStop(refusal);
+          throw refusal;
+        }
         const candidateConfiguredThinkLevel =
           params.immutableThinkLevel ??
           resolveConfiguredThinkingDefault({
@@ -648,6 +653,7 @@ export function createCronPromptExecutor(
           verboseLevel: params.resolvedVerboseLevel,
           runTimeoutOverrideMs: params.runTimeoutOverrideMs,
           toolsAllow: params.agentPayload?.toolsAllow,
+          webSearchProvider: params.agentPayload?.webSearchProvider?.trim().toLowerCase(),
           scheduledRuntimeAuthority: params.job.runtimeAuthority,
           scheduledRuntimeAuthorityRecoveryRequired:
             params.job.runtimeAuthorityRecoveryRequired === true,

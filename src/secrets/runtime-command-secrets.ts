@@ -5,6 +5,7 @@ import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry.js";
+import { applyRunWebSearchProvider } from "../web-search/provider-override.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
   type CommandSecretAssignment,
@@ -63,6 +64,35 @@ function applyProviderOverridesToConfig(
 
 function pluginIdFromRuntimeWebPath(path: string): string | undefined {
   return /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\.apiKey$/.exec(path)?.[1];
+}
+
+/** Resolve an isolated run's selected search credentials without publishing a runtime snapshot. */
+export async function resolveWebSearchProviderForRun(params: {
+  config: OpenClawConfig;
+  providerId: string;
+}) {
+  const providerId = params.providerId.trim().toLowerCase();
+  const config = applyRunWebSearchProvider(params.config, providerId);
+  const active = getActiveSecretsRuntimeSnapshotState();
+  const sourceConfig = applyRunWebSearchProvider(active?.sourceConfig ?? config, providerId);
+  const resolvedConfig = cloneConfigWithResolutionFacts(config);
+  const context = createResolverContext({
+    sourceConfig,
+    env: getActiveSecretsRuntimeEnvState(),
+  });
+  const { metadata } = await resolveRuntimeWebTools({
+    sourceConfig,
+    resolvedConfig,
+    context,
+    kinds: ["search"],
+    requireSearchCredentials: true,
+  });
+  if (metadata.search.selectedProvider !== providerId) {
+    throw new Error(
+      `web_search provider "${providerId}" is unknown, disabled, or unavailable; check its plugin and credentials.`,
+    );
+  }
+  return { config: resolvedConfig, providerId, runtimeWebSearch: metadata.search };
 }
 
 function isProviderOverridePath(params: {

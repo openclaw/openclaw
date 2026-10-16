@@ -8,9 +8,15 @@ import {
   getRuntimeAuthProfileStoreSnapshotsRevision,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCommandSecretsFromActiveRuntimeSnapshot } from "./runtime-command-secrets.js";
+import {
+  resolveCommandSecretsFromActiveRuntimeSnapshot,
+  resolveWebSearchProviderForRun,
+} from "./runtime-command-secrets.js";
 import { createEmptyRuntimeWebToolsMetadata } from "./runtime-fast-path.js";
-import { activateSecretsRuntimeSnapshotState } from "./runtime-state.js";
+import {
+  activateSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotState,
+} from "./runtime-state.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "./runtime.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
@@ -95,6 +101,74 @@ function activateMinimalSecretsRuntimeSnapshot(params: {
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
 describe("runtime command secrets", () => {
+  it("resolves a run-only non-env SecretRef without publishing it or resolving fetch", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "run-search-secret-"));
+    try {
+      const secretPath = path.join(dir, "secret.json");
+      await fs.writeFile(secretPath, JSON.stringify({ key: "synthetic-file-search-key" }), {
+        mode: 0o600,
+      });
+      const config: OpenClawConfig = {
+        secrets: { providers: { fixture: { source: "file", path: secretPath, mode: "json" } } },
+        tools: { web: { search: { provider: "duckduckgo" }, fetch: { provider: "firecrawl" } } },
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: { apiKey: { source: "file", provider: "fixture", id: "/key" } },
+              },
+            },
+            firecrawl: {
+              enabled: true,
+              config: {
+                webFetch: { apiKey: { source: "file", provider: "fixture", id: "/missing-fetch" } },
+              },
+            },
+          },
+        },
+      };
+      const original = structuredClone(config);
+      activateMinimalSecretsRuntimeSnapshot({ config, env: {} });
+      const activeBefore = structuredClone(getActiveSecretsRuntimeSnapshotState());
+      const scoped = await resolveWebSearchProviderForRun({ config, providerId: "brave" });
+      expect(scoped.runtimeWebSearch).toMatchObject({
+        selectedProvider: "brave",
+        selectedProviderKeySource: "secretRef",
+      });
+      expect(scoped.config.plugins?.entries?.brave?.config?.webSearch).toEqual({
+        apiKey: "synthetic-file-search-key",
+      });
+      expect(config).toEqual(original);
+      expect(getActiveSecretsRuntimeSnapshotState()).toEqual(activeBefore);
+      await fs.writeFile(secretPath, "{}", { mode: 0o600 });
+      await expect(
+        resolveWebSearchProviderForRun({ config, providerId: "brave" }),
+      ).rejects.toThrow();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a selected provider with missing credentials before execution", async () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          brave: {
+            enabled: true,
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_RUN_SEARCH_FIXTURE" },
+              },
+            },
+          },
+        },
+      },
+    };
+    activateMinimalSecretsRuntimeSnapshot({ config, env: {} });
+    await expect(resolveWebSearchProviderForRun({ config, providerId: "brave" })).rejects.toThrow();
+  });
+
   const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   const previousTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 

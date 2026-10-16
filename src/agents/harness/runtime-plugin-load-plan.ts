@@ -13,6 +13,7 @@ import { addConfiguredSlotPluginIds } from "../../plugins/gateway-startup-plugin
 import { hashJson } from "../../plugins/installed-plugin-index-hash.js";
 import { createInstalledPluginIndexScopeLookup } from "../../plugins/installed-plugin-index-scope-lookup.js";
 import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
+import { listAvailableManifestContractPlugins } from "../../plugins/manifest-contract-eligibility.js";
 import type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotPluginIdScope,
@@ -37,6 +38,8 @@ export type AgentHarnessPluginSelection = {
   modelId: string;
   runtime?: string;
   agentId?: string;
+  /** Explicit managed search demand, admitted with this run rather than its global default. */
+  webSearchProvider?: string;
 };
 
 export type RuntimePluginLoadPurpose = "agent" | "model-catalog" | "isolated-completion";
@@ -330,6 +333,16 @@ export function resolveAgentRuntimePluginSelectionOwners(params: {
   const pluginIds: string[] = [];
   const forceActivatedPluginIds: string[] = [];
   for (const selection of params.selections) {
+    if (selection.webSearchProvider && config?.plugins?.enabled !== false) {
+      const owners = listAvailableManifestContractPlugins({
+        snapshot: params.metadataSnapshot,
+        config,
+        contract: "webSearchProviders",
+        value: selection.webSearchProvider.trim().toLowerCase(),
+      }).filter((plugin) => !restrictiveAllowlistOmitsPlugin(config, plugin.id));
+      pluginIds.push(...owners.map((plugin) => plugin.id));
+      forceActivatedPluginIds.push(...owners.map((plugin) => plugin.id));
+    }
     const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
     const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds({
       provider: selection.provider,

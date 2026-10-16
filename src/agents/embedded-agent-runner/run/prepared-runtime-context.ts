@@ -1,6 +1,7 @@
 import { isCurrentPluginMetadataSnapshotRuntimeGeneration } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { applyRunWebSearchProvider } from "../../../web-search/provider-override.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import {
   resolveCanonicalRunRuntimeWorkspace,
@@ -83,7 +84,10 @@ export function bindRunToPreparedModelRuntime(params: {
       ...params.runParams,
       agentId: preparedAgentId,
       agentDir: params.preparedModelRuntime.agentDir,
-      config: params.preparedModelRuntime.config,
+      config: applyRunWebSearchProvider(
+        params.preparedModelRuntime.config,
+        params.runParams.webSearchProvider,
+      ),
       workspaceDir: workspaceResolution.workspaceDir,
     },
     workspaceResolution,

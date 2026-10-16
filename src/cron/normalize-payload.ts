@@ -52,6 +52,7 @@ export function normalizeCronCommandArgv(value: unknown): string[] | undefined {
 function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
   return (
     "model" in payload ||
+    "webSearchProvider" in payload ||
     "fallbacks" in payload ||
     "thinking" in payload ||
     "timeoutSeconds" in payload ||
@@ -77,6 +78,11 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
   }
   if (typeof next.script === "string") {
     next.script = next.script.trim();
+  }
+  // Keep invalid values and unsupported kinds visible to the RPC validator;
+  // dropping an explicit selection would silently inherit another provider.
+  if (typeof next.webSearchProvider === "string") {
+    next.webSearchProvider = normalizeLowercaseStringOrEmpty(next.webSearchProvider);
   }
   for (const field of ["model", "thinking", "cwd"] as const) {
     // Model/thinking nulls clear stored overrides; cwd has no explicit-clear form.

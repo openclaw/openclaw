@@ -8,6 +8,7 @@ import {
 } from "../../security/external-content.js";
 import { WebSearchProviderError } from "../../web-search/runtime-error.js";
 import { runWebSearch } from "../../web-search/runtime.js";
+import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult, textResult } from "./common.js";
 import { normalizeWebSearchOutput, WebSearchOutputSchema } from "./web-search-output.js";
@@ -84,6 +85,7 @@ export function createWebSearchTool(options?: {
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   lateBindRuntimeConfig?: boolean;
+  webSearchProvider?: string;
 }): AnyAgentTool | null {
   if (options?.enabled === false || isWebSearchDisabled(options?.config)) {
     return null;
@@ -100,19 +102,38 @@ export function createWebSearchTool(options?: {
     execute: async (_toolCallId, args, signal) => {
       // Late binding lets long-lived agents pick up runtime web-search credentials/config without
       // rebuilding the tool object.
-      const {
-        config,
-        preferRuntimeProviders,
-        providerSelectionId,
-        runtimeMetadata: runtimeWebSearch,
-      } = resolveWebToolRuntimeContext({
-        kind: "search",
-        config: options?.config,
-        lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
-        runtimeMetadata: options?.runtimeWebSearch,
-      });
+      const resolveRuntimeContext = () =>
+        resolveWebToolRuntimeContext({
+          kind: "search",
+          config: options?.config,
+          lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
+          runtimeMetadata: options?.runtimeWebSearch,
+        });
+      const runtimeContext = resolveRuntimeContext();
+      const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
+      const assertCurrent = () => {
+        assertSourceCurrent();
+        // Scoped credentials must not keep a superseded configuration authorized across awaits.
+        // The search runtime carries this fence through provider preparation and final HTTP I/O.
+        if (resolveRuntimeContext().config !== runtimeContext.config) {
+          throw new Error("web_search configuration changed during execution; retry the request.");
+        }
+      };
+      const { preferRuntimeProviders } = runtimeContext;
+      let { config, providerSelectionId, runtimeMetadata: runtimeWebSearch } = runtimeContext;
       if (isWebSearchDisabled(config)) {
         throw new Error("web_search is disabled.");
+      }
+      if (options?.webSearchProvider !== undefined) {
+        const { resolveWebSearchProviderForRun } =
+          await import("../../secrets/runtime-command-secrets.js");
+        const scoped = await resolveWebSearchProviderForRun({
+          config: config ?? {},
+          providerId: options.webSearchProvider,
+        });
+        config = scoped.config;
+        runtimeWebSearch = scoped.runtimeWebSearch;
+        providerSelectionId = scoped.providerId;
       }
       if (providerSelectionId) {
         assertSecretOwnerAvailable(
@@ -123,10 +144,13 @@ export function createWebSearchTool(options?: {
       const toolArgs = asToolParamsRecord(args);
       const result = await runWebSearch({
         config,
+        providerId: options?.webSearchProvider !== undefined ? providerSelectionId : undefined,
+        preferInputConfig: options?.webSearchProvider !== undefined,
         agentDir: options?.agentDir,
         sandboxed: options?.sandboxed,
         runtimeWebSearch,
         preferRuntimeProviders,
+        assertCurrent: options?.webSearchProvider !== undefined ? assertCurrent : undefined,
         args: toolArgs,
         signal,
       }).catch((error: unknown) => {

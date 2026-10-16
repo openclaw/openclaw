@@ -30,6 +30,32 @@ afterEach(() => {
 });
 
 describe("cron shorthand recovery", () => {
+  it("forwards a nested provider selection from the automations job to cron.add", async () => {
+    await execute({
+      action: "add",
+      job: {
+        ...job,
+        sessionTarget: "isolated",
+        payload: { ...job.payload, webSearchProvider: " brave " },
+      },
+    });
+    expectAdd({
+      sessionTarget: "isolated",
+      payload: expect.objectContaining({ webSearchProvider: "brave" }),
+    });
+  });
+
+  it.each(["brave", null])(
+    "recovers provider-only update %j as an RPC patch",
+    async (webSearchProvider) => {
+      await execute({ action: "update", jobId: "job", webSearchProvider });
+      expect(gateway).toHaveBeenCalledExactlyOnceWith("cron.update", expect.anything(), {
+        id: "job",
+        patch: { payload: { kind: "agentTurn", webSearchProvider } },
+      });
+    },
+  );
+
   it("presents list metadata without private job content", () => {
     const presentation = getToolTerminalPresentation(createCronTool());
     if (!presentation) {

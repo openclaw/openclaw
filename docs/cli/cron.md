@@ -116,6 +116,23 @@ the default working directory. An explicitly empty or whitespace-only path is
 an error. When editing a stream job, `--stream-cwd ""` still clears its configured
 working directory.
 
+## Per-job web search provider
+
+Use `--web-search-provider <id>` on `add`/`create` or `edit` to select a managed
+search provider for an **isolated agent-turn** job, for example:
+
+```bash
+openclaw automations edit <job-id> --web-search-provider brave
+openclaw automations edit <job-id> --clear-web-search-provider
+```
+
+The provider ID must be nonblank. Set and clear flags are mutually exclusive,
+including an empty set argument. Omission on creation inherits normal search
+selection; omission on edit preserves the stored override. Clearing restores
+inheritance. Other payload kinds and non-isolated targets reject the override;
+clear it when moving an agent turn to another session target. Provider credentials
+and tool restrictions still apply. See [Web search](/tools/web).
+
 ## Sessions
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.

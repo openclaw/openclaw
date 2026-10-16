@@ -82,6 +82,25 @@ describe("agent harness private options", () => {
     >();
   });
 
+  it("keeps web search provider selection host-only in both factory signatures", () => {
+    type HostFactories = typeof import("../agents/agent-tools.js");
+    type InternalOptions = NonNullable<
+      Parameters<HostFactories["createOpenClawCodingToolsInternal"]>[0]
+    >;
+    type AsyncInternalOptions = NonNullable<
+      Parameters<HostFactories["createOpenClawCodingToolsInternalAsync"]>[0]
+    >;
+
+    expectTypeOf<CodingToolsOptions>().not.toHaveProperty("webSearchProvider");
+    expectTypeOf<AsyncCodingToolsOptions>().not.toHaveProperty("webSearchProvider");
+    expectTypeOf<Pick<InternalOptions, "webSearchProvider">>().toEqualTypeOf<{
+      webSearchProvider?: string;
+    }>();
+    expectTypeOf<Pick<AsyncInternalOptions, "webSearchProvider">>().toEqualTypeOf<{
+      webSearchProvider?: string;
+    }>();
+  });
+
   it("keeps the public factory on the existing shared implementation", () => {
     expect(createOpenClawCodingTools).toBe(createCoreCodingTools);
   });

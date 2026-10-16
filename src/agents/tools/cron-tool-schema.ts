@@ -208,6 +208,12 @@ function createCronPayloadSchema(params: {
             }
           : {}),
         model: nullableStringSchema("Model override, or null to clear"),
+        webSearchProvider: Type.Optional(
+          Type.Union([Type.String({ minLength: 1, pattern: "\\S" }), Type.Null()], {
+            description:
+              "Search provider ID for isolated agentTurn jobs; omitted inherits, null to clear on update",
+          }),
+        ),
         thinking: Type.Optional(Type.String({ description: "Thinking override" })),
         timeoutSeconds: Type.Optional(
           Type.Union([Type.Number({ minimum: 0 }), Type.Null()], {

@@ -131,6 +131,18 @@ export async function prepareCronRunContext(params: {
     config: modelOwner.config,
     agentConfigOverride,
   });
+  if (input.job.payload.kind === "agentTurn" && input.job.payload.webSearchProvider !== undefined) {
+    try {
+      const { resolveWebSearchProviderForRun } =
+        await import("../../secrets/runtime-command-secrets.js");
+      await resolveWebSearchProviderForRun({
+        config: runtimeCfg,
+        providerId: input.job.payload.webSearchProvider,
+      });
+    } catch (error) {
+      return { ok: false as const, result: { status: "error" as const, error: String(error) } };
+    }
+  }
   const baseSessionKey = (input.sessionKey?.trim() || `cron:${input.job.id}`).trim();
   const currentBoundSourceKey =
     input.job.sessionTarget === "current" ? input.job.sessionKey?.trim() : undefined;
@@ -425,9 +437,13 @@ export async function prepareCronRunContext(params: {
               entry: cronSession.sessionEntry,
               cfg: cfgWithAgentDefaults,
             });
-            return runtime
-              ? { provider: candidate.provider, modelId: candidate.model, runtime, agentId }
-              : { provider: candidate.provider, modelId: candidate.model, agentId };
+            return Object.assign(
+              { provider: candidate.provider, modelId: candidate.model, agentId },
+              runtime ? { runtime } : {},
+              input.job.payload.kind === "agentTurn" && input.job.payload.webSearchProvider
+                ? { webSearchProvider: input.job.payload.webSearchProvider.trim().toLowerCase() }
+                : {},
+            );
           }),
         },
         {

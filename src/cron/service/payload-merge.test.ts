@@ -105,6 +105,28 @@ const installDefaultMarkerCases = [
 ] satisfies MergeCase[];
 
 describe("mergeCronPayload trigger tool caps", () => {
+  it("sets, preserves, and clears the provider without changing other payload fields", () => {
+    const existing = {
+      kind: "agentTurn",
+      message: "hello",
+      model: "provider/model",
+      toolsAllow: ["web_search"],
+    } as const;
+    const payload: CronPayload = { ...existing, toolsAllow: [...existing.toolsAllow] };
+    const selected = mergeCronPayload(payload, { kind: "agentTurn", webSearchProvider: "brave" });
+    expect(selected).toEqual({ ...payload, webSearchProvider: "brave" });
+    expect(mergeCronPayload(selected, { kind: "agentTurn" })).toEqual(selected);
+    expect(mergeCronPayload(selected, { kind: "agentTurn", webSearchProvider: null })).toEqual(
+      payload,
+    );
+    expect(payload).not.toHaveProperty("webSearchProvider");
+    expect(mergeCronPayload(selected, { kind: "command", argv: ["true"] })).toEqual({
+      kind: "command",
+      argv: ["true"],
+      toolsAllow: ["web_search"],
+    });
+  });
+
   it.each(preserveCases)(
     "preserves $label toolsAllow when omitted",
     ({ existing, patch, expected }) => {

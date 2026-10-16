@@ -238,6 +238,109 @@ function cronPage(
   };
 }
 
+describe("cron web search provider", () => {
+  it("sets an arbitrary provider on add and inherits when omitted", async () => {
+    const selected = await namedAdd(
+      "--message",
+      "hello",
+      "--web-search-provider",
+      " custom-search ",
+    );
+    expect(selected).toMatchObject({
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello", webSearchProvider: "custom-search" },
+    });
+    expect((await namedAdd("--message", "hello")).payload).not.toHaveProperty("webSearchProvider");
+  });
+
+  it.each([
+    { args: ["--web-search-provider", " brave "], value: "brave" },
+    { args: ["--clear-web-search-provider"], value: null },
+  ])("sends only the provider patch for $args", async ({ args, value }) => {
+    mockExistingJob({
+      payload: { kind: "agentTurn", message: "keep", webSearchProvider: "custom-search" },
+    });
+    await buildProgram().parseAsync([...EDIT, ...args], { from: "user" });
+    expect(rpcParams<{ patch: CronJobPatch }>("cron.update").patch).toEqual({
+      payload: { kind: "agentTurn", webSearchProvider: value },
+    });
+  });
+
+  it.each(["", " \t", "brave"])(
+    "rejects set/clear conflicts before Gateway I/O (%j)",
+    async (value) => {
+      await expectCronCommandExit([
+        ...EDIT,
+        "--web-search-provider",
+        value,
+        "--clear-web-search-provider",
+      ]);
+      expectRuntimeErrorContaining(
+        "Use --web-search-provider or --clear-web-search-provider, not both",
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([AGENT_ADD, EDIT].map((args) => ({ args })))(
+    "rejects a blank provider for $args",
+    async ({ args }) => {
+      await expectCronCommandExit([...args, "--web-search-provider", " \t"]);
+      expectRuntimeErrorContaining("--web-search-provider must not be blank");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(
+    [
+      [...EVENT_ADD],
+      [...ADD, "--command", "true"],
+      [...AGENT_ADD, "--session", "current"],
+      [...AGENT_ADD, "--session", "session:report"],
+    ].map((args) => ({ args })),
+  )("rejects unsupported add targets ($args)", async ({ args }) => {
+    await expectCronCommandExit([...args, "--web-search-provider", "brave"]);
+    expectRuntimeErrorContaining("isolated");
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { sessionTarget: "main", payload: { kind: "systemEvent", text: "tick" } },
+    { sessionTarget: "isolated", payload: { kind: "command", argv: ["true"] } },
+    { sessionTarget: "isolated", payload: { kind: "script", script: "return {};" } },
+    { sessionTarget: "current", payload: { kind: "agentTurn", message: "tick" } },
+    { sessionTarget: "session:report", payload: { kind: "agentTurn", message: "tick" } },
+  ] satisfies Array<Partial<CronJob>>)(
+    "rejects provider edits on $sessionTarget/$payload.kind",
+    async (job) => {
+      for (const args of [["--web-search-provider", "brave"], ["--clear-web-search-provider"]]) {
+        mockExistingJob(job);
+        await expect(
+          buildProgram().parseAsync([...EDIT, ...args], { from: "user" }),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expectRuntimeErrorContaining("isolated");
+        expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.update")).toBe(
+          false,
+        );
+      }
+    },
+  );
+
+  it("allows clearing an isolated override while retargeting the agent turn", async () => {
+    mockExistingJob({
+      payload: { kind: "agentTurn", message: "hello", webSearchProvider: "brave" },
+    });
+    await buildProgram().parseAsync(
+      [...EDIT, "--session", "current", "--clear-web-search-provider"],
+      { from: "user" },
+    );
+    expect(rpcParams<{ patch: CronJobPatch }>("cron.update").patch).toEqual({
+      sessionTarget: "current",
+      payload: { kind: "agentTurn", webSearchProvider: null },
+    });
+  });
+});
+
 describe("cron cli", () => {
   it.each([
     { leaf: ["--port", "65268", "--token", "leaf-token"], port: "65268", token: "leaf-token" },

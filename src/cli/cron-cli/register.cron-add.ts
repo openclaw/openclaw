@@ -104,6 +104,10 @@ export function registerCronAddCommand(cron: Command) {
           cmd: Command,
         ) => {
           try {
+            const webSearchProvider = parseCronStringOption(
+              opts.webSearchProvider,
+              "--web-search-provider",
+            );
             for (const [flag, cwd] of [
               ["--command-cwd", opts.commandCwd],
               ["--on-exit-cwd", opts.onExitCwd],
@@ -239,6 +243,7 @@ export function registerCronAddCommand(cron: Command) {
                 kind: "agentTurn" as const,
                 message,
                 model: normalizeOptionalString(opts.model),
+                ...(webSearchProvider !== undefined ? { webSearchProvider } : {}),
                 fallbacks: parseCronStringList(opts.fallbacks),
                 thinking: parseCronThinkingOption(opts.thinking),
                 timeoutSeconds,
@@ -263,7 +268,10 @@ export function registerCronAddCommand(cron: Command) {
               throw new CronCliError("Choose --delete-after-run or --keep-after-run, not both");
             }
 
-            await assertCronCliJobSpec({ sessionTarget, payload: resolvedPayload });
+            await assertCronCliJobSpec({
+              sessionTarget,
+              payload: { ...resolvedPayload, webSearchProvider },
+            });
             const supportsChatDelivery = isIsolatedLikeSessionTarget && isDeliveryPayload;
             if ((opts.announce || typeof opts.deliver === "boolean") && !supportsChatDelivery) {
               throw new CronCliError(

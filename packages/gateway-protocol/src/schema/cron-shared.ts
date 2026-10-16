@@ -13,6 +13,7 @@ export const CronDateTimestampMsSchema = Type.Integer({
 export function cronAgentTurnPayloadSchema<
   TMessage extends TSchema,
   TModel extends TSchema,
+  TWebSearchProvider extends TSchema,
   TFallbacks extends TSchema,
   TToolsAllow extends TSchema,
   TThinking extends TSchema,
@@ -20,6 +21,7 @@ export function cronAgentTurnPayloadSchema<
 >(params: {
   message: TMessage;
   model: TModel;
+  webSearchProvider: TWebSearchProvider;
   fallbacks: TFallbacks;
   toolsAllow: TToolsAllow;
   thinking: TThinking;
@@ -29,6 +31,7 @@ export function cronAgentTurnPayloadSchema<
     kind: Type.Literal("agentTurn"),
     message: params.message,
     model: Type.Optional(params.model),
+    webSearchProvider: Type.Optional(params.webSearchProvider),
     fallbacks: Type.Optional(params.fallbacks),
     thinking: Type.Optional(params.thinking),
     timeoutSeconds: Type.Optional(params.timeoutSeconds),

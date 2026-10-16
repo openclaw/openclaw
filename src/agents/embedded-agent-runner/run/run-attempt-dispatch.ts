@@ -438,6 +438,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     preparedModelRuntime: runInput.preparedModelRuntime,
     config: params.config,
     toolOverrides: params.toolOverrides,
+    webSearchProvider: params.webSearchProvider,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     ...(attemptContextEngine
       ? {
