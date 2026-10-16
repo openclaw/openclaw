@@ -3,7 +3,7 @@ import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../lib/pr
 import { listen } from "../../lib/reactive/listener.ts";
 
 /** Park immediately; reveal alongside the parent's next props unless explicitly previewing. */
-export function usePanePresentation(source: () => PresentationValue, revealOnOwnerEvent = false) {
+export function usePanePresentation(source: () => PresentationValue) {
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   // The presentation owner emits DOM events independently of parent props.
   createEffect(source, (binding) => {
@@ -11,7 +11,7 @@ export function usePanePresentation(source: () => PresentationValue, revealOnOwn
       return undefined;
     }
     return listen(binding.owner, PRESENTATION_CHANGED_EVENT, () => {
-      if (revealOnOwnerEvent || !binding.isPresented() || binding.preview?.()) {
+      if (!binding.isPresented() || binding.preview?.()) {
         setRevision((value) => value + 1);
       }
     });
