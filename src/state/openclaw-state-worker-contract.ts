@@ -25,10 +25,6 @@ import type { ConfigHealthEntryBasis } from "../config/io.health-state.types.js"
 import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { CronStateWorkerOperations } from "../cron/store/worker-contract.js";
 import type {
-  RepositoryGitHubPublicationPendingQuery,
-  RepositoryGitHubPublicationStatusRow,
-} from "../gateway/github-repository-publication.kernel.js";
-import type {
   SessionGroupCatalogMutation,
   SessionGroupCatalogMutationResult,
 } from "../gateway/session-group-catalog.types.js";
@@ -46,7 +42,7 @@ import type {
 } from "../infra/update-run-interruption-contract.js";
 import type { UpdateRunWriteOperations } from "../infra/update-run-mutation.types.js";
 import type { UpdateRunReconciliationOperations } from "../infra/update-run-reconciliation.types.js";
-import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
+import type { PluginStateWriteOperations } from "../plugin-state/plugin-state-worker-contract.js";
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type {
@@ -93,7 +89,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
   TuiLastSessionWorkerOperations &
   SessionStateWorkerOperations &
   SessionUpstreamWorkerOperations &
-  PluginStateWorkerOperations &
+  PluginStateWriteOperations &
   UserPreferenceWorkerOperations &
   CronStateWorkerOperations &
   TranscriptReadOperations &
@@ -134,10 +130,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
         sessionEntryCurrentSource?: SessionEntryCurrentSource;
       };
       output: void;
-    };
-    "githubRepository.personalPending": {
-      input: RepositoryGitHubPublicationPendingQuery;
-      output: RepositoryGitHubPublicationStatusRow | undefined;
     };
     "agentProvenance.readBatch": {
       input: { agentIds: readonly string[] };
@@ -237,7 +229,7 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
       | keyof RestartLifecycleWorkerOperations
       | Extract<keyof OpenClawStateWorkerOperations, `deviceAuth.${string}`>
       | keyof CaptureWorkerOperations
-      | keyof PluginStateWorkerOperations
+      | keyof PluginStateWriteOperations
       | keyof WorktreeTemplateWorkerOperations
       | keyof OpenClawStateLeaseLifecycleOperations;
   }

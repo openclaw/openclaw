@@ -4,13 +4,12 @@ import {
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   pollProviderOperationJson,
   postJsonResponse,
-  resolveProviderHttpRequestConfig,
+  resolveProviderApiKeyHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -278,15 +277,20 @@ export function buildNovitaVideoGenerationProvider(): VideoGenerationProvider {
     async generateVideo(req) {
       const model = resolveModel(req);
       const body = buildBody(req, model);
-      const auth = await resolveApiKeyForProvider({
-        provider: "novita",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("Novita API key missing");
-      }
+      const providerConfig = req.cfg.models?.providers?.novita;
+      const configuredBase = normalizeOptionalString(providerConfig?.baseUrl)
+        ?.replace(/\/+$/, "")
+        .replace(/\/openai\/v1$/, "");
+      const { baseUrl, headers, allowPrivateNetwork, dispatcherPolicy } =
+        await resolveProviderApiKeyHttpRequestConfig({
+          req,
+          missingApiKeyMessage: "Novita API key missing",
+          baseUrl: configuredBase ?? DEFAULT_BASE_URL,
+          defaultBaseUrl: DEFAULT_BASE_URL,
+          provider: "novita",
+          capability: "video",
+          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+        });
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
         label: "Novita video generation",
@@ -295,23 +299,6 @@ export function buildNovitaVideoGenerationProvider(): VideoGenerationProvider {
         deadline,
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
       });
-      const providerConfig = req.cfg.models?.providers?.novita;
-      const configuredBase = normalizeOptionalString(providerConfig?.baseUrl)
-        ?.replace(/\/+$/, "")
-        .replace(/\/openai\/v1$/, "");
-      const { baseUrl, headers, allowPrivateNetwork, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: configuredBase ?? DEFAULT_BASE_URL,
-          defaultBaseUrl: DEFAULT_BASE_URL,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "novita",
-          capability: "video",
-          transport: "http",
-          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
-        });
       const endpoint = `/v3/async/${model}`;
       const submitted = await postJsonResponse({
         url: `${baseUrl}${endpoint}`,

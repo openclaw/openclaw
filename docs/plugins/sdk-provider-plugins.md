@@ -149,6 +149,13 @@ a saved policy is not proof that the running Gateway applied it.
 
 ## Submit JSON requests
 
+Bundled Bearer-key providers use `resolveProviderApiKeyHttpRequestConfig` from
+`openclaw/plugin-sdk/provider-http` to resolve current credentials and HTTP
+request policy together. Pass `req`, `provider`, `missingApiKeyMessage`, and the
+usual HTTP configuration options. JSON content type is the default; set
+`jsonContentType: false` for multipart or other non-JSON requests. Provider-specific
+endpoints, extra headers, and request overrides remain plugin-owned.
+
 Use `postJsonResponse` from `openclaw/plugin-sdk/provider-http` when a JSON POST
 returns a complete JSON response. It uses the guarded POST transport, checks the
 HTTP status, reads bounded JSON, and releases the transport before returning or

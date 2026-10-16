@@ -1,9 +1,9 @@
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
-  resolveProviderHttpRequestConfig,
+  resolveProviderApiKeyHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
   type postJsonRequest,
   type ProviderOperationRetryStage,
@@ -43,25 +43,14 @@ export async function resolveMinimaxMediaRequestConfig(params: {
   capability: "image" | "audio" | "video";
   baseUrl?: string;
 }) {
-  const auth = await resolveApiKeyForProvider({
-    provider: params.providerId,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    store: params.authStore,
-  });
-  if (!auth.apiKey) {
-    throw new Error("MiniMax API key missing");
-  }
-  return resolveProviderHttpRequestConfig({
+  return resolveProviderApiKeyHttpRequestConfig({
+    req: params,
+    missingApiKeyMessage: "MiniMax API key missing",
+    jsonContentType: params.capability !== "audio",
     baseUrl: params.baseUrl ?? resolveMinimaxMediaBaseUrl(params.cfg, params.providerId),
     defaultBaseUrl: DEFAULT_MINIMAX_MEDIA_BASE_URL,
-    defaultHeaders: {
-      Authorization: `Bearer ${auth.apiKey}`,
-      ...(params.capability !== "audio" ? { "Content-Type": "application/json" } : {}),
-    },
     provider: params.providerId,
     capability: params.capability,
-    transport: "http",
     request: sanitizeConfiguredModelProviderRequest(
       params.cfg?.models?.providers?.[params.providerId]?.request,
     ),

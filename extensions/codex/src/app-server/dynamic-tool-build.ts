@@ -515,6 +515,9 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     params.pluginHarnessToolPolicyRestricted === true ||
     isCodexMemoryFlushRun(params) ||
     params.disableTools ||
+    // Strict one-shots need the host tool owner's joined process cleanup.
+    // Native command completion cannot certify retired descendant settlement.
+    params.oneShotCliRun === true ||
     // Codex's environment policy is a serialized overlay, not a launch binding.
     // Let the common host tools own credentials, approvals, and process lifetime.
     params.hostCapabilities.preparedEnvironment?.().hostExecutionRequired === true

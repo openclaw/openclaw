@@ -1,14 +1,17 @@
-import { html, nothing, render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import { settleToolBridges, renderToolCard } from "./chat-tool-render.test-support.ts";
-import { renderToolPreview } from "./widget-card.ts";
+import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { ToolPreview } from "./widget-card.ts";
 
 let container: HTMLDivElement | undefined;
 afterEach(() => {
+  cleanupSolid();
   if (container) {
-    render(nothing, container);
     container.remove();
     container = undefined;
   }
@@ -20,24 +23,27 @@ describe.runIf("__vitest_browser__" in globalThis)("narrow tool activity rows", 
     container.style.width = "220px";
     const step = "Verify the implementation and report the result. ".repeat(12).slice(0, 512);
     const options = { messageKey: "narrow", expanded: false, onToggleExpanded: vi.fn() };
-    render(
-      html`
-        ${renderToolCard(
-          {
-            id: "receipt",
-            name: "progress_card",
-            args: { plan: [{ step, status: "completed" }] },
-            completed: true,
-          },
-          options,
-        )}
-        ${renderToolCard(
-          { id: "yield", name: "yield", args: { message: step }, completed: true },
-          options,
-        )}
-      `,
-      container,
+    mountSolid(
+      () => (
+        <>
+          <ChatToolCard
+            card={{
+              id: "receipt",
+              name: "progress_card",
+              args: { plan: [{ step, status: "completed" }] },
+              completed: true,
+            }}
+            options={options}
+          />
+          <ChatToolCard
+            card={{ id: "yield", name: "yield", args: { message: step }, completed: true }}
+            options={options}
+          />
+        </>
+      ),
+      { container },
     );
+    flush();
 
     await settleToolBridges(container);
     const receipt = container.querySelector<HTMLElement>('[role="status"]')!;
@@ -69,21 +75,34 @@ describe.runIf("__vitest_browser__" in globalThis)("widget action placement", ()
       }
     };
     window.addEventListener("error", recordError);
-    const draw = () =>
-      render(
-        renderToolPreview(
-          {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            url: "about:blank",
-            sandbox: "strict",
-          },
-          "chat_message",
-          { rawText: "Widget details" },
-        ),
-        container!,
-      );
+    let redraw!: () => void;
+    mountSolid(
+      () => {
+        const [revision, setRevision] = createSignal(0);
+        redraw = () => setRevision((value) => value + 1);
+        return (
+          <ToolPreview
+            preview={{
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              url: "about:blank",
+              sandbox: "strict",
+            }}
+            surface="chat_message"
+            options={(() => {
+              revision();
+              return { rawText: "Widget details" };
+            })()}
+          />
+        );
+      },
+      { container },
+    );
+    const draw = () => {
+      redraw();
+      flush();
+    };
     let rerenderObserver: ResizeObserver | undefined;
     try {
       draw();

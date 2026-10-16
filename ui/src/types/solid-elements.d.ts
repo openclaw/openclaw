@@ -164,7 +164,6 @@ declare module "@solidjs/web" {
       };
       "openclaw-tooltip": HTMLAttributes<Tooltip> & {
         "prop:content"?: Tooltip["content"];
-        "prop:contentTemplate"?: Tooltip["contentTemplate"];
         "prop:describe"?: Tooltip["describe"];
         "prop:pointerThrough"?: Tooltip["pointerThrough"];
         "prop:openOnClick"?: Tooltip["openOnClick"];

@@ -355,7 +355,7 @@ extensions/google/embedding-batch.ts	3
 extensions/google/music-generation-provider.ts	1
 extensions/google/oauth-token-shared.ts	1
 extensions/google/provider-registration.ts	2
-extensions/google/realtime-voice-provider.ts	4
+extensions/google/realtime-voice-provider.ts	3
 extensions/google/transport-stream.ts	11
 extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
@@ -2586,7 +2586,6 @@ ui/src/components/terminal/terminal-controller-lifecycle.ts	1
 ui/src/components/terminal/terminal-panel-upload.ts	2
 ui/src/components/terminal/terminal-panel.ts	2
 ui/src/components/terminal/terminal-pending-actions.ts	1
-ui/src/components/web-awesome.ts	2
 ui/src/i18n/lib/translate.ts	1
 ui/src/lib/agents/display.ts	5
 ui/src/lib/board/gateway-provider.ts	2
@@ -2628,7 +2627,6 @@ ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-selection-popup.ts	1
 ui/src/pages/chat/components/chat-session-workspace.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	1
-ui/src/pages/chat/components/widget-card.ts	3
 ui/src/pages/chat/components/widget-export.ts	1
 ui/src/pages/chat/connect-error.ts	1
 ui/src/pages/chat/export.ts	1

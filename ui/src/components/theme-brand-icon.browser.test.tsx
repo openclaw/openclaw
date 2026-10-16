@@ -6,7 +6,6 @@ import {
   readAvatarGatewayContext,
   setAvatarGatewayOrigin,
 } from "../lib/identity-avatar-context.ts";
-import { LitContent } from "../lit/solid-content.tsx";
 import { SubagentActivity } from "../pages/chat/components/chat-subagent-activity.tsx";
 import { ChatWorkingIndicator } from "../pages/chat/components/chat-working-indicator.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
