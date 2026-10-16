@@ -51,7 +51,7 @@ describe("secret egress runtime diagnostics", () => {
             event: { kind: "forwarded", host: "example.com", substituted: false, reason: "bypass" },
             level: "debug",
           },
-          { event: { kind: "forwarded", host: "example.com", substituted: true }, level: "info" },
+          { event: { kind: "forwarded", host: "example.com", substituted: true }, level: "debug" },
           { event: { kind: "refused", host: "example.com", substituted: false }, level: "info" },
           {
             event: {

@@ -10,7 +10,6 @@ import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   CHROME_MCP_HANDSHAKE_TIMEOUT_MS,
   type ChromeMcpSession,
-  type ChromeMcpSessionFactory,
   type ChromeMcpSessionOwner,
   type NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
@@ -24,17 +23,12 @@ import { refreshChromeMcpCleanupProcess } from "./chrome-mcp-process.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 
 const log = createSubsystemLogger("browser").child("chrome-mcp");
-let sessionFactory: ChromeMcpSessionFactory | null = null;
-
-export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFactory | null): void {
-  sessionFactory = factory;
-}
-
-async function createRealSession(
+// Publish the handle synchronously; only the owned transport's handshake is asynchronous.
+export function createChromeMcpSession(
   owner: ChromeMcpSessionOwner,
   profileName: string,
   options: NormalizedChromeMcpProfileOptions,
-): Promise<ChromeMcpSession> {
+): ChromeMcpSession {
   const transport = new StdioClientTransport({
     command: options.command,
     args: options.args,
@@ -145,7 +139,7 @@ export async function waitForChromeMcpReady(
   );
 }
 
-export async function waitForChromeMcpOperation<T>(
+async function waitForChromeMcpOperation<T>(
   pending: Promise<T>,
   signal?: AbortSignal,
   timeout?: { ms: number; error: () => Error; unref?: boolean },
@@ -172,42 +166,4 @@ export async function waitForChromeMcpOperation<T>(
       },
     },
   );
-}
-
-export function createChromeMcpSession(
-  owner: ChromeMcpSessionOwner,
-  profileName: string,
-  options: NormalizedChromeMcpProfileOptions,
-  signal?: AbortSignal,
-): { promise: Promise<ChromeMcpSession>; cleanup: Promise<void> } {
-  const created = sessionFactory
-    ? sessionFactory(profileName, options)
-    : createRealSession(owner, profileName, options);
-  let adopted = false;
-  let closePromise: Promise<void> | undefined;
-  const closeCreated = async (session: ChromeMcpSession) => {
-    closePromise ??= owner.close(session);
-    await closePromise;
-  };
-  const promise = (async () => {
-    const session = await waitForChromeMcpOperation(created, signal);
-    if (signal?.aborted) {
-      await closeCreated(session);
-      throw signal.reason ?? new Error("aborted");
-    }
-    adopted = true;
-    return session;
-  })();
-  const cleanup = (async () => {
-    await promise.catch(() => {});
-    if (adopted) {
-      return;
-    }
-    const session = await created.catch(() => null);
-    if (session) {
-      await closeCreated(session);
-    }
-  })();
-  void cleanup.catch(() => {});
-  return { promise, cleanup };
 }

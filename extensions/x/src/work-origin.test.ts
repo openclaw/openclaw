@@ -3,7 +3,7 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { xPlugin } from "./channel.js";
 import { client, config, fixture, post } from "./test-support/monitor-fixture.js";
-import { openXWorkOrigins, registerXWorkOriginGuidance, type XWorkOrigin } from "./work-origin.js";
+import { openXWorkOrigins, registerXWorkOriginGuidance } from "./work-origin.js";
 
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
@@ -12,7 +12,7 @@ vi.mock("./client.js", async (importOriginal) => ({
 }));
 
 const child = "agent:maintainer:work:example";
-const origin: XWorkOrigin = {
+const origin: Parameters<ReturnType<typeof openXWorkOrigins>["registerIfAbsent"]>[1] = {
   accountId: "default",
   postId: "501",
   postUrl: "https://x.com/config_maintainer/status/501",
@@ -21,7 +21,7 @@ const origin: XWorkOrigin = {
   senderTier: "maintainer",
 };
 const expectedGuidance =
-  'This session was started from an X post by @config_maintainer: https://x.com/config_maintainer/status/501. Replies to X are manual. Never post to X on your own. When you have a result worth sharing (finding, fix, PR, or a clear "can\'t reproduce"), draft a reply of at most 280 characters with the key result and any PR link, show it to the user, and ask whether to post it. Post only after the user explicitly says so in this session, using the message tool with channel "x" and that post URL as the target. If the user has not answered, remind them once at the end of your final summary.';
+  'X origin: @config_maintainer https://x.com/config_maintainer/status/501\nReplies are manual: draft ≤280 characters with the result and any PR link; show the user and ask. Post only after explicit approval in this session. Use tool message: {action:"send", channel:"x", target:"https://x.com/config_maintainer/status/501", accountId:"default", message:"<approved reply>"}. If unanswered, remind once at the end of your final summary.';
 
 beforeEach(() => client.getXApi.mockReset());
 afterEach(() => clearRuntimeConfigSnapshot());
@@ -40,7 +40,7 @@ describe("X work-session origin", () => {
       ctx: { sessionKey?: string },
     ) => Promise<{ appendSystemContext: string } | undefined>;
     expect(await handler({ prompt: "first task", messages: [] }, { sessionKey: child })).toEqual({
-      appendSystemContext: `${expectedGuidance}\nUse accountId "default" for that message-tool reply.`,
+      appendSystemContext: expectedGuidance,
     });
     expect(
       await handler(
@@ -48,7 +48,7 @@ describe("X work-session origin", () => {
         { sessionKey: child },
       ),
     ).toEqual({
-      appendSystemContext: `${expectedGuidance}\nUse accountId "default" for that message-tool reply.`,
+      appendSystemContext: expectedGuidance,
     });
     expect(
       await handler({ prompt: "hello", messages: [] }, { sessionKey: "unrelated" }),

@@ -16,16 +16,6 @@ public struct OpenClawNativeStateError: Error, LocalizedError, Sendable {
     }
 }
 
-public struct OpenClawNativeStateConfigValue: Equatable, Sendable {
-    public let value: String
-    public let updatedAtMilliseconds: Int64
-
-    public init(value: String, updatedAtMilliseconds: Int64) {
-        self.value = value
-        self.updatedAtMilliseconds = updatedAtMilliseconds
-    }
-}
-
 public enum OpenClawNativeStateCanonicalTable: Sendable {
     case deviceAuthTokens
     case deviceIdentities
@@ -51,7 +41,7 @@ public enum OpenClawNativeStateSQLiteValueType: Equatable, Sendable {
 public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION for backend-owned native surfaces.
     // Device credentials have a separate, exact table contract. Native clients never upgrade this database.
-    private static let maximumSupportedSchemaVersion: Int64 = 22
+    private static let maximumSupportedSchemaVersion: Int64 = 24
     private static let defaultBusyTimeoutMilliseconds: Int32 = 5000
 
     private struct SchemaObject: Hashable {
@@ -217,7 +207,6 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     private let readOnly: Bool
     private let admission: OpenClawNativeStateAdmission
     private let databaseIdentity: OpenClawNativeStateAdmission.DatabaseIdentity
-    private var admittedConfigMachineStateAvailable: Bool?
     fileprivate let database: OpaquePointer
     fileprivate let connectionLock = NSRecursiveLock()
 
@@ -236,7 +225,8 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         var database: OpaquePointer?
         let flags = (readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE) | SQLITE_OPEN_FULLMUTEX
             | (createIfMissing && !readOnly ? SQLITE_OPEN_CREATE : 0)
-        let result = sqlite3_open_v2(databaseURL.path, &database, flags, nil)
+        let vfsName = readOnly ? try OpenClawNativeStateReadOnlyVFS.name() : nil
+        let result = sqlite3_open_v2(databaseURL.path, &database, flags, vfsName)
         guard result == SQLITE_OK, let database else {
             let detail = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown SQLite error"
             if let database { sqlite3_close(database) }
@@ -261,7 +251,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         try self.admission.assertAvailable()
         try self.assertCurrentDatabase()
         if readOnly {
-            self.admittedConfigMachineStateAvailable = try self.admitReadOnlySchema()
+            try self.admitReadOnlySchema()
         } else {
             try Self.secureDatabaseFiles(databaseURL)
         }
@@ -345,26 +335,6 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             if newerSchema {
                 try self.validateDeviceCredentialContract(descriptor)
             }
-        }
-    }
-
-    /// Uses the read-only handle's admitted schema; core remains the value writer.
-    public func configMachineStateValue(key: String) throws -> OpenClawNativeStateConfigValue? {
-        try self.withCurrentDatabase {
-            guard let available = self.admittedConfigMachineStateAvailable else {
-                throw OpenClawNativeStateError("Config machine-state reads require a read-only database handle")
-            }
-            guard available else { return nil }
-            let query = try self.prepare(
-                "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = ? LIMIT 1")
-            try query.bindText(key, at: 1)
-            guard try query.step() == .row else { return nil }
-            guard query.valueType(at: 1) == .integer else {
-                throw OpenClawNativeStateError("Config machine-state timestamp must be an integer")
-            }
-            return try OpenClawNativeStateConfigValue(
-                value: query.requiredText(at: 0, field: "config machine-state value"),
-                updatedAtMilliseconds: query.int64(at: 1))
         }
     }
 
@@ -478,14 +448,14 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         }
     }
 
-    private func admitReadOnlySchema() throws -> Bool {
+    private func admitReadOnlySchema() throws {
         let version = try self.scalarInt64("PRAGMA user_version")
         guard version <= Self.maximumSupportedSchemaVersion else {
             throw OpenClawNativeStateError("The shared state database requires a newer OpenClaw app")
         }
         if version == 0 {
             try self.validateVersionZeroOwnership()
-            return false
+            return
         }
         try self.validateSharedDatabaseMetadata(userVersion: version)
         let available = try self.schemaObjectExists(type: "table", name: "config_machine_state")
@@ -493,7 +463,6 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         guard available || (1...5).contains(version) else {
             throw OpenClawNativeStateError("The shared state database is missing config_machine_state")
         }
-        return available
     }
 
     private func validateVersionZeroOwnership() throws {

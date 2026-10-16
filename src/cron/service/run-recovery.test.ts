@@ -144,49 +144,70 @@ async function record(
 }
 
 describe("worker-owned startup recovery", () => {
-  it("records an interrupted one-shot durably and never replays its uncertain payload", async () => {
-    const entry = job("one-shot", { schedule: { kind: "at", at: new Date(now).toISOString() } });
-    const store = await recoveryStore([entry]);
-    await activateManual(store, entry, "acknowledged-manual-run");
-    const runCommandJob = vi.fn();
-    const onEvent = vi.fn();
-    const state = createCronServiceState({
-      scheduler: createTestGatewayScheduler(),
-      storePath: store.storePath,
-      cronEnabled: true,
-      nowMs: () => now + 1_000,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(),
-      runCommandJob,
-      onEvent,
-    });
-    try {
-      await start(state);
-      expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
-        enabled: false,
-        state: { lastRunStatus: "error", lastError: "cron: job interrupted by gateway restart" },
+  it.each(["at", "every"] as const)(
+    "records an interrupted %s run without counting a failure or replaying its uncertain payload",
+    async (kind) => {
+      const entry = job("interrupted", {
+        schedule:
+          kind === "at"
+            ? { kind: "at", at: new Date(now).toISOString() }
+            : { kind: "every", everyMs: 60_000, anchorMs: now },
+        state: { nextRunAtMs: now, consecutiveErrors: 9 },
+        failureAlert: { after: 1, cooldownMs: 0 },
       });
-      expect(await store.history()).toMatchObject([
-        {
-          runId: "acknowledged-manual-run",
-          status: "error",
-          deliveryStatus: "unknown",
-        },
-      ]);
-      expect(runCommandJob).not.toHaveBeenCalled();
-      expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(1);
-      stop(state);
-      await state.schedulerDrain;
-      await start(state);
-      expect(await store.history()).toHaveLength(1);
-      expect(runCommandJob).not.toHaveBeenCalled();
-    } finally {
-      stop(state);
-      await state.schedulerDrain;
-    }
-  });
+      const store = await recoveryStore([entry]);
+      await activateManual(store, entry, "acknowledged-manual-run");
+      const runCommandJob = vi.fn();
+      const onEvent = vi.fn();
+      const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
+        storePath: store.storePath,
+        cronEnabled: true,
+        nowMs: () => now + 1_000,
+        log: logger,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(),
+        runCommandJob,
+        onEvent,
+      });
+      try {
+        await start(state);
+        expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
+          enabled: kind !== "at",
+          state: {
+            lastRunStatus: "error",
+            lastError: "cron: job interrupted by gateway restart",
+            consecutiveErrors: 9,
+            lastFailureNotificationDeliveryStatus: "not-requested",
+          },
+        });
+        expect(await store.history()).toMatchObject([
+          {
+            runId: "acknowledged-manual-run",
+            status: "error",
+            deliveryStatus: "unknown",
+          },
+        ]);
+        const recovered = (await loadCronStore(store.storePath)).jobs[0]!;
+        expect(recovered.state.nextRunAtMs).toBe(kind === "at" ? undefined : now + 3_601_000);
+        expect(recovered.state.autoDisabled).toBeUndefined();
+        expect(recovered.state.failureAlertIncident).toBeUndefined();
+        expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(runCommandJob).not.toHaveBeenCalled();
+        expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(1);
+        stop(state);
+        await state.schedulerDrain;
+        await start(state);
+        expect(await store.history()).toHaveLength(1);
+        expect(runCommandJob).not.toHaveBeenCalled();
+      } finally {
+        stop(state);
+        await state.schedulerDrain;
+      }
+    },
+  );
 
   it("finishes an existing legacy history row while preserving the acknowledged public ID", async () => {
     const entry = job("legacy-active");

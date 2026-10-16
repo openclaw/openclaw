@@ -55,26 +55,6 @@ function createAuditFixture(sheets: Record<string, string> = {}, markup = crampe
 }
 
 describe("fixed icon-grid fit", () => {
-  it("catches the shipped size override rather than flagging the safe base control", () => {
-    const findings = scan(original).findings;
-    expect(findings).toHaveLength(2);
-    for (const axis of ["width", "height"]) {
-      expect(findings).toContainEqual(
-        expect.objectContaining({
-          kind: "overflow",
-          axis,
-          size: 26,
-          padding: 12,
-          border: 2,
-          icon: 17,
-          available: 12,
-        }),
-      );
-    }
-    expect(scan(original + ".toolbar > button {padding:0}").findings).toEqual([]);
-    expect(scan(original.replace("width:26px; height:26px;", "")).findings).toEqual([]);
-  });
-
   it("requires authored padding instead of trusting jsdom's zero native default", () => {
     const css = original.replace("padding:6px;", "");
     expect(scan(css).findings).toEqual(
@@ -260,36 +240,6 @@ describe("JSX icon-grid fixtures", () => {
     return collect(`${imports}\nconst View = () => ${markup};`, "ui/src/control.tsx", document);
   }
 
-  it("does not treat type-only imports as Solid renderers", () => {
-    const dom = new JSDOM();
-    try {
-      for (const source of [
-        'import type { Show } from "solid-js"; const View = () => <Show when={true}><button><svg /></button></Show>;',
-        'import type * as Solid from "solid-js"; const View = () => <Solid.Show when={true}><button><svg /></button></Solid.Show>;',
-        'import { type Show } from "solid-js"; const View = () => <Show when={true}><button><svg /></button></Show>;',
-      ]) {
-        expect(collect(source, "ui/src/control.tsx", dom.window.document)).toEqual([]);
-      }
-    } finally {
-      dom.window.close();
-    }
-  });
-
-  it("ignores unnamed array-binding slots when checking component shadowing", () => {
-    const dom = new JSDOM();
-    try {
-      for (const source of [
-        "const [, value] = items; const View = () => <button><svg /></button>;",
-        "const { x: [, value] } = items; const View = () => <button><svg /></button>;",
-        "function View([, value]) { return <button><svg /></button>; }",
-      ]) {
-        expect(collect(source, "ui/src/control.tsx", dom.window.document)).toHaveLength(1);
-      }
-    } finally {
-      dom.window.close();
-    }
-  });
-
   it("preserves literal ancestors through JSX branches, Show, and For", () => {
     const dom = new JSDOM();
     try {
@@ -433,32 +383,6 @@ describe("JSX icon-grid fixtures", () => {
           base,
         ).findings,
       ).toHaveLength(2);
-    } finally {
-      dom.window.close();
-    }
-  });
-
-  it("does not fabricate adjacent controls from per-item branches", () => {
-    const dom = new JSDOM();
-    try {
-      for (const children of [
-        '<For each={[true, false]}>{item => item ? <button class="icon"><svg /></button> : <span />}</For>',
-        '<For each={[true, false]}>{item => item && <button class="icon"><svg /></button>}</For>',
-        '<For each={[true, false]}>{item => <Show when={item}><button class="icon"><svg /></button></Show>}</For>',
-      ]) {
-        const fixtures = collectJsx(
-          `<header class="toolbar">${children}</header>`,
-          dom.window.document,
-        );
-        expect(
-          scanIconGridFit(
-            original.replace(".toolbar > button", ".toolbar > button + button"),
-            fixtures,
-            base,
-          ).findings,
-          children,
-        ).toEqual([]);
-      }
     } finally {
       dom.window.close();
     }

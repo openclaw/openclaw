@@ -10,7 +10,10 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
-import { protectCodexAppServerLiveThread } from "./client-runtime.js";
+import {
+  isCodexAppServerLiveThreadProtected,
+  protectCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import { resolveCodexAppServerClientInstanceId, type CodexAppServerClient } from "./client.js";
 import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -66,6 +69,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   const { context } = prompt;
   const { runtime, attemptTools } = context;
   const { connection, hookChannelId } = runtime;
+  const { bindingStore, bindingIdentity } = connection;
   const {
     appServer,
     params,
@@ -96,18 +100,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   // Cancellation still owes cleanup. Keep host/lineage authority until this
   // resource owner closes, without inheriting the foreground abort signal.
   const cleanupAuthority = connection.authority.withLiveness(() => {
-    params.hostCapabilities.assertActive();
+    CodexNativeProcessAuthority.assertCleanup(nativeProcessAuthority, params.hostCapabilities);
     if (nativeProcessAuthorityReleased) {
       throw new Error("Codex attempt cleanup authority has ended");
     }
   });
   const clearThreadBinding = () =>
-    clearCodexBindingForClient(
-      connection.bindingStore,
-      connection.bindingIdentity,
-      state.thread,
-      cleanupAuthority,
-    );
+    clearCodexBindingForClient(bindingStore, bindingIdentity, state.thread, cleanupAuthority);
   const releaseNativeProcessAuthority = () => {
     if (!nativeProcessAuthorityReleased) {
       nativeProcessAuthorityReleased = true;
@@ -229,9 +228,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       await operation();
     });
   let nativeSubagentMonitorSettlement: Promise<void> | undefined;
-  let nativeSubagentMonitorGeneration = 0;
   const unregisterNativeSubagentMonitor = async () => {
-    nativeSubagentMonitorGeneration += 1;
     const registration = state.nativeSubagentMonitor;
     state.nativeSubagentMonitor = undefined;
     if (registration) {
@@ -241,7 +238,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   };
   const registerNativeSubagentMonitor = async (parentThreadId: string) => {
     const requestCustody = params.hostCapabilities.captureRequestCustody?.();
-    const { client, thread, nativeHookRelay, turnRoute } = state;
+    const { client, thread, nativeHookRelay } = state;
     const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
     const storePath = params.sessionTarget?.storePath;
     const parent =
@@ -257,7 +254,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     try {
       await unregisterNativeSubagentMonitor();
       connection.assertCurrent();
-      const generation = ++nativeSubagentMonitorGeneration;
       const parentSession = parent?.entry;
       const historyOwner = createCodexNativeSubagentHistoryOwner({
         parentThreadId,
@@ -267,7 +263,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           : {}),
         binding: thread,
       });
-      const { bindingStore, bindingIdentity } = connection;
       const assertParentSessionCurrent = async () => {
         await parent?.assertCurrent();
       };
@@ -304,15 +299,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           submissionStore.assertCurrent();
         }
         thread.liveThreadOwnership?.assertCurrent();
-        if (
-          generation !== nativeSubagentMonitorGeneration ||
-          state.client !== client ||
-          state.thread !== thread ||
-          state.nativeHookRelay !== nativeHookRelay ||
-          state.turnRoute !== turnRoute
-        ) {
-          throw new Error("Codex native subagent registration was superseded during setup");
-        }
       };
       const retainModelSource = params.hostCapabilities.retainSourceAuthority;
       const modelSource = retainModelSource?.();
@@ -393,7 +379,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   let subscriptionSettlement:
     | { thread: CodexAppServerThreadLifecycleBinding; retained: boolean }
     | undefined;
-  const retainThreadSubscription = async (): Promise<boolean> => {
+  const retainThreadSubscription = async (afterConfirmedStop = false): Promise<boolean> => {
     const { client, thread } = state;
     if (subscriptionSettlement?.thread === thread) {
       return subscriptionSettlement.retained;
@@ -401,7 +387,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     if (!thread || thread.clientId !== resolveCodexAppServerClientInstanceId(client)) {
       return false;
     }
-    const { bindingStore, bindingIdentity } = connection;
+    const hasNativeRetentionAuthority = () =>
+      nativeProcessAuthority?.hasCurrentProcesses(client, thread.threadId) ||
+      (afterConfirmedStop && isCodexAppServerLiveThreadProtected(client, thread.threadId));
+    const unsettled = connection.terminalState.settledTurnStatus === undefined;
+    if (afterConfirmedStop && unsettled && !hasNativeRetentionAuthority()) {
+      return false;
+    }
     // Expired settlement cannot start optional retention or queue a row read.
     if (state.nativeSettlementExpired) {
       return false;
@@ -412,7 +404,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       }
       let publicationStarted = false;
       let pending: Promise<boolean> | undefined;
-      const publish = (rowFailure?: { error: unknown }) => {
+      const publish = () => {
         publicationStarted = true;
         if (
           state.nativeSettlementExpired ||
@@ -423,10 +415,9 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         }
         // Decide at publication, after lease and any row-admission wait.
         // Concrete native work may outlive the foreground row that created it.
-        if (!nativeProcessAuthority?.hasCurrentProcesses(client, thread.threadId)) {
-          if (rowFailure) {
-            throw rowFailure.error;
-          }
+        if (hasNativeRetentionAuthority()) {
+          cleanupAuthority.assertCurrent();
+        } else {
           params.hostCapabilities.assertActive();
           connection.assertCurrent();
         }
@@ -443,22 +434,22 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           ephemeralPolicy: thread.liveThreadEphemeralPolicy,
         });
       };
-      if (nativeProcessAuthority?.hasCurrentProcesses(client, thread.threadId)) {
-        publish();
-      } else {
-        try {
-          await connection.withCurrent(() => publish());
-        } catch (error) {
-          // A process admitted during the row wait can still own cleanup.
-          // Never replay an effect if reader release failed after publication.
-          if (publicationStarted) {
-            await pending;
-            throw error;
-          }
-          publish({ error });
+      try {
+        // Child protection is subscription custody, not session authority. Even
+        // after foreground cancellation, publish only under the original lineage.
+        await (hasNativeRetentionAuthority()
+          ? cleanupAuthority.withCurrent(publish)
+          : connection.withCurrent(publish));
+      } catch (error) {
+        if (publicationStarted || !hasNativeRetentionAuthority()) {
+          throw error;
         }
+        await cleanupAuthority.withCurrent(publish);
+      } finally {
+        // A reader-release failure after publication still owes its retention join.
+        await pending;
       }
-      return pending ? await pending : false;
+      return pending ?? false;
     });
     if (retained) {
       subscriptionSettlement = { thread, retained: true };
@@ -522,14 +513,12 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         );
       } finally {
         if (!retained) {
+          let bindingReleased = false;
           try {
-            const bindingReleased =
+            bindingReleased =
               !isIncognitoSessionKey(params.sessionKey) || (await clearThreadBinding());
-            if (bindingReleased) {
-              await releaseThreadSubscription();
-            }
           } finally {
-            if (thread.liveThreadOwnership) {
+            if (bindingReleased || thread.liveThreadOwnership) {
               await releaseThreadSubscription();
             }
           }

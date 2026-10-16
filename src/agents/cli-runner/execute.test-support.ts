@@ -5,7 +5,6 @@ import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { withTestRunAdmission } from "../admitted-run-context.test-support.js";
 import { executeDeps } from "./execute-deps.js";
 import type { PreparedCliRunContext } from "./types.js";
-export { buildCliExecLogLine } from "./execute-logging.js";
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];

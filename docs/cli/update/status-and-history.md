@@ -105,6 +105,9 @@ ledger after the last repair pass. Completed obligations leave the final summary
 and persisted warning steps; pending obligations keep their retry command.
 If the ledger cannot be read, the summary retains the warnings. Messages already
 printed during an earlier phase can remain in the terminal scrollback.
+Repeated warnings appear once in the final report. If update Doctor deferred
+agent database path repair to preserve the rollback inventory, its warning points
+to `openclaw doctor --fix` without telling you to wait for the completed update.
 
 When the Gateway is reachable, status also reads its recorded channel warnings
 without checking channel services. JSON exposes these as `channelIssues`. This
@@ -352,6 +355,11 @@ campaign independently of checkout discovery. Installation details can arrive
 later; reading status does not start scheduling or clear an active campaign. If
 the update channel cannot be resolved, `schedule` remains absent rather than
 claiming the scheduler is idle.
+
+A recent cached check can skip another registry lookup, but still publishes the
+installation details already discovered at startup. A current package install
+therefore shows **Up to date** in Settings → Updates even when automatic updates
+are off. Missing installation details do not imply that the install is current.
 
 When a history request needs a read-only snapshot, the Gateway prepares it
 asynchronously so other requests can continue. The snapshot preserves the source

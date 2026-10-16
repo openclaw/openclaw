@@ -11,6 +11,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
   }
 
   return {
+    sqliteVector: runtimeProcessEntrypoint("infra/database-engine/sqlite-vector.child"),
     postgresBridge: runtimeProcessEntrypoint("infra/postgres-sync/bridge.worker"),
     secretEgressProxy: runtimeProcessEntrypoint("secrets/egress-proxy/proxy.worker"),
     codeModeNode: runtimeProcessEntrypoint("agents/code-mode-node.worker"),

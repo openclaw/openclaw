@@ -87,6 +87,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "package.json",
   "pnpm-lock.yaml",
   "tsconfig.json",
+  "tsconfig.packages.json",
   "scripts/tsdown-build.mts",
   "scripts/build-all.mts",
   "scripts/lib/build-artifact-cache.mts",
@@ -771,7 +772,7 @@ function tsdownBuildUsage() {
   ].join("\n");
 }
 
-export function parseTsdownBuildArgs(argv: string[]) {
+function parseTsdownBuildArgs(argv: string[]) {
   if (argv.includes("--help") || argv.includes("-h")) {
     return {
       forwardedArgs: [],

@@ -1,24 +1,21 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { coerceErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   WorkerProviderError,
   type WorkerLeaseStatus,
   type WorkerProfile,
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
-import { resolveCrabboxBinary } from "./crabbox-binary.js";
-import { ensureManagedCrabboxBinary, type CrabboxBinary } from "./crabbox-managed-binary.js";
 import { runCrabboxProcess } from "./crabbox-process.js";
 import {
   type CrabboxCommandRunner,
   type LeaseCommandContext,
-  runCrabboxCommandWithCoordinatorRetry,
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import type { ParsedInspect } from "./crabbox-worker-inspect.js";
+import { prepareCrabboxCaptureLifetime } from "./crabbox-worker-lifetime.js";
 import { createCrabboxMachineOptionsResolver } from "./crabbox-worker-machine-options.js";
 import { collectCrabboxNodeEnrollmentEvidence } from "./crabbox-worker-node-enrollment-diagnostics.js";
 import {
@@ -46,6 +43,7 @@ import {
   prepareCrabboxProjectFiles,
   prepareCrabboxWorkerRuntime,
 } from "./crabbox-worker-project.js";
+import { createCrabboxWorkerBinaryResolver } from "./crabbox-worker-provider-binary.js";
 import {
   createCrabboxProvisionAuthority,
   failProvisionAfterCleanup,
@@ -111,66 +109,20 @@ export function createCrabboxWorkerProvider(
     dependencies.sleep ?? ((milliseconds, signal) => delay(milliseconds, undefined, { signal }));
   const openclawRoot = dependencies.openclawRoot ?? process.cwd();
   const heartbeats = createCrabboxHeartbeatManager({
-    run: (context, signal) =>
-      runCrabboxCommandWithCoordinatorRetry({
-        action: "heartbeat",
-        args: [
-          "heartbeat",
-          "--provider",
-          context.provider,
-          "--id",
-          context.id,
-          "--idle-timeout",
-          context.idleTimeout,
-          "--json",
-        ],
-        binary: context.binary,
-        runCommand,
-        sleep,
-        signal,
-        timeoutMs: context.heartbeatTimeoutMs,
-      }),
+    runCommand,
+    sleep,
     warn,
   });
   const providerAbort = new AbortController();
-  const binaries = new Map<string, Promise<CrabboxBinary>>();
-  let defaultCandidate: string | undefined;
-  const resolveBinary = async (explicit?: string, signal?: AbortSignal): Promise<CrabboxBinary> => {
-    signal?.throwIfAborted();
-    const candidate =
-      explicit ??
-      (defaultCandidate ??= resolveCrabboxBinary({
-        isExecutable: dependencies.isExecutable,
-        openclawRoot,
-        pathEnv: dependencies.pathEnv ?? process.env.PATH,
-        platform: dependencies.platform,
-      }));
-    // Completed acquisition remains usable by lease cleanup after provider disposal.
-    let resolution = binaries.get(candidate);
-    if (!resolution) {
-      providerAbort.signal.throwIfAborted();
-      // Acquisition belongs to the provider; cancelling one waiter cannot cancel discovery.
-      resolution = ensureManagedCrabboxBinary({
-        binary: candidate,
-        runCommand,
-        signal: providerAbort.signal,
-      })
-        .then((resolved) => {
-          providerAbort.signal.throwIfAborted();
-          return resolved;
-        })
-        .catch((error: unknown) => {
-          binaries.delete(candidate);
-          throw error;
-        });
-      binaries.set(candidate, resolution);
-    }
-    const binary = await racePromiseWithAbortSignal(resolution, signal, ({ reason }) =>
-      toErrorObject(reason, "Crabbox acquisition aborted"),
-    );
-    signal?.throwIfAborted();
-    return binary;
-  };
+  const binaryResolver = createCrabboxWorkerBinaryResolver({
+    isExecutable: dependencies.isExecutable,
+    openclawRoot,
+    pathEnv: dependencies.pathEnv ?? process.env.PATH,
+    platform: dependencies.platform,
+    runCommand,
+    signal: providerAbort.signal,
+  });
+  const resolveBinary = binaryResolver.resolve;
   const machineOptions = createCrabboxMachineOptionsResolver({
     resolveBinary: async (...args) => (await resolveBinary(...args)).binary,
     runCommand,
@@ -181,6 +133,18 @@ export function createCrabboxWorkerProvider(
     runCommand,
     warn,
     policy: dependencies.warmImagePolicy,
+    prepareCapture: async (context) => {
+      heartbeats.start({ ...context.profile, ...context });
+      await prepareCrabboxCaptureLifetime(context, {
+        runCommand,
+        observe: (inspected) =>
+          heartbeats.start({
+            ...context.profile,
+            ...context,
+            lifetime: inspected.lifetime,
+          }),
+      });
+    },
   });
   let maintenanceInFlight: Promise<void> | undefined;
   const resolveMaintenanceBinaries = (
@@ -263,8 +227,11 @@ export function createCrabboxWorkerProvider(
     if (options?.project?.preparation && !project) {
       throw new WorkerProviderError("Crabbox prepared workers require warm images");
     }
-    const preparationSignal =
-      signal && project ? AbortSignal.any([signal, project.signal]) : (signal ?? project?.signal);
+    const preparationSignal = AbortSignal.any([
+      providerAbort.signal,
+      ...(signal ? [signal] : []),
+      ...(project?.signal ? [project.signal] : []),
+    ]);
     const allocation = await resolveAllocation(profile, operationId);
     signal?.throwIfAborted();
     const { binary, version: cliVersion } = await resolveBinary(parsed.binary, preparationSignal);
@@ -321,281 +288,299 @@ export function createCrabboxWorkerProvider(
         slug: operationSlug(operationId),
         timeoutMs: () => remainingProvisionTimeout(deadline, warmupTimeoutMs),
       });
-      let inspected: ParsedInspect | undefined;
+      let provisioned = false;
       try {
-        inspected = await inspectWithContext({
-          ...context,
-          id: leaseId,
-          runCommand,
-          sleep,
-          timeoutMs: remainingProvisionTimeout(
-            deadline,
-            resolveCrabboxLifecycleTimeoutMs(parsed.provider),
-          ),
-          waitForReady: parsed.provider === "machine0",
-          signal: preparationSignal,
-        });
-        signal?.throwIfAborted();
-      } catch (error) {
-        signal?.throwIfAborted();
-        // Transport failure after warmup is indeterminate; preserve the lease for durable replay.
-        if (error instanceof WorkerProviderError) {
-          return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
-        }
-        throw error;
-      }
-      if (!inspected) {
-        throw new Error("Crabbox warmup lease was not found during inspection");
-      }
-      const inspectedParams = {
-        ...context,
-        deadline,
-        inspect: inspected,
-        profile: parsed,
-        runCommand,
-        stopLease,
-        sleep,
-        signal: preparationSignal,
-        assertCurrent,
-      };
-      if (isNonRunnableState(inspected.state)) {
-        return await failProvisionAfterCleanup(
-          { ...inspectedParams, id: leaseId },
-          new WorkerProviderError(
-            `Crabbox warmup lease entered a terminal state${inspected.failureError ? `: ${inspected.failureError}` : ""}`,
-          ),
-        );
-      }
-      inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
-      inspectedParams.deadline = setupDeadline;
-      // The image key covers the exact setup script, so a fork already carries its results.
-      if (parsed.setup && allocationChoice.kind !== "checkpoint") {
-        await runProvisionSetup({
-          ...inspectedParams,
-          phase: "profile setup",
-          setup: parsed.setup,
-        });
-        // Setup may restart SSH; refresh its endpoint and security attestation before bootstrap.
-        inspectedParams.inspect = await waitForProvisionReady({
-          ...inspectedParams,
-          refresh: true,
-          sleep,
-        });
-      }
-      const desktop = await prepareProvisionDesktop({
-        ...inspectedParams,
-        wallpaperBase64,
-        prepareBeforeEnrollment: Boolean(project),
-      });
-      if (project?.preparation && (await warmImages.lookupLease(leaseId))?.phase === "enrolled") {
-        // An enrolled replay may have lost its response before core registration.
-        // Verify the preserved completion only; setup and capture remain closed.
+        let inspected: ParsedInspect | undefined;
         try {
-          await prepareCrabboxProjectFiles({
+          inspected = await inspectWithContext({
             ...context,
             id: leaseId,
-            project,
-            inspectPrepared: true,
             runCommand,
+            sleep,
+            timeoutMs: remainingProvisionTimeout(
+              deadline,
+              resolveCrabboxLifecycleTimeoutMs(parsed.provider),
+            ),
+            waitForReady: parsed.provider === "machine0",
             signal: preparationSignal,
-            timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
           });
-        } catch (error) {
-          preparationSignal?.throwIfAborted();
-          return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
-        }
-      }
-      let runtimePrepared = false;
-      let runtimeSetupFailed = false;
-      const prepareRuntime = async (scrubScript?: string) => {
-        await prepareCrabboxWorkerRuntime({
-          context: inspectedParams,
-          prepareNodeRuntime: options?.prepareNodeRuntime,
-          leaseId,
-          scrubScript,
-          preparationSignal,
-          assertCurrent,
-          onSetupFailure: () => {
-            runtimeSetupFailed = true;
-          },
-        });
-        runtimePrepared = true;
-        assertCurrent();
-      };
-      if (project && (await warmImages.lookupLease(leaseId))?.phase !== "enrolled") {
-        let captured: boolean | "source-running";
-        try {
-          const preparedProject = await prepareCrabboxProjectFiles({
-            ...context,
-            id: leaseId,
-            project,
-            runCommand,
-            signal: preparationSignal,
-            timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
-            recordRecipePreparation: (metadata) =>
-              warmImages.noteRecipePreparation(leaseId, metadata, () => {
-                preparationSignal?.throwIfAborted();
-                assertCurrent();
-              }),
-            setupSecrets: parsed.setupSecrets,
-            assertCurrent,
-          });
-          assertCurrent();
-          await warmImages.markPrepared(
-            leaseId,
-            project.baseCommit,
-            () => {
-              preparationSignal?.throwIfAborted();
-              assertCurrent();
-            },
-            preparedProject,
-          );
-          captured =
-            !parsed.warmImage || preparedProject?.captureSkipped
-              ? false
-              : await warmImages.capture(
-                  {
-                    ...context,
-                    id: leaseId,
-                    profile: parsed,
-                    cliVersion,
-                    signal: preparationSignal,
-                    assertCurrent,
-                    projectCaptureRequired:
-                      preparedProject?.captureRequired || preparedReplay ? true : undefined,
-                    projectCaptureReplay: preparedReplay ? true : undefined,
-                    ...(allocationChoice.kind === "checkpoint"
-                      ? { forkedCheckpointId: allocationChoice.checkpointId }
-                      : {}),
-                  },
-                  prepareRuntime,
-                );
-        } catch (error) {
-          // The runtime grant has a separate abort signal; revalidate the project owner.
           signal?.throwIfAborted();
-          assertCurrent();
-          if (runtimeSetupFailed) {
-            throw error;
+        } catch (error) {
+          signal?.throwIfAborted();
+          // Transport failure after warmup is indeterminate; preserve the lease for durable replay.
+          if (error instanceof WorkerProviderError) {
+            return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
           }
-          return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
+          throw error;
         }
-        // Only native capture can have restarted the source since preparation returned.
-        if (captured === true) {
+        if (!inspected) {
+          throw new Error("Crabbox warmup lease was not found during inspection");
+        }
+        // The provider owns idle protection as soon as allocation is known,
+        // including readiness, transfer, enrollment, and admitted capture.
+        heartbeats.start({
+          binary,
+          id: leaseId,
+          provider: parsed.provider,
+          heartbeatIntervalMs: parsed.heartbeatIntervalMs,
+          heartbeatTimeoutMs: parsed.heartbeatTimeoutMs,
+          idleTimeout: parsed.idleTimeout,
+          lifetime: inspected.lifetime,
+        });
+        const inspectedParams = {
+          ...context,
+          deadline,
+          inspect: inspected,
+          profile: parsed,
+          runCommand,
+          stopLease,
+          sleep,
+          signal: preparationSignal,
+          assertCurrent,
+        };
+        if (isNonRunnableState(inspected.state)) {
+          return await failProvisionAfterCleanup(
+            { ...inspectedParams, id: leaseId },
+            new WorkerProviderError(
+              `Crabbox warmup lease entered a terminal state${inspected.failureError ? `: ${inspected.failureError}` : ""}`,
+            ),
+          );
+        }
+        inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
+        inspectedParams.deadline = setupDeadline;
+        // The image key covers the exact setup script, so a fork already carries its results.
+        if (parsed.setup && allocationChoice.kind !== "checkpoint") {
+          await runProvisionSetup({
+            ...inspectedParams,
+            phase: "profile setup",
+            setup: parsed.setup,
+          });
+          // Setup may restart SSH; refresh its endpoint and security attestation before bootstrap.
           inspectedParams.inspect = await waitForProvisionReady({
             ...inspectedParams,
             refresh: true,
             sleep,
           });
         }
-      }
-      signal?.throwIfAborted();
-      const beginNodeEnrollment = options?.beginNodeEnrollment;
-      if (!beginNodeEnrollment) {
-        return await failProvisionAfterCleanup(
-          { ...inspectedParams, id: leaseId },
-          new Error("Crabbox worker node enrollment is unavailable"),
-        );
-      }
-      let enrollment: CrabboxWorkerNodeEnrollment;
-      try {
-        // A fork of an image captured for this exact runtime already holds it. Enrollment still
-        // verifies the runtime, and the node fetches a missing worker bundle from the Gateway.
-        const forkHasRuntime =
-          allocationChoice.kind === "checkpoint" &&
-          isDeepStrictEqual(
-            await warmImages.checkpointRuntimeIdentity(allocationChoice.checkpointId),
-            nodeRuntimeIdentity,
-          );
-        if (
-          options?.prepareNodeRuntime &&
-          !runtimePrepared &&
-          priorAllocation?.phase !== "enrolled" &&
-          !forkHasRuntime &&
-          (!project || allocationChoice.kind === "checkpoint")
-        ) {
-          await prepareRuntime();
-        }
-        enrollment = await beginNodeEnrollment();
-        signal?.throwIfAborted();
-      } catch (error) {
-        signal?.throwIfAborted();
-        if (runtimeSetupFailed) {
-          throw error;
-        }
-        if (error instanceof Error && error.name === "AbortError") {
-          throw error;
-        }
-        return await failProvisionAfterCleanup({ ...inspectedParams, id: leaseId }, error);
-      }
-      const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({
-        enrollment,
-        desktop: parsed.desktop,
-        desktopSetup: project ? undefined : desktop?.setup,
-        target: parsed.target,
-        leaseId,
-      });
-      const enrollmentSignal =
-        preparationSignal && enrollment.signal
-          ? AbortSignal.any([preparationSignal, enrollment.signal])
-          : (preparationSignal ?? enrollment.signal);
-      // These owned scripts do not restart SSH; authenticated enrollment proves node readiness.
-      await runProvisionSetup({
-        ...inspectedParams,
-        phase: "node enrollment setup",
-        signal: enrollmentSignal,
-        setup: nodeEnrollmentSetup.command,
-        // Combine the existing phase budgets; desktop work starts after node launch.
-        timeoutMs:
-          resolveCrabboxNodeEnrollmentTimeoutMs(enrollment.bootstrapTimeoutMs) +
-          (desktop && !project ? CRABBOX_SETUP_TIMEOUT_MS : 0),
-        forwardedEnv: nodeEnrollmentSetup.forwardedEnv,
-      });
-      let deviceId: string;
-      try {
-        deviceId = await enrollment.waitForDeviceId();
-        signal?.throwIfAborted();
-      } catch (error) {
-        signal?.throwIfAborted();
-        // Gateway shutdown cancels its wait, not the fixed operation-owned provider lease.
-        if (enrollment.signal?.aborted) {
-          throw error;
-        }
-        const leaseContext = { ...inspectedParams, id: leaseId };
-        // Read node evidence before cleanup destroys its only copy on the leased machine.
-        const evidence = await collectCrabboxNodeEnrollmentEvidence({
-          ...leaseContext,
-          target: parsed.target,
-          ...(enrollmentSignal ? { signal: enrollmentSignal } : {}),
+        const desktop = await prepareProvisionDesktop({
+          ...inspectedParams,
+          wallpaperBase64,
+          prepareBeforeEnrollment: Boolean(project),
         });
+        if (project?.preparation && (await warmImages.lookupLease(leaseId))?.phase === "enrolled") {
+          // An enrolled replay may have lost its response before core registration.
+          // Verify the preserved completion only; setup and capture remain closed.
+          try {
+            await prepareCrabboxProjectFiles({
+              ...context,
+              id: leaseId,
+              project,
+              inspectPrepared: true,
+              runCommand,
+              signal: preparationSignal,
+              timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
+            });
+          } catch (error) {
+            preparationSignal?.throwIfAborted();
+            return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
+          }
+        }
+        let runtimePrepared = false;
+        let runtimeSetupFailed = false;
+        const prepareRuntime = async () => {
+          const plan = await prepareCrabboxWorkerRuntime({
+            context: inspectedParams,
+            prepareNodeRuntime: options?.prepareNodeRuntime,
+            leaseId,
+            preparationSignal,
+            assertCurrent,
+            onSetupFailure: () => {
+              runtimeSetupFailed = true;
+            },
+          });
+          return {
+            timeoutMs: plan.timeoutMs,
+            run: async (scrubScript?: string) => {
+              await plan.run(scrubScript);
+              runtimePrepared = true;
+              assertCurrent();
+            },
+          };
+        };
+        if (project && (await warmImages.lookupLease(leaseId))?.phase !== "enrolled") {
+          let captured: boolean | "source-running";
+          try {
+            const preparedProject = await prepareCrabboxProjectFiles({
+              ...context,
+              id: leaseId,
+              project,
+              runCommand,
+              signal: preparationSignal,
+              timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
+              recordRecipePreparation: (metadata) =>
+                warmImages.noteRecipePreparation(leaseId, metadata, () => {
+                  preparationSignal?.throwIfAborted();
+                  assertCurrent();
+                }),
+              setupSecrets: parsed.setupSecrets,
+              assertCurrent,
+            });
+            assertCurrent();
+            await warmImages.markPrepared(
+              leaseId,
+              project.baseCommit,
+              () => {
+                preparationSignal?.throwIfAborted();
+                assertCurrent();
+              },
+              preparedProject,
+            );
+            captured =
+              !parsed.warmImage || preparedProject?.captureSkipped
+                ? false
+                : await warmImages.capture(
+                    {
+                      ...context,
+                      id: leaseId,
+                      profile: parsed,
+                      cliVersion,
+                      signal: preparationSignal,
+                      assertCurrent,
+                      projectCaptureRequired:
+                        preparedProject?.captureRequired || preparedReplay ? true : undefined,
+                      projectCaptureReplay: preparedReplay ? true : undefined,
+                      ...(allocationChoice.kind === "checkpoint"
+                        ? { forkedCheckpointId: allocationChoice.checkpointId }
+                        : {}),
+                    },
+                    prepareRuntime,
+                  );
+          } catch (error) {
+            // The runtime grant has a separate abort signal; revalidate the project owner.
+            signal?.throwIfAborted();
+            assertCurrent();
+            if (runtimeSetupFailed) {
+              throw error;
+            }
+            return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
+          }
+          // Only native capture can have restarted the source since preparation returned.
+          if (captured === true) {
+            inspectedParams.inspect = await waitForProvisionReady({
+              ...inspectedParams,
+              refresh: true,
+              sleep,
+            });
+          }
+        }
         signal?.throwIfAborted();
-        enrollment.signal?.throwIfAborted();
-        const message = error instanceof Error ? error.message : "Worker node enrollment failed";
-        return await failProvisionAfterCleanup(
-          leaseContext,
-          new Error(`${message}; ${evidence}`, { cause: error }),
-        );
-      }
-      if (parsed.warmImage) {
-        await warmImages.markEnrolled(leaseId, () => {
+        const beginNodeEnrollment = options?.beginNodeEnrollment;
+        if (!beginNodeEnrollment) {
+          return await failProvisionAfterCleanup(
+            { ...inspectedParams, id: leaseId },
+            new Error("Crabbox worker node enrollment is unavailable"),
+          );
+        }
+        let enrollment: CrabboxWorkerNodeEnrollment;
+        try {
+          // A fork of an image captured for this exact runtime already holds it. Enrollment still
+          // verifies the runtime, and the node fetches a missing worker bundle from the Gateway.
+          const forkHasRuntime =
+            allocationChoice.kind === "checkpoint" &&
+            isDeepStrictEqual(
+              await warmImages.checkpointRuntimeIdentity(allocationChoice.checkpointId),
+              nodeRuntimeIdentity,
+            );
+          if (
+            options?.prepareNodeRuntime &&
+            !runtimePrepared &&
+            priorAllocation?.phase !== "enrolled" &&
+            !forkHasRuntime &&
+            (!project || allocationChoice.kind === "checkpoint")
+          ) {
+            await (await prepareRuntime()).run();
+          }
+          enrollment = await beginNodeEnrollment();
+          signal?.throwIfAborted();
+        } catch (error) {
+          signal?.throwIfAborted();
+          if (runtimeSetupFailed) {
+            throw error;
+          }
+          if (error instanceof Error && error.name === "AbortError") {
+            throw error;
+          }
+          return await failProvisionAfterCleanup({ ...inspectedParams, id: leaseId }, error);
+        }
+        const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({
+          enrollment,
+          desktop: parsed.desktop,
+          desktopSetup: project ? undefined : desktop?.setup,
+          target: parsed.target,
+          leaseId,
+        });
+        const enrollmentSignal =
+          preparationSignal && enrollment.signal
+            ? AbortSignal.any([preparationSignal, enrollment.signal])
+            : (preparationSignal ?? enrollment.signal);
+        // These owned scripts do not restart SSH; authenticated enrollment proves node readiness.
+        await runProvisionSetup({
+          ...inspectedParams,
+          phase: "node enrollment setup",
+          signal: enrollmentSignal,
+          setup: nodeEnrollmentSetup.command,
+          // Combine the existing phase budgets; desktop work starts after node launch.
+          timeoutMs:
+            resolveCrabboxNodeEnrollmentTimeoutMs(enrollment.bootstrapTimeoutMs) +
+            (desktop && !project ? CRABBOX_SETUP_TIMEOUT_MS : 0),
+          forwardedEnv: nodeEnrollmentSetup.forwardedEnv,
+        });
+        let deviceId: string;
+        try {
+          deviceId = await enrollment.waitForDeviceId();
+          signal?.throwIfAborted();
+        } catch (error) {
+          signal?.throwIfAborted();
+          // Gateway shutdown cancels its wait, not the fixed operation-owned provider lease.
+          if (enrollment.signal?.aborted) {
+            throw error;
+          }
+          const leaseContext = { ...inspectedParams, id: leaseId };
+          // Read node evidence before cleanup destroys its only copy on the leased machine.
+          const evidence = await collectCrabboxNodeEnrollmentEvidence({
+            ...leaseContext,
+            target: parsed.target,
+            ...(enrollmentSignal ? { signal: enrollmentSignal } : {}),
+          });
           signal?.throwIfAborted();
           enrollment.signal?.throwIfAborted();
-        });
-        signal?.throwIfAborted();
-        enrollment.signal?.throwIfAborted();
+          const message = error instanceof Error ? error.message : "Worker node enrollment failed";
+          return await failProvisionAfterCleanup(
+            leaseContext,
+            new Error(`${message}; ${evidence}`, { cause: error }),
+          );
+        }
+        if (parsed.warmImage) {
+          await warmImages.markEnrolled(leaseId, () => {
+            signal?.throwIfAborted();
+            enrollment.signal?.throwIfAborted();
+          });
+          signal?.throwIfAborted();
+          enrollment.signal?.throwIfAborted();
+        }
+        provisioned = true;
+        return {
+          ...allocation,
+          node: { deviceId },
+          ...(desktop ? { desktop: desktop.endpoint } : {}),
+        };
+      } finally {
+        // Failed/cancelled preparation may retain a recoverable allocation, but
+        // its abandoned caller no longer owns background idle renewal.
+        if (!provisioned) {
+          await heartbeats.stop(leaseId);
+        }
       }
-      heartbeats.start({
-        binary,
-        heartbeatIntervalMs: parsed.heartbeatIntervalMs,
-        heartbeatTimeoutMs: parsed.heartbeatTimeoutMs,
-        id: leaseId,
-        idleTimeout: parsed.idleTimeout,
-        provider: parsed.provider,
-      });
-      return {
-        ...allocation,
-        node: { deviceId },
-        ...(desktop ? { desktop: desktop.endpoint } : {}),
-      };
     };
   };
 
@@ -610,7 +595,7 @@ export function createCrabboxWorkerProvider(
         heartbeats.dispose(),
         maintenanceInFlight?.catch(() => {}),
         snapshots.settle(),
-        Promise.allSettled(binaries.values()),
+        binaryResolver.settle(),
       ]);
     },
     images: snapshots.images,
@@ -682,14 +667,22 @@ export function createCrabboxWorkerProvider(
         return { status: "unknown" };
       }
       // `ready` is an SSH probe; every recognized nonterminal lease remains active.
-      heartbeats.start(context);
+      heartbeats.start({ ...context, lifetime: inspected.lifetime });
       return { status: "active", sharedHost: false };
     },
     async destroy(lease): Promise<void> {
       assertCrabboxLeaseId(lease.leaseId);
-      // Stop renewal before binary acquisition can delay or fail teardown.
-      await heartbeats.stop(lease.leaseId);
-      const { context, profile } = await resolveLeaseContext(lease);
+      // An admitted image capture still owns the source. Plain teardown fences
+      // renewal immediately; capture transfers it until the waiting stop below.
+      if (parseCrabboxCleanupProfile(lease.profile).warmImage === false) {
+        await heartbeats.stop(lease.leaseId);
+      }
+      const { context, profile } = await resolveLeaseContext(lease).catch(
+        async (error: unknown) => {
+          await heartbeats.stop(lease.leaseId);
+          throw error;
+        },
+      );
       const captureStarted = Promise.withResolvers<void>();
       let capturing = false;
       const teardown = (async () => {
@@ -703,6 +696,7 @@ export function createCrabboxWorkerProvider(
           if (captureProfile.warmImage) {
             await warmImages.capture({
               ...context,
+              signal: providerAbort.signal,
               profile: captureProfile,
               teardown: true,
               onCaptureStart: () => {

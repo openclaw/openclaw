@@ -3,7 +3,6 @@ import type { GatewayControlUiIngressFactoryV2 } from "openclaw/plugin-sdk/gatew
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { principalFactory } from "./grant-bindings.js";
 import { RelayError } from "./protocol.js";
 import type { RelayGrantAuthority, RelayState } from "./state.js";
 
@@ -13,7 +12,7 @@ type ConsentOptions = {
   revoke: (grantId: string) => Promise<unknown>;
   state: Pick<RelayState, "approveGrant" | "assertGrantCurrent">;
   scheduler: Pick<PluginServiceSchedulerV1, "now" | "signal">;
-  controlUiIngress?: GatewayControlUiIngressFactoryV2;
+  controlUiIngress: GatewayControlUiIngressFactoryV2;
   config: () => ReturnType<PluginRuntime["config"]["current"]>;
   requireReady: () => void;
 };
@@ -40,7 +39,7 @@ export class RelayConsent {
         "This Gateway requires a person-bound grant. Sign in and pair again from the Connected apps tab.",
       );
     }
-    const binding = await principalFactory(this.#options.controlUiIngress).bindPrincipal({
+    const binding = await this.#options.controlUiIngress.bindPrincipal({
       audienceId: `consent:${randomUUID()}`,
       principal: authority.principal,
       operatorScopeCeiling: authority.ceiling,

@@ -217,6 +217,8 @@ keep the existing synchronous fallback.
 
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
+    Sources with revocable per-event authority require `queue.enqueueAuthorized(id, payload, { assertCurrent, receivedAt?, laneKey?, metadata? })`. Its synchronous assertion is composed with the queue owner at transaction and final commit admission; the callback never crosses into stored JSON. The method is optional only for existing external queue implementations. A source requiring it must refuse when it is absent, not fall back to unguarded `enqueue`. Revoking one source does not retire the shared account queue.
+
     Host ingress queues provide `listUnsettled({ orderBy })`, returning `{ pending, claims }` from one snapshot in the shared-state broker, ordered with queue mutations. The shared drain uses this coherent view so a claim released during inspection cannot let a later event overtake its lane head. The method remains optional for existing external queue implementations until a separately announced compatibility window ends; only those implementations retain the separate `listPending`/`listClaims` path. A failed snapshot read never falls back to separate reads.
 
     Plugin-state leases were removed in 2026.8.1. Use plugin-scoped keyed stores (`openKeyedStoreV2`) for bounded durable state and their data-only commands for atomic database work.

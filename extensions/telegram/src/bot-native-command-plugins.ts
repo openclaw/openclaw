@@ -186,7 +186,6 @@ export async function executeTelegramPluginCommand(
   const progressResultText = deliverableResult.text;
   if (
     progressMessageId != null &&
-    dispatch.telegramDeps.editMessageTelegram &&
     typeof progressResultText === "string" &&
     progressResultText.trim().length > 0 &&
     (!renderable || editable)

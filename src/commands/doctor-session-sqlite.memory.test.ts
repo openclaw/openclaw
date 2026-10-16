@@ -10,6 +10,7 @@ import {
   createRuntimeProcessBuildEntries,
   runtimeProcessCoreEntrypoints,
 } from "../../scripts/lib/runtime-process-core-build-entries.mts";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sqliteImportMemorySupportUrl } from "./doctor-session-sqlite.memory.test-support.js";
 
@@ -59,7 +60,7 @@ it.each(["batch", "public"])(
   async (scenario) => {
     await withOpenClawTestState({ applyEnv: false, label: "import-memory" }, async (state) => {
       const { stdout } = await execFileAsync(
-        process.execPath,
+        resolveTestNodeExecPath(),
         ["--max-old-space-size=256", childPath, state.stateDir, scenario],
         {
           cwd: process.cwd(),

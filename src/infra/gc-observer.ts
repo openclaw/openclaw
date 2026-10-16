@@ -1,49 +1,78 @@
-import {
-  constants,
-  performance,
-  PerformanceObserver,
-  type PerformanceNodeEntry,
-} from "node:perf_hooks";
+import { GCProfiler } from "node:v8";
 
 export type GcSample = {
   kind: "scavenge" | "mark_sweep_compact" | "incremental" | "weak_processing";
+  reason:
+    | "none"
+    | "forced"
+    | "synchronous_phantom_processing"
+    | "all_available_garbage"
+    | "all_external_memory"
+    | "schedule_idle"
+    | "construct_retained"
+    | "other";
   durationMs: number;
 };
 
-const kinds: Readonly<Record<number, GcSample["kind"]>> = {
-  [constants.NODE_PERFORMANCE_GC_MINOR]: "scavenge",
-  [constants.NODE_PERFORMANCE_GC_MAJOR]: "mark_sweep_compact",
-  [constants.NODE_PERFORMANCE_GC_INCREMENTAL]: "incremental",
-  [constants.NODE_PERFORMANCE_GC_WEAKCB]: "weak_processing",
+const kinds: Readonly<Record<string, GcSample["kind"]>> = {
+  Scavenge: "scavenge",
+  MinorMarkSweep: "scavenge",
+  MarkSweepCompact: "mark_sweep_compact",
+  IncrementalMarking: "incremental",
+  ProcessWeakCallbacks: "weak_processing",
 };
 
-/** One observer per isolate owner; native batches travel together on worker ports. */
-export function observeGcSamples(publish: (samples: GcSample[]) => void): (() => void) | undefined {
-  if (!PerformanceObserver.supportedEntryTypes.includes("gc")) {
-    return undefined;
+const subscribers = new Set<(samples: GcSample[]) => void>();
+let profiler: GCProfiler | undefined;
+let timer: NodeJS.Timeout | undefined;
+
+function drain(restart: boolean): void {
+  const result = profiler?.stop();
+  if (restart) {
+    profiler?.start();
   }
-  const activatedAt = performance.now();
-  let active = true;
-  const observer = new PerformanceObserver((list) => {
-    if (!active) {
-      return;
+  const samples: GcSample[] = [];
+  for (const entry of result?.statistics ?? []) {
+    const kind = kinds[entry.gcType];
+    if (kind) {
+      // GCProfiler reports microseconds but does not expose callback flags.
+      samples.push({ kind, reason: "other", durationMs: entry.cost / 1000 });
     }
-    const samples: GcSample[] = [];
-    for (const entry of list.getEntries()) {
-      // SAFETY: This gc-only observer receives Node entries with detail; Node types are not discriminated.
-      const kind = kinds[(entry as PerformanceNodeEntry).detail.kind];
-      // A replacement observer can receive native entries queued before activation.
-      if (kind && entry.startTime >= activatedAt) {
-        samples.push({ kind, durationMs: entry.duration });
-      }
-    }
-    if (samples.length) {
+  }
+  if (samples.length) {
+    for (const publish of subscribers) {
       publish(samples);
     }
-  });
-  observer.observe({ entryTypes: ["gc"] });
+  }
+}
+
+/** One native sampler per isolate; never enqueue JavaScript in response to a GC. */
+export function observeGcSamples(publish: (samples: GcSample[]) => void): (() => void) | undefined {
+  if (typeof GCProfiler !== "function" || process.versions.bun) {
+    return undefined;
+  }
+  if (profiler) {
+    // Joining consumers must not receive collections preceding their activation.
+    drain(true);
+  } else {
+    profiler = new GCProfiler();
+    profiler.start();
+    // A per-GC PerformanceObserver wakes idle workers after every collection and
+    // can sustain a collection loop. Native profiling only wakes JS on this cadence.
+    timer = setInterval(() => drain(true), 1000).unref();
+  }
+  subscribers.add(publish);
   return () => {
-    active = false;
-    observer.disconnect();
+    if (!subscribers.has(publish)) {
+      return;
+    }
+    const last = subscribers.size === 1;
+    drain(!last);
+    subscribers.delete(publish);
+    if (last) {
+      clearInterval(timer);
+      timer = undefined;
+      profiler = undefined;
+    }
   };
 }

@@ -1,4 +1,3 @@
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -58,14 +57,7 @@ export async function withMessageInjectionAdmission<T>(
 ): Promise<T> {
   let consumed = false;
   const consumeSync = () => {
-    if (consumed) {
-      throw new Error("Message injection admission already consumed its input");
-    }
     const result = consume();
-    if (isPromiseLike(result)) {
-      void Promise.resolve(result).catch(() => {});
-      throw new Error("Message injection admission consumers must remain synchronous");
-    }
     consumed = true;
     return result;
   };
@@ -77,11 +69,7 @@ export async function withMessageInjectionAdmission<T>(
     return consumeSync();
   }
   try {
-    const result = await admission(consumeSync);
-    if (!consumed) {
-      throw new Error("Message injection admission did not consume its input");
-    }
-    return result;
+    return await admission(consumeSync);
   } catch (cause) {
     if (consumed) {
       throw new MessageInjectionAcceptedUnconfirmedError({ cause });

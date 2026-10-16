@@ -111,26 +111,19 @@ describe("formatErrorMessage", () => {
   it("retains aggregate branches, nested causes and codes once despite cycles", () => {
     const native = Object.assign(new Error("native close failed"), { code: "EIO" });
     const cleanup = new AggregateError([native, native, "second failure"], "cleanup failed");
-    const outer = new AggregateError([cleanup, native], "turn failed", {
-      cause: new Error("primary failure"),
-    });
+    const outer = Object.assign(
+      new AggregateError([cleanup, native], "turn failed", {
+        cause: new Error("primary failure"),
+      }),
+      { code: "REQUEST_FAILED" },
+    );
     native.cause = outer;
 
     expect(format(outer)).toBe(
       "turn failed | primary failure | cleanup failed | native close failed | EIO | second failure",
     );
-  });
-
-  it("walks and deduplicates Error cause chains while preserving codes", () => {
-    const root = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
-    const inner = new Error("request failed", { cause: root });
-    const outer = Object.assign(new Error("request failed", { cause: inner }), {
-      code: "REQUEST_FAILED",
-    });
-
-    expect(format(outer)).toBe("request failed | socket closed | ECONNRESET");
     expect(formatErrorMessage(outer, { includeCode: true, redact: keepText })).toBe(
-      "request failed | REQUEST_FAILED | socket closed | ECONNRESET",
+      "turn failed | REQUEST_FAILED | primary failure | cleanup failed | native close failed | EIO | second failure",
     );
   });
 

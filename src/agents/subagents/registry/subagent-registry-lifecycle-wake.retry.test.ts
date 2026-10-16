@@ -6,7 +6,11 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import { mockBlockedCompletionDeliveryOwner } from "./subagent-registry-lifecycle-completion.test-support.js";
-import { createLifecycleControllerFixture } from "./subagent-registry-lifecycle-controller.test-support.js";
+import {
+  createLifecycleControllerFixture,
+  createRunEntry,
+} from "./subagent-registry-lifecycle-controller.test-support.js";
+import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
 import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
@@ -35,12 +39,6 @@ vi.mock("./subagent-registry-requester-yield.js", () => ({
 vi.mock("./subagent-registry-lifecycle-delivery.js", () => ({
   refreshFrozenResultFromSession: vi.fn(),
 }));
-vi.mock("./subagent-registry-lifecycle-log.js", () => ({
-  buildSafeLifecycleErrorMeta: (error: unknown) => ({
-    message: error instanceof Error ? error.message : String(error),
-  }),
-  maskLifecycleIdentifier: () => "synthetic",
-}));
 vi.mock("../completion/subagent-completion-admission.store.js", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("../completion/subagent-completion-admission.store.js")
@@ -65,6 +63,108 @@ type WakeParams = Parameters<
 >[0];
 
 describe("requester settle retry lifetime", () => {
+  it.each([
+    { trigger: "descendant event", nextAttemptAt: undefined },
+    { trigger: "stale deadline", nextAttemptAt: undefined },
+    { trigger: "stale deadline", nextAttemptAt: 5_000 },
+  ] as const)(
+    "waits without repeated preparation or writes until $trigger (retry=$nextAttemptAt)",
+    async ({ trigger, nextAttemptAt }) => {
+      resetGatewayWorkAdmission();
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000);
+      const entry = createRunEntry({
+        endedAt: 4_000,
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          rearmGeneration: 1,
+          nextAttemptAt,
+        },
+      });
+      const beforeWrite = vi.fn();
+      const wake = vi.fn(async (params: WakeParams) => {
+        if (wake.mock.calls.length === 1) {
+          params.onDescendantsPending?.(trigger === "stale deadline" ? 310_000 : undefined);
+          return false;
+        }
+        await params.completeBatch([params.settledEntry], 1);
+        return true;
+      });
+      mockBlockedCompletionDeliveryOwner(completionDeliveryMocks);
+      const controller = createLifecycleControllerFixture(
+        { entry, beforeWrite, maybeWakeRequesterAfterAllChildrenSettled: wake },
+        { callGateway: vi.fn(), ownersByEntry: completionDeliveryMocks.ownersByEntry },
+      );
+      try {
+        controller.resumeRequesterSettleWake(entry.runId, entry);
+        await vi.waitFor(() => {
+          expect(wake).toHaveBeenCalledTimes(1);
+          expect(getActiveGatewayRootWorkCount()).toBe(0);
+        });
+        for (let sweep = 0; sweep < 5; sweep++) {
+          controller.resumeRequesterSettleWake(entry.runId, entry);
+          await vi.advanceTimersByTimeAsync(30_000);
+        }
+        expect(wake).toHaveBeenCalledTimes(1);
+        expect(beforeWrite).not.toHaveBeenCalled();
+        if (trigger === "descendant event") {
+          scheduleRequesterSettleWake(controller, entry.runId, entry, undefined, true);
+        } else {
+          await vi.advanceTimersByTimeAsync(150_000);
+        }
+        await vi.waitFor(() => {
+          expect(wake).toHaveBeenCalledTimes(2);
+          expect(controller.options.runs.get(entry.runId)?.requesterSettleWake).toBeUndefined();
+        });
+        expect(beforeWrite).toHaveBeenCalledTimes(1);
+      } finally {
+        controller.clearScheduledResumeTimers();
+        vi.useRealTimers();
+        resetGatewayWorkAdmission();
+      }
+    },
+  );
+
+  it("retains a descendant event arriving before an in-flight read records its wait", async () => {
+    resetGatewayWorkAdmission();
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      requesterSettleWake: { status: "pending", attemptCount: 0 },
+    });
+    let releaseRead: (() => void) | undefined;
+    const wake = vi.fn(async (params: WakeParams) => {
+      if (wake.mock.calls.length === 1) {
+        await new Promise<void>((resolve) => {
+          releaseRead = resolve;
+        });
+        params.onDescendantsPending?.();
+        return false;
+      }
+      await params.completeBatch([params.settledEntry]);
+      return true;
+    });
+    mockBlockedCompletionDeliveryOwner(completionDeliveryMocks);
+    const controller = createLifecycleControllerFixture(
+      { entry, maybeWakeRequesterAfterAllChildrenSettled: wake },
+      { callGateway: vi.fn(), ownersByEntry: completionDeliveryMocks.ownersByEntry },
+    );
+    try {
+      controller.resumeRequesterSettleWake(entry.runId, entry);
+      await vi.waitFor(() => expect(releaseRead).toBeTypeOf("function"));
+      scheduleRequesterSettleWake(controller, entry.runId, entry, undefined, true);
+      releaseRead?.();
+      await vi.waitFor(() => {
+        expect(wake).toHaveBeenCalledTimes(2);
+        expect(controller.options.runs.get(entry.runId)?.requesterSettleWake).toBeUndefined();
+      });
+    } finally {
+      releaseRead?.();
+      controller.clearScheduledResumeTimers();
+      resetGatewayWorkAdmission();
+    }
+  });
+
   it.each([
     { mode: "current entry", rejectCompletion: false },
     { mode: "replacement entry", rejectCompletion: false },
@@ -185,6 +285,11 @@ describe("requester settle retry lifetime", () => {
             progressOperationId: "retained-progress-receipt",
           },
         ]);
+        scheduleRequesterSettleWake(controller, entry.runId, entry, undefined, true);
+        expect(wake).toHaveBeenCalledTimes(1);
+        expect(controller.scheduledRequesterSettleWakeTimers.get(entry.runId)?.deadline).toBe(
+          11_000,
+        );
         await origin.drain();
         expect(origin.signal.aborted).toBe(true);
         const deliveryBeforeCompletion = structuredClone(runs.get(entry.runId)?.delivery);

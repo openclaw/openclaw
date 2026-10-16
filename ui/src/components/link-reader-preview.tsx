@@ -9,7 +9,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { parseGitHubLinkTarget } from "./github-link-target.ts";
+import { formatGitHubItemReference, parseGitHubLinkTarget } from "./github-link-target.ts";
 import { createPreviewRenderer } from "./link-reader-preview-root.ts";
 import { linkReaderAuthorHref, linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
@@ -231,7 +231,7 @@ const renderErrorContent = createPreviewRenderer<{ target: LinkReaderTarget; mes
       const current = item();
       return current
         ? t(current.kind === "pull" ? "linkReader.previewPullRequest" : "linkReader.previewIssue", {
-            number: String(current.number),
+            reference: formatGitHubItemReference(current),
           })
         : target().reader.label;
     };

@@ -1,8 +1,8 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
-import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
+  assistantMessageCanOwnTurnActions,
   assistantMessageIsInterrupted,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
@@ -20,7 +20,6 @@ import {
   chatItemStartsUserTurn,
   hasForwardedSource,
 } from "./chat-turn-boundary.ts";
-import { extractMessageMediaText } from "./components/chat-message-media.ts";
 
 type AgentRunFramePart =
   | MessageGroup
@@ -97,31 +96,15 @@ function frameKey(runId: string, boundaryId: string, segmentId: string | undefin
   return `agent-run:${JSON.stringify(segmentId ? [runId, boundaryId, segmentId] : [runId, boundaryId])}`;
 }
 
-function messageCanOwnCompletedFrame(message: unknown, explicitOnly: boolean): boolean {
-  const record = asRecord(message);
-  const phase = resolveAssistantReplyPhase(message);
-  const stopReason = record?.stopReason;
-  const metadata = asRecord(record?.["__openclaw"]);
-  if (
-    !(extractTextCached(message)?.trim() || extractMessageMediaText(message)) ||
-    assistantMessageIsInterrupted(message) ||
-    phase === "commentary" ||
-    stopReason === "toolUse" ||
-    stopReason === "error" ||
-    (metadata?.mirrorOrigin === "codex-app-server" && metadata.runTerminal !== true)
-  ) {
-    return false;
-  }
-  return !explicitOnly || phase === "final_answer" || stopReason === "stop";
-}
-
 function completedFrameActionOwner(
   parts: AgentRunFramePart[],
 ): MessageGroup["messages"][number] | null {
   const messages = parts
     .flatMap(chatItemGroups)
     .flatMap((group) => (group.role === "assistant" ? group.messages : []));
-  const explicit = messages.findLast(({ message }) => messageCanOwnCompletedFrame(message, true));
+  const explicit = messages.findLast(({ message }) =>
+    assistantMessageCanOwnTurnActions(message, true),
+  );
   if (explicit) {
     return explicit;
   }
@@ -130,7 +113,7 @@ function completedFrameActionOwner(
     return null;
   }
   const last = lastPart.messages.at(-1);
-  return last && messageCanOwnCompletedFrame(last.message, false) ? last : null;
+  return last && assistantMessageCanOwnTurnActions(last.message) ? last : null;
 }
 
 export function agentRunFrameActiveStatusParts(

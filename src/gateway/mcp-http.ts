@@ -172,14 +172,15 @@ async function startMcpLoopbackServer(
   const closeActiveSseResponses = (): void => {
     for (const res of activeSseResponses) {
       if (!res.destroyed && !res.writableEnded) {
-        const socket = res.socket;
         res.end();
-        socket?.end();
       }
     }
   };
 
   const httpServer = createHttpServer((req, res) => {
+    // Close after the complete response so pooled clients cannot race an idle timeout.
+    // Active JSON/SSE streams remain open until res.end().
+    res.setHeader("Connection", "close");
     const auth = validateMcpLoopbackRequest({
       req,
       res,

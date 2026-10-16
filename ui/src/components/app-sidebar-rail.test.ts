@@ -3,6 +3,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import * as toast from "../lib/toast.ts";
 import {
   createGatewayHarness,
@@ -14,6 +15,7 @@ import "../test-helpers/app-sidebar-suite.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import { dispatchMousePointer, settleTooltip } from "./tooltip.test-support.ts";
@@ -60,7 +62,7 @@ describe("personal navigation rail", () => {
       [...sidebar.querySelectorAll("[data-navigation-view]")].map((button) =>
         button.getAttribute("aria-label"),
       ),
-    ).toEqual(["Pages", "Sessions", "Online"]);
+    ).toEqual(["Pages", "Sessions", "Users"]);
     const frame = sidebar.querySelector("aside.sidebar")!;
     const bottom = sidebar.querySelector(".sidebar-rail__bottom")!;
     expect(bottom.querySelector(".sidebar-footer-bar__home")).not.toBeNull();
@@ -76,32 +78,7 @@ describe("personal navigation rail", () => {
     expect(sidebar.querySelector(".sidebar-rail__bottom")).toBe(bottom);
   });
 
-  it("keeps main activity visible on Home when the middle list is collapsed", async () => {
-    const { sidebar, result, sessions } = await fixture();
-    const mainIndex = result.sessions.findIndex((row) => row.key === "agent:main:main");
-    sessions.publishList({
-      agentId: "main",
-      result: {
-        ...result,
-        sessions: result.sessions.with(mainIndex, {
-          ...result.sessions[mainIndex]!,
-          status: "running",
-          hasActiveRun: true,
-        }),
-      },
-    });
-    sidebar.navigationCollapsed = true;
-    sidebar.requestUpdate();
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-footer-bar__home .session-glyph__ring")).not.toBeNull();
-    expect(
-      sidebar
-        .querySelector(".sidebar-footer-bar__home .session-glyph__ring")
-        ?.getAttribute("aria-label"),
-    ).toBe("Active run");
-  });
-
-  it("keeps Home outbox attention and drafts visible with its run state", async () => {
+  it("keeps Home outbox attention and drafts visible with its run state when collapsed", async () => {
     const { sidebar, result, sessions } = await fixture();
     const mainIndex = result.sessions.findIndex((row) => row.key === "agent:main:main");
     sessions.publishList({
@@ -120,9 +97,13 @@ describe("personal navigation rail", () => {
       attentionCountForSession: (key) => (key === "agent:main:main" ? 2 : 0),
       hasSessionDraft: (key) => key === "agent:main:main",
     };
+    sidebar.navigationCollapsed = true;
     await sidebar.updateComplete;
     const home = sidebar.querySelector(".sidebar-footer-bar__home")!;
     expect(home.querySelector(".session-glyph__ring")).not.toBeNull();
+    expect(home.querySelector(".session-glyph__ring")?.getAttribute("aria-label")).toBe(
+      "Active run",
+    );
     expect(
       home.querySelector(".session-row-badge--attention")?.getAttribute("aria-label"),
     ).toContain("2");
@@ -208,9 +189,7 @@ describe("personal navigation rail", () => {
   });
 
   it.each([
-    { label: "Release Notes", icon: undefined, monogram: "RN" },
     { label: "Résumé", icon: undefined, monogram: "R" },
-    { label: "Launch Pad", icon: "🚀", monogram: undefined },
     {
       label: "Architecture",
       icon: `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>')}`,
@@ -410,6 +389,8 @@ describe("personal navigation rail", () => {
     await select("online");
     expect(sidebar.navigationView).toBe("online");
     expect(sidebar.navigationCollapsed).toBe(false);
+    await select("online");
+    expect(sidebar.navigationCollapsed).toBe(false);
     expect(toggle).toHaveBeenCalledTimes(4);
   });
 
@@ -512,6 +493,61 @@ describe("personal navigation rail", () => {
     expect(sidebar.querySelector(".sidebar-brand")).toBeNull();
   });
 
+  it("settles retained menu avatars through a sidebar view-root replacement", async () => {
+    setAvatarGatewayOrigin(globalThis.location.origin, ["avatar-token"]);
+    onTestFinished(() => setAvatarGatewayOrigin(null));
+    const response = createDeferred<Response>();
+    onTestFinished(() => response.resolve(new Response(null, { status: 404 })));
+    const nativeFetch = globalThis.fetch;
+    const fetchAvatar = vi.fn<typeof fetch>().mockReturnValue(response.promise);
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+      return url.pathname === "/avatar/research"
+        ? fetchAvatar(input, init)
+        : nativeFetch(input, init);
+    });
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn(() => "blob:retained-menu-avatar");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    const agents = {
+      ...TWO_AGENTS,
+      agents: TWO_AGENTS.agents.map((agent) =>
+        agent.id === "research"
+          ? Object.assign({}, agent, { identity: { avatar: "/avatar/research?v=1" } })
+          : agent,
+      ),
+    };
+    const { sidebar, provider, context } = await mountSidebar(
+      gateway.gateway,
+      sessions.sessions,
+      "panel",
+      agents,
+    );
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(fetchAvatar).toHaveBeenCalledOnce());
+    provider.setContext({ ...context, basePath: "/control" });
+    await sidebar.updateComplete;
+    await vi.dynamicImportSettled();
+    response.resolve(
+      new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    await waitForSolid(() =>
+      expect(sidebar.querySelector('[data-value="agent:research"] img')?.getAttribute("src")).toBe(
+        "blob:retained-menu-avatar",
+      ),
+    );
+    expect(fetchAvatar).toHaveBeenCalledOnce();
+  });
+
   it("pins a person with native drag and retains a safe destination after they go offline", async () => {
     const { sidebar } = await fixture();
     sidebar.querySelector<HTMLButtonElement>('[data-navigation-view="online"]')!.click();
@@ -525,14 +561,6 @@ describe("personal navigation rail", () => {
     };
     await sidebar.updateComplete;
     const transfer = createDataTransferStub();
-    const collapse = sidebar.querySelector<HTMLButtonElement>(
-      ".sidebar-online .sidebar-session-group-toggle",
-    )!;
-    collapse.click();
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-online__row")).toBeNull();
-    collapse.click();
-    await sidebar.updateComplete;
     drag(sidebar.querySelector(".sidebar-online__row")!, "dragstart", transfer);
     drag(sidebar.querySelector(".sidebar-rail__pins")!, "drop", transfer);
     await sidebar.updateComplete;

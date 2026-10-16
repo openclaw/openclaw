@@ -419,6 +419,15 @@ it.each([false, true])("bounds forward clock catch-up with intervening refresh=%
     Array.from({ length: 7 }, (_, index) => job(`jump-${index}`, now + (index + 1) * minute)),
   );
   expect(scheduler.start().accepted).toEqual([]);
+  const edited = scheduler.read();
+  edited[5]!.name = "edited before catch-up";
+  edited[5]!.state.lastError = "retained failure detail";
+  withinWorker(() =>
+    runOpenClawStateWriteTransaction(
+      () => saveCronStoreInDatabase(database, scheduler.storeKey, { version: 1, jobs: edited }),
+      { database, path: database.path, env: fixture.env },
+    ),
+  );
   const jumpedAtMs = now + 24 * 60 * minute;
   if (refresh) {
     expect(scheduler.refresh({ nowMs: jumpedAtMs, monotonicMs: 1_000 }).accepted).toEqual([]);
@@ -437,6 +446,11 @@ it.each([false, true])("bounds forward clock catch-up with intervening refresh=%
       .slice(5)
       .map(({ state }) => state.nextRunAtMs),
   ).toEqual([jumpedAtMs + 5_000, jumpedAtMs + 10_000]);
+  expect(jumped.jobs.find(({ id }) => id === "jump-5")).toMatchObject({
+    name: "edited before catch-up",
+    state: { nextRunAtMs: jumpedAtMs + 5_000, lastError: "retained failure detail" },
+  });
+  expect(scheduler.read()[5]).toEqual(jumped.jobs.find(({ id }) => id === "jump-5"));
   expect(scheduler.tick(jumpedAtMs + 1, 1_001).accepted).toEqual([]);
   expect(scheduler.receipts()).toHaveLength(5);
 });

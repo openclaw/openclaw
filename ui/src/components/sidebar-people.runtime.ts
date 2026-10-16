@@ -3,7 +3,12 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
-import { presenceUserLabel, projectOnlinePresenceViewers } from "../lib/presence-users.ts";
+import {
+  presenceUserLabel,
+  projectOnlinePresenceViewers,
+  profilePresenceViewer,
+} from "../lib/presence-users.ts";
+import { profileDirectory } from "../lib/profile-directory.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
 import {
   resolveSessionPreferredFace,
@@ -173,9 +178,7 @@ export class SidebarPeopleRuntime {
       active.gateway === gateway &&
       active.client === gateway.snapshot.client &&
       active.scope === this.scope() &&
-      this.host.contains(active.row) &&
-      (active.row.dataset.personCardSection === undefined ||
-        !this.host.collapsedSessionSections.has(active.row.dataset.personCardSection)),
+      this.host.contains(active.row),
     );
   }
 
@@ -200,6 +203,10 @@ export class SidebarPeopleRuntime {
     );
     if (!user && active.id.startsWith("profile:")) {
       const profileId = active.id.slice("profile:".length);
+      const profile = profileDirectory(context.gateway).get(profileId);
+      if (profile) {
+        user = profilePresenceViewer(profile);
+      }
       const actor = [data.sessionsResult, ...Object.values(data.sessionResultsByAgent)]
         .flatMap((result) => result?.sessions ?? [])
         .flatMap((row) => [row.owner?.actor, row.createdActor])
@@ -207,7 +214,7 @@ export class SidebarPeopleRuntime {
           (candidate) =>
             candidate?.identity?.type === "profile" && candidate.identity.id === profileId,
         );
-      if (actor) {
+      if (!user && actor) {
         user = {
           id: profileId,
           identity: { type: "profile", id: profileId },

@@ -51,7 +51,6 @@ export function claimCronRecoveryReceipt(
     claimCronRunReceiptInDatabaseForTest({
       database: db,
       prepared,
-      resolveAgentId: (current) => current.agentId ?? defaultAgentId,
     }),
   );
 }

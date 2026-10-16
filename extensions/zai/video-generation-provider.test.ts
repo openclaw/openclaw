@@ -65,7 +65,7 @@ describe("Z.AI video generation", () => {
       fetchWithTimeoutMock.mockResolvedValueOnce(Response.json({ task_status: "PROCESSING" }));
       mockSuccess();
       const pending = generateVideo({
-        durationSeconds: 9,
+        durationSeconds: 10,
         size: "1900x1069",
         audio: true,
         providerOptions: { quality: "quality", fps: 60 },
@@ -118,7 +118,7 @@ describe("Z.AI video generation", () => {
       : { buffer: Buffer.from("png-bytes"), mimeType: "image/png" };
     await generateVideo({
       cfg: { models: { providers: { zai: { baseUrl, models: [] } } } },
-      ...(remoteImage ? {} : { durationSeconds: 6, aspectRatio: "9:16" }),
+      ...(remoteImage ? {} : { durationSeconds: 5, aspectRatio: "9:16" }),
       inputImages: [image],
     });
     expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(

@@ -54,22 +54,16 @@ export type LogbookDaysPayload = {
 
 export type LogbookUiState = {
   day: string;
-  /** True once the user navigated to a specific day; unpinned views follow the gateway's today. */
-  dayPinned: boolean;
   status: LogbookStatusPayload | null;
   days: LogbookDaysPayload["days"];
   timeline: LogbookTimelinePayload | null;
   loading: boolean;
   error: string | null;
-  expandedCardIds: Set<number>;
   framePreviews: Map<number, string>;
-  frameLoads: Set<number>;
   framePreviewFailed: Set<number>;
   standup: { day: string; text: string; updatedMs: number } | null;
   standupLoading: boolean;
-  askQuestion: string;
   askAnswer: string | null;
   askLoading: boolean;
   actionPending: boolean;
-  requestUpdate: (() => void) | null;
 };

@@ -5,15 +5,13 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_SCHEMA_SQL,
 } from "./memory-schema-base.js";
+import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import {
   dropMemoryChunkFtsTriggers,
   ensureMemoryChunkFtsTriggers,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS,
   rebuildMemoryChunkFts,
-} from "./memory-schema-fts.js";
-import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
-import {
   assertSqliteSchemaContains,
   canReuseSqliteSchemaInTransaction,
   createSqliteTableContractReader,

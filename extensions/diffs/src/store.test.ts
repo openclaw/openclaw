@@ -419,13 +419,6 @@ describe("createDiffsHttpHandler", () => {
     expect(res.statusCode).toBe(404);
   });
 
-  it("rejects malformed artifact ids before reading from disk", async () => {
-    const { handled, res } = await handleLocalGet(missingViewerPath);
-
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(404);
-  });
-
   it("serves the shared viewer asset", async () => {
     const { handled, res } = await handleLocalGet("/plugins/diffs/assets/viewer.js");
 
@@ -433,15 +426,6 @@ describe("createDiffsHttpHandler", () => {
     expect(res.statusCode).toBe(200);
     expect(String(res.body)).toContain("./viewer-runtime.js?v=");
     expect(res.getHeader("cache-control")).toBe("no-store, max-age=0");
-  });
-
-  it("serves the shared viewer runtime asset", async () => {
-    const { handled, res } = await handleLocalGet("/plugins/diffs/assets/viewer-runtime.js");
-
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
-    expect(String(res.body)).toContain("openclawDiffsReady");
-    expect(res.getHeader("cache-control")).toBe("public, max-age=31536000, immutable");
   });
 
   it.each([

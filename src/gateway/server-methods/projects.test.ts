@@ -302,6 +302,48 @@ test("registered anonymous native search does not borrow the service credential"
   }
 });
 
+test("checkout options preserve permitted Current access without exposing paths", async () => {
+  await withProjectState(async (state) => {
+    const workspace = await initializeRepository(state.root, "workspace");
+    const outside = await initializeRepository(state.root, "outside");
+    const project = await registerProjectRegistry({ path: outside });
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: { workspace, sandbox: { mode: "off" } } } },
+    };
+    for (const scopes of [
+      ["operator.admin"],
+      ["operator.sessions.read", "operator.sessions.write"],
+    ]) {
+      expect(
+        await invokeProjectMethod(
+          "projects.checkoutOptions",
+          { projectId: project.id, agentId: "main" },
+          cfg,
+          scopes,
+        ),
+      ).toEqual({ ok: true, payload: { current: true, worktree: true }, error: undefined });
+    }
+    const params = { projectId: project.id, agentId: "main" };
+    expect(
+      await invokeProjectMethod("projects.checkoutOptions", params, cfg, ["operator.read"]),
+    ).toMatchObject({ ok: true, payload: { current: false, worktree: false } });
+    let authorityChecks = 0;
+    expect(
+      await invokeProjectMethod(
+        "projects.checkoutOptions",
+        params,
+        cfg,
+        ["operator.admin"],
+        undefined,
+        projectsHandlers,
+        undefined,
+        () => cfg,
+        { hasCurrentClientAuthority: () => ++authorityChecks === 1 },
+      ),
+    ).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+  });
+});
+
 test("projects.list exposes a normalized configured default repository", async () => {
   const config = {
     gateway: {

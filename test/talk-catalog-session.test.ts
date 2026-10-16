@@ -1,27 +1,28 @@
 // @vitest-environment node
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { openaiMediaUnderstandingProvider } from "../extensions/openai/api.js";
 import { replaceSessionEntrySync } from "../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../src/config/types.js";
 import { sessionReadHandlers } from "../src/gateway/server-methods/sessions-read.js";
+import { callGatewayHandler } from "../src/gateway/server-methods/skills.test-helpers.js";
 import { bindSessionRowProjection } from "../src/gateway/session-row-projection-access.js";
 import { createSessionRowProjection } from "../src/gateway/session-row-projection.js";
 import { roleClient, rolePolicyConfig } from "../src/gateway/session-sharing.test-utils.js";
 import { createTalkHandlerCaller } from "../src/gateway/talk/handlers/handler-invocation.test-support.js";
 import { talkHandlers } from "../src/gateway/talk/handlers/index.js";
-import {
-  expectRespondError,
-  expectRespondOk,
-} from "../src/gateway/talk/handlers/responses.test-support.js";
+import { expectRespondError } from "../src/gateway/talk/handlers/responses.test-support.js";
 import { acquireStateDatabaseSchemaLease } from "../src/infra/gateway-state-owner.js";
 import { createPluginMetadataSnapshotFixture } from "../src/plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../src/plugins/runtime/generation-scope.js";
+import { captureGatewayRootWorkReleaseObserver } from "../src/process/gateway-work-admission.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../src/state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { prepareUserProfileCatalog } from "../src/state/user-profile-list.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
+import { createDeferred } from "./helpers/promise.js";
 
 const sessionKey = "agent:researcher:catalog";
 
@@ -128,6 +129,7 @@ describe("session-scoped Talk catalog", () => {
             { getRuntimeConfig: () => config },
             () => projection,
           );
+          let catalogReleased = createDeferred<"settled" | "reset">();
           const registry = createEmptyPluginRegistry();
           registry.mediaUnderstandingProviders.push({
             pluginId: "openai",
@@ -145,8 +147,13 @@ describe("session-scoped Talk catalog", () => {
                   ?.apiKey,
               }),
               isConfigured: () => false,
-              isConfiguredAsync: async ({ providerConfig }) =>
-                providerConfig.resolvedKey === "synthetic-speech-key",
+              isConfiguredAsync: async ({ providerConfig }) => {
+                expectDefined(
+                  captureGatewayRootWorkReleaseObserver(),
+                  "catalog refresh must own root work admission",
+                )(catalogReleased.resolve);
+                return providerConfig.resolvedKey === "synthetic-speech-key";
+              },
               synthesize: async () => {
                 throw new Error("catalog must not synthesize");
               },
@@ -174,10 +181,24 @@ describe("session-scoped Talk catalog", () => {
                   [{ sessionKey }, selectedHasCredentials],
                   [{}, !selectedHasCredentials],
                 ] as const) {
-                  const respond = vi.fn();
-                  await call("talk.catalog", { params, client, context, respond });
-                  expect(respond.mock.calls[0]?.[2]).toBeUndefined();
-                  expect(expectRespondOk(respond)).toMatchObject({
+                  catalogReleased = createDeferred<"settled" | "reset">();
+                  expect(
+                    await callGatewayHandler(talkHandlers, "talk.catalog", params, {
+                      client,
+                      context,
+                    }),
+                  ).toMatchObject({
+                    ok: false,
+                    error: { retryable: true, details: { reason: "talk-catalog-warming" } },
+                  });
+                  expect(await catalogReleased.promise).toBe("settled");
+                  const result = await callGatewayHandler(talkHandlers, "talk.catalog", params, {
+                    client,
+                    context,
+                  });
+                  expect(result.ok).toBe(true);
+                  expect(result.error).toBeUndefined();
+                  expect(result.response).toMatchObject({
                     speech: {
                       providers: [
                         expect.objectContaining({

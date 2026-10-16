@@ -5,6 +5,7 @@ import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { backupDoctorSqliteRepair } from "../infra/sqlite-index-recovery.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
   scanDoctorSessionTranscripts,
@@ -145,6 +146,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
   let foundEvents = 0;
   let repairedSessions = 0;
   let repairedEvents = 0;
+  const preserved = new Set<string>();
 
   scanDoctorSessionTranscripts(
     {
@@ -201,6 +203,11 @@ export async function noteSessionTranscriptLabelHealth(params: {
               const currentRows = readTranscriptEventRows(writeDatabase, sessionId);
               if (!transcriptSnapshotsMatch(readResult.rows, currentRows)) {
                 throw new Error(`transcript changed while preparing rewrite for ${sessionId}`);
+              }
+              if (!preserved.has(target.sqlitePath)) {
+                const backup = backupDoctorSqliteRepair(target.sqlitePath, "transcript-labels");
+                preserved.add(target.sqlitePath);
+                note(`- Saved pre-repair SQLite backup: ${backup}`, NOTE_TITLE);
               }
               // Surgical per-row update: preserves seq, created_at, and sessions row.
               updateSqliteTranscriptEventJsonInTransaction(writeDatabase, sessionId, updates);

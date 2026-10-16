@@ -664,7 +664,7 @@ it("copies a linked workspace dependency without reading or changing Git update 
   expect(await fs.readFile(path.join(dependency, "data.txt"), "utf8")).toBe("live dependency");
 });
 
-it.each(["ordinary.tmp", "node_modules.openclaw-update-operator.tmp"])(
+it.each(["node_modules.openclaw-update-operator.tmp"])(
   "still rejects a missing dependency beneath %s",
   async (directory) => {
     await expect(

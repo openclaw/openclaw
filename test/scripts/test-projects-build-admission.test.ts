@@ -758,6 +758,7 @@ describe("automatic exact-target admission", () => {
     { outcome: "SIGTERM", mode: "automatic" },
     { outcome: "success", mode: "explicit parallel" },
     { outcome: "success", mode: "full suite" },
+    { outcome: "success", mode: "local full suite" },
   ])(
     "joins the real Gateway plan barrier before later admission and disposal ($mode, $outcome)",
     async ({ outcome, mode }) => {
@@ -775,6 +776,12 @@ describe("automatic exact-target admission", () => {
         return worker;
       });
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+      if (mode === "local full suite") {
+        vi.stubEnv("CI", "");
+        vi.stubEnv("GITHUB_ACTIONS", "");
+        vi.stubEnv("OPENCLAW_VITEST_MAX_WORKERS", "");
+        vi.stubEnv("OPENCLAW_TEST_WORKERS", "");
+      }
       const gatewayFile =
         mode === "automatic"
           ? "src/gateway/call.test.ts"
@@ -797,7 +804,7 @@ describe("automatic exact-target admission", () => {
         // Hold the ordinary/Gateway/ordinary order; timing weights have separate coverage.
         vi.spyOn(planner, "orderFullSuiteSpecsForParallelRun").mockImplementation((specs) => specs);
       }
-      if (mode === "full suite") {
+      if (mode.endsWith("full suite")) {
         vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
           configs.map((config, index) => ({
             config,
@@ -811,10 +818,13 @@ describe("automatic exact-target admission", () => {
       const releases = configs.map(() => createDeferred());
       const admissions = configs.map(() => createDeferred());
       const selected: string[] = [];
-      commands.reader.mockImplementation(({ pnpmArgs }) => {
+      commands.reader.mockImplementation(({ pnpmArgs, env }) => {
         const config = pnpmArgs[pnpmArgs.indexOf("--config") + 1];
         const index = configs.indexOf(config);
         expect(index).toBeGreaterThanOrEqual(0);
+        if (mode === "local full suite") {
+          expect(env.OPENCLAW_VITEST_MAX_WORKERS).toBe(index === 1 ? "3" : "1");
+        }
         selected.push(config);
         events.push(`start:${index}`);
         admissions[index]!.resolve();
@@ -833,7 +843,7 @@ describe("automatic exact-target admission", () => {
       const exit = vi.fn(async () => {});
       const running = runTestProjects(
         exit,
-        mode === "full suite" ? outputArgs : [...barrierFiles, ...outputArgs],
+        mode.endsWith("full suite") ? outputArgs : [...barrierFiles, ...outputArgs],
       );
       try {
         for (let index = 0; index < 2; index++) {

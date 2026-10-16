@@ -15,7 +15,6 @@ import type { CallGatewayCliOptions } from "../../gateway/call.js";
 import { GATEWAY_STALE_INSTALL_CLOSE_REASON } from "../../gateway/stale-install.js";
 import { createGatewayCloseTransportError } from "../../gateway/transport-error.js";
 import type { PortUsage } from "../../infra/ports-types.js";
-import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 
 const mocks = vi.hoisted(() => ({
   call: vi.fn(),
@@ -66,7 +65,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function ready(): GatewaySuspendPrepareResult {
+function ready(): Extract<GatewaySuspendPrepareResult, { status: "ready" }> {
   return {
     status: "ready",
     suspensionId: "resident-suspension",
@@ -81,7 +80,7 @@ function draining(
   kind: GatewaySuspendBlocker["kind"],
   message: string,
   retryAfterMs = 100,
-): GatewaySuspendPrepareResult {
+): Extract<GatewaySuspendPrepareResult, { status: "draining" }> {
   return {
     status: "draining",
     suspensionId: "resident-suspension",
@@ -291,7 +290,7 @@ it.each(["admitted work", "published resident", "expired observation"] as const)
   async (scenario) => {
     const observation: GatewaySuspendPrepareResult =
       scenario === "admitted work"
-        ? draining("embedded-run", "1 active agent turn", DEFAULT_UPDATE_STEP_TIMEOUT_MS)
+        ? draining("embedded-run", "1 active agent turn", 60_000)
         : scenario === "published resident"
           ? {
               ...draining("root-request", "2 active gateway requests"),
@@ -327,7 +326,7 @@ it.each(["admitted work", "published resident", "expired observation"] as const)
     const running = withGatewayMaintenanceDrain({ ...f.params, timeoutMs }, f.stop);
     await vi.advanceTimersByTimeAsync(0);
     expect(f.stop).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(timeoutMs ?? 30_000);
     await expect(running).resolves.toBe("stopped");
     expect(f.warn).toHaveBeenCalledOnce();
     expect(f.warn).toHaveBeenCalledWith(
@@ -420,6 +419,97 @@ it.each(["ready", "draining"] as const)(
     expect(f.events.indexOf("handoff")).toBeLessThan(f.events.indexOf("stop"));
     expect(f.events[1]).toBe(`observe:${phase}`);
     expect(f.stop).toHaveBeenCalledOnce();
+  },
+);
+
+it.each([
+  { timeoutMs: undefined, drainMs: 30_000 },
+  { timeoutMs: 60_000, drainMs: 30_000 },
+  { timeoutMs: 200, drainMs: 200 },
+])("leaves handoff grace with an update timeout of $timeoutMs", async ({ timeoutMs, drainMs }) => {
+  const f = fixture({
+    observations: [
+      { ...draining("embedded-run", "1 active turn", 60_000), expiresAtMs: Date.now() + 45_000 },
+    ],
+  });
+  const running = withGatewayMaintenanceDrain(
+    { ...f.params, timeoutMs, drainPolicy: "interrupt-after-drain" },
+    f.stop,
+  );
+  await vi.advanceTimersByTimeAsync(drainMs - 1);
+  expect(f.stop).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(f.events).toContain("handoff");
+  await expect(running).resolves.toBe("stopped");
+});
+
+it.each([
+  { stage: "status", delayMs: 5_000, timeoutMs: 1_000, elapsedMs: 6_000 },
+  { stage: "gateway.suspend.prepare", delayMs: 8_000, timeoutMs: undefined, elapsedMs: 30_000 },
+])(
+  "anchors the drain to its lease after slow $stage",
+  async ({ stage, delayMs, timeoutMs, elapsedMs }) => {
+    const observation = draining("embedded-run", "1 active turn", 60_000);
+    const f = fixture({ observations: [observation] });
+    const call = expectDefined(mocks.call.getMockImplementation(), "Missing Gateway fixture");
+    let prepared = false;
+    let delayed = false;
+    mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
+      if (request.method === "gateway.suspend.prepare" && !prepared) {
+        prepared = true;
+        observation.expiresAtMs = Date.now() + 45_000;
+      }
+      if (request.method === stage && !delayed) {
+        delayed = true;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, delayMs);
+        });
+      }
+      return await call(request);
+    });
+    const running = withGatewayMaintenanceDrain(
+      { ...f.params, timeoutMs, drainPolicy: "interrupt-after-drain" },
+      f.stop,
+    );
+    await vi.advanceTimersByTimeAsync(elapsedMs - 1);
+    expect(f.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.events).toContain("handoff");
+    await expect(running).resolves.toBe("stopped");
+  },
+);
+
+it.each(["expired", "replaced"] as const)(
+  "does not reacquire or stop after its suspension is %s",
+  async (reason) => {
+    const initial = {
+      ...draining("embedded-run", "1 active turn"),
+      expiresAtMs: Date.now() + 45_000,
+    };
+    const f = fixture({
+      observations: [initial, { ...ready(), suspensionId: "replacement-suspension" }],
+    });
+    const outcome = withGatewayMaintenanceDrain(
+      { ...f.params, drainPolicy: "interrupt-after-drain" },
+      f.stop,
+    ).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    if (reason === "expired") {
+      vi.setSystemTime(Date.now() + 45_000);
+    }
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await outcome).toBeInstanceOf(GatewayServiceStopUnsafeError);
+    expect(f.stop).not.toHaveBeenCalled();
+    expect(f.events).not.toContain("handoff");
+    expect(f.events.filter((event) => event.startsWith("observe:"))).toHaveLength(
+      reason === "expired" ? 1 : 2,
+    );
+    expect(mocks.call).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "gateway.suspend.resume",
+        params: { suspensionId: "resident-suspension" },
+      }),
+    );
   },
 );
 
@@ -529,7 +619,7 @@ it("warns when resume fails without replacing the native stop error", async () =
   await expect(withGatewayMaintenanceDrain(f.params, f.stop)).rejects.toBe(failure);
   expect(f.warn).toHaveBeenCalledWith(
     expect.stringMatching(
-      /resident-suspension.*resume transport failed.*the Gateway reopens admission automatically when the lease expires \(within 2 minutes\)/,
+      /resident-suspension.*resume transport failed.*the Gateway reopens admission automatically when the drain lease expires/,
     ),
   );
 });

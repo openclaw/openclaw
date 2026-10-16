@@ -5,6 +5,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import {
   bindOutboundSessionEntry,
   ensureOutboundSessionEntry,
@@ -28,21 +29,6 @@ const mocks = vi.hoisted(() => ({
     (_store: unknown, params?: { agentId?: string }) => `/stores/${params?.agentId ?? "main"}.json`,
   ),
 }));
-
-function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
-    throw new Error(`expected ${label} params to be an object`);
-  }
-  return arg as Record<string, unknown>;
-}
 
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
   resolveSessionStorePathCore: mocks.resolveStorePath,
@@ -652,7 +638,11 @@ describe("ensureOutboundSessionEntry", () => {
       agentId: "main",
     });
     expect(mocks.updateSessionLastRoute).toHaveBeenCalledOnce();
-    const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
+    const metadata = mockFirstRecordArg(
+      mocks.updateSessionLastRoute,
+      "updateSessionLastRoute",
+      "expected updateSessionLastRoute params to be an object",
+    );
     expect(metadata.storePath).toBe("/stores/main.json");
     expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
     expect(metadata.ctx).toMatchObject({
@@ -688,11 +678,15 @@ describe("ensureOutboundSessionEntry", () => {
       route,
     });
 
-    const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
+    const metadata = mockFirstRecordArg(
+      mocks.updateSessionLastRoute,
+      "updateSessionLastRoute",
+      "expected updateSessionLastRoute params to be an object",
+    );
     expect((metadata.ctx as Record<string, unknown>).GroupSubject).toBeUndefined();
   });
 
-  it.each(["operator", "required-parent", "unstamped-parent"] as const)(
+  it.each(["operator", "required-parent"] as const)(
     "carries %s creation policy without requiring current role configuration",
     async (source) => {
       const actor = { type: "human" as const, source: "profile" as const, id: "outbound-creator" };
@@ -723,12 +717,12 @@ describe("ensureOutboundSessionEntry", () => {
         ...(source === "operator" ? { creation } : { sourceSessionKey: "agent:other:main" }),
       });
 
-      const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
-      if (source === "unstamped-parent") {
-        expect(metadata.ctx).not.toHaveProperty("SessionCreation", expect.anything());
-      } else {
-        expect(metadata.ctx).toMatchObject({ SessionCreation: creation });
-      }
+      const metadata = mockFirstRecordArg(
+        mocks.updateSessionLastRoute,
+        "updateSessionLastRoute",
+        "expected updateSessionLastRoute params to be an object",
+      );
+      expect(metadata.ctx).toMatchObject({ SessionCreation: creation });
     },
   );
 

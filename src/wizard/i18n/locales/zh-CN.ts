@@ -52,6 +52,9 @@ export const zh_CN = {
       modelId: "模型 ID",
       modelIdPlaceholder: "例如 llama3、claude-3-7-sonnet",
       modelIdRequired: "模型 ID 必填",
+      noAuthConfirm: "未输入 API Key。是否将该端点设为免认证模式（请求不发送 Authorization 头）？",
+      noAuthCompatKeyRequired:
+        "免认证模式仅支持 OpenAI Chat Completions 端点。请输入 API Key（若服务器不校验密钥，可填入任意占位符）。",
       retryChoice: "你想修改哪一项？",
       verifying: "正在验证...",
       verificationFailedError: "验证失败：{error}",
@@ -1146,8 +1149,9 @@ export const zh_CN = {
       daemonRuntime: "Gateway 服务运行时",
       daemonRuntimeNode: "Node（推荐）",
       daemonRuntimeNodeHint: "托管服务的首选和推荐运行时。",
-      daemonRuntimeBun: "Bun 1.4+",
-      daemonRuntimeBunHint: "需要 Bun 1.4 或更高版本，并使用符合 WAL 重置安全要求的 node:sqlite。",
+      daemonRuntimeBun: "Bun 1.4.3+",
+      daemonRuntimeBunHint:
+        "需要 Bun 1.4.3 或更高版本，并使用符合 WAL 重置安全要求的 node:sqlite。",
       editBootstrap: "之后可编辑 BOOTSTRAP.md 来修改 agent 的自我介绍方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次终端聊天会发送："醒醒，我的朋友！"',

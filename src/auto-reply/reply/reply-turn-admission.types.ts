@@ -15,6 +15,7 @@ export type ReplyTurnAdmission =
   | {
       status: "skipped";
       reason: "active-run" | "aborted" | "lifecycle-invalidated";
+      error?: unknown;
       activeOperation?: ReplyOperation;
       sessionEntry?: SessionEntry;
       lifecycleAdmission?: SessionWorkAdmissionLease;

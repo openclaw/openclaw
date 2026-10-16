@@ -52,6 +52,10 @@ export const zh_TW = {
       modelId: "模型 ID",
       modelIdPlaceholder: "例如 llama3、claude-3-7-sonnet",
       modelIdRequired: "模型 ID 必填",
+      noAuthConfirm:
+        "未輸入 API Key。是否將該端點設為免驗證模式（請求不發送 Authorization 標頭）？",
+      noAuthCompatKeyRequired:
+        "免驗證模式僅支援 OpenAI Chat Completions 端點。請輸入 API Key（若伺服器不驗證金鑰，可填入任意佔位符）。",
       retryChoice: "你想修改哪一項？",
       verifying: "正在驗證...",
       verificationFailedError: "驗證失敗：{error}",
@@ -1148,8 +1152,9 @@ export const zh_TW = {
       daemonRuntime: "Gateway 服務執行環境",
       daemonRuntimeNode: "Node（建議）",
       daemonRuntimeNodeHint: "託管服務的主要與建議執行環境。",
-      daemonRuntimeBun: "Bun 1.4+",
-      daemonRuntimeBunHint: "需要 Bun 1.4 或更新版本，並使用符合 WAL 重設安全要求的 node:sqlite。",
+      daemonRuntimeBun: "Bun 1.4.3+",
+      daemonRuntimeBunHint:
+        "需要 Bun 1.4.3 或更新版本，並使用符合 WAL 重設安全要求的 node:sqlite。",
       editBootstrap: "之後可編輯 BOOTSTRAP.md 來修改 agent 的自我介紹方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次終端機聊天會傳送："醒醒，我的朋友！"',

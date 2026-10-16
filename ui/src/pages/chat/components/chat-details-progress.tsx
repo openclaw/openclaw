@@ -5,7 +5,12 @@ import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
-type Props = { props?: ChatDetailsProps; presented: boolean; menuRef?: (menu: MenuHandle) => void };
+type Props = {
+  props?: ChatDetailsProps;
+  presented: boolean;
+  menuRef?: (menu: MenuHandle) => void;
+  onHideProgress?: () => void;
+};
 let nextMenuId = 0;
 
 /** The pane owns the durable card, lifetime and all actions. */
@@ -56,6 +61,7 @@ export function ChatDetailsProgress(props: Props) {
         const current = props.props;
         switch (item.id) {
           case "hide":
+            props.onHideProgress?.();
             current?.onHideTaskProgress?.();
             break;
           case "collapse":

@@ -535,7 +535,12 @@ export async function prepareGatewayReplyRuntimeForTest(options?: {
 export function installGatewayTestHooks(
   options?:
     | { scope?: "test" }
-    | { scope: "suite"; setup?: () => Promise<void>; cleanup?: () => Promise<void> },
+    | {
+        scope: "suite";
+        prepareServer?: boolean;
+        setup?: () => Promise<void>;
+        cleanup?: () => Promise<void>;
+      },
 ) {
   if (options?.scope === "suite") {
     let homeSetup: Promise<void> | undefined;
@@ -557,7 +562,9 @@ export function installGatewayTestHooks(
         activeSuiteHookScopeCount += 1;
         if (createHome) {
           await setupGatewayTestHome();
-          await prepareGatewayServerImplementationForTest();
+          if (options.prepareServer !== false) {
+            await prepareGatewayServerImplementationForTest();
+          }
           await resetGatewayTestState({ uniqueConfigRoot: false });
         }
       })();

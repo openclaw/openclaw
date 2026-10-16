@@ -188,22 +188,6 @@ export type CodexThreadForkParams = CodexThreadConfigurationParams & {
   excludeTurns?: boolean;
 };
 
-/** Asserts the experimental beforeTurnId request field before it crosses the app-server boundary. */
-export function assertCodexThreadForkParams(value: unknown): CodexThreadForkParams {
-  if (
-    !isRecord(value) ||
-    typeof value.threadId !== "string" ||
-    !value.threadId.trim() ||
-    (value.beforeTurnId !== undefined &&
-      value.beforeTurnId !== null &&
-      typeof value.beforeTurnId !== "string")
-  ) {
-    throw new Error("Invalid Codex app-server thread/fork params");
-  }
-  // SAFETY: The required id and optional fork boundary are checked; native Codex validates other options.
-  return value as CodexThreadForkParams;
-}
-
 export type CodexThreadForkResponse = CodexThreadStartResponse;
 
 export type CodexThreadListParams = JsonObject & {
@@ -408,6 +392,12 @@ export type CodexServerNotification = {
   params?: JsonValue;
 };
 
+export type CodexPreparedServerNotification = CodexServerNotification & {
+  threadId?: string;
+  turnId?: string;
+  completedTurn: CodexTurn | undefined;
+};
+
 export type CodexDynamicToolCallParams = {
   namespace?: string | null;
   threadId: string;
@@ -465,7 +455,7 @@ export type CodexModel = {
   description?: string | null;
   hidden: boolean;
   isDefault: boolean;
-  inputModalities: string[];
+  inputModalities?: string[];
   serviceTiers?: { id: string; name: string; description: string }[];
   supportedReasoningEfforts: CodexReasoningEffortOption[];
   defaultReasoningEffort?: string | null;
@@ -488,7 +478,6 @@ export type CodexGetAccountResponse = {
 };
 
 type CodexModelProviderCapabilitiesReadResponse = {
-  namespaceTools: boolean;
   imageGeneration: boolean;
   webSearch: boolean;
 };

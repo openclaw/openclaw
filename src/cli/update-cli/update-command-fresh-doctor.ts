@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import {
   isUpdateDoctorInspectionReportMode,
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
@@ -37,26 +38,18 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
 import { createUpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
-import {
-  createUpdateFailureFact,
-  normalizeUpdateFailureFacts,
-  parseConfigFailureFacts,
-} from "../../infra/update-failure-facts.js";
+import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
-import {
-  redactPublicSupportDiagnosticLine,
-  redactSupportString,
-} from "../../logging/diagnostic-support-redaction.js";
+import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
 import { formatCommandOutput } from "../../process/command-error.js";
 import {
   CommandProcessCleanupError,
-  createSanitizedCommandError,
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
-import { isPlainCommandExitFailure, runExec, type CommandOptions } from "../../process/exec.js";
+import { isPlainCommandExitFailure, type CommandOptions } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import { parseUpdateTimeoutMs, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
@@ -71,11 +64,11 @@ import {
 } from "./update-command-doctor-child.js";
 import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { validatePostPluginConfigInFreshProcess } from "./update-command-post-plugin-config-check.js";
 import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
 import {
   applyPostPluginConfigValidation,
   POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
-  POST_PLUGIN_CONFIG_VALIDATION_EXECUTION_FAILED_REASON,
   type PostPluginConfigValidation,
 } from "./update-command-post-plugin-validation.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -157,9 +150,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   try {
     const commandOptions: CommandOptions = {
       cwd: params.root,
-      // Normal updates also carry a default step allowance. Only operator opts
-      // may impose a Doctor deadline; standalone finalization supplies its own.
-      timeoutMs: params.opts ? parseUpdateTimeoutMs(params.opts.timeout) : params.timeoutMs,
+      timeoutMs: parseUpdateTimeoutMs(params.opts?.timeout) ?? params.timeoutMs,
       maxOutputBytes: 4 * 1024 * 1024,
       terminateOnOutputLimit: true,
       onOutputChunk: captureUpdateFinalizationDoctorOutput(params.phase),
@@ -205,10 +196,18 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       ...commandOptions,
       env: { ...commandOptions.env, ...sectionTiming.env },
     };
-    const doctorArgv =
-      doctorConfigWrites && executorFence && runId
-        ? [...workerCommand, "--doctor"]
-        : [params.nodeRunner ?? resolveNodeRunner(), ...args];
+    let doctorArgv: string[];
+    if (doctorConfigWrites && executorFence && runId) {
+      doctorArgv = [...workerCommand, "--doctor"];
+    } else {
+      const invocation = resolveOpenClawCliInvocation({
+        execPath: params.nodeRunner ?? resolveNodeRunner(),
+        entryPath,
+        execArgv: [],
+        args: args.slice(1),
+      });
+      doctorArgv = [invocation.command, ...invocation.args];
+    }
     doctorStartedAt = Date.now();
     doctorStep = {
       name: `${params.phase} doctor`,
@@ -474,81 +473,6 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     throw failure.error;
   }
   return warning;
-}
-
-async function validatePostPluginConfigInFreshProcess(params: {
-  root: string;
-  timeoutMs: number;
-  entryPath: string;
-  nodeRunner?: string;
-}): Promise<PostPluginConfigValidation> {
-  try {
-    await runExec(
-      params.nodeRunner ?? resolveNodeRunner(),
-      [params.entryPath, "config", "validate", "--json"],
-      {
-        cwd: params.root,
-        timeoutMs: params.timeoutMs,
-        maxBuffer: 4 * 1024 * 1024,
-        logOutput: false,
-        baseEnv: stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
-        env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
-      },
-    );
-    return { status: "valid" };
-  } catch (error) {
-    const result = isRecord(error) ? error : {};
-    const cleanupUncertain = result.cleanup === "uncertain" || hasCommandProcessCleanupError(error);
-    // The CLI also emits valid:false for runtime exceptions. Only an ordinary
-    // completed failure with actual issues establishes invalid authored config.
-    const issues =
-      !cleanupUncertain &&
-      isPlainCommandExitFailure({
-        ...result,
-        failed: result.failed === true,
-        cause: result.cause,
-      }) &&
-      typeof result.stdout === "string"
-        ? parseConfigFailureFacts(result.stdout, process.env)
-        : [];
-    if (issues.length) {
-      return { status: "invalid", failureFacts: issues };
-    }
-    const summary = [
-      createSanitizedCommandError(result).message,
-      ...(typeof result.signal === "string" ? [`signal=${result.signal}`] : []),
-      ...(cleanupUncertain ? ["cleanup=uncertain"] : []),
-    ].join("; ");
-    return {
-      status: "execution-failed",
-      failureFacts: normalizeUpdateFailureFacts([
-        {
-          check: "config",
-          code: POST_PLUGIN_CONFIG_VALIDATION_EXECUTION_FAILED_REASON,
-          message: summary,
-        },
-        ...(["stderr", "stdout"] as const).flatMap((stream) => {
-          const output = result[stream];
-          if (typeof output !== "string" || !output.trim()) {
-            return [];
-          }
-          // Node may print a location or source frame before the actual error.
-          // Extract known public causes before single-line fact normalization loses them.
-          const diagnostic = redactPublicSupportDiagnosticLine(output, {
-            env: process.env,
-            stateDir: resolveStateDir(),
-          });
-          return [
-            {
-              check: "config",
-              code: "command-failed",
-              message: `${stream}: ${diagnostic === "[redacted-diagnostic]" ? output : diagnostic}`,
-            },
-          ];
-        }),
-      ]),
-    };
-  }
 }
 
 export async function completePostCorePluginUpdate(

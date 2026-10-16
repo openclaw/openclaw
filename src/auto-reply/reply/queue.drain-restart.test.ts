@@ -31,7 +31,7 @@ import {
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { clearFollowupDrainCallback, kickFollowupDrainIfIdle } from "./queue/drain.js";
-import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
+import { resetRecentQueuedMessageIdDedupe } from "./queue/recent-message-ids.test-support.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
@@ -173,7 +173,6 @@ describe("followup queue drain restart after idle window", () => {
       inlineProviderModels: [],
       pluginMetadataSnapshot: {} as never,
     };
-
     try {
       await withPreparedModelRuntimePluginGenerationScope(predecessorGeneration, () =>
         parent.run(async () => {
@@ -341,7 +340,7 @@ describe("followup queue drain restart after idle window", () => {
     expect(getExistingFollowupQueue(key)).toBeUndefined();
   });
 
-  it("resumes a queued followup after a restart-signal fence rolls back", async () => {
+  it("waits for a normal drain kick after a restart signal rolls back", async () => {
     const firstFailed =
       createDeferred<NonNullable<ReturnType<typeof beginGatewayRestartSignalAdmission>>>();
     const delivered = createDeferred();
@@ -367,8 +366,12 @@ describe("followup queue drain restart after idle window", () => {
     expect(attempts).toBe(1);
     expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
     expect(signal.rollback()).toBe(true);
-    await vi.waitFor(() => expect(attempts).toBe(2));
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(attempts).toBe(1);
+    expect(getExistingFollowupQueue(key)?.draining).toBe(false);
+    kickFollowupDrainIfIdle(key);
     await delivered.promise;
+    expect(attempts).toBe(2);
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expect(getExistingFollowupQueue(key)).toBeUndefined();
   });

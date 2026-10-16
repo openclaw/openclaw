@@ -6,7 +6,9 @@ import { z } from "zod";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { readConfigFileSnapshotForWrite } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { WorkboardPortError } from "../infra/database-engine/port-command.worker.js";
+import { DatabasePortError } from "../infra/database-engine/port-command.worker.js";
+import type { PortVerification } from "../infra/database-engine/port.worker.js";
+import type { DatabaseEngineInput } from "../infra/database-engine/types.js";
 import {
   databasePortManifestPath,
   databasePortArtifactSchema,
@@ -36,6 +38,12 @@ export type Context = {
   stateDir: string;
   configPath: string;
   env: NodeJS.ProcessEnv;
+  engineSelection: { input: DatabaseEngineInput };
+  stateReceipt?: {
+    path: string;
+    engine: "sqlite" | "postgres";
+    verification: PortVerification;
+  };
   assertCurrent: () => void;
   signal?: AbortSignal;
   phase: string;
@@ -46,7 +54,7 @@ export type Context = {
   prepared: [string, Awaited<ReturnType<typeof prepareVerifiedSqliteFile>>][];
 };
 export function refuse(ctx: Context, observed: string, required: string): never {
-  throw new WorkboardPortError(
+  throw new DatabasePortError(
     `Database port ${ctx.phase}: ${ctx.target}; observed ${observed}; required ${required}. Stop the Gateway first; correct this fact and retry, or use --resume/--rollback with ${databasePortManifestPath(ctx.stateDir)}.`,
   );
 }
@@ -66,8 +74,12 @@ export const livePath = (target: DatabasePortManifest["targets"][number]) =>
   target.original.engine === "sqlite" ? target.original.path : target.original.anchorPath;
 export function revise(ctx: Context) {
   const current = manifest(ctx);
+  writeDatabasePortManifest(
+    ctx.stateDir,
+    { ...current, revision: current.revision + 1 },
+    ctx.assertCurrent,
+  );
   current.revision++;
-  writeDatabasePortManifest(ctx.stateDir, current, ctx.assertCurrent);
 }
 export async function record(ctx: Context, file: string, value: unknown) {
   const contents = `${JSON.stringify(value)}\n`;

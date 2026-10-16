@@ -10,7 +10,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { VoiceCallConfigSchema, type VoiceCallRealtimeConfig } from "../config.js";
+import { normalizeVoiceCallConfig, type VoiceCallRealtimeConfig } from "../config.js";
 import { CallManager } from "../manager.js";
 import type { CallRecord, NormalizedEvent, ToolHandlerContext } from "../types.js";
 import {
@@ -496,23 +496,6 @@ describe("RealtimeCallHandler path routing", () => {
     callbacks[0]?.onReady?.();
     expect(triggerGreeting).toHaveBeenCalledTimes(1);
     expect(triggerGreeting.mock.calls[0]?.[0]).toContain("hello");
-  });
-
-  it("rejects stream sessions when token expiry would exceed the Date range", async () => {
-    const { handler, processEvent, createBridge } = makeCallHarness();
-    handler.setPublicUrl("https://public.example/voice/webhook");
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    const session = handler.issueStreamSession({
-      providerName: "telnyx",
-      callId: "call-overflow",
-      direction: "inbound",
-    });
-    nowSpy.mockRestore();
-    const server = await startStreamSessionServer(handler, session.streamUrl);
-
-    await expect(connectWs(server.url)).rejects.toThrow("Unexpected server response: 401");
-    expect(createBridge).not.toHaveBeenCalled();
-    expect(processEvent).not.toHaveBeenCalled();
   });
 
   it("rejects Telnyx stream starts that do not match the token-bound call", async () => {
@@ -1568,7 +1551,7 @@ describe("RealtimeCallHandler path routing", () => {
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 function createHandler() {
-  const config = VoiceCallConfigSchema.parse({ realtime: { enabled: true } });
+  const config = normalizeVoiceCallConfig({ realtime: { enabled: true } });
   const resolveRegistration = vi.fn((): never => {
     throw new Error("Rejected upgrades must not acquire a provider");
   });

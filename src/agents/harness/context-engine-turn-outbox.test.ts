@@ -10,6 +10,7 @@ import {
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
+  resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
@@ -377,7 +378,7 @@ describe("context-engine turn outbox", () => {
   it.each(["accepted", "admission-only"] as const)(
     "recovers %s prior work before recording the next dispatch",
     async (state) => {
-      const accepted = state === "accepted";
+      const accepted = state !== "admission-only";
       const {
         target,
         current: admitted,
@@ -464,6 +465,10 @@ describe("context-engine turn outbox", () => {
           database.db.prepare("SELECT advancement_key FROM context_engine_turn_outbox").all(),
         ).toHaveLength(0);
         expect(commitTurn.mock.calls[0]?.[0]).not.toHaveProperty("prePromptMessageCount");
+        expect(commitTurn.mock.calls[0]?.[0].runtimeSettings).toMatchObject({
+          model: { provider: "anthropic", resolved: "claude-sonnet-4-6" },
+          limits: { promptTokenBudget: 180_000 },
+        });
         recorder.markRuntimePersisted(currentMessage, currentAdmission);
         // The dispatch wait settles admission in the agent database worker.
         expect(recorder.hasRuntimePersistencePending()).toBe(true);
@@ -509,6 +514,14 @@ describe("context-engine turn outbox", () => {
       database.db
         .prepare("SELECT payload_state FROM context_engine_turn_outbox WHERE advancement_key = ?")
         .get(payload.boundary.admission.logicalTurnId)?.payload_state;
+    const sequence = () =>
+      database.db
+        .prepare(
+          "SELECT enqueue_sequence FROM context_engine_turn_outbox WHERE advancement_key = ?",
+        )
+        .get(payload.boundary.admission.logicalTurnId)?.enqueue_sequence;
+    const admittedSequence = sequence();
+    expect(admittedSequence).toBe(1);
     expect(storedState()).toBe("admitted");
     acceptContextEngineTurnIntent({
       boundary: payload.boundary,
@@ -517,6 +530,7 @@ describe("context-engine turn outbox", () => {
       isHeartbeat: false,
     });
     expect(storedState()).toBe("accepted");
+    expect(sequence()).toBe(admittedSequence);
     const warn = vi.fn();
 
     recoverContextEngineTurnOutbox({
@@ -526,6 +540,7 @@ describe("context-engine turn outbox", () => {
       warn,
     });
     expect(storedState()).toBe("blocked");
+    expect(sequence()).toBe(admittedSequence);
 
     const queued = database.db
       .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
@@ -639,6 +654,13 @@ describe("context-engine turn outbox", () => {
       "session-a:z-first",
       "session-b:1",
     ]);
+    expect(
+      database.db
+        .prepare(
+          "SELECT enqueue_sequence, attempt_count FROM context_engine_turn_outbox WHERE advancement_key = 'session-a:z-first'",
+        )
+        .get(),
+    ).toEqual({ enqueue_sequence: 1, attempt_count: 1 });
     failFirstTurn = false;
 
     await drainContextEngineTurnOutbox({
@@ -743,6 +765,53 @@ describe("context-engine turn outbox", () => {
     expect(degradeBeforeStart).toHaveBeenCalledWith(
       "pending durable turn advancement could not be completed before the next turn",
     );
+  });
+
+  it("preserves an unbound incognito namespace under a symlinked state directory", () => {
+    const stateDir = createStateDir();
+    const alias = path.join(createStateDir(), "state");
+    fs.symlinkSync(fs.realpathSync(stateDir), alias, "junction");
+    const storePath = path.join(
+      alias,
+      "agents",
+      "main",
+      "agent",
+      "incognito-openclaw-agent.sqlite",
+    );
+    expect(
+      resolveSessionTranscriptDatabasePath({
+        agentId: "main",
+        sessionId: "unbound-incognito",
+        sessionKey: "agent:main:dashboard:incognito-unbound",
+        storePath,
+      }),
+    ).toBe(storePath);
+  });
+
+  it("admits a runtime transcript through a symlinked state directory", async () => {
+    const { stateDir, target, admission, database } = await createTranscript("symlink-turn");
+    const alias = path.join(createStateDir(), "state");
+    fs.symlinkSync(fs.realpathSync(stateDir), alias, "junction");
+    const currentMessage = { role: "user" as const, content: "current", timestamp: 1_000 };
+    const recorder = createUserTurnTranscriptRecorder({
+      message: currentMessage,
+      target: async () => undefined,
+    });
+    const lease = createLease(createEngine(async () => ({ status: "committed" })));
+    await drainPendingContextEngineTurnsBeforeRun({
+      admission: undefined,
+      lease,
+      recorder,
+      sessionTarget: { ...target, storePath: path.join(alias, "sessions.json") },
+    });
+
+    recorder.markRuntimePersisted(currentMessage, admission);
+    await expect(recorder.waitForRuntimePersistence()).resolves.toBeUndefined();
+    expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+    const queued = database.db
+      .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
+      .get(admission.logicalTurnId) as { payload_json: string } | undefined;
+    expect(JSON.parse(queued?.payload_json ?? "{}")).toMatchObject({ state: "admitted" });
   });
 
   it("queues a runtime admission reported inside a session write lane behind that lane", async () => {

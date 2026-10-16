@@ -85,7 +85,6 @@ it.for(["controller", "reply-only"] as const)(
     let drain: SessionLifecycleDrain | undefined;
     const pending = prepareSessionLifecycleDrain({
       action: "delete",
-      timeoutMs: null,
       context,
       storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
         agentId: "main",

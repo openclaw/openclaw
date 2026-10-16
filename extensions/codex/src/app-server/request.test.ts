@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { codexControlRequest } from "../command-rpc.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
 import { createClientHarness } from "./test-support.js";
 
@@ -709,7 +710,6 @@ describe("requestCodexAppServerJson sandbox guard", () => {
   });
 
   it("does not resume or publish a control attachment after its passive preflight times out", async () => {
-    const { codexControlRequest } = await import("../command-rpc.js");
     const root = sessionDirs.make();
     const authority = {
       config: {},

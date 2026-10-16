@@ -615,8 +615,11 @@ it.each(["completed-drain", "active-drain", "terminal-owner"])(
           options,
         ) {
           dispatch.mockRestore();
-          expect(input).toMatchObject({ kind: "sqlite-target" });
-          return this.run(input, options).then(async (reply) => {
+          return this.run(async () => {
+            const request = typeof input === "function" ? await input() : input;
+            expect(request).toMatchObject({ kind: "sqlite-target" });
+            return request;
+          }, options).then(async (reply) => {
             received.resolve();
             await release.promise;
             return reply;

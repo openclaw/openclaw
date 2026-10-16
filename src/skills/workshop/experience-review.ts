@@ -133,8 +133,8 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     },
   };
 
-  // Fork the foreground model context through the completed turn; the review's tool
-  // schemas and prefix match the foreground so the provider prompt cache is reused.
+  // Read only a bounded suffix through the completed turn. The review does not
+  // need to repay the entire conversation's token budget to learn one procedure.
   const prepare = async (
     source: typeof candidate.source,
     assertPhysicalCurrent: () => void,
@@ -144,6 +144,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     const sessionManager = await SessionManager.openModelContextAsync(source, {
       cwd: workspaceDir,
       through: candidate.source,
+      limits: { maxBytes: 32_768, maxEvents: 64, toolResultOverflow: "omit" },
       signal: abortSignal,
     });
     assertPreparationCurrent();

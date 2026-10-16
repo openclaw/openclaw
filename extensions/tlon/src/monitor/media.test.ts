@@ -108,5 +108,19 @@ describe("tlon monitor media", () => {
     ]);
 
     expect(result).toEqual({ attachments: [], unavailableCount: 1 });
+    expect(console.error).toHaveBeenCalledWith("[tlon-media] Error downloading inbound media");
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(
+      "https://example.com/photo.png",
+    );
+  });
+
+  it("rejects non-http media without logging its contents", async () => {
+    const url = "data:image/png;base64,private-inbound-image";
+    const result = await downloadMessageImages([{ block: { image: { src: url } } }]);
+
+    expect(result).toEqual({ attachments: [], unavailableCount: 1 });
+    expect(saveRemoteMediaMock).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith("[tlon-media] Rejected non-http(s) media URL");
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain(url);
   });
 });

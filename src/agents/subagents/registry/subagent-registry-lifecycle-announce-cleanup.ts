@@ -7,6 +7,7 @@ import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
 import {
   matchesSubagentChildSessionOwner,
+  resolveRecordedRequester,
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
@@ -43,11 +44,9 @@ import {
   finalizeResumedAnnounceGiveUp,
   finalizeSubagentCleanup,
 } from "./subagent-registry-lifecycle-finalize-cleanup.js";
-import {
-  buildSafeLifecycleErrorMeta,
-  maskLifecycleIdentifier,
-} from "./subagent-registry-lifecycle-log.js";
+import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
+import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
@@ -69,6 +68,21 @@ export const resumeAncestorCleanup = (
   const params = context.options;
   const now = Date.now();
   const visited = [settledEntry];
+  const wakeSiblings = (settled: SubagentRunRecord) => {
+    const requesterAgent = resolveRecordedRequester(settled);
+    for (const entry of params.runs.values()) {
+      if (
+        entry.runId !== settled.runId &&
+        entry.requesterSettleWake &&
+        entry.requesterSessionKey === settled.requesterSessionKey &&
+        resolveRecordedRequester(entry) === requesterAgent &&
+        (entry.requesterStorePath ?? null) === (settled.requesterStorePath ?? null)
+      ) {
+        scheduleRequesterSettleWake(context, entry.runId, entry, undefined, true);
+      }
+    }
+  };
+  wakeSiblings(settledEntry);
   let requesterSessionKey = settledEntry.requesterSessionKey;
   let requesterAgentId = settledEntry.requesterAgentId;
   while (
@@ -89,6 +103,8 @@ export const resumeAncestorCleanup = (
     requesterSessionKey = entry.requesterSessionKey;
     requesterAgentId = entry.requesterAgentId;
     const { runId } = entry;
+    scheduleRequesterSettleWake(context, runId, entry, undefined, true);
+    wakeSiblings(entry);
     // A failed cleanup belongs to its retry timer or exhausted process-local
     // budget; even descendant settlement must not reopen that attempt early.
     if (
@@ -291,8 +307,8 @@ export const startSubagentAnnounceCleanupFlow = (
             onError: (error) =>
               params.warn("sessions.delete failed during subagent cleanup", {
                 error: buildSafeLifecycleErrorMeta(error),
-                runId: maskLifecycleIdentifier(runId, "run"),
-                childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
+                runId,
+                childSessionKey: entry.childSessionKey,
               }),
           });
           if (sessionCleanup === "failed") {

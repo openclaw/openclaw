@@ -9,12 +9,15 @@ import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   emitCatalogChanged,
-  setPageGateway,
+  emitGatewaySnapshot,
+  agentsCapability,
+  agentsRouteData,
+  gateway,
+  pageContext,
   snapshot,
   createAgentsPage,
 } from "./agents-page.test-support.ts";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
-import type { AgentsRouteData } from "./route.ts";
 import { Agents } from "./view.tsx";
 
 describe("agent model catalog recovery", () => {
@@ -63,37 +66,46 @@ describe("agent model catalog recovery", () => {
         .mockReturnValueOnce(pending.promise)
         .mockResolvedValue({ models: nextModels });
       const client = { request } as unknown as GatewayBrowserClient;
-      const page = createAgentsPage();
-      page.routeData = { panel: "overview" } as AgentsRouteData;
-      setPageGateway(page, client);
-      page.agentsSelectedId = "main";
-      page.loadActivePanelData();
-      await waitForFast(() => expect(page.modelCatalog.models).toEqual(oldModels));
-      emitCatalogChanged(page.context.gateway);
+      const currentGateway = gateway(snapshot(client));
+      const context = pageContext(
+        currentGateway,
+        agentsCapability(async () => ({ agentId: "main", workspace: "/synthetic", files: [] })),
+      );
+      const page = createAgentsPage(context, {
+        ...agentsRouteData(
+          currentGateway,
+          context.agents.state.agentsList,
+          "main",
+          context.settingsAgentSelection,
+        ),
+        panel: "overview",
+      });
+      await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(oldModels));
+      emitCatalogChanged(currentGateway);
       if (!lateFailure) {
         pending.reject(error);
         await waitForFast(() =>
-          expect(page.chatModelCatalogStatus).toMatchObject({
+          expect(page.read().overview.modelCatalogStatus).toMatchObject({
             awaitingGateway: lifecycle,
             error: lifecycle ? null : "Model catalog unavailable",
             stale: true,
           }),
         );
       }
-      expect(page.modelCatalog.models).toEqual(oldModels);
+      expect(page.read().overview.modelCatalog).toEqual(oldModels);
 
       for (const suspensionPhase of ["draining", "accepting", "accepting"] as const) {
-        page.gateway.applySnapshot(
-          { ...snapshot(client), suspensionPhase },
-          { initial: false, sourceChanged: false },
-        );
+        emitGatewaySnapshot(currentGateway, { ...snapshot(client), suspensionPhase });
       }
       if (lateFailure) {
         expect(request).toHaveBeenCalledTimes(2);
         pending.reject(error);
       }
-      await waitForFast(() => expect(page.modelCatalog.models).toEqual(nextModels));
-      expect(page.chatModelCatalogStatus).toMatchObject({ error: null, awaitingGateway: false });
+      await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(nextModels));
+      expect(page.read().overview.modelCatalogStatus).toMatchObject({
+        error: null,
+        awaitingGateway: false,
+      });
       expect(request).toHaveBeenCalledTimes(3);
     },
   );

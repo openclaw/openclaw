@@ -264,19 +264,14 @@ describe("readScheduledTaskCommand", () => {
     options: {
       scriptLines?: string[];
       scriptEncoding?: "utf8" | "gbk";
-      env?:
-        | Record<string, string | undefined>
-        | ((tmpDir: string) => Record<string, string | undefined>);
     },
     run: (env: Record<string, string | undefined>) => Promise<void>,
   ) {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
     try {
-      const extraEnv = typeof options.env === "function" ? options.env(tmpDir) : options.env;
       const env = {
         USERPROFILE: tmpDir,
         OPENCLAW_PROFILE: "default",
-        ...extraEnv,
       };
       if (options.scriptLines) {
         const scriptPath = resolveTaskScriptPath(env);
@@ -315,38 +310,18 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 
-  it.each(["node gateway.js & node another.js"])(
-    "rejects an ambiguous effective launcher body: %s",
-    async (body) => {
-      await withScheduledTaskScript({ scriptLines: ["@echo off", body] }, async (env) => {
-        await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
-          "Effective Scheduled Task service command could not be inspected.",
-        );
-      });
-    },
-  );
-
-  it("preserves escaped CMD literals during strict inspection", async () => {
-    await withScheduledTaskScript(
-      {
-        scriptLines: [
-          "@echo off",
-          'cd /d "C:\\literal%%root%%\\caret^dir"',
-          'node gateway.js "%%WORKSPACE%%" "^!literal^!" "caret^literal"',
-        ],
-      },
-      async (env) => {
-        const command = await readScheduledTaskCommand(env, { requireEffective: true });
-        expect(command?.workingDirectory).toBe("C:\\literal%root%\\caret^dir");
-        expect(command?.programArguments).toEqual([
-          "node",
-          "gateway.js",
-          "%WORKSPACE%",
-          "!literal!",
-          "caret^literal",
-        ]);
-      },
-    );
+  it.each([
+    "node gateway.js & node another.js",
+    'node gateway.js >> "C:\\Logs\\gateway.log"2>&1',
+    '"%NODE_EXE%" gateway.js < NUL',
+    "node gateway.js !WORKSPACE! < NUL",
+    'cd /d "%WORKSPACE%"\r\nnode gateway.js < NUL',
+  ])("rejects an ambiguous effective launcher body: %s", async (body) => {
+    await withScheduledTaskScript({ scriptLines: ["@echo off", body] }, async (env) => {
+      await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
+        "Effective Scheduled Task service command could not be inspected.",
+      );
+    });
   });
 
   async function withWindowsLauncherFiles(
@@ -507,43 +482,15 @@ describe("readScheduledTaskCommand", () => {
     ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
   });
 
-  it("reads a custom-state UTF-8 launcher with Windows paths and inline environment", async () => {
-    await withScheduledTaskScript(
-      {
-        env: (tmpDir) => ({ OPENCLAW_STATE_DIR: path.join(tmpDir, "custom-state") }),
-        scriptLines: [
-          "@echo off",
-          "rem OpenClaw Gateway",
-          'cd /d "C:\\Users\\苗振\\.openclaw"',
-          "set NODE_ENV=production",
-          "set OPENCLAW_PORT=18789",
-          '"\\\\fileserver\\OpenClaw Share\\node.exe" "C:\\Program Files\\OpenClaw\\gateway.js" --verbose',
-        ],
-      },
-      async (env) => {
-        expect(await readScheduledTaskCommand(env)).toEqual({
-          programArguments: [
-            "\\\\fileserver\\OpenClaw Share\\node.exe",
-            "C:\\Program Files\\OpenClaw\\gateway.js",
-            "--verbose",
-          ],
-          workingDirectory: "C:\\Users\\苗振\\.openclaw",
-          environment: { NODE_ENV: "production", OPENCLAW_PORT: "18789" },
-          environmentValueSources: { NODE_ENV: "inline", OPENCLAW_PORT: "inline" },
-          sourcePath: resolveTaskScriptPath(env),
-        });
-      },
-    );
+  it.each([
+    'gateway.js>>"C:\\Logs\\out log" 2>&1<NUL',
+    'gateway.js < NUL >> "%USERPROFILE%\\.openclaw\\logs\\gateway-stdout.log" 2>&1',
+  ])("preserves arguments beside quoted or attached operators: %s", async (line) => {
+    await withScheduledTaskScript({ scriptLines: ["@echo off", `node ${line}`] }, async (env) => {
+      const result = await readScheduledTaskCommand(env, { requireEffective: true });
+      expect(result?.programArguments).toEqual(["node", "gateway.js"]);
+    });
   });
-
-  it.each([['gateway.js>>"C:\\Logs\\out log" 2>&1<NUL', ["gateway.js"]]])(
-    "preserves arguments beside quoted or attached operators: %s",
-    async (line, args) => {
-      await withScheduledTaskScript({ scriptLines: ["@echo off", `node ${line}`] }, async (env) => {
-        expect((await readScheduledTaskCommand(env))?.programArguments).toEqual(["node", ...args]);
-      });
-    },
-  );
 
   it.each(["%OPENCLAW_TEST_LOG_PATH%"])(
     "preserves unquoted redirect expansion boundaries: %s",

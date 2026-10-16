@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
@@ -5,7 +6,10 @@ import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.j
 import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
-import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
+import {
+  recoverCrabboxWarmImageCapture,
+  type WarmProfileRecord,
+} from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 import {
   CHECKPOINT_ID,
@@ -21,6 +25,9 @@ function fixture(
   failCreate = false,
   onCommand?: (argv: string[]) => ReturnType<typeof commandResult> | void,
   policy?: CrabboxWarmImagePolicy,
+  prepareCapture: Parameters<
+    typeof createCrabboxWarmImageManager
+  >[0]["prepareCapture"] = async () => {},
 ) {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-allocation-"));
   const calls: string[][] = [];
@@ -31,6 +38,7 @@ function fixture(
       state: crabboxState,
       warn,
       policy,
+      prepareCapture,
       runCommand: async (argv) => {
         calls.push(argv);
         const override = onCommand?.(argv);
@@ -94,6 +102,132 @@ function fixture(
 }
 
 describe("Crabbox durable allocation admission", () => {
+  it("admits lifetime only for a claimed capture before preparing or scrubbing its source", async () => {
+    const events: string[] = [];
+    const prepareCapture = vi.fn(async () => {
+      expect(openWarmImageStore().entries()[0]?.value.operation).toMatchObject({
+        type: "capture",
+        leaseId: "cbx_lifetime",
+        phase: "scrubbing",
+      });
+      events.push("lifetime");
+    });
+    const { manager, context } = fixture(false, undefined, undefined, prepareCapture);
+    const owner = manager();
+    const source = context("cbx_lifetime");
+    await owner.allocate(source);
+    await owner.markEnrolled(source.id);
+    await expect(
+      owner.capture({ ...source, onCaptureStart: () => events.push("claimed") }, async () => {
+        events.push("runtime-grant");
+        return {
+          timeoutMs: 30 * 60_000,
+          run: async () => {
+            events.push("prepare-and-scrub");
+          },
+        };
+      }),
+    ).resolves.toBe(true);
+    expect(events).toEqual(["claimed", "runtime-grant", "lifetime", "prepare-and-scrub"]);
+    expect(prepareCapture).toHaveBeenCalledWith(
+      expect.objectContaining({ ...source, sourcePreparationTimeoutMs: 30 * 60_000 }),
+    );
+    await expect(owner.capture(source)).resolves.toBe(false);
+    expect(prepareCapture).toHaveBeenCalledOnce();
+  });
+
+  it("skips optional capture visibly when lifetime cannot cover it and releases only its capture claim", async () => {
+    const { manager, context, calls, warn } = fixture(false, undefined, undefined, async () => {
+      throw new Error("lease_extension_budget_exceeded; existing deadline 2030-01-01T01:00:00Z");
+    });
+    const owner = manager();
+    const source = context("cbx_short_optional");
+    await owner.allocate(source);
+    await owner.markEnrolled(source.id);
+    calls.length = 0;
+    await expect(owner.capture({ ...source, teardown: true })).resolves.toBe(false);
+    expect(calls).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "capture skipped: lease_extension_budget_exceeded; existing deadline",
+      ),
+    );
+    expect(openWarmImageStore().entries()[0]?.value.operation).toBeUndefined();
+    expect((await owner.lookupLease(source.id))?.phase).toBe("enrolled");
+    await owner.release(source);
+    expect(await owner.lookupLease(source.id)).toBeUndefined();
+  });
+
+  it.each(["runtime grant", "lifetime admission"])(
+    "does not scrub a source recovered while %s was in flight",
+    async (phase) => {
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const prepareCapture = vi.fn(async () => {
+        if (phase === "lifetime admission") {
+          entered.resolve();
+          await release.promise;
+        }
+      });
+      const { manager, context, calls } = fixture(false, undefined, undefined, prepareCapture);
+      const owner = manager();
+      const source = context("cbx_recovered_admission");
+      await owner.allocate(source);
+      await owner.markEnrolled(source.id);
+      calls.length = 0;
+      const run = vi.fn(async () => {});
+      const capturing = owner.capture(source, async () => {
+        if (phase === "runtime grant") {
+          entered.resolve();
+          await release.promise;
+        }
+        return { timeoutMs: 30 * 60_000, run };
+      });
+      await entered.promise;
+      try {
+        const operation = openWarmImageStore().entries()[0]!.value.operation!;
+        if (operation.type !== "capture") {
+          throw new Error("Expected claimed capture");
+        }
+        await recoverCrabboxWarmImageCapture(crabboxState, operation.id, true);
+      } finally {
+        release.resolve();
+      }
+      await expect(capturing).resolves.toBe(false);
+      expect(calls).toEqual([]);
+      expect(run).not.toHaveBeenCalled();
+      expect(prepareCapture).toHaveBeenCalledTimes(phase === "runtime grant" ? 0 : 1);
+      expect(openWarmImageStore().entries()[0]?.value.operation).toBeUndefined();
+    },
+  );
+
+  it.each([false, true])(
+    "fails project preparation before source mutation when capture lifetime is denied (explicit requirement=%s)",
+    async (required) => {
+      const { manager, projectContext, calls } = fixture(false, undefined, undefined, async () => {
+        throw new Error("lease_extension_unsupported_provider; size lifetime at creation");
+      });
+      const owner = manager();
+      const source = projectContext("cbx_short_project");
+      await owner.allocate(source);
+      await owner.markPrepared(source.id, "a".repeat(40));
+      calls.length = 0;
+      const prepareAndScrub = vi.fn(async () => {});
+      await expect(
+        owner.capture(
+          { ...source, ...(required ? { projectCaptureRequired: true as const } : {}) },
+          async () => ({ timeoutMs: 30 * 60_000, run: prepareAndScrub }),
+        ),
+      ).rejects.toThrow(
+        "Crabbox project image preparation failed: lease_extension_unsupported_provider",
+      );
+      expect(prepareAndScrub).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+      expect(openWarmImageStore().entries()[0]?.value.operation).toBeUndefined();
+      expect((await owner.lookupLease(source.id))?.phase).toBe("prepared");
+    },
+  );
+
   it("reports cold preparation before warmup and snapshot reuse before fork, retaining the latest cold reason", async () => {
     const { manager, projectContext, calls } = fixture();
     const owner = manager();

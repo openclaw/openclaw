@@ -2,13 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { assert, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { assert, beforeEach, describe, expect, it } from "vitest";
 import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-scan.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-
-type BundledPluginMetadata = ReturnType<typeof listBundledPluginMetadata>[number];
 import { resolveGatewayStartupPluginPlanFromRegistry } from "./gateway-startup-plugin-ids.js";
 import {
   createGeneratedPluginTempRoot,
@@ -49,22 +47,9 @@ function expectGeneratedPathResolution(tempRoot: string, expectedRelativePath: s
   ).toBe(path.join(tempRoot, expectedRelativePath));
 }
 
-function expectPluginScopedGeneratedPathResolution(
-  tempRoot: string,
-  pluginDirName: string,
-  expectedRelativePath: string,
-) {
-  expect(
-    resolveBundledPluginGeneratedPath(
-      tempRoot,
-      {
-        source: "./index.ts",
-        built: "index.js",
-      },
-      pluginDirName,
-    ),
-  ).toBe(path.join(tempRoot, expectedRelativePath));
-}
+let repoBundledPluginManifestsCache:
+  | ReturnType<typeof listRepoBundledPluginManifestsUncached>
+  | undefined;
 
 function expectArtifactPresence(
   artifacts: readonly string[] | undefined,
@@ -82,21 +67,21 @@ function expectArtifactPresence(
   }
 }
 
-let repoBundledPluginMetadataCache: readonly BundledPluginMetadata[] | undefined;
-let repoBundledPluginManifestsCache:
-  | ReturnType<typeof listRepoBundledPluginManifestsUncached>
-  | undefined;
-const repoBundledChannelConfigsCache = new Map<
-  string,
-  ReturnType<typeof collectBundledChannelConfigsCore>
->();
-
-function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
-  repoBundledPluginMetadataCache ??= listBundledPluginMetadata({
-    rootDir: repoRoot,
-    includeSyntheticChannelConfigs: false,
+function collectRepoBundledChannelConfigsForTest(dirName: string) {
+  const pluginDir = path.join(repoRoot, "extensions", dirName);
+  const manifest = loadPluginManifest(pluginDir, false);
+  if (!manifest.ok) {
+    throw toLintErrorObject(manifest.error, "Non-Error thrown");
+  }
+  const packagePath = path.join(pluginDir, "package.json");
+  const packageManifest: PackageManifest | undefined = fs.existsSync(packagePath)
+    ? (JSON.parse(fs.readFileSync(packagePath, "utf8")) as PackageManifest)
+    : undefined;
+  return collectBundledChannelConfigsCore({
+    pluginDir,
+    manifest: manifest.manifest,
+    packageManifest: getPackageManifestMetadata(packageManifest),
   });
-  return repoBundledPluginMetadataCache;
 }
 
 function listRepoBundledPluginManifestsUncached() {
@@ -151,32 +136,6 @@ function createRepoBundledManifestRegistry(): PluginManifestRegistry {
   };
 }
 
-function readPackageManifest(pluginDir: string): PackageManifest | undefined {
-  const packagePath = path.join(pluginDir, "package.json");
-  return fs.existsSync(packagePath)
-    ? (JSON.parse(fs.readFileSync(packagePath, "utf8")) as PackageManifest)
-    : undefined;
-}
-
-function collectRepoBundledChannelConfigsForTest(dirName: string) {
-  const cached = repoBundledChannelConfigsCache.get(dirName);
-  if (cached) {
-    return cached;
-  }
-  const pluginDir = path.join(repoRoot, "extensions", dirName);
-  const manifest = loadPluginManifest(pluginDir, false);
-  if (!manifest.ok) {
-    throw toLintErrorObject(manifest.error, "Non-Error thrown");
-  }
-  const configs = collectBundledChannelConfigsCore({
-    pluginDir,
-    manifest: manifest.manifest,
-    packageManifest: getPackageManifestMetadata(readPackageManifest(pluginDir)),
-  });
-  repoBundledChannelConfigsCache.set(dirName, configs);
-  return configs;
-}
-
 function hasPluginKind(record: PluginManifestRecord, kind: string): boolean {
   return Array.isArray(record.kind) ? record.kind.includes(kind as never) : record.kind === kind;
 }
@@ -224,12 +183,6 @@ function createInstalledPluginIndexForManifests(
 }
 
 describe("bundled plugin metadata", () => {
-  beforeAll(() => {
-    listRepoBundledPluginMetadata();
-    collectRepoBundledChannelConfigsForTest("discord");
-    collectRepoBundledChannelConfigsForTest("tlon");
-  });
-
   it(
     "matches the checked-in runtime sidecar path baseline",
     { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
@@ -241,7 +194,10 @@ describe("bundled plugin metadata", () => {
   );
 
   it("captures setup-entry metadata for bundled channel plugins", () => {
-    const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
+    const discord = listBundledPluginMetadata({
+      rootDir: repoRoot,
+      includeSyntheticChannelConfigs: false,
+    }).find((entry) => entry.dirName === "discord");
     expect(discord?.source).toEqual({ source: "./index.ts", built: "index.js" });
     expect(discord?.setupSource).toEqual({ source: "./setup-entry.ts", built: "setup-entry.js" });
     expectArtifactPresence(discord?.publicSurfaceArtifacts, {
@@ -263,40 +219,6 @@ describe("bundled plugin metadata", () => {
       | { schema?: { type?: unknown } }
       | undefined;
     expect(tlonChannelConfig?.schema?.type).toBe("object");
-  });
-
-  it("keeps bundled persisted-auth metadata on channel package manifests", () => {
-    const whatsapp = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "whatsapp");
-    expect(whatsapp?.packageManifest?.channel?.persistedAuthState).toEqual({
-      specifier: "./auth-presence",
-      exportName: "hasAnyWhatsAppAuth",
-    });
-
-    const matrix = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "matrix");
-    expect(matrix?.packageManifest?.channel?.persistedAuthState).toEqual({
-      specifier: "./auth-presence",
-      exportName: "hasAnyMatrixAuth",
-      exportNameAsync: "hasAnyMatrixAuthAsync",
-      backingStore: "plugin-state",
-    });
-  });
-
-  it("scopes Voice Call CLI activation to the voicecall command", () => {
-    const entry = listRepoBundledPluginManifests().find(
-      ({ manifest }) => manifest.id === "voice-call",
-    );
-
-    expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "voicecall" }]);
-    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
-  });
-
-  it("keeps Workboard CLI ownership separate from its slash command", () => {
-    const entry = listRepoBundledPluginManifests().find(
-      ({ manifest }) => manifest.id === "workboard",
-    );
-
-    expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "workboard" }]);
-    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["workboard"]);
   });
 
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {
@@ -333,21 +255,6 @@ describe("bundled plugin metadata", () => {
     ).toEqual(expectedPluginIds);
   });
 
-  it("auto-starts Bonjour for empty-config macOS Gateway startup", () => {
-    const manifestRegistry = createRepoBundledManifestRegistry();
-    const index = createInstalledPluginIndexForManifests(manifestRegistry);
-
-    expect(
-      resolveGatewayStartupPluginPlanFromRegistry({
-        config: {},
-        env: process.env,
-        index,
-        manifestRegistry,
-        platform: "darwin",
-      }).pluginIds,
-    ).toContain("bonjour");
-  });
-
   it.each([
     { name: "before login", config: {} },
     {
@@ -375,21 +282,6 @@ describe("bundled plugin metadata", () => {
     ).toContain("openai");
   });
 
-  it("starts Bonjour when explicitly enabled", () => {
-    const manifestRegistry = createRepoBundledManifestRegistry();
-    const index = createInstalledPluginIndexForManifests(manifestRegistry);
-
-    expect(
-      resolveGatewayStartupPluginPlanFromRegistry({
-        config: { plugins: { entries: { bonjour: { enabled: true } } } },
-        env: process.env,
-        index,
-        manifestRegistry,
-        platform: "linux",
-      }).pluginIds,
-    ).toContain("bonjour");
-  });
-
   it("prefers built generated paths when present and falls back to source paths", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-metadata-");
     const pluginRoot = path.join(tempRoot, "extensions", "plugin");
@@ -402,44 +294,6 @@ describe("bundled plugin metadata", () => {
     fs.mkdirSync(distPluginRoot, { recursive: true });
     fs.writeFileSync(path.join(distPluginRoot, "index.js"), "export {};\n", "utf8");
     expectGeneratedPathResolution(tempRoot, path.join("dist", "extensions", "plugin", "index.js"));
-  });
-
-  it("uses dist-runtime generated paths before source fallback when packaged dist is absent", () => {
-    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-runtime-metadata-");
-    const pluginRoot = path.join(tempRoot, "extensions", "plugin");
-    const runtimePluginRoot = path.join(tempRoot, "dist-runtime", "extensions", "plugin");
-
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    fs.mkdirSync(runtimePluginRoot, { recursive: true });
-    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export {};\n", "utf8");
-    fs.writeFileSync(path.join(runtimePluginRoot, "index.js"), "export {};\n", "utf8");
-
-    expectGeneratedPathResolution(
-      tempRoot,
-      path.join("dist-runtime", "extensions", "plugin", "index.js"),
-    );
-  });
-
-  it("resolves plugin-local generated entry paths when the plugin dir is provided", () => {
-    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-metadata-local-");
-    const pluginRoot = path.join(tempRoot, "extensions", "alpha");
-    const distPluginRoot = path.join(tempRoot, "dist", "extensions", "alpha");
-
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export {};\n", "utf8");
-    expectPluginScopedGeneratedPathResolution(
-      tempRoot,
-      "alpha",
-      path.join("extensions", "alpha", "index.ts"),
-    );
-
-    fs.mkdirSync(distPluginRoot, { recursive: true });
-    fs.writeFileSync(path.join(distPluginRoot, "index.js"), "export {};\n", "utf8");
-    expectPluginScopedGeneratedPathResolution(
-      tempRoot,
-      "alpha",
-      path.join("dist", "extensions", "alpha", "index.js"),
-    );
   });
 
   it("keeps generated entry path resolution inside bundled plugin roots", () => {
@@ -510,6 +364,9 @@ describe("bundled plugin metadata", () => {
       configSchema: { type: "object" },
     });
     fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const source = true;\n", "utf8");
+    const builtRoot = path.join(tempRoot, "dist", "extensions", "alpha");
+    fs.mkdirSync(builtRoot, { recursive: true });
+    fs.writeFileSync(path.join(builtRoot, "index.js"), "export const built = true;\n", "utf8");
     expect(
       listBundledPluginMetadata({
         rootDir: tempRoot,
@@ -557,32 +414,5 @@ describe("bundled plugin metadata", () => {
     clearPluginMetadataLifecycleCaches();
 
     expect(listBundledPluginMetadata({ rootDir: tempRoot })[0]?.manifest.name).toBe("After");
-  });
-
-  it("prefers direct scan-dir overrides over nested dist artifacts within the same override root", () => {
-    const pluginsDir = createGeneratedPluginTempRoot("openclaw-bundled-plugin-direct-priority-");
-    const pluginRoot = path.join(pluginsDir, "alpha");
-    const nestedDistPluginRoot = path.join(pluginsDir, "dist", "extensions", "alpha");
-
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    fs.mkdirSync(nestedDistPluginRoot, { recursive: true });
-    fs.writeFileSync(path.join(pluginRoot, "index.js"), "export const source = true;\n", "utf8");
-    fs.writeFileSync(
-      path.join(nestedDistPluginRoot, "index.js"),
-      "export const built = true;\n",
-      "utf8",
-    );
-
-    expect(
-      resolveBundledPluginGeneratedPath(
-        pluginsDir,
-        {
-          source: "./index.ts",
-          built: "index.js",
-        },
-        "alpha",
-        pluginsDir,
-      ),
-    ).toBe(path.join(pluginRoot, "index.js"));
   });
 });

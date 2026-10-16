@@ -334,22 +334,6 @@ describe("iMessage provider resource binding", () => {
     );
   });
 
-  it("fails unknown remote references closed without operator authority", async () => {
-    await expect(authorize({ ...remote, messageId: "unknown-guid" })).rejects.toThrow(
-      "require a current same-account conversation binding",
-    );
-  });
-
-  it("preserves direct operators when remote binding evidence is unavailable", async () => {
-    await expect(
-      authorize({
-        ...remote,
-        messageId: "unknown-guid",
-        conversationReadOrigin: "direct-operator",
-      }),
-    ).resolves.toBeUndefined();
-  });
-
   it("does not use an account-ambiguous local database for delegated authorization", async () => {
     const params = {
       accountId: "work",

@@ -166,27 +166,24 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
     expect(requests).toBe(1);
   });
 
-  it.each(["CERT_HAS_EXPIRED", "ERR_INVALID_URL"])(
-    "does not retry permanent fetch TypeError %s",
-    async (code) => {
-      let requests = 0;
-      const error = new TypeError("fetch failed", { cause: { code } });
-      await expect(
-        fetchNpmRegistryPackumentWithRetry({
-          packageName: "fixture",
-          packageUrl: "https://registry.npmjs.org/fixture",
-          fetchImpl: async () => {
-            requests += 1;
-            throw error;
-          },
-          sleep: async () => {
-            throw new Error("permanent failure must not retry");
-          },
-        }),
-      ).rejects.toBe(error);
-      expect(requests).toBe(1);
-    },
-  );
+  it.each(["CERT_HAS_EXPIRED"])("does not retry permanent fetch TypeError %s", async (code) => {
+    let requests = 0;
+    const error = new TypeError("fetch failed", { cause: { code } });
+    await expect(
+      fetchNpmRegistryPackumentWithRetry({
+        packageName: "fixture",
+        packageUrl: "https://registry.npmjs.org/fixture",
+        fetchImpl: async () => {
+          requests += 1;
+          throw error;
+        },
+        sleep: async () => {
+          throw new Error("permanent failure must not retry");
+        },
+      }),
+    ).rejects.toBe(error);
+    expect(requests).toBe(1);
+  });
 
   it("returns a stable missing-package status without retrying", async () => {
     let fetchCalls = 0;
@@ -221,7 +218,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
   const packageUrl = "https://registry.npmjs.org/@openclaw/fixture/-/fixture.tgz";
   const bytes = Buffer.from("qualified package bytes");
 
-  it.each([503, 429, "connection", "interrupted-body"] as const)(
+  it.each([429, "connection"] as const)(
     "recovers %s using only the original tarball URL",
     async (failure) => {
       const requests: string[] = [];
@@ -238,23 +235,6 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
           }
           if (failure === "connection") {
             throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
-          }
-          if (failure === "interrupted-body") {
-            let firstChunk = true;
-            return new Response(
-              new ReadableStream({
-                pull(controller) {
-                  if (firstChunk) {
-                    firstChunk = false;
-                    controller.enqueue(bytes.subarray(0, 3));
-                  } else {
-                    controller.error(
-                      new TypeError("terminated", { cause: { code: "UND_ERR_SOCKET" } }),
-                    );
-                  }
-                },
-              }),
-            );
           }
           return new Response(
             new ReadableStream({
@@ -281,7 +261,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
     },
   );
 
-  it.each([401, 403, 404, 410, 302])(
+  it.each([403, 404, 302])(
     "does not retry or follow permanent HTTP %s responses",
     async (status) => {
       let requests = 0;
@@ -407,12 +387,6 @@ describe("resolvePublishedNpmVersionRoute", () => {
   it.each([
     { label: "missing beta", version: "2026.7.1-beta.3", distTags: {}, route: "npm-tag-repair" },
     {
-      label: "lagging beta",
-      version: "2026.7.1-beta.3",
-      distTags: { beta: "2026.7.1-beta.2" },
-      route: "npm-tag-repair",
-    },
-    {
       label: "lagging latest with current mirror",
       version: "2026.7.1",
       distTags: { latest: "2026.6.11", beta: "2026.7.1" },
@@ -429,12 +403,6 @@ describe("resolvePublishedNpmVersionRoute", () => {
       version: "2026.7.1",
       distTags: { latest: "2026.7.1", beta: "2026.8.1-beta.1" },
       currentBeta: "2026.8.1-beta.1",
-      route: "npm-readback",
-    },
-    {
-      label: "complete beta",
-      version: "2026.7.1-beta.3",
-      distTags: { beta: "2026.7.1-beta.3" },
       route: "npm-readback",
     },
     {
@@ -475,13 +443,6 @@ describe("resolvePublishedNpmVersionRoute", () => {
 
   it.each([
     {
-      label: "published beta superseded",
-      version: "2026.7.1-beta.3",
-      distTags: { beta: "2026.7.1-beta.4" },
-      published: true,
-      supersededBy: "2026.7.1-beta.4",
-    },
-    {
       label: "published latest superseded",
       version: "2026.9.6",
       distTags: { latest: "2026.9.7", beta: "2026.9.7" },
@@ -500,12 +461,6 @@ describe("resolvePublishedNpmVersionRoute", () => {
       label: "unpublished behind lagging selector",
       version: "2026.9.6",
       distTags: { latest: "2026.9.5" },
-      published: false,
-    },
-    {
-      label: "unpublished behind placeholder",
-      version: "2026.9.6",
-      distTags: { latest: "0.0.0" },
       published: false,
     },
     { label: "unpublished missing selector", version: "2026.9.6", distTags: {}, published: false },

@@ -1,14 +1,13 @@
-import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { createGroupedMessageHarness } from "./chat-message-native.test-support.tsx";
 import baseCss from "../../../styles/base.css?inline";
 import layoutCss from "../../../styles/chat/layout.css?inline";
 import messageCss from "../../../styles/chat/message-layout.css?inline";
 import textCss from "../../../styles/chat/text.css?inline";
 
-const containers: HTMLElement[] = [];
+const views = new Map<HTMLElement, ReturnType<typeof createGroupedMessageHarness>>();
 const originalThemeMode = document.documentElement.getAttribute("data-theme-mode");
 const imageUrl =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAHElEQVR4nGP4z8DwnxLMMGrAsDCAQv2jBgwPAwAxtf4Q24P5oAAAAABJRU5ErkJggg==";
@@ -33,10 +32,11 @@ const video = {
 };
 
 afterEach(() => {
-  for (const container of containers.splice(0)) {
-    render(nothing, container);
+  for (const [container, view] of views) {
+    view.unmount();
     container.remove();
   }
+  views.clear();
   vi.unstubAllGlobals();
   if (originalThemeMode === null) {
     document.documentElement.removeAttribute("data-theme-mode");
@@ -48,23 +48,21 @@ afterEach(() => {
 function mount(width: number, theme: string) {
   const container = document.body.appendChild(document.createElement("section"));
   container.style.width = `${width}px`;
-  containers.push(container);
+  const stylesheet = document.createElement("style");
+  stylesheet.textContent = baseCss + layoutCss + messageCss + textCss;
+  const group = document.createElement("div");
+  container.append(stylesheet, group);
+  const view = createGroupedMessageHarness(group);
+  views.set(container, view);
   document.documentElement.dataset.themeMode = theme;
   return {
     container,
     draw: (content: unknown[], isStreaming = false, role = "assistant") => {
-      render(
-        html`<style>
-            ${baseCss}${layoutCss}${messageCss}${textCss}
-          </style>
-          <div class="chat-group ${role}">
-            ${renderGroupedMessage(prepareChatMessageRender({ role, content }), "media-spacing", {
-              isStreaming,
-              showReasoning: false,
-            })}
-          </div>`,
-        container,
-      );
+      group.className = `chat-group ${role}`;
+      view.render(prepareChatMessageRender({ role, content }), "media-spacing", {
+        isStreaming,
+        showReasoning: false,
+      });
     },
   };
 }
@@ -125,7 +123,12 @@ describe("transcript media block spacing", () => {
       const images = Array.from(
         container.querySelectorAll<HTMLImageElement>("img.chat-message-image"),
       );
-      await Promise.all(images.map((element) => element.decode()));
+      // Admit each lazy image through the viewport before awaiting its decode.
+      // The last media block can be below Chromium's loading margin.
+      for (const element of images) {
+        element.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+        await element.decode();
+      }
       expectRhythm(container, 11);
       if (streaming) {
         for (const isStreaming of [true, false]) {

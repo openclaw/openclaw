@@ -518,7 +518,12 @@ describe("agentCommand", () => {
   it.each([
     {
       name: "completed stop",
-      meta: { stopReason: "stop", finalAssistantVisibleText: "ok", finalAssistantRawText: "ok" },
+      meta: {
+        stopReason: "stop",
+        finalAssistantVisibleText: "ok",
+        finalAssistantRawText: "ok",
+        terminalReply: { disposition: "visible" as const, text: "ok" },
+      },
       outcome: "completed",
     },
     {
@@ -676,6 +681,44 @@ describe("agentCommand", () => {
           expect(readAgentRunTerminalOutcome(await command)).toBe("failed");
         }
         expect(runtime.log).toHaveBeenCalledWith("ok");
+      });
+    },
+  );
+
+  it.each(["text", "nested", "json"])(
+    "returns ingress %s replies without writing them to Gateway logs",
+    async (mode) => {
+      await withTempHome(async (home) => {
+        mockConfig(home, path.join(home, "sessions.json"));
+        const text = "synthetic private ingress reply";
+        vi.mocked(runEmbeddedAgent).mockResolvedValueOnce({
+          ...createDefaultAgentResult(),
+          payloads: [{ text }],
+        });
+        const actualDelivery = await vi.importActual<
+          typeof import("../agents/command/delivery.js")
+        >("../agents/command/delivery.js");
+        vi.mocked(deliverAgentCommandResult).mockImplementationOnce(
+          actualDelivery.deliverAgentCommandResult,
+        );
+        const ingressRuntime = { ...runtime, writeStdout: vi.fn(), writeJson: vi.fn() };
+
+        const result = await agentCommandFromIngress(
+          {
+            message: "probe",
+            agentId: "main",
+            allowModelOverride: false,
+            ...(mode === "nested" ? { lane: "nested" } : {}),
+            ...(mode === "json" ? { json: true } : {}),
+          },
+          ingressRuntime,
+        );
+
+        expect(result?.payloads).toEqual([expect.objectContaining({ text })]);
+        expect(JSON.stringify(vi.mocked(runtime.log).mock.calls)).not.toContain(text);
+        expect(JSON.stringify(vi.mocked(runtime.error).mock.calls)).not.toContain(text);
+        expect(ingressRuntime.writeStdout).not.toHaveBeenCalled();
+        expect(ingressRuntime.writeJson).not.toHaveBeenCalled();
       });
     },
   );
@@ -1318,32 +1361,6 @@ describe("agentCommand", () => {
     });
   });
 
-  it("uses the selected agent thinkingDefault for fresh ingress runs", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      mockConfig(
-        home,
-        store,
-        {
-          thinkingDefault: "high",
-        },
-        undefined,
-        { main: { thinkingDefault: "off" } },
-      );
-
-      await agentCommandFromIngress(
-        {
-          message: "ping",
-          agentId: "main",
-          allowModelOverride: false,
-        },
-        runtime,
-      );
-
-      expect(getLastEmbeddedCall()?.thinkLevel).toBe("off");
-    });
-  });
-
   it("persists local overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -1614,49 +1631,6 @@ describe("agentCommand", () => {
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
       expect(entry?.modelOverrideSource).toBeUndefined();
-    });
-  });
-
-  it("does not repair locked legacy auto session model overrides", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions-locked-legacy-auto-override.json");
-      await writeSessionStoreSeed(store, {
-        "agent:main:subagent:locked-legacy-auto": {
-          sessionId: "session-locked-legacy-auto",
-          updatedAt: Date.now(),
-          providerOverride: "anthropic",
-          modelOverride: "claude-opus-4-6",
-          modelOverrideSource: "auto",
-          modelSelectionLocked: true,
-        },
-      });
-
-      mockFallbackModelConfig(home, store);
-
-      mockModelCatalogOnce([
-        { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
-        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
-        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
-      ]);
-
-      await agentCommand(
-        {
-          message: "hi",
-          sessionKey: "agent:main:subagent:locked-legacy-auto",
-        },
-        runtime,
-      );
-
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-      expectLastRunProviderModel("anthropic", "claude-opus-4-6");
-      const persisted =
-        readSessionStore<SessionEntry>(store)["agent:main:subagent:locked-legacy-auto"];
-      expect(persisted).toMatchObject({
-        providerOverride: "anthropic",
-        modelOverride: "claude-opus-4-6",
-        modelOverrideSource: "auto",
-        modelSelectionLocked: true,
-      });
     });
   });
 

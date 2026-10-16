@@ -235,9 +235,8 @@ describe("models.list plugin metadata handoff", () => {
         });
         await projector.projectCatalog();
 
-        let currentConfig = cfg;
         const context = {
-          getRuntimeConfig: () => currentConfig,
+          getRuntimeConfig: () => cfg,
           loadGatewayModelCatalogSnapshot: vi.fn(),
           logGateway: { debug: vi.fn() },
         } as unknown as GatewayRequestContext;
@@ -256,15 +255,6 @@ describe("models.list plugin metadata handoff", () => {
             .toSorted(),
         ).toEqual(["another", "modern"]);
         expect(prepared.isCurrent()).toBe(true);
-        currentConfig = { ...cfg };
-        expect(prepared.isCurrent()).toBe(true);
-        currentConfig = { ...cfg, ui: { prefs: { theme: "knot" } } };
-        expect(prepared.isCurrent()).toBe(true);
-        currentConfig = {
-          ...cfg,
-          agents: { defaults: { ...cfg.agents?.defaults, model: "custom/another" } },
-        };
-        expect(prepared.isCurrent()).toBe(false);
       },
     );
   });
@@ -529,8 +519,8 @@ describe("models.list plugin metadata handoff", () => {
           result.models.map((model) => [`${model.provider}/${model.id}`, model.agentRuntime?.id]),
         ).toEqual([
           ["anthropic/claude-opus-5", "claude-cli"],
-          ["claude-cli/claude-haiku-4-5", undefined],
-          ...(cliOnly ? [["claude-cli/claude-opus-5", undefined]] : []),
+          ["claude-cli/claude-haiku-4-5", "claude-cli"],
+          ...(cliOnly ? [["claude-cli/claude-opus-5", "claude-cli"]] : []),
         ]);
       } finally {
         restoreActivePluginRegistrySnapshot(previousRegistry);

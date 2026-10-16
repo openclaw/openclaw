@@ -232,7 +232,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
           `Session ${params.sessionKey} was archived before cloud worker ${params.action}. Retry.`,
         );
       }
-      using runtime = await params.sessionRuntime.prepareWorkerPlacementSessionRuntime({
+      const readRuntime = await params.sessionRuntime.prepareWorkerPlacementSessionRuntime({
         cfg: params.getConfig(),
         entry,
         agentId: currentTarget.agentId,
@@ -243,7 +243,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
         params.signal?.throwIfAborted();
         const config = params.getConfig();
         assertCurrent(config);
-        const currentRuntime = runtime.read(config, entry);
+        const currentRuntime = readRuntime(config, entry);
         if (
           params.sessionRuntime.resolveWorkerPlacementExecutionMode(currentRuntime) !==
           params.executionMode

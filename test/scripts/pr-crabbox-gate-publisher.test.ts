@@ -32,6 +32,7 @@ const runId = "run_abc123";
 const leaseId = "cbx_def456";
 const serviceOwner = "unknown";
 const proofEndedAt = Date.parse("2026-08-28T01:30:00Z");
+const recoveryHomes = new Set<string>();
 
 type PublisherWorkflow = {
   jobs: {
@@ -165,11 +166,25 @@ function brokerEvents(overrides: Record<number, Record<string, unknown>> = {}) {
     },
     { type: "command.started" },
     { exitCode: 0, type: "command.finished" },
-    { type: "lease.released" },
+    { phase: "released", type: "lease.released" },
   ];
   return values.map((value, index) =>
     Object.assign(value, overrides[index], { runID: runId, seq: index + 1 }),
   );
+}
+
+function brokerLease(overrides: Record<string, unknown> = {}) {
+  return {
+    id: leaseId,
+    owner: serviceOwner,
+    org: "openclaw",
+    provider: "aws",
+    state: "released",
+    cleanupStatus: "complete",
+    cleanupCompletedAt: "2026-08-28T01:31:00Z",
+    host: "",
+    ...overrides,
+  };
 }
 
 function pullRequest(overrides: Record<string, unknown> = {}) {
@@ -252,6 +267,7 @@ function crabboxRunner() {
       stream?: boolean;
       input?: string;
     }) => {
+      recoveryHomes.add(childEnv.HOME!);
       if (args[0] === "config") {
         expect(stream).toBeUndefined();
         expect(input).toBeUndefined();
@@ -263,6 +279,12 @@ function crabboxRunner() {
             coordinator: "https://crabbox.example",
           }),
         };
+      }
+      if (args[0] === "stop") {
+        expect(args).toEqual(["stop", "--provider", "aws", "--id", leaseId, "--wait"]);
+        expect(stream).toBeUndefined();
+        expect(input).toBeUndefined();
+        return { exitCode: 0, stdout: "", stderr: `released lease=${leaseId} server=fixture\n` };
       }
       expect(stream).toBe(true);
       expect(input).toBe(transport().input);
@@ -403,6 +425,8 @@ describe("Crabbox gate request and broker proof", () => {
       retainedLog(),
     ],
     ["marker", {}, brokerEvents(), retainedLog().replace("test:ok", "missing")],
+    ["terminal lease", {}, brokerEvents({ 5: { leaseID: "cbx_other" } }), retainedLog()],
+    ["terminal phase", {}, brokerEvents({ 5: { phase: "running" } }), retainedLog()],
   ] as const)("rejects mismatched %s", (_label, runOverrides, events, log) => {
     expect(() => verifyProof({ events, log, run: brokerRun(runOverrides) })).toThrow();
   });
@@ -445,7 +469,13 @@ describe("Crabbox gate publisher boundary", () => {
     outputRoot = mkdtempSync(path.join(tmpdir(), "crabbox-publisher-test-"));
     outputPath = path.join(outputRoot, "output");
   });
-  afterEach(() => rmSync(outputRoot, { force: true, recursive: true }));
+  afterEach(() => {
+    rmSync(outputRoot, { force: true, recursive: true });
+    for (const home of recoveryHomes) {
+      rmSync(home, { force: true, recursive: true });
+    }
+    recoveryHomes.clear();
+  });
 
   function phaseEnv(phase: "proof" | "publish", overrides: NodeJS.ProcessEnv = {}) {
     return env({
@@ -458,6 +488,8 @@ describe("Crabbox gate publisher boundary", () => {
   function harness(
     overrides: {
       ancestry?: Record<string, unknown>;
+      events?: ReturnType<typeof brokerEvents>;
+      lease?: Record<string, unknown>;
       mainShas?: string[];
       membership?: Record<string, unknown>;
       principal?: Record<string, unknown>;
@@ -528,13 +560,16 @@ describe("Crabbox gate publisher boundary", () => {
           return servicePrincipal(overrides.principal);
         }
         if (requestPath.endsWith("/events?limit=500")) {
-          return { events: brokerEvents() };
+          return { events: overrides.events ?? brokerEvents() };
         }
         if (requestPath.endsWith("/logs") && options?.text) {
           return retainedLog();
         }
         if (requestPath === `/v1/runs/${runId}`) {
           return { run: brokerRun(overrides.run) };
+        }
+        if (requestPath === `/v1/leases/${leaseId}`) {
+          return { lease: brokerLease(overrides.lease) };
         }
         throw new Error(`unexpected broker call: ${requestPath}`);
       }),
@@ -563,6 +598,68 @@ describe("Crabbox gate publisher boundary", () => {
       ...overrides,
     });
   }
+
+  it.each(["released", "cleanup"])(
+    "waits for confirmed cleanup before handing off %s workload proof",
+    async (phase) => {
+      const values = harness({
+        run: { phase },
+        events: brokerEvents({ 5: { phase } }),
+      });
+      const stopStarted = Promise.withResolvers<void>();
+      const stopCompleted = Promise.withResolvers<void>();
+      const runCrabbox = vi.fn(async (input: Parameters<typeof values.runCrabbox>[0]) => {
+        const result = await values.runCrabbox(input);
+        if (input.args[0] === "run") {
+          return {
+            ...result,
+            stderr: result.stderr.replace('"leaseStopped":true', '"leaseStopped":false'),
+          };
+        }
+        if (input.args[0] === "stop") {
+          stopStarted.resolve();
+          await stopCompleted.promise;
+        }
+        return result;
+      });
+      const proof = runPhase(values, "proof", { runCrabbox });
+      await stopStarted.promise;
+      const homes = runCrabbox.mock.calls.map(([input]) => input.env.HOME);
+      expect(new Set(homes).size).toBe(1);
+      expect(existsSync(homes[0]!)).toBe(true);
+      expect(existsSync(outputPath)).toBe(false);
+      expect(values.broker.request).not.toHaveBeenCalledWith(`/v1/leases/${leaseId}`);
+      stopCompleted.resolve();
+      await expect(proof).resolves.toMatchObject({ context: { runId, leaseId } });
+      expect(existsSync(homes[0]!)).toBe(false);
+      expect(readFileSync(outputPath, "utf8")).toBe(`run_id=${runId}\nlease_id=${leaseId}\n`);
+      expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
+      await expect(runPhase(values, "publish")).resolves.toMatchObject({ checkId: 88 });
+    },
+  );
+
+  it.each([
+    ["failed stop", { exitCode: 5, stderr: "cleanup pending" }, {}],
+    ["accepted cleanup", { exitCode: 0, stderr: `release accepted lease=${leaseId}` }, {}],
+    ["wrong stop lease", { exitCode: 0, stderr: "released lease=cbx_other server=fixture" }, {}],
+    ["pending broker cleanup", {}, { cleanupStatus: "pending", cleanupCompletedAt: undefined }],
+    ["wrong broker lease", {}, { id: "cbx_other" }],
+    ["malformed completion receipt", {}, { cleanupCompletedAt: 1 }],
+    ["retained access", {}, { host: "private-host.example" }],
+  ])("retains recovery ownership after %s", async (_label, stop, lease) => {
+    const values = harness({ lease });
+    const runCrabbox = vi.fn(async (input: Parameters<typeof values.runCrabbox>[0]) => {
+      const result = await values.runCrabbox(input);
+      return input.args[0] === "stop" ? { ...result, ...stop } : result;
+    });
+    const proof = runPhase(values, "proof", { runCrabbox });
+    await expect(proof).rejects.toThrow(/recovery home retained/u);
+    await expect(proof).rejects.toThrow(`run=${runId} lease=${leaseId}`);
+    await expect(proof).rejects.toThrow(`crabbox stop --provider aws --id ${leaseId} --wait`);
+    expect(existsSync(runCrabbox.mock.calls[0]![0].env.HOME!)).toBe(true);
+    expect(existsSync(outputPath)).toBe(false);
+    expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
+  });
 
   it("uses fresh membership authority after a proof outlives the initial token", async () => {
     const values = harness();
@@ -599,7 +696,7 @@ describe("Crabbox gate publisher boundary", () => {
     expect(initialOrganization.request).toHaveBeenCalledTimes(1);
     expect(readFileSync(outputPath, "utf8")).toBe(`run_id=${runId}\nlease_id=${leaseId}\n`);
     expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
-    expect(values.runCrabbox).toHaveBeenCalledTimes(2);
+    expect(values.runCrabbox).toHaveBeenCalledTimes(3);
     expect(values.broker.request).toHaveBeenCalledWith(`/v1/runs/${runId}`);
 
     values.broker.request.mockClear();
@@ -665,7 +762,7 @@ describe("Crabbox gate publisher boundary", () => {
         env: phaseEnv("proof", { GITHUB_OUTPUT: outputRoot }),
       }),
     ).rejects.toThrow(/EISDIR/u);
-    expect(values.runCrabbox).toHaveBeenCalledTimes(2);
+    expect(values.runCrabbox).toHaveBeenCalledTimes(3);
     expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
   });
 
@@ -695,6 +792,8 @@ describe("Crabbox gate publisher boundary", () => {
     ["revoked administrator", { membership: { ...activeMembership(), role: "member" } }],
     ["changed broker principal", { principal: { owner: "other-owner" } }],
     ["mismatched lease", { run: { leaseID: "cbx_other" } }],
+    ["pending cleanup", { lease: { cleanupStatus: "pending", cleanupCompletedAt: undefined } }],
+    ["mismatched cleanup lease", { lease: { id: "cbx_other" } }],
     ["expired completed proof", { run: { endedAt: "2026-08-28T01:00:00Z" } }],
   ])("revalidates %s in the publication phase", async (_label, overrides) => {
     const values = harness(overrides);
@@ -876,9 +975,9 @@ describe("Crabbox gate workflow", () => {
     if (typeof installCommand !== "string") {
       throw new Error("Crabbox install command is missing");
     }
-    expect(installCommand).toContain("crabbox_0.46.0_linux_amd64.tar.gz");
+    expect(installCommand).toContain("crabbox_0.77.0_linux_amd64.tar.gz");
     expect(installCommand).toContain(
-      "6a9341e810307356361dbed4c4b84be28a036b5cc291af1566d2ccd376570d90",
+      "cbf6cb74251a454c65d13d7a92b070cf8c37ee81c300c97123063b9d21206d5f",
     );
     expect(job.steps.at(-1)).toMatchObject({
       env: {

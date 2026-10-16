@@ -28,6 +28,19 @@ describe("compaction real conversation classification", () => {
     expect(classify(result)).toBe(false);
   });
 
+  it.each(["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "no_reply", "Done\nNO_REPLY"])(
+    "counts literal assistant text %s as conversation",
+    (text) => {
+      const message = makeAgentAssistantMessage({ content: [{ type: "text", text }] });
+      expect(isRealConversationMessage(message, [message], 0)).toBe(true);
+    },
+  );
+
+  it("counts user NO_REPLY as conversation", () => {
+    const message: AgentMessage = { role: "user", content: "NO_REPLY", timestamp: 1 };
+    expect(isRealConversationMessage(message, [message], 0)).toBe(true);
+  });
+
   it.each<SummaryRole>(["compactionSummary"])(
     "treats non-empty %s messages as conversation anchors",
     (role) => {

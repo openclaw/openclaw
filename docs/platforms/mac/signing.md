@@ -37,6 +37,11 @@ remain available. Dependency source pruning is version-specific; new versions
 keep their sources until audited. Tauri uses the same pruning owner when staging
 its bundled OpenClaw package, before hashing and encoding resources.
 
+For a [standalone executable](/install/standalone#macos-signing), use the
+mode-specific `macos.entitlements` map in its `manifest.json` instead of applying
+the separate Bun runtime's entitlement list. Sign and verify the complete
+executable-plus-sidecar output, then refresh the executable hash in the manifest.
+
 ## Permission evidence
 
 Platform claims require real-device evidence. macOS permission proof requires a

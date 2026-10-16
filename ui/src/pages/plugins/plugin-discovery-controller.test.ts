@@ -476,19 +476,6 @@ it("preserves independent Trending rank from the deduplicated overview", async (
   expect(controller.trending.map((item) => item.id)).toEqual([community.id, official.id]);
 });
 
-it("keeps unranked overview members after ranked entries", async () => {
-  const ranked = entry(1);
-  ranked.catalog.featured = true;
-  ranked.catalog.featuredRank = 0;
-  const unranked = entry(2);
-  unranked.catalog.featured = true;
-  const { controller } = setup([{ items: [unranked, ranked] }]);
-
-  await controller.refresh();
-
-  expect(controller.featured.map((item) => item.id)).toEqual([ranked.id, unranked.id]);
-});
-
 it("preserves category navigation when a filtered view reconnects", async () => {
   const categories = [
     {

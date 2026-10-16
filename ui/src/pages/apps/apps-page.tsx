@@ -10,26 +10,26 @@ import type { McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { createMcpAppCatalog } from "../../lib/mcp-app-catalog.ts";
 import { mcpAppRouteFromSearch, resolveMcpAppRouteServer } from "../../lib/mcp-app-route.ts";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { useMcpAppCatalog } from "../../lib/reactive/mcp-app-catalog.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { buildMacGatewayLaunchUrl } from "./gateway-launch.ts";
 import { Apps } from "./view.tsx";
 
 registerEnglishCatalog(registerMcpAppEnglish);
 
-type AppsPageProps = { appSearch: string };
+type AppsPageProps = { appSearch?: string };
 type AppLaunch = { key: string; detail?: McpAppOpenDetail };
 
-function AppsPageContent(props: AppsPageProps) {
+export function AppsPage(props: AppsPageProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.agentSelection);
-  const appRoute = createMemo(() => mcpAppRouteFromSearch(props.appSearch));
-  const catalog = useMcpAppCatalog(
+  const appSearch = createMemo(() => props.appSearch ?? "");
+  const appRoute = createMemo(() => mcpAppRouteFromSearch(appSearch()));
+  const catalog = createMcpAppCatalog(
     context,
     () => ({
       sessionKey: appRoute() ? gateway.read().snapshot.sessionKey : "",
@@ -66,7 +66,7 @@ function AppsPageContent(props: AppsPageProps) {
     const state = gateway.read();
     const agentId = selection.read().state.selectedId ?? undefined;
     const key = JSON.stringify([
-      props.appSearch,
+      appSearch(),
       state.snapshot.sessionKey,
       agentId,
       state.connectionRevision,
@@ -83,7 +83,7 @@ function AppsPageContent(props: AppsPageProps) {
     if (!route) {
       return { key };
     }
-    const search = new URLSearchParams(props.appSearch);
+    const search = new URLSearchParams(appSearch());
     const settings = search.get("settings") === "1";
     const server = resolveMcpAppRouteServer(discovered.servers, route, settings);
     const entrypoint =
@@ -133,7 +133,7 @@ function AppsPageContent(props: AppsPageProps) {
         )
       : null;
   return (
-    <>
+    <openclaw-apps-page>
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header">
           <div>
@@ -195,10 +195,6 @@ function AppsPageContent(props: AppsPageProps) {
           )}
         </Show>
       </Show>
-    </>
+    </openclaw-apps-page>
   );
 }
-
-export const AppsPage = defineSolidBridge("openclaw-apps-page", AppsPageContent, {
-  properties: { appSearch: { default: "", attribute: false } },
-});

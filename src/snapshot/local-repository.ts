@@ -8,7 +8,7 @@ import {
   sameFileIdentity,
   type FileIdentityStat,
 } from "@openclaw/fs-safe/advanced";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
+import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
 import {
   ensureDurableDirectory,
   getPublishFileExclusiveFailureDetails,

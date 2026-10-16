@@ -19,15 +19,13 @@ import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-lo
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
-import {
-  registerSqliteCacheExitClose,
-  runInSqliteMaintenanceContext,
-} from "../infra/sqlite-wal.js";
+import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
@@ -99,7 +97,7 @@ function scheduleReaderRetirement(reader: RetainedReader): void {
     return;
   }
   clearTimeout(reader.idleTimer);
-  reader.idleTimer = runInSqliteMaintenanceContext(() =>
+  reader.idleTimer = runInDetachedAsyncContext(() =>
     setTimeout(() => {
       try {
         retireReader(reader);

@@ -1,7 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import type { RouteId } from "../app-routes.ts";
-import type { ShellElementAttributes } from "./app-shell-lazy-view.tsx";
 import type { ApplicationContext } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { availableLinkReaders } from "./link-reader-routing.ts";
@@ -10,15 +9,6 @@ import {
   isBrowserPanelSurfaceAvailable,
   isDesktopPanelAvailable,
 } from "./panel-availability.ts";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-browser-panel": ShellElementAttributes;
-      "openclaw-link-reader-panel": ShellElementAttributes;
-    }
-  }
-}
 
 type ShellDocksProps = {
   context: ApplicationContext;

@@ -43,6 +43,19 @@ describe("channel progress draft compositor", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["NO_REPLY", "_NO_REPLY_", "no_reply"])(
+    "forwards prepared literal commentary: %s",
+    async (text) => {
+      const { progress, update } = createProgress({
+        toolProgress: false,
+        label: false,
+        commentary: true,
+      });
+      expect(await progress.pushCommentaryProgress(text)).toBe(true);
+      expect(update.mock.lastCall?.[0]).toContain(text);
+    },
+  );
+
   it("keeps bounded operation state without a preamble or verbose tool log", async () => {
     const { progress, update } = createProgress(
       { toolProgress: false, label: false },
@@ -90,6 +103,52 @@ describe("channel progress draft compositor", () => {
     await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
     expect(update).toHaveBeenCalledTimes(calls);
   });
+
+  it("retracts model waits and restores the existing status without retaining a work item", async () => {
+    const deleteCurrent = vi.fn();
+    const { progress, update } = createProgress(
+      { toolProgress: false, label: false },
+      { preparedItems: true, deleteCurrent },
+    );
+    await progress.pushItemEvent({
+      itemId: "model-wait",
+      kind: "model-wait",
+      phase: "update",
+      progressText: "Waiting for the local model to respond",
+    });
+    expect(update.mock.lastCall?.[0]).toBe("Waiting for the local model to respond");
+    expect(progress.getSnapshot().lines).toHaveLength(0);
+    await progress.pushItemEvent({ itemId: "model-wait", kind: "model-wait", phase: "end" });
+    expect(deleteCurrent).toHaveBeenCalledOnce();
+    expect(progress.hasStatusHeadline).toBe(false);
+
+    await progress.pushPreambleHeadline("Checking the result");
+    await progress.pushItemEvent({
+      itemId: "model-wait",
+      kind: "model-wait",
+      phase: "update",
+      progressText: "Waiting for a free model slot",
+    });
+    expect(update.mock.lastCall?.[0]).toBe("Waiting for a free model slot");
+    await progress.pushItemEvent({ itemId: "model-wait", kind: "model-wait", phase: "end" });
+    expect(update.mock.lastCall?.[0]).toBe("Checking the result");
+    expect(progress.getSnapshot().lines).toHaveLength(0);
+  });
+
+  it.each(["cancel", "markFinalReplyStarted", "markFinalReplyDelivered"] as const)(
+    "clears transient model wait on %s",
+    async (terminal) => {
+      const { progress } = createProgress({ label: false });
+      await progress.pushItemEvent({
+        itemId: "model-wait",
+        kind: "model-wait",
+        phase: "update",
+        progressText: "Waiting for the local model to respond",
+      });
+      progress[terminal]();
+      expect(progress.getText()).not.toContain("Waiting for");
+    },
+  );
 
   it("continues public child state with the detailed tool log disabled", async () => {
     const { progress, update } = createProgress(
@@ -172,7 +231,7 @@ describe("channel progress draft compositor", () => {
     );
   });
 
-  it("updates cumulative id-less commentary in place across tools and ignores silent snapshots", async () => {
+  it("updates cumulative id-less commentary in place across tools and ignores directive-only snapshots", async () => {
     const { progress, update } = createProgress(
       { toolProgress: true, label: "Shelling", commentary: true },
       { commentaryLinePrefix: "💬 " },
@@ -188,9 +247,9 @@ describe("channel progress draft compositor", () => {
       "Exec",
     ]);
     const calls = update.mock.calls.length;
-    expect(
-      await progress.pushCommentaryProgress("[[reply_to_current]] _NO_REPLY_ [[audio_as_voice]]"),
-    ).toBe(false);
+    expect(await progress.pushCommentaryProgress("[[reply_to_current]] [[audio_as_voice]]")).toBe(
+      false,
+    );
     expect(update).toHaveBeenCalledTimes(calls);
     await progress.pushCommentaryProgress("Writing the patch next");
     expect(progress.getSnapshot().lines).toHaveLength(3);

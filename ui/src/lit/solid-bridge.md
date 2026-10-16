@@ -91,9 +91,10 @@ child range.
 DOM moves within a turn retain the root. A genuine disconnect disposes it at the
 microtask checkpoint. Reconnect creates a fresh root using current properties
 and the retained caller content. Moving to a different application provider
-also replaces the root. The bridge uses the DOM `context-request` protocol to
-subscribe to the existing application's Lit provider; it never owns or disposes
-the application capabilities. Lit-hosted pages also publish layout traits to the
+also replaces the root. The bridge uses the native DOM `context-request` protocol to
+subscribe to `ApplicationProvider` at its host boundary; it never owns or disposes
+the application capabilities. The shell and native custom elements share that one
+Solid provider; no Lit context provider is installed. Lit-hosted pages also publish layout traits to the
 existing shell layout owner. Direct Solid callers inherit their application and
 shell layout providers.
 

@@ -53,7 +53,7 @@ process.stdout.write('Open this page to sign in:\\n  https://auth.meta.com/oauth
       select: vi.fn(),
       multiselect: vi.fn(),
       text: vi.fn(),
-      confirm: vi.fn(),
+      confirm: vi.fn(async () => true),
       progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
     },
     isRemote: false,
@@ -76,6 +76,7 @@ describe("Muse Code browser sign-in", () => {
     expect(ctx.openUrl).toHaveBeenCalledWith("https://auth.meta.com/oauth/device/?code=ABCD-1234");
     expect(result.profiles).toEqual([]);
     expect(result.agentRuntimeId).toBe("muse");
+    expect(ctx.prompter.select).not.toHaveBeenCalled();
     expect(result.configPatch?.agents).toBeUndefined();
     expect(await readFile(path.join(directory, "attempts"), "utf8")).toBe("login\n");
     expect(ctx.prompter.deviceCode).toHaveBeenCalledOnce();

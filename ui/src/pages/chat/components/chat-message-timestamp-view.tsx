@@ -1,15 +1,21 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount, formatCost, formatTimeAgo } from "../../../lib/format.ts";
-import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
+
+// Shared relative-time copy is lowercase for mid-sentence use ("Updated just now");
+// the chat footer shows it alone, so it starts with a capital ("Just now").
+function capitalizeStandaloneLabel(value: string): string {
+  return value.charAt(0).toLocaleUpperCase(getLocale()) + value.slice(1);
+}
 
 function prepareTimestamp(timestamp: number) {
   const date = new Date(timestamp);
@@ -38,11 +44,11 @@ function prepareTimestamp(timestamp: number) {
     : label;
   const nowMs = Date.now();
   const ageMs = nowMs - date.getTime();
-  // Slightly-future messages clamp to "just now"; older or distant-future ones use a date.
+  // Slightly-future messages clamp to "Just now"; older or distant-future ones use a date.
   const relativeLabel = !valid
     ? label
     : ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS && ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
-      ? formatTimeAgo(Math.max(0, ageMs))
+      ? capitalizeStandaloneLabel(formatTimeAgo(Math.max(0, ageMs)))
       : date.toLocaleDateString([], {
           month: "short",
           day: "numeric",
@@ -114,6 +120,8 @@ export function extractGroupMeta(
   let model: string | null = null;
   let hasUsage = false;
   let maxPromptTokens = 0;
+  let maxLegacyPromptTokens = 0;
+  let hasContextUsage = false;
   let usageUnavailable = false;
 
   for (const { message } of group.messages) {
@@ -141,7 +149,19 @@ export function extractGroupMeta(
       output += callOutput;
       cacheRead += callCacheRead;
       cacheWrite += callCacheWrite;
-      maxPromptTokens = Math.max(maxPromptTokens, callInput + callCacheRead + callCacheWrite);
+      // A context marker holds the latest call; the counters may cover a whole multi-call turn.
+      const context = asOptionalRecord(asOptionalRecord(m.usage)?.contextUsage);
+      if (context?.state === "available" && typeof context.promptTokens === "number") {
+        hasContextUsage = true;
+        maxPromptTokens = Math.max(maxPromptTokens, context.promptTokens);
+      } else if (context?.state === "unavailable") {
+        hasContextUsage = true;
+      } else {
+        maxLegacyPromptTokens = Math.max(
+          maxLegacyPromptTokens,
+          callInput + callCacheRead + callCacheWrite,
+        );
+      }
     }
     // Producers write cost nested under usage.cost (the AssistantMessage
     // shape); a bare message.cost never exists, so reading only it left the
@@ -172,9 +192,11 @@ export function extractGroupMeta(
     return null;
   }
 
+  // Legacy counters are an estimate only when the group has no explicit context snapshots.
+  const promptTokens = hasContextUsage ? maxPromptTokens : maxLegacyPromptTokens;
   const contextPercent =
-    contextWindow && maxPromptTokens > 0
-      ? Math.min(Math.round((maxPromptTokens / contextWindow) * 100), 100)
+    contextWindow && promptTokens > 0
+      ? Math.min(Math.round((promptTokens / contextWindow) * 100), 100)
       : null;
 
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };

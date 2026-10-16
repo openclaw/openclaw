@@ -1,7 +1,8 @@
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { getHeapStatistics } from "node:v8";
 import { MessageChannel, MessagePort, Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -11,6 +12,7 @@ import {
   getTrackedWorkerLifecycleSnapshot,
   createCpuTrackedWorker,
   markWorkerRetirement,
+  trackNativeWorkerForCpu,
   sampleTrackedWorkerMemory,
 } from "./worker-cpu.js";
 import { getWorkerMessageMetrics } from "./worker-message-metrics.js";
@@ -39,6 +41,77 @@ async function createWorker(filename?: URL) {
 }
 
 describe("worker CPU lifecycle", () => {
+  it.each([
+    ["ERR_WORKER_OUT_OF_MEMORY", "crash"],
+    ["ERR_CODE_MODE_GC_THRASH", "gc-thrash"],
+  ] as const)("attributes Code Mode %s before pool cleanup", async (code, reason) => {
+    const filename = join(tempDirs.make("worker-retirement-"), "code-mode-node.worker.js");
+    await writeFile(filename, idleSource);
+    const before = getTrackedWorkerLifecycleSnapshot();
+    const worker = await createWorker(pathToFileURL(filename));
+    worker.on("error", () => markWorkerRetirement(worker, "closed"));
+    worker.emit("error", Object.assign(new Error("synthetic native failure"), { code }));
+    await worker.terminate();
+    const count = (snapshot: typeof before) =>
+      snapshot.workerLifecycle
+        .find(({ script }) => script === "code-mode-node.worker.js")
+        ?.retired.find((entry) => entry.reason === reason)?.count ?? 0;
+    expect(count(getTrackedWorkerLifecycleSnapshot()) - count(before)).toBe(1);
+  });
+
+  it("keeps Code Mode slots until native exit and bounds them across worker churn", async () => {
+    const handles: (EventEmitter & {
+      threadId: number;
+      cpuUsage: Worker["cpuUsage"];
+      getHeapStatistics: Worker["getHeapStatistics"];
+    })[] = [];
+    const register = () => {
+      const worker = Object.assign(new EventEmitter(), {
+        threadId: handles.length + 1000,
+        cpuUsage: async () => ({ user: 0, system: 0 }),
+        getHeapStatistics: async () => getHeapStatistics(),
+      });
+      handles.push(worker);
+      trackNativeWorkerForCpu(
+        worker,
+        new URL("../agents/code-mode-node.worker.ts", import.meta.url),
+      );
+      return worker;
+    };
+    try {
+      for (let index = 0; index < 65; index++) {
+        register();
+      }
+      sampleTrackedWorkerMemory();
+      await Promise.resolve();
+      const initial = sampleTrackedWorkerMemory().workerHeaps;
+      expect(initial.map((worker) => worker.workerSlot)).toEqual([
+        ...Array.from({ length: 64 }, (_, index) => index + 1),
+        undefined,
+      ]);
+      markWorkerRetirement(handles[0]!, "idle_timeout");
+      const retiring = register();
+      sampleTrackedWorkerMemory();
+      await Promise.resolve();
+      expect(
+        sampleTrackedWorkerMemory().workerHeaps.find(
+          (worker) => worker.threadId === retiring.threadId,
+        )?.workerSlot,
+      ).toBeUndefined();
+      handles[0]!.emit("exit");
+      const replacement = register();
+      sampleTrackedWorkerMemory();
+      await Promise.resolve();
+      const live = sampleTrackedWorkerMemory().workerHeaps;
+      expect(live.find((worker) => worker.threadId === replacement.threadId)?.workerSlot).toBe(1);
+      expect(live.find((worker) => worker.threadId === handles[1]!.threadId)?.workerSlot).toBe(2);
+    } finally {
+      for (const worker of handles) {
+        worker.emit("exit");
+      }
+    }
+  });
+
   it.each([
     {
       script: "openclaw-state-lease-heartbeat.worker.js",
@@ -429,9 +502,17 @@ describe("worker CPU lifecycle", () => {
         4 * 1024 * 1024,
       );
       const closed = once(port, "close");
-      await pool.close();
+      const beforeClose = getTrackedWorkerLifecycleSnapshot();
+      await pool.close(undefined, "eviction");
       await closed;
       expect(sampleTrackedWorkerMemory()).toMatchObject({ workerCount: 0, workerHeapUsedBytes: 0 });
+      const afterClose = getTrackedWorkerLifecycleSnapshot();
+      const evictions = (snapshot: typeof beforeClose) =>
+        snapshot.workerLifecycle
+          .flatMap((entry) => entry.retired)
+          .filter(({ reason }) => reason === "eviction")
+          .reduce((total, { count }) => total + count, 0);
+      expect(evictions(afterClose) - evictions(beforeClose)).toBe(1);
     } finally {
       Atomics.store(gate, 0, 1);
       completeNative?.();

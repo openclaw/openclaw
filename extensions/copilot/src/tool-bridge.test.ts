@@ -493,18 +493,6 @@ describe("createCopilotToolBridge", () => {
       });
     });
 
-    it("skips tool construction for raw prompts", async () => {
-      const createOpenClawCodingTools = vi.fn(() => [makeTool()]);
-      const result = await createCopilotToolBridge({
-        attemptParams: { promptMode: "none" },
-        createOpenClawCodingTools,
-      });
-      expect(result.codeModeEngaged).toBe(false);
-      expect(result.promptToolPolicy.apply()).toEqual({ tools: [], callableToolNames: [] });
-      expect(result.sourceTools).toEqual([]);
-      expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
-    });
-
     it("does NOT force a message tool when disableMessageTool is true (disable wins over force)", async () => {
       const createOpenClawCodingTools = vi.fn(() => makeTools("read", "message"));
       const result = await createCopilotToolBridge({

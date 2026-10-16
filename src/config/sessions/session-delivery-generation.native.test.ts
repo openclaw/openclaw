@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { readSqliteDataVersion } from "../../infra/sqlite-schema-facts.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -41,7 +40,7 @@ it.each([
           toolOverrides: original.toolOverrides,
         });
 
-        const version = readSqliteDataVersion(database.db);
+        const version = database.db.prepare("PRAGMA data_version").get()?.data_version;
         const write = database.db.prepare(
           "UPDATE session_nodes SET current_session_id = ?, entry_json = ? WHERE session_key = ?",
         );
@@ -52,7 +51,7 @@ it.each([
           ),
           scope.sessionKey,
         );
-        expect(readSqliteDataVersion(database.db)).toBe(version);
+        expect(database.db.prepare("PRAGMA data_version").get()?.data_version).toBe(version);
         expect(generation.assertCurrent).toThrow(
           expect.objectContaining({ code: `SESSION_DELIVERY_GENERATION_${code}` }),
         );

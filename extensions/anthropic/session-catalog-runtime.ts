@@ -35,7 +35,7 @@ function boundClaudeSource(
   const hostId =
     isRecord(marker) && typeof marker.sourceHostId === "string"
       ? marker.sourceHostId
-      : entry.execHost === "node" && typeof entry.execNode === "string" && entry.execNode.trim()
+      : entry.execHost === "node" && entry.execNode?.trim()
         ? `node:${entry.execNode.trim()}`
         : CLAUDE_LOCAL_SESSION_HOST_ID;
   // A CLI resume binding only records which Claude thread this session last

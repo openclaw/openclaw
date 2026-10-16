@@ -22,6 +22,8 @@ export type RunCronAgentTurnParams = {
   cfg: OpenClawConfig;
   deps: CliDeps;
   job: CronStoredJob;
+  /** Trusted caller classification; stored jobs default to cron, not their payload or audit ingress. */
+  trigger?: "cron" | "event";
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
   message: string;
   abortSignal?: AbortSignal;
@@ -139,7 +141,7 @@ export function appendCronUnattendedRunPreamble(
 ) {
   // Keep the suffix static for prompt caching. External hooks cannot override
   // this trusted guidance or gain permission to remove jobs through fenced content.
-  const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly ${SILENT_REPLY_TOKEN}. If you cannot complete the task, explain what blocked it and what you tried.`;
+  const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently. If you cannot complete the task, explain what blocked it and what you tried.`;
   const trustedExtra =
     " Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, remove it if your available tools allow.";
   return `${commandBody}\n\n${core}${opts.externalHook ? "" : trustedExtra}`;

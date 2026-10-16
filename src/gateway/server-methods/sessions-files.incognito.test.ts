@@ -36,6 +36,8 @@ import { loadSessionDiff } from "./sessions-diff.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   createSessionFilesHandlerInvoker,
+  createSessionFileDownloadClient,
+  fetchSessionFileDownload,
   expectOkPayload,
   expectError,
 } from "./sessions-files.test-support.js";
@@ -113,6 +115,18 @@ it("serves unbound memory files and the complete diff baseline without opening h
       await invoke("sessions.files.get", { sessionKey: key, path: "example.txt" }, context),
     );
     expect(file.file.content).toBe("after session\n");
+    using connection = createSessionFileDownloadClient();
+    const download = expectOkPayload(
+      await invoke(
+        "sessions.files.download",
+        { sessionKey: key, path: "example.txt" },
+        context,
+        connection,
+      ),
+    );
+    const fetched = await fetchSessionFileDownload(connection.client, download.url);
+    expect(fetched.response.statusCode).toBe(200);
+    expect(Buffer.from(fetched.body as Uint8Array).toString()).toBe("after session\n");
     expect(
       expectError(
         await invoke("sessions.files.get", { sessionKey: key, path: "../outside.txt" }, context),
@@ -234,6 +248,15 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
     expect(uploaded).toHaveLength(1);
     expect(await readFile(new URL(uploaded[0]!.uri), "utf8")).toBe("uploaded");
     await subscribeMcpAppHostFile(options, view, file.resourceUri, true);
+    using connection = createSessionFileDownloadClient();
+    const download = expectOkPayload(
+      await invoke(
+        "sessions.files.download",
+        { sessionKey: key, path: "example.txt" },
+        context,
+        connection,
+      ),
+    );
     const entered = createDeferred();
     const release = createDeferred();
     const original = workspaceFs.readWorkspaceFile;
@@ -257,6 +280,9 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
     }
     await rejected;
     await replaceSessionEntry({ sessionKey: key, storePath }, entry);
+    expect(
+      (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
+    ).toBe(404);
     await expect(readMcpAppHostFile(options, view, { uri: file.resourceUri })).rejects.toThrow(
       /Incognito|incognito/,
     );

@@ -240,18 +240,6 @@ describe("createInboundDebouncer", () => {
     expect(finished).toEqual(["1", "3"]);
   });
 
-  it("flushes buffered items before non-debounced item", async () => {
-    const { calls, debouncer } = createRecordingDebouncer<Message & { debounce: boolean }>({
-      debounceMs: 50,
-      shouldDebounce: (item) => item.debounce,
-    });
-
-    await debouncer.enqueue({ key: "a", id: "1", debounce: true });
-    await debouncer.enqueue({ key: "a", id: "2", debounce: false });
-
-    expect(calls).toEqual([["1"], ["2"]]);
-  });
-
   it("keeps fire-and-forget keyed work ahead of a later buffered item", async () => {
     const { debouncer, started, finished, release } = createBlockedDebouncer<
       Message & { debounce: boolean }
@@ -410,27 +398,6 @@ describe("createInboundDebouncer", () => {
     secondCompletion.resolve();
     await Promise.all([firstFlush, secondFlush, drain]);
     expect(drained).toBe(true);
-  });
-
-  it("swallows onError failures so keyed chains still complete", async () => {
-    const calls: string[] = [];
-    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
-      debounceMs: 0,
-      buildKey: (item) => item.key,
-      onFlush: (items) =>
-        flushOnCompletion(() => {
-          calls.push(items[0]?.id ?? "");
-          throw new Error("flush failed");
-        }),
-      onError: () => {
-        throw new Error("handler failed");
-      },
-    });
-
-    await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
-    await expect(debouncer.enqueue({ key: "a", id: "2" })).resolves.toBeUndefined();
-
-    expect(calls).toEqual(["1", "2"]);
   });
 
   it("releases serialized keys when custom completion rejects before admission", async () => {

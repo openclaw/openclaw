@@ -460,7 +460,6 @@ async function bindThread(params: CodexThreadBindingParams, threadId?: string) {
             ...options,
             withCurrent: async (write: () => void) => {
               await resolved.assertCurrent();
-              options.assertCurrent();
               write();
             },
           };
@@ -528,17 +527,14 @@ async function bindThread(params: CodexThreadBindingParams, threadId?: string) {
   };
 }
 
-export async function prepareCodexConversationBinding(
-  params: {
-    bindingStore: CodexAppServerBindingStore;
-    data: CodexAppServerConversationBindingData;
-    pluginConfig?: unknown;
-    config?: CodexConversationConfig;
-    sessionKey?: string;
-    incognito: boolean;
-  },
-  options: { forceNew?: boolean } = {},
-): Promise<void> {
+export async function prepareCodexConversationBinding(params: {
+  bindingStore: CodexAppServerBindingStore;
+  data: CodexAppServerConversationBindingData;
+  pluginConfig?: unknown;
+  config?: CodexConversationConfig;
+  sessionKey?: string;
+  incognito: boolean;
+}): Promise<void> {
   const identity = { kind: "conversation" as const, bindingId: params.data.bindingId };
   const snapshot = await params.bindingStore.readAsync(identity);
   const run = () =>
@@ -551,7 +547,7 @@ export async function prepareCodexConversationBinding(
         params.data.start && current?.conversationStartId !== params.data.start.id
           ? params.data.start
           : undefined;
-      if (current && !requested && !options.forceNew) {
+      if (current && !requested) {
         return;
       }
       const sourceIdentity = params.data.source
@@ -596,10 +592,7 @@ export async function prepareCodexConversationBinding(
       // Harness threads retain immutable tools, developer instructions, and app
       // policy. Transfer bounded visible history into a fresh bound-only thread.
       const threadId = requested?.threadId;
-      const sourceAuthority = await bindThread(
-        bindingParams,
-        options.forceNew ? undefined : threadId,
-      );
+      const sourceAuthority = await bindThread(bindingParams, threadId);
       using _ = { [Symbol.dispose]: sourceAuthority.release };
       await sourceAuthority.assertCurrent();
       const sourceGuard = sourceAuthority.source;

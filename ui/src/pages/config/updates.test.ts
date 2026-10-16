@@ -758,7 +758,7 @@ describe("renderUpdates", () => {
     { status: "failed", reason: "abandoned", recovery: false, reconciled: true },
   ] as const)(
     "renders the durable $status/$reason report with reconciled=$reconciled and only offers current recovery",
-    async ({ status, reason, recovery, reconciled }) => {
+    ({ status, reason, recovery, reconciled }) => {
       const onUpdateNow = vi.fn();
       const onCheckStatus = vi.fn(async () => true);
       mountUpdates(
@@ -786,10 +786,8 @@ describe("renderUpdates", () => {
           onCheckStatus,
         }),
       );
-      const view = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-        "openclaw-update-run-view",
-      )!;
-      await view.updateComplete;
+      flush();
+      const view = container.querySelector("openclaw-update-run-view")!;
       expect(view.querySelector(".update-run-view__report")?.textContent).toContain(
         reconciled
           ? "OpenClaw abandoned update reconciled."

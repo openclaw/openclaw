@@ -17,6 +17,28 @@ vi.mock("../../utils/message-channel.js", async (importOriginal) => ({
 }));
 
 describe("normalizeMessageActionInput", () => {
+  const routedThreadContext = {
+    currentChannelProvider: "discord",
+    currentChatType: "channel" as const,
+    currentChannelId: "channel:parent",
+    currentMessagingTarget: "channel:thread",
+    currentMessageId: "thread",
+  };
+
+  it.each(["read", "react", "edit", "delete"] as const)(
+    "keeps the native message conversation for an implicit %s",
+    (action) => {
+      expect(
+        normalizeMessageActionInput({
+          action,
+          args: { channel: "discord", messageId: "thread" },
+          toolContext: routedThreadContext,
+          targetAliasSpec: { aliases: ["messageId"], deliveryTargetAliases: [] },
+        }),
+      ).toMatchObject({ target: "channel:parent", to: "channel:parent", messageId: "thread" });
+    },
+  );
+
   type NormalizeMessageActionInputCase = {
     input: Parameters<typeof normalizeMessageActionInput>[0];
     expectedFields?: Record<string, unknown>;

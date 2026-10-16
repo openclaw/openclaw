@@ -1,12 +1,42 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import {
+  getPreparedModelRuntimeTestApi,
+  usePreparedModelRuntimeHarness,
+} from "./prepared-model-runtime.test-harness.js";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { describe, expect, it } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayReloadHandlerParams } from "../gateway/server-reload-contracts.js";
+import {
+  createDefaultGatewayReloadState,
+  createHotTailPlan,
+} from "../gateway/server-reload-handlers.config.test-support.js";
+import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
+import { publishConfiguredModelRuntimeSnapshots } from "../gateway/server-startup-model-runtime.js";
+import {
+  bindPluginMetadataSnapshotCache,
+  createPluginCache,
+  getPluginCache,
+  getProcessPluginCache,
+  retirePluginCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { retireAgentDeleteRuntime } from "./agent-delete-databases.js";
 import { withAgentDeletion } from "./agent-lifecycle-registry.js";
+import * as pluginModelCatalog from "./plugin-model-catalog.js";
+import * as configuredRefresh from "./prepared-model-runtime.configured-refresh.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -17,6 +47,7 @@ import {
   retirePreparedModelRuntimeAgent,
 } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
+import { getPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
@@ -33,6 +64,271 @@ function holdNextCatalogWrite() {
 }
 
 describe("prepared model runtime owner selection", () => {
+  it.for(["success", "preserved admission", "failure before retired cleanup"] as const)(
+    "follows an admitted hot reload through catalog pruning: %s",
+    async (outcome, { signal }) => {
+      const fails = outcome === "failure before retired cleanup";
+      mocks.configuredAgentIds = ["default", "deferred"];
+      const initial: OpenClawConfig = {
+        agents: { entries: { default: {}, deferred: {} } },
+        models: {
+          providers: { fixture: { baseUrl: "https://provider.example.test/v1", models: [] } },
+        },
+        messages: { responsePrefix: "initial" },
+      };
+      const latest: OpenClawConfig = {
+        agents: initial.agents,
+        messages: { responsePrefix: "latest" },
+      };
+      setRuntimeConfigSnapshot(initial);
+      const started = createDeferred();
+      const pruning = createDeferred();
+      const releasePruning = createDeferred();
+      const retiredCleanup = createDeferred();
+      const releaseAcquisition = createDeferred();
+      const producerClosed = createDeferred();
+      const pruningError = new Error("replacement catalog pruning failed");
+      const refreshNow = configuredRefresh.refreshPreparedModelRuntimeSnapshotsNow;
+      // Cancellation precedes producer cleanup; observe the real terminal boundary.
+      const refreshObservation = vi
+        .spyOn(configuredRefresh, "refreshPreparedModelRuntimeSnapshotsNow")
+        .mockImplementation(async (...args) => {
+          try {
+            return await refreshNow(...args);
+          } finally {
+            if (args[0] === initial) {
+              producerClosed.resolve();
+            }
+          }
+        });
+      const prune = vi
+        .spyOn(pluginModelCatalog, "pruneRemovedProviderPluginModelCatalogs")
+        .mockImplementation(async () => {
+          pruning.resolve();
+          await releasePruning.promise;
+          if (fails) {
+            throw pruningError;
+          }
+          return false;
+        });
+      mocks.prepareStaticCatalog.mockImplementation(async (input) => {
+        const options = input as { config: OpenClawConfig; signal: AbortSignal };
+        if (options.config.messages?.responsePrefix === "initial") {
+          const aborted = createDeferred();
+          const onAbort = () => aborted.resolve();
+          options.signal.addEventListener("abort", onAbort, { once: true });
+          started.resolve();
+          try {
+            await Promise.race([aborted.promise, releaseAcquisition.promise]);
+            if (fails) {
+              await retiredCleanup.promise;
+            }
+            options.signal.throwIfAborted();
+          } finally {
+            options.signal.removeEventListener("abort", onAbort);
+          }
+        }
+        return { entries: [] };
+      });
+      let state: ReturnType<GatewayReloadHandlerParams["getState"]> =
+        createDefaultGatewayReloadState();
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const handlers = createGatewayReloadHandlers({
+        scheduler: createTestGatewayScheduler(),
+        deps: {} as GatewayReloadHandlerParams["deps"],
+        broadcast: vi.fn(),
+        getState: () => state,
+        setState: (next) => {
+          state = next;
+        },
+        getPluginRegistry: () => createEmptyPluginRegistry(),
+        startChannel: vi.fn(async () => new Map()),
+        stopChannel: vi.fn(async () => {}),
+        releaseChannelRouteHandoffs: vi.fn(),
+        pruneInactiveChannelAccountState: vi.fn(),
+        reloadPlugins: vi.fn(),
+        logHooks: log,
+        logChannels: log,
+        logCron: log,
+        logReload: log,
+        cronReconciliation: {
+          arm: vi.fn(() => ({ complete: vi.fn(async () => {}) })),
+          invalidate: vi.fn(),
+        },
+        requestRecoveryRestart: vi.fn(() => ({ status: "emitted" as const })),
+      });
+      const startup = publishConfiguredModelRuntimeSnapshots({ cfg: initial });
+      let settled = false;
+      const observed = startup.then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      let reload: Promise<unknown> | undefined;
+      let reader: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+      try {
+        await withinTest(started.promise, signal);
+        reload = handlers
+          .applyHotReload(createHotTailPlan({ changedPaths: ["models.providers.fixture"] }), latest)
+          .catch((error: unknown) => error);
+        await withinTest(pruning.promise, signal);
+        if (!fails) {
+          await withinTest(producerClosed.promise, signal);
+          await withinTest(nextTurn(), signal);
+        }
+        if (outcome === "preserved admission") {
+          markPreparedModelRuntimeSnapshotsStale("replacement still preparing", {
+            preserveReplacementWait: true,
+          });
+        }
+        expect(settled).toBe(false);
+        releasePruning.resolve();
+        if (fails) {
+          expect(await withinTest(reload, signal)).toBe("applied-restart-required");
+          retiredCleanup.resolve();
+        }
+        const result = await withinTest(observed, signal);
+        if (!fails) {
+          expect(result).toBeUndefined();
+          for (const agentId of mocks.configuredAgentIds) {
+            reader = loadPublishedGatewayReplyDispatchRuntime({ agentId });
+            await expect(withinTest(reader, signal)).resolves.toMatchObject({
+              agentId,
+              config: latest,
+            });
+          }
+          expect(await withinTest(reload, signal)).toBe("applied");
+        } else {
+          expect(result).toBe(pruningError);
+        }
+      } finally {
+        releasePruning.resolve();
+        releaseAcquisition.resolve();
+        retiredCleanup.resolve();
+        await Promise.allSettled([startup, observed, reload, reader]);
+        handlers.stopRestartRetries();
+        await closePreparedModelRuntimeSnapshots();
+        prune.mockRestore();
+        refreshObservation.mockRestore();
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
+
+  it.for(["success", "failure", "shutdown", "foreground grace"] as const)(
+    "follows active startup acquisition through a scoped replacement's %s",
+    async (outcome, { signal }) => {
+      mocks.configuredAgentIds = ["default", "deferred"];
+      const initial = { messages: { responsePrefix: "initial" } };
+      const latest = { messages: { responsePrefix: "latest" } };
+      const started = createDeferred();
+      const successorStarted = createDeferred();
+      const release = createDeferred();
+      const escape = createDeferred();
+      const successorError = new Error("replacement catalog acquisition failed");
+      if (outcome === "foreground grace") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(120_000);
+      }
+      let cancellation: unknown;
+      mocks.prepareStaticCatalog.mockImplementation(async (input) => {
+        const options = input as { config: OpenClawConfig; signal: AbortSignal };
+        if (options.config.messages?.responsePrefix === "initial") {
+          const aborted = createDeferred();
+          const onAbort = () => {
+            cancellation = options.signal.reason;
+            aborted.resolve();
+          };
+          options.signal.addEventListener("abort", onAbort, { once: true });
+          started.resolve();
+          try {
+            await Promise.race([aborted.promise, escape.promise]);
+            options.signal.throwIfAborted();
+          } finally {
+            options.signal.removeEventListener("abort", onAbort);
+          }
+        } else {
+          successorStarted.resolve();
+          await release.promise;
+          options.signal.throwIfAborted();
+          if (outcome === "failure") {
+            throw successorError;
+          }
+        }
+        return { entries: [] };
+      });
+      const startup = publishConfiguredModelRuntimeSnapshots({ cfg: initial });
+      let settled = false;
+      const observed = startup.then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      let successor: Promise<void> | undefined;
+      let closing: Promise<void> | undefined;
+      let reader: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+      try {
+        await withinTest(started.promise, signal);
+        expect(getPreparedModelRuntimeStartupStatus()?.pendingAgents.length).toBeGreaterThan(0);
+        if (outcome === "foreground grace") {
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        successor = refreshPreparedModelRuntimeSnapshots(latest, {
+          gatewayLifecycle: true,
+          catalogMode: "static",
+          agentIds: new Set(["deferred"]),
+        });
+        void successor.catch(() => undefined);
+        expect(getPreparedModelRuntimeStartupStatus()).toBeUndefined();
+        await withinTest(successorStarted.promise, signal);
+        expect(cancellation).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
+        const settledBeforeSuccessor = settled;
+        if (outcome === "shutdown") {
+          closing = closePreparedModelRuntimeSnapshots();
+        } else if (outcome === "foreground grace") {
+          await vi.advanceTimersByTimeAsync(119_000);
+          expect(settled).toBe(true);
+          expect(await withinTest(observed, signal)).toBeUndefined();
+          expect(getPreparedModelRuntimeStartupStatus()).toBeUndefined();
+        }
+        release.resolve();
+        const result = await withinTest(observed, signal);
+        if (outcome === "success" || outcome === "foreground grace") {
+          expect(result).toBeUndefined();
+          for (const agentId of mocks.configuredAgentIds) {
+            reader = loadPublishedGatewayReplyDispatchRuntime({ agentId });
+            await expect(withinTest(reader, signal)).resolves.toMatchObject({
+              agentId,
+              config: latest,
+            });
+          }
+        } else if (outcome === "failure") {
+          expect(result).toBe(successorError);
+        } else {
+          expect(result).toMatchObject({ message: expect.stringContaining("closed") });
+        }
+        expect(getPreparedModelRuntimeStartupStatus()).toBeUndefined();
+        expect(settledBeforeSuccessor).toBe(false);
+      } finally {
+        escape.resolve();
+        release.resolve();
+        closing ??= closePreparedModelRuntimeSnapshots();
+        await Promise.allSettled([startup, observed, successor, closing, reader]);
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("retires only the deleted agent's physical owners", async () => {
     mocks.configuredAgentIds = ["worker"];
     mocks.configuredAgentDirs.set("worker", fixture.state.agentDir("isolated-worker"));
@@ -84,41 +380,56 @@ describe("prepared model runtime owner selection", () => {
     );
   });
 
-  it.each(["lost claim", "invalidation", "close"] as const)(
-    "does not accept a joined refresh after %s",
-    async (boundary) => {
-      mocks.configuredAgentIds = ["default"];
-      const { started, release } = holdNextCatalogWrite();
-      const first = refreshPreparedModelRuntimeSnapshots({}, { joinSupersedingPublication: true });
-      const rejected = expect(first).rejects.toThrow(/superseded|closed/);
-      let successor: Promise<void> | undefined;
-      let closing: Promise<void> | undefined;
-      try {
-        await started.promise;
-        if (boundary === "invalidation") {
-          markPreparedModelRuntimeSnapshotsStale("publication owner retired");
+  it.each([
+    "lost claim",
+    "invalidation",
+    "preserved invalidation",
+    "unpublished replacement invalidated",
+    "unpublished replacement close",
+    "close",
+  ] as const)("does not accept a joined refresh after %s", async (boundary) => {
+    mocks.configuredAgentIds = ["default"];
+    const { started, release } = holdNextCatalogWrite();
+    const first = refreshPreparedModelRuntimeSnapshots({}, { joinSupersedingPublication: true });
+    const rejected = expect(first).rejects.toThrow(/superseded|closed/);
+    let successor: Promise<void> | undefined;
+    let closing: Promise<void> | undefined;
+    try {
+      await started.promise;
+      if (boundary === "invalidation" || boundary === "preserved invalidation") {
+        markPreparedModelRuntimeSnapshotsStale("publication owner retired", {
+          preserveReplacementWait: boundary === "preserved invalidation",
+        });
+      } else if (boundary.startsWith("unpublished replacement")) {
+        markPreparedModelRuntimeSnapshotsStale("replacement preparing", {
+          waitForReplacement: true,
+        });
+        if (boundary === "unpublished replacement close") {
+          closing = closePreparedModelRuntimeSnapshots();
         } else {
-          let claimCurrent = true;
-          successor = refreshPreparedModelRuntimeSnapshots(
-            {},
-            {
-              isPublicationCurrent: () => claimCurrent,
-            },
-          );
-          if (boundary === "lost claim") {
-            claimCurrent = false;
-          } else {
-            closing = closePreparedModelRuntimeSnapshots();
-          }
+          markPreparedModelRuntimeSnapshotsStale("replacement cancelled");
         }
-        release.resolve();
-        await rejected;
-      } finally {
-        release.resolve();
-        await Promise.allSettled([first, successor, closing]);
+      } else {
+        let claimCurrent = true;
+        successor = refreshPreparedModelRuntimeSnapshots(
+          {},
+          {
+            isPublicationCurrent: () => claimCurrent,
+          },
+        );
+        if (boundary === "lost claim") {
+          claimCurrent = false;
+        } else {
+          closing = closePreparedModelRuntimeSnapshots();
+        }
       }
-    },
-  );
+      release.resolve();
+      await rejected;
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first, successor, closing]);
+    }
+  });
 
   it("joins the latest of multiple replacements without rebuilding skipped config", async () => {
     mocks.configuredAgentIds = ["default"];
@@ -207,6 +518,74 @@ describe("prepared model runtime owner selection", () => {
       configWrite.release.resolve();
       authWrite.release.resolve();
       await Promise.allSettled([reader, replacement]);
+    }
+  });
+
+  it("keeps logged-out reply dispatch after the config operation cache retires", async ({
+    signal,
+  }) => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    const nextConfig = { messages: { responsePrefix: "updated" } };
+    const metadata = { ...(await pluginMetadata.resolvePluginMetadataSnapshotAsync({ config })) };
+    bindPluginMetadataSnapshotCache(metadata, getProcessPluginCache());
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      pluginMetadataSnapshot: metadata,
+    });
+    const input = fixture.agentInput("default", nextConfig);
+    const operationCache = createPluginCache();
+    const resolveMetadata = vi
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
+      .mockImplementation(async () => {
+        const snapshot = { ...metadata };
+        bindPluginMetadataSnapshotCache(snapshot, getPluginCache());
+        return snapshot;
+      });
+    const { started, release } = holdNextCatalogWrite();
+    const resources = new AsyncDisposableStack();
+    let replacement: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
+    let reader: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+    let snapshotRead: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
+    let retirement: ReturnType<typeof retirePluginCache> | undefined;
+    try {
+      replacement = withPluginCache(operationCache, () =>
+        refreshPreparedModelRuntimeSnapshots(nextConfig, {
+          gatewayLifecycle: true,
+          pluginMetadataSnapshot: metadata,
+        }),
+      );
+      void replacement.catch(() => undefined);
+      await withinTest(started.promise, signal);
+      mocks.authStorage.getAll.mockReturnValue({});
+      mocks.mutationListener?.({
+        agentDir: input.agentDir,
+        affectsInheritedStores: false,
+        profileSetChanged: true,
+      });
+      release.resolve();
+      await withinTest(replacement, signal);
+      retirement = retirePluginCache(operationCache);
+      await withinTest(retirement, signal);
+
+      reader = loadPublishedGatewayReplyDispatchRuntime({
+        agentId: "default",
+        onRuntimeLease: (lease) => {
+          resources.use(lease);
+        },
+      });
+      await expect(withinTest(reader, signal)).resolves.toMatchObject({ config: nextConfig });
+      snapshotRead = prepareModelRuntimeSnapshot(input);
+      const snapshot = await withinTest(snapshotRead, signal);
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(snapshot.createStores().authStorage.getAll()).toEqual({});
+    } finally {
+      release.resolve();
+      await resources.disposeAsync();
+      const closing = closePreparedModelRuntimeSnapshots();
+      await Promise.allSettled([replacement, reader, snapshotRead, retirement, closing]);
+      resolveMetadata.mockRestore();
+      await retirePluginCache(operationCache);
     }
   });
 

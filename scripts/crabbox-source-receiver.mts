@@ -248,14 +248,9 @@ try {
     }
     if (actual !== oid) fail("source bytes mismatch: " + file);
   }
-  for (const entry of files) verify(entry);
   if (expected.alias) git(["update-ref", expected.alias, expected.baseSha]);
   git(["symbolic-ref", "HEAD", "refs/heads/openclaw-source"]);
   const sourceIndex = git(["ls-files", "--stage", "-v", "-z"], { encoding: "buffer" });
-  fs.rmSync(".git", { recursive: true, force: true });
-  fs.renameSync(gitDir, path.join(cwd, ".git"));
-  env.GIT_DIR = path.join(cwd, ".git");
-  env.GIT_INDEX_FILE = path.join(env.GIT_DIR, "index");
   const sourceGit = stat(env.GIT_DIR);
   // The payload consumes Git identity as well as bytes. Lifecycle hooks may refresh
   // index caches or hooksPath, but cannot change source membership or comparison refs.
@@ -281,6 +276,12 @@ try {
     if (extras.length) fail("unexpected source entry: " + extras[0]);
   }
   verifySource();
+  // Publish Git identity only after verification; rejected source must retain
+  // the prepared checkout revision for recovery. Renaming preserves its owner.
+  fs.rmSync(".git", { recursive: true, force: true });
+  fs.renameSync(gitDir, path.join(cwd, ".git"));
+  env.GIT_DIR = path.join(cwd, ".git");
+  env.GIT_INDEX_FILE = path.join(env.GIT_DIR, "index");
   if (selected.has("pnpm-lock.yaml")) {
     const installer = ".github/actions/setup-node-env/install-dependencies.sh";
     if (!selected.has(installer) || !stat(installer)?.isFile())

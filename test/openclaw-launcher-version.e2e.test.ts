@@ -22,6 +22,7 @@ async function makeLauncherVersionFixture(
   const fixtureRoot = makeTempDir(fixtureRoots, "openclaw-launcher-version-");
   for (const filename of [
     "openclaw.mjs",
+    "cli-invocation.mjs",
     "node-host-launcher.mjs",
     "node-compile-cache.mjs",
     "node-version.mjs",

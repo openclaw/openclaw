@@ -106,7 +106,8 @@ const runSchema = z.object({
   head_branch: ref,
   path: z.string().max(500),
   display_title: z.string().max(500).optional(),
-  event: z.literal("workflow_dispatch"),
+  created_at: z.iso.datetime().optional(),
+  event: z.enum(["workflow_dispatch", "workflow_run"]),
   status: runState,
   conclusion: conclusion.nullable(),
   actor: actor.optional(),
@@ -114,12 +115,18 @@ const runSchema = z.object({
 });
 export type PublicationRun = z.infer<typeof runSchema>;
 
-export function parsePublicationRun(value: unknown, repo: string, runId: string): PublicationRun {
+export function parsePublicationRun(
+  value: unknown,
+  repo: string,
+  runId: string,
+  event: PublicationRun["event"] = "workflow_dispatch",
+): PublicationRun {
   const parsed = runSchema.safeParse(value);
   requirePublication(parsed.success);
   const run = parsed.data;
   requirePublication(
     String(run.id) === runId &&
+      run.event === event &&
       run.repository.full_name === repo &&
       (!run.head_repository || run.head_repository.full_name === repo),
   );
@@ -162,6 +169,7 @@ export function assertPublicationRunUnchanged(before: PublicationRun, after: Pub
     run.head_branch,
     run.path.split("@")[0],
     run.event,
+    run.created_at ?? null,
   ];
   // Lifecycle, display and actor-login observations can change without a new identity.
   requirePublication(isDeepStrictEqual(identity(before), identity(after)));
@@ -278,6 +286,7 @@ type EvidenceRef = {
 };
 type Phase = { state: string; evidence: EvidenceRef[] };
 type Surface = {
+  target?: { tag: string; sourceTag: string };
   selection: "unknown" | "selected" | "not-selected";
   verificationSelection: "unknown" | "selected" | "not-selected";
   operation: Phase;
@@ -321,6 +330,7 @@ const surfaces = [
   "activation",
   "vcr",
   "nativeWindows",
+  "nativeLinux",
   "nativeAndroid",
   "nativeMac",
   "npmTelegram",
@@ -329,6 +339,12 @@ type SurfaceName = (typeof surfaces)[number];
 export type PublicationObservation = {
   version: 1;
   requested: { repository: string; validationRunId: string; publicationRunId: string };
+  release: {
+    version: string | null;
+    tag: string | null;
+    distTag: string | null;
+    sourceSha: string | null;
+  } | null;
   publisher: {
     runId: string;
     runAttempt: number;
@@ -359,7 +375,7 @@ export type PublicationObservation = {
   binding: Phase;
   assets: Phase;
   dispatches: {
-    scope: "normal-clawhub" | "windows";
+    scope: "normal-clawhub" | "windows" | "linux";
     state: "acknowledged" | "not-dispatched" | "unknown";
     runId: string;
     runAttempt: number;
@@ -377,6 +393,7 @@ export function newPublicationObservation(
   return {
     version: 1,
     requested: { repository: repo, validationRunId, publicationRunId },
+    release: null,
     publisher: null,
     relationship: {
       status: "unverified",
@@ -402,9 +419,14 @@ export function newPublicationObservation(
           verification: phase(),
           registryObservation: phase(),
           terminalMarker: phase(),
-          advisory: ["vcr", "nativeWindows", "nativeAndroid", "nativeMac", "npmTelegram"].includes(
-            name,
-          ),
+          advisory: [
+            "vcr",
+            "nativeWindows",
+            "nativeLinux",
+            "nativeAndroid",
+            "nativeMac",
+            "npmTelegram",
+          ].includes(name),
           jobs: [],
           children: [],
           verificationError: null,
@@ -518,6 +540,13 @@ export function observePublicationDiagnostic(
       runAttempt: observation.publisher.runAttempt,
     },
   ];
+  const context = diagnostic.context;
+  observation.release = {
+    version: context.releaseVersion,
+    tag: context.releaseTag,
+    distTag: context.npmDistTag,
+    sourceSha: context.requestedSourceSha,
+  };
   observation.diagnostics = {
     state: "available",
     artifactId,
@@ -658,6 +687,83 @@ export function observePublicationChild(
   });
 }
 
+export function parseLinuxDispatch(value: unknown, sourceSha: string) {
+  const parsed = z
+    .object({
+      tag: z
+        .string()
+        .max(81)
+        .regex(/^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-[0-9]+)?$/u),
+      sourceSha: sha.optional(),
+      state: z.enum([
+        "request-dispatched",
+        "request-reused",
+        "published-assets-reused",
+        "dispatch-unconfirmed",
+      ]),
+      requestRunId: decimal.optional(),
+      requestRunAttempt: decimal.optional(),
+      workflowSha: sha.optional(),
+    })
+    .safeParse(value);
+  requirePublication(parsed.success, "malformed-evidence");
+  requirePublication(!parsed.data.sourceSha || parsed.data.sourceSha === sourceSha);
+  if (["request-dispatched", "request-reused"].includes(parsed.data.state)) {
+    requirePublication(parsed.data.requestRunId && parsed.data.workflowSha);
+  }
+  return parsed.data;
+}
+
+export function observeLinuxAdmission(
+  observation: PublicationObservation,
+  value: unknown,
+  request: PublicationRun,
+  builder: PublicationRun,
+  tag: string,
+  sourceSha: string,
+  artifactId: number,
+) {
+  const parsed = z
+    .object({
+      schemaVersion: z.literal(1),
+      repository,
+      request: z.object({ runId: decimal, runAttempt: decimal, headSha: sha }),
+      builder: z.object({ runId: decimal, runAttempt: decimal, toolingSha: sha }),
+      tag: z.string().nullable(),
+      sourceSha: sha.nullable(),
+      admission: z.enum(["admitted", "rejected"]),
+    })
+    .safeParse(value);
+  requirePublication(parsed.success, "malformed-evidence");
+  const record = parsed.data;
+  requirePublication(
+    record.repository === request.repository.full_name &&
+      record.request.runId === String(request.id) &&
+      record.request.runAttempt === String(request.run_attempt) &&
+      record.request.headSha === request.head_sha &&
+      record.builder.runId === String(builder.id) &&
+      record.builder.runAttempt === String(builder.run_attempt) &&
+      record.builder.toolingSha === builder.head_sha,
+  );
+  requirePublication(
+    record.admission !== "admitted" ||
+      (record.tag === tag &&
+        record.sourceSha === sourceSha &&
+        record.builder.toolingSha === request.head_sha),
+  );
+  observation.surfaces.nativeLinux.terminalMarker = {
+    state: record.admission,
+    evidence: [
+      {
+        kind: "terminal-marker",
+        runId: String(builder.id),
+        runAttempt: builder.run_attempt,
+        artifactId,
+      },
+    ],
+  };
+}
+
 export function parseWindowsDispatch(value: unknown) {
   const parsed = z
     .object({
@@ -724,6 +830,7 @@ export function formatPublicationObservation(value: PublicationObservation) {
     `relationship: ${value.relationship.status} (${value.relationship.reason})`,
     `collection: ${value.collection.complete ? "complete" : `incomplete (${value.collection.error ?? "unknown"})`}`,
     `publisher: ${value.publisher?.runId ?? "unknown"} attempt=${value.publisher?.runAttempt ?? "unknown"} ${value.publisher?.status ?? "unknown"}/${value.publisher?.conclusion ?? "unknown"}`,
+    `release: version=${value.release?.version ?? "unknown"} tag=${value.release?.tag ?? "unknown"} dist-tag=${value.release?.distTag ?? "unknown"} source-sha=${value.release?.sourceSha ?? "unknown"} (producer diagnostic)`,
     `validation binding: original-plan-attempt=${value.relationship.originalPlanAttempt ?? "unknown"} selected-attempt=${value.relationship.validationAttempt ?? "unknown"}`,
     `diagnostics: ${value.diagnostics.state}; verification=${value.verification.state}; binding=${value.binding.state}; assets=${value.assets.state}`,
   ];
@@ -735,6 +842,11 @@ export function formatPublicationObservation(value: PublicationObservation) {
     lines.push(
       `${name}: selection=${surface.selection} operation=${surface.operation.state} verification=${surface.verification.state} registry-observation=${surface.registryObservation.state} terminal-marker=${surface.terminalMarker.state}${surface.advisory ? " advisory" : ""}`,
     );
+    if (surface.target) {
+      lines.push(
+        `  target-tag=${surface.target.tag} source-tag=${surface.target.sourceTag} (dispatch record)`,
+      );
+    }
     for (const job of surface.jobs) {
       lines.push(
         `  job=${job.jobId} run=${job.runId} attempt=${job.runAttempt} ${job.status}/${job.conclusion ?? "unknown"} (job conclusion only)`,
@@ -767,7 +879,13 @@ export function formatPublicationObservation(value: PublicationObservation) {
       `${dispatch.scope} dispatch: ${dispatch.state} parent=${dispatch.runId} attempt=${dispatch.runAttempt} artifact=${dispatch.artifactId}`,
     );
   }
+  const stableVersion = value.release?.version;
   lines.push(
+    "Mac assets and feeds are not observed here; consult the native publication owner." +
+      (stableVersion && /^\d{4}\.\d{1,2}\.\d+$/u.test(stableVersion)
+        ? ` Retained orchestration facts: pnpm release:stable ${stableVersion} --status (use the original --state-dir if customized).`
+        : ""),
+    "Website deployment is not observed here; read-only production checks: https://github.com/openclaw/openclaw.ai#companion-downloads",
     "Missing observations remain unknown; consult the existing owner evidence. No recovery action was performed.",
   );
   return lines.join("\n");

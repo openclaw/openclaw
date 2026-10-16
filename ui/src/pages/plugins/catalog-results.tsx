@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, onSettled } from "solid-js";
+import { createMemo, For, onSettled } from "solid-js";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
@@ -18,7 +18,7 @@ import { PluginInstallAction } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginAuthor,
-  renderPluginCardSummary,
+  PluginCardSummary,
   renderPluginOfficialBadge,
   renderPluginStateStatus,
 } from "./plugin-card.tsx";
@@ -198,14 +198,15 @@ function CatalogIcon(props: {
   plugin: PluginDiscoveryEntry;
   state: PluginCatalogResultsProps;
 }): JSX.Element {
-  const iconUrl = () =>
+  const iconUrl = createMemo(() =>
     resolvePluginCatalogIconUrl(
       {
         pluginId: props.plugin.local.pluginId,
         imageUrl: props.plugin.catalog.imageUrl,
       },
       props.state,
-    );
+    ),
+  );
   return (
     <PluginArtTile
       slug={props.plugin.local.pluginId ?? props.plugin.id}
@@ -296,7 +297,9 @@ function CatalogCard(props: {
           )}
         </div>
       </div>
-      {renderPluginCardSummary(props.plugin.catalog.summary || t("pluginsPage.optionalCapability"))}
+      <PluginCardSummary
+        summary={props.plugin.catalog.summary || t("pluginsPage.optionalCapability")}
+      />
       {renderPluginRowMessage(props.state.messages?.[`install:${props.plugin.id}`], {
         busy: busy(),
         onContinue:
@@ -375,6 +378,12 @@ function CatalogSection(params: {
 }
 
 function CategoryChips(props: PluginCatalogResultsProps): JSX.Element {
+  const sourceCategories = createMemo(() => props.categories);
+  const categories = createMemo(() =>
+    sourceCategories()
+      .filter((category) => category.slug !== "other")
+      .toSorted((left, right) => left.order - right.order),
+  );
   return (
     <div class="plugin-catalog-chips" role="group" aria-label={t("pluginsPage.categoriesLabel")}>
       <For each={[["all", "pluginsPage.intentAll", "layoutGrid"], ...PROMOTED_SECTIONS] as const}>
@@ -412,12 +421,7 @@ function CategoryChips(props: PluginCatalogResultsProps): JSX.Element {
           ))}
         </>
       ) : undefined}
-      <For
-        each={props.categories
-          .filter((category) => category.slug !== "other")
-          .toSorted((left, right) => left.order - right.order)}
-        keyed={(item) => item.slug}
-      >
+      <For each={categories()} keyed={(item) => item.slug}>
         {(item) => (
           <button
             type="button"
@@ -445,9 +449,9 @@ function renderCatalogEmptyState(): JSX.Element {
 }
 
 function RawResults(props: PluginCatalogResultsProps): JSX.Element {
-  const items = () => props.result?.items ?? [];
-  const official = () => items().filter((plugin) => plugin.catalog.official);
-  const community = () => items().filter((plugin) => !plugin.catalog.official);
+  const items = createMemo(() => props.result?.items ?? []);
+  const official = createMemo(() => items().filter((plugin) => plugin.catalog.official));
+  const community = createMemo(() => items().filter((plugin) => !plugin.catalog.official));
   return (
     <>
       {props.loading ? (
@@ -502,17 +506,20 @@ function RawResults(props: PluginCatalogResultsProps): JSX.Element {
 }
 
 function GroupedCatalog(props: PluginCatalogResultsProps): JSX.Element {
-  const items = () => props.result?.items ?? [];
-  const categories = () =>
-    props.categories
+  const items = createMemo(() => props.result?.items ?? []);
+  const sourceCategories = createMemo(() => props.categories);
+  const categories = createMemo(() =>
+    sourceCategories()
       .filter((category) => category.slug !== "other")
-      .toSorted((left, right) => left.order - right.order);
-  const hasAnySection = () =>
-    props.featured.length > 0 ||
-    props.trending.length > 0 ||
+      .toSorted((left, right) => left.order - right.order),
+  );
+  const hasCategoryItems = createMemo(() =>
     items().some((plugin) =>
       categories().some((category) => plugin.catalog.categories.includes(category.slug)),
-    );
+    ),
+  );
+  const hasAnySection = () =>
+    props.featured.length > 0 || props.trending.length > 0 || hasCategoryItems();
   return (
     <>
       {!hasAnySection() && !props.loading && !props.error && !props.remoteError ? (

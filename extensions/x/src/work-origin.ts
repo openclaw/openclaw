@@ -2,7 +2,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { XSenderTier } from "./guest-policy.js";
 
-export type XWorkOrigin = {
+type XWorkOrigin = {
   accountId: string;
   postId: string;
   postUrl: string;
@@ -31,7 +31,7 @@ export function openXWorkOrigins(runtime: PluginRuntime) {
 }
 
 function originGuidance(origin: XWorkOrigin): string {
-  return `This session was started from an X post by @${origin.authorHandle}: ${origin.postUrl}. Replies to X are manual. Never post to X on your own. When you have a result worth sharing (finding, fix, PR, or a clear "can't reproduce"), draft a reply of at most 280 characters with the key result and any PR link, show it to the user, and ask whether to post it. Post only after the user explicitly says so in this session, using the message tool with channel "x" and that post URL as the target. If the user has not answered, remind them once at the end of your final summary.\nUse accountId ${JSON.stringify(origin.accountId)} for that message-tool reply.`;
+  return `X origin: @${origin.authorHandle} ${origin.postUrl}\nReplies are manual: draft ≤280 characters with the result and any PR link; show the user and ask. Post only after explicit approval in this session. Use tool message: {action:"send", channel:"x", target:${JSON.stringify(origin.postUrl)}, accountId:${JSON.stringify(origin.accountId)}, message:"<approved reply>"}. If unanswered, remind once at the end of your final summary.`;
 }
 
 export function registerXWorkOriginGuidance(api: Pick<OpenClawPluginApi, "on" | "runtime">) {

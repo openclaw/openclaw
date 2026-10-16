@@ -178,6 +178,12 @@ async function authenticateBuzzRelay(params: {
   try {
     while (true) {
       signal.throwIfAborted();
+      // nostr-tools keeps the challenge after a close, and auth() then drops the
+      // rejected AUTH send as an unhandled rejection that exits the Gateway.
+      // Signing is synchronous, so no close can land between this check and the send.
+      if (!params.relay.connected) {
+        throw new Error("Buzz relay closed before NIP-42 authentication completed");
+      }
       try {
         await waitWithSignal(params.relay.auth(params.signAuth), signal);
         return;
