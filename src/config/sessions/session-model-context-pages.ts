@@ -1,5 +1,4 @@
 import type { AgentMessage } from "@openclaw/agent-core";
-import { getOpenClawSystemUpdateKind } from "../../../packages/agent-core/src/operator-messages.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { createSqliteQueryCache } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
@@ -37,8 +36,6 @@ type NavigationPage = {
   // Rewrites can refresh exact prefix costs from their existing page receipt.
   membership?: Uint8Array;
   bytes: number;
-  promptBytes: number;
-  promptCount: number;
 };
 type NavigationSnapshot = {
   sessionId: string;
@@ -97,15 +94,10 @@ function trimRequests(snapshot: NavigationSnapshot): void {
     const { entry, omitCheckpoint } = request;
     const page = snapshot.pages.get(Math.floor(entry.seq / MODEL_CONTEXT_PAGE_SIZE))!;
     const bytes = rowBytes(snapshot.rows.get(entry.seq)!, omitCheckpoint);
-    const prompt = getOpenClawSystemUpdateKind(entry) === "prompt-update";
     (page.membership ??= new Uint8Array(MODEL_CONTEXT_PAGE_SIZE))[
       entry.seq % MODEL_CONTEXT_PAGE_SIZE
-    ] = (omitCheckpoint ? 2 : 1) | (prompt ? 4 : 0);
+    ] = omitCheckpoint ? 2 : 1;
     page.bytes += bytes;
-    if (prompt) {
-      page.promptBytes += bytes;
-      page.promptCount += 1;
-    }
     snapshot.prefixCount += 1;
     snapshot.prefixHasUser ||= entry.type === "message" && entry.message.role === "user";
     snapshot.prefixBytes += bytes;
@@ -114,31 +106,6 @@ function trimRequests(snapshot: NavigationSnapshot): void {
   snapshot.requests = boundary ? [boundary, ...candidates] : candidates;
   snapshot.pairing.retain(messages(snapshot.requests));
   rebuildEntries(snapshot);
-}
-
-function retirePromptUpdates(snapshot: NavigationSnapshot): void {
-  for (const page of snapshot.pages.values()) {
-    if (!page.promptCount) {
-      continue;
-    }
-    snapshot.prefixBytes -= page.promptBytes;
-    snapshot.prefixCount -= page.promptCount;
-    page.bytes -= page.promptBytes;
-    page.promptBytes = 0;
-    page.promptCount = 0;
-    page.membership!.forEach((flags, index) => {
-      if (flags & 4) {
-        page.membership![index] = 0;
-      }
-    });
-  }
-  snapshot.requests = snapshot.requests.filter(({ entry }) => {
-    if (getOpenClawSystemUpdateKind(entry) !== "prompt-update") {
-      return true;
-    }
-    snapshot.rows.delete(entry.seq);
-    return false;
-  });
 }
 
 /** A normal append continues the known cursor; other topology is canonically reseeded. */
@@ -161,6 +128,12 @@ function appendRows(snapshot: NavigationSnapshot, rows: ModelContextNavigationRo
         "label",
         "session_info",
       ].includes(entry.type) ||
+      (entry.type === "custom" &&
+        entry.customType === "openclaw.system-prompt" &&
+        typeof entry.data === "object" &&
+        entry.data !== null &&
+        "restart" in entry.data &&
+        entry.data.restart === true) ||
       ("appendMode" in entry && entry.appendMode === "side") ||
       (Object.hasOwn(entry, "parentId") &&
         entry.parentId !== leafId &&
@@ -177,16 +150,6 @@ function appendRows(snapshot: NavigationSnapshot, rows: ModelContextNavigationRo
     return false;
   }
   for (const [index, entry] of entries.entries()) {
-    if (
-      entry.type === "custom" &&
-      entry.customType === "openclaw.system-prompt" &&
-      typeof entry.data === "object" &&
-      entry.data !== null &&
-      "restart" in entry.data &&
-      entry.data.restart === true
-    ) {
-      retirePromptUpdates(snapshot);
-    }
     if (
       entry.type === "model_change" ||
       (entry.type === "message" && entry.message.role === "assistant")
@@ -249,7 +212,7 @@ export function readModelContextNavigationPages(params: {
       : undefined;
     let page = pages.get(pageIndex);
     if (!page) {
-      page = { token, through: start - 1, bytes: 0, promptBytes: 0, promptCount: 0 };
+      page = { token, through: start - 1, bytes: 0 };
       pages.set(pageIndex, page);
     } else if (token === undefined || page.token !== token) {
       page.token = token;
@@ -267,7 +230,7 @@ export function readModelContextNavigationPages(params: {
   if (snapshot) {
     const appended: ModelContextNavigationRow[] = [];
     for (const range of refresh) {
-      const prefixBytes = new Map<number, { bytes: number; promptBytes: number }>();
+      const prefixBytes = new Map<number, number>();
       for (const row of readRows(range.after, range.through)) {
         if (row.entry.seq > snapshot.through) {
           appended.push(row);
@@ -281,20 +244,14 @@ export function readModelContextNavigationPages(params: {
         const flags =
           pages.get(pageIndex)!.membership?.[row.entry.seq % MODEL_CONTEXT_PAGE_SIZE] ?? 0;
         if (flags) {
-          const costs = prefixBytes.get(pageIndex) ?? { bytes: 0, promptBytes: 0 };
           const bytes = rowBytes(row, (flags & 2) !== 0);
-          costs.bytes += bytes;
-          if (flags & 4) {
-            costs.promptBytes += bytes;
-          }
-          prefixBytes.set(pageIndex, costs);
+          prefixBytes.set(pageIndex, (prefixBytes.get(pageIndex) ?? 0) + bytes);
         }
       }
-      for (const [pageIndex, costs] of prefixBytes) {
+      for (const [pageIndex, bytes] of prefixBytes) {
         const page = pages.get(pageIndex)!;
-        snapshot.prefixBytes += costs.bytes - page.bytes;
-        page.bytes = costs.bytes;
-        page.promptBytes = costs.promptBytes;
+        snapshot.prefixBytes += bytes - page.bytes;
+        page.bytes = bytes;
       }
     }
     if (appendRows(snapshot, appended)) {
@@ -318,7 +275,7 @@ export function readModelContextNavigationPages(params: {
       };
     }
   }
-  // Old anchors, branch/reset/compaction changes and ambiguous displaced results need
+  // Old anchors, branch/reset/compaction or prompt-series restarts and displaced results need
   // canonical ancestry once. The resulting compact state serves subsequent ordinary reads.
   const rows = new Map(Array.from(readRows(-1, through), (row) => [row.entry.seq, row]));
   const tree = scanSessionTranscriptTree(Array.from(rows.values(), (row) => row.entry));
@@ -335,8 +292,6 @@ export function readModelContextNavigationPages(params: {
       page.through = Math.min((pageIndex + 1) * MODEL_CONTEXT_PAGE_SIZE - 1, through);
       page.membership = undefined;
       page.bytes = 0;
-      page.promptBytes = 0;
-      page.promptCount = 0;
     }
     const requests = collectSessionModelContextRequests(entries);
     snapshot = {

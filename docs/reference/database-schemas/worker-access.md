@@ -354,8 +354,8 @@ model, thinking, and context-boundary markers. Discarded requests contribute exa
 byte totals and compact per-page membership facts. Ordinary appends advance these
 facts; existing rewrite receipts refresh the affected page's costs. Tool-result
 ownership uses the canonical pairing rules with bounded unresolved-call evidence.
-Branch changes, old anchors, reset or compaction, and ambiguous displaced results
-rebuild canonical navigation once and reseed the compact state. Unlimited context
+Branch changes, old anchors, reset or compaction, prompt-series restarts, and ambiguous
+displaced results rebuild canonical navigation once and reseed the compact state. Unlimited context
 reads scan transiently and retain no full-history navigation cache. Payload-size
 projections remain in SQL, and the bounded reader's limits and output are unchanged.
 

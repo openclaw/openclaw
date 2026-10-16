@@ -902,6 +902,31 @@ it.each(["reset", "compaction"])(
   },
 );
 
+it("refills warmed context when a prompt restart retires a suffix entry", async () => {
+  await withSessionState("model-prompt-restart", async ({ scope }) => {
+    const source = SessionManager.open(scope);
+    for (let index = 1; index <= 4; index++) {
+      source.appendMessage(makeUserMessage(`question-${index}`, index));
+    }
+    source.appendCustomMessageEntry("openclaw.system-update", "old prompt", false, {
+      kind: "prompt-update",
+    });
+    const limits = { maxBytes: 1_000_000, maxEvents: 4 };
+    const read = async () =>
+      (await SessionManager.openModelContextAsync(scope, { limits })).buildSessionContext();
+    const warmed = await read();
+    expect(warmed.messages).toHaveLength(4);
+    expect(warmed.messages[0]).toMatchObject({ content: "question-2" });
+
+    source.appendCustomEntry("openclaw.system-prompt", { restart: true });
+    const expected = source.buildSessionContext();
+    expect(expected.messages).toHaveLength(4);
+    expect(expected.messages[0]).toMatchObject({ content: "question-1" });
+    expect(await read()).toEqual(expected);
+    expect(await read()).toEqual(expected);
+  });
+});
+
 it("keeps warmed current context after historical and smaller-window reads", async () => {
   await withSessionState("model-anchor-retention", async ({ scope }) => {
     const source = SessionManager.open(scope);
