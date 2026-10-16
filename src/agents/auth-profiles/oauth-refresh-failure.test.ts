@@ -14,11 +14,12 @@ import {
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const refreshProfileId = "openai:oauth";
-const stored = credential({
-  access: "store-access",
-  refresh: "store-refresh",
-  idToken: "store-id-token",
+const secrets = (prefix: string) => ({
+  access: `${prefix}-access`,
+  refresh: `${prefix}-refresh`,
+  idToken: `${prefix}-id-token`,
 });
+const stored = credential(secrets("store"));
 const presentation = {
   errorType: "invalid_request_error",
   reason: "refresh_token_reused",
@@ -29,67 +30,59 @@ const access = "sk-oauthreviewredaction1234567890zzzz";
 const refresh = "ya29.oauthreviewredaction1234567890yyyy";
 const login = "openclaw models auth login --provider";
 const claudeLogin = `claude auth login && ${login} anthropic --method cli`;
+const reauthenticate = (command: string) => `Re-authenticate with \`${command}\`.`;
+const openaiLogin = `${login} openai --profile-id 'openai:default'`;
+const refreshMessage = (message: string) => `OAuth token refresh failed for openai: ${message}`;
+const oauthMessageCase = (message: string, reason: string, command?: string) =>
+  [refreshMessage(message), { provider: "openai", reason }, command] as const;
+function managerError(
+  cred: OAuthCredential,
+  cause: unknown,
+  profiles: AuthProfileStore["profiles"] = {},
+) {
+  return new OAuthManagerRefreshError({
+    credential: cred,
+    profileId: refreshProfileId,
+    refreshedStore: { version: 1, profiles },
+    cause,
+  });
+}
 
 describe("OAuthManagerRefreshError", () => {
-  it.each<{
-    name: string;
-    cred: OAuthCredential;
-    profiles: AuthProfileStore["profiles"];
-    cause: Error;
-    forbidden: string[];
-    redactions: number;
-  }>([
-    {
-      name: "stored and attempted secrets with structured diagnostics",
-      cred: credential({
-        access: "error-access",
-        refresh: "error-refresh",
-        idToken: "error-id-token",
-      }),
-      profiles: { [refreshProfileId]: stored },
-      cause: Object.assign(
+  it.each<[string, OAuthCredential, Error, string[], number, AuthProfileStore["profiles"]?]>([
+    [
+      "stored and attempted secrets with structured diagnostics",
+      credential(secrets("error")),
+      Object.assign(
         new Error(
           "refresh rejected error-access error-refresh error-id-token store-access store-refresh store-id-token",
         ),
         { oauthRefreshFailure: presentation },
       ),
-      forbidden: [
-        "error-access",
-        "error-refresh",
-        "error-id-token",
-        "store-access",
-        "store-refresh",
-        "store-id-token",
-      ],
-      redactions: 6,
-    },
-    {
-      name: "token-shaped secrets before generic masking, including nested causes",
-      cred: credential({ access, refresh }),
-      profiles: {},
-      cause: new Error(`refresh rejected ${access} ${refresh}`, {
+      [...Object.values(secrets("error")), ...Object.values(secrets("store"))],
+      6,
+      { [refreshProfileId]: stored },
+    ],
+    [
+      "token-shaped secrets before generic masking, including nested causes",
+      credential({ access, refresh }),
+      new Error(`refresh rejected ${access} ${refresh}`, {
         cause: new Error(`nested failure ${access}`),
       }),
-      forbidden: [access, refresh, "sk-oau", "zzzz", "ya29.o", "yyyy"],
-      redactions: 3,
-    },
-    {
-      name: "overlapping secrets longest first",
-      cred: credential({ access: "abc123", refresh: "abc123456" }),
-      profiles: {},
-      cause: new Error("refresh rejected abc123 abc123456"),
-      forbidden: ["abc123", "abc123456", "[redacted]456"],
-      redactions: 2,
-    },
+      [access, refresh, "sk-oau", "zzzz", "ya29.o", "yyyy"],
+      3,
+    ],
+    [
+      "overlapping secrets longest first",
+      credential({ access: "abc123", refresh: "abc123456" }),
+      new Error("refresh rejected abc123 abc123456"),
+      ["abc123", "abc123456", "[redacted]456"],
+      2,
+    ],
   ])(
-    "redacts $name from public errors and serialization",
-    ({ cred, profiles, cause, forbidden, redactions }) => {
-      const error = new OAuthManagerRefreshError({
-        credential: cred,
-        profileId: refreshProfileId,
-        refreshedStore: { version: 1, profiles },
-        cause,
-      });
+    "redacts %s from public errors and serialization",
+    (_name, cred, cause, forbidden, redactions, profiles) => {
+      const error = managerError(cred, cause, profiles);
       const serialized = JSON.stringify(error);
       expect(serialized).toContain("openai");
       expect(serialized).toContain(refreshProfileId);
@@ -107,40 +100,28 @@ describe("OAuthManagerRefreshError", () => {
   );
 
   it("formats an undefined refresh failure without throwing", () => {
-    const error = new OAuthManagerRefreshError({
-      credential: credential({ access: "sk-nonjsonredaction1234567890zzzz" }),
-      profileId: refreshProfileId,
-      refreshedStore: { version: 1, profiles: {} },
-      cause: undefined,
-    });
+    const error = managerError(
+      credential({ access: "sk-nonjsonredaction1234567890zzzz" }),
+      undefined,
+    );
     expect(error.message).toContain("OAuth token refresh failed");
   });
 });
 
 it.each([
-  [
-    "openai",
-    "auth",
-    "openai:default",
-    `Re-authenticate with \`${login} openai --profile-id 'openai:default'\`.`,
-  ],
-  [
-    "openai",
-    "auth_permanent",
-    "openai:default",
-    `Re-authenticate with \`${login} openai --profile-id 'openai:default'\`.`,
-  ],
+  ["openai", "auth", "openai:default", reauthenticate(openaiLogin)],
+  ["openai", "auth_permanent", "openai:default", reauthenticate(openaiLogin)],
   [
     "claude-cli",
     "session_expired",
     "anthropic:claude-cli",
-    `Re-authenticate with \`${claudeLogin} --profile-id 'anthropic:claude-cli'\`.`,
+    reauthenticate(`${claudeLogin} --profile-id 'anthropic:claude-cli'`),
   ],
   [
     "anthropic",
     "auth",
     "anthropic:api-key",
-    `Re-authenticate with \`${login} anthropic --profile-id 'anthropic:api-key'\`.`,
+    reauthenticate(`${login} anthropic --profile-id 'anthropic:api-key'`),
   ],
   [
     "google-gemini-cli",
@@ -171,21 +152,9 @@ it.each([
 });
 
 it.each([
-  [
-    "OAuth token refresh failed for openai: invalid_grant",
-    { provider: "openai", reason: "invalid_grant" },
-    `${login} openai`,
-  ],
-  [
-    "OAuth token refresh failed for openai: token_invalidated. Please sign in again.",
-    { provider: "openai", reason: "token_invalidated" },
-    undefined,
-  ],
-  [
-    "OAuth token refresh failed for openai: Your session ended. Please log in again.",
-    { provider: "openai", reason: "sign_in_again" },
-    undefined,
-  ],
+  oauthMessageCase("invalid_grant", "invalid_grant", `${login} openai`),
+  oauthMessageCase("token_invalidated. Please sign in again.", "token_invalidated"),
+  oauthMessageCase("Your session ended. Please log in again.", "sign_in_again"),
   [
     "Provider claude-cli failed: Failed to authenticate. API Error: 401 Invalid authentication credentials",
     { provider: "claude-cli", reason: "revoked" },
@@ -216,23 +185,29 @@ const cliFailure = {
   model: "claude-sonnet-4-20250514",
   status: 401,
 };
+const typed = (options: Partial<ConstructorParameters<typeof OAuthRefreshFailureError>[0]> = {}) =>
+  new OAuthRefreshFailureError({ ...typedFailure, ...options });
+const failover = (options: Partial<ConstructorParameters<typeof FailoverError>[1]>) =>
+  new FailoverError("Authentication refresh failed", {
+    reason: "auth_permanent",
+    provider: "openai",
+    ...options,
+  });
 
 it.each([
   [
     "typed metadata without display-message parsing",
-    new OAuthRefreshFailureError({ ...typedFailure, ...diagnostics }),
+    typed(diagnostics),
     { provider: typedFailure.provider, profileId: typedFailure.profileId, ...diagnostics },
   ],
   [
     "typed metadata through a wrapper cause",
-    new Error("wrapped", { cause: new OAuthRefreshFailureError(typedFailure) }),
+    new Error("wrapped", { cause: typed() }),
     { provider: typedFailure.provider, profileId: typedFailure.profileId, reason: "invalid_grant" },
   ],
   [
     "failover raw-error fallback",
-    new FailoverError("Authentication refresh failed", {
-      reason: "auth_permanent",
-      provider: "openai",
+    failover({
       profileId: "openai:work",
       rawError: "OAuth token refresh failed for openai: refresh_token_invalidated",
     }),
@@ -240,9 +215,7 @@ it.each([
   ],
   [
     "structured cause precedence over raw text",
-    new FailoverError("Authentication refresh failed", {
-      reason: "auth_permanent",
-      provider: "openai",
+    failover({
       rawError: "OAuth token refresh failed for openai: refresh_token_reused",
       cause: new OAuthRefreshFailureError({
         provider: "openai",

@@ -39,10 +39,15 @@ import {
 import { createOAuthManager } from "./oauth-manager.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { withPersonalAuthProfileStore } from "./personal-store.js";
-import type { OAuthCredential, ProfileUsageStats } from "./types.js";
+import type { OAuthCredential, ProfileUsageStats, UserModelAuthProfile } from "./types.js";
 import { reconcileWhamBlock } from "./usage-reduction.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+const authorityUnavailable = "Personal model account authority is unavailable";
+function expectUnavailable(read: () => unknown) {
+  expect(read).toThrow(authorityUnavailable);
+}
 
 function managerWith(overrides: Partial<Parameters<typeof createOAuthManager>[0]>) {
   return createOAuthManager({
@@ -110,13 +115,56 @@ function fixture() {
     profileId,
     credential,
     replacement,
-    replace: () => {
-      updateUserModelAuthProfile(profileId, (profile) => {
-        profile.credential = replacement;
-        return true;
-      });
-    },
+    replace: () => setProfile(profileId, { credential: replacement }),
   };
+}
+
+function personalCase<T extends unknown[]>(
+  run: (state: ReturnType<typeof fixture>, ...args: T) => Promise<void>,
+) {
+  return (...args: T) =>
+    withOpenClawTestState({ scenario: "minimal" }, () => run(fixture(), ...args));
+}
+
+function setProfile(profileId: string, fields: Partial<UserModelAuthProfile>) {
+  updateUserModelAuthProfile(profileId, (profile) => {
+    Object.assign(profile, fields);
+    return true;
+  });
+}
+
+function trackReplacements() {
+  const tracked: { target?: { worker: Worker; id: number }; attempts: number } = { attempts: 0 };
+  // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted worker receiver.
+  const post = Worker.prototype.postMessage;
+  vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    request: SqliteWorkerRequest,
+    transferList,
+  ) {
+    if (request.type === "execute") {
+      const command: unknown = deserialize(request.input);
+      if (isRecord(command) && command.type === "authProfiles.personalReplace") {
+        tracked.attempts++;
+        tracked.target = { worker: this, id: request.id };
+      }
+    }
+    return post.call(this, request, transferList);
+  });
+  return tracked;
+}
+
+function writeCredential(
+  profileId: string,
+  credential: OAuthCredential,
+  assertCurrent?: () => void,
+) {
+  return withPersonalAuthProfileStore(profileId, (owner) =>
+    owner.update((store) => {
+      store.profiles[profileId] = credential;
+      return true;
+    }, assertCurrent),
+  );
 }
 
 async function prepareCredentialReader(profileId: string) {
@@ -148,14 +196,14 @@ async function expectPreparedFetchRevoked(
       },
       beforeRequest,
     }),
-  ).rejects.toThrow("Personal model account authority is unavailable");
+  ).rejects.toThrow(authorityUnavailable);
   expect(beforeRequest).toHaveBeenCalledOnce();
   expect(fetchImpl).not.toHaveBeenCalled();
 }
 
-it("retains a personal credential pin across unlink without SQL or worker requests at use", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { owner, profileId, credential } = fixture();
+it(
+  "keeps an unlinked pin database-free",
+  personalCase(async ({ owner, profileId, credential }) => {
     const readCurrent = await prepareCredentialReader(profileId);
     await clearUserProfileAuthLinkAsync({
       profileId: owner.id,
@@ -163,12 +211,12 @@ it("retains a personal credential pin across unlink without SQL or worker reques
       assertCurrent() {},
     });
     await withoutDatabase(() => expect(readCurrent()).toEqual(credential));
-  });
-});
+  }),
+);
 
-it("retires an already prepared credential when reconnect keeps the same ID and token bytes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { owner, profileId, credential } = fixture();
+it(
+  "revokes same-byte reconnects",
+  personalCase(async ({ owner, profileId, credential }) => {
     const readCurrent = await prepareCredentialReader(profileId);
     await expectPreparedFetchRevoked(readCurrent, async () => {
       const connected = await connectUserModelAccountAsync({
@@ -179,50 +227,39 @@ it("retires an already prepared credential when reconnect keeps the same ID and 
       });
       expect(connected.authProfileId).toBe(profileId);
     });
-    expect(readCurrent).toThrow("Personal model account authority is unavailable");
+    expectUnavailable(readCurrent);
     const readReconnected = await prepareCredentialReader(profileId);
     expect(readReconnected()).toEqual(credential);
-    expect(readCurrent).toThrow("Personal model account authority is unavailable");
-  });
-});
+    expectUnavailable(readCurrent);
+  }),
+);
 
 it.each(["commit", "rollback"] as const)(
   "denies personal credential use during refresh and publishes only the %s outcome",
-  async (outcome) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { profileId, credential, replacement } = fixture();
-      const readCurrent = await prepareCredentialReader(profileId);
-      let admissions = 0;
-      const refused = new Error("Synthetic final credential write refusal");
-      const update = withPersonalAuthProfileStore(profileId, (owner) =>
-        owner.update(
-          (store) => {
-            store.profiles[profileId] = replacement;
-            return true;
-          },
-          () => {
-            admissions++;
-            expect(readCurrent).toThrow("Personal model account authority is unavailable");
-            if (outcome === "rollback" && admissions === 2) {
-              throw refused;
-            }
-          },
-        ),
-      );
-      if (outcome === "rollback") {
-        await expect(update).rejects.toThrow(refused.message);
-      } else {
-        await expect(update).resolves.toMatchObject({ profiles: { [profileId]: replacement } });
+  personalCase(async ({ profileId, credential, replacement }, outcome) => {
+    const readCurrent = await prepareCredentialReader(profileId);
+    let admissions = 0;
+    const refused = new Error("Synthetic final credential write refusal");
+    const update = writeCredential(profileId, replacement, () => {
+      admissions++;
+      expectUnavailable(readCurrent);
+      if (outcome === "rollback" && admissions === 2) {
+        throw refused;
       }
-      expect(admissions).toBe(2);
-      expect(readCurrent()).toEqual(outcome === "commit" ? replacement : credential);
     });
-  },
+    if (outcome === "rollback") {
+      await expect(update).rejects.toThrow(refused.message);
+    } else {
+      await expect(update).resolves.toMatchObject({ profiles: { [profileId]: replacement } });
+    }
+    expect(admissions).toBe(2);
+    expect(readCurrent()).toEqual(outcome === "commit" ? replacement : credential);
+  }),
 );
 
-it("keeps credentials unavailable until every overlapping admission has settled", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId, credential } = fixture();
+it(
+  "waits for all overlapping admissions",
+  personalCase(async ({ profileId, credential }) => {
     const readCurrent = await prepareCredentialReader(profileId);
     const context = captureOpenClawStateWorkerContext();
     const createAdmission = withPersonalCredentialPublication(
@@ -236,10 +273,10 @@ it("keeps credentials unavailable until every overlapping admission has settled"
       createAdmission({ settled: second.promise }).admission,
     ];
     try {
-      expect(readCurrent).toThrow("Personal model account authority is unavailable");
+      expectUnavailable(readCurrent);
       first.resolve({ kind: "not-entered", error: new Error("Synthetic admission refusal") });
       await first.promise;
-      expect(readCurrent).toThrow("Personal model account authority is unavailable");
+      expectUnavailable(readCurrent);
       second.resolve({ kind: "completed" });
       await second.promise;
       expect(readCurrent()).toEqual(credential);
@@ -250,31 +287,31 @@ it("keeps credentials unavailable until every overlapping admission has settled"
         admission.finish();
       }
     }
-  });
-});
+  }),
+);
 
-it("retires source and flattened-alias credentials when merge transfers identical bytes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { owner, profileId, credential } = fixture();
+it(
+  "revokes merged and aliased pins",
+  personalCase(async ({ owner, profileId, credential }) => {
     const target = ensureProfileForEmail("personal-merge-target@example.test");
     const successor = ensureProfileForEmail("personal-merge-successor@example.test");
     const readSource = await prepareCredentialReader(profileId);
     await expectPreparedFetchRevoked(readSource, () =>
       mergeCanonicalUserProfiles(owner.id, target.id),
     );
-    expect(readSource).toThrow("Personal model account authority is unavailable");
+    expectUnavailable(readSource);
     const readTransferred = await prepareCredentialReader(profileId);
     expect(readTransferred()).toEqual(credential);
     await mergeCanonicalUserProfiles(target.id, successor.id);
-    expect(readTransferred).toThrow("Personal model account authority is unavailable");
+    expectUnavailable(readTransferred);
     expect((await prepareCredentialReader(profileId))()).toEqual(credential);
-    expect(readSource).toThrow("Personal model account authority is unavailable");
-  });
-});
+    expectUnavailable(readSource);
+  }),
+);
 
-it("does not install a cold credential read after reconnect has retired its authority", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { owner, profileId, credential } = fixture();
+it(
+  "rejects a cold read retired by reconnect",
+  personalCase(async ({ owner, profileId, credential }) => {
     let reconnect = true;
     probe.command(workerStore, async (command, executeOptions, scope) => {
       const result = await scope.execute(command, executeOptions);
@@ -289,19 +326,16 @@ it("does not install a cold credential read after reconnect has retired its auth
       }
       return result;
     });
-    await expect(prepareCredentialReader(profileId)).rejects.toThrow(
-      "Personal model account authority is unavailable",
-    );
+    await expect(prepareCredentialReader(profileId)).rejects.toThrow(authorityUnavailable);
     expect((await prepareCredentialReader(profileId))()).toEqual(credential);
-  });
-});
+  }),
+);
 
-it("does not disclose a personal API key when its worker read is canceled", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId } = fixture();
-    updateUserModelAuthProfile(profileId, (profile) => {
-      profile.credential = { type: "api_key", provider: "synthetic", key: "synthetic-key" };
-      return true;
+it(
+  "withholds keys from canceled worker reads",
+  personalCase(async ({ profileId }) => {
+    setProfile(profileId, {
+      credential: { type: "api_key", provider: "synthetic", key: "synthetic-key" },
     });
     const controller = new AbortController();
     const reason = new Error("Synthetic credential read cancellation");
@@ -318,12 +352,12 @@ it("does not disclose a personal API key when its worker read is canceled", asyn
         signal: controller.signal,
       }),
     ).rejects.toBe(reason);
-  });
-});
+  }),
+);
 
-it.each([false, true])("persists a quota recheck with available=%s", async (available) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId, credential } = fixture();
+it.each([false, true])(
+  "persists a quota recheck with available=%s",
+  personalCase(async ({ profileId, credential }, available) => {
     const now = 1_800_000_000_000;
     const blocked: ProfileUsageStats = {
       blockedUntil: now + 86_400_000,
@@ -331,10 +365,7 @@ it.each([false, true])("persists a quota recheck with available=%s", async (avai
       blockedSource: "wham",
       lastProbeAt: now - 600_000,
     };
-    updateUserModelAuthProfile(profileId, (profile) => {
-      profile.usageStats = blocked;
-      return true;
-    });
+    setProfile(profileId, { usageStats: blocked });
     const result = await withPersonalAuthProfileStore(profileId, async (owner) => {
       await owner.update((store) => {
         expectDefined(store.usageStats?.[profileId], "seeded quota").lastProbeAt = now;
@@ -361,72 +392,63 @@ it.each([false, true])("persists a quota recheck with available=%s", async (avai
     };
     expect(readUserModelAuthProfile(profileId)).toStrictEqual(expected);
     expect(result?.usageStats?.[profileId]).toStrictEqual(expected.usageStats);
-  });
-});
+  }),
+);
 
 it.each(["capability", "format"] as const)(
   "rejects stale credentials across awaited provider %s preparation",
-  async (stage) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { profileId, credential, replacement, replace } = fixture();
-      const refreshCredential = vi.fn(async () => replacement);
-      let changed = false;
-      const manager = managerWith({
-        canRefreshCredential: async () => {
-          if (stage === "capability") {
-            replace();
-          }
-          return true;
-        },
-        refreshCredential,
-        buildApiKey: async (_provider, current) => {
-          if (stage === "format" && !changed) {
-            changed = true;
-            replace();
-          }
-          return current.access;
-        },
-      });
-      if (stage === "format") {
-        updateUserModelAuthProfile(profileId, (profile) => {
-          profile.credential = { ...credential, expires: Date.now() + 600_000 };
-          return true;
-        });
-      }
-      const resolving = resolve(manager, profileId, credential);
-      if (stage === "format") {
-        await expect(resolving).rejects.toThrow("changed during provider preparation");
-      } else {
-        expect((await resolving)?.credential).toEqual(replacement);
-      }
-      expect(refreshCredential).not.toHaveBeenCalled();
-      expect(readUserModelAuthProfile(profileId)?.credential).toEqual(replacement);
+  personalCase(async ({ profileId, credential, replacement, replace }, stage) => {
+    const refreshCredential = vi.fn(async () => replacement);
+    let changed = false;
+    const manager = managerWith({
+      canRefreshCredential: async () => {
+        if (stage === "capability") {
+          replace();
+        }
+        return true;
+      },
+      refreshCredential,
+      buildApiKey: async (_provider, current) => {
+        if (stage === "format" && !changed) {
+          changed = true;
+          replace();
+        }
+        return current.access;
+      },
     });
-  },
+    if (stage === "format") {
+      setProfile(profileId, { credential: { ...credential, expires: Date.now() + 600_000 } });
+    }
+    const resolving = resolve(manager, profileId, credential);
+    if (stage === "format") {
+      await expect(resolving).rejects.toThrow("changed during provider preparation");
+    } else {
+      expect((await resolving)?.credential).toEqual(replacement);
+    }
+    expect(refreshCredential).not.toHaveBeenCalled();
+    expect(readUserModelAuthProfile(profileId)?.credential).toEqual(replacement);
+  }),
 );
 
-it("accepts refreshed credentials with undefined optionals without repeating provider preparation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId, credential, replacement } = fixture();
+it(
+  "normalizes refreshed optionals once",
+  personalCase(async ({ profileId, credential, replacement }) => {
     const refreshCredential = vi.fn(async () => ({ ...replacement, displayName: undefined }));
     const buildApiKey = vi.fn(
       async (_provider: string, current: OAuthCredential) => current.access,
     );
-    const manager = managerWith({
-      refreshCredential,
-      buildApiKey,
-    });
+    const manager = managerWith({ refreshCredential, buildApiKey });
     const result = await resolve(manager, profileId, credential);
     expect(result).toStrictEqual({ apiKey: replacement.access, credential: replacement });
     expect(readUserModelAuthProfile(profileId)?.credential).toStrictEqual(replacement);
     expect(refreshCredential).toHaveBeenCalledTimes(1);
     expect(buildApiKey).toHaveBeenCalledTimes(1);
-  });
-});
+  }),
+);
 
-it("rechecks a live pin after refresh and never discloses a revoked selection", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { owner, profileId, credential, replacement } = fixture();
+it(
+  "rechecks live pins after refresh",
+  personalCase(async ({ owner, profileId, credential, replacement }) => {
     const successor = ensureProfileForEmail("personal-successor@example.test");
     const pin = await prepareUserModelAccountAuthority({
       profileId: owner.id,
@@ -449,12 +471,12 @@ it("rechecks a live pin after refresh and never discloses a revoked selection", 
       }),
     ).rejects.toThrow("Synthetic pin revoked");
     expect(readUserModelAuthProfile(profileId)?.credential).not.toEqual(replacement);
-  });
-});
+  }),
+);
 
-it("resolves and accepts published personal credentials without SQL or worker requests", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId, credential, replacement, replace } = fixture();
+it(
+  "accepts published credentials database-free",
+  personalCase(async ({ profileId, credential, replacement, replace }) => {
     const observe = vi.fn<(observation: CanonicalAuthProfileCredentialObservation) => void>();
     await withPersonalAuthProfileStore(profileId, async (owner) => {
       await owner.read();
@@ -478,81 +500,75 @@ it("resolves and accepts published personal credentials without SQL or worker re
         replacement,
       ]);
     });
-  });
-});
+  }),
+);
 
 it.each(["capability", "refresh"] as const)(
   "retains the original personal generation when the %s adapter mutates its input",
-  async (stage) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { profileId, credential, replacement } = fixture();
-      const manager = managerWith({
-        canRefreshCredential: async (input) => {
-          if (stage === "capability") {
-            input.accountId = "synthetic-other-account";
-          }
-          return true;
-        },
-        refreshCredential: async (input) => {
-          if (stage === "refresh") {
-            input.accountId = "synthetic-other-account";
-          }
-          return { ...replacement, accountId: input.accountId };
-        },
-      });
-      const resolving = resolve(manager, profileId, credential);
-      if (stage === "capability") {
-        expect(await resolving).toEqual({ apiKey: replacement.access, credential: replacement });
-      } else {
-        await expect(resolving).rejects.toThrow("different OAuth account");
-      }
-      expect(readUserModelAuthProfile(profileId)?.credential).toMatchObject({
-        type: "oauth",
-        accountId: credential.accountId,
-      });
+  personalCase(async ({ profileId, credential, replacement }, stage) => {
+    const manager = managerWith({
+      canRefreshCredential: async (input) => {
+        if (stage === "capability") {
+          input.accountId = "synthetic-other-account";
+        }
+        return true;
+      },
+      refreshCredential: async (input) => {
+        if (stage === "refresh") {
+          input.accountId = "synthetic-other-account";
+        }
+        return { ...replacement, accountId: input.accountId };
+      },
     });
-  },
+    const resolving = resolve(manager, profileId, credential);
+    if (stage === "capability") {
+      expect(await resolving).toEqual({ apiKey: replacement.access, credential: replacement });
+    } else {
+      await expect(resolving).rejects.toThrow("different OAuth account");
+    }
+    expect(readUserModelAuthProfile(profileId)?.credential).toMatchObject({
+      type: "oauth",
+      accountId: credential.accountId,
+    });
+  }),
 );
 
 it.each(["conflict", "unknown"] as const)(
   "does not replay a personal update after %s",
-  async (outcome) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { profileId, credential, replacement, replace } = fixture();
-      let attempts = 0;
-      probe.command(workerStore, (command, executeOptions, scope) => {
-        if (command.type === "authProfiles.personalReplace") {
-          attempts++;
-          if (outcome === "unknown") {
-            throw new SqliteWorkerError("Synthetic transport uncertainty", "outcome-unknown");
-          }
+  personalCase(async ({ profileId, credential, replacement, replace }, outcome) => {
+    let attempts = 0;
+    probe.command(workerStore, (command, executeOptions, scope) => {
+      if (command.type === "authProfiles.personalReplace") {
+        attempts++;
+        if (outcome === "unknown") {
+          throw new SqliteWorkerError("Synthetic transport uncertainty", "outcome-unknown");
         }
-        return scope.execute(command, executeOptions);
-      });
-      const updater = vi.fn((store) => {
-        if (outcome === "conflict") {
-          replace();
-        }
-        store.profiles[profileId] = { ...replacement, access: "synthetic-stale-candidate" };
-        return true;
-      });
-      const failure = await withPersonalAuthProfileStore(profileId, (owner) =>
-        owner.update(updater),
-      ).catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(Error);
-      expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(outcome === "unknown");
-      expect(updater).toHaveBeenCalledTimes(1);
-      expect(attempts).toBe(1);
-      expect(readUserModelAuthProfile(profileId)?.credential).toEqual(
-        outcome === "conflict" ? replacement : credential,
-      );
+      }
+      return scope.execute(command, executeOptions);
     });
-  },
+    const updater = vi.fn((store) => {
+      if (outcome === "conflict") {
+        replace();
+      }
+      store.profiles[profileId] = { ...replacement, access: "synthetic-stale-candidate" };
+      return true;
+    });
+    const failure = await withPersonalAuthProfileStore(profileId, (owner) =>
+      owner.update(updater),
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(outcome === "unknown");
+    expect(updater).toHaveBeenCalledTimes(1);
+    expect(attempts).toBe(1);
+    expect(readUserModelAuthProfile(profileId)?.credential).toEqual(
+      outcome === "conflict" ? replacement : credential,
+    );
+  }),
 );
 
-it("denies credential use after native commit until the owner receives its receipt", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId, replacement } = fixture();
+it(
+  "waits for the native commit receipt",
+  personalCase(async ({ profileId, replacement }) => {
     const readCurrent = await prepareCredentialReader(profileId);
     const observe = operationAdmission.observeSqliteWorkerCommittedFacts;
     let heldReceipt = false;
@@ -565,7 +581,7 @@ it("denies credential use after native commit until the owner receives its recei
             const sql = observeMainThreadSql();
             const requests = vi.spyOn(Worker.prototype, "postMessage");
             try {
-              expect(readCurrent).toThrow("Personal model account authority is unavailable");
+              expectUnavailable(readCurrent);
               sql.expectIdle();
               expect(requests).not.toHaveBeenCalled();
             } finally {
@@ -576,89 +592,49 @@ it("denies credential use after native commit until the owner receives its recei
           publish(receipt);
         }),
     );
-    await withPersonalAuthProfileStore(profileId, (owner) =>
-      owner.update((store) => {
-        store.profiles[profileId] = replacement;
-        return true;
-      }),
-    );
+    await writeCredential(profileId, replacement);
     expect(heldReceipt).toBe(true);
     expect(readCurrent()).toEqual(replacement);
-  });
-});
+  }),
+);
 
-it("denies a retained credential after worker death without a commit acknowledgment", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId, replacement } = fixture();
+it(
+  "revokes pins after unacknowledged worker death",
+  personalCase(async ({ profileId, replacement }) => {
     const readCurrent = await prepareCredentialReader(profileId);
-    let target: { worker: Worker } | undefined;
+    const tracked = trackReplacements();
     let terminated: Promise<number> | undefined;
-    // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver.
-    const post = Worker.prototype.postMessage;
-    vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-      this: Worker,
-      request: SqliteWorkerRequest,
-      transferList,
-    ) {
-      if (request.type === "execute") {
-        const command: unknown = deserialize(request.input);
-        if (isRecord(command) && command.type === "authProfiles.personalReplace") {
-          target = { worker: this };
-        }
-      }
-      return post.call(this, request, transferList);
-    });
     probe.admission(operationAdmission, (request, grant, admit) => {
-      if (target && request.stage === "commit") {
-        expect(readCurrent).toThrow("Personal model account authority is unavailable");
-        terminated = target.worker.terminate();
+      if (tracked.target && request.stage === "commit") {
+        expectUnavailable(readCurrent);
+        terminated = tracked.target.worker.terminate();
         return;
       }
       admit(request, grant);
     });
     try {
-      const failure = await withPersonalAuthProfileStore(profileId, (owner) =>
-        owner.update((store) => {
-          store.profiles[profileId] = replacement;
-          return true;
-        }),
-      ).catch((error: unknown) => error);
+      const failure = await writeCredential(profileId, replacement).catch(
+        (error: unknown) => error,
+      );
       expect(terminated).toBeDefined();
       expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
-      expect(readCurrent).toThrow("Personal model account authority is unavailable");
+      expectUnavailable(readCurrent);
       await expect(prepareCredentialReader(profileId)).rejects.toThrow();
     } finally {
       await terminated;
     }
-  });
-});
+  }),
+);
 
-it("publishes only the exact acknowledged personal postimage when its result frame is lost", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId, replacement } = fixture();
+it(
+  "publishes the acknowledged postimage after frame loss",
+  personalCase(async ({ profileId, replacement }) => {
     const readCurrent = await prepareCredentialReader(profileId);
     const acknowledged = { ...replacement };
-    let target: { worker: Worker; id: number } | undefined;
+    const tracked = trackReplacements();
     let terminated: Promise<number> | undefined;
-    let attempts = 0;
-    // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver.
-    const post = Worker.prototype.postMessage;
     // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver.
     const emit = Worker.prototype.emit;
-    vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-      this: Worker,
-      request: SqliteWorkerRequest,
-      transferList,
-    ) {
-      if (request.type === "execute") {
-        const command: unknown = deserialize(request.input);
-        if (isRecord(command) && command.type === "authProfiles.personalReplace") {
-          attempts++;
-          target = { worker: this, id: request.id };
-        }
-      }
-      return post.call(this, request, transferList);
-    });
     vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
       this: Worker,
       event,
@@ -668,9 +644,9 @@ it("publishes only the exact acknowledged personal postimage when its result fra
       if (
         event === "message" &&
         !terminated &&
-        target?.worker === this &&
+        tracked.target?.worker === this &&
         isRecord(reply) &&
-        reply.id === target.id &&
+        reply.id === tracked.target.id &&
         reply.ok === true
       ) {
         replacement.access = "synthetic-late-draft-mutation";
@@ -692,11 +668,11 @@ it("publishes only the exact acknowledged personal postimage when its result fra
       expect(result?.usageStats?.[profileId]).toStrictEqual({ lastProbeAt: 123 });
       expect(terminated).toBeDefined();
       await terminated;
-      expect(attempts).toBe(1);
+      expect(tracked.attempts).toBe(1);
       expect(readUserModelAuthProfile(profileId)?.credential).toEqual(acknowledged);
       expect(readCurrent()).toEqual(acknowledged);
     } finally {
       await terminated;
     }
-  });
-});
+  }),
+);

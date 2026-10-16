@@ -2,7 +2,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
-import { createAuthProfileStoreFixture } from "./credential-fixtures.test-support.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  createAuthProfileStoreFixture as storeOf,
+  createApiKeyCredential,
+  createOAuthRefreshCredential,
+} from "./credential-fixtures.test-support.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import type { AuthProfileCredential, AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
@@ -49,12 +54,17 @@ afterAll(() => {
 function cfgFor(profileId: string, provider: string, mode: "api_key" | "token" | "oauth") {
   return { auth: { profiles: { [profileId]: { provider, mode } } } } satisfies OpenClawConfig;
 }
+const publishProfiles = (profiles: AuthProfileStore["profiles"]) =>
+  setRuntimeAuthProfileStoreSnapshot(storeOf(profiles));
 const token = (overrides: Partial<Extract<AuthProfileCredential, { type: "token" }>> = {}) =>
   ({ type: "token", provider: "anthropic", token: "tok-123", ...overrides }) as const;
 const unavailable = (result: Promise<unknown>) =>
   expect(result).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
 const scoped = (result: Promise<unknown>) =>
   expect(result).resolves.toMatchObject({ apiKey: "synthetic-scoped-credential" });
+const ref = (id: string) => ({ source: "env", provider: "default", id }) as const;
+const refToken = (id: string) =>
+  ({ type: "token", provider: "github-copilot", tokenRef: ref(id) }) as const;
 function resolveCredential(
   credential: AuthProfileCredential,
   mode = credential.type,
@@ -63,7 +73,7 @@ function resolveCredential(
   const profileId = "fixture:default";
   return resolveApiKeyForProfile({
     cfg: cfgFor(profileId, provider, mode),
-    store: createAuthProfileStoreFixture({ [profileId]: credential }),
+    store: storeOf({ [profileId]: credential }),
     profileId,
   });
 }
@@ -72,24 +82,11 @@ describe("resolveApiKeyForProfile", () => {
   it("rejects a persisted Claude CLI token", async () => {
     const profileId = "anthropic:claude-cli";
     const store: RuntimeAuthProfileStore = {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider: "anthropic",
-          access: "copied-native-access",
-          refresh: "copied-native-refresh",
-          expires: Date.now() + 3_600_000,
-        },
-      },
+      ...storeOf({ [profileId]: createOAuthRefreshCredential({ provider: "anthropic" }) }),
       runtimePersistedProfileIds: [profileId],
     };
     await expect(
-      resolveApiKeyForProfile({
-        cfg: cfgFor(profileId, "anthropic", "oauth"),
-        store,
-        profileId,
-      }),
+      resolveApiKeyForProfile({ cfg: cfgFor(profileId, "anthropic", "oauth"), store, profileId }),
     ).resolves.toBeNull();
     expect(resolveProviderOAuthCredentialWithPlugin).not.toHaveBeenCalled();
   });
@@ -113,13 +110,10 @@ describe("resolveApiKeyForProfile", () => {
 
   it("uses current expired metadata before applying degraded owner state", async () => {
     const profileId = "fixture:default";
-    const tokenRef = { source: "env" as const, provider: "default", id: "EXPIRED_TOKEN" };
-    const credential = { type: "token" as const, provider: "github-copilot", tokenRef };
-    setRuntimeAuthProfileStoreSnapshot(
-      createAuthProfileStoreFixture({
-        [profileId]: { ...credential, token: "unused", expires: Date.now() + 60_000 },
-      }),
-    );
+    const credential = refToken("EXPIRED_TOKEN");
+    publishProfiles({
+      [profileId]: { ...credential, token: "unused", expires: Date.now() + 60_000 },
+    });
     setActiveDegradedSecretOwners([
       {
         ownerKind: "account",
@@ -135,25 +129,13 @@ describe("resolveApiKeyForProfile", () => {
 
   it("normalizes inline api_key values before header use", async () => {
     await expect(
-      resolveCredential({
-        type: "api_key",
-        provider: "openrouter",
-        key: " sk-or-\u202650ec ",
-      }),
+      resolveCredential(createApiKeyCredential("openrouter", " sk-or-\u202650ec ")),
     ).resolves.toEqual({ apiKey: "sk-or-50ec", provider: "openrouter", email: undefined });
   });
 
   it("reads published token SecretRefs without an inline source secret", async () => {
-    const source = {
-      type: "token" as const,
-      provider: "github-copilot",
-      tokenRef: { source: "env" as const, provider: "default", id: "GITHUB_TOKEN" },
-    };
-    setRuntimeAuthProfileStoreSnapshot(
-      createAuthProfileStoreFixture({
-        "fixture:default": { ...source, token: "materialized-secret" },
-      }),
-    );
+    const source = refToken("GITHUB_TOKEN");
+    publishProfiles({ "fixture:default": { ...source, token: "materialized-secret" } });
     await expect(resolveCredential(source)).resolves.toEqual({
       apiKey: "materialized-secret",
       provider: source.provider,
@@ -163,44 +145,35 @@ describe("resolveApiKeyForProfile", () => {
 
   it("hard-fails when oauth mode is combined with token SecretRef input", async () => {
     await expect(
-      resolveCredential(
-        {
-          type: "token",
-          provider: "anthropic",
-          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
-        },
-        "oauth",
-      ),
+      resolveCredential({ ...refToken("ANTHROPIC_TOKEN"), provider: "anthropic" }, "oauth"),
     ).rejects.toThrow(/mode is "oauth"/i);
   });
 });
 
 describe("setup-owned SecretRef materialization", () => {
   beforeEach(() => {
-    setRuntimeAuthProfileStoreSnapshot(
-      createAuthProfileStoreFixture({
-        "openai:unrelated": { type: "api_key", provider: "openai", key: "unchanged-key" },
-      }),
-    );
+    publishProfiles({ "openai:unrelated": createApiKeyCredential("openai", "unchanged-key") });
   });
   it.each(["abort", "replacement", "nested", "other-store", "other-profile"] as const)(
     "keeps the prepared credential scoped through %s settlement",
     async (settlement) => {
-      const { withSetupCredentialAccess, runOutsideSetupCredentialAccess } =
-        await import("./setup-access.js");
       const {
-        getRuntimeAuthProfileStoreCredentialsRevision,
-        getRuntimeAuthProfileStoreSnapshotCore,
+        withSetupCredentialAccess: withSetup,
+        runOutsideSetupCredentialAccess: outsideSetup,
+      } = await import("./setup-access.js");
+      const {
+        getRuntimeAuthProfileStoreCredentialsRevision: getRevision,
+        getRuntimeAuthProfileStoreSnapshotCore: getSnapshot,
       } = await import("./runtime-snapshots.js");
       const profileId = "openai:setup-scope";
       const source = {
         type: "api_key" as const,
         provider: "openai",
-        keyRef: { source: "env" as const, provider: "default", id: "SETUP_SCOPED_KEY" },
+        keyRef: ref("SETUP_SCOPED_KEY"),
       };
-      const store: AuthProfileStore = { version: 1, profiles: { [profileId]: source } };
+      const store: AuthProfileStore = storeOf({ [profileId]: source });
       const controller = new AbortController();
-      const prior = getRuntimeAuthProfileStoreSnapshotCore();
+      const prior = getSnapshot();
       const resolve = (agentDir?: string) =>
         resolveApiKeyForProfile({
           cfg: cfgFor(profileId, "openai", "api_key"),
@@ -208,46 +181,37 @@ describe("setup-owned SecretRef materialization", () => {
           profileId,
           agentDir,
         });
-      let readAfterClose: (() => ReturnType<typeof resolve>) | undefined;
-      await withSetupCredentialAccess(
+      const release = createDeferredCore<void>();
+      let retained: ReturnType<typeof resolve> | undefined;
+      await withSetup(
         {
           profileId,
           signal: controller.signal,
           runtimeCredential: {
             source,
             materialized: { ...source, key: "synthetic-scoped-credential" },
-            credentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+            credentialsRevision: getRevision(),
           },
         },
         async () => {
           await scoped(resolve());
-          let releaseRetained: (() => void) | undefined;
-          const retained = new Promise<void>((done) => {
-            releaseRetained = done;
-          }).then(() => resolve());
-          readAfterClose = () => {
-            releaseRetained!();
-            return retained;
-          };
+          retained = release.promise.then(() => resolve());
           if (settlement === "abort") {
             controller.abort();
             await unavailable(resolve());
           } else if (settlement === "replacement") {
-            setRuntimeAuthProfileStoreSnapshot({
-              version: 1,
-              profiles: { [profileId]: { ...source, key: "synthetic-new-owner-credential" } },
-            });
+            publishProfiles({ [profileId]: { ...source, key: "synthetic-new-owner-credential" } });
             await unavailable(resolve());
           } else if (settlement === "nested") {
-            await withSetupCredentialAccess({ profileId }, async () => {
+            await withSetup({ profileId }, async () => {
               await scoped(resolve());
-              await runOutsideSetupCredentialAccess(async () => {
+              await outsideSetup(async () => {
                 await unavailable(resolve());
               });
               await scoped(resolve());
             });
           } else if (settlement === "other-profile") {
-            await withSetupCredentialAccess({ profileId: "openai:another-setup" }, async () => {
+            await withSetup({ profileId: "openai:another-setup" }, async () => {
               await unavailable(resolve());
             });
           } else if (settlement === "other-store") {
@@ -255,17 +219,17 @@ describe("setup-owned SecretRef materialization", () => {
           }
         },
       );
-      expect(readAfterClose).toBeDefined();
-      await unavailable(readAfterClose!());
+      expect(retained).toBeDefined();
+      release.resolve();
+      await unavailable(retained!);
       if (settlement === "replacement") {
         await expect(resolve()).resolves.toMatchObject({
           apiKey: "synthetic-new-owner-credential",
         });
       } else {
-        expect(getRuntimeAuthProfileStoreSnapshotCore()).toEqual(prior);
+        expect(getSnapshot()).toEqual(prior);
       }
-      expect(store.profiles[profileId]).toEqual(source);
-      expect(store.profiles[profileId]).not.toHaveProperty("key");
+      expect(store.profiles[profileId]).toStrictEqual(source);
     },
   );
 });

@@ -8,6 +8,7 @@ import {
 } from "../../infra/state-migrations.shared-auth-store.js";
 import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
 import { resolveOpenAICodexAuthIdentity } from "../../plugin-sdk/provider-openai-chatgpt-auth.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { captureEnv } from "../../test-utils/env.js";
 import "./oauth-external-auth-passthrough.test-support.js";
 import {
@@ -29,12 +30,23 @@ import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } fr
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
+import type { OAuthCredential } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 const {
   refreshProviderOAuthCredentialWithPluginMock,
   formatProviderAuthProfileApiKeyWithPluginMock,
 } = getOAuthProviderRuntimeMocks();
+
+function holdRefresh() {
+  const started = createDeferredCore<void>();
+  const result = createDeferredCore<OAuthCredential>();
+  refreshProviderOAuthCredentialWithPluginMock.mockImplementation(() => {
+    started.resolve();
+    return result.promise;
+  });
+  return { started: started.promise, ...result };
+}
 
 function createWorkspaceAccessToken(accountId: string, rotation: string): string {
   const payload = Buffer.from(
@@ -46,13 +58,6 @@ function createWorkspaceAccessToken(accountId: string, rotation: string): string
 }
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
-let resetOAuthRefreshQueuesForTest: typeof import("./oauth.test-support.js").resetOAuthRefreshQueuesForTest;
-
-async function loadOAuthModuleForTest() {
-  ({ resolveApiKeyForProfile } = await import("./oauth.js"));
-  ({ resetOAuthRefreshQueuesForTest } = await import("./oauth.test-support.js"));
-  resetOAuthRefreshQueuesForTest();
-}
 
 vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: vi.fn(async () => null),
@@ -108,7 +113,9 @@ describe("createOAuthManager settlement credential validation", () => {
     clearRuntimeAuthProfileStoreSnapshots();
     tempRoot = await createOAuthTestTempRoot("openclaw-oauth-settlement-validator-");
     mainAgentDir = await createOAuthMainAgentDir(tempRoot);
-    await loadOAuthModuleForTest();
+    ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+    const { resetOAuthRefreshQueuesForTest } = await import("./oauth.test-support.js");
+    resetOAuthRefreshQueuesForTest();
   });
   afterEach(async () => {
     envSnapshot.restore();
@@ -222,25 +229,7 @@ describe("createOAuthManager settlement credential validation", () => {
     saveAuthProfileStore(local, peerAgentDir);
     saveAuthProfileStore(olderShared);
 
-    let finishRefresh: (() => void) | undefined;
-    let markStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
-      markStarted?.();
-      await new Promise<void>((resolve) => {
-        finishRefresh = resolve;
-      });
-      return {
-        type: "oauth",
-        provider,
-        access: createWorkspaceAccessToken("workspace-a", "local-rotation"),
-        refresh: "local-rotation-refresh",
-        expires: Date.now() + 30 * 60 * 1000,
-        accountId: "workspace-a",
-      } as never;
-    });
+    const refresh = holdRefresh();
     const validatedRotations: string[] = [];
     const resolving = resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
       store: ensureAuthProfileStore(ownerAgentDir),
@@ -256,7 +245,7 @@ describe("createOAuthManager settlement credential validation", () => {
         validatedRotations.push(credential.access);
       },
     });
-    await started;
+    await refresh.started;
     const newerShared = {
       type: "oauth" as const,
       provider,
@@ -270,7 +259,14 @@ describe("createOAuthManager settlement credential validation", () => {
       resetFailureState: true,
       allowOAuthGenerationReplacement: true,
     });
-    finishRefresh?.();
+    refresh.resolve({
+      type: "oauth",
+      provider,
+      access: createWorkspaceAccessToken("workspace-a", "local-rotation"),
+      refresh: "local-rotation-refresh",
+      expires: Date.now() + 30 * 60 * 1000,
+      accountId: "workspace-a",
+    });
 
     await expect(resolving).resolves.toMatchObject({
       apiKey: createWorkspaceAccessToken("workspace-a", "local-rotation"),
@@ -288,25 +284,7 @@ describe("createOAuthManager settlement credential validation", () => {
     const original = expiredStore("original", { email: "shared@example.test" });
     const peers = await createPeers(original);
 
-    let finishRefresh: (() => void) | undefined;
-    let markStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
-      markStarted?.();
-      await new Promise<void>((resolve) => {
-        finishRefresh = resolve;
-      });
-      return {
-        type: "oauth",
-        provider,
-        access: createWorkspaceAccessToken("workspace-a", "stale-rotation"),
-        refresh: "stale-rotation-refresh",
-        expires: Date.now() + 60 * 60 * 1000,
-        email: "shared@example.test",
-      } as never;
-    });
+    const refresh = holdRefresh();
 
     const validatedWorkspaceIds: Array<string | undefined> = [];
     const resolving = resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
@@ -315,7 +293,7 @@ describe("createOAuthManager settlement credential validation", () => {
       agentDir: peers[0],
       validateOAuthCredential: workspaceValidator(validatedWorkspaceIds),
     });
-    await started;
+    await refresh.started;
     await persistAuthProfileBatch({
       agentDir: mainAgentDir,
       profiles: [
@@ -334,7 +312,14 @@ describe("createOAuthManager settlement credential validation", () => {
       resetFailureState: true,
       allowOAuthGenerationReplacement: true,
     });
-    finishRefresh?.();
+    refresh.resolve({
+      type: "oauth",
+      provider,
+      access: createWorkspaceAccessToken("workspace-a", "stale-rotation"),
+      refresh: "stale-rotation-refresh",
+      expires: Date.now() + 60 * 60 * 1000,
+      email: "shared@example.test",
+    });
 
     await expect(resolving).resolves.toMatchObject({
       apiKey: createWorkspaceAccessToken("workspace-a", "stale-rotation"),
@@ -362,17 +347,7 @@ describe("createOAuthManager settlement credential validation", () => {
     const original = expiredStore("original", { email: "shared@example.test" });
     const peers = await createPeers(original);
 
-    let rejectRefresh: ((error: Error) => void) | undefined;
-    let markStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
-      markStarted?.();
-      return await new Promise<never>((_, reject) => {
-        rejectRefresh = reject;
-      });
-    });
+    const refresh = holdRefresh();
 
     const validatedWorkspaceIds: Array<string | undefined> = [];
     const resolving = resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
@@ -381,7 +356,7 @@ describe("createOAuthManager settlement credential validation", () => {
       agentDir: peers[0],
       validateOAuthCredential: workspaceValidator(validatedWorkspaceIds),
     });
-    await started;
+    await refresh.started;
     const conflictingOwner = {
       type: "oauth" as const,
       provider,
@@ -396,7 +371,7 @@ describe("createOAuthManager settlement credential validation", () => {
       resetFailureState: true,
       allowOAuthGenerationReplacement: true,
     });
-    rejectRefresh?.(new Error("provider refresh failed"));
+    refresh.reject(new Error("provider refresh failed"));
 
     await expect(resolving).rejects.toThrow("credential owner mismatch");
     expect(validatedWorkspaceIds.filter((accountId) => accountId === "workspace-b")).toHaveLength(

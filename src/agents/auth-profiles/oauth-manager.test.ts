@@ -69,6 +69,45 @@ function createTestManager(overrides: Partial<Parameters<typeof createOAuthManag
   });
 }
 
+function tokens(name: string, overrides: Partial<OAuthCredential> = {}) {
+  return {
+    ...tokenPair(name),
+    expires: Date.now() + 600_000,
+    ...overrides,
+  };
+}
+
+function tokenPair(name: string) {
+  return { access: `${name}-access`, refresh: `${name}-refresh` };
+}
+
+async function refreshFailure(result: Promise<unknown>) {
+  await expect(result).rejects.toBeInstanceOf(OAuthManagerRefreshError);
+  const error = await result.catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(OAuthManagerRefreshError);
+  if (!(error instanceof OAuthManagerRefreshError)) {
+    throw error;
+  }
+  return error;
+}
+
+function expired(name: string, overrides: Partial<OAuthCredential> = {}) {
+  return createCredential(tokens(name, { expires: Date.now() - 60_000, ...overrides }));
+}
+
+function fresh(name: string, overrides: Partial<OAuthCredential> = {}) {
+  return createCredential(tokens(name, overrides));
+}
+
+function profileStore(profileId: string, credential: OAuthCredential): AuthProfileStore {
+  return { version: 1, profiles: { [profileId]: credential } };
+}
+
+function readCredential(agentDir?: string, profileId = "openai:oauth") {
+  return ensureAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false })
+    .profiles[profileId];
+}
+
 function resolveStored(
   manager: ReturnType<typeof createOAuthManager>,
   credential: OAuthCredential,
@@ -76,7 +115,9 @@ function resolveStored(
   options: Partial<Parameters<typeof manager.resolveOAuthAccess>[0]> = {},
 ) {
   return manager.resolveOAuthAccess({
-    store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false }),
+    store:
+      options.store ??
+      ensureAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false }),
     profileId: "openai:oauth",
     credential,
     agentDir,
@@ -85,7 +126,7 @@ function resolveStored(
 }
 
 function saveCredential(profileId: string, credential: OAuthCredential, agentDir: string) {
-  saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir, {
+  saveAuthProfileStore(profileStore(profileId, credential), agentDir, {
     filterExternalAuthProfiles: false,
   });
 }
@@ -158,13 +199,7 @@ describe("createOAuthManager", () => {
       });
       const refreshCredential = vi.fn(async (current: OAuthCredential) => {
         expect(current).toEqual(credential);
-        return {
-          access: "personal-rotated-access",
-          refresh: "personal-rotated-refresh",
-          expires: Date.now() + 600_000,
-          accountId: "acct-personal",
-          ...metadata,
-        };
+        return tokens("personal-rotated", { accountId: "acct-personal", ...metadata });
       });
       const readBootstrapCredential = vi.fn(() => createCredential());
       const manager = createTestManager({
@@ -194,20 +229,17 @@ describe("createOAuthManager", () => {
       expect(refreshCredential).toHaveBeenCalledTimes(1);
       expect(readBootstrapCredential).not.toHaveBeenCalled();
       expect(readUserModelAuthProfile(profileId)?.credential).toMatchObject({
-        access: "personal-rotated-access",
-        refresh: "personal-rotated-refresh",
+        ...tokenPair("personal-rotated"),
         ...metadata,
       });
       for (const targetAgentDir of [undefined, mainAgentDir, agentDir]) {
-        expect(
-          ensureAuthProfileStoreWithoutExternalProfiles(targetAgentDir).profiles[profileId],
-        ).toBeUndefined();
+        expect(readCredential(targetAgentDir, profileId)).toBeUndefined();
       }
     });
   });
 
-  it("does not overwrite a personal reconnect while a refresh is in flight", async () => {
-    await withOAuthAgentDirs("oauth-manager-personal-reconnect-", async ({ agentDir }) => {
+  it("personal reconnect wins over refresh", async () => {
+    await withOAuthAgentDirs("oauth-manager-reconnect-", async ({ agentDir }) => {
       const owner = ensureProfileForEmail("alice@example.test");
       const credential = createCredential({ expires: Date.now() - 60_000, accountId: "workspace" });
       const { authProfileId: profileId } = connectUserModelAccount({
@@ -215,12 +247,7 @@ describe("createOAuthManager", () => {
         credential,
         assertCurrent() {},
       });
-      const reconnected = createCredential({
-        access: "reconnected-access",
-        refresh: "reconnected-refresh",
-        expires: Date.now() + 600_000,
-        accountId: "workspace",
-      });
+      const reconnected = fresh("reconnected", { accountId: "workspace" });
       const manager = createTestManager({
         refreshCredential: async () => {
           connectUserModelAccount({
@@ -229,11 +256,7 @@ describe("createOAuthManager", () => {
             replacement: readSelectedUserModelAccount(owner.id, reconnected.provider),
             assertCurrent() {},
           });
-          return {
-            access: "stale-refresh-access",
-            refresh: "stale-refresh-token",
-            expires: Date.now() + 600_000,
-          };
+          return tokens("stale-refresh", { refresh: "stale-refresh-token" });
         },
       });
 
@@ -256,17 +279,14 @@ describe("createOAuthManager", () => {
     });
   });
 
-  it("does not overlay external auth while checking main-store adoption", async () => {
-    await withOAuthAgentDirs("oauth-manager-main-adopt-", async ({ mainAgentDir, agentDir }) => {
+  it("main-store adoption excludes external auth", async () => {
+    await withOAuthAgentDirs("oauth-manager-adopt-", async ({ mainAgentDir, agentDir }) => {
       const profileId = "openai:oauth";
-      const subCredential = createCredential({
-        access: "expired-sub-access",
+      const subCredential = expired("expired-sub", {
         refresh: "sub-refresh",
-        expires: Date.now() - 60_000,
         accountId: "acct-main",
       });
-      const mainCredential = createCredential({
-        access: "expired-main-access",
+      const mainCredential = expired("expired-main", {
         refresh: "main-refresh",
         expires: Date.now() - 30_000,
         accountId: "acct-main",
@@ -277,9 +297,7 @@ describe("createOAuthManager", () => {
       externalAuthTesting.setResolveExternalAuthProfilesForTest(() => [
         {
           profileId,
-          credential: createCredential({
-            access: "external-fresh-access",
-            refresh: "external-fresh-refresh",
+          credential: fresh("external-fresh", {
             expires: Date.now() + 60_000,
             accountId: "acct-main",
           }),
@@ -291,41 +309,28 @@ describe("createOAuthManager", () => {
         expect(credential.access).toBe("expired-main-access");
         const pending = authority.readCurrentCredential();
         expect(pending?.type === "oauth" && isPendingOAuthRefreshFence(pending)).toBe(true);
-        return {
-          access: "rotated-main-access",
-          refresh: "rotated-main-refresh",
-          expires: Date.now() + 600_000,
-          accountId: "acct-main",
-        };
+        return tokens("rotated-main", { accountId: "acct-main" });
       });
       const manager = createTestManager({ refreshCredential });
       const result = await resolveStored(manager, subCredential, agentDir);
 
       expect(refreshCredential).toHaveBeenCalledTimes(1);
-      expect(authority.readCurrentCredential()).toMatchObject({
-        access: "rotated-main-access",
-        refresh: "rotated-main-refresh",
-      });
+      expect(authority.readCurrentCredential()).toMatchObject(tokenPair("rotated-main"));
       expect(result).toMatchObject({
         apiKey: "rotated-main-access",
-        credential: { access: "rotated-main-access", refresh: "rotated-main-refresh" },
+        credential: tokenPair("rotated-main"),
       });
     });
   });
 
-  it("adopts main-store OAuth when the local expiry is out of range", async () => {
-    await withOAuthAgentDirs("oauth-manager-invalid-local-", async ({ mainAgentDir, agentDir }) => {
+  it("invalid local expiry adopts main-store OAuth", async () => {
+    await withOAuthAgentDirs("oauth-manager-expiry-", async ({ mainAgentDir, agentDir }) => {
       const profileId = "openai-codex:default";
-      const localCredential = createCredential({
-        access: "poisoned-local-access",
+      const localCredential = expired("poisoned-local", {
         refresh: "local-refresh",
         expires: MAX_DATE_TIMESTAMP_MS + 1,
       });
-      const mainCredential = createCredential({
-        access: "main-access",
-        refresh: "main-refresh",
-        expires: Date.now() + 10 * 60_000,
-      });
+      const mainCredential = fresh("main");
       saveCredential(profileId, mainCredential, mainAgentDir);
 
       const refreshCredential = vi.fn(async () => {
@@ -333,13 +338,8 @@ describe("createOAuthManager", () => {
       });
       const manager = createTestManager({ refreshCredential });
 
-      const store: AuthProfileStore = { version: 1, profiles: { [profileId]: localCredential } };
-      const result = await manager.resolveOAuthAccess({
-        store,
-        profileId,
-        credential: localCredential,
-        agentDir,
-      });
+      const store = profileStore(profileId, localCredential);
+      const result = await resolveStored(manager, localCredential, agentDir, { store, profileId });
 
       expect(refreshCredential).not.toHaveBeenCalled();
       expect(result).toMatchObject({
@@ -348,63 +348,46 @@ describe("createOAuthManager", () => {
       });
       expect(store.profiles[profileId]).toMatchObject({
         type: "oauth",
-        access: "main-access",
-        refresh: "main-refresh",
+        ...tokenPair("main"),
       });
     });
   });
 
-  it("refreshes with the adopted external oauth credential", async () => {
-    await withOAuthAgentDirs("oauth-manager-refresh-", async ({ agentDir }) => {
+  it("refresh uses adopted external OAuth", async () => {
+    await withOAuthAgentDirs("oauth-manager-external-", async ({ agentDir }) => {
       const profileId = "minimax-portal:default";
-      const localCredential = createCredential({
-        provider: "minimax-portal",
-        access: "stale-local-access",
-        refresh: "stale-local-refresh",
-        expires: Date.now() - 60_000,
-      });
+      const localCredential = expired("stale-local", { provider: "minimax-portal" });
       saveCredential(profileId, localCredential, agentDir);
 
       const manager = createTestManager({
         refreshCredential: vi.fn(async (credential) => {
           expect(credential.refresh).toBe("external-refresh");
-          return {
-            access: "rotated-access",
-            refresh: "rotated-refresh",
-            expires: Date.now() + 600_000,
-          };
+          return tokens("rotated");
         }),
         readBootstrapCredential: () =>
-          createCredential({
+          expired("expired-external", {
             provider: "minimax-portal",
-            access: "expired-external-access",
             refresh: "external-refresh",
             expires: Date.now() - 30_000,
           }),
       });
 
-      const result = await manager.resolveOAuthAccess({
+      const result = await resolveStored(manager, localCredential, agentDir, {
         store: ensureAuthProfileStore(agentDir),
         profileId,
-        credential: localCredential,
-        agentDir,
       });
 
       expect(result).toMatchObject({
         apiKey: "rotated-access",
         credential: {
           provider: "minimax-portal",
-          access: "rotated-access",
-          refresh: "rotated-refresh",
+          ...tokenPair("rotated"),
         },
       });
-      expect(
-        ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
-      ).toMatchObject({
+      expect(readCredential(agentDir, profileId)).toMatchObject({
         type: "oauth",
         provider: "minimax-portal",
-        access: "rotated-access",
-        refresh: "rotated-refresh",
+        ...tokenPair("rotated"),
       });
     });
   });
@@ -414,11 +397,7 @@ describe("createOAuthManager", () => {
       const agentDir = path.join(tempRoot, "agents", "main", "agent");
       await fs.mkdir(agentDir, { recursive: true });
       const profileId = "openai:oauth";
-      const credential = createCredential({
-        access: "",
-        refresh: "",
-        expires: Date.now() - 60_000,
-      });
+      const credential = expired("", { access: "", refresh: "" });
       saveCredential(profileId, credential, agentDir);
       const refreshCredential = vi.fn(async () => null);
       const manager = createTestManager({ refreshCredential });
@@ -438,41 +417,23 @@ describe("createOAuthManager", () => {
       await fs.mkdir(mainAgentDir, { recursive: true });
       await fs.mkdir(agentDir, { recursive: true });
       const profileId = "openai:oauth";
-      const expired = createCredential({
-        access: "expired-access",
-        refresh: "expired-refresh",
-        expires: Date.now() - 60_000,
-        ...identity,
-      });
-      const relogged = createCredential({
-        access: "relogged-access",
-        refresh: "relogged-refresh",
-        expires: Date.now() + 10 * 60_000,
-        ...differentIdentity,
-      });
-      saveCredential(profileId, expired, agentDir);
+      const original = expired("expired", identity);
+      const relogged = fresh("relogged", differentIdentity);
+      saveCredential(profileId, original, agentDir);
 
       const manager = createTestManager({
         refreshCredential: vi.fn(async () => {
           saveCredential(profileId, relogged, agentDir);
-          return {
-            access: "rotated-access",
-            refresh: "rotated-refresh",
-            expires: Date.now() + 60_000,
-          };
+          return tokens("rotated", { expires: Date.now() + 60_000 });
         }),
       });
 
-      await expect(resolveStored(manager, expired, agentDir)).rejects.toThrow(
+      await expect(resolveStored(manager, original, agentDir)).rejects.toThrow(
         "OAuth token refresh failed",
       );
-      const persisted = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-        allowKeychainPrompt: false,
-      });
-      expect(persisted.profiles[profileId]).toMatchObject({
+      expect(readCredential(agentDir, profileId)).toMatchObject({
         type: "oauth",
-        access: "relogged-access",
-        refresh: "relogged-refresh",
+        ...tokenPair("relogged"),
         ...differentIdentity,
       });
     });
@@ -483,13 +444,8 @@ describe("createOAuthManager", () => {
       const agentDir = path.join(tempRoot, "agents", "main", "agent");
       await fs.mkdir(agentDir, { recursive: true });
       const profileId = "openai:oauth";
-      const expired = createCredential({
-        access: "expired-access",
-        refresh: "expired-refresh",
-        expires: Date.now() - 60_000,
-        accountId: "acct-123",
-      });
-      saveCredential(profileId, expired, agentDir);
+      const original = expired("expired", { accountId: "acct-123" });
+      saveCredential(profileId, original, agentDir);
       const initiatingError = Object.assign(new Error("provider rejected invalid_grant"), {
         oauthRefreshFailure: {
           errorType: "invalid_grant_error",
@@ -508,48 +464,39 @@ describe("createOAuthManager", () => {
         }),
       });
 
-      try {
-        await manager.resolveOAuthAccess({
-          store: { version: 1, profiles: { [profileId]: expired } },
-          profileId,
-          credential: expired,
-          agentDir,
-        });
-        throw new Error("Expected refresh failure");
-      } catch (caught) {
-        if (!(caught instanceof OAuthManagerRefreshError)) {
-          throw caught;
-        }
-        expect(caught.message).toContain("provider rejected invalid_grant");
-        expect(caught.message).not.toContain("unreadable");
-        expect(caught).toMatchObject({
-          errorType: "invalid_grant_error",
-          reason: "invalid_grant",
-          status: 401,
-          summary: "provider rejected invalid_grant",
-        });
-        expect(caught.cause).toBeInstanceOf(AggregateError);
-        expect(isSettledOAuthRefreshFailure(caught)).toBe(false);
-        const aggregate = caught.cause as AggregateError;
-        expect(aggregate.errors).toHaveLength(4);
-        expect(aggregate.cause).toBe(aggregate.errors[0]);
-        expect(formatErrorMessage(aggregate.errors[0])).toContain(
+      const caught = await refreshFailure(
+        resolveStored(manager, original, agentDir, {
+          store: profileStore(profileId, original),
+        }),
+      );
+      expect(caught.message).toContain("provider rejected invalid_grant");
+      expect(caught.message).not.toContain("unreadable");
+      expect(caught).toMatchObject({
+        errorType: "invalid_grant_error",
+        reason: "invalid_grant",
+        status: 401,
+        summary: "provider rejected invalid_grant",
+      });
+      expect(caught.cause).toBeInstanceOf(AggregateError);
+      expect(isSettledOAuthRefreshFailure(caught)).toBe(false);
+      const aggregate = caught.cause as AggregateError;
+      expect(aggregate.cause).toBe(aggregate.errors[0]);
+      expect(aggregate.errors.map(formatErrorMessage)).toEqual(
+        [
           "provider rejected invalid_grant",
-        );
-        expect(formatErrorMessage(aggregate.errors[1])).toContain("is unreadable");
-        expect(formatErrorMessage(aggregate.errors[2])).toContain("file is not a database");
-        expect(formatErrorMessage(aggregate.errors[3])).toContain("is unreadable");
-      }
+          "is unreadable",
+          "file is not a database",
+          "is unreadable",
+        ].map((message) => expect.stringContaining(message)),
+      );
     });
   });
 
-  it("fails closed after an undefined refresh rejection and invalid main-store recovery", async () => {
-    await withOAuthAgentDirs("oauth-manager-refresh-fail-closed-", async ({ agentDir }) => {
+  it("undefined rejection and invalid recovery fail closed", async () => {
+    await withOAuthAgentDirs("oauth-manager-recovery-", async ({ agentDir }) => {
       const profileId = "openai:user@example.com";
-      const managedCredential = createCredential({
-        access: "managed-expired-access",
+      const managedCredential = expired("managed-expired", {
         refresh: "managed-refresh",
-        expires: Date.now() - 60_000,
         email: "user@example.com",
         accountId: "acct-123",
       });
@@ -562,16 +509,11 @@ describe("createOAuthManager", () => {
         .spyOn(authProfileStoreRuntime, "ensureAuthProfileStoreWithoutExternalProfilesAsync")
         .mockImplementation(async (selectedDir, options) => {
           if (refreshRejected && selectedDir === undefined) {
-            return {
-              version: 1,
-              profiles: {
-                [profileId]: {
-                  ...managedCredential,
-                  access: "recovery-access",
-                  expires: Date.now() + 600_000,
-                },
-              },
-            };
+            return profileStore(profileId, {
+              ...managedCredential,
+              access: "recovery-access",
+              expires: Date.now() + 600_000,
+            });
           }
           return readMain(selectedDir, options);
         });
@@ -598,25 +540,20 @@ describe("createOAuthManager", () => {
       } finally {
         recoveryRead.mockRestore();
       }
-      const fenced = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-        allowKeychainPrompt: false,
-      }).profiles[profileId];
+      const fenced = readCredential(agentDir, profileId);
       expect(fenced).toMatchObject({
         type: "oauth",
         provider: "openai",
         expires: 1,
         accountId: "acct-123",
         email: "user@example.com",
+        access: expect.stringMatching(
+          /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:access:[a-f0-9]{64}$/,
+        ),
+        refresh: expect.stringMatching(
+          /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:refresh:[a-f0-9]{64}$/,
+        ),
       });
-      if (fenced?.type !== "oauth") {
-        throw new Error("expected durable OAuth refresh fence");
-      }
-      expect(fenced.access).toMatch(
-        /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:access:[a-f0-9]{64}$/,
-      );
-      expect(fenced.refresh).toMatch(
-        /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:refresh:[a-f0-9]{64}$/,
-      );
       expect(authority.readCurrentCredential()).toEqual(fenced);
       expect(JSON.stringify(fenced)).not.toContain("managed-expired-access");
       expect(JSON.stringify(fenced)).not.toContain("managed-refresh");
@@ -628,16 +565,12 @@ describe("createOAuthManager", () => {
       const agentDir = path.join(tempRoot, "agents", "sub", "agent");
       await fs.mkdir(agentDir, { recursive: true });
       const profileId = "minimax-portal:default";
-      const localCredential = createCredential({
+      const localCredential = fresh("fresh-local", {
         provider: "minimax-portal",
-        access: "fresh-local-access",
-        refresh: "fresh-local-refresh",
         expires: Date.now() + 60_000,
       });
-      const externalCredential = createCredential({
+      const externalCredential = expired("external-attempt", {
         provider: "minimax-portal",
-        access: "external-attempt-access",
-        refresh: "external-attempt-refresh",
         idToken: "external-attempt-id-token",
         expires: Date.now() - 30_000,
       });
@@ -652,28 +585,21 @@ describe("createOAuthManager", () => {
         readBootstrapCredential: () => externalCredential,
       });
 
-      try {
-        await manager.resolveOAuthAccess({
+      const caught = await refreshFailure(
+        resolveStored(manager, localCredential, agentDir, {
           store: ensureAuthProfileStore(agentDir),
           profileId,
-          credential: localCredential,
-          agentDir,
           forceRefresh: true,
-        });
-        throw new Error("Expected refresh failure");
-      } catch (caught) {
-        if (!(caught instanceof OAuthManagerRefreshError)) {
-          throw caught;
-        }
-        expect(caught.message).toContain("refresh rejected");
-        for (const message of [caught.message, formatErrorMessage(caught.cause)]) {
-          for (const secret of [
-            externalCredential.access,
-            externalCredential.refresh,
-            externalCredential.idToken!,
-          ]) {
-            expect(message).not.toContain(secret);
-          }
+        }),
+      );
+      expect(caught.message).toContain("refresh rejected");
+      for (const message of [caught.message, formatErrorMessage(caught.cause)]) {
+        for (const secret of [
+          externalCredential.access,
+          externalCredential.refresh,
+          externalCredential.idToken!,
+        ]) {
+          expect(message).not.toContain(secret);
         }
       }
     });
@@ -681,101 +607,62 @@ describe("createOAuthManager", () => {
 });
 
 describe("createOAuthManager credential validation", () => {
-  it("validates a refreshed credential before persisting it", async () => {
-    await withOAuthAgentDirs("oauth-manager-refresh-validator-", async ({ mainAgentDir }) => {
-      const profileId = "openai:oauth";
-      const credential = createCredential({
-        access: "expired-access",
-        refresh: "expired-refresh",
-        expires: Date.now() - 60_000,
-      });
-      saveCredential(profileId, credential, mainAgentDir);
-      const manager = createTestManager({
-        refreshCredential: async () => ({
-          access: "wrong-account-access",
-          refresh: "wrong-account-refresh",
-          expires: Date.now() + 600_000,
-          accountId: "wrong-account",
-        }),
-      });
-
-      await expect(
-        manager.resolveOAuthAccess({
-          store: ensureAuthProfileStoreWithoutExternalProfiles(mainAgentDir),
-          profileId,
-          credential,
-          agentDir: mainAgentDir,
-          forceRefresh: true,
-          validateCredential: (candidate) => {
-            if (candidate.accountId === "wrong-account") {
-              throw new Error("credential owner mismatch");
+  it.each(["refreshed", "authoritative"] as const)(
+    "validates the %s credential before persistence or refresh ownership",
+    async (phase) => {
+      await withOAuthAgentDirs("oauth-manager-validator-", async ({ mainAgentDir }) => {
+        const profileId = "openai:oauth";
+        const original = expired(
+          "expired",
+          phase === "authoritative" ? { accountId: "expected-account" } : {},
+        );
+        const replacement = expired("replacement", {
+          expires: Date.now() - 30_000,
+          accountId: "other-account",
+        });
+        saveCredential(profileId, original, mainAgentDir);
+        let replaced = false;
+        const manager = createTestManager({
+          canRefreshCredential: async () => {
+            if (phase === "authoritative" && !replaced) {
+              replaced = true;
+              saveCredential(profileId, replacement, mainAgentDir);
             }
+            return true;
           },
-        }),
-      ).rejects.toThrow("credential owner mismatch");
+          refreshCredential: async () =>
+            phase === "authoritative"
+              ? tokens("refreshed", { accountId: "expected-account" })
+              : tokens("wrong-account", { accountId: "wrong-account" }),
+        });
 
-      expect(
-        ensureAuthProfileStoreWithoutExternalProfiles(mainAgentDir).profiles[profileId],
-      ).not.toMatchObject({
-        access: "wrong-account-access",
-        accountId: "wrong-account",
-      });
-    });
-  });
+        await expect(
+          resolveStored(manager, original, mainAgentDir, {
+            forceRefresh: true,
+            validateCredential: (candidate) => {
+              if (
+                phase === "authoritative"
+                  ? candidate.accountId !== "expected-account"
+                  : candidate.accountId === "wrong-account"
+              ) {
+                throw new Error("credential owner mismatch");
+              }
+            },
+          }),
+        ).rejects.toThrow("credential owner mismatch");
 
-  it("validates the authoritative credential before claiming refresh ownership", async () => {
-    await withOAuthAgentDirs("oauth-manager-claim-validator-", async ({ mainAgentDir }) => {
-      const profileId = "openai:oauth";
-      const original = createCredential({
-        access: "expired-access",
-        refresh: "expired-refresh",
-        expires: Date.now() - 60_000,
-        accountId: "expected-account",
+        const persisted = readCredential(mainAgentDir);
+        if (phase === "authoritative") {
+          expect(persisted).toEqual(replacement);
+        } else {
+          expect(persisted).not.toMatchObject({
+            access: "wrong-account-access",
+            accountId: "wrong-account",
+          });
+        }
       });
-      const replacement = createCredential({
-        access: "replacement-access",
-        refresh: "replacement-refresh",
-        expires: Date.now() - 30_000,
-        accountId: "other-account",
-      });
-      saveCredential(profileId, original, mainAgentDir);
-      let replaced = false;
-      const manager = createTestManager({
-        canRefreshCredential: async () => {
-          if (!replaced) {
-            replaced = true;
-            saveCredential(profileId, replacement, mainAgentDir);
-          }
-          return true;
-        },
-        refreshCredential: async () => ({
-          access: "refreshed-access",
-          refresh: "refreshed-refresh",
-          expires: Date.now() + 600_000,
-          accountId: "expected-account",
-        }),
-      });
-
-      await expect(
-        manager.resolveOAuthAccess({
-          store: ensureAuthProfileStoreWithoutExternalProfiles(mainAgentDir),
-          profileId,
-          credential: original,
-          agentDir: mainAgentDir,
-          forceRefresh: true,
-          validateCredential: (candidate) => {
-            if (candidate.accountId !== "expected-account") {
-              throw new Error("credential owner mismatch");
-            }
-          },
-        }),
-      ).rejects.toThrow("credential owner mismatch");
-
-      expect(
-        ensureAuthProfileStoreWithoutExternalProfiles(mainAgentDir).profiles[profileId],
-      ).toEqual(replacement);
-    });
-  });
+    },
+  );
 });
 
 describe("Copilot tenant boundaries", () => {
@@ -801,7 +688,7 @@ describe("Copilot tenant boundaries", () => {
     return createTestManager({ refreshCredential });
   }
 
-  it("logout removes only stores that own the selected identity-less credential", async () => {
+  it("logout preserves another tenant", async () => {
     await withOAuthAgentDirs("oauth-manager-copilot-", async ({ agentDir }) => {
       const main = credential("other.ghe.com", "main-fixture", MAX_DATE_TIMESTAMP_MS);
       save(credential("acme.ghe.com", "child-fixture", MAX_DATE_TIMESTAMP_MS), agentDir);
@@ -814,11 +701,10 @@ describe("Copilot tenant boundaries", () => {
     });
   });
 
-  it("persists local refresh without mirroring to another tenant", async () => {
-    const mainDomain = "other.ghe.com";
+  it("refresh never mirrors to another tenant", async () => {
     await withOAuthAgentDirs("oauth-manager-copilot-", async ({ agentDir }) => {
       const local = credential("acme.ghe.com", "child-fixture", Date.now() - 60_000);
-      const main = credential(mainDomain, "main-fixture", Date.now() + 600_000);
+      const main = credential("other.ghe.com", "main-fixture", Date.now() + 600_000);
       const refreshed = {
         ...local,
         access: "refreshed-fixture",
@@ -831,12 +717,7 @@ describe("Copilot tenant boundaries", () => {
         expect(input).toEqual(local);
         return refreshed;
       });
-      const result = await manager(refresh).resolveOAuthAccess({
-        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir),
-        profileId,
-        credential: local,
-        agentDir,
-      });
+      const result = await resolveStored(manager(refresh), local, agentDir, { profileId });
       expect(result?.apiKey).toBe(refreshed.access);
       expect(refresh).toHaveBeenCalledTimes(1);
       expect(read(agentDir)).toEqual(refreshed);
@@ -867,12 +748,7 @@ describe("Copilot tenant boundaries", () => {
           save(renewed);
           throw new Error("simulated provider refresh failure");
         });
-        const result = manager(refresh).resolveOAuthAccess({
-          store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir),
-          profileId,
-          credential: local,
-          agentDir,
-        });
+        const result = resolveStored(manager(refresh), local, agentDir, { profileId });
         if (sameTenant) {
           await expect(result).resolves.toMatchObject({ apiKey: renewed.access });
         } else {

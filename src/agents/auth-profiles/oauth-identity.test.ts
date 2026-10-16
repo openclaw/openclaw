@@ -58,21 +58,19 @@ describe("isSafeToCopyOAuthIdentity (unified copy gate, used for mirror and adop
     expect(isSafeToCopyOAuthIdentity({ accountId: "x" }, { email: "u@example.com" })).toBe(false);
   });
 
-  describe("positive mismatch still refuses (CWE-284 protection)", () => {
-    it("refuses mismatching accountIds even when emails match", () => {
-      expect(
-        isSafeToCopyOAuthIdentity(
-          { accountId: "a", email: "u@example.com" },
-          { accountId: "A", email: "u@example.com" },
-        ),
-      ).toBe(false);
-    });
+  it("refuses mismatching accountIds even when emails match", () => {
+    expect(
+      isSafeToCopyOAuthIdentity(
+        { accountId: "a", email: "u@example.com" },
+        { accountId: "A", email: "u@example.com" },
+      ),
+    ).toBe(false);
+  });
 
-    it("refuses mismatching emails when both sides expose only email", () => {
-      expect(
-        isSafeToCopyOAuthIdentity({ email: "a@example.com" }, { email: "b@example.com" }),
-      ).toBe(false);
-    });
+  it("refuses mismatching emails when both sides expose only email", () => {
+    expect(isSafeToCopyOAuthIdentity({ email: "a@example.com" }, { email: "b@example.com" })).toBe(
+      false,
+    );
   });
 
   it("normalizes case while preserving plus-addressing", () => {
