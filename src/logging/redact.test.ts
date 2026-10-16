@@ -138,6 +138,26 @@ describe("non-secret environment references", () => {
   });
 });
 
+describe("auth-header reference exemption", () => {
+    // Values are assembled from parts so this file contains no credential-shaped literal.
+    it("preserves Authorization headers whose value is a complete reference (log sink)", () => {
+      for (const text of [
+        ["Authorization: Bearer ", "$", "MY", "_", "TOKEN"].join(""),
+        ["Authorization: Basic ${", "MY", "_", "TOKEN", "}"].join(""),
+        ["Authorization: Basic process.", "env.", "MY", "_", "TOKEN"].join(""),
+      ]) {
+        expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
+      }
+    });
+
+    it("still masks auth values that merely start with a reference", () => {
+      const text = ["Authorization: Bearer ", "$", "MY", "_", "TOKEN", "-privateCredential"].join("");
+      const output = redactSensitiveText(text, { mode: "tools" });
+      expect(output).not.toContain("privateCredential");
+      expect(output).not.toBe(text);
+    });
+  });
+
 describe("model-visible redaction notification", () => {
   const marker = "⟦redacted⟧";
   const secret = "a".repeat(24);
