@@ -460,6 +460,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
 
 export function createSubagentResumeReader(params: {
   resumedRuns: Set<object>;
+  runBackgroundWork<T>(entry: SubagentRunRecord, run: () => Promise<T>): Promise<T>;
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
   resume: (
     runId: string,
@@ -539,7 +540,7 @@ export function createSubagentResumeReader(params: {
           params.retryAfterDrain(runId, entry, stateContext);
         }
       };
-      void runWithGatewayDetachedWorkContinuation(async () => {
+      const readCurrent = async () => {
         try {
           let observed = entry;
           let check: ReturnType<typeof resolveSubagentRunOrphanReason> = orphanCheck;
@@ -578,7 +579,11 @@ export function createSubagentResumeReader(params: {
         } finally {
           release();
         }
-      }, "subagents:resume-session-read").catch((error: unknown) => {
+      };
+      void runWithGatewayDetachedWorkContinuation(
+        () => params.runBackgroundWork(entry, readCurrent),
+        "subagents:resume-session-read",
+      ).catch((error: unknown) => {
         try {
           failed(error);
         } finally {

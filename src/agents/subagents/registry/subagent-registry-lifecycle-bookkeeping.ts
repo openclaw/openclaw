@@ -62,14 +62,18 @@ export async function completeCleanupBookkeeping(
     const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
       // Admission can outlive the caller's async scope. Own the tail's lifetime
       // and recheck row ownership after waiting; surviving tails still block snapshots.
-      void runWithGatewayDetachedWorkContinuation(async () => {
+      const cleanup = async () => {
         if (
           !(await context.shouldSuppressSessionEffects(entry)) &&
           postBookkeepingEffectsAllowed()
         ) {
           await run();
         }
-      }, "subagents:lifecycle-cleanup").catch((error: unknown) => {
+      };
+      void runWithGatewayDetachedWorkContinuation(
+        () => context.runBackgroundWork(entry, cleanup),
+        "subagents:lifecycle-cleanup",
+      ).catch((error: unknown) => {
         defaultRuntime.log(
           `[warn] subagent ${label} failed (${cleanupParams.runId}): ${String(error)}`,
         );
