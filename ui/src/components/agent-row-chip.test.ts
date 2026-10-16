@@ -95,6 +95,8 @@ it("leaves retained chip DOM untouched when only the parent's loading state chan
     createSessions("research", []),
     {
       defaultId: "research",
+      mainKey: "main",
+      scope: "per-sender",
       agents: [{ id: "research", name: "Research", identity: { emoji: "🔬" } }],
     },
   );
