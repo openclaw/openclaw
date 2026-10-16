@@ -34,6 +34,7 @@ import {
 import { assertUpdateDatabaseEngineContexts } from "../update-database-engine-admission.js";
 import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
 import { captureUpdateRecoveryBaseline } from "../update-recovery-baseline-capture.js";
+import { resolveDatabaseEngineSelection } from "./config.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import { materializeDatabasePort } from "./port.worker.js";
@@ -161,7 +162,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       vi.stubEnv(key, env[key]);
     }
     resetDatabaseEngineSelectionForTest();
-    installDatabaseEngineSelection({ input: { connection: connection!, schemaPrefix: "update" } });
+    installDatabaseEngineSelection(await resolveDatabaseEngineSelection(config, env));
   });
 
   afterAll(async () => {

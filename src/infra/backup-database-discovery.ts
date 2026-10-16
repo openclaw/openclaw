@@ -1,7 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { discoverBackupDatabasePaths } from "./backup-sqlite-snapshot.js";
-import { resolveDatabaseEngineInput } from "./database-engine/config.js";
+import { resolveDatabaseEngineSelection } from "./database-engine/config.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
@@ -30,11 +30,11 @@ if (parentPort && workerData?.databaseDiscovery === true) {
   serveWorkerTasks<Reply>(async (value) => {
     // SAFETY: The private discovery host supplies this typed, serializable input.
     const input = value as Input;
-    const selected = await resolveDatabaseEngineInput(input.config, {
+    const selected = await resolveDatabaseEngineSelection(input.config, {
       ...process.env,
       ...input.env,
     });
-    return withDatabaseEngineSelection({ input: selected }, async () => {
+    return withDatabaseEngineSelection(selected, async () => {
       const paths = await discoverBackupDatabasePaths(input);
       const pluginOwners = Object.fromEntries(
         resolvePluginMetadataSnapshot(input).plugins.map(({ id, rootDir, source, origin }) => [
