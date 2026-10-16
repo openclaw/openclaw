@@ -126,23 +126,22 @@ describe("post-core plugin work deadlines", () => {
         const report = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
         vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", await state.writeText("global-npmrc", ""));
         const oldPath = state.statePath("extensions", "budget-fixture");
-        await fs.mkdir(oldPath, { recursive: true });
-        await fs.writeFile(
-          path.join(oldPath, "package.json"),
-          JSON.stringify({
-            name: "budget-fixture",
-            version: "1.0.0",
-            openclaw: { extensions: ["./index.js"] },
-          }),
-        );
-        await fs.writeFile(
-          path.join(oldPath, "openclaw.plugin.json"),
-          JSON.stringify({ id: "budget-fixture", configSchema: { type: "object" } }),
-        );
-        await fs.writeFile(path.join(oldPath, "index.js"), "export default {};\n");
-        await fs.writeFile(
-          path.join(state.workspaceDir, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
+        await state.writeJson("extensions/budget-fixture/package.json", {
+          name: "budget-fixture",
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.js"] },
+        });
+        await state.writeJson("extensions/budget-fixture/openclaw.plugin.json", {
+          id: "budget-fixture",
+          configSchema: { type: "object" },
+        });
+        await state.writeText("extensions/budget-fixture/index.js", "export default {};\n");
+        await state.writeJson(
+          path.relative(state.stateDir, path.join(state.workspaceDir, "package.json")),
+          {
+            name: "openclaw",
+            version: "2026.9.4",
+          },
         );
         const records = {
           "budget-fixture": {
@@ -267,19 +266,14 @@ event('complete');\n`,
         } else {
           expect(outcomes).toEqual(expect.arrayContaining([expectedOutcome]));
         }
+        expect(installedVersion).toBe(expires ? "1.0.0" : "2.0.0");
+        expect(
+          events.some((e) => e.kind === "complete" && e.command === "install" && !e.planning),
+        ).toBe(!expires);
         if (expires) {
-          expect(installedVersion).toBe("1.0.0");
           expect(
             JSON.parse(await fs.readFile(path.join(oldPath, "package.json"), "utf8")).version,
           ).toBe("1.0.0");
-          expect(
-            events.some((e) => e.kind === "complete" && e.command === "install" && !e.planning),
-          ).toBe(false);
-        } else {
-          expect(installedVersion).toBe("2.0.0");
-          expect(
-            events.some((e) => e.kind === "complete" && e.command === "install" && !e.planning),
-          ).toBe(true);
         }
         const metadataCalls = fixture.calls.filter(
           (call) => npmCommandArgs(call.argv)?.[0] === "view",
