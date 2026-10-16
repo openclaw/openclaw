@@ -4489,7 +4489,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/agents/openai-transport-stream.replay-and-tools.test.ts",
   "src/agents/openai-transport-stream.streaming.test.ts",
   "src/agents/openclaw-tools.sessions-steering.test.ts",
-  "src/agents/prepared-model-catalog-worker.mismatch.integration.test.ts",
   "src/agents/project-memory-scope.test.ts",
   "src/agents/provider-local-service.shutdown.test.ts",
   "src/agents/provider-local-service.test.ts",

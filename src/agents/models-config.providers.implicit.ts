@@ -332,7 +332,7 @@ export async function runProviderCatalogWithTimeout(
     timeoutMs: number | null;
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
-  const timeoutMs = params.timeoutMs ?? undefined;
+  const timeoutMs = params.timeoutMs;
   let active = true;
   const catalogParams = {
     ...params,

@@ -368,11 +368,7 @@ export async function runFallbackAttempt<T>(
       ? {
           exhaustionResult: {
             ...buildClassifiedResult(),
-            priority:
-              typeof classification.preserveResultPriority === "number" &&
-              Number.isFinite(classification.preserveResultPriority)
-                ? classification.preserveResultPriority
-                : 0,
+            priority: classification.preserveResultPriority ?? 0,
           },
         }
       : {}),
@@ -672,11 +668,7 @@ export async function resolveFallbackSoonestCooldownExpiry(params: {
     const candidateSoonest = params.authRuntime.getSoonestCooldownExpiry(refreshedStore, ids, {
       forModel: candidate.model,
     });
-    if (
-      typeof candidateSoonest === "number" &&
-      Number.isFinite(candidateSoonest) &&
-      (soonest === null || candidateSoonest < soonest)
-    ) {
+    if (candidateSoonest !== null && (soonest === null || candidateSoonest < soonest)) {
       soonest = candidateSoonest;
     }
   }

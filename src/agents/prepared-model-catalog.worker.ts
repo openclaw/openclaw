@@ -1,7 +1,6 @@
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import {
   copyConfigResolutionFacts,
@@ -56,11 +55,7 @@ import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
-import {
-  fingerprintPreparedModelCatalogGeneration,
-  fingerprintPreparedModelCatalogPluginContext,
-  fingerprintPreparedModelWorkerRequest,
-} from "./prepared-model-catalog-fingerprints.js";
+import { fingerprintPreparedModelCatalogPluginContext } from "./prepared-model-catalog-fingerprints.js";
 import { measurePreparedCatalogRetainedData } from "./prepared-model-catalog-retained-data.js";
 import type { PreparedModelCatalogWorkerData } from "./prepared-model-catalog-worker.pool.js";
 import type {
@@ -249,22 +244,7 @@ async function runCatalogRequest(
     restorePreparedSyntheticAuthFacts(value.input.config, request.syntheticAuth, {
       workspaceDir: value.input.workspaceDir,
     });
-    const generationFingerprint = fingerprintPreparedModelWorkerRequest(value, request);
     prepared = await prepareGeneration();
-    // Sharing plugin registrations does not relax the exact agent/config publication contract.
-    // Mismatched transferred facts still retire this request's worker through the owner.
-    const reconstructedFingerprint = fingerprintPreparedModelCatalogGeneration({
-      ...value,
-      preferBuiltPluginArtifacts: prepared.pluginGeneration.preferBuiltPluginArtifacts === true,
-      pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
-    });
-    if (reconstructedFingerprint !== value.generationFingerprint) {
-      return {
-        status: "generation-mismatch",
-        generationFingerprint: value.generationFingerprint,
-        reconstructedFingerprint,
-      };
-    }
     // Cached registrations retain their code, while request lookups use this clone's
     // config/environment objects and the synthetic-auth facts restored on them above.
     prepareOwnedPluginLoadContext(
@@ -330,7 +310,6 @@ async function runCatalogRequest(
       return {
         status: "ok",
         kind: "auth-refresh",
-        generationFingerprint,
         authStore,
         credentials,
         authModes: resolveUsableAgentCredentialModes(credentials),
@@ -478,7 +457,6 @@ async function runCatalogRequest(
     const result: PreparedModelWorkerOutcome = {
       status: "ok",
       kind: "catalog",
-      generationFingerprint,
       snapshot: facts.modelCatalog,
       runtimeModels,
       providerExpiries: source.providerExpiries ?? new Map(),
@@ -532,27 +510,6 @@ async function runCatalogRequest(
   }
 }
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
-
-function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
-  return (
-    isRecord(value) &&
-    Array.isArray(value.syntheticAuth) &&
-    isRecord(value.clawInstallSchemaVersions) &&
-    typeof value.clawInstallSchemaVersions.path === "string" &&
-    isRecord(value.clawInstallSchemaVersions.snapshot) &&
-    (value.codexClientVersion === undefined || typeof value.codexClientVersion === "string") &&
-    ((value.kind === "catalog" &&
-      (value.refresh === undefined || typeof value.refresh === "boolean") &&
-      (value.providerIds === undefined || isStringArray(value.providerIds))) ||
-      (value.kind === "auth-refresh" &&
-        isStringArray(value.providerIds) &&
-        (value.profileIds === undefined || isStringArray(value.profileIds))))
-  );
-}
-
 if (parentPort) {
   const data = workerData as PreparedModelCatalogWorkerData;
   if (data.databaseEngineSelection) {
@@ -569,9 +526,6 @@ if (parentPort) {
     async (input, channel) => {
       // SAFETY: The typed catalog host is the sole producer of this private task envelope.
       const { value, request } = input as PreparedModelCatalogWorkerTask;
-      if (!isRecord(value) || !isWorkerRequest(request)) {
-        throw new Error("invalid prepared model catalog worker request");
-      }
       activeRequest = value;
       let reportAfter = 0;
       let reportedPlugin: string | undefined;

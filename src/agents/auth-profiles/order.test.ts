@@ -243,6 +243,49 @@ describe("resolveAuthProfileOrder", () => {
     },
   );
 
+  it.each(["read-only", "execution"] as const)(
+    "orders expired and active cooldowns in %s mode without read-only housekeeping",
+    (readinessMode) => {
+      const expiredAt = Date.now() - 60_000;
+      const activeUntil = Date.now() + 600_000;
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "fixture-provider:active": createApiKeyCredential("fixture-provider", "sk-active"),
+          "fixture-provider:expired": createApiKeyCredential("fixture-provider", "sk-expired"),
+          "fixture-provider:ready": createApiKeyCredential("fixture-provider", "sk-ready"),
+        },
+        usageStats: {
+          "fixture-provider:active": { lastUsed: 0, cooldownUntil: activeUntil },
+          "fixture-provider:expired": {
+            lastUsed: 20,
+            cooldownUntil: expiredAt,
+            cooldownReason: "timeout",
+            errorCount: 3,
+          },
+          "fixture-provider:ready": { lastUsed: 10 },
+        },
+      };
+
+      expect(
+        resolveAuthProfileOrderWithMetadata({ store, provider: "fixture-provider", readinessMode }),
+      ).toEqual({
+        profileIds: [
+          "fixture-provider:ready",
+          "fixture-provider:expired",
+          "fixture-provider:active",
+        ],
+        hasExplicitOrder: false,
+      });
+      const expired = store.usageStats?.["fixture-provider:expired"];
+      expect(expired?.lastUsed).toBe(20);
+      expect(expired?.cooldownUntil).toBe(readinessMode === "read-only" ? expiredAt : undefined);
+      expect(expired?.cooldownReason).toBe(readinessMode === "read-only" ? "timeout" : undefined);
+      expect(expired?.errorCount).toBe(readinessMode === "read-only" ? 3 : 0);
+      expect(store.usageStats?.["fixture-provider:active"]?.cooldownUntil).toBe(activeUntil);
+    },
+  );
+
   it("does not fall back past an explicit configured auth order", async () => {
     const store: AuthProfileStore = {
       version: 1,

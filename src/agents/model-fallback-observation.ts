@@ -182,7 +182,7 @@ function buildFallbackStepFields(
     ...(to ? { fallbackStepToModel: formatModelRef(to) } : {}),
     ...(reason ? { fallbackStepFromFailureReason: reason } : {}),
     ...(detail ? { fallbackStepFromFailureDetail: detail } : {}),
-    ...(typeof params.attempt === "number" ? { fallbackStepChainPosition: params.attempt } : {}),
+    ...(params.attempt !== undefined ? { fallbackStepChainPosition: params.attempt } : {}),
     fallbackStepFinalOutcome: succeeded
       ? "succeeded"
       : params.nextCandidate

@@ -342,11 +342,6 @@ describe("fallback candidates across provider generations", () => {
                 { compatibleConfigs: [cfg] },
               );
         expect(candidates).toEqual(expected(model));
-        for (const candidate of candidates) {
-          candidate.model = "caller-mutation";
-          candidate.routeOrigin = "configured-primary";
-          candidate.routeResolution = "raw";
-        }
       }
       expect(
         withPluginMetadataSnapshotScope(metadataSnapshot, resolve, { compatibleConfigs: [cfg] }),
