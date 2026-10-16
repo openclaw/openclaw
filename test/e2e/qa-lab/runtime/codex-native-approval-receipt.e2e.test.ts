@@ -210,7 +210,6 @@ describe("Codex native approval receipt", () => {
           logging: { audit: { enabled: true, executionIdentity: true } },
           tools: { exec: { mode: "ask" } },
           plugins: {
-            enabled: true,
             allow: ["codex"],
             entries: { codex: { enabled: true, config: { appServer } } },
           },
@@ -221,7 +220,6 @@ describe("Codex native approval receipt", () => {
               workspace: "~/workspace",
               skipBootstrap: true,
               timeoutSeconds: 60,
-              sandbox: { mode: "off" },
             },
           },
         },

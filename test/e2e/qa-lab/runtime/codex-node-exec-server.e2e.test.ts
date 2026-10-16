@@ -27,6 +27,7 @@ import {
   type FixtureReceiptChannel,
 } from "../../../helpers/fixture-receipts.js";
 import { acquireGatewayTestClient } from "../../../helpers/gateway-client.js";
+import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -74,10 +75,7 @@ type PendingPluginApproval = {
   id: string;
   request?: { pluginId?: string; allowedDecisions?: string[]; title?: string };
 };
-type NodeStatus = {
-  connected?: boolean;
-  paired?: boolean;
-  approvalState?: string;
+type NodeStatus = NonNullable<Awaited<ReturnType<typeof readNode>>> & {
   commands?: string[];
   sessionHost?: boolean;
 };
@@ -125,51 +123,35 @@ function waitForTurn(reviewer: GatewayClient, runId: string, timeoutMs = REQUEST
     { timeoutMs: timeoutMs + 5_000 },
   );
 }
-type ProofProvider = {
-  readonly baseUrl: string;
-  readonly sessionObserverUrl: string;
-  readonly httpHits: number;
-  readonly nativeExecCalls: number;
-  readonly observations: readonly string[];
-  readonly visibleTools: ReadonlySet<string>;
-  stop: () => Promise<void>;
-};
-
-function writeProofEvent(response: ServerResponse, event: Record<string, unknown>): void {
-  response.write(`data: ${JSON.stringify(event)}\n\n`);
-}
+type ProofProvider = Awaited<ReturnType<typeof startProofProvider>>;
 
 function finishProofResponse(response: ServerResponse, item: Record<string, unknown>): void {
   const responseId = `resp_codex_node_${randomUUID()}`;
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  writeProofEvent(response, { type: "response.created", response: { id: responseId } });
-  writeProofEvent(response, { type: "response.output_item.done", item });
-  writeProofEvent(response, {
-    type: "response.completed",
-    response: {
-      id: responseId,
-      status: "completed",
-      output: [item],
-      usage: {
-        input_tokens: 32,
-        input_tokens_details: null,
-        output_tokens: 16,
-        output_tokens_details: null,
-        total_tokens: 48,
+  writeOpenAiResponsesSse(response, [
+    { type: "response.created", response: { id: responseId } },
+    { type: "response.output_item.done", item },
+    {
+      type: "response.completed",
+      response: {
+        id: responseId,
+        status: "completed",
+        output: [item],
+        usage: {
+          input_tokens: 32,
+          input_tokens_details: null,
+          output_tokens: 16,
+          output_tokens_details: null,
+          total_tokens: 48,
+        },
       },
     },
-  });
-  response.end("data: [DONE]\n\n");
+  ]);
 }
 
 function readProofScenario(body: Record<string, unknown>): ProofScenario | undefined {
   const input = Array.isArray(body.input) ? body.input : [];
   for (const entry of input.toReversed()) {
-    if (!entry || typeof entry !== "object" || !("role" in entry) || entry.role !== "user") {
+    if (!isRecord(entry) || entry.role !== "user") {
       continue;
     }
     const userText = JSON.stringify(entry);
@@ -234,7 +216,7 @@ function proofShellCommand(params: {
   return `node -e ${JSON.stringify(script)}`;
 }
 
-async function startProofProvider(nodeHome: string): Promise<ProofProvider> {
+async function startProofProvider(nodeHome: string) {
   const mock = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
   let httpHits = 0;
   let nativeExecCalls = 0;
@@ -258,7 +240,7 @@ async function startProofProvider(nodeHome: string): Promise<ProofProvider> {
       if (request.method === "POST" && request.url === "/v1/responses") {
         const body = JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
         for (const tool of Array.isArray(body.tools) ? body.tools : []) {
-          if (tool && typeof tool === "object" && "name" in tool && typeof tool.name === "string") {
+          if (isRecord(tool) && typeof tool.name === "string") {
             visibleTools.add(tool.name);
           }
         }
@@ -267,12 +249,7 @@ async function startProofProvider(nodeHome: string): Promise<ProofProvider> {
           const callId = `call_codex_node_${scenario}`;
           const completed = (Array.isArray(body.input) ? body.input : []).some(
             (entry) =>
-              entry &&
-              typeof entry === "object" &&
-              "type" in entry &&
-              entry.type === "function_call_output" &&
-              "call_id" in entry &&
-              entry.call_id === callId,
+              isRecord(entry) && entry.type === "function_call_output" && entry.call_id === callId,
           );
           observations.push(`${scenario}:${completed ? "completed" : "native-call"}`);
           if (observations.length > 16) {
@@ -661,15 +638,19 @@ describe("Codex paired-device exec-server carrier", () => {
         };
         node = startNodeProcess(gatewayPort, nodeEnv);
         const nodeId = await approvePairing(gateway, "device");
-        node = await restartNode();
-        await approvePairing(gateway, "node", nodeId);
-        await vi.waitFor(async () => {
+        const expectApprovedNode = async () => {
           const approved = (await readNode(gateway!, nodeId)) as NodeStatus | undefined;
           expect(approved).toMatchObject({
             connected: true,
             approvalState: "approved",
             sessionHost: true,
           });
+          return approved;
+        };
+        node = await restartNode();
+        await approvePairing(gateway, "node", nodeId);
+        await vi.waitFor(async () => {
+          const approved = await expectApprovedNode();
           expect(approved?.commands).not.toContain(COMMAND);
         }, WAIT_OPTIONS);
 
@@ -717,12 +698,7 @@ describe("Codex paired-device exec-server carrier", () => {
         await approvePairing(gateway, "node", nodeId);
         node = await restartNode();
         await vi.waitFor(async () => {
-          const approved = (await readNode(gateway!, nodeId)) as NodeStatus | undefined;
-          expect(approved).toMatchObject({
-            connected: true,
-            approvalState: "approved",
-            sessionHost: true,
-          });
+          const approved = await expectApprovedNode();
           expect(approved?.commands).toContain(COMMAND);
           expect((await readEnvironment(reviewer!, nodeId))?.invocableCommands).toContain(COMMAND);
         }, WAIT_OPTIONS);
@@ -861,13 +837,8 @@ describe("Codex paired-device exec-server carrier", () => {
 
         node = startNodeProcess(gatewayPort, nodeEnv);
         await vi.waitFor(async () => {
-          const reconnected = (await readNode(gateway!, nodeId)) as NodeStatus | undefined;
-          expect(reconnected).toMatchObject({
-            connected: true,
-            paired: true,
-            approvalState: "approved",
-            sessionHost: true,
-          });
+          const reconnected = await expectApprovedNode();
+          expect(reconnected).toMatchObject({ paired: true });
           expect(reconnected?.commands).toContain(COMMAND);
         }, WAIT_OPTIONS);
         const reconnectPlacement = await describeSession(gateway);

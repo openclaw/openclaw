@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { json } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Locator } from "playwright";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   createQaBusState,
   createQaChannelTransport,
@@ -16,8 +16,9 @@ import {
   FileSettingsStorage,
   type Settings,
 } from "../../../../src/agents/sessions/settings-storage.js";
+import { startOpenAiResponsesModelServer } from "../../../helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 // #141032: empty summary recovery must not turn a post-tool idle timeout into success.
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
@@ -27,7 +28,6 @@ const JOB_NAME = "idle-timeout-finalization-proof";
 const ANNOUNCE_CONVERSATION = { id: "idle-timeout-proof-announce", kind: "direct" as const };
 const PROVIDER_IDLE_TIMEOUT_SECONDS = 8;
 const PROVIDER_MAX_RETRIES = 0;
-const RUN_TIMEOUT_SECONDS = 120;
 const RUN_WAIT_MS = 100_000;
 // Source-mode Gateway startup with packaged plugins can take a few minutes on slow hosts.
 const TEST_TIMEOUT_MS = RUN_WAIT_MS + 500_000;
@@ -44,29 +44,11 @@ type ProviderRequest = {
   clientClosedAt?: number;
 };
 
-type CronRunEntry = {
-  status?: unknown;
-  completionStatus?: unknown;
-  error?: unknown;
-};
+type CronRunEntry = Partial<Record<"status" | "completionStatus" | "error", unknown>>;
 
 const cleanups: Array<() => Promise<void>> = [];
 
-afterEach(async () => {
-  const errors: unknown[] = [];
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    try {
-      await cleanup();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (errors.length) {
-    throw errors.length === 1
-      ? errors[0]
-      : new AggregateError(errors, "cron idle-timeout finalization proof cleanup failed");
-  }
-});
+afterEach(() => runQaGatewayFixture(async () => undefined, ...cleanups.splice(0).toReversed()));
 
 function writeProviderReply(response: ServerResponse, seq: number, empty = false): void {
   const args = JSON.stringify({ path: NOTE_FILE, content: "settled" });
@@ -122,30 +104,18 @@ function writeProviderReply(response: ServerResponse, seq: number, empty = false
 
 async function startControlledProvider() {
   const requests: ProviderRequest[] = [];
-  let releaseStalled: (() => void) | undefined;
-  const stalledGate = new Promise<void>((resolve) => {
-    releaseStalled = resolve;
-  });
-  const server = createServer((request, response) => {
-    void (async () => {
-      if (request.method === "GET" && request.url === "/v1/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ data: [{ id: "gpt-5.6-luna", object: "model" }] }));
-        return;
-      }
-      if (request.method !== "POST" || request.url !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
+  const { baseUrl, close: stop } = await startOpenAiResponsesModelServer({
+    modelId: "gpt-5.6-luna",
+    bindError: "controlled provider did not bind a loopback port",
+    onRequest: async (request, response) => {
       const body = (await json(request)) as {
         tools?: unknown[];
         input?: unknown;
       };
       const toolsOffered = Array.isArray(body.tools) && body.tools.length > 0;
       const inputText = JSON.stringify(body.input ?? []);
-      const seq = requests.length + 1;
       const entry: ProviderRequest = {
-        seq,
+        seq: requests.length + 1,
         kind: !toolsOffered
           ? "finalization"
           : !inputText.includes("function_call_output")
@@ -154,48 +124,18 @@ async function startControlledProvider() {
         startedAt: Date.now(),
       };
       requests.push(entry);
-      if (entry.kind === "finalization") {
-        writeProviderReply(response, seq, true);
+      if (entry.kind !== "stalled") {
+        writeProviderReply(response, entry.seq, entry.kind === "finalization");
         return;
       }
-      if (entry.kind === "tool-call") {
-        writeProviderReply(response, seq);
-        return;
-      }
-      // The post-tool turn: stay silent until the Gateway's idle watchdog aborts it.
+      // Leaving the response open stalls until the Gateway's watchdog aborts it;
+      // stop() closes any connection still waiting during fixture cleanup.
       response.once("close", () => {
         entry.clientClosedAt ??= Date.now();
       });
-      await stalledGate;
-      if (!response.writableEnded) {
-        response.end();
-      }
-    })().catch((error: unknown) => {
-      if (!response.headersSent) {
-        response.writeHead(500);
-      }
-      response.end(error instanceof Error ? error.message : String(error));
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("controlled provider did not bind a loopback port");
-  }
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    requests,
-    stop: async () => {
-      releaseStalled?.();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
     },
-  };
+  });
+  return { baseUrl, requests, stop };
 }
 
 async function captureAutomationsScreenshots(
@@ -216,10 +156,7 @@ async function captureAutomationsScreenshots(
     });
     const page = await context.newPage();
     const waitFor = (locator: Locator, timeout = 60_000) =>
-      locator
-        .first()
-        .waitFor({ timeout })
-        .catch(() => undefined);
+      locator.waitFor({ timeout }).catch(() => undefined);
     // Native-shell auth avoids an interactive pairing prompt.
     await page.addInitScript(
       (auth) => {
@@ -252,7 +189,7 @@ async function captureAutomationsScreenshots(
     if (await exitSetup.isVisible({ timeout: 5_000 }).catch(() => false)) {
       await exitSetup.click();
     }
-    await waitFor(page.getByText(JOB_NAME));
+    await waitFor(page.getByText(JOB_NAME).first());
     await sleep(3_000);
     await capture("automations-job");
     // The job route opens on Settings; the run outcome lives under Run history.
@@ -262,7 +199,7 @@ async function captureAutomationsScreenshots(
     if (await history.isVisible().catch(() => false)) {
       await history.click().catch(() => undefined);
       await sleep(3_000);
-      await waitFor(page.locator(".cron-run-entry"), 30_000);
+      await waitFor(page.locator(".cron-run-entry").first(), 30_000);
       await sleep(1_000);
       await capture("automations-run-history");
     }
@@ -281,201 +218,190 @@ async function captureAutomationsScreenshots(
   return written;
 }
 
-describe.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1")(
-  "Gateway cron idle-timeout finalization product proof",
-  () => {
-    it(
-      "records a stalled post-tool run as failed instead of announcing the fallback summary",
-      { timeout: TEST_TIMEOUT_MS },
-      async () => {
-        const startedAt = Date.now();
-        let phase = "provider";
-        const heartbeat = setInterval(() => {
-          console.log(
-            JSON.stringify({
-              phase: "proof-heartbeat",
-              step: phase,
-              elapsedMs: Date.now() - startedAt,
-            }),
-          );
-        }, 20_000);
-        cleanups.push(async () => clearInterval(heartbeat));
-        const provider = await startControlledProvider();
-        cleanups.push(() => provider.stop());
-        phase = "gateway-start";
-        const busState = createQaBusState();
-        const transport = createQaChannelTransport(busState);
-        const bus = await startQaBusServer({ state: busState });
-        cleanups.push(() => bus.stop());
-        const gatewayOwner = createQaGatewayChild();
-        cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
-        const gateway = await gatewayOwner.start({
-          repoRoot: process.cwd(),
-          command: {
-            executablePath: process.execPath,
-            argsPrefix: GATEWAY_ENTRY ? [GATEWAY_ENTRY] : ["--import", "tsx", "src/entry.ts"],
-            cwd: process.cwd(),
-            usePackagedPlugins: true,
-          },
-          providerBaseUrl: `${provider.baseUrl}/v1`,
-          providerMode: "mock-openai",
-          primaryModel: MODEL_REF,
-          alternateModel: MODEL_REF,
-          transport,
-          transportBaseUrl: bus.baseUrl,
-          controlUiEnabled: Boolean(SCREENSHOT_DIR),
-          onListening: ({ runtimeEnv }) => {
-            const stateDir = runtimeEnv.OPENCLAW_STATE_DIR;
-            if (!stateDir) {
-              throw new Error("QA gateway state directory is missing");
-            }
-            // Exhaust retries before exercising unanswered finalization.
-            const agentDir = path.join(stateDir, "agents", "qa", "agent");
-            new FileSettingsStorage(process.cwd(), agentDir).withLock("global", (raw) => {
-              const settings: Settings = raw ? JSON.parse(raw) : {};
-              settings.retry ??= {};
-              settings.retry.provider = {
-                ...settings.retry.provider,
-                maxRetries: PROVIDER_MAX_RETRIES,
-              };
-              return JSON.stringify(settings);
-            });
-          },
-          mutateConfig: (config) => {
-            const providerConfig = config.models?.providers?.["mock-openai"];
-            if (!providerConfig) {
-              throw new Error("mock-openai provider is missing from QA gateway config");
-            }
-            const providers = {
-              ...config.models?.providers,
-              "mock-openai": { ...providerConfig, timeoutSeconds: PROVIDER_IDLE_TIMEOUT_SECONDS },
-            };
-            return { ...config, models: { ...config.models, providers } };
-          },
-        });
-
-        phase = "transport-ready";
-        await transport.waitReady({ gateway });
-        phase = "cron";
-        const added = (await gateway.call(
-          "cron.add",
-          {
-            name: JOB_NAME,
-            enabled: true,
-            schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-            sessionTarget: "isolated",
-            wakeMode: "next-heartbeat",
-            payload: {
-              kind: "agentTurn",
-              message: PROMPT,
-              timeoutSeconds: RUN_TIMEOUT_SECONDS,
-            },
-            delivery: { mode: "announce", channel: "qa-channel", to: ANNOUNCE_CONVERSATION.id },
-          },
-          { timeoutMs: 30_000 },
-        )) as { id: string };
-        expect(typeof added.id).toBe("string");
-
-        const outboundBefore = busState
-          .getSnapshot()
-          .messages.filter((message) => message.direction === "outbound").length;
-        const logMark = gateway.markLogs();
-        const triggered = (await gateway.call(
-          "cron.run",
-          { id: added.id, mode: "force" },
-          { timeoutMs: 30_000 },
-        )) as { ok?: unknown; ran?: unknown; enqueued?: unknown };
-        expect(triggered).toMatchObject({ ok: true });
-        expect(triggered.ran === true || triggered.enqueued === true).toBe(true);
-
-        const deadline = Date.now() + RUN_WAIT_MS;
-        let entry: CronRunEntry | undefined;
-        while (Date.now() < deadline) {
-          const page = (await gateway.call(
-            "cron.runs",
-            { id: added.id, limit: 5 },
-            { timeoutMs: 10_000 },
-          )) as { entries?: CronRunEntry[] };
-          entry = (page.entries ?? []).find((candidate) => candidate.status !== undefined);
-          if (entry) {
-            break;
-          }
-          await sleep(500);
-        }
-        const job = (await gateway.call("cron.get", { id: added.id }, { timeoutMs: 10_000 })) as {
-          state?: Record<string, unknown>;
-        };
-        const gatewayLogs = gateway
-          .readLogsSince(logMark)
-          .split("\n")
-          .filter((line) => /settled|idle timeout|fallback|cron/i.test(line))
-          .map((line) => line.trim())
-          .filter(Boolean);
-        const noteExists = await fs
-          .access(path.join(gateway.workspaceDir, NOTE_FILE))
-          .then(() => true)
-          .catch(() => false);
-        const stalled = provider.requests.find((request) => request.kind === "stalled");
-        // Give the announce path a moment to settle after the run record lands.
-        await sleep(2_000);
-        const announced = busState
-          .getSnapshot()
-          .messages.filter((message) => message.direction === "outbound")
-          .slice(outboundBefore)
-          .map((message) => ({ conversation: message.conversation, text: message.text }));
-
-        phase = "screenshots";
-        const screenshots = SCREENSHOT_DIR
-          ? await captureAutomationsScreenshots(gateway, added.id, SCREENSHOT_DIR)
-          : [];
-
-        const proof = {
-          phase: "cron-idle-timeout-finalization-proof",
-          head: process.env.OPENCLAW_PROOF_HEAD_SHA ?? process.env.GITHUB_SHA ?? "local-checkout",
-          providerIdleTimeoutSeconds: PROVIDER_IDLE_TIMEOUT_SECONDS,
-          providerMaxRetries: PROVIDER_MAX_RETRIES,
-          cronRunTrigger: triggered,
-          providerRequests: provider.requests.map((request) => ({
-            seq: request.seq,
-            kind: request.kind,
-            ...(request.clientClosedAt !== undefined
-              ? { clientClosedAfterMs: request.clientClosedAt - request.startedAt }
-              : {}),
-          })),
-          settledWriteLanded: noteExists,
-          announcedToChannel: announced,
-          screenshots,
-          cronRun: entry ?? null,
-          jobState: {
-            lastRunStatus: job.state?.lastRunStatus,
-            lastDeliveryStatus: job.state?.lastDeliveryStatus,
-            lastError: job.state?.lastError,
-          },
-          gatewayLogs,
-        };
-        console.log(JSON.stringify(proof, null, 2));
-
-        expect(entry, "cron run never finished").toBeDefined();
-        expect(noteExists).toBe(true);
-        expect(provider.requests.map((request) => request.kind)).toEqual([
-          "tool-call",
-          "stalled",
-          "finalization",
-          "finalization",
-        ]);
-        expect(stalled?.clientClosedAt).toBeDefined();
-        expect((stalled?.clientClosedAt ?? 0) - (stalled?.startedAt ?? 0)).toBeGreaterThanOrEqual(
-          PROVIDER_IDLE_TIMEOUT_SECONDS * 1_000 - 500,
-        );
-
-        const recordText = JSON.stringify(entry);
-        expect(recordText).not.toContain(SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT);
-        expect(JSON.stringify(announced)).not.toContain(SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT);
-        expect(entry).toMatchObject({ status: "error" });
-        expect(entry?.completionStatus).not.toBe("succeeded");
-        expect(typeof entry?.error === "string" ? entry.error : "").toMatch(/idle timeout/i);
-        expect(job.state?.lastRunStatus).toBe("error");
+it.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1")(
+  "Gateway cron idle-timeout finalization product proof records a stalled post-tool run as failed instead of announcing the fallback summary",
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    const startedAt = Date.now();
+    let phase = "provider";
+    const heartbeat = setInterval(() => {
+      console.log(
+        JSON.stringify({
+          phase: "proof-heartbeat",
+          step: phase,
+          elapsedMs: Date.now() - startedAt,
+        }),
+      );
+    }, 20_000);
+    cleanups.push(async () => clearInterval(heartbeat));
+    const provider = await startControlledProvider();
+    cleanups.push(() => provider.stop());
+    phase = "gateway-start";
+    const busState = createQaBusState();
+    const transport = createQaChannelTransport(busState);
+    const bus = await startQaBusServer({ state: busState });
+    cleanups.push(() => bus.stop());
+    const gatewayOwner = createQaGatewayChild();
+    cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+    const gateway = await gatewayOwner.start({
+      repoRoot: process.cwd(),
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: GATEWAY_ENTRY ? [GATEWAY_ENTRY] : ["--import", "tsx", "src/entry.ts"],
+        cwd: process.cwd(),
+        usePackagedPlugins: true,
       },
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+      providerMode: "mock-openai",
+      primaryModel: MODEL_REF,
+      alternateModel: MODEL_REF,
+      transport,
+      transportBaseUrl: bus.baseUrl,
+      controlUiEnabled: Boolean(SCREENSHOT_DIR),
+      onListening: ({ runtimeEnv }) => {
+        const stateDir = runtimeEnv.OPENCLAW_STATE_DIR;
+        if (!stateDir) {
+          throw new Error("QA gateway state directory is missing");
+        }
+        // Exhaust retries before exercising unanswered finalization.
+        const agentDir = path.join(stateDir, "agents", "qa", "agent");
+        new FileSettingsStorage(process.cwd(), agentDir).withLock("global", (raw) => {
+          const settings: Settings = raw ? JSON.parse(raw) : {};
+          settings.retry ??= {};
+          settings.retry.provider ??= {};
+          settings.retry.provider.maxRetries = PROVIDER_MAX_RETRIES;
+          return JSON.stringify(settings);
+        });
+      },
+      mutateConfig: (config) => {
+        const providerConfig = config.models?.providers?.["mock-openai"];
+        if (!providerConfig) {
+          throw new Error("mock-openai provider is missing from QA gateway config");
+        }
+        const providers = {
+          ...config.models?.providers,
+          "mock-openai": { ...providerConfig, timeoutSeconds: PROVIDER_IDLE_TIMEOUT_SECONDS },
+        };
+        return { ...config, models: { ...config.models, providers } };
+      },
+    });
+
+    phase = "transport-ready";
+    await transport.waitReady({ gateway });
+    phase = "cron";
+    const added = (await gateway.call(
+      "cron.add",
+      {
+        name: JOB_NAME,
+        enabled: true,
+        schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "agentTurn",
+          message: PROMPT,
+          timeoutSeconds: 120,
+        },
+        delivery: { mode: "announce", channel: "qa-channel", to: ANNOUNCE_CONVERSATION.id },
+      },
+      { timeoutMs: 30_000 },
+    )) as { id: string };
+    expect(typeof added.id).toBe("string");
+
+    const outboundBefore = busState
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound").length;
+    const logMark = gateway.markLogs();
+    const triggered = (await gateway.call(
+      "cron.run",
+      { id: added.id, mode: "force" },
+      { timeoutMs: 30_000 },
+    )) as { ok?: unknown; ran?: unknown; enqueued?: unknown };
+    expect(triggered).toMatchObject({ ok: true });
+    expect(triggered.ran === true || triggered.enqueued === true).toBe(true);
+
+    const deadline = Date.now() + RUN_WAIT_MS;
+    let entry: CronRunEntry | undefined;
+    while (Date.now() < deadline) {
+      const page = (await gateway.call(
+        "cron.runs",
+        { id: added.id, limit: 5 },
+        { timeoutMs: 10_000 },
+      )) as { entries?: CronRunEntry[] };
+      entry = (page.entries ?? []).find((candidate) => candidate.status !== undefined);
+      if (entry) {
+        break;
+      }
+      await sleep(500);
+    }
+    const job = (await gateway.call("cron.get", { id: added.id }, { timeoutMs: 10_000 })) as {
+      state?: Record<string, unknown>;
+    };
+    const { lastRunStatus, lastDeliveryStatus, lastError } = job.state ?? {};
+    const gatewayLogs = gateway
+      .readLogsSince(logMark)
+      .split("\n")
+      .filter((line) => /settled|idle timeout|fallback|cron/i.test(line))
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const noteExists = await fs
+      .access(path.join(gateway.workspaceDir, NOTE_FILE))
+      .then(() => true)
+      .catch(() => false);
+    const stalled = provider.requests.find((request) => request.kind === "stalled");
+    // Give the announce path a moment to settle after the run record lands.
+    await sleep(2_000);
+    const announced = busState
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound")
+      .slice(outboundBefore)
+      .map((message) => ({ conversation: message.conversation, text: message.text }));
+
+    phase = "screenshots";
+    const screenshots = SCREENSHOT_DIR
+      ? await captureAutomationsScreenshots(gateway, added.id, SCREENSHOT_DIR)
+      : [];
+
+    const proof = {
+      phase: "cron-idle-timeout-finalization-proof",
+      head: process.env.OPENCLAW_PROOF_HEAD_SHA ?? process.env.GITHUB_SHA ?? "local-checkout",
+      providerIdleTimeoutSeconds: PROVIDER_IDLE_TIMEOUT_SECONDS,
+      providerMaxRetries: PROVIDER_MAX_RETRIES,
+      cronRunTrigger: triggered,
+      providerRequests: provider.requests.map((request) => ({
+        seq: request.seq,
+        kind: request.kind,
+        ...(request.clientClosedAt !== undefined
+          ? { clientClosedAfterMs: request.clientClosedAt - request.startedAt }
+          : {}),
+      })),
+      settledWriteLanded: noteExists,
+      announcedToChannel: announced,
+      screenshots,
+      cronRun: entry ?? null,
+      jobState: { lastRunStatus, lastDeliveryStatus, lastError },
+      gatewayLogs,
+    };
+    console.log(JSON.stringify(proof, null, 2));
+
+    expect(entry, "cron run never finished").toBeDefined();
+    expect(noteExists).toBe(true);
+    expect(provider.requests.map((request) => request.kind)).toEqual([
+      "tool-call",
+      "stalled",
+      "finalization",
+      "finalization",
+    ]);
+    expect(stalled?.clientClosedAt).toBeDefined();
+    expect((stalled?.clientClosedAt ?? 0) - (stalled?.startedAt ?? 0)).toBeGreaterThanOrEqual(
+      PROVIDER_IDLE_TIMEOUT_SECONDS * 1_000 - 500,
     );
+
+    expect(JSON.stringify(entry)).not.toContain(SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT);
+    expect(JSON.stringify(announced)).not.toContain(SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT);
+    expect(entry).toMatchObject({ status: "error" });
+    expect(entry?.completionStatus).not.toBe("succeeded");
+    expect(typeof entry?.error === "string" ? entry.error : "").toMatch(/idle timeout/i);
+    expect(lastRunStatus).toBe("error");
   },
 );

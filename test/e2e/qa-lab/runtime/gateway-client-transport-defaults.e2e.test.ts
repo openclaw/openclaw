@@ -2,7 +2,7 @@ import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type RawData, type WebSocket, WebSocketServer } from "ws";
+import { type WebSocket, WebSocketServer } from "ws";
 import {
   GatewayClient,
   GatewayClientRequestTimeoutError,
@@ -10,27 +10,16 @@ import {
 } from "../../../../packages/gateway-client/src/index.js";
 import { createDeferred } from "../../../helpers/promise.js";
 
-type RequestFrame = {
-  id: string;
-  method: string;
-};
+type RequestFrame = { id: string; method: string };
 
 const clients: GatewayClient[] = [];
 let server: WebSocketServer | undefined;
 
-function parseRequest(data: RawData): RequestFrame {
-  return JSON.parse(rawDataToString(data)) as RequestFrame;
-}
-
-function sendFrame(socket: WebSocket, frame: unknown): void {
-  socket.send(JSON.stringify(frame));
-}
+const sendFrame = (socket: WebSocket, frame: unknown) => socket.send(JSON.stringify(frame));
 
 function waitForClose(socket: WebSocket) {
   return new Promise<{ code: number; reason: string }>((resolve) => {
-    socket.once("close", (code: number, reason: Buffer) => {
-      resolve({ code, reason: reason.toString() });
-    });
+    socket.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
   });
 }
 
@@ -64,7 +53,7 @@ async function connectWithFakeTime(
   server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   server.on("connection", (socket) => {
     socket.on("message", (data) => {
-      const request = parseRequest(data);
+      const request = JSON.parse(rawDataToString(data)) as RequestFrame;
       if (request.method === "connect" && params.tickIntervalMs !== undefined) {
         sendFrame(socket, {
           type: "res",
@@ -171,7 +160,6 @@ describe("GatewayClient transport defaults", () => {
       clientOptions: { onConnectError: (error) => errors.push(error) },
     });
     const closed = waitForClose(socket);
-    await flushSocketIo();
 
     await vi.advanceTimersByTimeAsync(29_999);
     expect(errors).toEqual([]);
