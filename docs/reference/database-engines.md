@@ -154,6 +154,8 @@ those stores still use SQLite. The port preflight refuses pending declared
 legacy migrations and names the repairs required before retrying the port.
 This includes native Codex task assignments, Matrix inbound dedupe, and legacy
 memory index sidecars.
+Fresh Matrix account roots without legacy inbound-dedupe rows do not need a
+migration completion receipt before porting.
 
 These migrations are SQLite-only. On PostgreSQL, Doctor records that they are
 not applicable instead of opening the local engine anchor as an application
@@ -570,6 +572,25 @@ PostgreSQL into a fresh owned namespace and publishes its matched anchor; the
 migrated namespace remains available until recovery is confirmed. Changed state
 or uncertain custody prevents automatic restore and retains the captures for
 recovery. An update never silently ports a store or falls back to SQLite.
+
+Recovery generations include the live PostgreSQL catalog, exact rows, and sequence
+allocation state (`last_value` and `is_called`). The installed driver can fingerprint
+a candidate's newer schema without loading that schema's descriptor. Restore uses
+the captured version's descriptor and retains exact allocation state, including a
+sequence deliberately reset below retained row IDs. Maintenance checks the stable
+Gateway lease contract independently of the newer application schema.
+
+Update-run admission reads PostgreSQL through its existing schema connection and
+initializes only the update-history fragment; it does not copy the anchor as SQLite
+state or run candidate schema migrations before managed shutdown.
+
+Candidate Doctor state and agent schema migrations publish their before/after generations through
+the existing maintenance write receipt. PostgreSQL table and sequence locks retain
+native exclusion until the migration transaction commits; only that confirmed
+publication advances the expected generation. Independent writes before migration
+or after publication still prevent automatic rollback. Uncertain commit or custody
+outcomes keep the captures for recovery. SQLite update behavior and the update
+admission protocol are unchanged.
 
 Release packages declare supported engines in the optional
 `openclaw.databaseEngines` array in `package.json`, next to

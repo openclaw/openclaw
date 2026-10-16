@@ -9,6 +9,7 @@ import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { routeReply } from "../auto-reply/reply/route-reply.js";
 import * as bundledChannelPlugins from "../channels/plugins/bundled.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
+import * as globals from "../globals.js";
 import {
   captureActivePluginRegistrySnapshot,
   getActivePluginRegistry,
@@ -151,33 +152,45 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
     expect(synthesizeMock).not.toHaveBeenCalled();
   });
 
-  it("synthesizes persisted TTS facts after the visible text has been stripped", async () => {
-    const payload = setReplyPayloadMetadata(
-      { text: "Visible answer" },
-      {
-        tts: {
-          tagged: true,
-          text: "Spoken answer",
-          directives: [{ provider: "mock", values: {} }],
+  it("synthesizes persisted TTS facts without logging model directive content", async () => {
+    const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+    try {
+      const payload = setReplyPayloadMetadata(
+        { text: "Visible answer" },
+        {
+          tts: {
+            tagged: true,
+            text: "Spoken answer",
+            directives: [
+              { provider: "mock", values: { "synthetic-private-directive": "private-value" } },
+            ],
+          },
         },
-      },
-    );
+      );
 
-    const result = await maybeApplyTtsToPayload({
-      payload,
-      cfg: createTtsConfig("openclaw-speech-core-persisted-facts"),
-      channel: "telegram",
-      kind: "final",
-      ttsAuto: "tagged",
-    });
+      const cfg = createTtsConfig("openclaw-speech-core-persisted-facts");
+      cfg.tts = { ...cfg.tts, modelOverrides: { allowProvider: true } };
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "telegram",
+        kind: "final",
+        ttsAuto: "tagged",
+      });
 
-    expect(requireFirstSynthesisRequest("persisted TTS facts")).toMatchObject({
-      text: "Spoken answer",
-    });
-    expect(result).toMatchObject({
-      text: "Visible answer",
-      spokenText: "Spoken answer",
-    });
+      expect(requireFirstSynthesisRequest("persisted TTS facts")).toMatchObject({
+        text: "Spoken answer",
+      });
+      expect(result).toMatchObject({
+        text: "Visible answer",
+        spokenText: "Spoken answer",
+      });
+      expect(log).toHaveBeenCalledWith("TTS: ignored 1 directive override(s)");
+      expect(JSON.stringify(log.mock.calls)).not.toContain("synthetic-private-directive");
+      expect(JSON.stringify(log.mock.calls)).not.toContain("private-value");
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("uses the first speech-supported voiceModel fallback as the default provider", async () => {
@@ -356,22 +369,30 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
     },
   );
 
-  it("keeps existing visible text when hidden TTS synthesis fails", async () => {
-    synthesizeMock.mockRejectedValueOnce(new Error("Speech provider unavailable"));
-
-    const result = await maybeApplyTtsToPayloadCore(
-      {
-        payload: {
-          text: "Visible answer [[tts:text]]Hidden expressive answer[[/tts:text]]",
+  it("keeps visible text when synthesis fails without logging the provider's text echo", async () => {
+    const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+    synthesizeMock.mockImplementationOnce(async ({ text }: { text: string }) => {
+      throw new Error(text);
+    });
+    try {
+      const result = await maybeApplyTtsToPayloadCore(
+        {
+          payload: {
+            text: "Visible answer [[tts:text]]Hidden expressive answer[[/tts:text]]",
+          },
+          cfg: createTtsConfig("openclaw-speech-core-visible-hidden-tts-provider-failure"),
+          channel: "telegram",
+          kind: "final",
         },
-        cfg: createTtsConfig("openclaw-speech-core-visible-hidden-tts-provider-failure"),
-        channel: "telegram",
-        kind: "final",
-      },
-      async () => "/unused.ogg",
-    );
+        async () => "/unused.ogg",
+      );
 
-    expect(result).toEqual({ text: "Visible answer" });
+      expect(result).toEqual({ text: "Visible answer" });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("mock failed (provider_error)"));
+      expect(JSON.stringify(log.mock.calls)).not.toContain("Hidden expressive answer");
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("keeps hidden TTS text private when the reply already contains an attachment", async () => {

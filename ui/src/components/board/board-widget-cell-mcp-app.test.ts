@@ -131,6 +131,27 @@ afterEach(() => {
 });
 
 describe("board MCP App cell lifecycle", () => {
+  it("refreshes an in-place HTML widget when its board revision changes", async () => {
+    const current = widget({ contentKind: "html" });
+    const cell = await mount(
+      {},
+      {
+        widget: current,
+        widgetFrameUrl: (name, revision) => `/widget/${name}/${revision}`,
+      },
+    );
+    const frame = cell.querySelector("iframe")!;
+    expect(frame.getAttribute("src")).toBe("/widget/alpha/1");
+
+    current.revision = 2;
+    current.title = "Updated HTML widget";
+    await update(cell, { boardRevision: 1 });
+
+    expect(cell.querySelector("iframe")).toBe(frame);
+    expect(frame.getAttribute("src")).toBe("/widget/alpha/2");
+    expect(frame.title).toBe("Updated HTML widget");
+  });
+
   it("waits to materialize an inactive cell until its board becomes active", async () => {
     const visibility = stubVisibility(() => true);
     const widgetAppView = vi.fn(async () => readyAppView("activated-view"));

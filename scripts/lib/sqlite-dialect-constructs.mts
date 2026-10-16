@@ -13,6 +13,8 @@ export const SQLITE_PRIMITIVE_OWNERS: readonly string[] = [
   "src/infra/sqlite-planner-statistics.ts",
   // SQLite-only daemon store owner: empty-store admission and durable schema creation on every engine.
   "src/daemon/runtime-pin-store.ts",
+  // SQLite-only local client owner; it never opens the selected Gateway engine.
+  "src/infra/client-credential-store.ts",
 ];
 export type DialectMatch = {
   construct: string;

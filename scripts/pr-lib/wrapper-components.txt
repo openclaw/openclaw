@@ -697,6 +697,7 @@ src/state/artifact-preserving-state-reads.ts
 src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
 src/config/sessions/session-model-context-navigation.ts
+src/config/sessions/session-model-context-pages.ts
 src/config/sessions/session-model-context-read.ts
 src/config/sessions/session-model-context-window.ts
 src/config/sessions/session-mutation-conflict-error.ts
@@ -1226,6 +1227,7 @@ src/infra/tmp-openclaw-dir.ts
 src/infra/update-channels.ts
 src/infra/update-doctor-config-schema.ts
 src/infra/update-doctor-lint-schema.ts
+src/infra/update-doctor-migration-attribution.ts
 src/infra/update-doctor-result.ts
 src/infra/update-failure-facts-format.ts
 src/infra/update-failure-facts.ts
@@ -1959,6 +1961,8 @@ src/state/postgres-schema.generated/runtime.ts
 src/state/postgres-schema.generated/sqlite-agent-catalogs.json
 src/state/postgres-schema.generated/sqlite-agent-catalogs.ts
 src/state/postgres-schema.generated/sqlite-catalogs.ts
+src/state/postgres-schema.generated/sqlite-client-catalogs.json
+src/state/postgres-schema.generated/sqlite-client-catalogs.ts
 src/state/postgres-schema.generated/sqlite-daemon-catalogs.json
 src/state/postgres-schema.generated/sqlite-daemon-catalogs.ts
 src/state/postgres-schema.generated/sqlite-memory-catalogs.json

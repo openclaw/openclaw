@@ -1,6 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, Match, Show, Switch } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { EventStream } from "../../lib/board/provider-signals.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
@@ -9,6 +10,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
 import { postWidgetTheme } from "../../lib/widget-theme.ts";
@@ -64,7 +66,6 @@ type BoardWidgetFrameOwnerHost = {
   connected: () => boolean;
   context: () => ApplicationContext | undefined;
   refreshFrame: () => FrameRefresh | undefined;
-  requestUpdate: () => void;
   reportContentHeight: (name: string, height: number) => void;
   scrollBy: (deltaY: number) => void;
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
@@ -143,6 +144,7 @@ class BoardWidgetTicketRefresh {
 }
 
 export class BoardWidgetFrameOwner {
+  readonly changes = new EventStream<void>();
   error = "";
   private frame?: HTMLIFrameElement;
   private waiting = false;
@@ -158,7 +160,7 @@ export class BoardWidgetFrameOwner {
   private sandboxHost: BoardWidgetSandboxHost | null = null;
   private contentVisible = false;
   private revealFrame = 0;
-  private readonly confirmation = new McpAppConfirm(() => this.host.requestUpdate());
+  private readonly confirmation = new McpAppConfirm(() => this.changes.emit());
   private readonly ticketRefresh = new BoardWidgetTicketRefresh(
     () => this.host.widget()?.viewTicket,
     () => this.host.active() && !documentHidden() && this.gatewayAvailable(),
@@ -245,13 +247,10 @@ export class BoardWidgetFrameOwner {
     this.updateSandboxHost();
   }
 
-  render(
-    widget: BoardWidget | (() => BoardWidget),
-    revision: () => number = () => 0,
-  ): SolidJSX.Element {
-    const current = () => (typeof widget === "function" ? widget() : widget);
+  render(current: () => BoardWidget): SolidJSX.Element {
+    const changes = projectOwner(this.changes, () => this);
     const view = createMemo(() => {
-      revision();
+      changes.revision();
       const value = current();
       const resolveFrameUrl = this.host.resolveFrameUrl();
       if (!resolveFrameUrl) {
@@ -294,7 +293,7 @@ export class BoardWidgetFrameOwner {
         }
       >
         <div class="board-widget__frame-pane">
-          <McpAppConfirmation confirmation={this.confirmation} revision={revision()} />
+          <McpAppConfirmation confirmation={this.confirmation} revision={changes.revision()} />
           <Show when={!view().visible && !view().covered}>
             <Switch
               fallback={
@@ -364,7 +363,7 @@ export class BoardWidgetFrameOwner {
     }
     this.error = error;
     if (notify) {
-      this.host.requestUpdate();
+      this.changes.emit();
     }
   }
 
@@ -396,7 +395,7 @@ export class BoardWidgetFrameOwner {
       this.revealFrame = window.requestAnimationFrame(() => {
         this.revealFrame = 0;
         this.contentVisible = true;
-        this.host.requestUpdate();
+        this.changes.emit();
       });
     });
   }
@@ -575,7 +574,7 @@ export class BoardWidgetFrameOwner {
         this.frameFailureKey = "";
         this.frameRefreshAttempts = 0;
         this.setError("", false);
-        this.host.requestUpdate();
+        this.changes.emit();
       },
       onRendered: () => {
         // The proxy replaces its inner document after the outer load event.
@@ -590,7 +589,7 @@ export class BoardWidgetFrameOwner {
       onError: (error) => {
         if (error instanceof WidgetRenderTimeoutError) {
           this.renderStalled = true;
-          this.host.requestUpdate();
+          this.changes.emit();
           return;
         }
         this.setError(formatUiError(error));
@@ -602,12 +601,12 @@ export class BoardWidgetFrameOwner {
     this.renderStalled = false;
     this.waiting = false;
     this.sandboxHost?.reset();
-    this.host.requestUpdate();
+    this.changes.emit();
   }
 
   private waitForConnection(): void {
     this.waiting = true;
-    this.host.requestUpdate();
+    this.changes.emit();
   }
 
   private updateSandboxHost(): void {

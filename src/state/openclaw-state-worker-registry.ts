@@ -109,10 +109,10 @@ const loaders = {
     import("../skills/workshop/changes.worker.js").then((m) => m.skillWorkshopOperations),
   transcripts: async () => {
     const [read, write] = await Promise.all([
-      import("../transcripts/store-worker-read.js"),
-      import("../transcripts/store-worker-write.js"),
+      import("../transcripts/store-worker-read.js").then((m) => m.transcriptReadOperations),
+      import("../transcripts/store-worker-write.js").then((m) => m.transcriptWriteOperations),
     ]);
-    return { ...read.transcriptReadOperations, ...write.transcriptWriteOperations };
+    return { ...read, ...write };
   },
   webPush: () => import("../infra/push-web-store.worker.js").then((m) => m.webPushOperations),
   apns: () => import("../infra/push-apns-store.worker.js").then((m) => m.apnsOperations),

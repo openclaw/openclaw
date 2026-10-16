@@ -2471,7 +2471,6 @@ src/tts/openai-compatible-speech-provider.ts	1
 src/tts/status-config.ts	1
 src/tts/tts-config.ts	4
 src/tts/tts-core.ts	1
-src/tts/tts-payload.ts	1
 src/tts/tts-provider-resolution.ts	1
 src/tts/tts-request.ts	1
 src/tts/tts-settings.ts	3

@@ -697,7 +697,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           model: model.id,
           usage: createZeroUsageFixture(),
           stopReason: "error",
-          errorMessage: "Cannot convert undefined or null to object",
+          errorMessage: "Cannot convert undefined or null to object: synthetic-private-summary",
           timestamp: 1,
         },
       });
@@ -717,6 +717,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(event.preparation.messagesToSummarize).toStrictEqual(transcriptBefore);
     expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toContain(
       "Cannot convert undefined or null to object",
+    );
+    expect(compactionLogger.warn).toHaveBeenCalledExactlyOnceWith(
+      "Compaction summarization failed; cancelling compaction to preserve history.",
+    );
+    expect(JSON.stringify(compactionLogger.warn.mock.calls)).not.toContain(
+      "synthetic-private-summary",
     );
   });
 
@@ -1157,9 +1163,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
     "handles provider AbortError according to caller cancellation (aborted=%s)",
     async (aborted) => {
       mockSummarizeCompactionHistory.mockResolvedValue("llm fallback summary");
-      const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
-        name: "AbortError",
-      });
+      const providerAbortErr = Object.assign(
+        new Error("This operation was aborted: synthetic-private-provider"),
+        {
+          name: "AbortError",
+        },
+      );
       installCompactionProviderForTest(
         "aborting-provider",
         vi.fn().mockRejectedValue(providerAbortErr),
@@ -1192,6 +1201,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
         expect(result.cancel).not.toBe(true);
         expect(mockSummarizeCompactionHistory).toHaveBeenCalled();
       }
+      expect(JSON.stringify(compactionLogger.warn.mock.calls)).not.toContain(
+        "synthetic-private-provider",
+      );
     },
   );
 

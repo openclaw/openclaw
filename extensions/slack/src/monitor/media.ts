@@ -236,11 +236,9 @@ async function fetchFreshSlackFileUrl(params: {
     }
     logVerbose(`slack: files.info returned no private URL for file id=${params.file.id}`);
     return null;
-  } catch (error) {
+  } catch {
     assertCurrent?.();
-    logVerbose(
-      `slack: files.info failed for file id=${params.file.id}: ${formatErrorMessage(error)}`,
-    );
+    logVerbose(`slack: files.info failed for file id=${params.file.id}`);
     return null;
   }
 }
@@ -347,7 +345,10 @@ export async function resolveSlackMedia(params: {
         url = attempt === 0 && eventUrl ? await refreshFileUrl(file) : null;
       }
       params.unavailableFiles?.set(file, reason);
-      slackMediaLog.warn(`slack: file ${formatSlackFileReference(file)} unavailable (${reason})`);
+      slackMediaLog.warn("slack: file unavailable", {
+        fileId: file.id,
+        reason: reason === "no private download URL" ? "missing-url" : "download-failed",
+      });
       return null;
     }),
     limit: MAX_SLACK_MEDIA_CONCURRENCY,
@@ -473,11 +474,9 @@ export async function resolveSlackAttachmentContent(params: {
                 ...(saved.fileName ? { fileName: saved.fileName } : {}),
                 placeholder: `[Forwarded image: ${label}]`,
               });
-            } catch (error) {
+            } catch {
               unavailableMediaCount += 1;
-              slackMediaLog.warn(
-                `slack: forwarded image unavailable (${formatSlackMediaFailure(error)})`,
-              );
+              slackMediaLog.warn("slack: forwarded image unavailable");
             }
           }
           attachmentMedia.push(...((await resolveFiles(att.files)) ?? []));

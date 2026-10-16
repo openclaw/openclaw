@@ -432,7 +432,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       msg,
       sock,
       mediaMaxMb: options.mediaMaxMb,
-      logVerbose: (message) => logWhatsAppVerbose(options.verbose, message),
     });
     if (!enriched) {
       await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);

@@ -44,6 +44,7 @@ import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   SharedGatewaySessionGenerationState,
 } from "../../server-shared-auth-generation.js";
+import * as wsLog from "../../ws-log.js";
 import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
 import { disconnectDisallowedGatewayPolicyClients } from "../ws-origin-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
@@ -688,17 +689,36 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
   it("closes malformed JSON explicitly on an authenticated connection", async () => {
     const close = createCloseMock();
+    const setCloseCause = createSetCloseCauseMock();
+    const websocketLog = vi.spyOn(wsLog, "logWs");
+    onTestFinished(() => websocketLog.mockRestore());
     const harness = attachGatewayHarness({
       connId: "conn-malformed-json",
       connectNonce: "nonce-malformed-json",
       close,
+      setCloseCause,
     });
     harness.sendConnect("connect", BACKEND_CONNECT_PARAMS);
     await harness.runWhenIdle();
-    harness.sendMessage("{");
+    websocketLog.mockClear();
+    harness.logGateway.error.mockClear();
+    const marker = "PRIVATE_JSON_FRAME";
+    harness.sendMessage(marker);
     await harness.runWhenIdle();
     expect(close).toHaveBeenCalledWith(1007, "invalid JSON");
-    expect(harness.logGateway.error).toHaveBeenCalledWith(expect.stringContaining("parse error"));
+    expect(harness.logGateway.error).toHaveBeenCalledWith("parse error: invalid JSON");
+    expect(setCloseCause).toHaveBeenCalledWith("parse-error", { error: "invalid JSON" });
+    expect(websocketLog).toHaveBeenCalledWith("out", "parse-error", {
+      connId: "conn-malformed-json",
+      error: "invalid JSON",
+    });
+    expect(
+      JSON.stringify([
+        harness.logGateway.error.mock.calls,
+        websocketLog.mock.calls,
+        setCloseCause.mock.calls,
+      ]),
+    ).not.toContain(marker);
   });
 
   it.each(["bytes", "count"] as const)(

@@ -108,7 +108,7 @@ export async function runLinkUnderstanding(params: {
         throw err;
       }
       if (shouldLogVerbose()) {
-        logVerbose(`Link understanding fetch blocked or failed for ${url}: ${String(err)}`);
+        logVerbose("Link understanding fetch blocked or failed.");
       }
       continue;
     }
@@ -116,7 +116,6 @@ export async function runLinkUnderstanding(params: {
       continue;
     }
     let output: string | undefined;
-    let lastError: unknown;
     for (const entry of entries) {
       if (params.signal?.aborted) {
         break;
@@ -143,9 +142,6 @@ export async function runLinkUnderstanding(params: {
             .filter((arg) => !isLinkUrlTemplate(arg))
             .map((arg) => applyTemplate(arg, templCtx)),
         ];
-        if (shouldLogVerbose()) {
-          logVerbose(`Link understanding via CLI: ${argv.join(" ")}`);
-        }
         const result = await runCommandWithTimeout(argv, {
           timeoutMs: resolveTimeoutMs(
             entry.timeoutSeconds ?? config.timeoutSeconds,
@@ -175,14 +171,10 @@ export async function runLinkUnderstanding(params: {
         if (isAbortError(err)) {
           throw err;
         }
-        lastError = err;
         if (shouldLogVerbose()) {
-          logVerbose(`Link understanding failed for ${url}: ${String(err)}`);
+          logVerbose("Link understanding CLI failed; trying the next entry.");
         }
       }
-    }
-    if (!output && lastError && shouldLogVerbose()) {
-      logVerbose(`Link understanding exhausted for ${url}`);
     }
     if (params.signal?.aborted) {
       break;

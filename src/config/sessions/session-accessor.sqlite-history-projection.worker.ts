@@ -149,7 +149,7 @@ export function resolveWorkerVisibleHistoryProjection(
     return buildVisibleHistoryProjection(projection);
   }
   const sessions = historyProjections(projection.database.db);
-  const key = projection.resolved.sessionId;
+  const key = JSON.stringify([projection.resolved.agentId, projection.resolved.sessionId]);
   const cached = sessions.get(key);
   let history: VisibleHistoryProjection | undefined;
   if (cached?.generation === projection.generation) {

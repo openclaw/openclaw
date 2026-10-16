@@ -2,6 +2,7 @@ import { renameSync } from "node:fs";
 import { backup } from "node:sqlite";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
 import { disposeNodeSqliteDependents } from "../../infra/kysely-sync-cache-state.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
@@ -58,6 +59,51 @@ describe("SQLite transcript history cache", () => {
       touchSessionEntry: false,
     });
   }
+
+  it("keeps worker history cursors scoped to the logical agent on a shared store", async () => {
+    await seedRoot();
+    const database = openOpenClawAgentDatabase({
+      agentId: fixtureScope.agentId,
+      env: fixtureScope.env,
+    });
+    const target = { agentId: database.agentId, path: database.path };
+    const createReader = (agentId: string) =>
+      createReadonlySessionHistoryReader({
+        database: target,
+        transcript: {
+          ...fixtureScope,
+          agentId,
+          sessionFile: fixtureScope.sessionKey,
+          storePath: database.path,
+        },
+      });
+    const firstReader = createReader("main");
+    const secondReader = createReader("other");
+    const owner = new OpenClawAgentDatabaseReadOnlyScope();
+    const options = { maxMessages: 1, offset: 0, captureReadWindow: true };
+    try {
+      owner.run(target, () => {
+        const first = firstReader.readHistoryEventPage(options);
+        expect(first.readWindow?.source).toBeTypeOf("string");
+        const second = secondReader.readHistoryEventPage({
+          ...options,
+          expectedReadWindow: first.readWindow,
+        });
+        expect(second.windowReset).toBe(true);
+        expect(second.displaySource).not.toBe(first.displaySource);
+        expect(second.events.map(historyEventId)).toEqual(["root"]);
+        const returned = firstReader.readHistoryEventPage({
+          ...options,
+          expectedReadWindow: first.readWindow,
+        });
+        expect(returned).not.toHaveProperty("windowReset");
+        expect(returned.readWindow).toEqual(first.readWindow);
+        expect(returned.events).toEqual(first.events);
+      });
+    } finally {
+      owner.close();
+    }
+  });
 
   it("reuses recent payloads with fresh result ownership until append or rewrite", async () => {
     const events = [

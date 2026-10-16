@@ -1,6 +1,7 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
@@ -82,6 +83,7 @@ it.for([
     let draining: Promise<void> | undefined;
     try {
       runtimeConfigState.value = { agents: { defaults: { utilityModel: "test/utility" } } };
+      await setAppliedRuntimeConfigSnapshot(runtimeConfigState.value, runtimeConfigState.value);
       const entry = await upsertSessionEntryCore(scope, {
         sessionId: scope.sessionId,
         updatedAt: 1,

@@ -13,6 +13,7 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerHasSourceCustody,
 } from "../state/openclaw-state-maintenance-context.js";
+import { resolveClientCredentialStorePath } from "./client-credential-store.js";
 import { resolveStatePortRoots } from "./database-engine/state-port.js";
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -63,18 +64,15 @@ import {
   readUpdateStateDatabaseSizesInProcess,
   updateStateDatabaseExists,
 } from "./update-candidate-state.sizes.js";
+import {
+  publishStateDatabaseVersions,
+  UpdateStateSchemaVersionsSchema,
+  type UpdateStateSchemaVersion,
+} from "./update-candidate-state.versions.js";
 import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
-const UpdateStateSchemaVersionsSchema = z.array(
-  z.object({
-    path: z.string(),
-    userVersion: z.number().nullable(),
-    contentVersion: z.number().optional(),
-    retainedAgentPaths: z.array(z.string()).optional(),
-  }),
-);
-export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsSchema>[number];
+export type { UpdateStateSchemaVersion } from "./update-candidate-state.versions.js";
 export const UpdateCandidateStateSnapshotSchema = z.object({
   versions: UpdateStateSchemaVersionsSchema,
   pluginPaths: z.record(z.string(), z.string()),
@@ -148,6 +146,7 @@ export async function collectStateDatabasePaths(
     }
   }
   // Published owners describe shared/agent schemas; local stores retain exact opaque contents.
+  queue(resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: stateRoot }));
   queue(resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: stateRoot }));
   const directories =
     options.includeUnconfiguredAgents !== false
@@ -196,30 +195,6 @@ async function collectUpdateCandidateDatabasePaths(input: StateInput) {
     }
   }
   return files;
-}
-
-/** Publish exact aliases; released shared/agent callers opt out of local schema versions. */
-function publishStateDatabaseVersions(
-  files: Map<string, StateDatabaseDiscovery>,
-  inspected: Map<string, Omit<UpdateStateSchemaVersion, "path">>,
-  input: StateInput,
-): UpdateStateSchemaVersion[] {
-  const versions: UpdateStateSchemaVersion[] = [];
-  for (const [identity, discovery] of files) {
-    const result = inspected.get(identity);
-    if (!result) {
-      continue;
-    }
-    for (const spelling of discovery.spellings) {
-      versions.push({ path: spelling, ...result });
-    }
-  }
-  return input.includeLocalStoreVersions === false
-    ? versions.filter(
-        ({ path: file }) =>
-          file !== resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: input.stateDir }),
-      )
-    : versions;
 }
 
 /** Read registrations and plugin ownership from one private shared copy before budgeting. */
@@ -357,9 +332,11 @@ export async function readUpdateStateSchemaVersionsInProcess(
       phase:
         file === shared
           ? "shared database inspection"
-          : file === resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: input.stateDir })
-            ? "daemon schema inspection"
-            : "agent schema inspection",
+          : file === resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: input.stateDir })
+            ? "client credential schema inspection"
+            : file === resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: input.stateDir })
+              ? "daemon schema inspection"
+              : "agent schema inspection",
       path: file,
     });
     // Missing stores stay explicit so creation is checked and loss blocks rollback.

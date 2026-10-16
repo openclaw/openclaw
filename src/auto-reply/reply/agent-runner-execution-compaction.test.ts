@@ -35,17 +35,33 @@ function createNotifyUserRun() {
   return followupRun;
 }
 
+type CompactionData = Parameters<NonNullable<EmbeddedAgentParams["onAgentEvent"]>>[0]["data"];
+
+function mockCompaction(start: CompactionData = {}, end: CompactionData = {}) {
+  state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+    await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start", ...start } });
+    await params.onAgentEvent?.({
+      stream: "compaction",
+      data: { phase: "end", completed: true, ...end },
+    });
+    return { payloads: [{ text: "final" }], meta: {} };
+  });
+}
+
+function expectNotices(reply: ReturnType<typeof vi.fn>, texts: string[], addressed = false) {
+  texts.forEach((text, index) => {
+    expectBlockReplyCall(reply, index, {
+      text,
+      isCompactionNotice: true,
+      ...(addressed ? { replyToId: "msg", replyToCurrent: true } : {}),
+    });
+  });
+}
+
 describe("executeAgentTurn: compaction events", () => {
   it("warns about degraded compaction even when ordinary notices are disabled", async () => {
     const onCompactionNoticePayload = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
-      await params.onAgentEvent?.({
-        stream: "compaction",
-        data: { phase: "end", completed: true, qualityDegraded: true },
-      });
-      return { payloads: [{ text: "continued" }], meta: {} };
-    });
+    mockCompaction({}, { qualityDegraded: true });
     const result = await executeTestTurn(undefined, { onCompactionNoticePayload });
     expect(result.kind).toBe("success");
     expect(onCompactionNoticePayload).toHaveBeenCalledOnce();
@@ -76,30 +92,13 @@ describe("executeAgentTurn: compaction events", () => {
           attempts: [{ provider: "anthropic", model: "claude", error: "rate limit" }],
         }),
       );
-      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-        await params.onAgentEvent?.({
-          stream: "compaction",
-          data: {
-            phase: "start",
-            backend: "codex-app-server",
-            threadId: "thread-1",
-            turnId: "turn-1",
-            itemId: "compaction-1",
-          },
-        });
-        await params.onAgentEvent?.({
-          stream: "compaction",
-          data: {
-            phase: "end",
-            completed: true,
-            backend: "codex-app-server",
-            threadId: "thread-1",
-            turnId: "turn-1",
-            itemId: "compaction-1",
-          },
-        });
-        return { payloads: [{ text: "final" }], meta: {} };
-      });
+      const context = {
+        backend: "codex-app-server",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "compaction-1",
+      };
+      mockCompaction(context, context);
 
       const result = await executeTestTurn({ opts: { onBlockReply } });
 
@@ -201,17 +200,7 @@ describe("executeAgentTurn: compaction events", () => {
 
   it("delivers compaction hook messages alongside notifyUser notices (#90185)", async () => {
     const onBlockReply = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({
-        stream: "compaction",
-        data: { phase: "start", messages: ["Hook before"] },
-      });
-      await params.onAgentEvent?.({
-        stream: "compaction",
-        data: { phase: "end", completed: true, messages: ["Hook after"] },
-      });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+    mockCompaction({ messages: ["Hook before"] }, { messages: ["Hook after"] });
 
     const result = await executeTestTurn(
       { followupRun: createNotifyUserRun(), opts: { onBlockReply } },
@@ -220,44 +209,18 @@ describe("executeAgentTurn: compaction events", () => {
 
     expect(result.kind).toBe("success");
     expect(onBlockReply).toHaveBeenCalledTimes(4);
-    expectBlockReplyCall(onBlockReply, 0, {
-      text: "Hook before",
-      replyToId: "msg",
-      replyToCurrent: true,
-      isCompactionNotice: true,
-    });
-    expectBlockReplyCall(onBlockReply, 1, {
-      text: "🧹 Compacting context...",
-      replyToId: "msg",
-      replyToCurrent: true,
-      isCompactionNotice: true,
-    });
-    expectBlockReplyCall(onBlockReply, 2, {
-      text: "Hook after",
-      replyToId: "msg",
-      replyToCurrent: true,
-      isCompactionNotice: true,
-    });
-    expectBlockReplyCall(onBlockReply, 3, {
-      text: "🧹 Compaction complete",
-      replyToId: "msg",
-      replyToCurrent: true,
-      isCompactionNotice: true,
-    });
+    expectNotices(
+      onBlockReply,
+      ["Hook before", "🧹 Compacting context...", "Hook after", "🧹 Compaction complete"],
+      true,
+    );
   });
 
   it("fires both notifyUser notices alongside onCompactionStart / onCompactionEnd callbacks (#87107)", async () => {
     const onBlockReply = vi.fn();
     const onCompactionStart = vi.fn();
     const onCompactionEnd = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
-      await params.onAgentEvent?.({
-        stream: "compaction",
-        data: { phase: "end", completed: true },
-      });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+    mockCompaction();
 
     const result = await executeTestTurn(
       {
@@ -273,27 +236,13 @@ describe("executeAgentTurn: compaction events", () => {
     expect(onCompactionStart).toHaveBeenCalledTimes(1);
     expect(onCompactionEnd).toHaveBeenCalledTimes(1);
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expectBlockReplyCall(onBlockReply, 0, {
-      text: "🧹 Compacting context...",
-      isCompactionNotice: true,
-    });
-    expectBlockReplyCall(onBlockReply, 1, {
-      text: "🧹 Compaction complete",
-      isCompactionNotice: true,
-    });
+    expectNotices(onBlockReply, ["🧹 Compacting context...", "🧹 Compaction complete"]);
   });
 
   it("emits an incomplete compaction notice when compaction ends without completing", async () => {
     const onBlockReply = vi.fn();
     const onCompactionEnd = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
-      await params.onAgentEvent?.({
-        stream: "compaction",
-        data: { phase: "end", completed: false },
-      });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+    mockCompaction({}, { completed: false });
 
     const result = await executeTestTurn(
       { followupRun: createNotifyUserRun(), opts: { onBlockReply, onCompactionEnd } },
@@ -302,26 +251,12 @@ describe("executeAgentTurn: compaction events", () => {
 
     expect(result.kind).toBe("success");
     expect(onCompactionEnd).toHaveBeenCalledWith({ completed: false });
-    expectBlockReplyCall(onBlockReply, 0, {
-      text: "🧹 Compacting context...",
-      isCompactionNotice: true,
-    });
-    expectBlockReplyCall(onBlockReply, 1, {
-      text: "🧹 Compaction incomplete",
-      isCompactionNotice: true,
-    });
+    expectNotices(onBlockReply, ["🧹 Compacting context...", "🧹 Compaction incomplete"]);
   });
 
   it("uses the compaction notice fallback when no block-reply dispatcher is wired", async () => {
     const onCompactionNoticePayload = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
-      await params.onAgentEvent?.({
-        stream: "compaction",
-        data: { phase: "end", completed: true },
-      });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+    mockCompaction();
 
     const result = await executeTestTurn(
       { followupRun: createNotifyUserRun() },
@@ -330,17 +265,10 @@ describe("executeAgentTurn: compaction events", () => {
 
     expect(result.kind).toBe("success");
     expect(onCompactionNoticePayload).toHaveBeenCalledTimes(2);
-    expectBlockReplyCall(onCompactionNoticePayload, 0, {
-      text: "🧹 Compacting context...",
-      replyToId: "msg",
-      replyToCurrent: true,
-      isCompactionNotice: true,
-    });
-    expectBlockReplyCall(onCompactionNoticePayload, 1, {
-      text: "🧹 Compaction complete",
-      replyToId: "msg",
-      replyToCurrent: true,
-      isCompactionNotice: true,
-    });
+    expectNotices(
+      onCompactionNoticePayload,
+      ["🧹 Compacting context...", "🧹 Compaction complete"],
+      true,
+    );
   });
 });

@@ -123,37 +123,32 @@ function BoardWidgetCellContent(
     return value?.status === "error" ? value : undefined;
   };
   const appView = createBoardMcpAppLifecycle({
-    active: () => untrack(active),
+    active,
     connected: () => connected,
-    sessionKey: () => untrack(() => props.sessionKey ?? ""),
-    widget: () => untrack(() => props.widget),
+    sessionKey: () => props.sessionKey ?? "",
+    widget: () => props.widget,
   });
   const frame = new BoardWidgetFrameOwner({
-    active: () => untrack(active),
+    active,
     connected: () => connected,
     loadingCovered: () => props.loadingCovered ?? false,
-    bridgeEnabled: () => untrack(() => props.bridgeEnabled !== false),
+    bridgeEnabled: () => props.bridgeEnabled !== false,
     context: () => context,
-    refreshFrame: () => untrack(() => props.callbacks?.frameLoadFailed),
-    reportContentHeight: (name, height) =>
-      untrack(() => props.callbacks?.reportContentHeight(name, height)),
+    refreshFrame: () => props.callbacks?.frameLoadFailed,
+    reportContentHeight: (name, height) => props.callbacks?.reportContentHeight(name, height),
     scrollBy: (deltaY) =>
       host.closest("openclaw-board-view")?.scrollBy({ top: deltaY, behavior: "auto" }),
-    requestUpdate,
     resolveFrameUrl: () => props.widgetFrameUrl,
-    widget: () => untrack(() => props.widget),
+    widget: () => props.widget,
   });
+  const frameError = projectOwner(frame.changes, () => frame.error);
   const state = createMemo(() => {
     revision();
-    const app = appView.snapshot();
     return {
-      active: app.active,
+      ...appView.snapshot(),
       error: actionError,
       pending: actionPending,
-      frameError: frame.error,
-      appView: app.state,
-      loading: app.loading,
-      nearVisible: app.nearVisible,
+      frameError: frameError.read(),
     };
   });
   const activeKinds = () => gateway.read()?.hello?.controlUiWidgetKinds ?? [];
@@ -242,51 +237,50 @@ function BoardWidgetCellContent(
         gatewayBinding(),
       ] as const,
     // Owner callbacks intentionally read the current binding captured above.
-    () =>
-      untrack(() => {
-        if (previousBoardRevision !== props.boardRevision) {
+    () => {
+      if (previousBoardRevision !== props.boardRevision) {
+        actionError = "";
+      }
+      previousBoardRevision = props.boardRevision;
+      if (previousWidget && previousWidget !== props.widget) {
+        if (
+          previousWidget.name !== props.widget?.name ||
+          previousWidget.instanceId !== props.widget?.instanceId ||
+          previousWidget.revision !== props.widget?.revision
+        ) {
           actionError = "";
         }
-        previousBoardRevision = props.boardRevision;
-        if (previousWidget && previousWidget !== props.widget) {
-          if (
-            previousWidget.name !== props.widget?.name ||
-            previousWidget.instanceId !== props.widget?.instanceId ||
-            previousWidget.revision !== props.widget?.revision
-          ) {
-            actionError = "";
-          }
-          frame.widgetChanged(previousWidget, props.widget);
-        }
-        previousWidget = props.widget;
-        frame.activityChanged();
-        for (const element of CORE_BOARD_WIDGET_ELEMENTS) {
-          loader.requestWhileActive(element, active() && contribution() === element);
-        }
-        if (props.widget?.contentKind === "mcp-app") {
-          void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
-        }
-        requestUpdate();
-      }),
+        frame.widgetChanged(previousWidget, props.widget);
+      }
+      previousWidget = props.widget;
+      frame.activityChanged();
+      for (const element of CORE_BOARD_WIDGET_ELEMENTS) {
+        loader.requestWhileActive(element, active() && contribution() === element);
+      }
+      if (props.widget?.contentKind === "mcp-app") {
+        void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
+      }
+      requestUpdate();
+    },
   );
   createEffect(
     () =>
       [
         revision(),
+        frameError.revision(),
         props.widget,
         active(),
         props.loadingCovered,
         props.bridgeEnabled,
         props.widgetFrameUrl,
       ] as const,
-    () =>
-      untrack(() => {
-        appView.synchronize(props.callbacks, widgetRoot ?? null);
-        frame.update();
-        if (props.loadingCovered && presentationReady()) {
-          host.dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
-        }
-      }),
+    () => {
+      appView.synchronize(props.callbacks, widgetRoot ?? null);
+      frame.update();
+      if (props.loadingCovered && presentationReady()) {
+        host.dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
+      }
+    },
   );
   createEffect(
     () => props.widget?.contentKind,
@@ -351,7 +345,12 @@ function BoardWidgetCellContent(
       />
     </Show>
   );
-  const Frame = () => frame.render(() => props.widget!, revision);
+  const Frame = () =>
+    frame.render(() => {
+      // Reused widget objects still change with board and gateway bindings.
+      revision();
+      return props.widget!;
+    });
   const Plugin = () => {
     const pluginId = () => pluginIdForWidgetKind(props.widget?.pluginKind);
     const key = () => `${pluginId()}/${props.widget?.pluginKind?.slice(pluginId().length + 1)}`;
@@ -465,7 +464,7 @@ function BoardWidgetCellContent(
         <BoardMcpAppContent
           accessNotice={<AccessNotice />}
           active={state().active}
-          appView={state().appView}
+          appView={state().state}
           busy={unavailable()}
           loading={state().loading}
           nearVisible={state().nearVisible}
