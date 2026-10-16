@@ -416,7 +416,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         <Show when={view().message}>
           {(message) => (
             <div
-              class={`callout ${message().kind} model-providers__installed-agent-message`}
+              class={["callout", message().kind, "model-providers__installed-agent-message"]}
               role={message().kind === "error" ? "alert" : "status"}
             >
               {message().text}

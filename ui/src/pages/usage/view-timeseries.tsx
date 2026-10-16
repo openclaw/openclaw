@@ -535,7 +535,7 @@ function TimeSeriesChart(props: {
             const x = () => (side === "left" ? model().leftHandleX : model().rightHandleX);
             return (
               <div
-                class={`chart-handle-zone chart-handle-${side}`}
+                class={["chart-handle-zone", `chart-handle-${side}`]}
                 role="slider"
                 tabindex="0"
                 aria-label={t(
@@ -591,7 +591,7 @@ function TimeSeriesChart(props: {
             <For each={USAGE_TOKEN_CATEGORIES}>
               {({ key, className }) => (
                 <div
-                  class={`cost-segment ${className}`}
+                  class={["cost-segment", className]}
                   style={{
                     width: `${(model().totalTypeTokens > 0 ? (model().filteredTokens[key] / model().totalTypeTokens) * 100 : 0).toFixed(1)}%`,
                   }}
@@ -603,7 +603,7 @@ function TimeSeriesChart(props: {
             <For each={USAGE_TOKEN_CATEGORIES}>
               {({ key, className, labelKey, hintKey }) => (
                 <div class="legend-item" title={t(hintKey)}>
-                  <span class={`legend-dot ${className}`} />
+                  <span class={["legend-dot", className]} />
                   {t(labelKey)} {formatUsageTokens(model().filteredTokens[key])}
                 </div>
               )}

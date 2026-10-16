@@ -29,6 +29,7 @@ import { createStandaloneEntrySource } from "./lib/bun-standalone-entry.mjs";
 import { rewriteStandaloneImports } from "./lib/bun-standalone-imports.mjs";
 import { createStandaloneMetadataAdapter } from "./lib/bun-standalone-metadata.mjs";
 import { createStandaloneNativeAdapter } from "./lib/bun-standalone-native.mjs";
+import { planStandalonePackageManager } from "./lib/bun-standalone-package-manager.mjs";
 import { createStandaloneRequireAdapter } from "./lib/bun-standalone-require.mjs";
 import {
   planStandaloneRuntime,
@@ -336,6 +337,7 @@ function embedded(pathname) {
   if (embeddedEntries.has(pathname)) return pathname;
   return entries[pathname] ?? entries[path.relative(root, pathname).split(path.sep).join("/")];
 }
+globalThis.__openclawStandaloneEmbeddedPath = embedded;
 ${artifacts.bootstrap}
 ${metadata.bootstrap}
 ${native.bootstrap}
@@ -548,9 +550,10 @@ const compiledEntries = result.outputs
   .filter((output) => output.path.endsWith(".js"))
   .map((output) => output.path);
 const nativeResources = native.finalize({ metafile: result.metafile, embeddedPaths });
+const packageManager = planStandalonePackageManager(runtimeRoot);
 const resourcePlan = planStandaloneRuntime(
   runtimeRoot,
-  [...nativeResources.files, ...sqlite.files],
+  [...nativeResources.files, ...sqlite.files, ...packageManager.files],
   declaredPluginAssets,
   metadata.directories,
 );
@@ -706,6 +709,7 @@ const manifest = await createStandaloneManifest({
   },
   pruning,
   sqlite: sqlite.manifest,
+  packageManager: packageManager.manifest,
 });
 fs.mkdirSync(destinationRoot);
 fs.renameSync(executable, path.join(destinationRoot, "openclaw"));

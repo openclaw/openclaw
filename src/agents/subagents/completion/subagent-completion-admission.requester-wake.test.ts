@@ -157,6 +157,43 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
+  it("settles lost operator authority without discarding child results or queuing a notice", async () => {
+    const input = armRequesterWake(records());
+    input.subagent.cleanupCompletedAt = undefined;
+    persistOwner(input);
+    const before = structuredClone(input.subagent);
+
+    await mutateRequesterCompletionBatch({
+      entries: [input.subagent],
+      operation: {
+        kind: "settle",
+        outcome: {
+          delivered: false,
+          path: "none",
+          disposition: "permanent_failure",
+          reason: "operator_authority_unavailable",
+          error: "The original operator no longer has access",
+        },
+      },
+      assertCurrent: () => {},
+      databaseOptions: { database },
+    });
+
+    database = await reopenCompletionFixtureOwners();
+    const restored = subagentRuns.get(input.subagent.runId)!;
+    expect(restored.requesterSettleWake).toBeUndefined();
+    expect(restored.execution).toEqual(before.execution);
+    expect(restored.completion).toEqual(before.completion);
+    expect(restored.delivery).toMatchObject({
+      status: "failed",
+      disposition: "permanent_failure",
+      lastError: "The original operator no longer has access",
+    });
+    expect(restored.delivery?.queueId).toBeUndefined();
+    expect(restored.suppressCompletionDelivery).toBe(true);
+    expect(readCompletionSystemEvents(database)).toEqual([]);
+  });
+
   it("settles a rejected dispatch transition after rollback without another wake", async () => {
     const input = armRequesterWake(records());
     persistOwner(input);
@@ -719,9 +756,10 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
-  it.each([false, true])(
-    "settles a pause notice across reopen (store replaced=%s)",
-    async (storeReplaced) => {
+  it.each(["delivered", "store replaced", "operator authority lost"] as const)(
+    "settles a pause notice across reopen (%s)",
+    async (settlement) => {
+      const storeReplaced = settlement === "store replaced";
       const paused = records();
       const sibling = records();
       sibling.subagent.runId = "running-sibling";
@@ -749,10 +787,16 @@ describe("persisted subagent requester wakes", () => {
         operation: {
           kind: "settle",
           outcome: {
-            delivered: !storeReplaced,
+            delivered: settlement === "delivered",
             path: "direct",
             ...(storeReplaced
               ? { storeReplaced: true, disposition: "intentional_non_delivery" as const }
+              : {}),
+            ...(settlement === "operator authority lost"
+              ? {
+                  disposition: "permanent_failure" as const,
+                  reason: "operator_authority_unavailable" as const,
+                }
               : {}),
           },
         },
@@ -761,7 +805,9 @@ describe("persisted subagent requester wakes", () => {
       });
       database = await reopenCompletionFixtureOwners();
       const restored = subagentRuns.get(paused.subagent.runId)!;
-      expect(restored.requesterSettleWake).toEqual(storeReplaced ? undefined : completionWake);
+      expect(restored.requesterSettleWake).toEqual(
+        settlement === "delivered" ? completionWake : undefined,
+      );
       expect(restored.pauseReason).toBe("sessions_yield");
       expect(restored.execution.outcome).toBeUndefined();
       expect(restored.delivery).toEqual({ status: "pending" });

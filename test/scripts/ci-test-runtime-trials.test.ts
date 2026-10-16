@@ -17,6 +17,33 @@ const nodeFile = "src/process/spawn-broker/cleanup.test.ts";
 const bunFile = "src/process/spawn-broker/context.test.ts";
 
 describe("explicit all-test runtime trials", () => {
+  it.each([
+    "src/infra/owned-directory-observation.test.ts",
+    "src/infra/tailscale-route-owner.worker.test.ts",
+    "src/gateway/session-utils.fs.display-position.test.ts",
+    "src/infra/exec-host.socket.test.ts",
+    "src/state/openclaw-database-preflight.startup-prepared.test.ts",
+    "src/state/openclaw-state-ownership.test.ts",
+  ])("keeps the blocked native contract in %s on Node", (file) => {
+    for (const policy of ["bun-all", "dual-all"] as const) {
+      expect(resolveCiTestRuntimeSelections({ targets: [file] }, policy)).toEqual([
+        { runtime: "node" },
+      ]);
+    }
+  });
+
+  it.each(["bun-all", "dual-all"] as const)(
+    "runs the test-instance cleanup contract on Bun under %s",
+    (policy) => {
+      expect(
+        resolveCiTestRuntimeSelections(
+          { targets: ["test/helpers/openclaw-test-instance.test.ts"] },
+          policy,
+        ),
+      ).toEqual([...(policy === "dual-all" ? [{ runtime: "node" }] : []), { runtime: "bun" }]);
+    },
+  );
+
   it.each(["node", "bun-compatible", "dual", "bun-all", "dual-all"] as const)(
     "accepts %s without changing the default",
     (policy) => {
@@ -151,7 +178,14 @@ describe("explicit all-test runtime trials", () => {
   });
 
   it("retains exact Node exceptions and selects broad target remainders on Bun", async () => {
-    for (const target of [nodeFile, `./${nodeFile}`, path.resolve(nodeFile)]) {
+    for (const target of [
+      nodeFile,
+      `./${nodeFile}`,
+      path.resolve(nodeFile),
+      "test/scripts/control-ui-cold-load-trace.test.ts",
+      "test/talk-browser-defaults.test.ts",
+      "src/gateway/artifact-downloads.test.ts",
+    ]) {
       expect(resolveCiTestRuntimeSelections({ targets: [target] }, "bun-all")).toEqual([
         { runtime: "node" },
       ]);

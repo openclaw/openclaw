@@ -79,6 +79,17 @@ export function isStandaloneRuntimeExecutable(executable = process.execPath) {
   return resolveStandaloneSidecarRoot(executable) !== undefined;
 }
 
+/** Disk-executed package-manager programs belong to the standalone sidecar. */
+export function resolveStandaloneNpmCliPath() {
+  const root = resolveStandaloneSidecarRoot(process.execPath);
+  return root === undefined ? undefined : path.join(root, "npm", "bin", "npm-cli.js");
+}
+
+/** A compiled Bun executable needs this mode to execute a disk program as Bun. */
+export function resolveRuntimeScriptEnv(env) {
+  return isStandaloneRuntimeExecutable() ? { ...env, BUN_BE_BUN: "1" } : { ...env };
+}
+
 /** A null entry explicitly selects a CLI command; undefined inherits the current script. */
 export function resolveOpenClawCliInvocation({
   execPath = process.execPath,

@@ -2,7 +2,6 @@ import { createEffect, createSignal, onCleanup, onSettled, untrack } from "solid
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
-import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -23,6 +22,7 @@ declare module "@solidjs/web" {
 
 export function LobsterdexPage() {
   let host!: HTMLElement;
+  const cards = new Map<string, HTMLElement>();
   const context = useApplication();
   const branding = projectSource(
     untrack(() => context.theme),
@@ -47,15 +47,8 @@ export function LobsterdexPage() {
     globalThis.clearTimeout(copyResetTimer);
   });
   onSettled(() => {
-    const prefix = "#lobsterdex-";
-    if (!location.hash.startsWith(prefix)) {
-      return undefined;
-    }
-    const palette = LOBSTER_PET_PALETTES.find(
-      (entry) => entry.id === location.hash.slice(prefix.length),
-    );
-    const card = palette ? host.querySelector<HTMLElement>(`#lobsterdex-${palette.id}`) : null;
-    if (!card) {
+    const card = cards.get(location.hash);
+    if (!card || !host.contains(card)) {
       return undefined;
     }
     const clearHighlight = (event: AnimationEvent) => {
@@ -107,6 +100,7 @@ export function LobsterdexPage() {
           <LobsterdexView
             entries={entries.read()}
             copyFeedback={copyFeedback()}
+            onCardRef={(id, element) => cards.set(`#lobsterdex-${id}`, element)}
             onCopyLink={(paletteId) => void copyLink(paletteId)}
           />
         ) : (

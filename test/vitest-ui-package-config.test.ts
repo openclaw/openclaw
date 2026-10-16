@@ -11,6 +11,7 @@ import { createFixtureLifetime } from "./helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.js";
 import { loadVitestPerformanceConfig } from "./vitest/vitest.performance-config.ts";
+import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 import { createUiIsolatedVitestConfig } from "./vitest/vitest.ui-isolated.config.ts";
 import { uiNodeDrivenBrowserTestFiles, uiTimingTestFiles } from "./vitest/vitest.ui-paths.mjs";
@@ -253,6 +254,7 @@ export default {
     include: ["*.test.ts"],
     setupFiles: [${JSON.stringify(path.join(process.cwd(), "ui/src/test-helpers/lit-warnings.setup.ts"))}],
     environment: "jsdom", isolate: false, pool: "threads", maxWorkers: 1,
+    execArgv: ${JSON.stringify(sharedVitestConfig.test.execArgv)},
     sequence: { sequencer: class extends BaseSequencer {
       sort(files) { return files.toSorted((a, b) => a.moduleId.localeCompare(b.moduleId)); }
     } },

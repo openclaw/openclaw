@@ -588,7 +588,11 @@ describe("run-node script", () => {
         trackConfig: true,
       });
       const { deps } = await trackProjectWithGit(tmp);
-      const env = { ...process.env, OPENCLAW_DEV_SOURCE_ROOT: tmp };
+      const env = {
+        ...process.env,
+        OPENCLAW_DEV_SOURCE_ROOT: tmp,
+        OPENCLAW_VITEST_RUNTIME: "node",
+      };
       await fs.appendFile(resolvePath(tmp, input), "\n");
       writeRuntimePostBuildStamp({
         cwd: tmp,

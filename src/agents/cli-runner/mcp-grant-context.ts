@@ -56,7 +56,7 @@ export function finalizeCliMcpGrant(
 }
 
 export function buildCliMcpDelegationCapabilityBinding(capability: DelegationCapability): object {
-  return capability === "report_only" ? { [cliMcpDelegationCapability]: capability } : {};
+  return capability !== "full" ? { [cliMcpDelegationCapability]: capability } : {};
 }
 
 function readCliMcpDelegationCapability(run: object): DelegationCapability | undefined {
@@ -64,7 +64,9 @@ function readCliMcpDelegationCapability(run: object): DelegationCapability | und
     return undefined;
   }
   const capability = run[cliMcpDelegationCapability];
-  return capability === "full" || capability === "report_only" ? capability : undefined;
+  return capability === "full" || capability === "report_only" || capability === "host_only"
+    ? capability
+    : undefined;
 }
 
 function buildCliMcpExecSession(

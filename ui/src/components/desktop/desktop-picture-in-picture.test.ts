@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient } from "./desktop-client.ts";
+import "./desktop-panel.ts";
 import {
   createPanel,
   mountPanel,
@@ -119,6 +120,15 @@ describe("Desktop Picture-in-Picture ownership", () => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("accepts a native close before the Solid panel mounts", () => {
+    const panel = document.createElement("openclaw-desktop-panel");
+    expect(() =>
+      panel.handleToggleRequest(
+        new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),
+      ),
+    ).not.toThrow();
   });
 
   it.each(["dock"] as const)(
@@ -242,7 +252,7 @@ describe("Desktop Picture-in-Picture ownership", () => {
     expect(disconnect).not.toHaveBeenCalled();
   });
 
-  it.each(["disconnect", "source switch", "session switch", "unmount"])(
+  it.each(["disconnect", "source switch", "session switch", "hidden", "unmount"])(
     "closes late PiP completions after %s",
     async (reason) => {
       const pending = createDeferred<Window>();
@@ -259,6 +269,10 @@ describe("Desktop Picture-in-Picture ownership", () => {
         updatePanel(panel, { requestedSource: "another-machine" });
       } else if (reason === "session switch") {
         updatePanel(panel, { sessionKey: "agent:main:another-session" });
+      } else if (reason === "hidden") {
+        updatePanel(panel, { presented: false });
+        await panel.updateComplete;
+        expect(button(panel).getAttribute("aria-busy")).toBe("true");
       } else {
         unmountPanel(panel);
       }

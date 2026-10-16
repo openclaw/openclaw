@@ -113,7 +113,7 @@ export function LogsView(props: LogsProps) {
           <div class="chip-row">
             <For each={LOG_LEVELS}>
               {(level) => (
-                <label class={`chip log-chip ${level}`}>
+                <label class={["chip log-chip", level]}>
                   <input
                     type="checkbox"
                     checked={props.levelFilters[level]}

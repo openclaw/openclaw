@@ -167,6 +167,7 @@ export async function createStandaloneManifest({
   embedded,
   pruning,
   sqlite,
+  packageManager,
 }) {
   const runtime = await describeStandaloneRuntime(path.join(outputRoot, "runtime"));
   const executable = path.join(outputRoot, "openclaw");
@@ -187,6 +188,7 @@ export async function createStandaloneManifest({
       categories,
       sidecarPlugins,
       sqlite,
+      ...(packageManager ? { packageManager } : {}),
     },
     embedded,
     pruning: pruningSummary,

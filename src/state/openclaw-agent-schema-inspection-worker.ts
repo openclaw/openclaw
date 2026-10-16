@@ -17,7 +17,6 @@ import {
   resolveSqliteInspectionSignal,
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
-import { getCanonicalSqliteTableNames } from "../infra/sqlite-schema-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { agentSchemaMetadataKey } from "./openclaw-agent-db-metadata.js";
 import { agentDatabaseValidationKey } from "./openclaw-agent-db-validation-facts.js";
@@ -29,7 +28,6 @@ import type {
   AgentSchemaInspection,
   AgentSchemaInspectionInput,
 } from "./openclaw-agent-schema-inspection.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import type {
   StateSchemaInspection,
   StateSchemaInspectionInput,
@@ -207,10 +205,6 @@ export function createAgentSchemaInspectionWorker() {
             };
           }
         }
-        if (kind === "agent" && input.requireStartupMigrationReadiness) {
-          // Only an admission miss needs comparison templates in later runtime workers.
-          getCanonicalSqliteTableNames(OPENCLAW_AGENT_SCHEMA_SQL);
-        }
         const snapshot = snapshotPath
           ? { pathname: snapshotPath, identity: readSqliteIntegrityFileIdentity(snapshotPath) }
           : undefined;
@@ -264,7 +258,6 @@ export function createAgentSchemaInspectionWorker() {
               }
               response.resolve({
                 ...stateInspection,
-                schemaContracts: message.schemaContracts,
                 inspectionErrors: stateInspection.inspectionErrors.map(
                   restoreAgentSchemaInspectionError,
                 ),

@@ -89,6 +89,51 @@ it.each(["worker", "gateway", "optional", "account"] as const)(
   },
 );
 
+it("reports missing sign-in instead of a catalog refresh", async () => {
+  const owner = createModelRuntimeChoiceOwnerFixture(custom);
+  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+  published.owner = owner;
+  const selection = await preparePublishedModelRuntimeChoice({
+    ...request,
+    cfg: custom,
+    runtimeId: "openclaw",
+  });
+  expect(selection).toEqual({
+    kind: "unavailable",
+    message:
+      'Runtime "openclaw" is not available for fixture/model: sign-in needed. Connect its provider account, or choose another model.',
+  });
+});
+
+it("points a signed-out Claude CLI route at claude auth login", async () => {
+  const entry: ModelCatalogEntry = {
+    provider: "anthropic",
+    id: "claude-fixture",
+    name: "Claude Fixture",
+    reasoning: false,
+  };
+  const cfg: OpenClawConfig = {
+    plugins: { enabled: false },
+    agents: { defaults: { models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } } } },
+  };
+  const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+    modelCatalog: { entries: [entry], routeVariants: [entry] },
+  });
+  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+  published.owner = owner;
+  const selection = await preparePublishedModelRuntimeChoice({
+    cfg,
+    agentId: "main",
+    provider: "anthropic",
+    model: "claude-fixture",
+  });
+  expect(selection).toEqual({
+    kind: "unavailable",
+    message:
+      "A runtime is not available for anthropic/claude-fixture: sign-in needed. If Claude Code is signed out, run claude auth login on the Gateway host, or choose another model.",
+  });
+});
+
 it("keeps keyless host selection after an explicit runtime reset without granting explicit availability", async () => {
   for (const agentRuntimeOverride of [undefined, "claude-cli"]) {
     expect(

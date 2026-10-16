@@ -177,17 +177,13 @@ function renderInsightList(
     error?: boolean;
   },
 ) {
-  const cardClass = ["usage-insight-card", options?.className].filter(Boolean).join(" ");
-  const listClass = [options?.error ? "usage-error-list" : "usage-list", options?.listClassName]
-    .filter(Boolean)
-    .join(" ");
   return (
-    <div class={cardClass}>
+    <div class={["usage-insight-card", options?.className]}>
       <div class="usage-insight-title">{title}</div>
       {items.length === 0 ? (
         <div class="muted">{emptyLabel}</div>
       ) : (
-        <div class={listClass}>
+        <div class={[options?.error ? "usage-error-list" : "usage-list", options?.listClassName]}>
           <For each={items}>
             {(item) =>
               options?.error ? (

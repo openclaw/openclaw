@@ -119,7 +119,10 @@ describe("models.probe", () => {
       agents: {
         defaults: {
           model: { primary: "openai/gpt-5.6", fallbacks: ["openai/gpt-5.5"] },
-          utilityModel: "openai/gpt-5.6-luna",
+          utilityModel: {
+            primary: "openai/gpt-5.6-luna",
+            fallbacks: ["local/backup"],
+          },
         },
       },
     };
@@ -134,7 +137,7 @@ describe("models.probe", () => {
       agentDir: "/tmp/agent-main",
       workspaceDir: "/tmp/workspace-main",
       providers: ["openai"],
-      modelCandidates: ["openai/gpt-5.6", "openai/gpt-5.5", "openai/gpt-5.6-luna"],
+      modelCandidates: ["openai/gpt-5.6", "openai/gpt-5.5", "openai/gpt-5.6-luna", "local/backup"],
       options: {
         provider: "openai",
         profileIds: ["work"],
@@ -162,7 +165,12 @@ describe("models.probe", () => {
 
   it("probes an explicit configured agent", async () => {
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: {}, writer: {} } },
+      agents: {
+        defaults: {
+          utilityModel: { primary: "openai/small", fallbacks: ["openai/default-backup"] },
+        },
+        entries: { main: {}, writer: { utilityModel: { fallbacks: ["openai/writer-backup"] } } },
+      },
     };
     const { options } = createOptions({ provider: "openai", agentId: "Writer" }, cfg);
 
@@ -173,6 +181,7 @@ describe("models.probe", () => {
         agentId: "writer",
         agentDir: "/tmp/agent-writer",
         workspaceDir: "/tmp/workspace-writer",
+        modelCandidates: ["openai/small", "openai/writer-backup"],
       }),
     );
   });

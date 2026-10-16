@@ -219,6 +219,17 @@ literal trigram contains, and exact cosine search. Agent transcript text search
 uses this contract; agent memory still follows the support matrix above.
 It does not enable PostgreSQL for an unported store.
 
+Owning components can register additional search definitions with
+`admitStoreSearch(connection, definition, { extension: name })` on an admitted
+worker connection. PostgreSQL installs
+the derived objects and records their definitions in one writer transaction.
+Reopening the store verifies PostgreSQL's catalog fingerprint, including these
+extensions, without recreating the indexes. Changing a registered definition,
+including its vector dimension, is refused with `SearchExtensionDefinitionChangedError`;
+restore the previous definition until the owning component provides a derived-index
+rebuild. Canonical embeddings remain unchanged. SQLite registration only binds
+the existing capability and leaves its FTS5 and vec0 lifecycle unchanged.
+
 For a store that declares search indexes, install these extensions in the
 database before opening it. The default extension namespace is `public`:
 
@@ -495,12 +506,30 @@ recovery. An update never silently ports a store or falls back to SQLite.
 Release packages declare supported engines in the optional
 `openclaw.databaseEngines` array in `package.json`, next to
 `openclaw.updateAdmissionProtocol`. An absent array means `["sqlite"]`; the
-admission protocol remains `1`. Only installations with a physical non-SQLite
-store use this additional check. A target without `postgres` is refused before
-mutation with a remedy: reverse-port to SQLite with the current compatible binary,
-or stay on the current version. SQLite-only installations keep their existing
-admission behavior. The installed driver owns this check; a candidate cannot
-repair an older driver. See [Update admission](/cli/update#candidate-owned-admission).
+admission protocol remains `1`. PostgreSQL targets also declare
+`openclaw.postgresFamilies`: the supported family IDs (`state`, `workboard`,
+`logbook`, and `team-reports`). On installations configured for PostgreSQL,
+the updater checks every selected family and retained physical store, including
+disabled plugins. Missing engine or family support refuses before stopping the
+previous Gateway or mutating data.
+Reverse-port to SQLite with the current compatible binary, or stay on the
+current version. PostgreSQL agent runtime support does not yet include a port
+and exact-backup provider. A global PostgreSQL configuration selects that family,
+so updates currently refuse it with the previous Gateway kept running until the
+agent provider is available. The four supported providers can capture and restore
+their stores independently; they do not make a full PostgreSQL-agent update safe.
+
+Shared-state preflight reads registry, plugin installation, schema-version and
+retained-agent facts through an admitted read-only PostgreSQL transaction in a
+worker. It never treats the SQLite anchor as application rows or migrates the
+source during inspection. Disposable candidate rehearsals use provider-exported
+SQLite images and a private SQLite config, so they never reconnect to the source
+PostgreSQL namespaces. Exact rollback restores the captured rows while
+preserving the current update-run history, as SQLite rollback does.
+SQLite-only installations keep their existing admission and inspection behavior.
+The installed driver owns these checks; a candidate cannot repair an older
+driver. PostgreSQL shared state has not shipped, so published-driver compatibility
+is exercised on SQLite installations. See [Update admission](/cli/update#candidate-owned-admission).
 
 ## Limits and recovery
 

@@ -1,29 +1,11 @@
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
 import type { IconName } from "../../components/solid/icon.tsx";
-import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { emptyLegacyContent, solidContent } from "../../lit/solid-content.tsx";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
-import type { SidebarPanelDefinitionParams } from "./chat-pane-embedded-types.ts";
-import {
-  BrowserPanel,
-  ClearCompanion,
-  CompanionPanel,
-  DesktopPanel,
-  DiscussionPanel,
-  LinkReaderPanel,
-  PortalPanel,
-  PresentedPaneContent,
-  ProcessesPanel,
-  SubagentsPanel,
-  TerminalPanel,
-  UnavailableDetail,
-  WorkspacePanel,
-} from "./chat-pane-embedded-view.tsx";
+import type { SidebarPanelDefinitionParams, SidebarPanelData } from "./chat-pane-embedded-types.ts";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
-import { EmbeddedPluginPanel } from "./chat-pane-plugin-panel.tsx";
 import { getSessionWorkspace } from "./components/chat-session-workspace-state.ts";
 import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
@@ -44,13 +26,13 @@ export function sidebarPanelDefinitions(
   // Metadata-only definitions have no pane context, so they describe types without offering tabs.
   const panelContext = params && {
     ...params,
-    dashboardAvailable: () => params.dashboard !== emptyLegacyContent,
+    dashboardAvailable: () => params.dashboard !== null,
   };
   const definePanel = (
     slot: Exclude<SidebarSlotId, `plugin:${string}` | "link-reader">,
     icon: IconName,
-    content: SidebarPanelDefinition["content"],
-    actions?: Pick<SidebarPanelDefinition, "headerAction" | "headerLink">,
+    hasContent = true,
+    actions?: Pick<SidebarPanelDefinition, "headerAction" | "headerActionView" | "headerLink">,
   ): SidebarPanelDefinition => {
     const textKey = slot === "detail" ? "review" : slot === "workspace" ? "files" : slot;
     return {
@@ -74,8 +56,9 @@ export function sidebarPanelDefinitions(
             ? panelContext.subagentsAvailable
             : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
       ),
-      content,
-      loading: solidContent(PanelLoadingSkeleton, {
+      content: null,
+      view: hasContent ? data : undefined,
+      loading: {
         variant:
           textKey === "conversation" || textKey === "companion"
             ? "chat"
@@ -87,31 +70,18 @@ export function sidebarPanelDefinitions(
                   ? "board"
                   : textKey,
         label: t(textKey === "desktop" ? "desktop.connecting" : "common.loading"),
-      }),
+      },
       empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
       ...actions,
       shortcut: SIDEBAR_PANEL_SHORTCUTS[slot]?.combo,
     };
   };
-  const terminal = state?.terminalAvailable && params ? solidContent(TerminalPanel, params) : null;
-  const browser =
-    state?.browserPanelAvailable && params ? solidContent(BrowserPanel, params) : null;
-  const companion = params ? solidContent(CompanionPanel, params) : null;
-  const desktop = params?.desktopAvailable ? solidContent(DesktopPanel, params) : null;
-  const discussion = params?.discussion ? solidContent(DiscussionPanel, params) : null;
-  const portal = params ? solidContent(PortalPanel, params) : null;
-  const workspace = state ? getSessionWorkspace(state) : null;
-  // The region owns mounting and visibility. Hidden Review tabs must keep the
-  // same cached diff loader so their live content and selection survive.
-  const detailContent =
-    state?.sidebarContent ?? (state ? resolveSessionDiffSidebarContent(state) : null);
-  // The region mounts only tabs in the layout. Rendering Review starts its lazy
-  // panel import, so default diff content must not build it before a tab exists.
-  const detailTabPresent = layoutPanels.some((panel) => panel.slot === "detail");
-  const workspaceContent =
-    state && params && workspace
-      ? solidContent(WorkspacePanel, { ...params, workspaceState: workspace })
-      : (params?.workspace ?? null);
+  const data: SidebarPanelData | undefined = params && {
+    ...params,
+    workspaceState: getSessionWorkspace(params.state),
+    detailContent: params.state.sidebarContent ?? resolveSessionDiffSidebarContent(params.state),
+    detailPresentation: params.state.sidebarContent ? (params.panePresentation ?? true) : true,
+  };
   const pluginPanels = new Map<SidebarSlotId, ControlUiRegistration<ControlUiPanel> | undefined>(
     (params?.pluginPanels ?? []).map((entry) => [`plugin:${entry.key}`, entry]),
   );
@@ -122,65 +92,43 @@ export function sidebarPanelDefinitions(
     }
   }
   return [
-    definePanel("conversation", "messageSquare", emptyLegacyContent),
-    definePanel("subagents", "bot", params ? solidContent(SubagentsPanel, params) : null),
-    definePanel("processes", "terminal", params ? solidContent(ProcessesPanel, params) : null),
-    definePanel(
-      "detail",
-      "diff",
-      detailContent?.kind === "loading"
-        ? solidContent(PanelLoadingSkeleton, { variant: "review", label: t("common.loading") })
-        : detailContent?.kind === "unavailable"
-          ? solidContent(UnavailableDetail, { message: detailContent.message })
-          : detailContent && params && detailTabPresent
-            ? solidContent(PresentedPaneContent, {
-                presentation: state?.sidebarContent ? (params.panePresentation ?? true) : true,
-                content: params.renderDetail(detailContent),
-              })
-            : null,
-    ),
-    definePanel("terminal", "terminal", terminal),
-    definePanel("browser", "globe", browser),
+    definePanel("conversation", "messageSquare", false),
+    definePanel("subagents", "bot"),
+    definePanel("processes", "terminal"),
+    definePanel("detail", "diff", Boolean(data?.detailContent)),
+    definePanel("terminal", "terminal", Boolean(state?.terminalAvailable)),
+    definePanel("browser", "globe", Boolean(state?.browserPanelAvailable)),
     {
       slot: "link-reader",
       label: t("linkReader.title"),
       icon: "link",
       available: Boolean(params?.linkReaders?.length),
-      content: params ? solidContent(LinkReaderPanel, params) : null,
-      loading: solidContent(PanelLoadingSkeleton, {
-        variant: "files",
-        label: t("linkReader.loadingPreview"),
-      }),
+      content: null,
+      view: data,
+      loading: { variant: "files", label: t("linkReader.loadingPreview") },
       empty: { description: t("linkReader.urlPlaceholder") },
     },
-    definePanel("portal", "globe", portal),
-    definePanel("workspace", "fileText", workspaceContent),
-    definePanel("companion", "messageSquarePlus", companion, {
-      headerAction: params ? solidContent(ClearCompanion, params) : undefined,
-    }),
-    definePanel("desktop", "monitor", desktop, {
+    definePanel("portal", "globe"),
+    definePanel("workspace", "fileText"),
+    definePanel("companion", "messageSquarePlus", true, { headerActionView: params }),
+    definePanel("desktop", "monitor", Boolean(params?.desktopAvailable), {
       headerLink: panelExternalLink(params?.desktopFocusHref, t("desktop.openWindow")),
     }),
-    definePanel("discussion", "messageSquare", discussion, {
+    definePanel("discussion", "messageSquare", Boolean(params?.discussion), {
       headerLink: panelExternalLink(
         params?.discussionOpenUrl,
         t("chat.sessionDiscussion.openExternal"),
       ),
     }),
-    definePanel("dashboard", "layoutDashboard", params?.dashboard ?? null),
+    definePanel("dashboard", "layoutDashboard", Boolean(params?.dashboard)),
     ...[...pluginPanels].map(([slot, entry]): SidebarPanelDefinition => ({
       slot,
       label: entry?.value.label ?? slot.slice("plugin:".length),
       icon: "plug",
       available: entry !== undefined,
-      content: entry
-        ? solidContent(EmbeddedPluginPanel, {
-            contributionKey: entry.key,
-            props: { sessionKey: state?.sessionKey ?? "", agentId: params?.agentId ?? undefined },
-            presentation: params?.isPluginPanelPresented(slot) ?? true,
-          })
-        : null,
-      loading: solidContent(PanelLoadingSkeleton, { variant: "files", label: t("common.loading") }),
+      content: null,
+      view: entry ? data : undefined,
+      loading: { variant: "files", label: t("common.loading") },
       empty: { description: entry?.value.label ?? t("pluginTabs.unavailableSubtitle") },
     })),
   ];

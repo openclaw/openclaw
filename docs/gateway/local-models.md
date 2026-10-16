@@ -140,6 +140,20 @@ Hosted MiniMax/Kimi/GLM variants also exist on OpenRouter with region-pinned end
 
 MLX (`mlx_lm.server`), vLLM, SGLang, LiteLLM, OAI-proxy, or any custom gateway works if it exposes an OpenAI-style `/v1/chat/completions` endpoint. Use `openai-completions` unless the backend explicitly documents `/v1/responses` support.
 
+To configure one through the wizard, run `openclaw onboard`, choose **Custom provider**, and enter its base URL (for example, `http://127.0.0.1:8000/v1`). Setup lists models from `/v1/models` so you can select one, with manual model ID entry available if discovery fails or the desired model is not listed.
+
+For non-interactive setup, omit `--custom-model-id` to save all discovered models and use the first as the default:
+
+```bash
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --auth-choice custom-api-key \
+  --custom-base-url "http://127.0.0.1:8000/v1" \
+  --custom-provider-id local \
+  --custom-compatibility openai
+```
+
+Add `--custom-api-key` if the server requires authentication. Discovery uses that key and a five-second timeout. To select a specific model or recover from unavailable, empty, or invalid discovery, add `--custom-model-id "my-local-model"`; an explicit ID skips discovery. For manual configuration, use:
+
 ```json5
 {
   agents: {

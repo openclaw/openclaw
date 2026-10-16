@@ -135,15 +135,6 @@ export class RestScheduler<TData> {
     return bucket;
   }
 
-  private hasBucketReference(key: string): boolean {
-    for (const bucketKey of this.routeBuckets.values()) {
-      if (bucketKey === key) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   private isBucketRateLimited(bucket: BucketState<TData>, now = Date.now()): boolean {
     return bucket.remaining === 0 && bucket.resetAt > now;
   }
@@ -312,12 +303,9 @@ export class RestScheduler<TData> {
       for (const routeKey of bucket.routeKeys) {
         if (this.routeBuckets.get(routeKey) === key) {
           this.routeBuckets.delete(routeKey);
-          bucket.routeKeys.delete(routeKey);
         }
       }
-      if (this.routeBuckets.get(key) !== key && !this.hasBucketReference(key)) {
-        this.buckets.delete(key);
-      }
+      this.buckets.delete(key);
     }
   }
 
