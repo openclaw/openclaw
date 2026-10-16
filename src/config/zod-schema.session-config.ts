@@ -1,4 +1,5 @@
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { SESSION_COMMUNICATION_MODES } from "../../packages/gateway-protocol/src/session-communication.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
@@ -33,6 +34,16 @@ const PositiveDurationSchema = z.union([z.string(), z.number()]).superRefine((va
 
 const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 
+// Fallback names become session slugs, worktree directories, and `openclaw/<name>`
+// branches. Letters only keeps nouns distinct from numeric collision suffixes, and
+// 20 characters keeps three words plus suffixes within the 64-character name cap.
+const FallbackNameNounSchema = z
+  .string()
+  .regex(
+    /^[a-z]{1,20}$/,
+    "fallback name nouns must be one lowercase ASCII word of 1-20 letters (a-z), e.g. otter",
+  );
+
 export const SessionSchema = z
   .strictObject({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
@@ -41,6 +52,10 @@ export const SessionSchema = z
       .optional(),
     groupScope: z.enum(["main", "per-group"]).optional(),
     notifyOnCreate: z.boolean().optional(),
+    fallbackNameNouns: z
+      .array(FallbackNameNounSchema)
+      .transform((nouns) => uniqueValues(nouns))
+      .optional(),
     identityLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
     reset: SessionResetConfigSchema.optional(),

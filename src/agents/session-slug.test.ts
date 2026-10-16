@@ -29,6 +29,27 @@ describe("session slug", () => {
     expect(createCrustaceanSlug()).toBe("amber-barnacle");
   });
 
+  it.each([undefined, []])("keeps crustacean nouns when configured nouns are %j", (nouns) => {
+    randomMocks.generateSecureInt.mockReturnValue(0);
+    expect(createCrustaceanSlug({ nouns })).toBe("amber-barnacle");
+  });
+
+  it("draws fallback nouns from a custom list", () => {
+    randomMocks.generateSecureInt.mockReturnValueOnce(0).mockReturnValueOnce(1);
+    expect(createCrustaceanSlug({ nouns: ["falcon", "otter", "badger"] })).toBe("amber-otter");
+  });
+
+  it("applies collision numbering and three-word fallbacks to custom nouns", () => {
+    randomMocks.generateSecureInt.mockReturnValue(0);
+    const nouns = ["falcon"];
+    expect(createCrustaceanSlug({ nouns, isTaken: (id) => id === "amber-falcon" })).toBe(
+      "amber-falcon-2",
+    );
+    expect(createCrustaceanSlug({ nouns, isTaken: (id) => /^amber-falcon(-\d+)?$/.test(id) })).toBe(
+      "amber-falcon-falcon",
+    );
+  });
+
   it("adds a numeric suffix when the base slug is taken", () => {
     randomMocks.generateSecureInt.mockReturnValue(0);
     const slug = createSessionSlug((id) => id === "amber-atlas");
