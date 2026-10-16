@@ -45,29 +45,22 @@ async function readAnchor(state: OpenClawTestState): Promise<Anchor | undefined>
     }
     throw error;
   }
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
-  try {
-    expect(
-      db
-        .prepare(
-          "SELECT name FROM sqlite_master WHERE name IN ('schema_meta', 'config_machine_state')",
-        )
-        .all(),
-    ).toEqual([]);
-    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'openclaw_engine_anchor'").get()) {
-      return undefined;
-    }
-    const rows = db.prepare("SELECT store_id, engine, schema FROM openclaw_engine_anchor").all();
-    expect(rows).toHaveLength(1);
-    const row = rows[0];
-    expect(row?.engine).toBe("postgres");
-    if (typeof row?.store_id !== "string" || typeof row.schema !== "string") {
-      throw new Error("PostgreSQL bootstrap did not persist a complete anchor identity");
-    }
-    return { storeId: row.store_id, namespace: row.schema };
-  } finally {
-    db.close();
+  using db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  const sqliteState = db.prepare(
+    "SELECT name FROM sqlite_master WHERE name IN ('schema_meta', 'config_machine_state')",
+  );
+  expect(sqliteState.all()).toEqual([]);
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'openclaw_engine_anchor'").get()) {
+    return undefined;
   }
+  const rows = db.prepare("SELECT store_id, engine, schema FROM openclaw_engine_anchor").all();
+  expect(rows).toHaveLength(1);
+  const row = rows[0];
+  expect(row?.engine).toBe("postgres");
+  if (typeof row?.store_id !== "string" || typeof row.schema !== "string") {
+    throw new Error("PostgreSQL bootstrap did not persist a complete anchor identity");
+  }
+  return { storeId: row.store_id, namespace: row.schema };
 }
 
 async function bootstrap(): Promise<ConfigFileSnapshot> {
@@ -100,13 +93,8 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
   const client = new pg.Client({ connectionString: connection });
   let state: OpenClawTestState | undefined;
 
-  beforeAll(async () => {
-    await client.connect();
-  });
-
-  afterAll(async () => {
-    await client.end();
-  });
+  beforeAll(() => client.connect());
+  afterAll(() => client.end());
 
   afterEach(async () => {
     clearSecretsRuntimeSnapshot();
@@ -219,25 +207,19 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
     const current = await fixture();
     const pathname = resolveOpenClawStateSqlitePath(current.env);
     await fs.mkdir(current.statePath("state"), { recursive: true });
-    const original = openNodeSqliteDatabase(pathname);
-    try {
+    {
+      using original = openNodeSqliteDatabase(pathname);
       original.exec("CREATE TABLE existing_data (value TEXT NOT NULL)");
       original.prepare("INSERT INTO existing_data (value) VALUES (?)").run("preserved");
-    } finally {
-      original.close();
     }
 
     await expect(bootstrap()).rejects.toThrow(/existing SQLite[\s\S]*openclaw database port/iu);
     await closeStateDatabaseForTest();
     expect(await readAnchor(current)).toBeUndefined();
-    const unchanged = openNodeSqliteDatabase(pathname, { readOnly: true });
-    try {
-      expect(unchanged.prepare("SELECT value FROM existing_data").all()).toEqual([
-        { value: "preserved" },
-      ]);
-    } finally {
-      unchanged.close();
-    }
+    using unchanged = openNodeSqliteDatabase(pathname, { readOnly: true });
+    expect(unchanged.prepare("SELECT value FROM existing_data").all()).toEqual([
+      { value: "preserved" },
+    ]);
   });
 
   it("acquires, renews, publishes, and releases Gateway ownership in PostgreSQL", async () => {

@@ -34,6 +34,50 @@ import {
 } from "./server/readiness.js";
 import { withTempConfig } from "./test-temp-config.js";
 
+type ServerFixture = Parameters<typeof withGatewayServer>[0];
+function withProbeServer(
+  overrides: ServerFixture["overrides"],
+  run: ServerFixture["run"],
+  resolvedAuth = AUTH_NONE,
+) {
+  return withGatewayServer({ prefix: "http-probe", resolvedAuth, overrides, run });
+}
+
+async function expectProbe(
+  server: Parameters<typeof sendRequest>[0],
+  request: string | Parameters<typeof sendRequest>[1],
+  status: number,
+  body: unknown,
+  exact = false,
+) {
+  const response = await sendRequest(
+    server,
+    typeof request === "string" ? { path: request } : request,
+  );
+  expect(response.res.statusCode).toBe(status);
+  if (exact) {
+    expect(JSON.parse(response.getBody())).toEqual(body);
+  } else {
+    expect(JSON.parse(response.getBody())).toMatchObject(body);
+  }
+}
+
+const idleInspectors = {
+  getQueueSize: () => 0,
+  getPendingReplies: () => 0,
+  getEmbeddedRuns: () => 0,
+  getCronRuns: () => 0,
+  getAgentRuns: () => 0,
+  getAcpRuns: () => 0,
+  getMediaRuns: () => 0,
+  getSessionAdmissions: () => 0,
+  getSessionMutations: () => 0,
+  getChatRuns: () => 0,
+  getQueuedTurns: () => 0,
+  getTerminalPersistence: () => 0,
+  getTerminalSessions: () => 0,
+};
+
 async function withMarkedControlUiRoot(run: (root: string) => Promise<void>): Promise<void> {
   const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-http-routing-"));
   try {
@@ -48,10 +92,8 @@ describe("startup plugin HTTP routing", () => {
   it("uses Accept to route only the unclaimed Control UI SPA fallback", async () => {
     await withMarkedControlUiRoot(async (controlUiRoot) => {
       let sidecarsReady = false;
-      await withGatewayServer({
-        prefix: "startup-plugin-get-accept-root-control-ui",
-        resolvedAuth: AUTH_NONE,
-        overrides: {
+      await withProbeServer(
+        {
           controlUiEnabled: true,
           controlUiBasePath: "",
           controlUiRoot: { kind: "resolved", path: controlUiRoot },
@@ -59,7 +101,7 @@ describe("startup plugin HTTP routing", () => {
           shouldEnforcePluginGatewayAuth: () => false,
           isStartupPluginRuntimeReady: () => sidecarsReady,
         },
-        run: async (server) => {
+        async (server) => {
           const htmlCases = [
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "*/*",
@@ -125,7 +167,7 @@ describe("startup plugin HTTP routing", () => {
             }
           }
         },
-      });
+      );
     });
   });
 });
@@ -147,35 +189,30 @@ describe("standalone MCP App HTTP routing", () => {
       enabled: true,
       requestPath: "/__openclaw__/mcp-app/other",
     },
-  ])(
-    "returns 404 for the $name instead of Control UI HTML",
-    async ({ name, enabled, requestPath }) => {
-      await withMarkedControlUiRoot(async (controlUiRoot) => {
-        await withGatewayServer({
-          prefix: `mcp-app-routing-${name}`,
-          resolvedAuth: AUTH_NONE,
-          overrides: {
-            controlUiEnabled: true,
-            controlUiBasePath: "",
-            controlUiRoot: { kind: "resolved", path: controlUiRoot },
-            getRuntimeConfig: () => ({
-              gateway: { trustedProxies: [] },
-              mcp: { apps: { enabled } },
-            }),
-          },
-          run: async (server) => {
-            const { res, getBody } = await sendRequest(server, {
-              path: requestPath,
-              method: "GET",
-            });
+  ])("returns 404 for the $name instead of Control UI HTML", async ({ enabled, requestPath }) => {
+    await withMarkedControlUiRoot(async (controlUiRoot) => {
+      await withProbeServer(
+        {
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "resolved", path: controlUiRoot },
+          getRuntimeConfig: () => ({
+            gateway: { trustedProxies: [] },
+            mcp: { apps: { enabled } },
+          }),
+        },
+        async (server) => {
+          const { res, getBody } = await sendRequest(server, {
+            path: requestPath,
+            method: "GET",
+          });
 
-            expect(res.statusCode).toBe(404);
-            expect(getBody()).toBe("Not Found");
-          },
-        });
-      });
-    },
-  );
+          expect(res.statusCode).toBe(404);
+          expect(getBody()).toBe("Not Found");
+        },
+      );
+    });
+  });
 });
 
 describe("gateway probe endpoints", () => {
@@ -186,19 +223,15 @@ describe("gateway probe endpoints", () => {
       uptimeMs: 1_000,
     });
     await withMarkedControlUiRoot(async (controlUiRoot) => {
-      await withGatewayServer({
-        prefix: "probe-namespace-root-control-ui",
-        resolvedAuth: AUTH_NONE,
-        overrides: {
+      await withProbeServer(
+        {
           controlUiEnabled: true,
           controlUiBasePath: "",
           controlUiRoot: { kind: "resolved", path: controlUiRoot },
           getReadiness,
         },
-        run: async (server) => {
-          const exact = await sendRequest(server, { path: "/readyz" });
-          expect(exact.res.statusCode).toBe(503);
-          expect(JSON.parse(exact.getBody())).toMatchObject({ ready: false });
+        async (server) => {
+          await expectProbe(server, "/readyz", 503, { ready: false });
 
           for (const routePath of [
             "/health/",
@@ -213,7 +246,7 @@ describe("gateway probe endpoints", () => {
             expect(getBody(), routePath).toBe("Not Found");
           }
         },
-      });
+      );
     });
   });
 
@@ -229,66 +262,48 @@ describe("gateway probe endpoints", () => {
       getGatewayDraining: isGatewayDraining,
       cacheTtlMs: 0,
     });
-
     try {
-      await withGatewayServer({
-        prefix: "probe-suspension-lease",
-        resolvedAuth: AUTH_NONE,
-        overrides: { getReadiness, openAiChatCompletionsEnabled: true },
-        run: async (server) => {
+      await withProbeServer(
+        { getReadiness, openAiChatCompletionsEnabled: true },
+        async (server) => {
           const prepared = prepareGatewaySuspend({
             requestId: "request-readiness-probe",
             pauseScheduling: vi.fn(),
             resumeScheduling: vi.fn(),
             createSuspensionId: () => "suspension-readiness-probe",
-            inspect: {
-              getQueueSize: () => 0,
-              getPendingReplies: () => 0,
-              getEmbeddedRuns: () => 0,
-              getCronRuns: () => 0,
-              getAgentRuns: () => 0,
-              getAcpRuns: () => 0,
-              getMediaRuns: () => 0,
-              getRootRequests: () => 0,
-              getSessionAdmissions: () => 0,
-              getSessionMutations: () => 0,
-              getChatRuns: () => 0,
-              getQueuedTurns: () => 0,
-              getTerminalPersistence: () => 0,
-              getTerminalSessions: () => 0,
-            },
+            inspect: { ...idleInspectors, getRootRequests: () => 0 },
           });
           if (prepared.status !== "ready") {
             throw new Error(`expected prepared suspension, received ${prepared.status}`);
           }
 
-          const health = await sendRequest(server, { path: "/healthz" });
-          expect(health.res.statusCode).toBe(200);
-          expect(JSON.parse(health.getBody())).toEqual({ ok: true, status: "live" });
+          await expectProbe(server, "/healthz", 200, { ok: true, status: "live" }, true);
 
-          const suspendedReadiness = await sendRequest(server, { path: "/readyz" });
-          expect(suspendedReadiness.res.statusCode).toBe(503);
-          expect(JSON.parse(suspendedReadiness.getBody())).toMatchObject({
+          await expectProbe(server, "/readyz", 503, {
             ready: false,
             failing: ["gateway-draining"],
           });
 
-          const blockedChat = await sendRequest(server, {
-            path: "/v1/chat/completions",
-            method: "POST",
-          });
-          expect(blockedChat.res.statusCode).toBe(503);
-          expect(JSON.parse(blockedChat.getBody())).toMatchObject({
-            error: { code: "gateway_unavailable" },
-          });
+          await expectProbe(
+            server,
+            {
+              path: "/v1/chat/completions",
+              method: "POST",
+            },
+            503,
+            {
+              error: { code: "gateway_unavailable" },
+            },
+          );
 
-          const blockedBoard = await sendRequest(server, {
-            path: "/__openclaw__/board/agent%3Amain%3Amain/status/index.html?bt=garbage",
-          });
-          expect(blockedBoard.res.statusCode).toBe(503);
-          expect(JSON.parse(blockedBoard.getBody())).toMatchObject({
-            error: { code: "gateway_unavailable" },
-          });
+          await expectProbe(
+            server,
+            "/__openclaw__/board/agent%3Amain%3Amain/status/index.html?bt=garbage",
+            503,
+            {
+              error: { code: "gateway_unavailable" },
+            },
+          );
 
           expect(resumeGatewaySuspend(prepared.suspensionId)).toEqual({
             ok: true,
@@ -296,14 +311,12 @@ describe("gateway probe endpoints", () => {
             resumed: true,
           });
 
-          const resumedReadiness = await sendRequest(server, { path: "/readyz" });
-          expect(resumedReadiness.res.statusCode).toBe(200);
-          expect(JSON.parse(resumedReadiness.getBody())).toMatchObject({
+          await expectProbe(server, "/readyz", 200, {
             ready: true,
             failing: [],
           });
         },
-      });
+      );
     } finally {
       resetGatewayWorkAdmission();
     }
@@ -326,50 +339,30 @@ describe("gateway probe endpoints", () => {
       res.end("ok");
       return true;
     });
-
     try {
-      await withGatewayServer({
-        prefix: "probe-http-work-admission",
-        resolvedAuth: AUTH_NONE,
-        overrides: { handleWatchNodeRequest },
-        run: async (server) => {
-          const request = createRequest({ path: "/api/nodes/watch/node-1" });
-          const response = createResponse();
-          const pendingRequest = dispatchRequest(server, request, response.res);
-          await watchStarted;
-          expect(getActiveGatewayRootWorkCount()).toBe(1);
+      await withProbeServer({ handleWatchNodeRequest }, async (server) => {
+        const request = createRequest({ path: "/api/nodes/watch/node-1" });
+        const response = createResponse();
+        const pendingRequest = dispatchRequest(server, request, response.res);
+        await watchStarted;
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
 
-          const prepared = prepareGatewaySuspend({
-            requestId: "request-http-work",
-            pauseScheduling: vi.fn(),
-            resumeScheduling: vi.fn(),
-            inspect: {
-              getQueueSize: () => 0,
-              getPendingReplies: () => 0,
-              getEmbeddedRuns: () => 0,
-              getCronRuns: () => 0,
-              getAgentRuns: () => 0,
-              getAcpRuns: () => 0,
-              getMediaRuns: () => 0,
-              getSessionAdmissions: () => 0,
-              getSessionMutations: () => 0,
-              getChatRuns: () => 0,
-              getQueuedTurns: () => 0,
-              getTerminalPersistence: () => 0,
-              getTerminalSessions: () => 0,
-            },
-          });
-          expect(prepared).toMatchObject({
-            status: "busy",
-            reason: "active-work",
-            activeCount: 1,
-          });
+        const prepared = prepareGatewaySuspend({
+          requestId: "request-http-work",
+          pauseScheduling: vi.fn(),
+          resumeScheduling: vi.fn(),
+          inspect: idleInspectors,
+        });
+        expect(prepared).toMatchObject({
+          status: "busy",
+          reason: "active-work",
+          activeCount: 1,
+        });
 
-          releaseWatch();
-          await pendingRequest;
-          expect(response.res.statusCode).toBe(200);
-          await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-        },
+        releaseWatch();
+        await pendingRequest;
+        expect(response.res.statusCode).toBe(200);
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       });
     } finally {
       releaseWatch();
@@ -380,12 +373,9 @@ describe("gateway probe endpoints", () => {
   it("rejects unattributable proxy ingress before hooks and watch-node handlers", async () => {
     const handleHooksRequest = vi.fn(async () => true);
     const handleWatchNodeRequest = vi.fn(async () => true);
-
-    await withGatewayServer({
-      prefix: "probe-unattributable-owned-routes",
-      resolvedAuth: AUTH_TOKEN,
-      overrides: { handleHooksRequest, handleWatchNodeRequest },
-      run: async (server) => {
+    await withProbeServer(
+      { handleHooksRequest, handleWatchNodeRequest },
+      async (server) => {
         for (const path of ["/hooks/test", "/api/nodes/watch/node-1"]) {
           const { res, getBody } = await sendRequest(server, {
             path,
@@ -396,8 +386,8 @@ describe("gateway probe endpoints", () => {
           expect(getBody(), path).toContain("proxy_attribution_required");
         }
       },
-    });
-
+      AUTH_TOKEN,
+    );
     expect(handleHooksRequest).not.toHaveBeenCalled();
     expect(handleWatchNodeRequest).not.toHaveBeenCalled();
   });
@@ -409,16 +399,12 @@ describe("gateway probe endpoints", () => {
       uptimeMs: 8_000,
     });
     let currentAuth = AUTH_TOKEN;
-
-    await withGatewayServer({
-      prefix: "probe-remote-rotated-auth",
-      // `resolvedAuth` remains the static fallback; `getResolvedAuth` drives the rotated value.
-      resolvedAuth: AUTH_TOKEN,
-      overrides: {
+    await withProbeServer(
+      {
         getReadiness,
         getResolvedAuth: () => currentAuth,
       },
-      run: async (server) => {
+      async (server) => {
         const sendReady = async (authorization: string) => {
           const { res, getBody } = await sendRequest(server, {
             path: "/ready",
@@ -456,7 +442,8 @@ describe("gateway probe endpoints", () => {
           },
         });
       },
-    });
+      AUTH_TOKEN,
+    );
   });
 
   it("hides readiness details when trusted-proxy auth violates browser origin policy", async () => {
@@ -465,7 +452,6 @@ describe("gateway probe endpoints", () => {
       failing: ["discord", "telegram"],
       uptimeMs: 8_000,
     });
-
     await withTempConfig({
       prefix: "probe-remote-origin-rejected",
       cfg: {
@@ -519,17 +505,11 @@ describe("gateway probe endpoints", () => {
     const getReadiness: ReadinessChecker = () => {
       throw new Error("boom");
     };
+    await withProbeServer({ getReadiness }, async (server) => {
+      const { res, getBody } = await sendRequest(server, { path: "/ready" });
 
-    await withGatewayServer({
-      prefix: "probe-throws",
-      resolvedAuth: AUTH_NONE,
-      overrides: { getReadiness },
-      run: async (server) => {
-        const { res, getBody } = await sendRequest(server, { path: "/ready" });
-
-        expect(res.statusCode).toBe(503);
-        expect(JSON.parse(getBody())).toEqual({ ready: false, failing: ["internal"], uptimeMs: 0 });
-      },
+      expect(res.statusCode).toBe(503);
+      expect(JSON.parse(getBody())).toEqual({ ready: false, failing: ["internal"], uptimeMs: 0 });
     });
   });
 
@@ -575,95 +555,71 @@ describe("gateway probe endpoints", () => {
       ...startupDeps,
       cacheTtlMs: 0,
     });
+    await withProbeServer({ getReadiness, getStartup }, async (server) => {
+      await expectProbe(server, "/startupz", 503, {
+        ok: false,
+        status: "starting",
+        version: resolveRuntimeServiceVersion(process.env),
+        uptimeMs: expect.any(Number),
+        pendingReason: "plugin-convergence",
+      });
 
-    await withGatewayServer({
-      prefix: "probe-startup-lifecycle",
-      resolvedAuth: AUTH_NONE,
-      overrides: { getReadiness, getStartup },
-      run: async (server) => {
-        const starting = await sendRequest(server, { path: "/startupz" });
-        expect(starting.res.statusCode).toBe(503);
-        expect(JSON.parse(starting.getBody())).toMatchObject({
-          ok: false,
-          status: "starting",
-          version: resolveRuntimeServiceVersion(process.env),
-          uptimeMs: expect.any(Number),
-          pendingReason: "plugin-convergence",
-        });
+      gatewayDraining = true;
+      await expectProbe(server, "/startupz", 503, {
+        ok: false,
+        status: "draining",
+        version: resolveRuntimeServiceVersion(process.env),
+        uptimeMs: expect.any(Number),
+      });
 
-        gatewayDraining = true;
-        const drainingDuringStartup = await sendRequest(server, { path: "/startupz" });
-        expect(drainingDuringStartup.res.statusCode).toBe(503);
-        expect(JSON.parse(drainingDuringStartup.getBody())).toMatchObject({
-          ok: false,
-          status: "draining",
-          version: resolveRuntimeServiceVersion(process.env),
-          uptimeMs: expect.any(Number),
-        });
+      await expectProbe(server, "/readyz", 503, {
+        ready: false,
+        failing: ["gateway-draining"],
+      });
+      gatewayDraining = false;
 
-        const drainingReadiness = await sendRequest(server, { path: "/readyz" });
-        expect(drainingReadiness.res.statusCode).toBe(503);
-        expect(JSON.parse(drainingReadiness.getBody())).toMatchObject({
-          ready: false,
-          failing: ["gateway-draining"],
-        });
-        gatewayDraining = false;
+      startupPending = false;
+      await expectProbe(server, "/startupz", 503, {
+        ok: false,
+        status: "starting",
+        pendingReason: "agent-database-inspection",
+      });
+      const readyWhileInspecting = await sendRequest(server, { path: "/readyz" });
+      expect(readyWhileInspecting.res.statusCode).toBe(200);
+      const liveWhileInspecting = await sendRequest(server, { path: "/healthz" });
+      expect(liveWhileInspecting.res.statusCode).toBe(200);
 
-        startupPending = false;
-        const inspecting = await sendRequest(server, { path: "/startupz" });
-        expect(inspecting.res.statusCode).toBe(503);
-        expect(JSON.parse(inspecting.getBody())).toMatchObject({
-          ok: false,
-          status: "starting",
-          pendingReason: "agent-database-inspection",
-        });
-        const readyWhileInspecting = await sendRequest(server, { path: "/readyz" });
-        expect(readyWhileInspecting.res.statusCode).toBe(200);
-        const liveWhileInspecting = await sendRequest(server, { path: "/healthz" });
-        expect(liveWhileInspecting.res.statusCode).toBe(200);
+      refusals = [createAgentDatabaseInspectionRefusal({ ...pending, pending: false })];
+      await expectProbe(server, "/startupz", 200, {
+        ok: true,
+        status: "started",
+        version: resolveRuntimeServiceVersion(process.env),
+        uptimeMs: expect.any(Number),
+      });
 
-        refusals = [createAgentDatabaseInspectionRefusal({ ...pending, pending: false })];
-        const started = await sendRequest(server, { path: "/startupz" });
-        expect(started.res.statusCode).toBe(200);
-        expect(JSON.parse(started.getBody())).toMatchObject({
-          ok: true,
-          status: "started",
-          version: resolveRuntimeServiceVersion(process.env),
-          uptimeMs: expect.any(Number),
-        });
+      refusals = [];
+      account.lifecycle = "blocked";
+      account.running = false;
+      account.connected = false;
+      account.linked = false;
+      account.terminalDisconnect = true;
+      await expectProbe(server, "/readyz", 503, {
+        ready: false,
+        failing: ["whatsapp"],
+      });
 
-        refusals = [];
-        account.lifecycle = "blocked";
-        account.running = false;
-        account.connected = false;
-        account.linked = false;
-        account.terminalDisconnect = true;
-        const readiness = await sendRequest(server, { path: "/readyz" });
-        expect(readiness.res.statusCode).toBe(503);
-        expect(JSON.parse(readiness.getBody())).toMatchObject({
-          ready: false,
-          failing: ["whatsapp"],
-        });
+      await expectProbe(server, "/startupz", 200, {
+        ok: true,
+        status: "started",
+      });
 
-        const channelIndependentStartup = await sendRequest(server, {
-          path: "/startupz",
-        });
-        expect(channelIndependentStartup.res.statusCode).toBe(200);
-        expect(JSON.parse(channelIndependentStartup.getBody())).toMatchObject({
-          ok: true,
-          status: "started",
-        });
-
-        gatewayDraining = true;
-        const draining = await sendRequest(server, { path: "/startupz" });
-        expect(draining.res.statusCode).toBe(503);
-        expect(JSON.parse(draining.getBody())).toMatchObject({
-          ok: false,
-          status: "draining",
-          version: resolveRuntimeServiceVersion(process.env),
-          uptimeMs: expect.any(Number),
-        });
-      },
+      gatewayDraining = true;
+      await expectProbe(server, "/startupz", 503, {
+        ok: false,
+        status: "draining",
+        version: resolveRuntimeServiceVersion(process.env),
+        uptimeMs: expect.any(Number),
+      });
     });
   });
 
@@ -674,36 +630,41 @@ describe("gateway probe endpoints", () => {
       getStartupPendingReason: () => "startup-sidecars",
       getGatewayDraining: () => false,
     });
+    await withProbeServer(
+      { getStartup },
+      async (server) => {
+        await expectProbe(
+          server,
+          {
+            path: "/startupz",
+            remoteAddress: "10.0.0.8",
+            host: "gateway.test",
+          },
+          503,
+          { ok: false, status: "starting" },
+          true,
+        );
 
-    await withGatewayServer({
-      prefix: "probe-startup-details",
-      resolvedAuth: AUTH_TOKEN,
-      overrides: { getStartup },
-      run: async (server) => {
-        const remote = await sendRequest(server, {
-          path: "/startupz",
-          remoteAddress: "10.0.0.8",
-          host: "gateway.test",
-        });
-        expect(remote.res.statusCode).toBe(503);
-        expect(JSON.parse(remote.getBody())).toEqual({ ok: false, status: "starting" });
-
-        const authenticated = await sendRequest(server, {
-          path: "/startupz",
-          remoteAddress: "10.0.0.8",
-          host: "gateway.test",
-          authorization: "Bearer test-token",
-        });
-        expect(authenticated.res.statusCode).toBe(503);
-        expect(JSON.parse(authenticated.getBody())).toMatchObject({
-          ok: false,
-          status: "starting",
-          version: resolveRuntimeServiceVersion(process.env),
-          uptimeMs: expect.any(Number),
-          pendingReason: "startup-sidecars",
-        });
+        await expectProbe(
+          server,
+          {
+            path: "/startupz",
+            remoteAddress: "10.0.0.8",
+            host: "gateway.test",
+            authorization: "Bearer test-token",
+          },
+          503,
+          {
+            ok: false,
+            status: "starting",
+            version: resolveRuntimeServiceVersion(process.env),
+            uptimeMs: expect.any(Number),
+            pendingReason: "startup-sidecars",
+          },
+        );
       },
-    });
+      AUTH_TOKEN,
+    );
   });
 
   it("serves liveness probes before loading gateway config or resolving auth", async () => {
@@ -714,28 +675,22 @@ describe("gateway probe endpoints", () => {
       getRuntimeConfig();
       return AUTH_NONE;
     });
+    await withProbeServer({ getRuntimeConfig, getResolvedAuth }, async (server) => {
+      const liveBody = JSON.stringify({ ok: true, status: "live" });
+      for (const path of ["/health", "/healthz"]) {
+        for (const method of ["GET", "HEAD"] as const) {
+          const { res, getBody, setHeader } = await sendRequest(server, { path, method });
 
-    await withGatewayServer({
-      prefix: "probe-liveness-before-config-auth",
-      resolvedAuth: AUTH_NONE,
-      overrides: { getRuntimeConfig, getResolvedAuth },
-      run: async (server) => {
-        const liveBody = JSON.stringify({ ok: true, status: "live" });
-        for (const path of ["/health", "/healthz"]) {
-          for (const method of ["GET", "HEAD"] as const) {
-            const { res, getBody, setHeader } = await sendRequest(server, { path, method });
-
-            expect(res.statusCode, `${method} ${path}`).toBe(200);
-            expect(getBody(), `${method} ${path}`).toBe(method === "HEAD" ? "" : liveBody);
-            expect(setHeader).toHaveBeenCalledWith(
-              "Content-Length",
-              String(Buffer.byteLength(liveBody)),
-            );
-          }
+          expect(res.statusCode, `${method} ${path}`).toBe(200);
+          expect(getBody(), `${method} ${path}`).toBe(method === "HEAD" ? "" : liveBody);
+          expect(setHeader).toHaveBeenCalledWith(
+            "Content-Length",
+            String(Buffer.byteLength(liveBody)),
+          );
         }
-        expect(getRuntimeConfig).not.toHaveBeenCalled();
-        expect(getResolvedAuth).not.toHaveBeenCalled();
-      },
+      }
+      expect(getRuntimeConfig).not.toHaveBeenCalled();
+      expect(getResolvedAuth).not.toHaveBeenCalled();
     });
   });
 
@@ -752,11 +707,8 @@ describe("gateway probe endpoints", () => {
       failing: [],
       uptimeMs: 123,
     }));
-
-    await withGatewayServer({
-      prefix: "probe-before-stalled-stages",
-      resolvedAuth: AUTH_TOKEN,
-      overrides: {
+    await withProbeServer(
+      {
         getReadiness,
         handleHooksRequest,
         controlUiEnabled: true,
@@ -765,7 +717,7 @@ describe("gateway probe endpoints", () => {
         handlePluginRequest,
         shouldEnforcePluginGatewayAuth,
       },
-      run: async (server) => {
+      async (server) => {
         for (const path of ["/health", "/healthz", "/ready", "/readyz", "/startup", "/startupz"]) {
           const response = await sendRequest(server, { path });
           expect(response.res.statusCode, path).toBe(200);
@@ -787,6 +739,7 @@ describe("gateway probe endpoints", () => {
         expect(handlePluginRequest).not.toHaveBeenCalled();
         expect(shouldEnforcePluginGatewayAuth).not.toHaveBeenCalled();
       },
-    });
+      AUTH_TOKEN,
+    );
   });
 });

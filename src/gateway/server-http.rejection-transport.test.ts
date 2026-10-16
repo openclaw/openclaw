@@ -13,6 +13,72 @@ import { createPreauthConnectionBudget } from "./server/preauth-connection-budge
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 
+const resolvedAuth = { mode: "none" as const, allowTailscale: false };
+type ServerOptions = Parameters<typeof createGatewayHttpServer>[0];
+function createServer(
+  overrides: Pick<ServerOptions, "handleHooksRequest"> & Partial<ServerOptions>,
+) {
+  return createGatewayHttpServer({
+    clients: new Set(),
+    controlUiEnabled: false,
+    controlUiBasePath: "",
+    openAiChatCompletionsEnabled: false,
+    openResponsesEnabled: false,
+    resolvedAuth,
+    getRuntimeConfig: () => ({}),
+    ...overrides,
+  });
+}
+
+function attachUpgradeHandler(
+  httpServer: ReturnType<typeof createGatewayHttpServer>,
+  clients: Set<never>,
+  overrides: Partial<Parameters<typeof attachGatewayUpgradeHandler>[0]> = {},
+) {
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
+  attachGatewayUpgradeHandler({
+    httpServer,
+    wss,
+    clients,
+    resolvedAuth,
+    preauthConnectionBudget: createPreauthConnectionBudget(),
+    ...overrides,
+  });
+  return wss;
+}
+
+function captureSocket(port: number) {
+  const socket = connect({ host: "127.0.0.1", port });
+  const chunks: Buffer[] = [];
+  const errors: string[] = [];
+  let ended = false;
+  socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+  socket.on("error", (error) => errors.push(error.message));
+  socket.once("end", () => {
+    ended = true;
+  });
+  const closed = new Promise<void>((resolve) => {
+    socket.once("close", resolve);
+  });
+  const deadline = setTimeout(() => {
+    errors.push("client deadline");
+    socket.destroy();
+  }, 3000);
+  return {
+    socket,
+    chunks,
+    errors,
+    closed,
+    get ended() {
+      return ended;
+    },
+    dispose() {
+      clearTimeout(deadline);
+      socket.destroy();
+    },
+  };
+}
+
 async function listen(server: ReturnType<typeof createGatewayHttpServer>): Promise<number> {
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -37,14 +103,10 @@ describe("Gateway closing connection admission", () => {
       res.end();
       return true;
     });
-    const server = createGatewayHttpServer({
+    const server = createServer({
       clients: new Set(),
-      controlUiEnabled: false,
       controlUiBasePath: "/__control__",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
       handleHooksRequest,
-      resolvedAuth: { mode: "none", allowTailscale: false },
       getRuntimeConfig: () => ({ gateway: { trustedProxies: [] } }),
     });
     const port = await listen(server);
@@ -69,13 +131,8 @@ describe("Gateway closing connection admission", () => {
 
   it("flushes HTTP 503 before closing when a WebSocket upgrade throws", async () => {
     const clients = new Set<never>();
-    const resolvedAuth = { mode: "none" as const, allowTailscale: false };
-    const server = createGatewayHttpServer({
+    const server = createServer({
       clients,
-      controlUiEnabled: false,
-      controlUiBasePath: "",
-      resolvedAuth,
-      getRuntimeConfig: () => ({}),
       handleHooksRequest: async () => false,
     });
     const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
@@ -95,22 +152,8 @@ describe("Gateway closing connection admission", () => {
       log: { warn },
     });
     const port = await listen(server);
-    const socket = connect({ host: "127.0.0.1", port });
-    const chunks: Buffer[] = [];
-    const errors: string[] = [];
-    let ended = false;
-    socket.on("data", (chunk: Buffer) => chunks.push(chunk));
-    socket.on("error", (error) => errors.push(error.message));
-    socket.once("end", () => {
-      ended = true;
-    });
-    const closed = new Promise<void>((resolve) => {
-      socket.once("close", resolve);
-    });
-    const deadline = setTimeout(() => {
-      errors.push("client deadline");
-      socket.destroy();
-    }, 3000);
+    const capture = captureSocket(port);
+    const { socket, chunks, errors, closed } = capture;
     try {
       socket.write(
         "GET /socket HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGVzdC1rZXktMDEyMzQ1Ng==\r\nSec-WebSocket-Version: 13\r\n\r\n",
@@ -125,10 +168,9 @@ describe("Gateway closing connection admission", () => {
       expect(Buffer.concat(chunks).toString()).toBe(
         "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n",
       );
-      expect(ended).toBe(true);
+      expect(capture.ended).toBe(true);
     } finally {
-      clearTimeout(deadline);
-      socket.destroy();
+      capture.dispose();
       await closeServer(server);
       wss.close();
     }
@@ -136,26 +178,14 @@ describe("Gateway closing connection admission", () => {
 
   it("delivers an upgrade rejection after an ordinary response on a reused connection", async () => {
     const clients = new Set<never>();
-    const resolvedAuth = { mode: "none" as const, allowTailscale: false };
-    const server = createGatewayHttpServer({
+    const server = createServer({
       clients,
-      controlUiEnabled: false,
-      controlUiBasePath: "",
-      resolvedAuth,
-      getRuntimeConfig: () => ({}),
       handleHooksRequest: async (_req, res) => {
         res.end("ready");
         return true;
       },
     });
-    const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
-    attachGatewayUpgradeHandler({
-      httpServer: server,
-      wss,
-      clients,
-      resolvedAuth,
-      preauthConnectionBudget: createPreauthConnectionBudget(),
-    });
+    const wss = attachUpgradeHandler(server, clients);
     const agent = new Agent({ keepAlive: true, maxSockets: 1 });
     const port = await listen(server);
     const readResponse = (upgrade: boolean) =>
@@ -198,25 +228,14 @@ describe("Gateway closing connection admission", () => {
     const releaseRouting = createDeferredCore();
     const routed = createDeferredCore();
     const clients = new Set<never>();
-    const resolvedAuth = { mode: "none" as const, allowTailscale: false };
-    const server = createGatewayHttpServer({
+    const server = createServer({
       clients,
-      controlUiEnabled: false,
-      controlUiBasePath: "",
-      resolvedAuth,
-      getRuntimeConfig: () => ({}),
       handleHooksRequest: async (_req, res) => {
         res.end("still available");
         return true;
       },
     });
-    const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
-    attachGatewayUpgradeHandler({
-      httpServer: server,
-      wss,
-      clients,
-      resolvedAuth,
-      preauthConnectionBudget: createPreauthConnectionBudget(),
+    const wss = attachUpgradeHandler(server, clients, {
       shouldEnforcePluginGatewayAuth: () => false,
       handlePluginUpgrade: async (_req, socket) => {
         routing.resolve(socket);
@@ -259,15 +278,8 @@ describe("Gateway closing connection admission", () => {
       let stream: Duplex | undefined;
       const buffered = createDeferredCore();
       const clients = new Set<never>();
-      const resolvedAuth = { mode: "none" as const, allowTailscale: false };
-      const server = createGatewayHttpServer({
+      const server = createServer({
         clients,
-        controlUiEnabled: false,
-        controlUiBasePath: "",
-        openAiChatCompletionsEnabled: false,
-        openResponsesEnabled: false,
-        resolvedAuth,
-        getRuntimeConfig: () => ({}),
         handleHooksRequest: async (_req, res) => {
           earlier = res;
           if (upgradeSeen) {
@@ -364,14 +376,8 @@ describe("Gateway closing connection admission", () => {
     "preserves Node Expect admission for HTTP/$version $expectation",
     async ({ version, expectation, status, interim }) => {
       const dispatched: string[] = [];
-      const server = createGatewayHttpServer({
+      const server = createServer({
         clients: new Set(),
-        controlUiEnabled: false,
-        controlUiBasePath: "",
-        openAiChatCompletionsEnabled: false,
-        openResponsesEnabled: false,
-        resolvedAuth: { mode: "none", allowTailscale: false },
-        getRuntimeConfig: () => ({}),
         handleHooksRequest: async (req, res) => {
           dispatched.push(req.url!);
           res.end("accepted");
@@ -379,18 +385,8 @@ describe("Gateway closing connection admission", () => {
         },
       });
       const port = await listen(server);
-      const socket = connect({ host: "127.0.0.1", port });
-      const chunks: Buffer[] = [];
-      const errors: string[] = [];
-      socket.on("data", (chunk: Buffer) => chunks.push(chunk));
-      socket.on("error", (error) => errors.push(error.message));
-      const closed = new Promise<void>((resolve) => {
-        socket.once("close", resolve);
-      });
-      const deadline = setTimeout(() => {
-        errors.push("client deadline");
-        socket.destroy();
-      }, 3000);
+      const capture = captureSocket(port);
+      const { socket, chunks, errors, closed } = capture;
       try {
         socket.write(
           `GET /expect HTTP/${version}\r\nHost: localhost\r\nExpect: ${expectation}\r\nConnection: close\r\n\r\n`,
@@ -404,8 +400,7 @@ describe("Gateway closing connection admission", () => {
         expect(dispatched).toEqual(status === 200 ? ["/expect"] : []);
         expect(wire.endsWith(status === 200 ? "accepted" : "\r\n\r\n")).toBe(true);
       } finally {
-        clearTimeout(deadline);
-        socket.destroy();
+        capture.dispose();
         await closeServer(server);
       }
     },
@@ -418,15 +413,8 @@ describe("Gateway closing connection admission", () => {
       const upgrades = vi.fn(async () => true);
       const tasks: Promise<unknown>[] = [];
       const clients = new Set<never>();
-      const resolvedAuth = { mode: "none" as const, allowTailscale: false };
-      const server = createGatewayHttpServer({
+      const server = createServer({
         clients,
-        controlUiEnabled: false,
-        controlUiBasePath: "",
-        openAiChatCompletionsEnabled: false,
-        openResponsesEnabled: false,
-        resolvedAuth,
-        getRuntimeConfig: () => ({}),
         handleHooksRequest: async (req, res) => {
           dispatched.push(req.url!);
           const task = readWebhookBodyOrReject({ req, res, maxBytes: 256 * 1024 });
@@ -435,29 +423,13 @@ describe("Gateway closing connection admission", () => {
           return true;
         },
       });
-      const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
-      attachGatewayUpgradeHandler({
-        httpServer: server,
-        wss,
-        clients,
-        resolvedAuth,
-        preauthConnectionBudget: createPreauthConnectionBudget(),
+      const wss = attachUpgradeHandler(server, clients, {
         handlePluginUpgrade: upgrades,
         shouldEnforcePluginGatewayAuth: () => false,
       });
       const port = await listen(server);
-      const socket = connect({ host: "127.0.0.1", port });
-      const received: Buffer[] = [];
-      const errors: string[] = [];
-      const closed = new Promise<void>((resolve) => {
-        socket.once("close", resolve);
-      });
-      socket.on("data", (chunk: Buffer) => received.push(chunk));
-      socket.on("error", (error) => errors.push(error.message));
-      const deadline = setTimeout(() => {
-        errors.push("client deadline");
-        socket.destroy();
-      }, 3000);
+      const capture = captureSocket(port);
+      const { socket, chunks: received, errors, closed } = capture;
       try {
         const payload = "x".repeat(1024 * 1024 + 1);
         const headers =
@@ -490,8 +462,7 @@ describe("Gateway closing connection admission", () => {
         expect(dispatched).toEqual(["/first"]);
         expect(upgrades).not.toHaveBeenCalled();
       } finally {
-        clearTimeout(deadline);
-        socket.destroy();
+        capture.dispose();
         await closeServer(server);
         wss.close();
         await Promise.all(tasks);
