@@ -43,6 +43,8 @@ owning `onSettled` callback, split-effect apply phase, or explicit lifetime.
 through custom-element boundaries. Ref callbacks capture nodes; they must not
 create cleanup registrations. Use refs instead of `querySelector`; retain
 deliberate xterm, noVNC, PDF, and canvas islands as ref-owned regions.
+JSX handlers can still fire on a detached node retained by another owner. Use
+explicit listener teardown when late events could observe replacement props.
 
 Remove `untrack` unless a read deliberately must not subscribe; explain
 non-obvious snapshots. Delete the old controller, host adapter wiring, and

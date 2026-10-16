@@ -1,5 +1,6 @@
 import { createEffect, createMemo, onCleanup, untrack, type Accessor } from "solid-js";
 import { retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 
 type IdentityAvatarImageProps = {
   view: { imageUrl: string | Promise<string | null> | null };
@@ -97,15 +98,18 @@ function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
       active = false;
     };
   });
-  onCleanup(() => release?.());
-  return { ref: (element: HTMLImageElement) => (image = element), onLoad: load, onError: error };
+  const cleanup = [() => release?.()];
+  onCleanup(() => cleanup.forEach((stop) => stop()));
+  return (element: HTMLImageElement) => {
+    image = element;
+    cleanup.push(listen(image, "load", load), listen(image, "error", error));
+  };
 }
 
 export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
-  const binding = bindIdentityAvatarImage(() => props);
   return (
     <img
-      {...binding}
+      ref={bindIdentityAvatarImage(() => props)}
       class={props.class}
       alt={props.alt ?? ""}
       aria-hidden={props.ariaHidden ? "true" : undefined}
