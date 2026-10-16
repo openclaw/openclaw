@@ -1,35 +1,37 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as terminalText from "openclaw/plugin-sdk/text-chunking";
-import { expect, it, vi } from "vitest";
-import type { CodexThreadListResponse } from "./app-server/protocol.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { CodexThread, CodexThreadListResponse } from "./app-server/protocol.js";
 import { catalogFactory, remoteCatalogFactory } from "./session-catalog-resident.test-support.js";
 import { commandRpcMocks, idleThread } from "./session-catalog.test-helpers.js";
 
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+const nativeThread = (overrides: Partial<CodexThread>) =>
+  idleThread({ source: "cli", updatedAt: 100, recencyAt: 100, ...overrides });
+
 it("reconciles remote membership without reparsing unchanged visible or hidden previews", async () => {
-  const known = idleThread({
+  const known = nativeThread({
     id: "known",
     name: "Previous title",
     preview: "Retained first user request",
     path: "/remote/sessions/known.jsonl",
-    updatedAt: 100,
-    recencyAt: 100,
-    source: "cli",
     status: { type: "active", activeFlags: ["waitingOnApproval"] },
   });
-  const changed = idleThread({
+  const changed = nativeThread({
     id: "changed",
     name: null,
     preview: "Previous request",
-    updatedAt: 100,
-    recencyAt: 100,
-    source: "cli",
   });
-  const hidden = idleThread({
+  const hidden = nativeThread({
     id: "hidden",
     source: "exec",
     preview: "Hidden native execution",
-    updatedAt: 100,
-    recencyAt: 100,
   });
   let native = [known, changed, idleThread({ id: "removed", source: "cli" }), hidden];
   commandRpcMocks.codexControlRequest.mockImplementation(
@@ -45,10 +47,10 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
   const source = (await factory.homesForAgent("main"))[0]!;
   expect(source.localSessionsRoot).toBeUndefined();
   const control = factory.forRequest("main", source);
-  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   try {
     await control.initialize();
-    expect((await control.listPage({})).sessions.map((row) => row.threadId).toSorted()).toEqual([
+    const initial = await control.listPage({});
+    expect(initial.sessions.map((row) => row.threadId).toSorted()).toEqual([
       "changed",
       "known",
       "removed",
@@ -72,32 +74,22 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
       recencyAt: 300,
     });
     native = [created, changed, known, hidden];
-    expect((await control.listPage({})).sessions.map((row) => row.threadId).toSorted()).toEqual([
-      "changed",
-      "known",
-      "removed",
-    ]);
+    expect(await control.listPage({})).toEqual(initial);
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(15 * 60_000);
     await vi.waitFor(async () => {
       const sessions = (await control.listPage({})).sessions;
-      expect(sessions.map((row) => row.threadId).toSorted()).toEqual([
-        "changed",
-        "created",
-        "known",
+      expect(sessions.toSorted((a, b) => a.threadId.localeCompare(b.threadId))).toMatchObject([
+        { threadId: "changed", fallbackName: "Changed user request" },
+        { threadId: "created", fallbackName: "New independent native task" },
+        {
+          threadId: "known",
+          name: null,
+          fallbackName: "Retained first user request",
+          status: "idle",
+        },
       ]);
-      expect(sessions.find((row) => row.threadId === "known")).toMatchObject({
-        name: null,
-        fallbackName: "Retained first user request",
-        status: "idle",
-      });
       expect(sessions.find((row) => row.threadId === "known")).not.toHaveProperty("activeFlags");
-      expect(sessions.find((row) => row.threadId === "changed")?.fallbackName).toBe(
-        "Changed user request",
-      );
-      expect(sessions.find((row) => row.threadId === "created")?.fallbackName).toBe(
-        "New independent native task",
-      );
     });
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
     expect(commandRpcMocks.codexControlRequest.mock.calls[1]?.[2]).toMatchObject({
@@ -119,22 +111,16 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
     expect(sanitize).not.toHaveBeenCalled();
   } finally {
-    try {
-      await factory.stop();
-    } finally {
-      vi.useRealTimers();
-    }
+    await factory.stop();
   }
 });
 
 it("walks remote pages beyond the resident bound without projecting the uncached tail", async () => {
   const native = Array.from({ length: 20_001 }, (_, index) =>
-    idleThread({
+    nativeThread({
       id: `bounded-thread-${index}`,
       source: index === 20_000 ? "exec" : "cli",
       preview: `Synthetic first user request ${index}`,
-      updatedAt: 100,
-      recencyAt: 100,
     }),
   );
   const lastPage = createDeferred<void>();
@@ -154,7 +140,6 @@ it("walks remote pages beyond the resident bound without projecting the uncached
   const tailPreview = vi.fn(() => {
     throw new Error("Uncached native tail must not be projected on each refresh");
   });
-  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   try {
     await control.initialize();
     const first = await control.listPage({ limit: 64 });
@@ -176,24 +161,17 @@ it("walks remote pages beyond the resident bound without projecting the uncached
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(pages * 2 + 1);
     expect(tailPreview).not.toHaveBeenCalled();
   } finally {
-    try {
-      await factory.stop();
-    } finally {
-      vi.useRealTimers();
-    }
+    await factory.stop();
   }
 });
 
 it("reconciles displayed native metadata and explicit Git clears without activity or file changes", async () => {
   const native = Object.assign(
-    idleThread({
+    nativeThread({
       id: "metadata",
       name: "Unchanged title",
-      source: "cli",
       cwd: "/workspace/project",
       createdAt: 10,
-      updatedAt: 100,
-      recencyAt: 100,
       sessionId: "previous-session",
     }),
     { cliVersion: "0.154.0", gitInfo: { branch: "previous-branch" } },
@@ -208,7 +186,6 @@ it("reconciles displayed native metadata and explicit Git clears without activit
   const factory = catalogFactory();
   const source = (await factory.homesForAgent("main"))[0]!;
   const control = factory.forRequest("main", source);
-  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   try {
     await control.initialize();
     expect((await control.listPage({})).sessions[0]).toMatchObject({
@@ -245,6 +222,5 @@ it("reconciles displayed native metadata and explicit Git clears without activit
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
   } finally {
     await factory.stop();
-    vi.useRealTimers();
   }
 });

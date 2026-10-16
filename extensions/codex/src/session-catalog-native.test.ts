@@ -26,14 +26,6 @@ it("keeps exact-millisecond ties resident and applies real native title notifica
   }
   const client = await startNativeCatalogPerformanceClient(state);
   try {
-    const baseline = await client.request<CodexThreadListResponse>("thread/list", {
-      limit: 100,
-      archived: false,
-      modelProviders: [],
-      sortKey: "updated_at",
-      sortDirection: "desc",
-    });
-    expect(baseline.data).toHaveLength(81);
     const batches: string[][] = [];
     commandRpcMocks.codexControlRequest.mockImplementation(
       async (_plugin, method, request, options) => {

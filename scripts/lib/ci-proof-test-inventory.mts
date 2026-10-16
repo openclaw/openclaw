@@ -463,8 +463,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/codex/src/session-catalog-request-lifetime.test.ts",
   "extensions/codex/src/session-catalog-settings.test.ts",
   "extensions/codex/src/session-catalog-source.test.ts",
-  "extensions/codex/src/session-catalog-spawn.test.ts",
-  "extensions/codex/src/session-catalog-stop.test.ts",
   "extensions/codex/src/web-search-provider.test.ts",
   "extensions/copilot/src/attempt-active-run.test.ts",
   "extensions/copilot/src/attempt-session.integration.test.ts",

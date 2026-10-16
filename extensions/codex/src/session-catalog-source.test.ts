@@ -251,18 +251,14 @@ it.each([
   "observes native preview transition %j to %j within one timestamp second",
   async (before, after) => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-    const thread: CodexThread = {
+    const thread = sourceThread({
       id: "preview-transition",
-      projectId: null,
       name: null,
-      source: "cli",
       originator: "codex_cli_rs",
       cwd: "/workspace/project",
       path: null,
-      updatedAt: 100,
-      recencyAt: 100,
       preview: before,
-    };
+    });
     const requests: CodexThreadListParams[] = [];
     const harness = createTrackedClient({
       onWrite(line, send) {

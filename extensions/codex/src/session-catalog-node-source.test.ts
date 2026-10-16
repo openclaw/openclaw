@@ -1,6 +1,7 @@
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CLI_SESSION_SOURCE_CAPABILITY } from "./node-cli-sessions.js";
+import { catalogRow } from "./session-catalog-index.test-support.js";
 import { catalogFactory, catalogProvider } from "./session-catalog-resident.test-support.js";
 import {
   commandRpcMocks,
@@ -34,6 +35,16 @@ const pairedNode = (nodeId: string) => ({
   caps: [CODEX_CLI_SESSION_SOURCE_CAPABILITY],
   commands: [...CODEX_NODE_CONTINUE_COMMANDS],
   invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
+});
+const nodeListing = (
+  threadId: string,
+  canContinueCodex: unknown,
+  status = "notLoaded",
+  source = "cli",
+) => ({
+  sourceHomeId: "a".repeat(64),
+  canContinueCodex,
+  sessions: [{ threadId, status, source, archived: false }],
 });
 
 async function nativeCommands(
@@ -81,23 +92,18 @@ describe("Codex node catalog sources", () => {
         throw new Error("unexpected node");
       }
       return {
-        payloadJSON: JSON.stringify({
-          sourceHomeId: "a".repeat(64),
-          canContinueCodex:
+        payloadJSON: JSON.stringify(
+          nodeListing(
+            `thread-${nodeId}`,
             nodeId === "missing-source"
               ? undefined
               : nodeId === "invalid-source"
                 ? "true"
                 : nodeId !== "unix-source",
-          sessions: [
-            {
-              threadId: `thread-${nodeId}`,
-              status: source[0],
-              source: source[1],
-              archived: false,
-            },
-          ],
-        }),
+            source[0],
+            source[1],
+          ),
+        ),
       };
     });
     const { runtime } = createRuntime({
@@ -146,18 +152,7 @@ describe("Codex node catalog sources", () => {
       const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ command }) => ({
         payloadJSON: JSON.stringify(
           command === CODEX_APP_SERVER_THREADS_LIST_COMMAND
-            ? {
-                sourceHomeId: "a".repeat(64),
-                canContinueCodex,
-                sessions: [
-                  {
-                    threadId: "source-thread",
-                    status: "notLoaded",
-                    source: "cli",
-                    archived: false,
-                  },
-                ],
-              }
+            ? nodeListing("source-thread", canContinueCodex)
             : { data: [] },
         ),
       }));
@@ -335,18 +330,7 @@ describe("Codex node catalog sources", () => {
       };
       const threadId = "123e4567-e89b-12d3-a456-426614174000";
       const control = createControl({
-        listPage: async () => ({
-          sessions: [
-            {
-              threadId,
-              name: "Selected source session",
-              cwd: "/synthetic/project",
-              status: "idle",
-              source: "cli",
-              archived: false,
-            },
-          ],
-        }),
+        listPage: async () => catalogRow(threadId, 100, { status: "idle", source: "cli" }).page,
       });
       const provider = catalogProvider({
         ...factory,

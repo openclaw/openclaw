@@ -150,9 +150,6 @@ export async function measureNativeCatalogBoundary(
 ) {
   const page = await readPage(client, boundary, true, undefined, previewCache);
   return {
-    boundary,
-    previewCacheUsed: boundary === "catalog",
-    useStateDbOnly: true,
     ...(await walkNativeCatalog(client, boundary, { useStateDbOnly: true, previewCache })),
     retainedPageBytes: Buffer.byteLength(JSON.stringify(page)),
     pageRows: page.data.length,

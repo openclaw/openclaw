@@ -19,12 +19,7 @@ it("measures ordinary and catalog response retention across real native DB-only 
   });
   const knownPreviews = new Map<
     string,
-    {
-      path: string | null;
-      updatedAt: number | null;
-      recencyAt: number | null;
-      preview: string;
-    }
+    Omit<Parameters<CodexCatalogPreviewCache>[0], "id"> & { preview: string }
   >();
   const seed = await startNativeCatalogPerformanceClient(fixture);
   try {
@@ -80,7 +75,6 @@ it("measures ordinary and catalog response retention across real native DB-only 
     rows: 3_000,
     pages: 47,
     pageRows: 64,
-    previewCacheUsed: false,
     previewCacheHits: 0,
   });
   expect(catalog).toMatchObject({
@@ -88,7 +82,6 @@ it("measures ordinary and catalog response retention across real native DB-only 
     pages: 47,
     pageRows: 64,
     firstThreadId: ordinary!.firstThreadId,
-    previewCacheUsed: true,
     previewCacheHits: 3_064,
   });
   expect(ordinary!.maxPreviewCharacters).toBeGreaterThan(16 * 1024);
