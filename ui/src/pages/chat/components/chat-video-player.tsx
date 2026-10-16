@@ -47,7 +47,7 @@ function ChatVideoPlayerContent(
       return;
     }
     // The bridge holds current synchronous inputs for ref, event, and async callbacks.
-    sourceController.sync(
+    void sourceController.sync(
       currentMedia,
       host.src,
       host.sourceIdentity,
@@ -187,9 +187,7 @@ function ChatVideoPlayerContent(
                 sourceController.handleError(currentMedia);
               }
             }}
-            onError={(event) => {
-              sourceController.handleError(event.currentTarget);
-            }}
+            onError={(event) => sourceController.handleError(event.currentTarget)}
           />
         </div>
       </div>

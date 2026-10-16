@@ -336,10 +336,10 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
                   playsinline
                   aria-label={t("chat.composer.cameraPreview")}
                   onLoadedData={(event) => {
-                    const video = event.currentTarget;
-                    if (video.srcObject === stream && isCurrent(generation)) {
+                    const preview = event.currentTarget;
+                    if (preview.srcObject === stream && isCurrent(generation)) {
                       setState((draft) => {
-                        draft.videoReady = video.videoWidth > 0 && video.videoHeight > 0;
+                        draft.videoReady = preview.videoWidth > 0 && preview.videoHeight > 0;
                       });
                     }
                   }}

@@ -34,19 +34,21 @@ export class ChatMediaSourceController {
 
   subscribe(notify: () => void): () => void {
     this.listeners.add(notify);
-    return () => {
-      this.listeners.delete(notify);
-    };
+    return () => this.listeners.delete(notify);
   }
 
   private setPlayback(
     readiness: typeof this.playbackReadiness,
     source = this.playbackSource,
   ): void {
-    if (readiness === this.playbackReadiness && source === this.playbackSource) return;
+    if (readiness === this.playbackReadiness && source === this.playbackSource) {
+      return;
+    }
     this.playbackReadiness = readiness;
     this.playbackSource = source;
-    for (const notify of this.listeners) notify();
+    for (const notify of this.listeners) {
+      notify();
+    }
   }
 
   get currentIdentity(): string {
