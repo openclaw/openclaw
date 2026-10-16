@@ -264,7 +264,13 @@ export function createLazyPluginRuntime(params: {
       if (prop === "version") {
         return VERSION;
       }
-      if (prop === "capabilities" || prop === "config" || prop === "state" || prop === "system") {
+      if (
+        prop === "capabilities" ||
+        prop === "config" ||
+        prop === "llm" ||
+        prop === "state" ||
+        prop === "system"
+      ) {
         return base[prop];
       }
     }
@@ -284,8 +290,8 @@ export function createLazyPluginRuntime(params: {
         return getRuntimeProperty(prop);
       },
     };
-    // Policy facets match the runtime's getter-only contract before loading too.
-    if (prop !== "modelAuth" && prop !== "modelConfig") {
+    // Host and policy facets retain their getter-only contract before loading too.
+    if (prop !== "modelAuth" && prop !== "modelConfig" && prop !== "llm") {
       descriptor.set = (value: unknown) => {
         Reflect.set(resolveRuntime() as object, prop, value);
       };
