@@ -96,6 +96,20 @@ async function runFastAutoProgressCase(params: {
 }
 
 describe("executeFollowupTurn", () => {
+  it("retains the queued turn's restart restrictions over later runner defaults", async () => {
+    const turn = createTurn();
+    turn.queued.forceRestartSafeTools = true;
+    turn.queued.forceCodeModeTools = true;
+    await executeTestTurn({
+      turn,
+      defaults: { opts: { forceRestartSafeTools: false, forceCodeModeTools: false } },
+    });
+    expect(state.execute.mock.calls[0]?.[0]?.opts).toMatchObject({
+      forceRestartSafeTools: true,
+      forceCodeModeTools: true,
+    });
+  });
+
   it("refreshes the eligible queued turn from its current personal profile", async () => {
     const turn = createTurn({
       session: {

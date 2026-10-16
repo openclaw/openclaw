@@ -254,10 +254,13 @@ Transcript bytes, session recovery rows, schemas, and update behavior are unchan
 Global projection preflight and search readiness use the projection maintenance
 owner's connection-local facts. Transactional TEMP triggers queue affected sessions
 for appends, rewrites, projection publication, deletion, cold-storage moves, and raw
-local SQL. An owning-writer receipt or schema change restarts bounded admission;
-indexed seeks skip whole session ranges instead of scanning transcript rows. Each
-maintenance transaction examines at most 128 sessions and deletes at most 512
-orphan rows per projection table. A status request stops after 32 batches;
+local SQL. A sibling-writer receipt or schema change restarts bounded admission;
+local changes consume only the queued sessions. A bounded recursive key query
+skips whole session ranges instead of scanning transcript rows, then a compound
+read classifies the batch using the projection owner's readiness predicate.
+Queue consumption and dirty-session publication are batched in the same
+transaction. Each maintenance transaction examines at most 128 sessions and
+deletes at most 512 orphan rows per projection table. A status request stops after 32 batches;
 incomplete admission remains pending and the existing reconcile cadence resumes it.
 Reconciliation yields between bounded batches until an ordered traversal completes,
 then gives the observed pending backlog to the scheduler and awaits its rebuild.

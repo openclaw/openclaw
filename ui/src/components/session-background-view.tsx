@@ -2,7 +2,6 @@ import { createEffect, createMemo } from "solid-js";
 import type { ApplicationContext } from "../app/context.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
-import { solidContent } from "../lit/solid-content.tsx";
 import type { SessionBackground } from "./session-background.ts";
 
 const renderer = createIdleImport(() => import("./session-background.ts"));
@@ -45,14 +44,6 @@ export function SessionBackgroundView(props: Props) {
       prop:presented={props.presented !== false}
     />
   );
-}
-
-export function renderSessionBackground(
-  context: ApplicationContext | undefined,
-  surface: Props["surface"],
-  presented = true,
-) {
-  return solidContent(SessionBackgroundView, { context, surface, presented });
 }
 
 declare module "@solidjs/web" {

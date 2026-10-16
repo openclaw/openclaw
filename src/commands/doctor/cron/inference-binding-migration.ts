@@ -189,7 +189,24 @@ export async function maybeRepairCronInferenceBindings(params: {
           agentId,
           agentDir: selected.owner.agentDir,
           workspaceDir: selected.owner.workspaceDir,
-          authProfileStore: store,
+          // A rate-limit cooldown only defers the usual account; recording around it would make
+          // a temporary fallback permanent. Disabled and blocked accounts stay excluded.
+          authProfileStore: {
+            ...store,
+            usageStats: Object.fromEntries(
+              Object.entries(store.usageStats ?? {}).map(
+                ([
+                  profileId,
+                  {
+                    cooldownUntil: _until,
+                    cooldownReason: _reason,
+                    cooldownModel: _model,
+                    ...stats
+                  },
+                ]) => [profileId, stats],
+              ),
+            ),
+          },
           sessionAuthProfileId: explicitProfileId,
           sessionAuthProfileSource: explicitProfileId ? "user" : undefined,
           ...(explicitProfileId
@@ -301,8 +318,8 @@ export async function maybeRepairCronInferenceBindings(params: {
             continue;
           }
         }
-        // Several eligible accounts: before binding, every run took the planner's first one.
-        // Recording it keeps that account; the warning names the others.
+        // Several eligible accounts: record the one a run would take now. With auth.order that is the
+        // account every earlier run used; without it, runs rotated by last use. The log names the others.
         const plannedProfileId =
           currentAuth.attempts[0]?.kind === "profile"
             ? currentAuth.attempts[0].profileId

@@ -9,7 +9,6 @@ import {
   stubMatchMedia,
 } from "../pages/chat/chat-page.test-support.ts";
 import type { ChatPage } from "../pages/chat/chat-page.ts";
-import * as chatRoute from "../pages/chat/route-entry.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -26,6 +25,7 @@ vi.mock("../pages/chat/chat-pane.tsx", async () => {
 afterEach(() => vi.unstubAllGlobals());
 
 it("mounts one pane for the legacy chat route and retains it through revalidation", async () => {
+  const chatRoute = await import("../pages/chat/route-entry.ts");
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
   stubMatchMedia(false);

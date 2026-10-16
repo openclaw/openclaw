@@ -1,4 +1,3 @@
-// Windows database path tests exercise canonical state lifecycles beyond MAX_PATH.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,10 +6,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { noteDoctorAgentDatabasePathHealth } from "../commands/doctor-agent-database-paths.js";
 import { compactDoctorSessionSqliteTarget } from "../commands/doctor-session-sqlite-compact.js";
 import { runDoctorStateSqliteCompact } from "../commands/doctor-state-sqlite-compact.js";
-import {
-  readUpdateStateSchemaVersions,
-  updateStateSchemaVersionsMatch,
-} from "../infra/update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "../infra/update-candidate-state.js";
+// Windows database path tests exercise canonical state lifecycles beyond MAX_PATH.
+import { updateStateSchemaVersionsMatch } from "../infra/update-candidate-state.versions.js";
 import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {

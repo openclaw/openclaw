@@ -205,6 +205,8 @@ export async function executeFollowupTurn(params: {
     abortSignal: turn.operation.abortSignal,
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
+    forceRestartSafeTools: turn.queued.forceRestartSafeTools,
+    forceCodeModeTools: turn.queued.forceCodeModeTools,
     awaitSessionDiffBaseline: turn.queued.runObservers?.awaitSessionDiffBaseline,
     onAgentRunStart: turn.queued.runObservers?.onAgentRunStart,
     onPreparedAgentRunStart: turn.queued.runObservers?.onPreparedAgentRunStart,

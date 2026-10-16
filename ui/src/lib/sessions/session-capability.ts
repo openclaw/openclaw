@@ -8,6 +8,7 @@ import type {
   SessionsListParams,
   SessionsPatchManyParams,
   SessionsPatchManyResult,
+  SessionsRecoverParams,
   SessionsRecoverResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SchemaContract } from "../../../../packages/gateway-protocol/src/schema-contract.js";
@@ -308,7 +309,7 @@ export type SessionCapability = {
     options?: { reconciliation?: SessionCreateReconciliation },
   ) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
-  recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;
+  recover: (params: SessionsRecoverParams) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
   patchMany: (
     targets: SessionsPatchManyParams["targets"],

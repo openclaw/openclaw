@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
-import { SessionBackgroundView } from "../../components/session-background-view.ts";
+import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";

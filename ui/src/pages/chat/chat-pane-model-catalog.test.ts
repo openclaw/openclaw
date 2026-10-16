@@ -164,7 +164,6 @@ describe("chat pane composer controls", () => {
       }) as unknown as ChatPageHost;
       state.chatModelSwitchPromises = {};
       onTestFinished(() => {
-        render(null, container);
         container.remove();
         retireChatMetadataRequests(state);
         state.sessions.dispose();
