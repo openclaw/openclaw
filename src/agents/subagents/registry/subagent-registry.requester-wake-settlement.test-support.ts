@@ -4,7 +4,7 @@ import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpe
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { countActiveDescendantRunsFromRuns } from "./subagent-registry-queries.js";
+import { buildScopedSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { createRequesterYieldTool } from "./subagent-registry.requester-wake-receipts.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
@@ -224,7 +224,18 @@ export function registerRequesterWakeSettlementBoundaryTests({
     );
     expect(completions).toEqual([{ delivered: true, error: undefined }]);
     expect(registry.getSubagentRunByRunId("run-main-batch")?.requesterSettleWake).toBeUndefined();
-    expect(countActiveDescendantRunsFromRuns(subagentRuns, requesterSessionKey)).toBe(1);
-    expect(countActiveDescendantRunsFromRuns(subagentRuns, requesterSessionKey, "main")).toBe(0);
+    expect(
+      buildScopedSubagentRunReadIndexFromRuns(
+        subagentRuns,
+        requesterSessionKey,
+      ).countActiveDescendantRuns(requesterSessionKey),
+    ).toBe(1);
+    expect(
+      buildScopedSubagentRunReadIndexFromRuns(
+        subagentRuns,
+        requesterSessionKey,
+        "main",
+      ).countActiveDescendantRuns(requesterSessionKey),
+    ).toBe(0);
   });
 }

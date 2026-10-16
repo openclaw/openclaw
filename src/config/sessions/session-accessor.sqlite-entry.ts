@@ -637,13 +637,13 @@ async function patchSqliteSessionEntrySnapshot(
       skipMaintenance: options.skipMaintenance,
       storePath: params.storePath,
     });
+    kickSessionHistoryDiskBudgetMaintenance({
+      ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+      env: resolved.env,
+      storePath: params.storePath,
+      ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
+    });
   }
-  kickSessionHistoryDiskBudgetMaintenance({
-    ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
-    env: resolved.env,
-    storePath: params.storePath,
-    ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
-  });
   return committed;
 }
 

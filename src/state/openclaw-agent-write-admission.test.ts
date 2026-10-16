@@ -6,7 +6,11 @@ import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   onInternalDiagnosticEvent,
@@ -25,6 +29,7 @@ import { trackWorkerRequest } from "../infra/worker-request-diagnostics.js";
 import * as logging from "../logging/logger.js";
 import {
   runOpenClawAgentWorkerWrite,
+  runOpenClawAgentBoardReadAdmission,
   runOpenClawAgentPathWriteAdmission,
   runOpenClawAgentWriteAdmission,
   runOpenClawAgentWriteAdmissions,
@@ -32,6 +37,58 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("overlaps Board reads with transcript writes while retaining exclusive mutation order", async ({
+  signal,
+}) => {
+  const options = {
+    agentId: "main",
+    path: path.join(tempDirs.make("board-admission-"), "agent.sqlite"),
+  };
+  const writerEntered = createDeferred();
+  const releaseWriter = createDeferred();
+  const readEntered = createDeferred();
+  const releaseRead = createDeferred();
+  const order: string[] = [];
+  const writer = runOpenClawAgentWorkerWrite(
+    options,
+    async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+      order.push("transcript");
+    },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "transcript-only",
+  );
+  await writerEntered.promise;
+  const read = runOpenClawAgentBoardReadAdmission(options, async () => {
+    readEntered.resolve();
+    await releaseRead.promise;
+    order.push("read");
+  });
+  const mutation = runOpenClawAgentWorkerWrite(options, async () => {
+    order.push("mutation settled");
+  });
+  const following = runOpenClawAgentBoardReadAdmission(options, async () => {
+    order.push("following read");
+  });
+  try {
+    await withinTest(readEntered.promise, signal);
+    releaseWriter.resolve();
+    await writer;
+    expect(order).toEqual(["transcript"]);
+    releaseRead.resolve();
+    await Promise.all([read, mutation, following]);
+    expect(order).toEqual(["transcript", "read", "mutation settled", "following read"]);
+  } finally {
+    releaseWriter.resolve();
+    releaseRead.resolve();
+    await Promise.allSettled([writer, read, mutation, following]);
+  }
+});
 
 it.each(["single", "batch"] as const)(
   "lets a cold native task finish its background write before a %s foreground reservation",

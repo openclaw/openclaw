@@ -443,11 +443,7 @@ export function createSessionActorWorker(
           registerParticipantOwner(opened);
           registerTranscriptRewriteOwner(opened);
           const admit = (stage: "transaction" | "commit", publication: unknown) => {
-            const revision = readSqliteNativeMutationRevision(opened.db);
             withoutSqliteDatabaseWriteScope(opened.db, () => context.admit(stage, publication));
-            if (readSqliteNativeMutationRevision(opened.db) !== revision) {
-              throw new Error("Session actor database changed during authority admission");
-            }
           };
           // The writer owns both hydration and version validation. A replica miss
           // never requires a separate read command before this transaction.

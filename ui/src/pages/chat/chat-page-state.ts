@@ -17,7 +17,7 @@ import {
 } from "../../lib/subscriptions-controller.ts";
 import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
 import { ChatPageCloseFocus } from "./chat-page-close-focus.ts";
-import { ChatPageDropIndicator } from "./chat-page-drop-indicator.ts";
+import { createChatPageDropIndicator } from "./chat-page-drop-indicator.ts";
 import {
   navigateChatPage,
   ownedChatPaneRouteData,
@@ -39,7 +39,7 @@ import { RouteDraftComposerFocus, type ChatPaneElement } from "./route-draft-foc
 import { locationWithoutDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 import { observeChatCache, type ChatMessageCache } from "./session-message-cache.ts";
-import { SessionPrefetchController } from "./session-prefetch.ts";
+import { createSessionPrefetch } from "./session-prefetch.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SplitDropZone } from "./split-drop-zone.ts";
 import type { ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
@@ -113,12 +113,8 @@ export class ChatPageState extends ControllerHost {
   private unboundRoute: SessionChatRouteData | undefined;
   private processedRouteData: SessionChatRouteData | undefined;
   private readonly closeFocus = new ChatPageCloseFocus(this.host);
-  private readonly sessionDrop = new ChatPageDropIndicator(this.host, {
-    sessionSplitAvailable: () => this.sessionSplitAvailable,
-    narrow: () => this.narrow,
-    applySessionDrop: (sessionKey, paneId, zone) => this.applySessionDrop(sessionKey, paneId, zone),
-  });
-  private readonly prefetch: SessionPrefetchController;
+  sessionDrop!: ReturnType<typeof createChatPageDropIndicator>;
+  private prefetch!: () => void;
   private readonly mcpAppUnmountGate = new McpAppUnmountGate<ChatPageSnapshot | null>(this);
   private readonly viewerPresence = new ChatViewerPresenceController(this);
   private readonly retainedSessions = new ChatPageRetainedSessions(this.host, {
@@ -144,14 +140,22 @@ export class ChatPageState extends ControllerHost {
       .watchStore(() => this.context?.placementStartup)
       .watch(() => this.context?.gateway, subscribeChatPageRouteDefaults)
       .watchStore(() => this.context?.nativeConversation);
-    this.prefetch = new SessionPrefetchController(
+    ChatPageState.hosts.set(host, this);
+  }
+
+  createPresentation() {
+    this.sessionDrop = createChatPageDropIndicator(this.host, {
+      sessionSplitAvailable: () => this.sessionSplitAvailable,
+      narrow: () => this.narrow,
+      applySessionDrop: (sessionKey, paneId, zone) =>
+        this.applySessionDrop(sessionKey, paneId, zone),
+    });
+    this.prefetch = createSessionPrefetch(
       this.host,
       this.messageCache,
       this.snapshotStore,
       () => this.context,
     );
-    this.addController(this.prefetch);
-    ChatPageState.hosts.set(host, this);
   }
 
   override connect() {
@@ -170,7 +174,6 @@ export class ChatPageState extends ControllerHost {
     this.mediaQuery.addEventListener("change", this.handleViewportChange);
     this.mobileNavMediaQuery = window.matchMedia(mobileNavLayoutMediaQuery());
     this.mobileNavMediaQuery.addEventListener("change", this.handleMobileNavViewportChange);
-    this.sessionDrop.connect();
     window.addEventListener(UI_COMMAND_EVENT, this.handleUiCommand);
     this.retainedSessions.connect();
     this.syncRouteToActivePane();
@@ -195,7 +198,6 @@ export class ChatPageState extends ControllerHost {
     this.mediaQuery = null;
     this.mobileNavMediaQuery?.removeEventListener("change", this.handleMobileNavViewportChange);
     this.mobileNavMediaQuery = null;
-    this.sessionDrop.disconnect();
     window.removeEventListener(UI_COMMAND_EVENT, this.handleUiCommand);
     super.disconnect();
     ChatPageState.hosts.delete(this.host);
@@ -223,7 +225,7 @@ export class ChatPageState extends ControllerHost {
   }
 
   private updated(presentationChanged: boolean, renderedSnapshot: ChatPageSnapshot | null) {
-    this.prefetch.hostUpdated();
+    this.prefetch();
     // Cancelling retained previews republishes pane state; suspend only on a hiding edge.
     if (this.wasConversationPresented && !this.conversationPresented) {
       this.retainedSessions.suspend();
@@ -662,46 +664,42 @@ export class ChatPageState extends ControllerHost {
   ) {
     const onboarding = this.host.closest(".shell--onboarding") !== null;
     const webNavigation = this.mobileNavMediaQuery?.matches === true && !this.nativeConversation;
-    return createChatPageSnapshot(
-      layout,
-      {
-        retainedSessions,
-        unboundPaneIds: this.pendingCreate ? undefined : this.retainedSessions.unboundPaneIds,
-        pane: {
-          presented: this.conversationPresented,
-          chatMessagesBySession: this.messageCache,
-          sessionSnapshotStore: this.snapshotStore,
-          consumedDraftData: this.consumedDraftData,
-          context: this.context,
-          data: this.paneData,
-          draftFocus: this.draftFocus,
-          mergedChrome: mergeChatPageChrome(webNavigation, onboarding),
-          narrow: this.narrow,
-          navDrawerOpen: this.host.navDrawerOpen,
-          onboarding,
-          onClosePane: splitMode ? this.handleClosePane : undefined,
-          onFaceChange: this.handlePaneFaceChange,
-          onFocusPane: this.handleFocusPane,
-          onOpenSplitView:
-            splitMode || this.narrow || this.nativeConversation ? undefined : this.openSplitView,
-          onPaneSessionChange: this.handlePaneSessionChange,
-          onSessionDeleted: this.retainedSessions.removeSession,
-          onSplitDown: splitMode ? this.handleSplitDown : undefined,
-          onSplitRight: splitMode ? this.handleSplitRight : undefined,
-          splitMode,
-        },
-        onResizePanes: (columnId, paneIndex, ratio) => {
-          this.layout = this.layout
-            ? resizePanes(this.layout, columnId, paneIndex, ratio)
-            : undefined;
-        },
-        onResizeColumns: (columnIndex, ratio) => {
-          this.layout = this.layout ? resizeColumns(this.layout, columnIndex, ratio) : undefined;
-        },
-        onResizeEnd: () => this.persistLayout(this.layout),
+    return createChatPageSnapshot(layout, {
+      retainedSessions,
+      unboundPaneIds: this.pendingCreate ? undefined : this.retainedSessions.unboundPaneIds,
+      pane: {
+        presented: this.conversationPresented,
+        chatMessagesBySession: this.messageCache,
+        sessionSnapshotStore: this.snapshotStore,
+        consumedDraftData: this.consumedDraftData,
+        context: this.context,
+        data: this.paneData,
+        draftFocus: this.draftFocus,
+        mergedChrome: mergeChatPageChrome(webNavigation, onboarding),
+        narrow: this.narrow,
+        navDrawerOpen: this.host.navDrawerOpen,
+        onboarding,
+        onClosePane: splitMode ? this.handleClosePane : undefined,
+        onFaceChange: this.handlePaneFaceChange,
+        onFocusPane: this.handleFocusPane,
+        onOpenSplitView:
+          splitMode || this.narrow || this.nativeConversation ? undefined : this.openSplitView,
+        onPaneSessionChange: this.handlePaneSessionChange,
+        onSessionDeleted: this.retainedSessions.removeSession,
+        onSplitDown: splitMode ? this.handleSplitDown : undefined,
+        onSplitRight: splitMode ? this.handleSplitRight : undefined,
+        splitMode,
       },
-      this.pendingCreate ? null : this.sessionDrop.indicator,
-    );
+      onResizePanes: (columnId, paneIndex, ratio) => {
+        this.layout = this.layout
+          ? resizePanes(this.layout, columnId, paneIndex, ratio)
+          : undefined;
+      },
+      onResizeColumns: (columnIndex, ratio) => {
+        this.layout = this.layout ? resizeColumns(this.layout, columnIndex, ratio) : undefined;
+      },
+      onResizeEnd: () => this.persistLayout(this.layout),
+    });
   }
 
   render() {

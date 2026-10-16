@@ -50,7 +50,7 @@ function isWorktreeAdd(argv: readonly string[]): boolean {
 
 function expectCheckoutTimeouts(
   commandSpy: MockInstance<typeof commandRunner.runCommandWithTimeout>,
-  checkoutBases: string[],
+  checkoutBases: [string, string],
   networkTimeouts: number[] = [],
 ) {
   const gitCommands = commandSpy.mock.calls
@@ -59,10 +59,12 @@ function expectCheckoutTimeouts(
       checkout: isWorktreeAdd(argv) || (argv.includes("read-tree") && argv.includes("-u")),
       base: argv.at(-1),
       timeoutMs: typeof options === "number" ? options : options.timeoutMs,
+      noOutputTimeoutMs: typeof options === "number" ? undefined : options.noOutputTimeoutMs,
     }));
-  expect(gitCommands.filter((command) => command.checkout)).toEqual(
-    checkoutBases.map((base) => ({ checkout: true, base, timeoutMs: 300_000 })),
-  );
+  expect(gitCommands.filter((command) => command.checkout)).toEqual([
+    { checkout: true, base: checkoutBases[0], timeoutMs: 300_000, noOutputTimeoutMs: undefined },
+    { checkout: true, base: checkoutBases[1], timeoutMs: undefined, noOutputTimeoutMs: 300_000 },
+  ]);
   expect(
     new Set(gitCommands.filter((command) => !command.checkout).map((command) => command.timeoutMs)),
   ).toEqual(new Set([120_000, ...networkTimeouts]));

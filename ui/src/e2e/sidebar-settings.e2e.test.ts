@@ -284,13 +284,17 @@ suite.define(() => {
       const selected = picker.locator('[role="option"][aria-selected="true"]');
       await selected.waitFor({ state: "visible" });
       const selectedValue = await selected.getAttribute("data-value");
+      const selectedLabel = await picker.locator(".picker-select__trigger").textContent();
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
       await expect
         .poll(() => picker.locator(".picker-select__trigger").getAttribute("aria-expanded"))
         .toBe("false");
+      expect(await picker.locator(".picker-select__trigger").textContent()).toBe(selectedLabel);
+      await picker.locator(".picker-select__trigger").click();
       expect(await selected.getAttribute("data-value")).toBe(selectedValue);
+      await page.keyboard.press("Escape");
       expect(
         await picker
           .locator(".picker-select__trigger")

@@ -35,7 +35,6 @@ import {
   resolveModelRuntimeEntry,
 } from "../../../lib/model-runtime-choice.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import { ChatEffortPicker, type ChatEffortPickerParams } from "./chat-effort-picker.tsx";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import {
@@ -52,7 +51,7 @@ type ChatContextWindowTarget = Pick<
   "contextWindow" | "contextWindows" | "contextWindowDefault"
 >;
 
-type ChatModelControlsProps = {
+export type ChatModelControlsProps = {
   modelAuthStatusResult?: ModelAuthStatusResult | null;
   accountSelection?: ChatAccountSelection | null;
   renderAccountSection?: (model: string) => ChatModelAccountSection | undefined;
@@ -628,8 +627,4 @@ export function ChatModelControls(props: ChatModelControlsProps) {
       <ChatEffortPicker {...controls().effort} />
     </div>
   );
-}
-
-export function renderChatModelControls(props: ChatModelControlsProps) {
-  return solidContent(ChatModelControls, props);
 }

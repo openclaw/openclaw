@@ -268,6 +268,7 @@ src/agents/model-auth-policy.ts
 src/agents/model-catalog-lookup.ts
 src/agents/model-catalog-metadata.ts
 src/agents/model-compat-catalog.ts
+src/agents/model-cost-normalization.ts
 src/agents/model-extra-params.ts
 src/agents/model-ref-profile.ts
 src/agents/model-ref-shared.ts
@@ -1255,6 +1256,7 @@ src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
 src/infra/windows-process-census.ts
 src/infra/windows-process-start.ts
+src/infra/windows-user-sid.ts
 src/infra/worker-cpu.ts
 src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
@@ -1367,6 +1369,7 @@ src/plugins/compat/media-legacy-projection.ts
 src/plugins/compat/mention-inbox-record.ts
 src/plugins/compat/model-account-connect-record.ts
 src/plugins/compat/native-exec-approval-record.ts
+src/plugins/compat/plugin-sdk-private-runtime-export-record.ts
 src/plugins/compat/plugin-sdk-removed-export-records.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/progress-receipt-handoff-record.ts
@@ -2486,7 +2489,6 @@ src/state/user-profile-authority.ts
 src/state/user-profile-events.ts
 src/utils/normalize-secret-input.ts
 packages/gateway-protocol/src/schema/approval-id.ts
-packages/memory-host-sdk/src/host/openclaw-runtime-session-visibility.ts
 src/agents/delivery-evidence-values.ts
 src/agents/embedded-agent-runner/message-visibility.ts
 src/auto-reply/reply-payload.ts

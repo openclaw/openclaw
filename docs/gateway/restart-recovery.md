@@ -103,6 +103,9 @@ does not depend on the browser returning.
 Accepted `sessions_send` agent updates recover from their saved input and original
 delivery ID. Temporary admission, worker capacity, and storage-readiness failures
 get up to three attempts, waiting 5 seconds and then 10 seconds between attempts.
+Recovery preserves the accepted identity when older saved delivery metadata omitted
+an unset lifecycle revision during JSON storage. An identical completed input returns
+its recorded outcome; it does not start another turn. Changed input still conflicts.
 Each attempt checks the original source and destination sessions and current
 communication permission again. Reset, replaced, archived, or permission-denied
 sessions stop automatic delivery. Unknown failures and exhausted retries leave the

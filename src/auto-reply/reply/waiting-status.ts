@@ -50,7 +50,7 @@ export function buildWaitingStatusPayload(params: {
  * Ordinary and queued waiting replies offer their progress draft to the work
  * that owes the result: the yielding turn's children, or its in-flight media runs.
  */
-export async function attachWaitingStatusProgressContinuation(params: {
+async function attachWaitingStatusProgressContinuation(params: {
   payload: ReplyPayload;
   acceptedSessionSpawns?: readonly AcceptedSessionSpawn[];
   /** Set only for a media continuation, which has no completion child. */

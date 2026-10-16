@@ -3,7 +3,7 @@
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { updatePickers } from "../../test-helpers/select-picker.ts";
+import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { MemoryDreamingControls } from "./memory-dreaming.tsx";
 
@@ -105,6 +105,7 @@ describe("MemoryDreamingControls", () => {
     );
     await updatePickers(container);
     const row = rowFor(container, "Dreaming model");
+    await openPicker(row.querySelector("openclaw-select-picker")!);
 
     expect(row.textContent).toContain("Default: openai/gpt-5.6");
     expect(

@@ -1,10 +1,9 @@
-import { For, Show, createEffect, createSignal, onSettled } from "solid-js";
+import { For, Show, createEffect, createMemo, createStore } from "solid-js";
 import type {
   ControlUiSessionPullRequestCheck,
   ControlUiSessionPullRequestCheckDetails,
   ControlUiSessionPullRequestCheckStep,
 } from "../../../../../src/gateway/control-ui-contract.js";
-import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatCiEnglish } from "../../../i18n/locales/en-chat-ci.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
@@ -14,7 +13,7 @@ import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connectio
 import { resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { ChatCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclosure.ts";
+import { createCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclosure.ts";
 
 registerEnglishCatalog(registerChatCiEnglish);
 registerEnglishCatalog(registerGitHubEnglish);
@@ -91,138 +90,140 @@ function duration(item: { startedAt?: string; completedAt?: string }, running: b
 }
 
 /** Presentation-only details: the Gateway owns GitHub discovery, joins, and caching. */
-class ChatCiDetailsController extends ChatCiDisclosure {
-  loading = false;
-  result?: ControlUiSessionPullRequestCheckDetails;
-  error: string | null = null;
+type DetailsState = {
+  loading: boolean;
+  result: ControlUiSessionPullRequestCheckDetails | undefined;
+  error: string | null;
+  retryAt: number;
+  expandedJobs: Record<number, boolean>;
+};
 
-  private stopGateway?: () => void;
-  private boundGateway?: ApplicationGateway;
-  private readonly connection = createGatewayConnectionLifecycle({
-    client: null,
-    phase: "stopped",
+function createCiDetails(
+  props: ChatCiDisclosureProps,
+  host: SolidBridgeElement<ChatCiDisclosureProps>,
+) {
+  const [state, setState] = createStore<DetailsState>({
+    loading: false,
+    result: undefined,
+    error: null,
+    retryAt: 0,
+    expandedJobs: {},
   });
-  private target = "";
-  private requestGeneration = 0;
-  private requestController?: AbortController;
-  private refreshTimer?: ReturnType<typeof setTimeout>;
-  retryAt = 0;
-  readonly expandedJobs = new Map<number, boolean>();
-  private expansionInitialized = false;
+  const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
+  let target = "";
+  let requestController: AbortController | undefined;
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let expansionInitialized = false;
+  const disclosure = createCiDisclosure(host, handleVisibility, () => {
+    connection.dispose();
+    requestController?.abort();
+    clearTimeout(refreshTimer);
+  });
 
-  protected override disconnect(): void {
-    this.stopGateway?.();
-    this.stopGateway = undefined;
-    this.boundGateway = undefined;
-    this.connection.transition({ client: null, phase: "stopped" });
-    this.reset();
-  }
-
-  private targetKey(): string {
-    const pr = this.pullRequest;
-    return JSON.stringify([this.sessionKey, pr?.owner, pr?.repo, pr?.number, pr?.headSha]);
-  }
-
-  protected override syncProps(changed: ReadonlyMap<string, unknown>): void {
-    const target = this.targetKey();
-    if (target !== this.target) {
-      // Head changes refresh the same open monitor; session changes dismiss it.
-      if (changed.has("sessionKey") && changed.get("sessionKey") && this.disclosure) {
-        this.disclosure.open = false;
-      }
-      this.target = target;
-      this.reset();
-    }
-    if (this.boundGateway !== this.gateway) {
-      this.stopGateway?.();
-      this.boundGateway = this.gateway;
-      this.connection.transition(this.gateway?.snapshot ?? { client: null, phase: "stopped" });
-      this.reset();
-      this.stopGateway = this.gateway?.subscribe((snapshot) => {
-        if (this.connection.transition(snapshot)) {
-          this.reset();
-          void this.load();
+  createEffect(
+    () => props.gateway,
+    (gateway) => {
+      connection.transition(gateway?.snapshot ?? { client: null, phase: "stopped" });
+      reset();
+      const stop = gateway?.subscribe((snapshot) => {
+        if (connection.transition(snapshot)) {
+          reset();
+          queueMicrotask(() => void load());
         }
       });
-    }
-    if (!this.visible) {
-      this.cancelRequest();
-    }
-  }
-
-  protected override refreshIfVisible(changed: ReadonlyMap<string, unknown>): void {
-    if (
-      changed.has("pullRequest") ||
-      changed.has("gateway") ||
-      changed.has("sessionKey") ||
-      changed.has("presented")
-    ) {
-      if (
-        this.visible &&
-        !this.loading &&
-        (changed.has("presented") || (!this.result && !this.error))
-      ) {
-        void this.load();
+      queueMicrotask(() => void load());
+      return stop;
+    },
+  );
+  const targetKey = createMemo(() =>
+    JSON.stringify([
+      props.sessionKey,
+      props.pullRequest?.owner,
+      props.pullRequest?.repo,
+      props.pullRequest?.number,
+      props.pullRequest?.headSha,
+    ]),
+  );
+  const currentSessionKey = createMemo(() => props.sessionKey);
+  const presented = createMemo(() => props.presented);
+  createEffect(
+    () => [currentSessionKey(), targetKey(), presented()] as const,
+    ([sessionKey, nextTarget], previous) => {
+      if (target !== nextTarget) {
+        // Head changes refresh the same open monitor; session changes dismiss it.
+        if (previous?.[0] && previous[0] !== sessionKey) {
+          disclosure.close();
+        }
+        target = nextTarget;
+        reset();
       }
-    }
+      if (!disclosure.visible()) {
+        cancelRequest();
+      } else {
+        queueMicrotask(handleVisibility);
+      }
+    },
+  );
+
+  function cancelRequest() {
+    requestController?.abort();
+    requestController = undefined;
+    clearTimeout(refreshTimer);
+    refreshTimer = undefined;
+    setState((draft) => {
+      draft.loading = false;
+    });
   }
 
-  private cancelRequest(): void {
-    this.requestGeneration += 1;
-    this.requestController?.abort();
-    this.requestController = undefined;
-    clearTimeout(this.refreshTimer);
-    this.refreshTimer = undefined;
-    this.loading = false;
+  function reset() {
+    cancelRequest();
+    setState((draft) => {
+      draft.result = undefined;
+      draft.error = null;
+      draft.retryAt = 0;
+      draft.expandedJobs = {};
+    });
+    expansionInitialized = false;
   }
 
-  private reset(): void {
-    this.cancelRequest();
-    this.result = undefined;
-    this.error = null;
-    this.retryAt = 0;
-    this.expandedJobs.clear();
-    this.expansionInitialized = false;
-  }
-
-  protected override readonly handleVisibility = (): void => {
-    if (this.visible) {
-      void this.load();
+  function handleVisibility() {
+    if (disclosure.visible()) {
+      void load();
     } else {
-      this.cancelRequest();
+      cancelRequest();
     }
-  };
+  }
 
-  async load(): Promise<void> {
-    if (!this.visible || this.loading) {
+  async function load(): Promise<void> {
+    if (!disclosure.visible() || requestController) {
       return;
     }
-    if (Date.now() < this.retryAt) {
-      this.scheduleRetryAvailability();
+    if (Date.now() < state.retryAt) {
+      scheduleRetryAvailability(state.retryAt);
       return;
     }
-    const pr = this.pullRequest;
-    const gateway = this.gateway;
-    const scope = this.connection.capture();
-    if (!scope || !gateway || !pr?.headSha || !this.sessionKey) {
-      this.error = t("chat.pullRequests.checksUnavailable");
-      this.publish();
+    const pr = host.pullRequest;
+    const scope = connection.capture();
+    if (!scope || !host.gateway || !pr?.headSha || !host.sessionKey) {
+      setState((draft) => {
+        draft.error = t("chat.pullRequests.checksUnavailable");
+      });
       return;
     }
-    clearTimeout(this.refreshTimer);
-    const generation = ++this.requestGeneration;
+    clearTimeout(refreshTimer);
     const controller = new AbortController();
-    this.requestController = controller;
-    this.loading = true;
-    this.error = null;
-    this.publish();
+    requestController = controller;
+    setState((draft) => {
+      draft.loading = true;
+      draft.error = null;
+    });
     const current = () =>
-      this.visible && generation === this.requestGeneration && this.connection.isCurrent(scope);
+      disclosure.visible() && requestController === controller && connection.isCurrent(scope);
     try {
       const result = await scope.client.request<ControlUiSessionPullRequestCheckDetails>(
         "controlUi.sessionPullRequests.checks",
         {
-          sessionKey: this.sessionKey,
+          sessionKey: host.sessionKey,
           owner: pr.owner,
           repo: pr.repo,
           number: pr.number,
@@ -233,53 +234,71 @@ class ChatCiDetailsController extends ChatCiDisclosure {
       if (!current()) {
         return;
       }
-      this.result = result;
-      this.retryAt =
+      const retryAt =
         Date.now() + Math.max(0, result.retryAfterMs ?? (result.rateLimited ? 60_000 : 0));
-      if (!this.expansionInitialized && result.checks.length > 0) {
-        this.expansionInitialized = true;
-        const first = result.checks
-          .toSorted((a, b) => CHECK_ORDER[a.state] - CHECK_ORDER[b.state])
-          .find((check) => check.state === "failed" || check.state === "running");
-        if (first) {
-          this.expandedJobs.set(first.id, true);
+      setState((draft) => {
+        draft.result = result;
+        draft.retryAt = retryAt;
+        if (!expansionInitialized && result.checks.length > 0) {
+          expansionInitialized = true;
+          const first = result.checks
+            .toSorted((a, b) => CHECK_ORDER[a.state] - CHECK_ORDER[b.state])
+            .find((check) => check.state === "failed" || check.state === "running");
+          if (first) {
+            draft.expandedJobs[first.id] = true;
+          }
         }
-      }
-      const ids = new Set(result.checks.map((check) => check.id));
-      for (const id of this.expandedJobs.keys()) {
-        if (!ids.has(id)) {
-          this.expandedJobs.delete(id);
+        const ids = new Set(result.checks.map((check) => check.id));
+        for (const id of Object.keys(draft.expandedJobs)) {
+          if (!ids.has(Number(id))) {
+            delete draft.expandedJobs[Number(id)];
+          }
         }
-      }
-      if (this.retryAt > Date.now()) {
-        this.scheduleRetryAvailability();
+      });
+      if (retryAt > Date.now()) {
+        scheduleRetryAvailability(retryAt);
       } else if (result.status === "ready") {
-        // Completed jobs can be rerun on the same head without changing the
-        // summary counts. Poll only the visible monitor, even after completion.
-        this.refreshTimer = setTimeout(() => void this.load(), REFRESH_MS);
+        // Completed jobs can be rerun on the same head without changing the summary counts.
+        refreshTimer = setTimeout(() => void load(), REFRESH_MS);
       }
     } catch (error) {
       if (current()) {
         // Only explicit stale responses authorize retaining previous details.
-        this.result = undefined;
-        this.error = formatUiError(error, t("chat.pullRequests.checksUnavailable"));
+        setState((draft) => {
+          draft.result = undefined;
+          draft.error = formatUiError(error, t("chat.pullRequests.checksUnavailable"));
+        });
       }
     } finally {
       if (current()) {
-        this.loading = false;
-        this.requestController = undefined;
-        this.publish();
+        requestController = undefined;
+        setState((draft) => {
+          draft.loading = false;
+        });
       }
     }
   }
 
-  private scheduleRetryAvailability(): void {
-    clearTimeout(this.refreshTimer);
-    this.refreshTimer = setTimeout(
-      () => this.publish(),
-      Math.min(2_147_483_647, Math.max(0, this.retryAt - Date.now())),
+  function scheduleRetryAvailability(retryAt: number) {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(
+      () => {
+        setState((draft) => {
+          draft.retryAt = 0;
+        });
+      },
+      Math.min(2_147_483_647, Math.max(0, retryAt - Date.now())),
     );
   }
+  return {
+    state,
+    load,
+    setExpanded: (id: number, open: boolean) => {
+      setState((draft) => {
+        draft.expandedJobs[id] = open;
+      });
+    },
+  };
 }
 
 export type ChatCiDetailsElement = SolidBridgeElement<ChatCiDisclosureProps>;
@@ -287,23 +306,10 @@ function ChatCiDetailsContent(
   props: ChatCiDisclosureProps,
   host: SolidBridgeElement<ChatCiDisclosureProps>,
 ) {
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const notify = () => setRevision((value) => value + 1);
-  const model = new ChatCiDetailsController(host, host, notify);
-  const read = () => {
-    revision();
-    return model;
-  };
-  createEffect(
-    () => [props.gateway, props.pullRequest, props.sessionKey, props.presented],
-    () => model.sync(),
-  );
-  onSettled(() => {
-    model.connect();
-    return () => model.dispose();
-  });
-  const retryWait = () => Math.max(0, read().retryAt - Date.now());
-  const result = () => read().result;
+  const model = createCiDetails(props, host);
+  const state = model.state;
+  const retryWait = () => Math.max(0, state.retryAt - Date.now());
+  const result = () => state.result;
   const checks = () => result()?.checks ?? [];
   const jobs = () =>
     checks()
@@ -313,7 +319,7 @@ function ChatCiDetailsContent(
   const showNotice = () =>
     result()?.rateLimited ||
     result()?.status === "stale" ||
-    read().error ||
+    state.error ||
     result()?.status === "unavailable" ||
     result()?.error;
   const job = (check: () => ControlUiSessionPullRequestCheck) => {
@@ -328,13 +334,12 @@ function ChatCiDetailsContent(
         class="chat-ci__job"
         data-state={check().state}
         data-check-id={check().id}
-        prop:open={read().expandedJobs.get(check().id) ?? false}
+        prop:open={state.expandedJobs[check().id] ?? false}
         onToggle={(event) => {
           if (event.target !== event.currentTarget) {
             return;
           }
-          model.expandedJobs.set(check().id, event.currentTarget.open);
-          notify();
+          model.setExpanded(check().id, event.currentTarget.open);
         }}
       >
         <summary class="chat-ci__job-summary">
@@ -394,7 +399,7 @@ function ChatCiDetailsContent(
   return (
     <>
       <Show
-        when={read().loading && !result()}
+        when={state.loading && !result()}
         fallback={
           <Show when={showNotice()}>
             <div
@@ -403,7 +408,7 @@ function ChatCiDetailsContent(
               data-state={result()?.rateLimited ? "rate-limited" : "unavailable"}
             >
               <span>
-                {read().error ??
+                {state.error ??
                   t(
                     result()?.rateLimited
                       ? "chat.pullRequests.checksRateLimited"
@@ -420,7 +425,7 @@ function ChatCiDetailsContent(
               <button
                 class="chat-ci__retry"
                 type="button"
-                disabled={read().loading || retryWait() > 0}
+                disabled={state.loading || retryWait() > 0}
                 onClick={() => {
                   void model.load();
                 }}
@@ -435,7 +440,7 @@ function ChatCiDetailsContent(
           {t("chat.pullRequests.checksLoading")}
         </div>
       </Show>
-      <div class="chat-ci__jobs" aria-busy={read().loading ? "true" : "false"}>
+      <div class="chat-ci__jobs" aria-busy={state.loading ? "true" : "false"}>
         <For each={jobs()} keyed={(check) => check.id}>
           {job}
         </For>

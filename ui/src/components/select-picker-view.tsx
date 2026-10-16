@@ -531,10 +531,10 @@ export function PickerContent<Option extends PickerOption>(props: {
           data-picker-focus={!searching() ? "" : undefined}
           tabindex={searching() ? -1 : 0}
           aria-activedescendant={
-            !searching() && active() !== null ? optionId(active()!) : undefined
+            opened() && !searching() && active() !== null ? optionId(active()!) : undefined
           }
         >
-          <For each={sections()} keyed={(section) => section.position}>
+          <For each={opened() ? sections() : []} keyed={(section) => section.position}>
             {(section, index) => (
               <Show
                 when={section().group}

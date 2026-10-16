@@ -13,6 +13,8 @@ export const postgresSchemaMetadataSql = `CREATE TABLE openclaw_schema_meta (
   fingerprint TEXT, ddl_hash TEXT, server_major BIGINT)`;
 const recovery =
   "Use a compatible OpenClaw binary or restore the matching PostgreSQL schema and anchor; do not edit schema metadata.";
+// Keep the DDL seal portable when a backup is restored into a fresh namespace.
+const canonicalNamespace = "openclaw_schema";
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 export type PostgresCapabilities = {
@@ -87,6 +89,7 @@ function postgresSchemaFingerprint(
 
 export function postgresSchemaSql(
   schema: StoreSchema,
+  namespace: string,
   catalog?: readonly PostgresCatalogFact[],
 ): string {
   const tables = new Set(
@@ -116,7 +119,7 @@ export function postgresSchemaSql(
   return [
     schema.postgres ?? "",
     ...ordered.values(),
-    ...(schema.search ? [`;\n${postgresSearchSql(schema.search)}`] : []),
+    ...(schema.search ? [`;\n${postgresSearchSql(schema.search, namespace)}`] : []),
   ].join("\n");
 }
 
@@ -134,7 +137,7 @@ export function recordPostgresSchema(
     "UPDATE openclaw_schema_meta SET fingerprint = ?, ddl_hash = ?, server_major = ? WHERE store = ?",
   ).run(
     postgresSchemaFingerprint(captured.catalog),
-    hash(postgresSchemaSql(schema, captured.catalog)),
+    hash(postgresSchemaSql(schema, canonicalNamespace, captured.catalog)),
     admitPostgresCapabilities(db).serverMajor,
     schema.id,
   );
@@ -148,7 +151,7 @@ export function verifyPostgresSchema(
   snapshot: ReturnType<typeof readPostgresSchema>,
 ): void {
   const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
-  const ddl = postgresSchemaSql(schema, snapshot.catalog);
+  const ddl = postgresSchemaSql(schema, canonicalNamespace, snapshot.catalog);
   const { metadata } = snapshot;
   const major = admitPostgresCapabilities(db).serverMajor;
   if (
@@ -175,13 +178,12 @@ export function verifyAndRecordPostgresSchema(
   snapshot = readPostgresSchema(db, namespace, schema.id),
 ): void {
   const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
-  const ddl = postgresSchemaSql(schema, snapshot.catalog);
   const scratch = `openclaw_check_${randomUUID().replaceAll("-", "")}`;
   db.runTransaction(() => {
     db.exec(`CREATE SCHEMA ${quote(scratch)}`);
     try {
       db.exec(`SET LOCAL search_path TO ${quote(scratch)}`);
-      db.exec(ddl);
+      db.exec(postgresSchemaSql(schema, scratch, snapshot.catalog));
       const row = db.query(
         `SELECT catalog::text FROM (${postgresCatalogQuery(scratch, true)}) captured`,
       ).rows[0];

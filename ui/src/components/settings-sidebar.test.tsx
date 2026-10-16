@@ -665,6 +665,7 @@ describe("Settings agent selector", () => {
       expect(container.querySelectorAll("openclaw-agent-select")).toHaveLength(1);
       const selector = container.querySelector<AgentSelectElement>("openclaw-agent-select")!;
       await selector.updateComplete;
+      expect(props.agentIdentity.ensure).toHaveBeenCalledWith(["main"]);
       expect(
         selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label"),
       ).toContain("Main");
@@ -681,6 +682,19 @@ describe("Settings agent selector", () => {
         expect(props.settingsAgentSelection.set).toHaveBeenCalledWith("research"),
       );
       expect(props.onNavigate).not.toHaveBeenCalled();
+      render(
+        {
+          ...props,
+          settingsAgentSelection: {
+            ...props.settingsAgentSelection,
+            state: { selectedId: "research", scopeId: "research" },
+          },
+        },
+        container,
+      );
+      await waitForSolid(() =>
+        expect(props.agentIdentity.ensure).toHaveBeenLastCalledWith(["research"]),
+      );
     },
   );
 
