@@ -1,4 +1,4 @@
-import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionsResolveResult } from "../../../packages/gateway-protocol/src/index.js";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
@@ -22,30 +22,26 @@ const selectedResolution = {
   boardFace: "dashboard",
   boardPresentation: "expanded",
 } satisfies SessionsResolveResult;
-const dashboardRows = (
-  [
-    [selectedSessionKey, selectedResolution.displayName, "mira", "Mira", 3_000, "running"],
-    ["agent:main:dashboard:model-spend", "Model spend", "peter", "Peter", 8_000, "done"],
-    ["agent:main:dashboard:support-radar", "Support radar", "mira", "Mira", 18_000, "done"],
-    ["agent:main:dashboard:ci-signal", "CI signal", "peter", "Peter", 42_000, "done"],
-    ["agent:main:dashboard:community-pulse", "Community pulse", "mira", "Mira", 75_000, "done"],
-    ["agent:main:dashboard:gateway-fleet", "Gateway fleet", "peter", "Peter", 130_000, "done"],
-    ["agent:main:dashboard:deployments", "Deployments", "mira", "Mira", 160_000, "done"],
-    ["agent:main:dashboard:incidents", "Incidents", "peter", "Peter", 190_000, "done"],
-    ["agent:main:dashboard:traffic", "Traffic", "mira", "Mira", 220_000, "done"],
-    ["agent:main:dashboard:queues", "Queues", "peter", "Peter", 250_000, "done"],
-    ["agent:main:dashboard:workers", "Workers", "mira", "Mira", 280_000, "done"],
-    ["agent:main:dashboard:capacity", "Capacity", "peter", "Peter", 310_000, "done"],
-  ] as const
-).map(([key, displayName, actorId, actorLabel, age, status]) => ({
-  key,
+const capacityKey = "agent:main:dashboard:capacity";
+const agesSeconds = [3, 8, 18, 42, 75, 130, 160, 190, 220, 250, 280, 310];
+const dashboardRows = agesSeconds.map((age, index) => ({
+  key:
+    index === 0
+      ? selectedSessionKey
+      : index === 11
+        ? capacityKey
+        : `agent:main:dashboard:sample-${index}`,
   kind: "direct",
   boardFace: "dashboard",
   boardPresentation: "expanded",
-  displayName,
-  updatedAt: now - age,
-  status,
-  createdActor: { type: "human", id: actorId, label: actorLabel },
+  displayName: index === 0 ? selectedResolution.displayName : `Dashboard ${index}`,
+  updatedAt: now - age * 1_000,
+  status: index === 0 ? "running" : "done",
+  createdActor: {
+    type: "human",
+    id: index % 2 ? "peter" : "mira",
+    label: index % 2 ? "Peter" : "Mira",
+  },
 }));
 
 const widgetMarkup = `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#111827;color:#f8fafc;font:16px sans-serif"><main style="padding:24px"><h1>Live Gateway Pulse</h1><strong>All systems nominal</strong><p><label>Notes <input aria-label="Notes"></label></p><button onclick="document.querySelector('ul').replaceChildren(...Array.from(document.querySelectorAll('li')).reverse())">Reverse rows</button><ul><li>café</li><li>雪</li><li>🦞</li></ul></main></body></html>`;
@@ -76,17 +72,16 @@ const boardSnapshots = dashboardRows.map((row) => ({
       : []),
   ],
 }));
+async function waitForPreview(card: Locator) {
+  const frame = card.locator('iframe[title="Live Gateway Pulse"]');
+  await frame.waitFor();
+  await frame.contentFrame().getByText("All systems nominal", { exact: true }).waitFor();
+}
 suite.define(() => {
   it("opens a responsive gallery card without restarting its retained dashboard widgets", async () => {
-    const proofDir = process.env.OPENCLAW_UI_E2E_RECORD === "1" ? suite.artifactDir : null;
     await suite.withPage(
       { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
       async ({ page }) => {
-        const screenshot = async (name: string) => {
-          if (proofDir) {
-            await page.screenshot({ path: path.join(proofDir, `${name}.png`) });
-          }
-        };
         await page.route("**/dashboard-gallery-widget.html", (route) =>
           route.fulfill({
             contentType: "text/html; charset=utf-8",
@@ -140,31 +135,19 @@ suite.define(() => {
         await releaseCard.waitFor();
         expect(await gallery.locator("[data-dashboard-session]").count()).toBe(12);
         expect(await gallery.getByText("By Mira", { exact: true }).count()).toBe(6);
-        const previewFrame = releaseCard.locator('iframe[title="Live Gateway Pulse"]');
-        await previewFrame.waitFor();
-        await previewFrame
-          .contentFrame()
-          .getByText("All systems nominal", { exact: true })
-          .waitFor();
+        await waitForPreview(releaseCard);
         expect(await releaseCard.locator('[data-widget-name="release-tools"]').count()).toBe(0);
         expect(await gateway.getRequests("board.widget.appView")).toHaveLength(0);
-        const capacityKey = "agent:main:dashboard:capacity";
         const capacityRequested = async () =>
           (await gateway.getRequests("board.get", { sessionKey: capacityKey })).length > 0;
         expect(await capacityRequested()).toBe(false);
         const capacityCard = gallery.locator(`[data-dashboard-session="${capacityKey}"]`);
         await capacityCard.scrollIntoViewIfNeeded();
         await expect.poll(capacityRequested).toBe(true);
-        const capacityFrame = capacityCard.locator('iframe[title="Live Gateway Pulse"]');
-        await capacityFrame.waitFor();
-        await capacityFrame
-          .contentFrame()
-          .getByText("All systems nominal", { exact: true })
-          .waitFor();
+        await waitForPreview(capacityCard);
         expect(await releaseCard.locator("a").getAttribute("href")).toBe(
           "/dashboard/main/release-health-1234567890abcdef1234567890abcdef",
         );
-        await screenshot("01-gallery");
 
         await releaseCard.locator("a").click();
         await page.waitForURL(
@@ -194,7 +177,6 @@ suite.define(() => {
         );
         await page.locator('a.nav-item[href="/dashboards"]:not([aria-current])').waitFor();
         await noteInput.waitFor();
-        await screenshot("02-gallery-return");
         expect(await noteInput.inputValue()).toBe(notes);
         expect(await widgetRows.allTextContents()).toEqual(["🦞", "雪", "café"]);
         expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStartedAt);
@@ -203,37 +185,27 @@ suite.define(() => {
         await page.locator(".board-session-surface").waitFor();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
         await expect.poll(() => task.locator(".chat-thread").isHidden()).toBe(true);
-        await screenshot("02-expanded-dashboard");
 
         await selectChatLayoutAction(page, "Restore split");
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await task.locator(".chat-thread").waitFor();
-        await screenshot("03-split-dashboard");
         await selectChatLayoutAction(page, "Minimize side panel");
         await page.locator(".board-session-surface").waitFor();
         await task.locator(".chat-thread").waitFor({ state: "hidden" });
-        await screenshot("04-dashboard-only");
 
         await page.setViewportSize({ width: 390, height: 844 });
         await page.goto(`${suite.server.baseUrl}dashboards`);
         await gallery.getByText("Release health", { exact: true }).waitFor();
         await expect
           .poll(() =>
-            page.evaluate(() => ({
+            gallery.locator(".dashboards-grid").evaluate((element) => ({
               documentWidth: document.documentElement.scrollWidth,
               viewportWidth: window.innerWidth,
+              columns: getComputedStyle(element).gridTemplateColumns.split(" ").filter(Boolean)
+                .length,
             })),
           )
-          .toEqual({ documentWidth: 390, viewportWidth: 390 });
-        expect(
-          await gallery
-            .locator(".dashboards-grid")
-            .evaluate(
-              (element) =>
-                getComputedStyle(element).gridTemplateColumns.split(" ").filter(Boolean).length,
-            ),
-        ).toBe(1);
-        await screenshot("05-gallery-mobile");
+          .toEqual({ documentWidth: 390, viewportWidth: 390, columns: 1 });
       },
     );
   });

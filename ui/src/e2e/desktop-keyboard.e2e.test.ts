@@ -1,7 +1,5 @@
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
@@ -23,9 +21,7 @@ async function openKeyboard(page: Page, beforeReady?: (panel: Locator) => Promis
   const gateway = await installMockGateway(page, {
     deferredMethods: ["environments.list", "desktop.observe"],
     featureMethods: ["desktop.observe", "environments.list"],
-    methodResponses: {
-      "desktop.observe": desktopObserve,
-    },
+    methodResponses: { "desktop.observe": desktopObserve },
   });
   await page.goto(`${suite.server.baseUrl}focus/desktop/control/source/gateway`);
   await gateway.waitForRequest("environments.list");
@@ -39,9 +35,7 @@ async function openKeyboard(page: Page, beforeReady?: (panel: Locator) => Promis
   await gateway.resolveDeferred("desktop.observe");
   await panel.locator(".desktop-surface canvas").waitFor();
   await expect.poll(peer.events).toEqual(["authenticated:1"]);
-  await panel
-    .getByRole("status", { name: "Connecting to desktop…", exact: true })
-    .waitFor({ state: "hidden" });
+  await connectingStatus(panel).waitFor({ state: "hidden" });
   await panel.getByRole("button", { name: "Keyboard", exact: true }).click();
   return { gateway, panel, peer, input: panel.locator(".desktop-keyboard-input") };
 }
@@ -49,6 +43,18 @@ async function openKeyboard(page: Page, beforeReady?: (panel: Locator) => Promis
 type ModifierRow = [string, string, string, number, string, number];
 function makeModifier([platform, key, code, location, flag, keysym]: ModifierRow) {
   return { platform, key, code, location, flag, keysym };
+}
+const connectingStatus = (panel: Locator) =>
+  panel.getByRole("status", { name: "Connecting to desktop…", exact: true });
+const keyboardButton = (panel: Locator) =>
+  panel.getByRole("button", { name: "Keyboard", exact: true });
+async function expectDisabled(panel: Locator) {
+  expect(
+    await Promise.all([
+      keyboardButton(panel).isDisabled(),
+      panel.locator(".desktop-keyboard-input").isDisabled(),
+    ]),
+  ).toEqual([true, true]);
 }
 function dispatchInput(
   element: Element,
@@ -91,7 +97,6 @@ suite.define(() => {
         await page.keyboard.down("Shift");
         const held = [{ down: true, keysym: 0xffe1 }];
         await expect.poll(peer.keyEvents).toEqual(held);
-        const keyboardButton = panel.getByRole("button", { name: "Keyboard", exact: true });
         await (
           destination === "canvas"
             ? panel.locator(".desktop-surface canvas")
@@ -104,7 +109,7 @@ suite.define(() => {
         if (destination === "toolbar") {
           await page.keyboard.press("Escape");
         }
-        await keyboardButton.click();
+        await keyboardButton(panel).click();
         await expect.poll(() => input.evaluate((element) => element.matches(":focus"))).toBe(true);
         await input.evaluate(dispatchInput, { text: "p", inputType: "insertFromPaste" });
         await expect
@@ -188,12 +193,9 @@ suite.define(() => {
   it("accepts 32 pasted ASCII characters only after connected control and disables view-only input", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await page.setViewportSize({ width: 720, height: 540 });
-      const artifactDirectory = createControlUiE2eArtifactDir("desktop-keyboard-readiness");
       const { gateway, panel, peer, input } = await openKeyboard(page, async (connectingPanel) => {
-        await connectingPanel
-          .getByRole("status", { name: "Connecting to desktop…", exact: true })
-          .waitFor();
-        const keyboard = connectingPanel.getByRole("button", { name: "Keyboard", exact: true });
+        await connectingStatus(connectingPanel).waitFor();
+        const keyboard = keyboardButton(connectingPanel);
         const pendingInput = connectingPanel.locator(".desktop-keyboard-input");
         const padding = await pendingInput.inputValue();
         const bounds = await keyboard.boundingBox();
@@ -202,10 +204,8 @@ suite.define(() => {
         }
         await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
         await page.keyboard.insertText("early");
-        await page.screenshot({ path: path.join(artifactDirectory, "connecting.png") });
         expect(await pendingInput.inputValue()).toBe(padding);
-        expect(await keyboard.isDisabled()).toBe(true);
-        expect(await pendingInput.isDisabled()).toBe(true);
+        await expectDisabled(connectingPanel);
       });
       expect(await peer.keyEvents()).toEqual([]);
       const padding = await input.inputValue();
@@ -219,7 +219,6 @@ suite.define(() => {
       await page.keyboard.insertText("Z");
       await page.keyboard.press("Backspace");
       await expect.poll(peer.keyEvents).toEqual([...expected, ...keyPresses([0x5a, 0xff08])]);
-      await page.screenshot({ path: path.join(artifactDirectory, "connected-control.png") });
 
       await page.keyboard.down("Shift");
       const beforeHandoff = [...expected, ...keyPresses([0x5a, 0xff08])];
@@ -235,40 +234,24 @@ suite.define(() => {
       await expect.poll(peer.events).toContain("authenticated:2");
       await expect.poll(peer.events).toContain("closed:1");
       await page.keyboard.up("Shift");
-      await panel
-        .getByRole("status", { name: "Connecting to desktop…", exact: true })
-        .waitFor({ state: "hidden" });
-      expect(await panel.getByRole("button", { name: "Keyboard", exact: true }).isDisabled()).toBe(
-        true,
-      );
-      expect(await input.isDisabled()).toBe(true);
-      await page.screenshot({ path: path.join(artifactDirectory, "connected-view-only.png") });
+      await connectingStatus(panel).waitFor({ state: "hidden" });
+      await expectDisabled(panel);
       await peer.disconnect("view-only reconnect");
       await panel.getByRole("button", { name: "Reconnect", exact: true }).click();
       await expect.poll(peer.events).toContain("authenticated:3");
       await expect.poll(peer.events).toContain("closed:2");
-      await panel
-        .getByRole("status", { name: "Connecting to desktop…", exact: true })
-        .waitFor({ state: "hidden" });
-      expect(await panel.getByRole("button", { name: "Keyboard", exact: true }).isDisabled()).toBe(
-        true,
-      );
-      expect(await input.isDisabled()).toBe(true);
+      await connectingStatus(panel).waitFor({ state: "hidden" });
+      await expectDisabled(panel);
       expect(await peer.keyEvents()).toEqual(released);
     });
   });
 
-  it.each([
-    { name: "deletion", replacement: "", inputType: "deleteContentBackward", keysyms: [0xff08] },
-    {
-      name: "replacement",
-      replacement: "🦀",
-      inputType: "insertReplacementText",
-      keysyms: [0xff08, 0x0101f980],
-    },
+  it.each<[string, string, string, number[]]>([
+    ["deletion", "", "deleteContentBackward", [0xff08]],
+    ["replacement", "🦀", "insertReplacementText", [0xff08, 0x0101f980]],
   ])(
-    "keeps supplementary characters intact during mobile $name",
-    async ({ replacement, inputType, keysyms }) => {
+    "keeps supplementary characters intact during mobile %s",
+    async (_name, replacement, inputType, keysyms) => {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         const { peer, input } = await openKeyboard(page);
         const padding = await input.inputValue();
@@ -284,15 +267,11 @@ suite.define(() => {
     },
   );
 
-  it.each([
-    { name: "BMP", text: "éΩ漢", keysyms: [0x00e9, 0x07d9, 0x01006f22] },
-    {
-      name: "line endings",
-      text: "a\r\nb\rc\nd",
-      keysyms: [0x61, 0xff0d, 0x62, 0xff0d, 0x63, 0xff0d, 0x64],
-    },
-    { name: "supplementary Unicode", text: "A🦞B", keysyms: [0x41, 0x0101f99e, 0x42] },
-  ])("emits balanced $name keysyms through real noVNC", async ({ text, keysyms }) => {
+  it.each<[string, string, number[]]>([
+    ["BMP", "éΩ漢", [0x00e9, 0x07d9, 0x01006f22]],
+    ["line endings", "a\r\nb\rc\nd", [0x61, 0xff0d, 0x62, 0xff0d, 0x63, 0xff0d, 0x64]],
+    ["supplementary Unicode", "A🦞B", [0x41, 0x0101f99e, 0x42]],
+  ])("emits balanced %s keysyms through real noVNC", async (_name, text, keysyms) => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const { peer } = await openKeyboard(page);
       await page.keyboard.insertText(text);
