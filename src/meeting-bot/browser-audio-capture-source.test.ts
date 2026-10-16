@@ -81,6 +81,7 @@ function createPage(devices?: Promise<{ kind: string; deviceId: string; groupId:
     setInterval,
     clearInterval,
     Date,
+    performance,
   });
   const run = async (action: "start" | "pull" | "stop", captureId = "capture-1") => {
     const source = createMeetingBrowserAudioCaptureSource({
@@ -112,6 +113,23 @@ function createPage(devices?: Promise<{ kind: string; deviceId: string; groupId:
 
 describe("browser meeting input capture", () => {
   afterEach(() => vi.useRealTimers());
+
+  it.each([60_000, -60_000])(
+    "expires the capture by elapsed time across a wall-clock shift of %i ms",
+    async (clockShiftMs) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-22T00:00:00Z"));
+      const page = createPage();
+      await page.run("start");
+
+      vi.setSystemTime(Date.now() + clockShiftMs);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(page.close).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(page.close).toHaveBeenCalledOnce();
+    },
+  );
 
   it("rejects ownership lost while discovering input devices", async () => {
     vi.useFakeTimers();
