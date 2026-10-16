@@ -2530,7 +2530,6 @@ test/vitest/vitest.ui-paths.mjs
 test/vitest/vitest.unit-fast-paths.mjs
 test/vitest/vitest.unit-paths.mjs
 tsconfig.json
-<<<<<<< HEAD
 .github/actions/setup-security-review/action.yml
 .github/actions/setup-security-review/package-lock.json
 .github/actions/setup-security-review/package.json
@@ -2987,9 +2986,7 @@ src/sessions/session-run-error-presentation.ts
 src/sessions/user-turn-media.ts
 src/shared/channel-read-authority.ts
 src/shared/tool-approval-reviews.ts
-=======
 worker-heap-flag.mjs
 src/infra/database-engine/capability-unavailable.ts
 src/state/openclaw-agent-search-schema.ts
 src/state/postgres-schema.generated/agent-search-runtime.ts
->>>>>>> a2a7cd1f665f30 (feat(agents): integrate PostgreSQL transcript search)
