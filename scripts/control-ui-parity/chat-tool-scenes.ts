@@ -87,7 +87,7 @@ export const chatToolScenes: Scene[] = [
         await toggle.focus();
         await toggle.press("Enter");
       }
-      await page.locator("wa-tab-group").first().waitFor();
+      await page.locator(".chat-tool-card__modes .oc-tabs").first().waitFor();
     },
   },
   {

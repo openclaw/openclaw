@@ -1425,7 +1425,7 @@ const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 const RELEASE_ONLY_TOOLING_SHARDS = new Set(["core-tooling"]);
 const sharedUiE2eInputs = [
   "ui/{package.json,tsconfig.json,index.html,vite.config.ts}",
-  "ui/config/control-ui-{boot-preloads,chunking,locales,hover-guard,web-awesome-page-rule}.ts",
+  "ui/config/control-ui-{boot-preloads,chunking,locales,hover-guard}.ts",
   "ui/config/control-ui-boot-modules.json",
   "ui/src/main.ts",
   "ui/src/app/{app-host,app-root,bootstrap,router-outlet,router-outlet-controller}.ts",
@@ -1588,17 +1588,6 @@ export function createUiRealGatewayTestShards(
     e2eGroups.flatMap((group) => group.includePatterns ?? uiE2eRealGatewayTestFiles),
   );
   const parallelFiles = new Set(uiE2ePrebuiltParallelTestFiles);
-  // Balance the serial phase with standalone fixtures that need no preview build.
-  const standaloneCompanions = new Set(
-    [
-      "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
-      "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
-      "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
-      "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
-      "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
-      "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
-    ].map((file) => resolveUiTypeScriptPath(file)),
-  );
   const desktop = resolveUiTypeScriptPath("ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts");
   const files = uiE2eRealGatewayTestFiles.filter((file) => selected.has(file) && file !== desktop);
   // Desktop transport proof owns its file separately, alongside the serial phase.
@@ -1610,9 +1599,7 @@ export function createUiRealGatewayTestShards(
       {
         configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
         shard_name: `ui-e2e-real-gateway-${shard === 1 ? "desktop" : "parallel"}`,
-        includePatterns: files.filter(
-          (file) => (parallelFiles.has(file) && !standaloneCompanions.has(file)) === (shard === 2),
-        ),
+        includePatterns: files.filter((file) => parallelFiles.has(file) === (shard === 2)),
       },
     ],
   }));

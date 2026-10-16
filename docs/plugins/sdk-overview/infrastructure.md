@@ -189,6 +189,18 @@ without registered PostgreSQL DDL stays on SQLite; a selected PostgreSQL store t
 fails admission never falls back. See [Database engines](/reference/database-engines)
 for configuration, supported stores, durability, anchors, and observation events.
 
+Experimental search capabilities use the same worker entrypoint. Call
+`admitStoreSearch` with an admitted store and its existing index declarations to
+bind `TextIndex` and `VectorIndex` handles. `FullTextCapability` supplies native
+Kysely expressions; `VectorCapability` owns native candidate queries and derived
+index maintenance. Callers retain filters, limits, chronology, snippets' display
+bounds, and scoring policy. The adapter's existing capability labels remain
+diagnostic metadata. SQLite retains its L2 candidate selection and cosine
+reranking, with the memory owner's exact fallback when native vectors are
+unavailable. PostgreSQL search capabilities are currently `null` with an admission
+diagnostic; their later implementation will use explicitly documented native
+ranking rather than promise SQLite ranking equivalence.
+
 ### Owned stdio processes
 
 Bundled and official plugins with a bidirectional CLI protocol can use

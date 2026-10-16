@@ -1,5 +1,6 @@
 // Transcript mirroring turns outbound text/media notifications into compact transcript text.
 import path from "node:path";
+import type { SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND } from "../../shared/transcript-only-openclaw-assistant.js";
 
 export type SessionTranscriptDeliveryMirror =
   | {
@@ -11,6 +12,10 @@ export type SessionTranscriptDeliveryMirror =
       reason: "stale-foreground";
       sourceMessageId?: string;
     };
+
+export type SubagentCompletionDirectDeliveryMirror = {
+  kind: typeof SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND;
+};
 
 function extractFileNameFromMediaUrl(value: string): string | null {
   const trimmed = value.trim();

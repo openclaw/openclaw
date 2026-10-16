@@ -1,17 +1,10 @@
-import { html, nothing } from "lit";
 import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
-import { renderAgentIdentityAvatar } from "../../../components/identity-avatar-view.ts";
-import { renderKbd } from "../../../components/kbd.ts";
-import { t } from "../../../i18n/index.ts";
-import "../../../components/openclaw-mascot.ts";
-import { registerCommandPaletteEnglish } from "../../../i18n/locales/en-command-palette.ts";
 import { resolveAgentTextAvatar } from "../../../lib/agents/display.ts";
 import {
   resolveAgentAvatarUrl,
   resolveAssistantTextAvatar,
   resolveChatAvatarRenderUrl,
 } from "../../../lib/avatar.ts";
-import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import {
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
@@ -21,51 +14,16 @@ import { filterVisibleSessionRows } from "../../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
-  resolveUiSelectedGlobalAgentId,
-  type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
-
-registerCommandPaletteEnglish();
-
-type ChatWelcomeProps = {
-  currentAgentId?: string;
-  agents?: AgentsListResult["agents"];
-  assistantName: string;
-  assistantAvatar: string | null;
-  assistantAvatarUrl?: string | null;
-  /** Hero hint override; defaults to the chat slash-command hint. */
-  hint?: unknown;
-  /** Rendered between the hero and the recents (the new-session draft composer). */
-  composer?: unknown;
-  /** Hide recents and suggestions when the surrounding flow must stay ephemeral. */
-  hideSecondaryContent?: boolean;
-  /** Visually retire secondary content while the new-session draft is active. */
-  fadeSecondaryContent?: boolean;
-  sessions?: SessionsListResult | null;
-  sessionKey?: string;
-  sessionHost?: UiSessionDefaultsHost | null;
-  modelSetupRequired?: boolean;
-  onModelSetup?: () => void;
-  onDraftChange: (next: string) => void;
-  onSend: () => void;
-  onOpenSession?: (sessionKey: string) => void;
-};
-
-const WELCOME_SUGGESTION_KEYS = [
-  "chat.welcome.suggestions.whatCanYouDo",
-  "chat.welcome.suggestions.summarizeRecentSessions",
-  "chat.welcome.suggestions.configureChannel",
-  "chat.welcome.suggestions.checkSystemHealth",
-];
 
 const WELCOME_RECENT_SESSION_LIMIT = 5;
 
-export function resolveAssistantDisplayAvatar(
-  props: Pick<
-    ChatWelcomeProps,
-    "currentAgentId" | "agents" | "assistantAvatar" | "assistantAvatarUrl"
-  >,
-) {
+export function resolveAssistantDisplayAvatar(props: {
+  currentAgentId?: string;
+  agents?: AgentsListResult["agents"];
+  assistantAvatar: string | null;
+  assistantAvatarUrl?: string | null;
+}) {
   const id = props.currentAgentId ?? "main";
   const agent = props.agents?.find((entry) => entry.id === id);
   const avatar = resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
@@ -83,7 +41,7 @@ export function resolveAssistantDisplayAvatar(
   };
 }
 
-type WelcomeRecentSession = {
+export type WelcomeRecentSession = {
   key: string;
   name: string;
   subtitle: string | undefined;
@@ -127,130 +85,4 @@ export function prepareWelcomeRecentSessions(
         updatedAt: row.updatedAt,
       }))
   );
-}
-
-function renderWelcomeClawd() {
-  return html`
-    <div class="agent-chat__welcome-clawd" aria-hidden="true">
-      <openclaw-mascot mood="idle" .size=${112}></openclaw-mascot>
-    </div>
-  `;
-}
-
-function renderWelcomeRecentSessions(
-  rows: readonly WelcomeRecentSession[],
-  onOpenSession: ((sessionKey: string) => void) | undefined,
-) {
-  return html`
-    <div class="agent-chat__recents">
-      <div class="agent-chat__recents-title">${t("chat.welcome.recentSessions")}</div>
-      ${rows.map((row) => {
-        const subtitle = row.subtitle;
-        return html`
-          <button type="button" class="agent-chat__recent" @click=${() => onOpenSession?.(row.key)}>
-            <span class="agent-chat__recent-name">${row.name}</span>
-            ${subtitle ? html`<span class="agent-chat__recent-sub">${subtitle}</span>` : nothing}
-            <span class="agent-chat__recent-time">
-              ${formatRelativeTimestamp(row.updatedAt, { fallback: "" })}
-            </span>
-          </button>
-        `;
-      })}
-    </div>
-  `;
-}
-
-function renderWelcomeSuggestions(props: Pick<ChatWelcomeProps, "onDraftChange" | "onSend">) {
-  return html`
-    <div class="agent-chat__suggestions">
-      ${WELCOME_SUGGESTION_KEYS.map((key) => {
-        const text = t(key);
-        return html`
-          <button
-            type="button"
-            class="agent-chat__suggestion"
-            @click=${() => {
-              props.onDraftChange(text);
-              props.onSend();
-            }}
-          >
-            ${text}
-          </button>
-        `;
-      })}
-    </div>
-  `;
-}
-
-function renderWelcomeHero(props: ChatWelcomeProps) {
-  const name = props.assistantName || "Assistant";
-  const hint =
-    props.hint ??
-    html`${t("chat.welcome.hintBeforeShortcut")} ${renderKbd("/")}
-    ${t("chat.welcome.hintAfterShortcut")}`;
-  return html`
-    <div class="agent-chat__welcome-identity">
-      <span class="agent-chat__welcome-avatar" role="img" aria-label=${name}>
-        ${renderAgentIdentityAvatar(resolveAssistantDisplayAvatar(props))}
-      </span>
-      <div class="agent-chat__welcome-identity-copy">
-        <h2>${name}</h2>
-        <p class="agent-chat__hint">${hint}</p>
-      </div>
-    </div>
-  `;
-}
-
-/** The start-screen welcome block, shared by the empty chat and the new-session draft. */
-export function renderWelcomeState(
-  props: ChatWelcomeProps,
-  preparedRecents?: readonly WelcomeRecentSession[],
-) {
-  if (props.modelSetupRequired) {
-    return html`
-      <div class="agent-chat__welcome agent-chat__welcome--setup" role="alert">
-        ${renderWelcomeClawd()}
-        <h2>${t("modelSetup.required.title")}</h2>
-        <p class="agent-chat__hint">${t("modelSetup.required.body")}</p>
-        ${
-          props.onModelSetup
-            ? html`<button class="btn primary" type="button" @click=${props.onModelSetup}>
-                ${t("modelSetup.required.action")}
-              </button>`
-            : nothing
-        }
-      </div>
-    `;
-  }
-  const recentSessions =
-    preparedRecents ??
-    prepareWelcomeRecentSessions(
-      props.sessions,
-      props.sessionKey,
-      resolveUiSelectedGlobalAgentId(props.sessionHost ?? {}),
-    );
-  return html`
-    <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
-      ${renderWelcomeHero(props)} ${props.composer ?? nothing}
-      ${
-        props.hideSecondaryContent
-          ? nothing
-          : html`<div
-              class="agent-chat__welcome-secondary ${
-                props.fadeSecondaryContent ? "agent-chat__welcome-secondary--hidden" : ""
-              }"
-              aria-hidden=${props.fadeSecondaryContent ? "true" : "false"}
-              ?inert=${props.fadeSecondaryContent}
-            >
-              <div class="agent-chat__welcome-secondary-inner">
-                ${
-                  recentSessions.length > 0
-                    ? renderWelcomeRecentSessions(recentSessions, props.onOpenSession)
-                    : renderWelcomeSuggestions(props)
-                }
-              </div>
-            </div>`
-      }
-    </div>
-  `;
 }

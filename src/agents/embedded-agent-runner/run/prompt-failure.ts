@@ -16,11 +16,11 @@ import {
   FailoverError,
   hasRecordedModelFallbackStop,
   isCliTerminalStopCode,
+  isNonProviderRuntimeCoordinationError,
   resolveFailoverStatus,
 } from "../../failover-error.js";
 import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
-import { isAgentHarnessPreflightError } from "../../harness/errors.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
@@ -95,7 +95,7 @@ export async function handleEmbeddedPromptFailure(input: {
 }): Promise<PromptFailureOutcome> {
   const { runInput, preparedRuntime, normalizedAttempt, runtime, terminal } = input;
   if (
-    isAgentHarnessPreflightError(terminal.promptError) ||
+    isNonProviderRuntimeCoordinationError(terminal.promptError) ||
     hasRecordedModelFallbackStop(terminal.promptError)
   ) {
     throw terminal.promptError;

@@ -40,7 +40,6 @@ export function mergeReplyDirectiveResults(
     replyToCurrent: first.replyToCurrent || second.replyToCurrent,
     replyToTag: first.replyToTag || second.replyToTag,
     audioAsVoice: first.audioAsVoice || second.audioAsVoice || undefined,
-    isSilent: first.isSilent || second.isSilent,
   };
 }
 

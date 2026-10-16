@@ -420,6 +420,8 @@ async function runEmbeddedAttemptOwned(
         lifecycle: {
           applyPermissionMode: (mode, revokeApprovals) =>
             withRuntimeToolSchemaQuarantine(async (recordQuarantine) => {
+              // Record within the current operator's synchronous authorization scope.
+              params.permissionChange?.recordApplied(mode);
               await preparedToolBase.refreshPermissionMode(mode, revokeApprovals);
               preparedBundleTools.refreshTools(recordQuarantine);
               preparedToolCatalog.refreshTools(recordQuarantine);
@@ -434,7 +436,6 @@ async function runEmbeddedAttemptOwned(
                       })
                   : undefined,
               );
-              params.permissionChange?.recordApplied(mode);
             }),
           readYieldState: () => ({
             yieldAbortSettled,

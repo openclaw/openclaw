@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
@@ -75,7 +76,13 @@ export async function writeImportedSourcePage(params: {
   const pageStat = await readWikiPageStat(vault, params.pagePath);
   const created = !pageStat;
   const updatedAt = timestampMsToIsoString(params.sourceUpdatedAtMs) ?? new Date().toISOString();
-  const raw = await fs.readFile(params.sourcePath, "utf8");
+  const bytes = await fs.readFile(params.sourcePath);
+  if (!isUtf8(bytes)) {
+    throw new Error(
+      `Imported source file must be valid UTF-8: ${params.sourcePath}. Restore the source as valid UTF-8 and retry the sync.`,
+    );
+  }
+  const raw = bytes.toString("utf8");
   const rendered = params.buildRendered(raw, updatedAt);
   const existing = pageStat
     ? await readExistingWikiPage(

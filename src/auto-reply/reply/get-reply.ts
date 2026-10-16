@@ -55,7 +55,6 @@ import {
 } from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { finishCommandTurn } from "./command-turn-completion.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
@@ -300,7 +299,6 @@ async function resolveReplyFromConfig(
       onCleanup: opts?.onTypingCleanup,
       typingIntervalSeconds,
       keepalive: opts?.typingKeepalive ?? true,
-      silentToken: SILENT_REPLY_TOKEN,
       log: defaultRuntime.log,
     });
     opts?.onTypingController?.(controller);

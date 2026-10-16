@@ -72,7 +72,7 @@ function resolveFollowupCompletion(
         outcome.kind === "rejected"
           ? outcome.payload.text
           : outcome.kind === "settled" && outcome.status === "failed"
-            ? outcome.terminalFailurePayload.text
+            ? (outcome.terminalFailurePayload?.text ?? meta?.error?.message)
             : meta?.error?.message,
     },
   });
@@ -393,6 +393,7 @@ export function createFollowupRunner(
               ? {
                   visibleReplySent,
                   failed: !admittedTurn || completion.kind === "failed",
+                  completed: Boolean(admittedTurn) && completion.kind === "completed",
                   ...(deliveryPending ? { transportPending: true } : {}),
                 }
               : undefined,

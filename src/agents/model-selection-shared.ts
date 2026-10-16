@@ -1,3 +1,4 @@
+import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 /**
  * Shared model-selection resolution, alias, allowlist, and visibility logic.
  */
@@ -585,6 +586,40 @@ export function resolveModelRefFromString(
     raw: model,
   });
   return parsed ? { ref: parsed } : null;
+}
+
+/**
+ * Keep discovery and activation labels aligned: resolve aliases, but preserve
+ * literal catalog namespaces that the completion resolver strips.
+ */
+export function resolveConfiguredRouteModelLabel(params: {
+  /** The authored primary/utility ref, or undefined when none is configured. */
+  configuredRef: string | undefined;
+  /** The resolved selection for the same config (provider + model id). */
+  resolved: ModelRef;
+  /**
+   * The auth profile the selection already separated. Only a suffix matching
+   * this exact profile is dropped, so a literal catalog `@` suffix (e.g.
+   * `local-utility/tiny@experimental`) is preserved.
+   */
+  profileId?: string;
+}): string {
+  const configuredRef = params.configuredRef?.trim();
+  const configuredModel =
+    configuredRef && params.profileId && configuredRef.endsWith(`@${params.profileId}`)
+      ? configuredRef.slice(0, configuredRef.length - params.profileId.length - 1)
+      : (configuredRef ?? "");
+  // Preserve an authored namespace only when it resolves to the same model.
+  // Otherwise the concrete selection, rather than a mutable alias, owns identity.
+  const strippedConfiguredModel = stripSelfProviderModelPrefix(
+    params.resolved.provider,
+    configuredModel,
+  );
+  const model =
+    configuredModel && strippedConfiguredModel === params.resolved.model
+      ? configuredModel
+      : params.resolved.model;
+  return modelKey(params.resolved.provider, model);
 }
 
 /** Prepare implicit provider selection without promoting the agent's utility route. */

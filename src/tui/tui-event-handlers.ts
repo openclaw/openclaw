@@ -557,6 +557,23 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isKnownRun) {
       return;
     }
+    if (evt.stream === "run_status" && isActiveRun) {
+      if (evt.data?.phase === "waiting_for_model") {
+        pauseStreamingWatchdog();
+        setActivityStatus(
+          evt.data.reason === "slot"
+            ? "Waiting for a free model slot"
+            : "Waiting for the local model to respond",
+        );
+      } else if (evt.data?.phase === "starting_model") {
+        armStreamingWatchdog(evt.runId);
+        setActivityStatus("running");
+      } else {
+        return;
+      }
+      tui.requestRender();
+      return;
+    }
     if (evt.stream === "item") {
       if (
         renderTuiActivityItem({ chatLog, event: evt, verboseLevel: state.sessionInfo.verboseLevel })

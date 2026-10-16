@@ -1,4 +1,3 @@
-import { render } from "lit";
 import { flush } from "solid-js";
 import { expect, vi } from "vitest";
 import type { GatewaySessionRow, SessionsPatchResult } from "../../api/types.ts";
@@ -7,6 +6,7 @@ import type { BoardWidgetPageMenu } from "../../components/board/board-widget-ce
 import type { BoardCommandEvent, BoardProvider } from "../../lib/board/provider.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
+import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
@@ -36,7 +36,7 @@ type DashboardPane = TestChatPane & {
   handleBoardCommand: (event: BoardCommandEvent) => void;
   saveDashboardDefault: (row: GatewaySessionRow, agentId: string | undefined) => Promise<void>;
 };
-type HeaderMenu = HTMLElement & { updateComplete: Promise<boolean> };
+type HeaderMenu = HTMLElement;
 
 export const key = "agent:main:dashboard-defaults";
 
@@ -51,6 +51,22 @@ export function session(overrides: Partial<GatewaySessionRow> = {}): GatewaySess
     boardPresentation: "split",
     ...overrides,
   };
+}
+
+async function settleLayoutMenu() {
+  flush();
+  await Promise.resolve();
+  flush();
+}
+
+async function openLayoutMenu(menu: HTMLElement) {
+  await settleLayoutMenu();
+  const panel = menu.querySelector<HTMLElement>(".oc-menu")!;
+  if (!panel.matches(":popover-open")) {
+    menu.querySelector<HTMLButtonElement>(".chat-pane__layout-trigger")!.click();
+    await settleLayoutMenu();
+  }
+  expect(panel.matches(":popover-open")).toBe(true);
 }
 
 export function createDashboardHarness(
@@ -143,7 +159,7 @@ export function createDashboardHarness(
     pane.commitSidebarPanelResize(state.sidebarLayout, column!.id, 620);
   };
   const header = async () => {
-    render(
+    renderPaneLegacyContent(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         state.sessionsResult?.sessions[0],
@@ -155,11 +171,10 @@ export function createDashboardHarness(
       ),
       mount,
     );
+    await settleLayoutMenu();
     const menu = mount.querySelector<HeaderMenu>(".chat-pane__layout-menu");
     expect(menu).not.toBeNull();
-    menu!.dispatchEvent(new Event("wa-show"));
-    flush();
-    await menu!.updateComplete;
+    await openLayoutMenu(menu!);
     return menu!;
   };
   return {
@@ -181,23 +196,13 @@ export function createDashboardHarness(
   };
 }
 
-export function select(menu: ParentNode, value: string) {
-  const dropdown =
-    menu instanceof Element && menu.matches("wa-dropdown")
-      ? menu
-      : menu.querySelector("wa-dropdown");
-  expect(dropdown).not.toBeNull();
-  dropdown!.dispatchEvent(
-    new CustomEvent("wa-select", {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      detail: { item: { value } },
-    }),
-  );
-  if (dropdown!.matches(".chat-pane__layout-menu")) {
-    dropdown!.dispatchEvent(new CustomEvent("wa-after-hide"));
+export async function select(menu: ParentNode, value: string) {
+  if (!(menu instanceof HTMLElement) || !menu.matches(".chat-pane__layout-menu")) {
+    throw new Error("Expected native Layout menu");
   }
+  await openLayoutMenu(menu);
+  menu.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`)?.click();
+  await settleLayoutMenu();
 }
 
 export function expectPresentation(layout: SidebarLayout, expanded: boolean) {

@@ -1,5 +1,4 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, nothing } from "lit";
 import { CHAT_MESSAGE_MAX_CHARS } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
@@ -8,7 +7,7 @@ import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-ava
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
+import { emptyLegacyContent, solidContent } from "../../../lit/solid-content.tsx";
 import { messageRecoveryKey, resolveSourceMessageId } from "../chat-message-recovery.ts";
 import { resolveTurnRecap } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
@@ -30,14 +29,15 @@ import { assistantMediaPolicyKey, getChatMediaRenderVersion } from "./chat-messa
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
+import { ChatSubagentActivity } from "./chat-subagent-activity-live.ts";
 import {
   closeTranscriptSearch,
   getTranscriptState,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
+import { TranscriptWorkPreviews } from "./chat-transcript-content.tsx";
 import {
   isTranscriptGlobalAlias,
   resolveTranscriptAvatarPlacement,
@@ -62,7 +62,6 @@ import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { TurnRecapRow } from "./chat-working-indicator.tsx";
-import "./chat-subagent-activity-live.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 
@@ -337,12 +336,12 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     waitingSubagents: subagents.wait ?? undefined,
     runningSubagents: subagents.running,
     subagentActivity: subagents.activity.length
-      ? html`<openclaw-chat-subagent-activity
-          .rows=${subagents.activity}
-          .turnStartedAt=${subagents.wait ? workingIndicator?.request?.askedAt : undefined}
-          .onOpenSubagent=${props.onOpenSubagent}
-          .onOpenSession=${props.onOpenSession}
-        ></openclaw-chat-subagent-activity>`
+      ? solidContent(ChatSubagentActivity, {
+          rows: subagents.activity,
+          turnStartedAt: subagents.wait ? workingIndicator?.request?.askedAt : undefined,
+          onOpenSubagent: props.onOpenSubagent,
+          onOpenSession: props.onOpenSession,
+        })
       : undefined,
     onOpenSubagents: subagents.listed ? props.onOpenSubagents : undefined,
     runOutputTokens,
@@ -521,16 +520,11 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     transcriptRows.push(row);
     const previews = workPreviews.get(row.key);
     if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
-      appendContent(
-        `work-previews:${row.key}`,
-        html`<div class="chat-group tool chat-group--turn-block">
-          <div class="chat-group-messages">${solidContent(BrowserTabPreviews, { previews })}</div>
-        </div>`,
-      );
+      appendContent(`work-previews:${row.key}`, solidContent(TranscriptWorkPreviews, { previews }));
     }
   }
   const realtimeConversation = renderRealtimeTalkConversation(props);
-  if (realtimeConversation !== nothing) {
+  if (realtimeConversation !== emptyLegacyContent) {
     appendContent("realtime-talk", realtimeConversation);
   }
   if (turnRecap !== null && !recapAttached && !isEmpty && !showLoadingSkeleton) {
@@ -713,7 +707,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     isEmpty,
     showLoadingSkeleton,
     searchOpen: state.searchOpen,
-    renderRows: (overlay: unknown = nothing, header: TranscriptHeader | null = null) =>
+    renderRows: (overlay: unknown = emptyLegacyContent, header: TranscriptHeader | null = null) =>
       transcript.render(
         transcriptRows,
         (row) => (row.kind === "item" ? renderItem(row.item) : row.content),

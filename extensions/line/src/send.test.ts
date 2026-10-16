@@ -140,10 +140,10 @@ describe("LINE send helpers", () => {
       messageId,
       meta: { messageCount },
     }));
-    const messageId = messageIds[0];
+    const primaryMessageId = messageIds[0];
     return {
       chatId,
-      messageId,
+      messageId: primaryMessageId,
       receipt: {
         parts: messageIds.map((id, index) => ({
           index,
@@ -153,7 +153,7 @@ describe("LINE send helpers", () => {
           threadId: chatId,
         })),
         platformMessageIds: messageIds,
-        primaryPlatformMessageId: messageId,
+        primaryPlatformMessageId: primaryMessageId,
         raw,
         sentAt: fixedSentAt,
         sourceResults: messageIds.map((id) => ({ channel: "line", messageId: id })),
@@ -839,6 +839,30 @@ describe("LINE send helpers", () => {
     expect(textSpy).not.toHaveBeenCalled();
     expect(tracked.wasCanceled()).toBe(true);
   });
+
+  it.each(["batch", "flex"] as const)(
+    "does not log reflected message content on a rejected %s push",
+    async (kind) => {
+      const text = "synthetic private message reflected by LINE";
+      lineFetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: text }), {
+          status: 400,
+          statusText: "Bad Request",
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+      const caught = await captureError(() =>
+        kind === "batch"
+          ? sendModule.pushMessagesLine("U123", [{ type: "text", text }], { cfg: LINE_TEST_CFG })
+          : sendModule.pushFlexMessage("U123", text, { type: "bubble" }, { cfg: LINE_TEST_CFG }),
+      );
+
+      expect(caught).toBeInstanceOf(HTTPFetchError);
+      expect(caught).toMatchObject({ status: 400, body: JSON.stringify({ message: text }) });
+      expect(logVerboseMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("masks a reflected Authorization token through a real HTTP reflector", async () => {
     const token = "line-channel-access-token-xyz0123456789abcdef";

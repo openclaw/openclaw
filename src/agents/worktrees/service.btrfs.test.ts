@@ -41,7 +41,12 @@ describe("managed Btrfs checkout selection", () => {
     vi.mocked(detectWorktreeFilesystemBackend).mockResolvedValue(backend);
     let elapsed = 0;
     vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-    for (const name of ["cold", "warm", "still-cloned"]) {
+    for (const name of ["cold", "warm", "still-cloned", "new-commit"]) {
+      const content = name === "new-commit" ? "changed source\n" : "base\n";
+      if (name === "new-commit") {
+        await fs.writeFile(path.join(repo, "README.md"), content);
+        await git(repo, "commit", "-am", "changed source");
+      }
       const destination = path.join(worktreeRoot, name);
       const result = await addManagedWorktree({
         env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
@@ -58,12 +63,16 @@ describe("managed Btrfs checkout selection", () => {
         },
       });
       expect(result.code).toBe(0);
-      expect(await fs.readFile(path.join(destination, "README.md"), "utf8")).toBe("base\n");
+      expect(await fs.readFile(path.join(destination, "README.md"), "utf8")).toBe(content);
+      expect(await git(destination, "rev-parse", "HEAD")).toBe(
+        await git(repo, "rev-parse", "HEAD"),
+      );
     }
-    expect(backend.cloneTemplate).toHaveBeenCalledTimes(3);
+    expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+    expect(backend.cloneTemplate).toHaveBeenCalledTimes(4);
   });
 
-  it("selects Git after a slower warm snapshot and measures a new commit again", async () => {
+  it("reuses the cold comparison and Git selection across commits", async () => {
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     vi.stubEnv("GIT_ATTR_NOSYSTEM", "1");
     const root = tempDirs.make("openclaw-btrfs-selection-");
@@ -80,17 +89,72 @@ describe("managed Btrfs checkout selection", () => {
       elapsed += 1_000;
     });
     const diagnostics = vi.spyOn(preparationTiming, "setWorktreePreparationTemplate");
+    await fs.writeFile(path.join(repo, "private.txt"), "untracked source only\n");
     for (const name of ["cold-sample", "warm-sample", "selected-git"]) {
       const created = await service.create({ repoRoot: repo, name, baseRef: "HEAD" });
       expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
       expect(await git(created.path, "status", "--porcelain")).toBe("");
     }
-    expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
     expect(diagnostics).toHaveBeenCalledWith("unavailable", { reason: "measured-git-faster" });
-    await fs.writeFile(path.join(repo, "README.md"), "new commit\n");
-    await git(repo, "commit", "-am", "new source");
-    const next = await service.create({ repoRoot: repo, name: "new-generation", baseRef: "HEAD" });
-    expect(await fs.readFile(path.join(next.path, "README.md"), "utf8")).toBe("new commit\n");
-    expect(backend.cloneTemplate).toHaveBeenCalledTimes(3);
+    for (const name of ["commit-b", "commit-c"]) {
+      await fs.writeFile(path.join(repo, "README.md"), `${name}\n`);
+      await git(repo, "commit", "-am", name);
+      const commit = await git(repo, "rev-parse", "HEAD");
+      const next = await service.create({ repoRoot: repo, name, baseRef: "HEAD" });
+      expect(await fs.readFile(path.join(next.path, "README.md"), "utf8")).toBe(`${name}\n`);
+      expect(await git(next.path, "rev-parse", "HEAD")).toBe(commit);
+      expect(await git(next.path, "status", "--porcelain")).toBe("");
+      await expect(fs.access(path.join(next.path, "private.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+    expect.soft(backend.createTemplate).toHaveBeenCalledTimes(1);
+    expect.soft(backend.cloneTemplate).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Git selections separate by source policy, backend, and destination root", async () => {
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    vi.stubEnv("GIT_ATTR_NOSYSTEM", "1");
+    const root = tempDirs.make("openclaw-btrfs-scope-");
+    const repo = await initializeRepository(root);
+    const backend = createCopyWorktreeBackend();
+    vi.mocked(detectWorktreeFilesystemBackend).mockResolvedValue(backend);
+    let elapsed = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    const clone = createCopyWorktreeBackend().cloneTemplate;
+    vi.mocked(backend.cloneTemplate).mockImplementation(async (...args) => {
+      await clone(...args);
+      elapsed += 1_000;
+    });
+    for (const [index, step] of [
+      { sourceOnly: false, id: "btrfs", directory: "worktrees", cloned: true },
+      { sourceOnly: true, id: "btrfs", directory: "worktrees", cloned: true },
+      { sourceOnly: false, id: "btrfs", directory: "worktrees", cloned: false },
+      { sourceOnly: true, id: "btrfs", directory: "worktrees", cloned: false },
+      { sourceOnly: false, id: "refs", directory: "worktrees", cloned: true },
+      { sourceOnly: false, id: "btrfs", directory: "other-root", cloned: true },
+    ].entries()) {
+      backend.id = step.id;
+      const worktreeRoot = path.join(root, step.directory);
+      await fs.mkdir(worktreeRoot, { recursive: true });
+      const destination = path.join(worktreeRoot, `checkout-${index}`);
+      const result = await addManagedWorktree({
+        env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+        now: Date.now,
+        enabled: true,
+        repoRoot: repo,
+        commonDir: path.join(repo, ".git"),
+        worktreeRoot,
+        destination,
+        base: "HEAD",
+        sourceOnly: step.sourceOnly,
+        commitGuard: () => {},
+        requireSpace: async () => {},
+      });
+      expect(result.code).toBe(0);
+      expect(result.templateCloned === true, `checkout ${index}`).toBe(step.cloned);
+      expect(await fs.readFile(path.join(destination, "README.md"), "utf8")).toBe("base\n");
+      expect(await git(destination, "status", "--porcelain")).toBe("");
+    }
   });
 });

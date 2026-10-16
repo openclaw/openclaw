@@ -6,10 +6,6 @@
   min-block-size: 3.6rem;
 }
 
-.model-providers__loading {
-  min-block-size: 70vh;
-}
-
 .model-providers__installed-agent .settings-row__desc {
   min-block-size: 2.6em;
 }

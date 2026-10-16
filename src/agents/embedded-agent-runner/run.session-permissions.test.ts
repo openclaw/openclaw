@@ -272,7 +272,11 @@ describe("embedded run permissions and timeout delivery", () => {
       timeoutPhase: "provider",
       providerStarted: true,
       modelFallbackStopReason: "agent_run_terminal_timeout",
+      terminalReply: { disposition: "empty" },
+      finalAssistantVisibleText: "",
     });
+    expect(result.meta.finalAssistantRawText).toBeUndefined();
+    expect(result.meta.finalAssistantMessageRawText).toBe("");
     expect(
       classifyEmbeddedAgentRunResultForModelFallback({
         provider: "openai",
@@ -313,7 +317,8 @@ it("does not replace a successfully recovered final assistant after a prompt-tim
   const attempt = makeAttemptResult({
     terminal: { kind: "timeout", phase: "prompt", source: "runtime", aborted: true },
   });
-  const payloads = [{ text: "Completed answer after the timeout race." }];
+  const answer = "Completed answer after the timeout race.";
+  const payloads = [{ text: answer }];
   const setTerminalLifecycleMeta = vi.fn();
   const result = resolveEmbeddedRunTerminalTimeout({
     terminalPrepared: {
@@ -321,8 +326,13 @@ it("does not replace a successfully recovered final assistant after a prompt-tim
       hasSuccessfulFinalAssistantAfterPromptTimeout: true,
       hasPartialAssistantTextAfterPromptTimeout: false,
       replyDeliveryState: "missing",
+      sourceReplyDeliveryState: "missing",
       reportedModelRef: { provider: "openai", model: "gpt-5.4" },
-      finalAssistantVisibleText: undefined,
+      preparedTerminalReply: {
+        text: answer,
+        terminalReply: { disposition: "visible", text: answer },
+      },
+      finalAssistantVisibleText: answer,
       finalAssistantRawText: undefined,
       finalAssistantMessageRawText: undefined,
       recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,

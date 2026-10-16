@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createMemo, Match, Show, Switch } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
@@ -295,33 +295,30 @@ export class BoardWidgetFrameLifecycle {
         <div class="board-widget__frame-pane">
           <McpAppConfirmation confirmation={this.confirmation} revision={revision()} />
           <Show when={!view().visible && !view().covered}>
-            <Show
-              when={view().stalled}
+            <Switch
               fallback={
-                <Show
-                  when={view().waiting}
-                  fallback={
-                    <PanelLoadingSkeleton
-                      variant="discussion"
-                      label={t("common.loading")}
-                      compact={false}
-                      overlay
-                    />
-                  }
-                >
-                  <div class="board-widget__notice" role="status">
-                    {t("board.widget.waitingForConnection")}
-                  </div>
-                </Show>
+                <PanelLoadingSkeleton
+                  variant="discussion"
+                  label={t("common.loading")}
+                  compact={false}
+                  overlay
+                />
               }
             >
-              <div class="board-widget__notice" role="status">
-                {t("board.widget.resourceUnavailable")}
-                <button class="btn btn--small" onClick={() => this.retryContent()}>
-                  {t("common.retry")}
-                </button>
-              </div>
-            </Show>
+              <Match when={view().stalled}>
+                <div class="board-widget__notice" role="status">
+                  {t("board.widget.resourceUnavailable")}
+                  <button class="btn btn--small" onClick={() => this.retryContent()}>
+                    {t("common.retry")}
+                  </button>
+                </div>
+              </Match>
+              <Match when={view().waiting}>
+                <div class="board-widget__notice" role="status">
+                  {t("board.widget.waitingForConnection")}
+                </div>
+              </Match>
+            </Switch>
           </Show>
           <iframe
             class="board-widget__frame"

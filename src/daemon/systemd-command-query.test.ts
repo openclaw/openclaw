@@ -21,6 +21,7 @@ import {
   assertDaemonRuntimePinDefinition,
   commitDaemonRuntimePin,
   readDaemonRuntimePin,
+  withDaemonRuntimePinMigration,
 } from "./runtime-pin-state.js";
 import {
   hasGatewayServiceEnvironmentOverride,
@@ -335,6 +336,7 @@ describe("effective service inspection through legacy busctl", () => {
           OPENCLAW_CONFIG_PATH: path.join(env.HOME!, "state", "openclaw.json"),
         },
       };
+      await withDaemonRuntimePinMigration(scope.env, () => undefined);
       const pin = { runtime: "node" as const, path: "/usr/bin/node" };
       commitDaemonRuntimePin(scope, { expected: readDaemonRuntimePin(scope, null), pin }, actual);
       expect(readDaemonRuntimePin(scope, await inspect()).pin).toEqual(pin);

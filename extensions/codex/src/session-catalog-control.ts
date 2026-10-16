@@ -229,11 +229,9 @@ export function createCodexSessionCatalogControl(params: {
               }
             }
             foreground?.assertActive();
-            const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
             const bounded = { ...response, data: response.data.slice(0, remainingRows) };
             const projection = {
               localSessionsRoot: root,
-              sanitize: sanitizeTerminalText,
               diagnostics,
             };
             const page = query.useStateDbOnly

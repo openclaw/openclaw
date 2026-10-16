@@ -167,7 +167,9 @@ test.each([
       .spyOn(stateReads, "executeExistingOpenClawStateRead")
       .mockRejectedValueOnce(new Error("pairing read unavailable"));
     try {
-      await expect(getPairedDevice("node", baseDir)).rejects.toThrow("pairing read unavailable");
+      await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
+        "pairing read unavailable",
+      );
     } finally {
       read.mockRestore();
     }
@@ -508,6 +510,12 @@ test.each(["worker commit", "native owner commit"] as const)(
   async (commit) => {
     await listDevicePairing(baseDir);
     expect(getPublishedPairedDeviceBinding("node", baseDir)).not.toBeNull();
+    // A native owner's commit retires the resident rows, forcing this read through the worker.
+    const state = {
+      pendingById: {},
+      pairedByDeviceId: { node: (await getPairedDevice("node", baseDir))! },
+    };
+    persistDevicePairingStoreState(state, baseDir, "paired");
     const releaseRead = createDeferredCore();
     const releaseMutation = createDeferredCore();
     const mutationQueued = createDeferredCore();

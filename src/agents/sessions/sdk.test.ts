@@ -1,3 +1,6 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Agent session SDK tests cover prepared tool wiring, prompt preservation, and
 // session write-settlement behavior.
@@ -8,6 +11,8 @@ import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { runEmbeddedSessionFork } from "../embedded-agent-runner/session-fork.js";
+import { resolveEmbeddedAgentStream } from "../embedded-agent-runner/stream-resolution.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 
 const streamMocks = vi.hoisted(() => ({
@@ -24,6 +29,7 @@ import {
 } from "./agent-session-loop-resource-loader.test-support.js";
 import { AuthStorage } from "./auth-storage.js";
 import type { ToolDefinition } from "./extensions/types.js";
+import { convertToLlm } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
@@ -186,6 +192,74 @@ async function createSessionWithPersistedAssistantContent(content: unknown) {
     createSessionManagerWithPersistedAssistantMessages([{ content }]),
   );
 }
+
+describe("createAgentSession fork retention", () => {
+  it("collects disposed parents while their native transport remains available for replay", async () => {
+    const model: Model = { ...testModel, provider: "openai", api: "openai-chatgpt-responses" };
+    const modelRegistry = ModelRegistry.inMemory(AuthStorage.inMemory());
+    modelRegistry.registerProvider("fork-retention", {
+      api: model.api,
+      streamSimple: (requestModel, context, options) => {
+        const stream = createAssistantMessageEventStream();
+        void Promise.resolve(options?.onPayload?.({ input: context.messages }, requestModel)).then(
+          () =>
+            stream.end({
+              ...createAssistantError(""),
+              stopReason: "stop",
+              content: [{ type: "text", text: "Answer" }],
+            }),
+        );
+        return stream;
+      },
+    });
+    const references: WeakRef<object>[] = [];
+    const sessionId = "sdk-persisted-content";
+    async function completeParent(run: number) {
+      const sessionManager = createSessionManagerWithPersistedAssistantMessages([
+        { content: [{ type: "text", text: "Oversized parent history. ".repeat(16_384) }] },
+      ]);
+      const { session } = await createSdkSession({
+        model,
+        modelRegistry,
+        sessionManager,
+        cleanupProviderSessionResourcesOnDispose: false,
+      });
+      references.push(new WeakRef(sessionManager), new WeakRef(session));
+      try {
+        const { streamFn } = resolveEmbeddedAgentStream({
+          model,
+          sessionId,
+          currentStreamFn: session.agent.streamFn!,
+          sessionFork: { sessionId, agentId: "main", runId: `parent-${run}` },
+        });
+        await (await streamFn(model, { messages: convertToLlm(session.messages) }, {})).result();
+      } finally {
+        session.dispose();
+      }
+    }
+    try {
+      for (let run = 0; run < 4; run++) {
+        await completeParent(run);
+      }
+      const control = new WeakRef({ unowned: true });
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(control.deref()).toBeUndefined();
+      expect(references.filter((reference) => reference.deref())).toHaveLength(0);
+      await expect(
+        runEmbeddedSessionFork({
+          sessionId,
+          agentId: "main",
+          model,
+          question: "Side question",
+          assertCurrent() {},
+        }),
+      ).resolves.toBe("Answer");
+    } finally {
+      cleanupSessionResources(sessionId);
+    }
+  });
+});
 
 describe("AgentSession getLastAssistantText", () => {
   it.each([

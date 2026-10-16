@@ -304,6 +304,15 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         `  printf '%s' ${shellQuote(`${helpText}${fakeHydrateValueOptionHelp}`)}`,
         "  exit 0",
         "fi",
+        'if [ "$#" -eq 3 ] && [ "$1" = "config" ] && [ "$2" = "show" ] && [ "$3" = "--json" ] &&',
+        '  [ -z "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ] && [ "${OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS:-0}" = 0 ]; then',
+        '  if [ "${OPENCLAW_FAKE_CRABBOX_CONFIG_JSON+x}" = x ]; then',
+        "    printf '%s' \"$OPENCLAW_FAKE_CRABBOX_CONFIG_JSON\"",
+        "  else",
+        `    printf '%s' ${shellQuote('{"coordinator":"configured-broker","brokerMode":"managed","brokerAuth":"configured"}')}`,
+        "  fi",
+        "  exit 0",
+        "fi",
         "fast_run=1",
         'for arg in "$@"; do',
         '  case "$arg" in --artifact-glob|-artifact-glob|--script|-script|--timing-json|-timing-json|--timing-json=*|-timing-json=*) fast_run=0 ;; esac',
@@ -4085,6 +4094,7 @@ esac
   it.each(
     [
       "ci-check-focused-testbox.yml",
+      "ci-android-focused-testbox.yml",
       "ci-check-routine-testbox.yml",
       "ci-check-high-memory-testbox.yml",
     ].flatMap((workflow) =>

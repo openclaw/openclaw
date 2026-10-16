@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -84,6 +85,14 @@ it.each(["legacy", "current"] as const)(
   async (dialect) => {
     const f = await fixture();
     const inspectionPlan = structuredClone(f.inspectionPlan);
+    // Released drivers parse these owners before invoking the candidate's capture code.
+    const releasedOwner = z.discriminatedUnion("role", [
+      z.object({ role: z.literal("global") }),
+      z.object({ role: z.literal("agent"), agentId: z.string().min(1) }),
+    ]);
+    for (const [, database] of inspectionPlan.files) {
+      expect(z.array(releasedOwner).optional().safeParse(database.owners).success).toBe(true);
+    }
     if (dialect === "legacy") {
       // Released parents parse only spellings and discard the candidate's optional ownership fields.
       for (const [, database] of inspectionPlan.files) {

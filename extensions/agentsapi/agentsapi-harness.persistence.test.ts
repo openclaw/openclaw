@@ -68,7 +68,8 @@ beforeEach(() => {
   fetchWithSsrFGuardMock.mockReset().mockImplementation(() => {
     throw new Error("Unexpected live request in the Agents API persistence fixture");
   });
-  vi.useFakeTimers();
+  // Keep harness deadlines virtual, but share real clocks and heartbeats with SQLite lease workers.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
   createSession.mockImplementation((options) => {
     const turn = createTurn({ id: `turn-${options.sessionId}`, session_id: options.sessionId });

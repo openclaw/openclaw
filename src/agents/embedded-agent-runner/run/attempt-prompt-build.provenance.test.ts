@@ -10,7 +10,7 @@ import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
-import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import {
   createTestSession,
@@ -304,7 +304,7 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
       outcome: { status: "ok" },
       reason: SUBAGENT_ENDED_REASON_COMPLETE,
       triggerCleanup: false,
-      terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: answer }),
+      terminalReply: prepareAgentRunTerminalReply({ rawText: answer }).terminalReply,
     });
     await mutateSubagentRuns(
       [child.runId],
@@ -329,7 +329,11 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
   if (!first || !second) {
     throw new Error("expected two completed children for requester queue delivery");
   }
-  expect(runs.get(first.runId)?.completion?.resultText).toHaveLength(4_096);
+  const boundedReply = runs.get(first.runId)?.completion?.terminalReply;
+  if (boundedReply?.disposition !== "visible") {
+    throw new Error("expected visible terminal evidence");
+  }
+  expect(boundedReply.text).toHaveLength(4_096);
   const storedCompletion = structuredClone(runs.get(first.runId)?.completion);
   announceTesting.setDepsForTest({
     findTranscriptEvent: async ({ sessionId }, match) => {

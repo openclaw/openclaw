@@ -53,6 +53,43 @@ describe("config raw editing and redaction", () => {
     return element;
   }
 
+  it("retains the focused raw editor through draft and page updates", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const original = '{"laboratory":{"endpoint":"form-api","retryBudget":4}}';
+    const draft = '{laboratory:{endpoint:"raw-api",retryBudget:8}}';
+    const props: ConfigProps = {
+      ...baseProps(),
+      formMode: "raw",
+      raw: original,
+      originalRaw: original,
+      onRawChange: (next) => {
+        props.raw = next;
+      },
+    };
+    try {
+      renderConfigInto(props, container);
+      const textarea = required(container, ".config-raw-field textarea", HTMLTextAreaElement);
+      textarea.focus();
+      textarea.value = draft;
+      textarea.setSelectionRange(3, 6);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(props.raw).toBe(draft);
+      renderConfigInto(props, container);
+      expect(required(container, ".config-raw-field textarea", HTMLTextAreaElement)).toBe(textarea);
+      expect(document.activeElement).toBe(textarea);
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([3, 6]);
+
+      renderConfigInto({ ...props, issues: [] }, container);
+      expect(required(container, ".config-raw-field textarea", HTMLTextAreaElement)).toBe(textarea);
+      expect(document.activeElement).toBe(textarea);
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([3, 6]);
+      expect(textarea.value).toBe(draft);
+      expect(findButtonByText(container, "Save").disabled).toBe(false);
+    } finally {
+      container.remove();
+    }
+  });
+
   it("shows the form-unsafe banner only for populated unsupported paths", () => {
     const schema = object({
       gateway: object({
@@ -136,6 +173,24 @@ describe("config raw editing and redaction", () => {
     expect(findButtonByText(container, "Raw").getAttribute("aria-pressed")).toBe("false");
     findButtonByText(container, "Raw").click();
     expect(props.onFormModeChange).toHaveBeenCalledWith("raw");
+  });
+
+  it("retains the focused raw editor across equivalent config publications", () => {
+    const { container, props } = renderConfigView({ formMode: "raw" });
+    document.body.append(container);
+    try {
+      const textarea = required(container, ".config-raw-field textarea", HTMLTextAreaElement);
+      textarea.focus();
+      textarea.setSelectionRange(1, 3);
+
+      renderConfigInto({ ...props }, container);
+
+      expect(required(container, ".config-raw-field textarea", HTMLTextAreaElement)).toBe(textarea);
+      expect(document.activeElement).toBe(textarea);
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([1, 3]);
+    } finally {
+      container.remove();
+    }
   });
 
   it("pins the raw editor while an unsaved raw draft is authoritative", () => {

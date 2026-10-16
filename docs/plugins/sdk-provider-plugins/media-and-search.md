@@ -18,6 +18,14 @@ the private `openclaw/plugin-sdk/concurrency-runtime` subpath. It returns
 `promise`, `resolve`, and `reject` without loading logging or provider auth;
 the adapter retains responsibility for cancellation and terminal settlement.
 
+Speech providers can use `createSpeechDirectiveParser` from the lightweight
+`openclaw/plugin-sdk/speech-provider` subpath. Map each override field to its
+policy key and accepted token aliases; optional field callbacks retain vendor
+validation and warning text. The shared parser handles alias dispatch and policy
+gating and returns an override patch. The host merges these patches into the
+provider's accumulated overrides; callbacks use `currentOverrides` only when
+merging a nested value such as voice settings.
+
 ## Media and search capabilities
 
 <Tabs>
