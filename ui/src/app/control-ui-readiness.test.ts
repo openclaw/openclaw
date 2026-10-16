@@ -1,5 +1,6 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
 import type { JSX } from "@solidjs/web";
+import { createComponent, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import type { SolidRouteProps } from "../app-route-types.ts";
@@ -66,7 +67,13 @@ it("publishes the new generation only after the retiring MCP route releases its 
         id: "about",
         path: "/about",
         component: () => ({
-          renderSolid: (props) => () => (props.data ? previousView : null),
+          renderSolid: (props) =>
+            createComponent(Show, {
+              get when() {
+                return props.data;
+              },
+              children: () => previousView,
+            }),
         }),
         loader: () => ({ ready: true }),
       }),
