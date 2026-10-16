@@ -31,9 +31,9 @@ import {
   type StagedOlderHistoryPage,
 } from "./chat-history-request.ts";
 import {
+  applyChatHistoryRefill,
   commitCurrentChatHistorySnapshot,
   historySessionId,
-  reconcileHistoryTail,
   resolveChatHistoryPagination,
   type ChatHistoryResult,
 } from "./chat-history-snapshot.ts";
@@ -60,7 +60,6 @@ import { persistChatComposerState } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
   publishChatSessionProjectionMessages,
-  reduceChatSessionProjection,
   retireChatSubmissionDisplay,
 } from "./history-merge.ts";
 import {
@@ -506,20 +505,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         }
         const previousCount = state.chatMessages.length;
         if (requestedOffset === 0) {
-          // A byte-limited refill can be smaller than the cache. Replace its
-          // window; the projection owner alone retains live and pending rows.
-          const tail = reconcileHistoryTail({
-            nextMessages: messages,
-            nextPagination,
-            nextSessionId: historySessionId(result),
-            previousMessages: state.chatMessages,
-            previousPagination: pagination,
-            previousSessionId: state.currentSessionId ?? null,
-          });
-          reduceChatSessionProjection(state, {
-            type: "snapshotLoaded",
-            messages: tail?.messages ?? messages,
-          });
+          applyChatHistoryRefill(state, result);
         } else {
           publishChatSessionProjectionMessages(
             state,
