@@ -1,6 +1,7 @@
 import { AsyncResource } from "node:async_hooks";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
@@ -48,39 +49,23 @@ import {
   type WorkerTurnLauncherOptions,
 } from "./worker-turn-launcher.test-support.js";
 
-function visible(messages: readonly unknown[]) {
-  return messages.map((message) => {
-    if (!message || typeof message !== "object") {
-      throw new Error("invalid synthetic history");
-    }
-    const item = message as { role?: string; content?: unknown };
-    const text =
-      typeof item.content === "string"
-        ? item.content
-        : Array.isArray(item.content)
-          ? item.content
-              .map((part: unknown) =>
-                part && typeof part === "object" && "text" in part && typeof part.text === "string"
-                  ? part.text
-                  : "",
-              )
-              .join("")
-          : "";
-    return { role: item.role, text };
-  });
+function visible(messages: readonly { role?: string; content?: unknown }[]) {
+  return messages.map(({ role, content }) => ({
+    role,
+    text: typeof content === "string" ? content : collectTextContentBlocks(content).join(""),
+  }));
 }
 
 function seedPrevious() {
   const manager = SessionManager.open(sessionTarget);
-  manager.appendMessage(makeAgentUserMessage({ content: "previous request", timestamp: 1 }));
-  const previousLeafId = manager.appendMessage(
-    makeAgentAssistantMessage({
-      content: [{ type: "text", text: "previous answer" }],
-      timestamp: 2,
-    }),
-  );
+  manager.appendMessage(user("previous request", 1));
+  const previousLeafId = manager.appendMessage(assistant("previous answer", 2));
   return { manager, previousLeafId };
 }
+
+const user = (content: string, timestamp = 0) => makeAgentUserMessage({ content, timestamp });
+const assistant = (text: string, timestamp = 0) =>
+  makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp });
 
 const prior = [
   { role: "user", text: "previous request" },
@@ -91,27 +76,31 @@ const priorAtModelBoundary = [
   { role: "assistant", text: "previous answer" },
 ];
 
-function recorder() {
+function recorder(excludeFromContext = false) {
   return createUserTurnTranscriptRecorder({
     target: { ...sessionTarget, sessionEntry: undefined },
     input: {
       text: "current request",
       idempotencyKey: "synthetic-current-user",
+      ...(excludeFromContext ? { excludeFromContext: true } : {}),
     },
   });
 }
 
 let hasUnjoinedOwner = false;
 
-function request(runId: string): SessionPlacementTurnParams {
-  return { ...turn(runId), prompt: "current request", transcriptPrompt: "current request" };
-}
-
 async function launchProbe(
-  input: SessionPlacementTurnParams,
+  runId: string,
+  overrides: Partial<SessionPlacementTurnParams> = {},
   assertRunCurrent?: () => void,
   waitForInitialPlacement?: WorkerTurnLauncherOptions["waitForInitialPlacement"],
 ) {
+  const input = {
+    ...turn(runId),
+    prompt: "current request",
+    transcriptPrompt: "current request",
+    ...overrides,
+  };
   if (!waitForInitialPlacement && (await placements.getAsync(SESSION_ID))?.state !== "active") {
     await seedActivePlacement();
   }
@@ -186,23 +175,19 @@ async function launchProbe(
   expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
   if (launch) {
-    expect(outcome.kind).toBe("rejected");
-    if (outcome.kind === "rejected") {
-      expect(outcome.error).toBe(deliberateStop);
-    }
+    expect(outcome.kind === "rejected" && outcome.error).toBe(deliberateStop);
   }
   return { launch, credentialCalls, tunnelCalls, outcome, deliberateStop };
 }
 
 function expectNoLaunch(result: Awaited<ReturnType<typeof launchProbe>>) {
-  expect(result.credentialCalls).toBe(0);
-  expect(result.tunnelCalls).toBe(0);
-  expect(result.launch).toBeUndefined();
+  expect(result).toMatchObject({ credentialCalls: 0, tunnelCalls: 0, launch: undefined });
 }
 
 async function withAsyncReadHook<T>(
-  hooks: { before?: () => Promise<void>; after?: () => Promise<void> },
+  hook: () => Promise<void>,
   run: () => Promise<T>,
+  phase: "before" | "after" = "after",
 ) {
   const original = SessionManager.openModelContextAsync.bind(SessionManager);
   const descriptor = Object.getOwnPropertyDescriptor(SessionManager, "openModelContextAsync")!;
@@ -211,9 +196,13 @@ async function withAsyncReadHook<T>(
     ...descriptor,
     value: async (...args: Parameters<typeof original>) => {
       calls++;
-      await hooks.before?.();
+      if (phase === "before") {
+        await hook();
+      }
       const result = await original(...args);
-      await hooks.after?.();
+      if (phase === "after") {
+        await hook();
+      }
       return result;
     },
   });
@@ -284,21 +273,14 @@ describe("worker detached model-context branch parity", () => {
       isError: true,
       timestamp: 2,
     });
-    const committedLeaf = await manager.appendMessageAsync(
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Preserved partial reply" }],
-        timestamp: 3,
-      }),
-    );
+    const committedLeaf = await manager.appendMessageAsync(assistant("Preserved partial reply", 3));
     expect(committedLeaf).not.toBe(originalLeaf);
-    const stale = await launchProbe({
-      ...request("original-recorder-borrowed"),
+    const stale = await launchProbe("original-recorder-borrowed", {
       suppressNextUserMessagePersistence: true,
       userTurnTranscriptRecorder: original,
     });
     expect(stale.launch?.baseLeafId).toBe(originalLeaf);
-    const continuation = await launchProbe({
-      ...request("interruption-continuation"),
+    const continuation = await launchProbe("interruption-continuation", {
       suppressNextUserMessagePersistence: true,
     });
     expect(continuation.launch?.baseLeafId).toBe(committedLeaf);
@@ -309,18 +291,11 @@ describe("worker detached model-context branch parity", () => {
     "waits for context readiness and preserves the pre-persisted input prefix (side append=%s)",
     async (sideAppend) => {
       const { manager, previousLeafId } = seedPrevious();
-      const currentId = manager.appendMessage(
-        makeAgentUserMessage({
-          content: "current request",
-          timestamp: 3,
-        }),
-      );
+      const currentId = manager.appendMessage(user("current request", 3));
       let sideId: string | undefined;
       if (sideAppend) {
         manager.branch(previousLeafId);
-        sideId = manager.appendMessage(
-          makeAgentUserMessage({ content: "inactive side input", timestamp: 4 }),
-        );
+        sideId = manager.appendMessage(user("inactive side input", 4));
         manager.appendLeafControl({
           targetId: currentId,
           appendParentId: sideId,
@@ -332,24 +307,16 @@ describe("worker detached model-context branch parity", () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
         const { result } = await withAsyncReadHook(
-          {
-            // Readiness may arrive after the former fixture deadline on a loaded host.
-            before: async () => {
-              await vi.advanceTimersByTimeAsync(5_001);
-            },
-          },
-          () =>
-            launchProbe({
-              ...request("persisted-current"),
-              suppressNextUserMessagePersistence: true,
-            }),
+          // Readiness may arrive after the former fixture deadline on a loaded host.
+          () => vi.advanceTimersByTimeAsync(5_001),
+          () => launchProbe("persisted-current", { suppressNextUserMessagePersistence: true }),
+          "before",
         );
         expect(result.launch).toEqual({ baseLeafId: currentId, history: priorAtModelBoundary });
         expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
         if (sideAppend) {
           const after = SessionManager.open(sessionTarget);
-          expect(after.getLeafId()).toBe(currentId);
-          expect(after.getAppendParentId()).toBe(sideId);
+          expect([after.getLeafId(), after.getAppendParentId()]).toEqual([currentId, sideId]);
         }
       } finally {
         vi.useRealTimers();
@@ -368,8 +335,7 @@ describe("worker detached model-context branch parity", () => {
       const inputRecorder = recorder();
       expect(inputRecorder.hasPersisted()).toBe(false);
       const pending = state === "in-flight" ? inputRecorder.persistApproved() : undefined;
-      const result = await launchProbe({
-        ...request("recorder-admission"),
+      const result = await launchProbe("recorder-admission", {
         userTurnTranscriptRecorder: inputRecorder,
       });
       await pending;
@@ -393,15 +359,8 @@ describe("worker detached model-context branch parity", () => {
     "uses the recorder's admitted prefix with $appendAt activity (excluded input: $excludeFromContext)",
     async ({ excludeFromContext, appendAt }) => {
       const { manager } = seedPrevious();
-      manager.appendMessage(makeAgentUserMessage({ content: "earlier unanswered input" }));
-      const inputRecorder = createUserTurnTranscriptRecorder({
-        target: { ...sessionTarget, sessionEntry: undefined },
-        input: {
-          text: "current request",
-          idempotencyKey: "synthetic-current-user",
-          ...(excludeFromContext ? { excludeFromContext: true } : {}),
-        },
-      });
+      manager.appendMessage(user("earlier unanswered input"));
+      const inputRecorder = recorder(excludeFromContext);
       await inputRecorder.persistApproved();
       const receipt = inputRecorder.getAdmissionReceipt();
       if (!receipt) {
@@ -411,9 +370,7 @@ describe("worker detached model-context branch parity", () => {
       const originalRows = readWorkerTurnTranscriptStorageRows();
       let appendedRows: ReturnType<typeof readWorkerTurnTranscriptStorageRows> | undefined;
       const appendLaterActivity = async () => {
-        writer.appendMessage(
-          makeAgentAssistantMessage({ content: [{ type: "text", text: "later activity" }] }),
-        );
+        writer.appendMessage(assistant("later activity"));
         appendedRows = readWorkerTurnTranscriptStorageRows();
       };
       const snapshot =
@@ -424,8 +381,7 @@ describe("worker detached model-context branch parity", () => {
         await appendLaterActivity();
       }
       try {
-        const result = await launchProbe({
-          ...request(`admitted-prefix-${excludeFromContext}-${appendAt}`),
+        const result = await launchProbe(`admitted-prefix-${excludeFromContext}-${appendAt}`, {
           userTurnTranscriptRecorder: inputRecorder,
         });
 
@@ -473,8 +429,7 @@ describe("worker detached model-context branch parity", () => {
           waiting.resolve();
           await wait();
         });
-      const pending = launchProbe({
-        ...request(`runtime-recorder-${change}`),
+      const pending = launchProbe(`runtime-recorder-${change}`, {
         userTurnTranscriptRecorder: inputRecorder,
         abortSignal: abort.signal,
       });
@@ -496,9 +451,11 @@ describe("worker detached model-context branch parity", () => {
             history: priorAtModelBoundary,
           });
         } else {
-          expect(result.credentialCalls).toBe(0);
-          expect(result.tunnelCalls).toBe(0);
-          expect(result.outcome).toMatchObject({ kind: "rejected", error: expect.any(Error) });
+          expect(result).toMatchObject({
+            credentialCalls: 0,
+            tunnelCalls: 0,
+            outcome: { kind: "rejected", error: expect.any(Error) },
+          });
         }
         expect(visible(SessionManager.open(sessionTarget).buildSessionContext().messages)).toEqual([
           ...prior,
@@ -521,8 +478,7 @@ describe("worker detached model-context branch parity", () => {
     const inputRecorder = recorder();
     inputRecorder.markRuntimePersisted(buildPersistedUserTurnMessage({ text: "current request" }));
     const beforeRows = readWorkerTurnTranscriptStorageRows();
-    const result = await launchProbe({
-      ...request("recorder-admission-missing"),
+    const result = await launchProbe("recorder-admission-missing", {
       userTurnTranscriptRecorder: inputRecorder,
     });
     expectNoLaunch(result);
@@ -575,26 +531,24 @@ describe("worker detached model-context branch parity", () => {
     try {
       await paused.promise;
       const observed = await withAsyncReadHook(
-        {
-          after: async () => {
-            await setup;
-            const placement = placements.get(SESSION_ID);
-            const claim = placement && projectWorkerSessionTurnClaim(placement);
-            if (placement?.state !== "active" || !claim) {
-              throw new Error("initial setup did not admit the worker turn");
-            }
-            expect(placements.validateTurnClaim(claim)).toBe(true);
-            await patchSessionEntryCore(sessionTarget, () => ({
-              activeWriterRunId: "replacement-writer",
-            }));
-            expect(placements.get(SESSION_ID)).toEqual(placement);
-            expect(placements.validateTurnClaim(claim)).toBe(true);
-          },
+        async () => {
+          await setup;
+          const placement = placements.get(SESSION_ID);
+          const claim = placement && projectWorkerSessionTurnClaim(placement);
+          if (placement?.state !== "active" || !claim) {
+            throw new Error("initial setup did not admit the worker turn");
+          }
+          expect(placements.validateTurnClaim(claim)).toBe(true);
+          await patchSessionEntryCore(sessionTarget, () => ({
+            activeWriterRunId: "replacement-writer",
+          }));
+          expect(placements.get(SESSION_ID)).toEqual(placement);
+          expect(placements.validateTurnClaim(claim)).toBe(true);
         },
         async () => {
           const pending = launchProbe(
+            "writer-after-initial-setup",
             {
-              ...request("writer-after-initial-setup"),
               abortSignal: signal,
               suppressNextUserMessagePersistence: true,
             },
@@ -635,33 +589,31 @@ describe("worker detached model-context branch parity", () => {
       const abort = new AbortController();
       let callerCurrent = true;
       const observed = await withAsyncReadHook(
-        {
-          after: async () => {
-            if (change === "cancel") {
-              abort.abort(new Error("synthetic context-read cancellation"));
-            } else if (change === "claim") {
-              const placement = placements.get(SESSION_ID);
-              const claim = placement && projectWorkerSessionTurnClaim(placement);
-              if (!claim) {
-                throw new Error("fixture turn claim was not admitted");
-              }
-              await releaseClaimIfOwned(placements, claim);
-            } else if (change === "caller") {
-              callerCurrent = false;
-            } else if (change === "blocked") {
-              inputRecorder.markBlocked();
-            } else {
-              await upsertSessionEntryCore(sessionTarget, {
-                sessionId: "replacement-session",
-                updatedAt: Date.now(),
-              });
+        async () => {
+          if (change === "cancel") {
+            abort.abort(new Error("synthetic context-read cancellation"));
+          } else if (change === "claim") {
+            const placement = placements.get(SESSION_ID);
+            const claim = placement && projectWorkerSessionTurnClaim(placement);
+            if (!claim) {
+              throw new Error("fixture turn claim was not admitted");
             }
-          },
+            await releaseClaimIfOwned(placements, claim);
+          } else if (change === "caller") {
+            callerCurrent = false;
+          } else if (change === "blocked") {
+            inputRecorder.markBlocked();
+          } else {
+            await upsertSessionEntryCore(sessionTarget, {
+              sessionId: "replacement-session",
+              updatedAt: Date.now(),
+            });
+          }
         },
         () =>
           launchProbe(
+            "after-read-" + change,
             {
-              ...request("after-read-" + change),
               userTurnTranscriptRecorder: inputRecorder,
               abortSignal: abort.signal,
             },

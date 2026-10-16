@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import {
   initializeGlobalHookRunner,
@@ -25,25 +24,34 @@ const fixtureMocks = workerSessionToolTestMocks();
 const { sessionEntries, sessionStorePaths, delivered, gatewayRequest, scopedSessionAccess } =
   fixtureMocks;
 
+function policyGate(result: { block?: true; blockReason?: string } = {}) {
+  const started = createDeferred();
+  const finish = createDeferred();
+  const handler = vi.fn(async () => {
+    started.resolve();
+    await finish.promise;
+    return result;
+  });
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      { hookName: "before_tool_call", matcher: ["sessions_send"], handler },
+    ]),
+  );
+  return { started, finish, handler };
+}
+
 describe("worker session tool send delivery", () => {
   const getFixture = installWorkerSessionToolTestFixture(fixtureMocks);
   let f: ReturnType<typeof getFixture>;
 
   beforeEach(() => {
-    setRuntimeConfigSnapshot({});
     resetGlobalHookRunner();
     f = getFixture();
+    f.setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    f.setEntry(TARGET.sessionKey, TARGET.sessionId, SOURCE);
   });
 
-  afterEach(() => {
-    resetGlobalHookRunner();
-  });
-
-  function setParentAndChild() {
-    const { setEntry } = f;
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    setEntry(TARGET.sessionKey, TARGET.sessionId, SOURCE);
-  }
+  afterEach(resetGlobalHookRunner);
 
   function setSiblings() {
     f.setEntry(PARENT.sessionKey, PARENT.sessionId);
@@ -53,7 +61,6 @@ describe("worker session tool send delivery", () => {
 
   it("uses bound source metadata when the configured route has the same key and incarnation", async () => {
     const { setEntry, send } = f;
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     fixtureMocks.sessionEntriesByStorePath.set(
       path.join(getFixture().root, "sessions.json"),
       new Map([[SOURCE.sessionKey, structuredClone(sessionEntries.get(SOURCE.sessionKey)!)]]),
@@ -69,7 +76,6 @@ describe("worker session tool send delivery", () => {
 
   it("delivers across exact live family incarnations with the source channel", async () => {
     const { setEntry, send } = f;
-    setParentAndChild();
     await expect(send("parent-to-child")).resolves.toBeDefined();
 
     setEntry(SOURCE.sessionKey, SOURCE.sessionId, TARGET);
@@ -101,25 +107,23 @@ describe("worker session tool send delivery", () => {
         storePath: "/physical/session-owner.sqlite",
       }),
     );
-    expect(delivered).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        args: expect.objectContaining({ sessionKey: TARGET.sessionKey }),
-        options: expect.objectContaining({
-          agentChannel: "telegram",
-          agentId: SOURCE.agentId,
-          agentSessionId: SOURCE.sessionId,
-          assertSourceCurrent: expect.any(Function),
-          expectedTargetSessionId: TARGET.sessionId,
-          completionOwner: "caller",
-          expectedTargetStorePath: "/physical/session-owner.sqlite",
-          idempotencyKey: expect.stringMatching(/^worker-session-send:/u),
-        }),
-      }),
-    );
+    expect(delivered.mock.calls.at(-1)?.[0]).toMatchObject({
+      args: { sessionKey: TARGET.sessionKey },
+      options: {
+        agentChannel: "telegram",
+        agentId: SOURCE.agentId,
+        agentSessionId: SOURCE.sessionId,
+        assertSourceCurrent: expect.any(Function),
+        expectedTargetSessionId: TARGET.sessionId,
+        completionOwner: "caller",
+        expectedTargetStorePath: "/physical/session-owner.sqlite",
+        idempotencyKey: expect.stringMatching(/^worker-session-send:/u),
+      },
+    });
   });
 
   it("delivers to an authorized Gateway parent with local placement", async () => {
-    const { setEntry, placements, execute, identity } = f;
+    const { setEntry, placements, send } = f;
     setEntry(TARGET.sessionKey, TARGET.sessionId);
     setEntry(SOURCE.sessionKey, SOURCE.sessionId, PARENT);
     setEntry(PARENT.sessionKey, PARENT.sessionId);
@@ -133,15 +137,10 @@ describe("worker session tool send delivery", () => {
     await placements.releaseTurn(claim);
     expect(placements.get(PARENT.sessionId)?.state).toBe("local");
 
-    const result = await execute({
-      identity,
-      toolName: "sessions_send",
-      request: {
-        toolCallId: "send-to-gateway",
-        sessionKey: PARENT.sessionKey,
-        message: "Report the Gateway result",
-        timeoutSeconds: 30,
-      },
+    const result = await send("send-to-gateway", {
+      sessionKey: PARENT.sessionKey,
+      message: "Report the Gateway result",
+      timeoutSeconds: 30,
     });
 
     expect(JSON.parse(result.resultJson)).toMatchObject({ details: { status: "ok" } });
@@ -196,44 +195,28 @@ describe("worker session tool send delivery", () => {
 
   it("suppresses policy receipts and effects when worker authority closes during the hook", async () => {
     const { send, delegatedAuthorities } = f;
-    setParentAndChild();
-    const { promise: policy, resolve: resolvePolicy } = createDeferred();
-    const policyStarted = createDeferred();
-    const beforeToolCall = vi.fn(async () => {
-      policyStarted.resolve();
-      await policy;
-      return {};
-    });
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        { hookName: "before_tool_call", matcher: ["sessions_send"], handler: beforeToolCall },
-      ]),
-    );
+    const policy = policyGate();
     const receipts: DecisionReceiptV1[] = [];
     const clearReceipts = configureRuntimeActionDecisionSink((receipt) => {
       receipts.push(receipt);
       return true;
     });
-    const result = await (async () => {
-      try {
-        const pending = send("authority-closes-during-policy");
-        await policyStarted.promise;
-        releaseAgentRunDelegatedAuthority(delegatedAuthorities[0]!);
-        resolvePolicy();
-        return await pending;
-      } finally {
-        clearReceipts();
-      }
-    })();
-
-    expect(result.resultJson).toMatch(/authority changed|lost ownership/u);
-    expect(receipts).toEqual([]);
-    expect(delivered).not.toHaveBeenCalled();
+    try {
+      const pending = send("authority-closes-during-policy");
+      await policy.started.promise;
+      releaseAgentRunDelegatedAuthority(delegatedAuthorities[0]!);
+      policy.finish.resolve();
+      const result = await pending;
+      expect(result.resultJson).toMatch(/authority changed|lost ownership/u);
+      expect(receipts).toEqual([]);
+      expect(delivered).not.toHaveBeenCalled();
+    } finally {
+      clearReceipts();
+    }
   });
 
   it("suppresses dispatch when worker authority closes after policy", async () => {
     const { send, delegatedAuthorities } = f;
-    setParentAndChild();
     gatewayRequest.mockResolvedValue({ runId: "target-run", status: "accepted" });
     const { promise: dispatchEntered, resolve: enterDispatch } = createDeferred();
     const { promise: dispatch, resolve: finishDispatch } = createDeferred();
@@ -261,7 +244,6 @@ describe("worker session tool send delivery", () => {
 
   it("coalesces concurrent retries into one message effect", async () => {
     const { send } = f;
-    setParentAndChild();
     const deliveryStarted = createDeferred();
     const finishDelivery = createDeferred();
     delivered.mockImplementation(async () => {
@@ -279,38 +261,23 @@ describe("worker session tool send delivery", () => {
 
   it("coalesces concurrent policy blocks before message effects", async () => {
     const { send } = f;
-    setParentAndChild();
-    const { promise: policy, resolve: resolvePolicy } = createDeferred<{
-      block: true;
-      blockReason: string;
-    }>();
-    const policyStarted = createDeferred();
-    const beforeToolCall = vi.fn(async () => {
-      policyStarted.resolve();
-      return await policy;
-    });
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        { hookName: "before_tool_call", matcher: ["sessions_send"], handler: beforeToolCall },
-      ]),
-    );
+    const policy = policyGate({ block: true, blockReason: "blocked by worker session policy" });
 
     const retries = Array.from({ length: 2 }, () => send("concurrent-policy-block"));
-    await policyStarted.promise;
-    resolvePolicy({ block: true, blockReason: "blocked by worker session policy" });
+    await policy.started.promise;
+    policy.finish.resolve();
     const results = await Promise.all(retries);
     const replay = await send("concurrent-policy-block");
 
     expect(new Set(results.map((result) => result.resultJson))).toHaveLength(1);
     expect(replay.resultJson).toBe(results[0]?.resultJson);
     expect(replay.resultJson).toContain("blocked by worker session policy");
-    expect(beforeToolCall).toHaveBeenCalledOnce();
+    expect(policy.handler).toHaveBeenCalledOnce();
     expect(delivered).not.toHaveBeenCalled();
   });
 
   it("records repeated downstream send failures as unknown instead of replayable failure", async () => {
     const { send, placements, sourceClaim } = f;
-    setParentAndChild();
     delivered.mockImplementation(() => {
       throw new Error("target send response was lost");
     });
@@ -325,7 +292,7 @@ describe("worker session tool send delivery", () => {
   });
 
   it("denies stale parent incarnations, parent-key reuse, self-send, and cross-tree targets", async () => {
-    const { setEntry, send, execute, identity } = f;
+    const { setEntry, send } = f;
     const denied = [
       ["stale-parent", PARENT, "replacement-parent"],
       ["parent-key-reuse", { ...PARENT, sessionId: "other-parent" }, PARENT.sessionId],
@@ -344,14 +311,9 @@ describe("worker session tool send delivery", () => {
     }
 
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    const selfSend = await execute({
-      identity,
-      toolName: "sessions_send",
-      request: {
-        toolCallId: "self-send",
-        sessionKey: SOURCE.sessionKey,
-        message: "status",
-      },
+    const selfSend = await send("self-send", {
+      sessionKey: SOURCE.sessionKey,
+      timeoutSeconds: undefined,
     });
     expect(selfSend.resultJson).toContain("not an exact live session");
     expect(delivered).not.toHaveBeenCalled();
@@ -397,7 +359,6 @@ describe.each([false, true])(
     const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, {
       collectExecutionIdentity,
     });
-    beforeEach(() => setRuntimeConfigSnapshot({}));
 
     it("does not deliver to a sibling after the source owner closes during admission", async () => {
       const { setEntry, send, placements, sourceClaim, delegatedAuthorities } = getFixture();
