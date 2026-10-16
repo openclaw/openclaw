@@ -205,6 +205,7 @@ describe("ordinary steering into automatic model fallback", () => {
     "automatic",
     "queued-followup",
     "cross-profile",
+    "cross-profile-default",
     "cross-profile-pending",
     "collaborative-automatic",
     "collaborative-pinned-selection",
@@ -229,6 +230,7 @@ describe("ordinary steering into automatic model fallback", () => {
     const crossProfile =
       collaborative ||
       scenario === "cross-profile" ||
+      scenario === "cross-profile-default" ||
       scenario === "cross-profile-pending" ||
       scenario === "explicit-steer-cross-profile";
     const key = `agent:main:fallback-steering-${scenario}`;
@@ -237,9 +239,9 @@ describe("ordinary steering into automatic model fallback", () => {
     run.run.sessionKey = key;
     run.run.sessionId = `fallback-${scenario}`;
     run.run.config = {
-      ...(explicitSteer || collaborative
+      ...(scenario === "cross-profile-default"
         ? {}
-        : { messages: { queue: { allowCollaborativeSteering: false } } }),
+        : { messages: { queue: { allowCollaborativeSteering: collaborative || explicitSteer } } }),
       agents: {
         defaults: {
           model: {
@@ -474,7 +476,7 @@ describe("ordinary steering into automatic model fallback", () => {
       });
       await incoming;
       expect(resultState.admission).toEqual(
-        crossProfile && run.run.config.messages?.queue?.allowCollaborativeSteering === false
+        crossProfile && run.run.config.messages?.queue?.allowCollaborativeSteering !== true
           ? { status: "skipped", reason: "collaborative-steering-disabled" }
           : {
               status: "accepted",
@@ -485,6 +487,9 @@ describe("ordinary steering into automatic model fallback", () => {
             },
       );
       expect(delivered).toEqual(shouldSteer ? [run.prompt] : []);
+      if (crossProfile && run.run.config.messages?.queue?.allowCollaborativeSteering !== true) {
+        expect(getFollowupQueueDepth(key)).toBe(0);
+      }
       expect(operation.requesterPrincipalKey).toBe(requesterPrincipalKey);
       expect(operation.toolAuthorityFingerprint).toBe(toolAuthorityFingerprint);
       if (crossProfile) {

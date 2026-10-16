@@ -164,12 +164,12 @@ describe("steering input custody", () => {
         setUserProfileRole(profile.id, "writer");
         setUserProfileRole(incomingProfile.id, "participant");
       }
-      const collaborative = allowCollaborativeSteering !== false && acrossProfiles;
+      const collaborative = allowCollaborativeSteering === true && acrossProfiles;
       const accepted =
         sharedSecretOwner ||
         scenario === "same grant" ||
         (collaborative && scenario !== "no native admission across profiles");
-      const refused = acrossProfiles && allowCollaborativeSteering === false;
+      const refused = acrossProfiles && allowCollaborativeSteering !== true;
       const forwarded = !accepted && scenario !== "revoked grant";
       const originalGrant = new AbortController();
       const incomingGrant = new AbortController();

@@ -31,12 +31,12 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 When unset, all inbound channel surfaces use:
 
 - `mode: "steer"`
-- `allowCollaborativeSteering: true`
+- `allowCollaborativeSteering: false`
 - a built-in 500ms debounce for steer, followup, and collect batching
 - `cap: 20`
 - `drop: "summarize"`
 
-Same-turn steering is the default. A prompt that arrives mid-run is injected into the active runtime when the run can accept steering, so no second session run is started. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
+Same-requester steering is the default. A compatible prompt from the active turn’s requester is injected into the runtime when it can accept steering, so no second session run is started. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
 
 ## Queue modes
 
@@ -64,7 +64,7 @@ before it starts ends that recovery without sending it again. See
 
 Queued Gateway input retains its authenticated requester. Each new execution resolves current applicable policy. Collecting messages requires compatible operator sources and tool permissions.
 
-By default, admitted human input in the same conversation can steer an active turn under that turn's unchanged identity and prepared permissions. This lets Bob influence actions using permissions Alice has that Bob does not. Set `messages.queue.allowCollaborativeSteering: false` to refuse another person’s steering attempt without queueing it. The runtime explains how to resend it with `/followup <message>` for a new turn under that person’s identity and current policy. Same-requester steering still requires compatible permissions. The option does not change queue modes or explicit cross-session `sessions_send(mode="steer")` authorization. See [Steering scope](/concepts/queue-steering#scope).
+By default, another person’s steering attempt is refused without queueing it. The runtime explains how to resend it with `/followup <message>` for a new turn under that person’s identity and current policy. Set `messages.queue.allowCollaborativeSteering: true` to let admitted human input in the same conversation steer an active turn under that turn's unchanged identity and prepared permissions. This lets Bob influence actions using permissions Alice has that Bob does not. Same-requester steering still requires compatible permissions. The option does not change queue modes or explicit cross-session `sessions_send(mode="steer")` authorization. See [Steering scope](/concepts/queue-steering#scope).
 
 An accepted turn can continue after its request returns or its client disconnects.
 That does not extend revoked device authority or permissions removed by a current
@@ -78,7 +78,7 @@ Configure globally or per channel via `messages.queue`:
   messages: {
     queue: {
       mode: "steer",
-      allowCollaborativeSteering: true,
+      allowCollaborativeSteering: false,
       cap: 20,
       drop: "summarize",
       byChannel: { discord: "collect", x: "followup" },

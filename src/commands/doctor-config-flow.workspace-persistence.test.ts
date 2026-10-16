@@ -70,14 +70,19 @@ const withQueueDefaultHome = useDoctorConfigPreflightHome();
 afterEach(closeOpenClawStateDatabaseForTest);
 
 it.each([
-  { included: true, otherRepair: false },
-  { included: false, otherRepair: true },
+  { included: true, otherRepair: false, value: undefined },
+  { included: false, otherRepair: true, value: undefined },
+  { included: true, otherRepair: false, value: false },
+  { included: true, otherRepair: false, value: true },
 ])(
-  "persists collaborative steering without overriding authored config (included=$included, other repair=$otherRepair)",
-  async ({ included, otherRepair }) => {
+  "persists collaborative steering without overriding authored config (included=$included, other repair=$otherRepair, value=$value)",
+  async ({ included, otherRepair, value }) => {
     await withQueueDefaultHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const messages = { responsePrefix: "keep-prefix" };
+        const messages = {
+          responsePrefix: "keep-prefix",
+          ...(value === undefined ? {} : { queue: { allowCollaborativeSteering: value } }),
+        };
         const configPath = await writeOpenClawConfig(home, {
           agents: {
             entries: { main: otherRepair ? { $include: "./agent.json" } : {} },
@@ -99,7 +104,7 @@ it.each([
         const before = await fs.readFile(configPath, "utf8");
         expect(
           (await readConfigFileSnapshot()).sourceConfig.messages?.queue?.allowCollaborativeSteering,
-        ).toBeUndefined();
+        ).toBe(value);
         await using ctx = await prepareDoctorContext(configPath);
         expect(await fs.readFile(configPath, "utf8")).toBe(before);
         if (included) {
@@ -113,13 +118,17 @@ it.each([
         expect(ctx.configWriteRefusal).toBeUndefined();
         const saved = await readConfigFileSnapshot();
         expect(saved.valid).toBe(true);
-        expect(saved.sourceConfig.messages?.queue?.allowCollaborativeSteering).toBe(true);
+        expect(saved.sourceConfig.messages?.queue?.allowCollaborativeSteering).toBe(value ?? false);
         expect(saved.sourceConfig.gateway?.port).toBe(otherRepair ? undefined : 18880);
         expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(before);
         if (included) {
           expect(saved.parsed).toHaveProperty("messages", { $include: "./messages.json" });
           expect(saved.sourceConfig.messages?.responsePrefix).toBe("keep-prefix");
-          expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(includeRaw);
+          if (value === undefined) {
+            expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(includeRaw);
+          } else {
+            expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+          }
         }
         if (otherRepair) {
           expect(saved.parsed).toHaveProperty("agents.entries.main", {
@@ -265,7 +274,7 @@ it(
       expect(await readText(`${configPath}.bak`)).toBe(original);
 
       const saved = await readJson(configPath);
-      expect(saved.messages?.queue?.allowCollaborativeSteering).toBe(true);
+      expect(saved.messages?.queue?.allowCollaborativeSteering).toBe(false);
       expect(saved.agents).toMatchObject({ ownership: "explicit", defaults });
       expect(saved.agents.entries.ops).toEqual({
         memory: { search: entries.ops.memorySearch },

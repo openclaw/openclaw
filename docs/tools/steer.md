@@ -34,7 +34,7 @@ Behavior:
 - Uses the active runtime's steering path, so the model sees the guidance at
   the next supported runtime boundary.
 
-With `messages.queue.allowCollaborativeSteering: false`, steering another person’s
+With `messages.queue.allowCollaborativeSteering: false` (the default), steering another person’s
 active turn is refused and the message is not queued. The runtime offers
 `/followup <message>` to request a separate turn. This applies to `/steer` and
 `/tell` as well as ordinary steering input. See [Steering scope](/concepts/queue-steering#scope).

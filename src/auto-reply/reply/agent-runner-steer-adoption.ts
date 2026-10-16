@@ -225,7 +225,7 @@ export async function runActiveReplySteer(
     assertReadCurrent();
     if (
       isInboundUserMessage &&
-      followupRun.run.config.messages?.queue?.allowCollaborativeSteering === false &&
+      followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== true &&
       hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation)
     ) {
       await refuseCollaborativeSteering(followupRun, replyOperationRunState, () => {
@@ -245,7 +245,7 @@ export async function runActiveReplySteer(
     });
     const steeringDelivery = delivery;
     const collaborativeCaller =
-      followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== false &&
+      followupRun.run.config.messages?.queue?.allowCollaborativeSteering === true &&
       isInboundUserMessage &&
       !isExplicitCommandTurn(resolveCommandTurnContext(params.sessionCtx))
         ? resolveInboundReplyToolAuthorityOverlay({

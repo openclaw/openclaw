@@ -239,7 +239,7 @@ describe("automatic config repair", () => {
       outputPath: "browser.executablePath",
       authored: "${BROWSER_BIN}",
       resolved: "/opt/example/browser-current",
-      allowCollaborativeSteering: true,
+      allowCollaborativeSteering: false,
     },
     ...[
       { apiKey: "${STARTUP_MEMORY_KEY}", allowCollaborativeSteering: false },

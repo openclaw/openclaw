@@ -8,7 +8,7 @@ read_when:
 title: "Steering queue"
 ---
 
-When a normal prompt arrives in the same conversation while a session run is active and the queue mode is `steer` (the default, no config needed), OpenClaw tries to send that prompt into the active runtime, including during tool execution. OpenClaw and the native Codex app-server harness implement the delivery details differently.
+When a prompt from the active turn’s requester arrives in the same conversation and the queue mode is `steer` (the default, no config needed), OpenClaw tries to send that prompt into the active runtime, including during tool execution. Steering by another person requires collaborative steering to be enabled. OpenClaw and the native Codex app-server harness implement the delivery details differently.
 
 This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
@@ -78,16 +78,16 @@ Messages with separate durable ingress admission, including Discord and Telegram
 
 If several messages arrive while the agent is executing a tool call:
 
-- With collaborative steering enabled (the default), messages from another admitted participant can join the active turn under its original requester and prepared permissions. With `messages.queue.allowCollaborativeSteering: false`, another person’s steering attempt is refused without queueing; they can resend it with `/followup <message>` for their own turn.
+- With collaborative steering enabled, messages from another admitted participant can join the active turn under its original requester and prepared permissions. With `messages.queue.allowCollaborativeSteering: false` (the default), another person’s steering attempt is refused without queueing; they can resend it with `/followup <message>` for their own turn.
 - For accepted steering, OpenClaw preserves the runtime's configured steering drain mode and FIFO order. One-at-a-time consumers keep later messages for later boundaries; `all` consumers inject the queued FIFO batch together. Codex receives messages collected during its quiet window as one batched `turn/steer`.
 - With `/queue collect`, OpenClaw does not steer. It waits until the active run ends, then creates followup turns after the debounce window, combining only compatible queued messages.
 - With `/queue interrupt`, OpenClaw aborts the active run and starts the newest message instead of steering.
 
 ## Scope
 
-`messages.queue.allowCollaborativeSteering` defaults to `true`. When Bob's admitted human input joins Alice's active turn in the same conversation, the execution keeps Alice's identity and prepared permissions. Bob can influence actions using permissions Alice has that Bob does not. Bob remains identified as the message author; steering does not switch the execution to Bob, combine their permissions, or attribute subsequent actions to individual messages.
+`messages.queue.allowCollaborativeSteering` defaults to `false`. Operators can set it to `true` to allow collaboration. When Bob's admitted human input joins Alice's active turn in the same conversation, the execution keeps Alice's identity and prepared permissions. Bob can influence actions using permissions Alice has that Bob does not. Bob remains identified as the message author; steering does not switch the execution to Bob, combine their permissions, or attribute subsequent actions to individual messages.
 
-Set the option to `false` to refuse another person’s steering attempt without queueing it. Same-requester steering still requires compatible permissions. Unidentified input cannot borrow the active execution's authority. Conversation access, backend compatibility, cancellation, and current-owner checks always apply.
+With the option omitted or set to `false`, another person’s steering attempt is refused without queueing it. Same-requester steering still requires compatible permissions. Unidentified input cannot borrow the active execution's authority. Conversation access, backend compatibility, cancellation, and current-owner checks always apply.
 
 The runtime sends this refusal without invoking the model:
 

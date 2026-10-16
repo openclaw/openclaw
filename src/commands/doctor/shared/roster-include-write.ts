@@ -24,7 +24,7 @@ export function prepareDoctorConfigWriteStage(params: {
   const steeringPath = ["messages", "queue", "allowCollaborativeSteering"];
   if (
     params.snapshot.sourceConfig.messages?.queue?.allowCollaborativeSteering === undefined &&
-    params.nextConfig.messages?.queue?.allowCollaborativeSteering === true
+    params.nextConfig.messages?.queue?.allowCollaborativeSteering === false
   ) {
     // A new root default must not block a repair owned by an included file.
     const withoutDefault = cloneConfigWithResolutionFacts(params.nextConfig);
@@ -41,7 +41,7 @@ export function prepareDoctorConfigWriteStage(params: {
       };
     }
     const defaultOnly = cloneConfigWithResolutionFacts(params.snapshot.sourceConfig);
-    setConfigValueAtPath(defaultOnly, steeringPath, true);
+    setConfigValueAtPath(defaultOnly, steeringPath, false);
     const remaining = collectChangedConfigPaths(defaultOnly, params.nextConfig);
     if (
       remaining.paths.length > 0 &&

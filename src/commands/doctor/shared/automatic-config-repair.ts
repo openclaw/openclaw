@@ -151,7 +151,7 @@ async function planConfigRepair(
       ...(migration.warnings ?? []),
       ...(config === migrated
         ? []
-        : ["Set messages.queue.allowCollaborativeSteering to true (default)."]),
+        : ["Set messages.queue.allowCollaborativeSteering to false (default)."]),
     ],
     snapshot: {
       ...snapshot,

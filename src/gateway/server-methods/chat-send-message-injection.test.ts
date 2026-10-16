@@ -299,6 +299,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
           resetTriggered: false,
         });
         const params = makeStarterParams({ entry: initial, sessionKey, storePath });
+        params.session.cfg = { messages: { queue: { allowCollaborativeSteering: true } } };
         params.abortSignal = source.signal;
         params.assertCurrent = () => {
           if (!callerCurrent) {

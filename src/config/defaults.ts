@@ -139,7 +139,7 @@ export function applyMessageQueueDefaults(cfg: OpenClawConfig): OpenClawConfig {
   }
   return {
     ...cfg,
-    messages: { ...messages, queue: { ...queue, allowCollaborativeSteering: true } },
+    messages: { ...messages, queue: { ...queue, allowCollaborativeSteering: false } },
   };
 }
 

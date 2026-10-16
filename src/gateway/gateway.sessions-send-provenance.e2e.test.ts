@@ -768,7 +768,7 @@ async function verifyCrossHumanAdmission(
   allowCollaborativeSteering: boolean | undefined,
   conversation: "same" | "different" = "same",
 ) {
-  const collaborative = allowCollaborativeSteering !== false && conversation === "same";
+  const collaborative = allowCollaborativeSteering === true && conversation === "same";
   const id = `mixed_human_${conversation === "same" ? (allowCollaborativeSteering ?? "default") : "foreign"}`;
   const scenario = createScenario(
     {
@@ -846,7 +846,7 @@ async function verifyCrossHumanAdmission(
     stage = "sender-policy preparation";
     await updateSenderPolicies({
       "id:alice": { deny: null },
-      "id:bob": { deny: allowCollaborativeSteering !== false ? ["message"] : null },
+      "id:bob": { deny: allowCollaborativeSteering === true ? ["message"] : null },
     });
     stage = "Alice admission";
     alice = runHuman(scenario, "alice", scenario.incumbentPrompt, "steer", signal).then(
@@ -880,7 +880,7 @@ async function verifyCrossHumanAdmission(
         awaitGateBeforeSettlement(steering.admitted, bob, "Bob settled before steering admission"),
         signal,
       );
-    } else if (allowCollaborativeSteering === false) {
+    } else if (allowCollaborativeSteering !== true) {
       expect(await bob).toMatchObject({ collaborativeSteeringRefused: true });
       expect(scenario.sourceRequests).toEqual([]);
       expect(scenario.incumbentCompleted).toBe(false);
@@ -894,7 +894,7 @@ async function verifyCrossHumanAdmission(
       collaborative
         ? []
         : [
-            ...(allowCollaborativeSteering === false
+            ...(allowCollaborativeSteering !== true
               ? [
                   {
                     sender: "bob",

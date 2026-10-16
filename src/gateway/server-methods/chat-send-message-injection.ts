@@ -205,7 +205,7 @@ export function createChatSendMessageInjectionStarter(params: {
           steeringMode: "all",
           isInboundUserMessage: true,
           allowCollaborativeSteering:
-            cfg.messages?.queue?.allowCollaborativeSteering !== false &&
+            cfg.messages?.queue?.allowCollaborativeSteering === true &&
             (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user"),
           ...(isProgressCardRefreshInputProvenance(ctx.InputProvenance)
             ? { allowPendingUserInputAnswer: false as const, debounceMs: 0 }
