@@ -111,11 +111,7 @@ function mockLogin(
     await run(options);
     return result;
   };
-  if (once) {
-    hooks.login.mockImplementationOnce(login);
-  } else {
-    hooks.login.mockImplementation(login);
-  }
+  hooks.login[once ? "mockImplementationOnce" : "mockImplementation"](login);
   return started.promise;
 }
 
@@ -207,24 +203,30 @@ function harness(config: OpenClawConfig = {}) {
   };
   const start = () =>
     invoke("models.authLogin", { sessionId: "login", authChoice: "fixture/fixture-device" });
-  const next = async (answer?: { stepId: string; value: string }) => {
+  let stepId: string | undefined;
+  const next = async (value?: string) => {
     const respond = await invoke("wizard.next", {
       sessionId: "login",
-      ...(answer ? { answer } : {}),
+      ...(value === undefined
+        ? {}
+        : { answer: { stepId: expectDefined(stepId, "wizard step"), value } }),
     });
     const response = expectDefined(respond.mock.calls[0], "wizard response");
-    expect(respond).toHaveBeenCalledOnce();
-    expect(response[0]).toBe(true);
-    expect(response[2]).toBeUndefined();
+    expect(respond.mock.calls).toEqual([[true, expect.anything(), undefined]]);
     if (!validateWizardResult.Check(response[1])) {
       throw new Error("Expected a valid wizard response");
     }
+    stepId = response[1].step?.id;
     return response[1];
   };
   const session = () => expectDefined(tracker.wizardSessions.get("login"), "login session");
+  const begin = async () => {
+    await start();
+    return session();
+  };
   const cancel = (closeInput?: boolean, caller = client) =>
     invoke("wizard.cancel", { sessionId: "login", ...(closeInput ? { closeInput } : {}) }, caller);
-  return { tracker, controller, client, invoke, start, next, session, cancel };
+  return { tracker, controller, client, invoke, start, begin, next, session, cancel };
 }
 
 describe("models.authLogin ownership", () => {
@@ -357,10 +359,7 @@ describe("models.authLogin ownership", () => {
             }
           }
         });
-        const response = h.next({
-          stepId: expectDefined(prompt.step, "model access question").id,
-          value: "all",
-        });
+        const response = h.next("all");
         try {
           if (status !== "unclaimed") {
             const receipt = await Promise.race([
@@ -404,7 +403,7 @@ describe("models.authLogin ownership", () => {
     "does not publish model access after a disconnect during %s",
     async (boundary) => {
       await withOpenClawTestState({ label: "wizard-policy-disconnect" }, async (state) => {
-        const { h, prompt } = await policyWizard(state);
+        const { h } = await policyWizard(state);
         const before = await fs.readFile(state.configPath, "utf8");
         const session = h.session();
         const lockCancellation = session.lockCancellation.bind(session);
@@ -438,10 +437,7 @@ describe("models.authLogin ownership", () => {
             }
           });
         try {
-          const terminal = await h.next({
-            stepId: expectDefined(prompt.step, "model access question").id,
-            value: "all",
-          });
+          const terminal = await h.next("all");
           await whenAdmittedWizardSessionSettled(session);
           expect(h.controller.signal.aborted).toBe(true);
           expect(terminal.status).toBe("error");
@@ -480,9 +476,8 @@ describe("models.authLogin ownership", () => {
       requestModelAccess(options);
       return { ...result, authRefresh };
     });
-    await h.start();
-    const session = h.session();
-    const prompt = await session.next();
+    const session = await h.begin();
+    const prompt = await h.next();
     const answer = { stepId: expectDefined(prompt.step, "model access").id, value: modelAccess };
     expect(await h.next()).toMatchObject({
       step: {
@@ -506,7 +501,7 @@ describe("models.authLogin ownership", () => {
     expectRejected(await h.cancel(true, peer), { details: { code: "WIZARD_NOT_FOUND" } });
     expect(hooks.writeConfig).not.toHaveBeenCalled();
     expect(session.getStatus()).toBe("running");
-    expect(await h.next(answer)).toMatchObject({
+    expect(await h.next(modelAccess)).toMatchObject({
       done: true,
       status: authRefresh === "refreshed" ? "done" : "error",
       ...(authRefresh === "refreshed"
@@ -532,8 +527,7 @@ describe("models.authLogin ownership", () => {
         await finishWrite.promise;
         requestModelAccess(options);
       });
-      await h.start();
-      const session = h.session();
+      const session = await h.begin();
       await enteredWrite.promise;
       expectReply(await h.cancel(), { status: "running" });
       expect(session.signal.aborted).toBe(false);
@@ -554,12 +548,9 @@ describe("models.authLogin ownership", () => {
 
   it("keeps a cancelled login readable until repeated cancellation releases admission", async () => {
     const { release } = holdAdmission();
-    void mockLogin(async (options) => {
-      await options.prompter.note("Waiting for acknowledgement");
-    }, false);
+    void mockLogin((options) => options.prompter.note("Waiting for acknowledgement"), false);
     const h = harness();
-    await h.start();
-    const session = h.session();
+    const session = await h.begin();
     await h.cancel();
     await session.whenSettled();
     await h.cancel();
@@ -582,10 +573,9 @@ describe("models.authLogin ownership", () => {
         await options.openUrl?.("https://provider.example/authorize");
         await options.prompter.text({ message: "Paste the redirect URL" });
       });
-      await h.start();
+      const session = await h.begin();
       const options = await started;
       expect(typeof options.browserAuthorization).toBe(origin ? "function" : "undefined");
-      const session = h.session();
       expect((await h.next()).step).toMatchObject({
         type: "text",
         message: "Paste the redirect URL",
@@ -605,8 +595,7 @@ describe("models.authLogin ownership", () => {
       await options.prompter.text({ message: "Waiting for device approval" });
       options.assertCurrent?.();
     });
-    await h.start();
-    const session = h.session();
+    const session = await h.begin();
     await h.next();
     withdraw();
     const options: ModelsAuthLoginFlowOptions = hooks.login.mock.calls[0]![0];
@@ -623,10 +612,9 @@ describe("models.authLogin ownership", () => {
       expect(options.assertCurrent).not.toThrow();
       requestModelAccess(options);
     });
-    await h.start();
+    const session = await h.begin();
     const options = await received;
-    const session = h.session();
-    const prompt = await session.next();
+    const prompt = await h.next();
     expect(prompt.step?.type).toBe("select");
     expect(options.signal?.aborted).toBe(true);
     expect(options.assertCurrent).toThrow("closed");
@@ -652,8 +640,7 @@ describe("models.authLogin ownership", () => {
   it("releases admission on disconnect with a post-save note", async () => {
     const h = harness();
     postSaveNote();
-    await h.start();
-    const session = h.session();
+    const session = await h.begin();
     expect(await h.next()).toMatchObject({ step: { message: "Credentials saved." } });
     h.controller.abort();
     await withTestTimeout(
@@ -662,16 +649,14 @@ describe("models.authLogin ownership", () => {
       "Disconnected login retained admission",
     );
     expect(session.getStatus()).toBe("error");
-    const replacement = await harness().start();
-    expectReply(replacement, { sessionId: "login" });
+    expectReply(await harness().start(), { sessionId: "login" });
   });
 
   it("settles discarded login input before admitting another login on the same connection", async () => {
     const h = harness();
     const { release } = holdAdmission();
     postSaveNote();
-    await h.start();
-    const session = h.session();
+    const session = await h.begin();
     await h.invoke("wizard.next", { sessionId: "login" });
     let responded = false;
     const closing = h.cancel(true);
@@ -709,8 +694,7 @@ describe("models.authLogin ownership", () => {
         await options.beforePersistentEffect?.();
         wrote = true;
       }, false);
-      await h.start();
-      const session = h.session();
+      const session = await h.begin();
       if (changed === "owner") {
         h.client.invalidated = true;
       } else {

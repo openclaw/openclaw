@@ -155,10 +155,14 @@ it.for([false, true])(
       });
       try {
         await server.startupSettled;
+        const forAgent = <T = unknown>(
+          method: Parameters<typeof client.request>[0],
+          params: Record<string, unknown> = {},
+        ) => client.request<T>(method, { agentId: "main", ...params });
+        const requestCount = (url: string) => requests.filter((request) => request === url).length;
         const list = async (refresh = false) => {
           const started = performance.now();
-          const result = await client.request<ModelsListResult>("models.list", {
-            agentId: "main",
+          const result = await forAgent<ModelsListResult>("models.list", {
             view: "configured",
             refresh,
           });
@@ -176,11 +180,7 @@ it.for([false, true])(
           waitFor(({ ids }) => ids.includes("account-exclusive"), start);
         const holdRefresh = () => {
           const held = holdNextCatalogResponse();
-          const request = client.request("models.list", {
-            agentId: "main",
-            provider,
-            refresh: true,
-          });
+          const request = forAgent("models.list", { provider, refresh: true });
           void request.catch((error: unknown) => held.started.reject(error));
           return { ...held, request };
         };
@@ -197,9 +197,8 @@ it.for([false, true])(
           },
           () => list(true),
         );
-        await client.request("models.authLogin", {
+        await forAgent("models.authLogin", {
           sessionId: "fixture-login",
-          agentId: "main",
           authChoice: `${provider}/fixture-oauth`,
         });
         let wizard = await client.request<WizardNextResult>("wizard.next", {
@@ -217,9 +216,9 @@ it.for([false, true])(
         }
         expect(wizard.status, wizard.error).toBe("done");
         const assertPassiveReads = async (stage: "early" | "final") => {
-          const before = requests.filter((url) => url === "/models").length;
+          const before = requestCount("/models");
           const reads = await Promise.all([list(), list()]);
-          expect.soft(requests.filter((url) => url === "/models")).toHaveLength(before);
+          expect.soft(requestCount("/models")).toBe(before);
           for (const read of reads) {
             expect.soft(read.elapsedMs).toBeLessThan(1_000);
             expect
@@ -241,7 +240,7 @@ it.for([false, true])(
           return list();
         });
         await assertPassiveReads("final");
-        expect(requests.filter((url) => url === "/models")).toHaveLength(1);
+        expect(requestCount("/models")).toBe(1);
         expect(catalogWork.read()).toMatchObject({
           maxWorkers: 1,
           workersCreated: 1,
@@ -249,9 +248,7 @@ it.for([false, true])(
         });
         responseDelay = 0;
         const manualRefresh = await list(true);
-        const session = await client.request<{ key: string }>("sessions.create", {
-          agentId: "main",
-        });
+        const session = await forAgent<{ key: string }>("sessions.create");
         await client.request("sessions.patch", {
           key: session.key,
           model: `${provider}/account-exclusive@${provider}:owner`,
@@ -274,7 +271,7 @@ it.for([false, true])(
         const staleRefreshSettled = Promise.allSettled([staleRefresh.request]);
         void staleRefreshSettled.then(([outcome]) => staleRefresh.started.reject(outcome));
         await staleRefresh.started.promise;
-        await client.request("models.authLogout", { provider, agentId: "main" });
+        await forAgent("models.authLogout", { provider });
         const signedOut = await list();
         staleRefresh.release.resolve();
         await staleRefreshSettled;
@@ -284,11 +281,7 @@ it.for([false, true])(
         // and a failed first listing must not take them away.
         listingStatus = 500;
         const apiKeyListing = holdNextCatalogResponse();
-        await client.request("models.authSetApiKey", {
-          provider,
-          apiKey: "fixture-access",
-          agentId: "main",
-        });
+        await forAgent("models.authSetApiKey", { provider, apiKey: "fixture-access" });
         await withinTest(apiKeyListing.started.promise, signal);
         const apiKeyPending = await list();
         apiKeyListing.release.resolve();
@@ -301,7 +294,7 @@ it.for([false, true])(
         listingStatus = 200;
         await waitForAccount(() => list(true));
         expect(manualRefresh.ids).toContain("account-exclusive");
-        expect(requests.filter((url) => url === "/token")).toHaveLength(1);
+        expect(requestCount("/token")).toBe(1);
       } finally {
         releaseEarlyResponse.resolve();
         await disconnectGatewayClient(client);
