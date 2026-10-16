@@ -120,7 +120,8 @@ whether or not automatic public sharing is enabled.
 
 When the session has a finding, fix, PR, or a clear "can't reproduce" result, it
 drafts a reply of at most 280 characters and asks whether to post it. Tell the
-session explicitly to post the draft; it uses tool `message` with `action: "send"`,
+session explicitly to post the draft; after approval, the visible session uses
+tool `message` with `action: "send"`,
 `channel: "x"`, the origin post URL as `target`, the recorded `accountId`, and
 the approved reply as `message`. Without an answer, it reminds you once in
 its final summary. The send adapter restricts work sessions to their origin post

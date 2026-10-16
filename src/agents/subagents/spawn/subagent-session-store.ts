@@ -29,6 +29,7 @@ import {
 type PersistedSessionCapabilityEntry = Pick<
   SessionEntry,
   | "sessionId"
+  | "createdVia"
   | "spawnDepth"
   | "subagentRole"
   | "subagentControlScope"
