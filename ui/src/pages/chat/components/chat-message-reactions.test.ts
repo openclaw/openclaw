@@ -135,8 +135,14 @@ describe("transcript message reactions", () => {
     picker.querySelector<HTMLButtonElement>(".trigger")!.click();
     const pressed = pickerButton(picker, "👍")!;
     expect(pressed.getAttribute("aria-pressed")).toBe("true");
+    const hidden = new Promise<void>((resolve) => {
+      picker
+        .querySelector(".chat-reaction-picker")!
+        .addEventListener("overlay-after-hide", () => resolve(), { once: true });
+    });
     pressed.click();
     expect(onReact).toHaveBeenLastCalledWith("message-1", "👍", true);
+    await hidden;
     expect(picker.querySelector(".palette")).toBeNull();
     picker.querySelector<HTMLButtonElement>(".trigger")!.click();
     pickerButton(picker, "🚀")!.click();
