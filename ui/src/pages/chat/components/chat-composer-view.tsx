@@ -591,6 +591,7 @@ function ComposerTextarea(view: {
   });
   onCleanup(() => {
     if (ownerState.composerTextarea === element) {
+      ownerState.composerComposing = false;
       ownerState.textareaRef?.();
     }
   });

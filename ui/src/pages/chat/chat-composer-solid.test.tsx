@@ -375,6 +375,26 @@ it("ends the old IME scope without writing into a newly selected session", () =>
   expect(onNewDraftChange).toHaveBeenCalledWith("second draft edited", undefined);
 });
 
+it("retires an unfinished IME gesture when the same pane composer remounts", () => {
+  const { state, view, input } = mountOwnedComposer({ draft: "Canonical draft" });
+  const oldInput = view.container.querySelector("textarea")!;
+  oldInput.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  oldInput.value = "Unfinished composition";
+  oldInput.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+  disposeComposer(view.container);
+  view.update((props) => props);
+
+  const newInput = view.container.querySelector("textarea")!;
+  expect(newInput).not.toBe(oldInput);
+  expect(newInput.value).toBe("Canonical draft");
+  input("Typing after remount");
+  flush();
+  expect(state.chatMessage).toBe("Typing after remount");
+  oldInput.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+  oldInput.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+  expect(state.chatMessage).toBe("Typing after remount");
+});
+
 it("keeps the open permission picker through parent updates", async () => {
   const permissionPicker = { canSelectFull: true, onSelect: vi.fn() };
   const view = mountComposer(createComposerProps({ permissionPicker }));
