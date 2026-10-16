@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { NodeWorkerBundleInstallInput } from "../../worker/node-bundle-install-protocol.js";
@@ -52,13 +52,15 @@ function installRequest(current: NodeWorkerSupervisorNodeProof) {
 
 function installerFixture(
   invoke: NodeWorkerSupervisorTransport["invoke"],
-  nodes: NodeWorkerSupervisorNodeProof[],
+  nodes: NodeWorkerSupervisorNodeProof[] = [node],
   listCurrentNodes: NodeWorkerSupervisorTransport["listCurrentNodes"] = async () => nodes,
+  options: Partial<Parameters<typeof createGatewayNodeWorkerBundleInstaller>[0]> = {},
 ) {
   let tokenId = 65;
   const transfer = createNodeWorkerBundleTransferService({
     generateToken: () => String.fromCharCode(tokenId++).repeat(43),
   });
+  onTestFinished(() => transfer.closeAll());
   const transport: NodeWorkerSupervisorTransport = {
     hasCurrentRunner: () => false,
     async getCurrentNode(nodeId) {
@@ -73,27 +75,17 @@ function installerFixture(
     getTransport: () => transport,
     transfer,
     log: { info: vi.fn(), warn: vi.fn() },
+    ...options,
   });
-  return { ensure, transfer };
+  return { ensure, transfer, transport };
 }
 
 function observedInstaller() {
   let clock = 1_000;
   const log = { info: vi.fn(), warn: vi.fn() };
   const changed = vi.fn();
-  const transfer = createNodeWorkerBundleTransferService();
   const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
-  const transport: NodeWorkerSupervisorTransport = {
-    hasCurrentRunner: () => true,
-    getCurrentNode: async (nodeId) => (nodeId === node.nodeId ? node : undefined),
-    listCurrentNodes: async () => [node],
-    isCurrent: (candidate) => candidate === node,
-    invoke,
-  };
-  const ensure = createGatewayNodeWorkerBundleInstaller({
-    gatewayNamespace: "gateway-test",
-    getTransport: () => transport,
-    transfer,
+  const { ensure, transfer } = installerFixture(invoke, [node], async () => [node], {
     log,
     now: () => clock,
     onObservationChange: changed,
@@ -102,6 +94,11 @@ function observedInstaller() {
     ensure,
     log,
     changed,
+    counts: () => ({
+      version: ensure.version(),
+      changes: changed.mock.calls.length,
+      logs: log.info.mock.calls.length,
+    }),
     expectInfo: (message: string) =>
       expect(log.info).toHaveBeenLastCalledWith(
         `worker runtime install: node=node-1 bundle=aaaaaaaaaaaa ${message}`,
@@ -117,26 +114,27 @@ function observedInstaller() {
       const dispatched = createDeferredCore<ReturnType<typeof transfer.authorize>>();
       const result =
         createDeferredCore<Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>>();
+      const succeed = () => result.resolve({ ok: true, payload: receipt });
       invoke.mockImplementationOnce(async (request) => {
         const input = request.params as NodeWorkerBundleInstallInput;
-        const capability = transfer.authorize({
-          token: input.archive.token,
-          artifactKey: input.build.bundleHash,
-        });
-        dispatched.resolve(capability);
+        dispatched.resolve(
+          transfer.authorize({
+            token: input.archive.token,
+            artifactKey: input.build.bundleHash,
+          }),
+        );
         return result.promise;
       });
       const pending = ensure({
-        deviceId: node.nodeId,
+        ...installRequest(node),
         artifact: { ...artifact, tarballBytes: 4_000_000 },
-        prewarm: true,
         reason,
         environmentId,
         ...(onProgress ? { onProgress } : {}),
       });
       const capability = (await dispatched.promise)?.capability;
       if (!capability?.onProgress || !capability.onInterrupted) {
-        result.resolve({ ok: true, payload: receipt });
+        succeed();
         await pending;
         throw new Error("install did not publish transfer observers");
       }
@@ -144,7 +142,7 @@ function observedInstaller() {
         pending,
         progress: capability.onProgress,
         interrupt: capability.onInterrupted,
-        succeed: () => result.resolve({ ok: true, payload: receipt }),
+        succeed,
         fail: (error: Error) => result.reject(error),
       };
     },
@@ -174,19 +172,16 @@ describe("Gateway node worker bundle installer", () => {
     h.advance(500);
     call.progress(1_000_000);
     expect(h.ensure.readInstall(node.nodeId)).toMatchObject({ transferredBytes: 1_000_000 });
-    expect(h.ensure.version()).toBe(2);
-    expect(h.changed).toHaveBeenCalledTimes(2);
+    expect(h.counts()).toMatchObject({ version: 2, changes: 2 });
     h.advance(1_500);
     call.progress(2_000_000);
-    expect(h.changed).toHaveBeenCalledTimes(2);
-    expect(h.log.info).toHaveBeenCalledTimes(1);
+    expect(h.counts()).toMatchObject({ changes: 2, logs: 1 });
     h.advance(28_500);
     call.progress(3_000_000);
     h.expectInfo("3.0/4.0 MB (75%) 100.0 KB/s");
     h.advance(500);
     call.progress(3_500_000);
-    expect(h.log.info).toHaveBeenCalledTimes(2);
-    expect(h.changed).toHaveBeenCalledTimes(3);
+    expect(h.counts()).toMatchObject({ logs: 2, changes: 3 });
     call.progress(4_000_000);
     expect(h.ensure.readInstall(node.nodeId)).toMatchObject({
       phase: "installing",
@@ -198,9 +193,8 @@ describe("Gateway node worker bundle installer", () => {
     call.succeed();
     await call.pending;
     expect(h.ensure.readInstall(node.nodeId)).toBeUndefined();
-    expect(h.changed).toHaveBeenCalledTimes(5);
+    expect(h.counts()).toMatchObject({ changes: 5, version: 7 });
     expect(h.changed).toHaveBeenLastCalledWith(node.nodeId, ["environment-1"]);
-    expect(h.ensure.version()).toBe(7);
     h.expectInfo("installed in 31.0s");
   });
 
@@ -243,8 +237,7 @@ describe("Gateway node worker bundle installer", () => {
     expect(refreshProgress).toHaveBeenCalledOnce();
     expect(h.ensure.readInstallForEnvironment("environment-1")).toBeUndefined();
     expect(h.ensure.readInstall(node.nodeId)?.environmentIds).toEqual(["environment-2"]);
-    expect(h.ensure.version()).toBe(version + 1);
-    expect(h.changed).toHaveBeenCalledTimes(changes + 1);
+    expect(h.counts()).toMatchObject({ version: version + 1, changes: changes + 1 });
     expect(h.changed).toHaveBeenLastCalledWith(node.nodeId, ["environment-2", "environment-1"]);
     expect(h.ensure.readInstallForEnvironment("environment-2")?.phase).toBe("installing");
     refresh.succeed();
@@ -339,7 +332,6 @@ describe("Gateway node worker bundle installer", () => {
       discovered.resolve([node]);
       await outcome;
       grant.mockRestore();
-      transfer.closeAll();
     }
     if (phase === "discovery") {
       expect(await outcome).toMatchObject({ name: "AbortError" });
@@ -359,36 +351,32 @@ describe("Gateway node worker bundle installer", () => {
         }),
       }));
       const { ensure, transfer } = installerFixture(invoke, nodes);
-      try {
-        for (const [index, current] of nodes.entries()) {
-          const pending = ensure(installRequest(current));
-          if (mode === "mismatched") {
-            await expect(pending).rejects.toThrow("mismatched build receipt");
-          } else {
-            await expect(pending).resolves.toMatchObject({ bundleHash: artifact.bundleHash });
-          }
-          expect(ensure.readInstall(current.nodeId)).toBeUndefined();
-          expect(ensure.version()).toBe((index + 1) * 2);
-          const request = invoke.mock.calls[index]?.[0];
-          expect(request).toMatchObject({
-            node: current,
-            command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
-            params: { gatewayNamespace: "gateway-test" },
-            idempotencyKey: `gateway-test:${artifact.bundleHash}`,
-          });
-          if (index === 0) {
-            expect(request?.params).toMatchObject({ bundlePrewarm: 1 });
-          } else {
-            expect(request?.params).not.toHaveProperty("bundlePrewarm");
-          }
-          const input = request?.params as NodeWorkerBundleInstallInput;
-          expect(input.build).toEqual(receipt);
-          expect(
-            transfer.authorize({ token: input.archive.token, artifactKey: artifact.bundleHash }),
-          ).toBeUndefined();
+      for (const [index, current] of nodes.entries()) {
+        const pending = ensure(installRequest(current));
+        if (mode === "mismatched") {
+          await expect(pending).rejects.toThrow("mismatched build receipt");
+        } else {
+          await expect(pending).resolves.toMatchObject({ bundleHash: artifact.bundleHash });
         }
-      } finally {
-        transfer.closeAll();
+        expect(ensure.readInstall(current.nodeId)).toBeUndefined();
+        expect(ensure.version()).toBe((index + 1) * 2);
+        const request = invoke.mock.calls[index]?.[0];
+        expect(request).toMatchObject({
+          node: current,
+          command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
+          params: { gatewayNamespace: "gateway-test" },
+          idempotencyKey: `gateway-test:${artifact.bundleHash}`,
+        });
+        if (index === 0) {
+          expect(request?.params).toMatchObject({ bundlePrewarm: 1 });
+        } else {
+          expect(request?.params).not.toHaveProperty("bundlePrewarm");
+        }
+        const input = request?.params as NodeWorkerBundleInstallInput;
+        expect(input.build).toEqual(receipt);
+        expect(
+          transfer.authorize({ token: input.archive.token, artifactKey: artifact.bundleHash }),
+        ).toBeUndefined();
       }
     },
   );
@@ -398,38 +386,26 @@ describe("Gateway node worker bundle installer", () => {
   ] as const)(
     "%s pairing authority on a replacement connection",
     async (_mode, pairingGeneration, outcome) => {
-      const transfer = createNodeWorkerBundleTransferService();
       const replacement = {
         ...node,
         connId: "conn-2",
         ...(pairingGeneration ? { pairingGeneration } : {}),
       };
       let current = node;
-      const transport: NodeWorkerSupervisorTransport = {
-        hasCurrentRunner: () => false,
-        getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? current : undefined),
-        listCurrentNodes: async () => [current],
-        isCurrent: (candidate) => candidate === current,
-        invoke: async () => {
+      const { ensure, transport } = installerFixture(
+        async () => {
           current = replacement;
           return { ok: true, payloadJSON: JSON.stringify(receipt) };
         },
-      };
-      const ensure = createGatewayNodeWorkerBundleInstaller({
-        gatewayNamespace: "gateway-test",
-        getTransport: () => transport,
-        transfer,
-        log: { info: vi.fn(), warn: vi.fn() },
-      });
-      try {
-        const pending = ensure(installRequest(node));
-        if (outcome === "resolves") {
-          await expect(pending).resolves.toEqual(receipt);
-        } else {
-          await expect(pending).rejects.toThrow("connection is no longer current");
-        }
-      } finally {
-        transfer.closeAll();
+        [node],
+        async () => [current],
+      );
+      transport.isCurrent = (candidate) => candidate === current;
+      const pending = ensure(installRequest(node));
+      if (outcome === "resolves") {
+        await expect(pending).resolves.toEqual(receipt);
+      } else {
+        await expect(pending).rejects.toThrow("connection is no longer current");
       }
     },
   );

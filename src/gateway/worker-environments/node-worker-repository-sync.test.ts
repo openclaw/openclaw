@@ -9,7 +9,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
-import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
+import type { WorkerWorkspaceReconcileRequest as ReconcileRequest } from "./tunnel-contract.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import {
   parseRemoteWorkspaceManifestEnvelope,
@@ -18,6 +18,15 @@ import {
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type RepositorySource = Extract<ReconcileRequest["source"], { kind: "repository" }>;
+type Checkpoint = Parameters<RepositorySource["prepareCheckpoint"]>[0];
+const paths = (entries: { path: string }[]) => entries.map((entry) => entry.path);
+const copyTree = (from: string, to: string) => fs.cp(from, to, { recursive: true });
+const repositorySource = {
+  kind: "repository" as const,
+  url: "https://example.invalid/repository.git",
+  branch: "openclaw/session",
+};
 const filesAt = (root: string) => ({
   read: (file: string) => fs.readFile(path.join(root, file), "utf8"),
   write: (file: string, content: string) => fs.writeFile(path.join(root, file), content),
@@ -53,11 +62,7 @@ it.each([
       actions.syncWorkspace({
         sessionId: "session-1",
         generation: 1,
-        source: {
-          kind: "repository",
-          url: "https://example.invalid/repository.git",
-          branch: "openclaw/session",
-        },
+        source: repositorySource,
       }),
     ).rejects.toThrow(
       `Cloud repository preparation failed: ${reason}: ${stage}: exit (exit code 128, signal null): fatal: Permission denied`,
@@ -82,11 +87,7 @@ it("rejects repository sources on SSH before invoking any remote command", async
     actions.syncWorkspace({
       sessionId: "session-ssh",
       generation: 1,
-      source: {
-        kind: "repository",
-        url: "https://github.com/example/repository.git",
-        branch: "openclaw/session",
-      },
+      source: repositorySource,
     }),
   ).rejects.toThrow("managed node");
   await expect(
@@ -171,10 +172,12 @@ it.each([
       }),
     });
     const server = await startNodeWorkspaceTransferTestServer(service);
-    let runtime = new NodeWorkerWorkspaceRuntime({
-      root: path.join(home, "node-host"),
-      env: { PATH: process.env.PATH, HOME: home },
-    });
+    const createRuntime = () =>
+      new NodeWorkerWorkspaceRuntime({
+        root: path.join(home, "node-host"),
+        env: { PATH: process.env.PATH, HOME: home },
+      });
+    let runtime = createRuntime();
     const manifestCaptures: RemoteWorkspaceManifestEnvelope[] = [];
     const createActions = () => {
       const ownerEpoch = epoch;
@@ -239,20 +242,14 @@ it.each([
       if (first.mode !== "repository") {
         throw new Error("Repository source was not prepared");
       }
-      const firstFiles = filesAt(first.remoteWorkspaceDir);
+      const workspace = first.remoteWorkspaceDir;
+      const firstFiles = filesAt(workspace);
       expect(first.baseCommit).toBe(baseCommit);
       expect(first.manifestRef).not.toBe(first.baseManifestRef);
       expect(await firstFiles.read("setup.txt")).toBe("prepared\n");
-      let checkpoint:
-        | Parameters<
-            Extract<
-              WorkerWorkspaceReconcileRequest["source"],
-              { kind: "repository" }
-            >["prepareCheckpoint"]
-          >[0]
-        | undefined;
+      let checkpoint: Checkpoint | undefined;
       let revision = 0;
-      const capture = async (active = actions, directory = first.remoteWorkspaceDir) => {
+      const capture = async (active = actions, directory = workspace) => {
         const firstCapture = manifestCaptures.length;
         const phases: string[] = [];
         const result = await active.reconcileWorkspace({
@@ -264,7 +261,7 @@ it.each([
             referenceManifestRef: checkpoint?.currentManifestRef ?? first.manifestRef,
             prepareCheckpoint: async (payload) => {
               const stagingRoot = path.join(root, `checkpoint-${++revision}`);
-              await fs.cp(payload.stagingRoot, stagingRoot, { recursive: true });
+              await copyTree(payload.stagingRoot, stagingRoot);
               if (filters) {
                 expect(payload.publicationDigest).toBeUndefined();
                 expect(payload.publicationStagingRoot).toBeUndefined();
@@ -278,9 +275,7 @@ it.each([
                 ? path.join(root, `publication-${revision}`)
                 : undefined;
               if (publicationStagingRoot) {
-                await fs.cp(payload.publicationStagingRoot!, publicationStagingRoot, {
-                  recursive: true,
-                });
+                await copyTree(payload.publicationStagingRoot!, publicationStagingRoot);
               }
               const captured = { ...payload, stagingRoot, publicationStagingRoot };
               return {
@@ -325,23 +320,16 @@ it.each([
       expect(initialCaptures[0]!.metrics.contentHashCount).toBeGreaterThan(0);
       expect(revision).toBe(1);
       expect(checkpoint).toBeDefined();
-      await gitAt(first.remoteWorkspaceDir, "rm", "--cached", "retained-removal.ignored");
+      await gitAt(workspace, "rm", "--cached", "retained-removal.ignored");
       await firstFiles.write("published[1].ignored", "publishable\n");
       await firstFiles.write("retained.ignored", "recovery only\n");
-      await gitAt(
-        first.remoteWorkspaceDir,
-        "--literal-pathspecs",
-        "add",
-        "-f",
-        "--",
-        "published[1].ignored",
-      );
+      await gitAt(workspace, "--literal-pathspecs", "add", "-f", "--", "published[1].ignored");
       await firstFiles.write("first.txt", "turn one\n");
       const changedCaptures = await capture();
       expect(changedCaptures[0]!.metrics.contentHashCount).toBeGreaterThan(0);
       expect(changedCaptures[0]!.metrics.memoHitCount).toBeGreaterThan(0);
       await firstFiles.write("second.txt", "turn two\n");
-      await fs.rm(path.join(first.remoteWorkspaceDir, "tracked.txt"));
+      await fs.rm(path.join(workspace, "tracked.txt"));
       await capture();
       expect(checkpoint).toBeDefined();
 
@@ -354,7 +342,7 @@ it.each([
       });
       const restoredFiles = filesAt(restored.remoteWorkspaceDir);
       const restoredGit = (...args: string[]) => gitAt(restored.remoteWorkspaceDir, ...args);
-      expect(restored.remoteWorkspaceDir).not.toBe(first.remoteWorkspaceDir);
+      expect(restored.remoteWorkspaceDir).not.toBe(workspace);
       expect(restored.manifestRef).toBe(checkpoint!.currentManifestRef);
       expect(await restoredFiles.read("first.txt")).toBe("turn one\n");
       expect(await restoredFiles.read("second.txt")).toBe("turn two\n");
@@ -382,26 +370,17 @@ it.each([
         filters ? "" : "retained-removal.ignored\ntracked.txt",
       );
       // A node process restart loses in-memory transfer refs; the Gateway owns the accepted ref.
-      runtime = new NodeWorkerWorkspaceRuntime({
-        root: path.join(home, "node-host"),
-        env: { PATH: process.env.PATH, HOME: home },
-      });
+      runtime = createRuntime();
       await capture(replacement, restored.remoteWorkspaceDir);
-      expect(
-        JSON.parse(checkpoint!.currentManifestRaw).entries.map(
-          (entry: { path: string }) => entry.path,
-        ),
-      ).toContain("published[1].ignored");
+      expect(paths(JSON.parse(checkpoint!.currentManifestRaw).entries)).toContain(
+        "published[1].ignored",
+      );
       if (!filters) {
         const snapshot = JSON.parse(
           await filesAt(checkpoint!.publicationStagingRoot!).read("snapshot.json"),
         );
-        expect(snapshot.entries.map((entry: { path: string }) => entry.path)).toContain(
-          "published[1].ignored",
-        );
-        expect(snapshot.entries.map((entry: { path: string }) => entry.path)).not.toContain(
-          "retained.ignored",
-        );
+        expect(paths(snapshot.entries)).toContain("published[1].ignored");
+        expect(paths(snapshot.entries)).not.toContain("retained.ignored");
         expect(snapshot.entries).toContainEqual({
           path: "retained-removal.ignored",
           mode: "100644",
