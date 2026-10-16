@@ -1,12 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
 import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
-import * as chatMessage from "./chat-message-group.test-support.ts";
 import {
   getTranscriptState,
   renderTranscriptSearch,
@@ -599,14 +598,19 @@ describe("chat transcript replies", () => {
         expect(
           attribution().querySelector("button .chat-reply-attribution__name")?.textContent,
         ).toBe("Old label");
-        const unrelatedKey = expectDefined(
-          container
-            .querySelector('[data-entry-id="unrelated-answer"]')
-            ?.closest(".chat-group")
-            ?.getAttribute("data-chat-row-key"),
-          "unrelated group key",
+        const unrelatedGroup = expectDefined(
+          container.querySelector('[data-entry-id="unrelated-answer"]')?.closest(".chat-group"),
+          "unrelated group",
         );
-        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+        const changes: MutationRecord[] = [];
+        const observer = new MutationObserver((records) => changes.push(...records));
+        observer.observe(unrelatedGroup, {
+          attributes: true,
+          characterData: true,
+          childList: true,
+          subtree: true,
+        });
+        onTestFinished(() => observer.disconnect());
 
         for (const [name, text] of [
           ["Carol", "Original question loaded"],
@@ -626,9 +630,10 @@ describe("chat transcript replies", () => {
           expect(
             attribution().querySelector("button .chat-reply-attribution__name")?.textContent,
           ).toBe(name);
-          expect(renderGroup.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual(
-            [],
-          );
+          expect(
+            container.querySelector('[data-entry-id="unrelated-answer"]')?.closest(".chat-group"),
+          ).toBe(unrelatedGroup);
+          expect([...changes.splice(0), ...observer.takeRecords()]).toEqual([]);
         }
       } finally {
         transcript.hostDisconnected();

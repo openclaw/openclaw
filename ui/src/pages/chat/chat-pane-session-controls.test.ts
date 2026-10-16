@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
+import { createComponent, createSignal, merge, Show } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ChatAccountSelection,
@@ -17,9 +17,7 @@ import {
   createGatewayHarness,
   createTestSessionCapability,
 } from "../../lib/sessions/session-capability.test-support.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -73,24 +71,38 @@ describe("chat account selection", () => {
       chatAccountSelection: selection,
       requestUpdate: () => draw(),
     };
+    const [section, setSection] = createSignal<ReturnType<typeof renderChatModelAccountControl>>();
+    mountSolid(
+      () =>
+        createComponent(Show, {
+          get when() {
+            return section();
+          },
+          children: (activeSection) =>
+            createComponent(
+              ChatModelAccountSectionView,
+              merge(() => activeSection().viewProps(0)),
+            ),
+        }),
+      { container },
+    );
     const onSelect = vi.fn(async () => true);
     const onManage = vi.fn();
     const draw = () => {
-      const section = renderChatModelAccountControl({
-        owner: state,
-        client: state.client,
-        selection: state.chatAccountSelection,
-        model: "openai/gpt-5.5",
-        disabled: false,
-        ownsSelection: () => current,
-        onSelect,
-        onManage,
-        onRequestUpdate: () => draw(),
-      });
-      renderPaneLegacyContent(
-        section ? solidContent(ChatModelAccountSectionView, section.viewProps(0)) : undefined,
-        container,
+      setSection(
+        renderChatModelAccountControl({
+          owner: state,
+          client: state.client,
+          selection: state.chatAccountSelection,
+          model: "openai/gpt-5.5",
+          disabled: false,
+          ownsSelection: () => current,
+          onSelect,
+          onManage,
+          onRequestUpdate: () => draw(),
+        }),
       );
+      flush();
     };
     draw();
     return {
