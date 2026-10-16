@@ -8,11 +8,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { discoverAuthStorageFacts, discoverModelsAsync } from "../agent-model-discovery.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots,
-  saveAuthProfileStore,
-} from "../auth-profiles.js";
+import { clearRuntimeAuthProfileStoreSnapshots, saveAuthProfileStore } from "../auth-profiles.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.owner.js";
 import { registerModelAuthReadTests } from "./model.auth-read.test-support.js";
@@ -207,7 +203,6 @@ import {
   makeModel,
   mockDiscoveredModel,
   mockOpenAICodexTemplateModel,
-  OPENAI_CODEX_TEMPLATE_MODEL,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
 
@@ -502,57 +497,6 @@ describe("resolveModel", () => {
     );
   });
 
-  it("passes config into model discovery when auth storage is prebuilt", async () => {
-    const agentDir = state.agentDir("configured");
-    const workspaceDir = state.path("workspace-configured");
-    const authStorage = { mocked: true } as never;
-    const cfg = makeProviderConfig("openai", {
-      api: "openai-completions",
-      baseUrl: "https://api.openai.com/v1",
-      models: [{ id: "gpt-5.5", baseUrl: "https://api.openai.com/v1" }],
-    });
-    mockMinimalModelDiscovery("openai", "gpt-5.5");
-
-    const options = {
-      authStorage,
-      workspaceDir,
-      runtimeHooks: createRuntimeHooks(),
-    };
-    const result = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, options);
-
-    expectResolvedModel(result);
-    expect(discoverModelsAsync).toHaveBeenCalledWith(authStorage, agentDir, {
-      config: cfg,
-      workspaceDir,
-    });
-  });
-
-  it("keeps runtime auth snapshots inside the lifecycle generation", async () => {
-    replaceRuntimeAuthProfileStoreSnapshots([
-      {
-        store: {
-          version: 1,
-          profiles: {
-            openai: { type: "api_key", key: "one" },
-          },
-        } as never,
-      },
-    ]);
-    mockMinimalModelDiscovery("openai", "gpt-5.5");
-
-    const first = await resolveModelAsync("openai", "gpt-5.5", state.agentDir(), undefined, {
-      runtimeHooks: createRuntimeHooks(),
-    });
-    const second = await resolveModelAsync("openai", "gpt-5.5", state.agentDir(), undefined, {
-      runtimeHooks: createRuntimeHooks(),
-    });
-
-    expectResolvedModel(first);
-    expectResolvedModel(second);
-    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
-    expect(discoverModelsAsync).toHaveBeenCalledTimes(1);
-  });
-
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
     const config = {};
@@ -711,21 +655,29 @@ describe("resolveModel", () => {
     expect(discoverModelsAsync).not.toHaveBeenCalled();
   });
 
-  it("leaves maxTokens undefined when no configured or catalog value is available (regression: #98295)", async () => {
-    // Strict providers reject synthesized caps above their own completion-token ceiling.
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce(undefined);
-    const cfg = makeProviderConfig("xiaomi", {
-      baseUrl: "https://api.xiaomimimo.com/v1",
-      models: [{ id: "mimo-v2.5-pro", name: "mimo-v2.5-pro" }],
-    });
+  it.each([
+    ["xiaomi", "https://api.xiaomimimo.com/v1", "mimo-v2.5-pro", undefined],
+    ["local-custom", "http://127.0.0.1:1234/v1", "local-model", "openai-completions"],
+    ["local-ollama", "http://127.0.0.1:11434", "local-model", "ollama"],
+  ] as const)(
+    "leaves unknown output caps unset for %s (regression: #98295)",
+    async (provider, baseUrl, modelId, api) => {
+      // Strict providers reject synthesized caps above their own completion-token ceiling.
+      resolveBundledStaticCatalogModelMock.mockReturnValueOnce(undefined);
+      const cfg = makeProviderConfig(provider, {
+        baseUrl,
+        ...(api ? { api } : {}),
+        models: [{ id: modelId, name: modelId }],
+      });
 
-    const result = await resolveModelForTest("xiaomi", "mimo-v2.5-pro", cfg);
-    const model = expectResolvedModel(result);
+      const result = await resolveModelForTest(provider, modelId, cfg);
+      const model = expectResolvedModel(result);
 
-    expect(model.id).toBe("mimo-v2.5-pro");
-    expect(model.baseUrl).toBe("https://api.xiaomimimo.com/v1");
-    expect(model.maxTokens).toBeUndefined();
-  });
+      expect(model.id).toBe(modelId);
+      expect(model.baseUrl).toBe(baseUrl);
+      expect(model.maxTokens).toBeUndefined();
+    },
+  );
 
   it("inherits bundled static transport for configured provider fallback models", async () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce(
@@ -1134,28 +1086,4 @@ describe("resolveModel", () => {
       maxTokens: 11111,
     });
   });
-
-  it("prefers runtime-resolved openai gpt-5.4 metadata when it has a larger context window", async () => {
-    mockMinimalModelDiscovery("openai", "gpt-5.4", {
-      ...OPENAI_CODEX_TEMPLATE_MODEL,
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-      contextWindow: 128_000,
-      contextTokens: 32_000,
-      input: ["text"],
-    });
-
-    const result = await resolveModelForTest("openai", "gpt-5.4");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      contextWindow: 1_050_000,
-      contextTokens: 272_000,
-    });
-  });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

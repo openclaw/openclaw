@@ -243,7 +243,7 @@ describe("Git operation host lifecycle", () => {
     await fs.writeFile(path.join(clone, "README.md"), "work\n");
     const trace = path.join(root, "git-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
-    const readFacts = () =>
+    const readFacts = async () =>
       runGitWorkerOperation({
         type: "pull-request.branch-facts",
         input: {
@@ -252,6 +252,10 @@ describe("Git operation host lifecycle", () => {
           defaultBranch: "main",
           mergedHeads: [],
           refreshIndex: true,
+          comparison: await runGitWorkerOperation({
+            type: "pull-request.branch-comparison",
+            input: { root: clone, branch: "feature", defaultBranch: "main", mergedHeads: [] },
+          }),
         },
       });
 

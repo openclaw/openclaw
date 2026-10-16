@@ -287,6 +287,7 @@ it.each([
   { name: "no plan saved in this run", replacement: "untouched", checks: 0 },
   { name: "a consumed check is not rearmed by another save", replacement: "recovery", checks: 0 },
   { name: "status-only refresh", replacement: "status", checks: 0 },
+  { name: "authored silence with pending work", replacement: "silent", checks: 0 },
 ])("honors $name", async ({ replacement, checks }) => {
   const completionCheck = { unfinishedPlan: false, checked: replacement === "recovery" };
   const pending = [{ step: "Await external permission", status: "pending" as const }];
@@ -339,7 +340,7 @@ it.each([
       completionCheck,
       ...(replacement === "status"
         ? { silentExpected: true, terminalReplyExpectation: "optional" as const }
-        : {}),
+        : { terminalReplyExpectation: "required" as const }),
     },
   });
   streams.push(prepared);
@@ -361,7 +362,10 @@ it.each([
           : [
               {
                 type: "text",
-                text: "Waiting for the user's permission; no more authorized actions.",
+                text:
+                  replacement === "silent"
+                    ? "NO_REPLY"
+                    : "Waiting for the user's permission; no more authorized actions.",
               },
             ],
         requests <= writes ? "toolUse" : "stop",

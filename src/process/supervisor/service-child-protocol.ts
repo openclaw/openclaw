@@ -81,6 +81,7 @@ export type ServiceChildAnchorPayload =
       type: "startup-error";
       error: string;
       errorDetails?: BrokerError;
+      anchorPid?: number;
     };
 
 export type ServiceChildAnchorMessage = ServiceChildAnchorPayload & {

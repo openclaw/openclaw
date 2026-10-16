@@ -1,7 +1,6 @@
 import { once } from "node:events";
-import { performance, constants } from "node:perf_hooks";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { hasInternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
 import {
   emitTrustedDiagnosticEvent,
@@ -26,41 +25,59 @@ import { startGatewayDiagnosticHeartbeat, stopGatewayDiagnosticHeartbeat } from 
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 const native = vi.hoisted(() => {
-  type Entry = { startTime: number; duration: number; detail?: { kind: number } };
-  const observers: Observer[] = [];
-  class Observer {
-    static supportedEntryTypes = ["gc"];
-    observe = vi.fn();
-    disconnect = vi.fn();
-    constructor(private callback: (list: { getEntries: () => Entry[] }) => void) {
-      observers.push(this);
+  type Collection = { gcType: string; cost: number };
+  const active = new Set<Profiler>();
+  class Profiler {
+    collections: Collection[] = [];
+    start() {
+      this.collections = [];
+      active.add(this);
     }
-    deliver(entries: Entry[]) {
-      this.callback({
-        getEntries: () => entries.map((entry) => ({ detail: { kind: 1 }, ...entry })),
-      });
+    stop() {
+      active.delete(this);
+      return { statistics: this.collections };
     }
   }
-  return { Observer, observers };
+  return {
+    Profiler,
+    active,
+    collect(collections: Collection[]) {
+      for (const profiler of active) {
+        profiler.collections.push(...collections);
+      }
+    },
+  };
 });
 
-vi.mock("node:perf_hooks", async (original) => ({
-  ...(await original<typeof import("node:perf_hooks")>()),
-  PerformanceObserver: native.Observer,
+vi.mock("node:v8", async (original) => ({
+  ...(await original<typeof import("node:v8")>()),
+  GCProfiler: native.Profiler,
 }));
+
+const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+
+beforeEach(() => {
+  // The native profiler fixture exercises Node behavior even when Vitest runs on Bun.
+  Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+});
 
 afterEach(() => {
   resetDiagnosticStateForTest();
   resetDiagnosticEventsForTest();
-  native.observers.length = 0;
+  native.active.clear();
   vi.restoreAllMocks();
   vi.useRealTimers();
+  if (bunVersion) {
+    Object.defineProperty(process.versions, "bun", bunVersion);
+  } else {
+    Reflect.deleteProperty(process.versions, "bun");
+  }
 });
 
-it("owns demand, queued GC batches, and disable/re-enable through the existing heartbeat", async () => {
+it("owns demand, sampled GC batches, and disable/re-enable through the existing heartbeat", async () => {
   const clock = createGatewaySchedulerClock(0);
   const scheduler = createTestGatewayScheduler(clock.clock);
-  const now = vi.spyOn(performance, "now").mockReturnValue(100);
   const observations: unknown[] = [];
   const start = () =>
     startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
@@ -69,11 +86,11 @@ it("owns demand, queued GC batches, and disable/re-enable through the existing h
   try {
     setDiagnosticsEnabledForProcess(false);
     start();
-    expect(native.observers).toHaveLength(0);
+    expect(native.active.size).toBe(0);
     setDiagnosticsEnabledForProcess(true);
     start();
     expect(hasInternalDiagnosticEventInterest("diagnostic.gc")).toBe(false);
-    expect(native.observers).toHaveLength(0);
+    expect(native.active.size).toBe(0);
 
     unsubscribe = onInternalDiagnosticEvent(
       (event) => {
@@ -84,20 +101,21 @@ it("owns demand, queued GC batches, and disable/re-enable through the existing h
       { include: ["diagnostic.gc"] },
     );
     await clock.advanceBy(29_999);
-    expect(native.observers).toHaveLength(0);
+    expect(native.active.size).toBe(0);
     await clock.advanceBy(1);
-    const first = native.observers[0]!;
-    expect(first.observe).toHaveBeenCalledExactlyOnceWith({ entryTypes: ["gc"] });
+    expect(native.active.size).toBe(1);
     start();
-    expect(native.observers).toHaveLength(1);
-    first.deliver([
-      { startTime: 99, duration: 99 },
-      { startTime: 100, duration: 10 },
-      { startTime: 101, duration: 20, detail: { kind: constants.NODE_PERFORMANCE_GC_MAJOR } },
-      { startTime: 102, duration: 2, detail: { kind: constants.NODE_PERFORMANCE_GC_INCREMENTAL } },
-      { startTime: 103, duration: 3, detail: { kind: constants.NODE_PERFORMANCE_GC_WEAKCB } },
-      { startTime: 104, duration: 99, detail: { kind: 12345 } },
+    expect(native.active.size).toBe(1);
+    native.collect([
+      { gcType: "Scavenge", cost: 10_000 },
+      { gcType: "MarkSweepCompact", cost: 20_000 },
+      { gcType: "IncrementalMarking", cost: 2_000 },
+      { gcType: "ProcessWeakCallbacks", cost: 3_000 },
+      { gcType: "Unknown", cost: 99_000 },
     ]);
+    await waitForDiagnosticEventsDrained();
+    expect(observations).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1_000);
     await waitForDiagnosticEventsDrained();
     expect(observations).toEqual([
       ["scavenge", "main", 10],
@@ -107,17 +125,13 @@ it("owns demand, queued GC batches, and disable/re-enable through the existing h
     ]);
 
     setDiagnosticsEnabledForProcess(false);
-    first.deliver([{ startTime: 150, duration: 99 }]);
-    stopGatewayDiagnosticHeartbeat();
-    expect(first.disconnect).toHaveBeenCalledTimes(1);
-    now.mockReturnValue(200);
+    native.collect([{ gcType: "Scavenge", cost: 99_000 }]);
+    start();
+    expect(native.active.size).toBe(0);
     setDiagnosticsEnabledForProcess(true);
     start();
-    first.deliver([{ startTime: 201, duration: 99 }]);
-    native.observers[1]!.deliver([
-      { startTime: 199, duration: 99 },
-      { startTime: 200, duration: 30 },
-    ]);
+    native.collect([{ gcType: "Scavenge", cost: 30_000 }]);
+    await vi.advanceTimersByTimeAsync(1_000);
     await waitForDiagnosticEventsDrained();
     expect(observations).toEqual([
       ["scavenge", "main", 10],
@@ -130,27 +144,32 @@ it("owns demand, queued GC batches, and disable/re-enable through the existing h
     unsubscribe();
     expect(hasInternalDiagnosticEventInterest("diagnostic.gc")).toBe(false);
     await clock.advanceBy(30_000);
-    expect(native.observers[1]!.disconnect).toHaveBeenCalledTimes(1);
+    expect(native.active.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
     stopGatewayDiagnosticHeartbeat();
-    expect(native.observers[1]!.disconnect).toHaveBeenCalledTimes(1);
   } finally {
     unsubscribe();
     publicUnsubscribe();
+    await scheduler.stop();
   }
 });
 
-it("batches worker GC with heap samples and flushes at shutdown", async () => {
+it.each([
+  ["sqlite-store.worker.ts", "sqlite-store.worker", undefined],
+  ["code-mode-node.worker.ts", "code-mode-node.worker", 1],
+  ["code-mode-node.worker.mjs", "code-mode-node.worker", 1],
+] as const)("batches %s GC and flushes at shutdown", async (file, script, slot) => {
   const worker = createCpuTrackedWorker(
     'require("node:worker_threads").parentPort.on("message", () => {});',
     { eval: true },
   );
-  trackNativeWorkerForCpu(worker, new URL("../infra/sqlite-store.worker.ts", import.meta.url));
+  trackNativeWorkerForCpu(worker, new URL(`../infra/${file}`, import.meta.url));
   const parent = new MessageChannel();
   const events: unknown[] = [];
   const unsubscribe = onInternalDiagnosticEvent(
     (event) => {
-      if (event.type === "diagnostic.gc") {
-        events.push([event.kind, event.thread, event.durationMs]);
+      if (event.type === "diagnostic.gc" && event.thread !== "main") {
+        events.push([event.kind, event.thread, event.durationMs, event.workerSlot]);
       }
     },
     { include: ["diagnostic.gc"] },
@@ -173,60 +192,63 @@ it("batches worker GC with heap samples and flushes at shutdown", async () => {
       await sampled;
     };
     await fence();
-    expect(native.observers).toHaveLength(2);
-    const workerObserver = native.observers[1]!;
+    // Both services run in this test isolate and share the native sampler.
+    expect(native.active.size).toBe(1);
     const messages: unknown[] = [];
     telemetry!.on("message", (sample) => messages.push(sample));
-    workerObserver.deliver([{ startTime: performance.now(), duration: 2 }]);
-    workerObserver.deliver([
-      {
-        startTime: performance.now(),
-        duration: 8,
-        detail: { kind: constants.NODE_PERFORMANCE_GC_MAJOR },
-      },
+    native.collect([
+      { gcType: "Scavenge", cost: 2_000 },
+      { gcType: "MarkSweepCompact", cost: 8_000 },
     ]);
+    await vi.advanceTimersByTimeAsync(1_000);
     await fence();
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({ heapUsed: expect.any(Number) });
     await waitForDiagnosticEventsDrained();
     expect(events).toEqual([
-      ["scavenge", "sqlite-store.worker.js", 2],
-      ["mark_sweep_compact", "sqlite-store.worker.js", 8],
+      ["scavenge", `${script}.js`, 2, slot],
+      ["mark_sweep_compact", `${script}.js`, 8, slot],
     ]);
     events.length = 0;
     messages.length = 0;
     const flushed = once(telemetry!, "message");
     const batch = Array.from({ length: 128 }, () => ({
-      startTime: performance.now(),
-      duration: 1,
+      gcType: "Scavenge",
+      cost: 1_000,
     }));
-    workerObserver.deliver(batch);
-    workerObserver.deliver(batch);
+    native.collect(batch);
+    native.collect(batch);
+    await vi.advanceTimersByTimeAsync(1_000);
     await flushed;
     await waitForDiagnosticEventsDrained();
     expect(messages).toEqual([
-      { gc: Array.from({ length: 256 }, () => ({ kind: "scavenge", durationMs: 1 })) },
+      {
+        gc: Array.from({ length: 256 }, () => ({
+          kind: "scavenge",
+          reason: "other",
+          durationMs: 1,
+        })),
+      },
     ]);
     expect(events).toEqual(
-      Array.from({ length: 256 }, () => ["scavenge", "sqlite-store.worker.js", 1]),
+      Array.from({ length: 256 }, () => ["scavenge", `${script}.js`, 1, slot]),
     );
     events.length = 0;
     setDiagnosticsEnabledForProcess(false);
     stopDiagnosticGcObserver();
     await fence();
-    expect(workerObserver.disconnect).toHaveBeenCalledTimes(1);
-    workerObserver.deliver([{ startTime: performance.now(), duration: 99 }]);
+    expect(native.active.size).toBe(0);
+    native.collect([{ gcType: "Scavenge", cost: 99_000 }]);
     setDiagnosticsEnabledForProcess(true);
     reconcileDiagnosticGcObserver();
     await fence();
-    expect(native.observers).toHaveLength(4);
-    native.observers[3]!.deliver([{ startTime: performance.now(), duration: 7 }]);
+    expect(native.active.size).toBe(1);
+    native.collect([{ gcType: "Scavenge", cost: 7_000 }]);
     const closed = once(telemetry!, "close");
     close();
     await closed;
-    expect(native.observers[3]!.disconnect).toHaveBeenCalled();
     await waitForDiagnosticEventsDrained();
-    expect(events).toEqual([["scavenge", "sqlite-store.worker.js", 7]]);
+    expect(events).toEqual([["scavenge", `${script}.js`, 7, slot]]);
   } finally {
     close();
     stopDiagnosticGcObserver();
@@ -242,27 +264,64 @@ it("bounds SDK GC attribution once before delivering it to metric consumers", as
   onInternalDiagnosticEvent(
     (event) => {
       if (event.type === "diagnostic.gc") {
-        labels.push([event.kind, event.thread]);
+        labels.push([event.kind, event.thread, event.workerSlot, event.reason]);
       }
     },
     { include: ["diagnostic.gc"] },
   );
   // JavaScript SDK producers are not constrained by the TypeScript kind union.
   for (const fields of JSON.parse(`[
-    {"kind":"scavenge","thread":"main"},
-    {"kind":"mark_sweep_compact","thread":"sqlite-store.worker.js"},
-    {"kind":"dynamic-123","thread":"worker-123"},
+    {"kind":"scavenge","thread":"main","reason":"forced"},
+    {"kind":"mark_sweep_compact","thread":"sqlite-store.worker.js","reason":"all_external_memory"},
+    {"kind":"dynamic-123","thread":"worker-123","reason":"private-user-reason"},
     {"kind":"dynamic-456","thread":"/private/workers/job-456.js"},
-    {}
+    {},
+    {"thread":"code-mode-node.worker.js","workerSlot":1},
+    {"thread":"code-mode-node.worker.js","workerSlot":64},
+    {"thread":"code-mode-node.worker.js","workerSlot":65},
+    {"thread":"code-mode-node.worker.js","workerSlot":0},
+    {"thread":"code-mode-node.worker.js","workerSlot":1.5},
+    {"thread":"code-mode-node.worker.js","workerSlot":"1"},
+    {"thread":"main","workerSlot":1}
   ]`)) {
     emitTrustedDiagnosticEvent({ type: "diagnostic.gc", durationMs: 1, ...fields });
   }
   await waitForDiagnosticEventsDrained();
   expect(labels).toEqual([
-    ["scavenge", "main"],
-    ["mark_sweep_compact", "sqlite-store.worker.js"],
-    [undefined, "other"],
-    [undefined, "other"],
-    [undefined, "main"],
+    ["scavenge", "main", undefined, "forced"],
+    ["mark_sweep_compact", "sqlite-store.worker.js", undefined, "all_external_memory"],
+    [undefined, "other", undefined, "other"],
+    [undefined, "other", undefined, "other"],
+    [undefined, "main", undefined, "other"],
+    [undefined, "code-mode-node.worker.js", 1, "other"],
+    [undefined, "code-mode-node.worker.js", 64, "other"],
+    [undefined, "code-mode-node.worker.js", undefined, "other"],
+    [undefined, "code-mode-node.worker.js", undefined, "other"],
+    [undefined, "code-mode-node.worker.js", undefined, "other"],
+    [undefined, "code-mode-node.worker.js", undefined, "other"],
+    [undefined, "main", undefined, "other"],
   ]);
+});
+
+it("reports unavailable native GC reasons as other", async () => {
+  const reasons: unknown[] = [];
+  const unsubscribe = onInternalDiagnosticEvent(
+    (event) => {
+      if (event.type === "diagnostic.gc") {
+        reasons.push(event.reason);
+      }
+    },
+    { include: ["diagnostic.gc"] },
+  );
+  setDiagnosticsEnabledForProcess(true);
+  reconcileDiagnosticGcObserver();
+  try {
+    native.collect([{ gcType: "MarkSweepCompact", cost: 1_000 }]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await waitForDiagnosticEventsDrained();
+    expect(reasons).toEqual(["other"]);
+  } finally {
+    stopDiagnosticGcObserver();
+    unsubscribe();
+  }
 });

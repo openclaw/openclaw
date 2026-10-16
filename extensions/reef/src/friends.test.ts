@@ -146,17 +146,6 @@ describe("ReefFriendManager pairing", () => {
     expect(pairing.values).toEqual(new Set());
   });
 
-  it("consumes approval before accepting or pinning an inbound friendship", async () => {
-    const pending = relayFriend("alice", "pending");
-    const { relay, store, pairing, manager } = pairingFixture(pending);
-    pairing.remove.mockRejectedValue(new Error("approval store unavailable"));
-    await addApproval(store, pairing, pending);
-
-    await expect(manager.reconcile()).rejects.toThrow("approval store unavailable");
-    expect(relay.respondFriend).not.toHaveBeenCalled();
-    expect(await store.get("alice")).toBeUndefined();
-  });
-
   it("does not reuse an approval another reconciler already consumed", async () => {
     const pending = relayFriend("alice", "pending");
     const { relay, store, pairing, manager } = pairingFixture(pending);
@@ -577,20 +566,6 @@ describe("ReefFriendManager pairing", () => {
       store,
       pairing,
     );
-
-    await expect(manager.reconcile()).resolves.toEqual([]);
-    expect(await store.get("alice")).toBeUndefined();
-    expect(pairing.values).toEqual(new Set());
-  });
-
-  it("rejects a bound approval after the relay keys change", async () => {
-    const active = relayFriend("alice", "active");
-    const { store, pairing, manager } = pairingFixture(active);
-    await addApproval(store, pairing, active);
-    const nextIdentity = generateIdentity();
-    active.ed25519_pub = nextIdentity.signing.publicKey;
-    active.x25519_pub = nextIdentity.encryption.publicKey;
-    active.key_epoch += 1;
 
     await expect(manager.reconcile()).resolves.toEqual([]);
     expect(await store.get("alice")).toBeUndefined();

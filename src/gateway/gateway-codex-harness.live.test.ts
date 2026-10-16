@@ -1464,6 +1464,15 @@ function randomBitmapTextToken(length = 6): string {
   return [...randomBytes(length)].map((byte) => alphabet[byte % alphabet.length]).join("");
 }
 
+function randomSpelledWordsToken(count: number): string {
+  // Models sometimes drop trailing characters when echoing long hex runs; spelled words echo intact.
+  const words = (
+    "ALPHA BRAVO CHARLIE DELTA ECHO FOXTROT GOLF HOTEL INDIA JULIET KILO LIMA MIKE " +
+    "NOVEMBER OSCAR PAPA QUEBEC ROMEO SIERRA TANGO UNIFORM VICTOR WHISKEY XRAY YANKEE ZULU"
+  ).split(" ");
+  return [...randomBytes(count)].map((byte) => words[byte % words.length]).join("-");
+}
+
 function findGuardianReviewStatus(events: CapturedAgentEvent[]): "approved" | "denied" | undefined {
   const status = events.findLast((event) => event.data?.phase === "completed" && event.data?.status)
     ?.data?.status;
@@ -1957,7 +1966,7 @@ describeLive("gateway live (Codex harness)", () => {
           const sessionKey = `agent:dev:live-codex-steering-${mode}`;
           const runId = `steering-root-${randomUUID()}`;
           const steerRunId = `steering-input-${randomUUID()}`;
-          const marker = `CODEX-STEER-${randomBytes(8).toString("hex").toUpperCase()}`;
+          const marker = `CODEX-STEER-${randomSpelledWordsToken(4)}`;
           const startedPath = path.join(workspace, `${mode}-started`);
           const releasePath = path.join(workspace, `${mode}-release`);
           const commandPath = path.join(workspace, `${mode}-wait.cjs`);

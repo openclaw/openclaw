@@ -952,3 +952,26 @@ it.each([
     model: expected,
   });
 });
+
+it("excludes typed-only rows from conversational selection while retaining dual-capability rows", () => {
+  const chat = { provider: "fixture", id: "chat", name: "Chat" };
+  const typed = {
+    provider: "fixture",
+    id: "typed",
+    name: "Typed",
+    inference: { chat: false as const },
+  };
+  const dual = {
+    provider: "fixture",
+    id: "dual",
+    name: "Dual",
+    inference: { chat: true as const },
+  };
+  const result = buildAllowedModelSet({
+    cfg: {},
+    catalog: [chat, typed, dual],
+    defaultProvider: "fixture",
+  });
+  expect(result.allowedCatalog).toEqual([chat, dual]);
+  expect(result.allowedKeys.has("fixture/typed")).toBe(false);
+});

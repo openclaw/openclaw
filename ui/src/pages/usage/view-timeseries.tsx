@@ -182,14 +182,11 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
           segmentY -= segmentHeight;
           return [{ className, y: segmentY, height: segmentHeight }];
         })
-      : [];
+      : [{ className: "", y, height: barHeight }];
     return {
       x,
-      y,
       width: barWidth,
-      height: barHeight,
       tooltip: tooltipLines.join(" · "),
-      stacked: breakdownByType,
       dimmed: hasSelection && (index < rangeStartIdx || index >= rangeEndIdx),
       segments,
     };
@@ -214,8 +211,6 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
       chartHeight,
       maxValue,
       formatAxisTimestamp,
-      barWidth,
-      barGap,
       formatTooltipTimestamp,
       breakdownByType,
       rangeStartIdx,
@@ -274,6 +269,7 @@ function TimeSeriesChart(props: {
   status: TimeSeriesProps["detail"]["timeSeriesStatus"];
 }) {
   const model = () => props.model;
+  let svg!: SVGSVGElement;
   let stopDrag: (() => void) | undefined;
   onCleanup(() => stopDrag?.());
   const moveCursor = (
@@ -318,21 +314,13 @@ function TimeSeriesChart(props: {
     moveCursor(side, timestamp, props.callbacks.onTimeSeriesCursorRangeChange);
   };
   const makeDragHandler = (side: "left" | "right") => (e: MouseEvent) => {
-    if (!(e.currentTarget instanceof HTMLElement)) {
-      return;
-    }
     stopDrag?.();
     e.preventDefault();
     e.stopPropagation();
-    const wrapper = e.currentTarget.closest(".timeseries-chart-wrapper");
-    const svgEl = wrapper?.querySelector("svg");
-    if (!svgEl) {
-      return;
-    }
     // Retain the callback that guards the series identity at the start of this drag.
     const initialOnRangeChange = props.callbacks.onTimeSeriesCursorRangeChange;
     // Capture rect once at mousedown to avoid re-render offset shifts
-    const rect = svgEl.getBoundingClientRect();
+    const rect = svg.getBoundingClientRect();
     const svgWidth = rect.width;
     const initialChartLeftPx = (model().padding.left / model().width) * svgWidth;
     const initialChartRightPx =
@@ -420,45 +408,41 @@ function TimeSeriesChart(props: {
       </div>
       {renderUsageRefreshStatus(props.status, "usage.details.usageOverTime", "timeline")}
       <div class="timeseries-chart-wrapper">
-        <svg viewBox={`0 0 ${model().width} ${model().height + 18}`} class="timeseries-svg">
-          <For
-            each={[
-              {
-                x1: model().padding.left,
-                y1: model().padding.top,
-                x2: model().padding.left,
-                y2: model().padding.top + model().chartHeight,
-              },
-              {
-                x1: model().padding.left,
-                y1: model().padding.top + model().chartHeight,
-                x2: model().width - model().padding.right,
-                y2: model().padding.top + model().chartHeight,
-              },
-            ]}
+        <svg
+          ref={(element) => (svg = element)}
+          viewBox={`0 0 ${model().width} ${model().height + 18}`}
+          class="timeseries-svg"
+        >
+          <line
+            x1={model().padding.left}
+            y1={model().padding.top}
+            x2={model().padding.left}
+            y2={model().padding.top + model().chartHeight}
+            stroke="var(--border)"
+          />
+          <line
+            x1={model().padding.left}
+            y1={model().padding.top + model().chartHeight}
+            x2={model().width - model().padding.right}
+            y2={model().padding.top + model().chartHeight}
+            stroke="var(--border)"
+          />
+          <text
+            x={model().padding.left - 4}
+            y={model().padding.top + 5}
+            text-anchor="end"
+            class="ts-axis-label"
           >
-            {({ x1, y1, x2, y2 }) => (
-              <>
-                {" "}
-                <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--border)" />{" "}
-              </>
-            )}
-          </For>
-          <For
-            each={[
-              { y: model().padding.top + 5, text: formatUsageTokens(model().maxValue) },
-              { y: model().padding.top + model().chartHeight, text: "0" },
-            ]}
+            {formatUsageTokens(model().maxValue)}
+          </text>
+          <text
+            x={model().padding.left - 4}
+            y={model().padding.top + model().chartHeight}
+            text-anchor="end"
+            class="ts-axis-label"
           >
-            {({ y, text }) => (
-              <>
-                {" "}
-                <text x={model().padding.left - 4} y={y} text-anchor="end" class="ts-axis-label">
-                  {text}
-                </text>{" "}
-              </>
-            )}
-          </For>
+            0
+          </text>
           <text
             x={model().padding.left}
             y={model().padding.top + model().chartHeight + 10}
@@ -476,37 +460,23 @@ function TimeSeriesChart(props: {
             {model().formatAxisTimestamp(model().lastTimestamp)}
           </text>
           <For each={model().bars}>
-            {(bar) =>
-              bar.stacked ? (
-                <For each={bar.segments}>
-                  {(segment) => (
-                    <rect
-                      x={bar.x}
-                      y={segment.y}
-                      width={bar.width}
-                      height={segment.height}
-                      class={["ts-bar", segment.className, { dimmed: bar.dimmed }]}
-                      rx="1"
-                      role="img"
-                      data-tooltip={bar.tooltip}
-                      aria-label={bar.tooltip}
-                    />
-                  )}
-                </For>
-              ) : (
-                <rect
-                  x={bar.x}
-                  y={bar.y}
-                  width={bar.width}
-                  height={bar.height}
-                  class={["ts-bar", { dimmed: bar.dimmed }]}
-                  rx="1"
-                  role="img"
-                  data-tooltip={bar.tooltip}
-                  aria-label={bar.tooltip}
-                />
-              )
-            }
+            {(bar) => (
+              <For each={bar.segments}>
+                {(segment) => (
+                  <rect
+                    x={bar.x}
+                    y={segment.y}
+                    width={bar.width}
+                    height={segment.height}
+                    class={["ts-bar", segment.className, { dimmed: bar.dimmed }]}
+                    rx="1"
+                    role="img"
+                    data-tooltip={bar.tooltip}
+                    aria-label={bar.tooltip}
+                  />
+                )}
+              </For>
+            )}
           </For>
           {/*  Selection highlight overlay (always visible between handles)  */}
           <rect
@@ -541,18 +511,15 @@ function TimeSeriesChart(props: {
                 />
                 <For each={[-HANDLE_GRIP_OFFSET, HANDLE_GRIP_OFFSET]}>
                   {(offset) => (
-                    <>
-                      {" "}
-                      <line
-                        x1={handleX + offset}
-                        y1={model().padding.top + model().chartHeight / 2 - HANDLE_HEIGHT / 5}
-                        x2={handleX + offset}
-                        y2={model().padding.top + model().chartHeight / 2 + HANDLE_HEIGHT / 5}
-                        stroke="var(--bg)"
-                        stroke-width="0.4"
-                        pointer-events="none"
-                      />{" "}
-                    </>
+                    <line
+                      x1={handleX + offset}
+                      y1={model().padding.top + model().chartHeight / 2 - HANDLE_HEIGHT / 5}
+                      x2={handleX + offset}
+                      y2={model().padding.top + model().chartHeight / 2 + HANDLE_HEIGHT / 5}
+                      stroke="var(--bg)"
+                      stroke-width="0.4"
+                      pointer-events="none"
+                    />
                   )}
                 </For>
               </>
@@ -565,7 +532,7 @@ function TimeSeriesChart(props: {
             const x = () => (side === "left" ? model().leftHandleX : model().rightHandleX);
             return (
               <div
-                class={`chart-handle-zone chart-handle-${side}`}
+                class={["chart-handle-zone", `chart-handle-${side}`]}
                 role="slider"
                 tabindex="0"
                 aria-label={t(
@@ -621,7 +588,7 @@ function TimeSeriesChart(props: {
             <For each={USAGE_TOKEN_CATEGORIES}>
               {({ key, className }) => (
                 <div
-                  class={`cost-segment ${className}`}
+                  class={["cost-segment", className]}
                   style={{
                     width: `${(model().totalTypeTokens > 0 ? (model().filteredTokens[key] / model().totalTypeTokens) * 100 : 0).toFixed(1)}%`,
                   }}
@@ -633,7 +600,7 @@ function TimeSeriesChart(props: {
             <For each={USAGE_TOKEN_CATEGORIES}>
               {({ key, className, labelKey, hintKey }) => (
                 <div class="legend-item" title={t(hintKey)}>
-                  <span class={`legend-dot ${className}`} />
+                  <span class={["legend-dot", className]} />
                   {t(labelKey)} {formatUsageTokens(model().filteredTokens[key])}
                 </div>
               )}

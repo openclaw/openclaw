@@ -1,5 +1,5 @@
 import { onCleanup } from "solid-js";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { HovercardOwner } from "./link-reader-hovercard-owner.ts";
 import type {
   HovercardProperties,
@@ -13,6 +13,7 @@ export type LinkReaderHovercardProvider = HovercardElement;
 const properties = {
   client: { default: null, attribute: false },
   agentId: { default: undefined, attribute: false },
+  sessionKey: { default: undefined, attribute: false },
   readers: { default: EMPTY_LINK_READERS, attribute: false },
   previewSeeds: { default: [], attribute: false },
   pagePreviewContext: { default: undefined, attribute: false },

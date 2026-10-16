@@ -3,7 +3,7 @@ import { createEffect, createMemo, For, Show } from "solid-js";
 import { stripFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { type FileKind, fileKindForPath } from "./file-kind.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { CopyButton } from "./solid/copy-button.tsx";
@@ -398,10 +398,11 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
               <span class="foot-group">
                 <Kbd keys={["↑", "↓"]} class="kbd" /> {t("filePreview.navigate")}
               </span>
-              <span class="spacer" />
-              <button class="button" onClick={close}>
-                {t("common.close")} <Kbd keys="esc" class="kbd" />
-              </button>
+              <openclaw-modal-actions>
+                <button class="button" onClick={close}>
+                  {t("common.close")} <Kbd keys="esc" class="kbd" />
+                </button>
+              </openclaw-modal-actions>
             </footer>
           </Show>
         </div>

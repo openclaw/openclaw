@@ -68,10 +68,7 @@ import {
   prepareSessionCreateFilesystemRoot,
   prepareSessionForkFilesystemRoot,
 } from "./server-methods/session-create-root.js";
-import {
-  prepareSessionPatchRuntimeSelection,
-  refreshSessionPatchQueuedSelection,
-} from "./server-methods/sessions-patch-model-selection.js";
+import { refreshSessionPatchQueuedSelection } from "./server-methods/sessions-patch-model-selection.js";
 import { completeGatewaySessionCreation } from "./session-create-completion.js";
 import {
   existingSessionSelectionWouldChange,
@@ -87,6 +84,7 @@ import {
 import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
 import { buildSessionCreateLifecycleTargets } from "./session-create-lifecycle-targets.js";
 import {
+  prepareSessionCreateRuntimeSelection,
   resolveSessionCreationCommitGuard,
   prepareSessionCreateDefaultAccount,
   prepareSessionCreateModelSelection,
@@ -131,7 +129,6 @@ import {
   resolveGatewaySessionStoreTargetInWorker,
 } from "./session-utils-store-worker.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
-import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 
 export function createGatewaySession(
@@ -954,28 +951,16 @@ async function createGatewaySessionInScope(
             }
           }
         }
-        const runtimeSelection = await prepareSessionPatchRuntimeSelection({
-          cfg: params.cfg,
+        const runtimeSelection = await prepareSessionCreateRuntimeSelection({
+          request: params,
           agentId: target.agentId,
-          patch: {
-            key: target.canonicalKey,
-            agentRuntime: params.agentRuntime,
-            model: params.model,
-          },
+          sessionKey: target.canonicalKey,
+          storePath: target.storePath,
+          existingEntry,
           entry,
-          catalog: preparedModelCatalog?.entries,
-          // Thinking policy was already validated by the patch owner; create discards hydration.
-          hydrateThinkingCatalog: false,
+          catalog: preparedModelCatalog,
           validateModelSelection:
             validateAccountModel ?? patched.validateModelSelection ?? modelSelection.validate,
-          ...(params.agentRuntime !== undefined || params.model !== undefined
-            ? {
-                placement: {
-                  context: resolveSessionWorkerPlacementContext(),
-                  sessionKey: target.canonicalKey,
-                },
-              }
-            : {}),
         });
         if (!runtimeSelection.ok) {
           return runtimeSelection;

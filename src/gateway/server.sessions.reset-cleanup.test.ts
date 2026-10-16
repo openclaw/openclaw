@@ -130,7 +130,20 @@ test("sessions.reset retires an unbound memory session without host session SQL"
 test("sessions.reset aborts active runs and clears queues", async () => {
   const { storePath } = await seedWaitingActiveMainSession();
   const parentGrant = RESET_PARENT_GRANT_FIXTURE;
-  await upsertSessionEntryCore({ storePath, sessionKey: "agent:main:main" }, parentGrant);
+  const preferences = {
+    responseUsage: "tokens",
+    pinnedAt: 123,
+    label: "Operator session",
+    category: "Operator group",
+    icon: "🦞",
+    boardFace: "dashboard",
+    boardPresentation: "expanded",
+    visibility: "draft",
+  } satisfies Partial<InternalSessionEntry>;
+  await upsertSessionEntryCore(
+    { storePath, sessionKey: "agent:main:main" },
+    { ...parentGrant, ...preferences },
+  );
   enqueueSystemEvent("stale event via alias", { sessionKey: "main" });
   enqueueSystemEvent("stale event via canonical key", { sessionKey: "agent:main:main" });
   enqueueSystemEvent("stale event via session id", { sessionKey: "sess-main" });
@@ -145,6 +158,7 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   expect(reset.payload?.entry.sessionId).toBe("sess-main");
   expect(reset.payload?.entry.lifecycleRevision).toEqual(expect.any(String));
   expect(reset.payload?.entry).not.toHaveProperty("sessionDiffBaselineCapture");
+  expect(reset.payload?.entry).toMatchObject(preferences);
   expect(
     loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }) as
       | InternalSessionEntry
@@ -152,6 +166,7 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   ).toMatchObject({
     sessionId: "sess-main",
     ...parentGrant,
+    ...preferences,
     sessionDiffBaselineCapture: {
       version: 1,
       captureId: expect.any(String),
@@ -608,57 +623,6 @@ test("sessions.patch rejects an archive queued behind a rotated session", async 
   expect(entry?.sessionId).toBe(replacementSessionId);
 });
 
-test("sessions.reset preserves a newer session after lifecycle rotation", async () => {
-  const { dir, storePath } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
-  installAcpRuntimeBackendWithFreshSession();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-    },
-  });
-  seedCanonicalAcpSessionMeta({
-    sessionKey: "agent:main:main",
-    lifecycleRevision: undefined,
-    meta: resolvedAcpMeta({
-      recordId: "agent:main:main",
-      backendSessionId: "backend-session-1",
-    }),
-  });
-  let lifecycleCurrent = true;
-  acpManagerMocks.closeSession.mockImplementationOnce(async () => {
-    lifecycleCurrent = false;
-    await writeSessionStore({
-      entries: {
-        main: sessionStoreEntry("new-owner-session"),
-      },
-    });
-  });
-  const { performGatewaySessionReset } = await import("./session-reset-service.js");
-
-  await expect(
-    performGatewaySessionReset({
-      key: "main",
-      reason: "new",
-      commandSource: "gateway:agent",
-      workerPlacementContext: {},
-      assertCurrent: () => {
-        if (!lifecycleCurrent) {
-          throw new Error("stale lifecycle");
-        }
-      },
-    }),
-  ).rejects.toThrow("stale lifecycle");
-
-  expect(
-    loadSessionEntry({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      storePath,
-    })?.sessionId,
-  ).toBe("new-owner-session");
-});
-
 test("sessions.reset closes child ACP runtime handles spawned from the parent", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
@@ -908,35 +872,4 @@ test("sessions.reset directly unbinds thread bindings when hooks are unavailable
     targetSessionKey: "agent:main:main",
     reason: "session-reset",
   });
-});
-
-test("sessions.reset preserves explicit session preferences across session rollover", async () => {
-  // Reset clears conversation state without discarding operator-owned session preferences.
-  const { dir, storePath } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
-  const preferences = {
-    responseUsage: "tokens",
-    pinnedAt: 123,
-    label: "Operator session",
-    category: "Operator group",
-    icon: "🦞",
-    boardFace: "dashboard",
-    boardPresentation: "expanded",
-    visibility: "draft",
-  } satisfies Partial<InternalSessionEntry>;
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main", preferences),
-    },
-  });
-
-  const reset = await directSessionReq<{
-    ok: true;
-    key: string;
-    entry: InternalSessionEntry;
-  }>("sessions.reset", { key: "main" });
-
-  expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry).toMatchObject(preferences);
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject(preferences);
 });

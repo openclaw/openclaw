@@ -20,7 +20,7 @@ For an eligible repository with committed content, OpenClaw:
 3. Removes worker identity and session state, then fixes the snapshot capture point before node enrollment.
 4. Enrolls the node, binds the session workspace, runs post-create/start commands, and starts the first turn.
 
-With Crabbox 0.78.0 or newer on AWS, the first session continues to enrollment once Crabbox confirms the capture point is fixed. The snapshot upload finishes in the background; later sessions start cold until it is available. Older Crabbox, refresh captures, reserves, and other backends still wait for completion. Daytona may stop and restore the source machine during capture.
+With Crabbox 0.79.0 or newer on AWS, the first session continues to enrollment once Crabbox confirms the capture point is fixed. The snapshot upload finishes in the background; later sessions start cold until it is available. Older Crabbox, refresh captures, reserves, and other backends still wait for completion. Daytona may stop and restore the source machine during capture.
 
 This works for both Gateway checkouts and repository-only GitHub sessions. Only committed repository content enters preparation. Session edits and enrollment credentials arrive after the capture point is fixed. Private repository preparation transfers Git content without putting GitHub credentials in worker files or snapshots; it needs temporary Gateway disk space, and the outgoing pack is limited to 4 GiB.
 
@@ -41,6 +41,14 @@ A foreground fork can refresh a changed commit or top up its runtime without cap
 Retries and Gateway restarts keep the originally selected cold allocation or checkpoint. A failed fork reports an error rather than silently allocating another machine. Missing, retiring, or incompatible snapshots cause new allocations to start cold.
 
 If the backend definitively refuses native capture, OpenClaw records the reason and continues enrollment on the prepared machine. Existing compatible snapshots remain usable. Capture is retried after `refreshAfter`; a successful capture clears the refusal. An uncertain capture instead pauses further capture and blocks enrollment on its source until [recovery](/gateway/cloud-workers/warm-images#recover-a-paused-capture).
+
+### Capture lifetime
+
+A 45-minute checkpoint wait is an operation budget, not extra lease lifetime. Before source-dependent capture, OpenClaw checks the effective remaining total lifetime and keeps the existing source heartbeat active while the provider requires the source. Heartbeats protect idle time only. If the source needs more total lifetime, OpenClaw requests a bounded `crabbox extend <lease-id> --ttl <desired-total> --json`, within the configured duration and effective maximum. Extension does not reset idle time. On the supported nonblocking AWS path, fixing the capture point permits enrollment while upload continues; lifetime checks do not turn that upload into a blocking wait. Renewal stops before source release, and allocation holds remain until cleanup is confirmed.
+
+Crabbox owns extension authority, policy, and budget. `lease_extension_denied` and `lease_extension_budget_exceeded` grant no extra time; `lease_extension_not_advancing` means the target or cap cannot advance, and `lease_not_active` cannot revive the lease. Creation-fixed providers, including Daytona, return `lease_extension_unsupported_provider` and need sufficient TTL at creation. OpenClaw visibly skips an optional capture when the source window cannot be secured; required project capture fails preparation with that reason. It does not bypass policy, switch providers, or chain leases indefinitely.
+
+A direct extension can commit a longer provider deadline but fail to refresh the guest expiry guard. That is a failed preparation outcome until reconciled: the guest can still shut down at its old deadline. Retry only the same fixed total TTL in the same Crabbox state to repair the pending refresh; do not add another duration blindly. See [Crabbox extend](https://crabbox.sh/commands/extend.html).
 
 ### Retention policy
 
@@ -101,6 +109,8 @@ Set `cloudWorkers.profiles.<id>.readyWorkers` for the per-project target and `cl
 Ready workers incur running-machine charges until deletion is confirmed. Demand expires using the provider's idle timeout; refill and Gateway restart do not extend it. Expired, incompatible, disabled, and surplus workers retire. Temporary provider or artifact-observation failures defer maintenance, retaining existing capacity and its expiry. Check the pool limits and Gateway's refill diagnostic if no reserve appears after activation.
 
 **Build on demand:** `environments.prepare` accepts `{ profileId, projectPath }` with `operator.admin`, prepares a local Git checkout's committed `HEAD`, and authorizes its setup recipe. It returns `{ environmentId, preparationKey, reused }`, reusing matching work already in progress. It requires an eligible profile and room under the pool cap. A build can finish with `readyWorkers: 0`, then ordinary reserve policy may retire it as surplus. `environments.destroy` cancels an unused build or reserve and waits for provider work and cleanup to settle.
+
+An already-admitted capture can finish after reserve-demand expiry within its secured source lifetime and provider budget, while its worker remains counted. Reserve-demand expiry does not grant more provider lifetime or allow later enrollment, readiness, or consumption; cleanup follows settled capture custody.
 
 ### Inspect snapshots in the Control UI
 

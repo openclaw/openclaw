@@ -5,10 +5,45 @@ import {
   SessionGitHubOptionsResultSchema,
   SessionGitHubPublicationResultSchema,
   SessionGitHubPublishParamsSchema,
+  SessionGitHubActionParamsSchema,
 } from "./session-github-publication.js";
 import { UsersGitHubAuthorizeStartParamsSchema, UsersGitHubStatusParamsSchema } from "./users.js";
 
 describe("session GitHub publication protocol", () => {
+  it("admits only a current-workspace refresh and bounded conflict acknowledgment", () => {
+    const refresh = { sessionKey: "agent:main:publication", action: "refresh_base" };
+    expect(Value.Check(SessionGitHubActionParamsSchema, refresh)).toBe(true);
+    expect(
+      Value.Check(SessionGitHubActionParamsSchema, {
+        ...refresh,
+        conflictsResolved: true,
+        baseCommit: "a".repeat(40),
+      }),
+    ).toBe(true);
+    for (const extra of [
+      { repository: "other/repo" },
+      { ref: "main" },
+      { publishingSessionKey: "other" },
+      { requestId: "a1111111-1111-4111-8111-111111111111" },
+      { mergeMethod: "merge" },
+      { baseCommit: "main" },
+    ]) {
+      expect(Value.Check(SessionGitHubActionParamsSchema, { ...refresh, ...extra })).toBe(false);
+    }
+  });
+  it("keeps session PR actions closed to arbitrary targets, credentials and auto-merge", () => {
+    const inspect = { sessionKey: "agent:main:publication", action: "inspect" };
+    expect(Value.Check(SessionGitHubActionParamsSchema, inspect)).toBe(true);
+    for (const extra of [
+      { action: "auto_merge" },
+      { url: "https://github.com/another/repository/pull/1" },
+      { token: "synthetic" },
+      { admin: true },
+      { mergeMethod: "admin" },
+    ]) {
+      expect(Value.Check(SessionGitHubActionParamsSchema, { ...inspect, ...extra })).toBe(false);
+    }
+  });
   it("accepts typed publication unavailability without accepting arbitrary diagnostics", () => {
     const options = { personal: null, shared: null, pendingPersonal: null, latestShared: null };
     for (const sharedUnavailableReason of [

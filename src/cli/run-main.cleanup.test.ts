@@ -341,28 +341,19 @@ describe("CLI process harness cleanup", () => {
     },
   );
 
-  it("installs the rejection handler before the direct Gateway fast path", async () => {
-    dispatch.run = async () => {
-      expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
-    };
-
-    const { runCli } = await import("./run-main.js");
-    await runCli(["node", "openclaw", "gateway"]);
-
-    expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
-  });
-
   it.each([undefined, "drained", "retained"] as const)(
     "uses the actual Gateway cleanup receipt (%s), not its command name",
     async (receipt) => {
       const { getGatewayRunRuntimeHooks } = await import("./gateway-cli/runtime-hooks.js");
       const { runCli } = await import("./run-main.js");
       dispatch.run = async () => {
+        expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
         if (receipt) {
           getGatewayRunRuntimeHooks().onProcessResourcesSettled?.(receipt);
         }
       };
       await runCli(["node", "openclaw", "gateway"]);
+      expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
       expect(dispatch.memoryClosed).toHaveBeenCalledTimes(receipt ? 0 : 1);
     },
   );

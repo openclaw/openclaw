@@ -423,7 +423,7 @@ describe("fresh producer results through persistence and model guards", () => {
 
   it("refuses a whole skill that fits the byte cap but exceeds the model text budget", async () => {
     const locator = "node://fixture/skills/whole/SKILL.md";
-    const base = fakeTool("read", "Read a file");
+    const base = createReadTool("/");
     const read = wrapReadToolWithSkillContent(
       base,
       [{ filePath: locator, readContent: "INSTRUCTIONS" + "中".repeat(9000) }],

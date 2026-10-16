@@ -20,6 +20,7 @@ import type { Dispatcher } from "undici";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeHostname } from "./hostname.js";
+import { hasTrustedHostPodmanGatewayLinkLocalExemption } from "./ssrf-trusted-host-linklocal-exemptions.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
@@ -401,18 +402,32 @@ function isExplicitLoopbackHostname(hostname: string): boolean {
   );
 }
 
+// These link-local metadata services remain forbidden under the Podman grant.
+const PODMAN_GATEWAY_BLOCKED_LINK_LOCAL_ADDRESSES = new Set([
+  "169.254.0.23",
+  "169.254.42.42",
+  "169.254.169.254",
+  "169.254.170.2",
+  "169.254.170.23",
+]);
+
 function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
   results: readonly LookupAddress[],
   hostname: string,
+  policy?: SsrFPolicy,
 ): void {
   const isLoopbackAllowed = isExplicitLoopbackHostname(hostname);
+  const isPodmanGatewayLinkLocalAllowed = hasTrustedHostPodmanGatewayLinkLocalExemption(policy);
 
   for (const entry of results) {
     if (
       isUnspecifiedIpAddress(entry.address) ||
       (!isLoopbackAllowed && isLoopbackIpAddressIncludingEmbeddedIpv4(entry.address)) ||
       isBlockedTrustedResolvedIpv6Address(entry.address) ||
-      isLinkLocalIpAddress(entry.address) ||
+      (isLinkLocalIpAddress(entry.address) &&
+        (!isPodmanGatewayLinkLocalAllowed ||
+          !isCanonicalDottedDecimalIPv4(entry.address) ||
+          PODMAN_GATEWAY_BLOCKED_LINK_LOCAL_ADDRESSES.has(entry.address))) ||
       isCloudMetadataIpAddress(entry.address)
     ) {
       throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
@@ -568,7 +583,7 @@ export async function resolvePinnedHostnameWithPolicy(
   } else if (!isPrivateNetworkAllowedByPolicy(params.policy)) {
     // Exact-host trust may allow RFC1918/tailnet/private-DNS provider targets, but
     // it must not turn metadata/link-local DNS rebinding into an implicit allow.
-    assertAllowedTrustedHostnameResolvedAddressesOrThrow(results, normalized);
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(results, normalized, params.policy);
   }
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
@@ -638,7 +653,7 @@ function resolvePinnedDispatcherLookup(
   if (!shouldSkipPrivateNetworkChecks(pinned.hostname, policy)) {
     assertAllowedResolvedAddressesOrThrow(records, policy);
   } else if (!isPrivateNetworkAllowedByPolicy(policy)) {
-    assertAllowedTrustedHostnameResolvedAddressesOrThrow(records, pinned.hostname);
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(records, pinned.hostname, policy);
   }
   return createPinnedLookup({
     hostname: pinned.hostname,
@@ -652,16 +667,22 @@ export function createPinnedDispatcher(
   policy?: PinnedDispatcherPolicy,
   ssrfPolicy?: SsrFPolicy,
   timeoutMs?: number,
+  streamTimeoutMs?: number,
 ): Dispatcher {
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
+  const streamTimeouts = { bodyTimeout: streamTimeoutMs, headersTimeout: streamTimeoutMs };
 
   if (!policy || policy.mode === "direct") {
-    return createHttp1Agent({ connect: withPinnedLookup(lookup, policy?.connect) }, timeoutMs);
+    return createHttp1Agent(
+      { ...streamTimeouts, connect: withPinnedLookup(lookup, policy?.connect) },
+      timeoutMs,
+    );
   }
 
   if (policy.mode === "env-proxy") {
     return createHttp1EnvHttpProxyAgent(
       {
+        ...streamTimeouts,
         connect: withPinnedLookup(lookup, policy.connect),
         ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
       },
@@ -673,6 +694,7 @@ export function createPinnedDispatcher(
   const requestTls = withPinnedLookup(lookup, policy.proxyTls);
   return createHttp1ProxyAgent(
     {
+      ...streamTimeouts,
       uri: proxyUrl,
       // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
       // transport hints for explicit proxies. Translate that to undici's

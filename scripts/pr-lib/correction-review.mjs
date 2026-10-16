@@ -5,6 +5,7 @@ import { copyFileSync, lstatSync, mkdtempSync, readFileSync, writeFileSync } fro
 import { join } from "node:path";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { baselineRefreshCandidate } from "./baseline-refresh.mjs";
+import { incomingReview } from "./incoming-review.mjs";
 import {
   createReviewArtifactTemplate,
   renderReviewMarkdown,
@@ -19,34 +20,6 @@ function readRegular(path) {
     throw new Error(`Expected a regular review file: ${path}`);
   }
   return readFileSync(path, "utf8");
-}
-
-export function incomingReview(pr, incoming, jsonOid) {
-  const reviewPath = ".local/review.json";
-  const review = JSON.parse(readRegular(reviewPath));
-  const prMeta = JSON.parse(readRegular(".local/pr-meta.json"));
-  const violations = validateReviewArtifacts({ review, prMeta });
-  if (violations.length) {
-    throw new Error(violations.join("\n"));
-  }
-  if (prMeta.number !== pr || prMeta.headRefOid !== incoming) {
-    throw new Error("Correction preparation does not match the incoming PR review.");
-  }
-  if (git("hash-object", "--no-filters", reviewPath) !== jsonOid) {
-    throw new Error(
-      "Incoming review changed after correction admission. Retain evidence and re-review.",
-    );
-  }
-  const findings = review.findings.filter((item) =>
-    ["BLOCKER", "IMPORTANT"].includes(item.severity),
-  );
-  if (review.recommendation !== "NEEDS WORK" || findings.length === 0) {
-    throw new Error("Correction admission requires NEEDS WORK with actionable findings.");
-  }
-  if (new Set(findings.map((item) => item.id)).size !== findings.length) {
-    throw new Error("Correction admission requires distinct finding IDs.");
-  }
-  return { prMeta, findings };
 }
 
 function candidateMetadata(prMeta, incoming, head, jsonOid, anchor, bindingOid) {

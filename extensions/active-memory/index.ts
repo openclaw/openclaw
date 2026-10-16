@@ -305,14 +305,6 @@ export default definePluginEntry({
               ctx.assertMemoryAudienceCurrent?.();
               return { prependContext };
             };
-            const skipRecall = async (reason: string) => {
-              logRecallSkipped(reason);
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
-            };
             if (authorityAllowedRecallTools.length === 0) {
               await persistPluginStatusLines({
                 api,
@@ -336,6 +328,14 @@ export default definePluginEntry({
               logRecallSkipped("harness-session");
               return undefined;
             }
+            // Status describes this turn. Clear it after the side-effect-free harness
+            // guard, before preflight can fail or time out without a replacement.
+            await persistPluginStatusLines({
+              api,
+              agentId: effectiveAgentId,
+              sessionKey: resolvedSessionKey,
+            });
+            toolAuthority.assertActive();
             const sessionDisabled = await isSessionActiveMemoryDisabled({
               api,
               sessionKey: resolvedSessionKey,
@@ -343,7 +343,7 @@ export default definePluginEntry({
             deadlineController.signal.throwIfAborted();
             toolAuthority.assertActive();
             if (sessionDisabled) {
-              await skipRecall("session-disabled");
+              logRecallSkipped("session-disabled");
               return undefined;
             }
             const sessionContext = {
@@ -351,7 +351,7 @@ export default definePluginEntry({
               sessionKey: resolvedSessionKey ?? ctx.sessionKey,
             };
             if (!isEligibleInteractiveSession(sessionContext)) {
-              await skipRecall("session-ineligible");
+              logRecallSkipped("session-ineligible");
               return undefined;
             }
             const destinationContext = {
@@ -511,7 +511,7 @@ export default definePluginEntry({
               );
             }
             if (!activeMemoryAllowed && !productRecallAllowed) {
-              await skipRecall("destination-not-allowed");
+              logRecallSkipped("destination-not-allowed");
               return publishPrependContext([laneOneContext]);
             }
             const escalationDecision = resolveRecallEscalationDecision({

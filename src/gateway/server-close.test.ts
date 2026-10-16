@@ -7,10 +7,6 @@ import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { registerDispatcher } from "../auto-reply/reply/dispatcher-registry.js";
-import {
-  createReplyOperation,
-  type ReplyOperation,
-} from "../auto-reply/reply/reply-run-registry.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
@@ -22,7 +18,6 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "../plugins/services.js";
 import {
   createServiceRegistration,
@@ -34,6 +29,7 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
+import { registerGatewayCancellationTests } from "./server-close-cancellation.test-support.js";
 import { registerGatewayResourceRetirementTests } from "./server-close-retirement.test-support.js";
 import {
   createGatewayCloseTestDepsFactory,
@@ -1066,9 +1062,7 @@ describe("createGatewayCloseHandler", () => {
       );
       expect(drainActiveSessionsForShutdown).toHaveBeenCalledOnce();
       expect(firstMockCall(drainActiveSessionsForShutdown)?.[0]?.reason).toBe(reason);
-      expect(order).toStrictEqual(
-        reason === "restart" ? ["reply-drain", "session-end"] : ["session-end"],
-      );
+      expect(order).toStrictEqual(["reply-drain", "session-end"]);
       expect(result.warnings.includes("session-end-drain")).toBe(timedOut);
     },
   );
@@ -1102,86 +1096,10 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
-  it.each([false, true])(
-    "cancels only captured Gateway replies before disposal (marker fails: %s)",
-    async (markerFails) => {
-      const resolveGatewayContext = () => undefined;
-      const otherGatewayContext = () => undefined;
-      const operations: ReplyOperation[] = [];
-      const begin = (key: string, resolver = resolveGatewayContext) => {
-        const operation = createReplyOperation({
-          sessionKey: key,
-          sessionId: key,
-          resetTriggered: false,
-        });
-        operation.setPhase("running");
-        bindGatewayContextResolver(operation, resolver);
-        operations.push(operation);
-        return operation;
-      };
-      const owned = begin("agent:main:closing");
-      const reboundDuringAbort = begin("agent:main:rebound");
-      owned.abortSignal.addEventListener(
-        "abort",
-        () => bindGatewayContextResolver(reboundDuringAbort, otherGatewayContext),
-        { once: true },
-      );
-      const replaced = begin("agent:main:replaced");
-      const other = begin("agent:main:other", otherGatewayContext);
-      const finalizing = begin("agent:main:finalizing");
-      finalizing.freezeAbort();
-      const markerEntered = createDeferredCore();
-      const markerCommitted = createDeferredCore();
-      const observed: boolean[] = [];
-      const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(
-        async () => {
-          markerEntered.resolve(undefined);
-          await markerCommitted.promise;
-          if (markerFails) {
-            throw new Error("marker write failed");
-          }
-        },
-      );
-      const close = createGatewayCloseHandler({
-        getPendingReplyCount: () => Number(!owned.abortSignal.aborted),
-        markMainSessionsAbortedForRestart,
-        channelIds: ["telegram"],
-        stopChannel: async () => {
-          observed.push(owned.abortSignal.aborted);
-        },
-        disposeAllCodeModeRuns: () => {
-          observed.push(owned.abortSignal.aborted);
-        },
-        resolveGatewayContext,
-      });
-      try {
-        const closing = close({ restartExpectedMs: 123, drainTimeoutMs: 0 });
-        await markerEntered.promise;
-        expect(owned.abortSignal.aborted).toBe(false);
-        replaced.complete();
-        const replacement = begin(replaced.key);
-        markerCommitted.resolve(undefined);
-        const result = await closing;
-
-        expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
-          expect.objectContaining({ activeRuns: [], reason: "gateway restart shutdown" }),
-        );
-        expect(observed).toEqual([true, true]);
-        expect(isAgentRunRestartAbortReason(owned.abortSignal.reason)).toBe(true);
-        expect(other.abortSignal.aborted).toBe(false);
-        expect(reboundDuringAbort.abortSignal.aborted).toBe(false);
-        expect(replacement.abortSignal.aborted).toBe(false);
-        expect(finalizing.abortSignal.aborted).toBe(false);
-        expect(finalizing.result).toBeNull();
-        expect(result.warnings.includes("restart-main-session-marker")).toBe(markerFails);
-      } finally {
-        markerCommitted.resolve(undefined);
-        for (const operation of operations) {
-          operation.complete();
-        }
-      }
-    },
-  );
+  registerGatewayCancellationTests({
+    createClose: createGatewayCloseHandler,
+    setShutdownHook: (hook) => mocks.triggerInternalHook.mockImplementation(hook),
+  });
 
   it("aborts active runs when restart reply drain times out", async () => {
     vi.useFakeTimers();
@@ -1314,19 +1232,19 @@ describe("createGatewayCloseHandler", () => {
         ...(restart ? { restartExpectedMs: 123 } : {}),
         drainTimeoutMs: 0,
       });
-      expect(result.warnings.includes("restart-reply-drain")).toBe(restart);
+      expect(result.warnings).toContain("restart-reply-drain");
       expect(controller.signal.aborted).toBe(!finalizing);
       expect(chatAbortControllers.has(runId)).toBe(finalizing);
       expect(chatAbortControllers.size).toBe(finalizing ? 1 : 0);
       if (!finalizing) {
-        expect(isAgentRunRestartAbortReason(controller.signal.reason)).toBe(restart);
+        expect(isAgentRunRestartAbortReason(controller.signal.reason)).toBe(true);
       }
       if (!restart) {
-        expect(getPendingReplyCount).not.toHaveBeenCalled();
-        expect(markMainSessionsAbortedForRestart).not.toHaveBeenCalled();
+        expect(getPendingReplyCount).toHaveBeenCalled();
+        expect(markMainSessionsAbortedForRestart).toHaveBeenCalledOnce();
         expect(deps.broadcast).toHaveBeenCalledWith(
           "chat",
-          expect.objectContaining({ runId, state: "aborted", stopReason: "rpc" }),
+          expect.objectContaining({ runId, state: "aborted", stopReason: "restart" }),
           { sessionKeys: ["session-1"] },
         );
       }

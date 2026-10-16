@@ -3,7 +3,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { resolveToolApprovalReviewOutcome } from "../../../lib/chat/tool-approval-reviews.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";
 
 export type ToolOutcomeSummaryProps = {

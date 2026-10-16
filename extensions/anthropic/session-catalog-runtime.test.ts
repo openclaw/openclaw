@@ -22,7 +22,11 @@ function boundSessions(entries: { sessionKey: string; entry: Partial<SessionEntr
 describe("Claude bound session resolution", () => {
   it("reuses revision-bound projections and reads unversioned entries every time", () => {
     const config = {};
-    const api = { id: "anthropic", config, runtime: {} } as OpenClawPluginApi;
+    const api = {
+      id: "anthropic",
+      config,
+      runtime: { config: { current: () => config } },
+    } as OpenClawPluginApi;
     const entries = [
       {
         agentId: "main",

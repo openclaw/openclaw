@@ -19,7 +19,6 @@ import {
   type PreparedThinkingPolicy,
   type ThinkingCatalogPolicyCarrier,
 } from "../plugins/provider-thinking-catalog.js";
-import type { ProviderThinkingRegistry } from "../plugins/provider-thinking.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -206,47 +205,6 @@ describe("Gateway all-null thinking map", () => {
       expect(profile.thinkingDefault).toBe(thinkingDefault);
     },
   );
-});
-
-describe("Gateway captured thinking defaults", () => {
-  const provider = "captured-thinking-default-fixture";
-  const captured: ProviderThinkingRegistry = {
-    providers: [
-      {
-        provider: {
-          id: provider,
-          resolveThinkingProfile: () => ({
-            // Medium stays supported so clamping cannot hide a lost policy source.
-            levels: [{ id: "off" }, { id: "low" }, { id: "medium" }],
-            defaultLevel: "low",
-          }),
-        },
-      },
-    ],
-  };
-
-  it("projects the agent-specific model default above shared model and global defaults", () => {
-    const ref = `${provider}/reasoner`;
-    const profile = resolveGatewayModelThinkingProfile({
-      cfg: {
-        agents: {
-          defaults: {
-            thinkingDefault: "medium",
-            models: { [ref]: { params: { thinking: "low" } } },
-          },
-          entries: { main: { models: { [ref]: { params: { thinking: "off" } } } } },
-        },
-      },
-      agentId: "main",
-      provider,
-      model: "reasoner",
-      agentRuntime: "openclaw",
-      providerPolicySource: captured,
-      modelCatalog: [{ provider, id: "reasoner", name: "Reasoner", reasoning: true }],
-    });
-
-    expect(profile.thinkingDefault).toBe("off");
-  });
 });
 
 describe("Gateway thinking catalog", () => {

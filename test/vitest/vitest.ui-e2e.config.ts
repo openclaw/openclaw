@@ -40,7 +40,10 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-export-attribution.e2e.test.ts",
   "ui/src/e2e/chat-json-tree.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
@@ -84,6 +87,8 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/sidebar-boot-imports.e2e.test.ts",
   "ui/src/e2e/terminal-fonts.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
+  "ui/src/pages/agents-home/claws-catalog.e2e.test.ts",
+  "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 
 export const uiE2eRuntimeBudgetTestFile = resolveUiTypeScriptPath(

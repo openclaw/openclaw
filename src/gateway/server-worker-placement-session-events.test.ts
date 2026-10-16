@@ -77,6 +77,7 @@ describe("worker placement session events", () => {
           subscribeMachineShapeChanged: () => () => {},
           installReconcileEnvironmentGuard: () => () => {},
           start() {},
+          isStopping: () => false,
           beginClose() {},
           stop: async () => {},
         } as never,
@@ -132,9 +133,10 @@ describe("worker placement session events", () => {
         await time.advanceBy(60_000);
         expect(await placements.getAsync(orphan.sessionId)).toBeUndefined();
         expect(await placements.getAsync(identity.sessionId)).toMatchObject(identity);
-        expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenLastCalledWith([
-          expect.objectContaining(orphan),
-        ]);
+        expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenLastCalledWith(
+          [expect.objectContaining(orphan)],
+          expect.any(AbortSignal),
+        );
         expect(list).toHaveBeenCalledTimes(3);
 
         reconciled = createDeferredCore();
@@ -146,9 +148,10 @@ describe("worker placement session events", () => {
         });
         await reconciled.promise;
         expect(await placements.getAsync(identity.sessionId)).toBeUndefined();
-        expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenLastCalledWith([
-          expect.objectContaining(identity),
-        ]);
+        expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenLastCalledWith(
+          [expect.objectContaining(identity)],
+          expect.any(AbortSignal),
+        );
         expect(list).toHaveBeenCalledTimes(3);
         expect(warn).not.toHaveBeenCalled();
       } finally {
@@ -209,6 +212,7 @@ describe("worker placement session events", () => {
           subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
           installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
           start: vi.fn(),
+          isStopping: () => false,
           beginClose: vi.fn(),
           stop: vi.fn().mockResolvedValue(undefined),
         } as never,
@@ -287,6 +291,7 @@ describe("worker placement session events", () => {
         subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
         installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
         start: vi.fn(),
+        isStopping: () => false,
         beginClose: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
       } as never,

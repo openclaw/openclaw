@@ -20,36 +20,25 @@ steps:
 `;
 
 describe("setYamlOcPath — direct", () => {
-  it("returns unresolved for missing path", () => {
+  it("reports unresolved for missing path", () => {
     const { ast } = parseYaml(LOBSTER);
-    const r = setYamlOcPath(ast, parseOcPath("oc://workflow.lobster/missing"), "x");
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toBe("unresolved");
-    }
-  });
-
-  it("returns parse-error before editing a malformed document", () => {
-    const { ast } = parseYaml("key: value\n  bad indent: oops\n");
-    const r = setYamlOcPath(ast, parseOcPath("oc://workflow.yaml/key"), "new-value");
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toBe("parse-error");
-    }
-  });
-
-  it("returns parse-error before inserting into a malformed document", () => {
-    const { ast } = parseYaml("key: value\n  bad indent: oops\n");
-    const r = insertYamlOcPath(
-      ast,
-      parseOcPath("oc://workflow.yaml"),
-      { kind: "keyed", key: "next" },
-      "x",
+    expect(() => setYamlOcPath(ast, parseOcPath("oc://workflow.lobster/missing"), "x")).toThrow(
+      expect.objectContaining({ reason: "unresolved" }),
     );
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toBe("parse-error");
-    }
+  });
+
+  it("reports parse-error before editing a malformed document", () => {
+    const { ast } = parseYaml("key: value\n  bad indent: oops\n");
+    expect(() => setYamlOcPath(ast, parseOcPath("oc://workflow.yaml/key"), "new-value")).toThrow(
+      expect.objectContaining({ reason: "parse-error" }),
+    );
+  });
+
+  it("reports parse-error before inserting into a malformed document", () => {
+    const { ast } = parseYaml("key: value\n  bad indent: oops\n");
+    expect(() =>
+      insertYamlOcPath(ast, parseOcPath("oc://workflow.yaml"), { kind: "keyed", key: "next" }, "x"),
+    ).toThrow(expect.objectContaining({ reason: "parse-error" }));
   });
 });
 
@@ -61,10 +50,7 @@ describe("setYamlOcPath — positional tokens", () => {
       parseOcPath("oc://workflow.lobster/steps/$first/id"),
       "fetch-renamed",
     );
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.ast.raw).toContain("id: fetch-renamed");
-    }
+    expect(r.raw).toContain("id: fetch-renamed");
   });
 
   it("edits the last seq element via $last", () => {
@@ -74,37 +60,26 @@ describe("setYamlOcPath — positional tokens", () => {
       parseOcPath("oc://workflow.lobster/steps/$last/id"),
       "classify-renamed",
     );
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.ast.raw).toContain("id: classify-renamed");
-    }
+    expect(r.raw).toContain("id: classify-renamed");
   });
 
   it("edits the first map entry via $first", () => {
     const { ast } = parseYaml("config:\n  a: 1\n  b: 2\n  c: 3\n");
     const r = setYamlOcPath(ast, parseOcPath("oc://x.yaml/config/$first"), 99);
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.ast.raw).toContain("a: 99");
-    }
+    expect(r.raw).toContain("a: 99");
   });
 
   it("edits the last map entry via $last", () => {
     const { ast } = parseYaml("config:\n  a: 1\n  b: 2\n  c: 3\n");
     const r = setYamlOcPath(ast, parseOcPath("oc://x.yaml/config/$last"), 99);
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.ast.raw).toContain("c: 99");
-    }
+    expect(r.raw).toContain("c: 99");
   });
 
-  it("returns unresolved for $last against an empty seq", () => {
+  it("reports unresolved for $last against an empty seq", () => {
     const { ast } = parseYaml("items: []\n");
-    const r = setYamlOcPath(ast, parseOcPath("oc://x.yaml/items/$last"), "x");
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toBe("unresolved");
-    }
+    expect(() => setYamlOcPath(ast, parseOcPath("oc://x.yaml/items/$last"), "x")).toThrow(
+      expect.objectContaining({ reason: "unresolved" }),
+    );
   });
 });
 
@@ -125,12 +100,9 @@ describe("universal verbs — yaml dispatch", () => {
     const ast = parseYaml(`${text}: old\nuntouched: keep\n`).ast;
     const result = setOcPath(ast, parseOcPath(`oc://workflow.yaml/${text}`), "updated");
 
-    expect(result.ok).toBe(true);
-    if (result.ok && result.ast.kind === "yaml") {
-      const written = parseYaml(result.ast.raw).ast.doc;
-      expect(written.get(key)).toBe("updated");
-      expect(written.get("untouched")).toBe("keep");
-    }
+    const written = parseYaml(result.raw).ast.doc;
+    expect(written.get(key)).toBe("updated");
+    expect(written.get("untouched")).toBe("keep");
   });
 
   it("resolveOcPath returns kind-agnostic match for yaml leaf", () => {
@@ -166,19 +138,14 @@ describe("universal verbs — yaml dispatch", () => {
   it("setOcPath coerces numeric string to number for number leaf", () => {
     const { ast } = parseYaml("count: 5\n");
     const r = setOcPath(ast, parseOcPath("oc://x.yaml/count"), "42");
-    expect(r.ok).toBe(true);
-    if (r.ok && r.ast.kind === "yaml") {
-      expect(r.ast.raw).toContain("count: 42");
-    }
+    expect(r.raw).toContain("count: 42");
   });
 
-  it("setOcPath returns parse-error for invalid coercion", () => {
+  it("setOcPath reports parse-error for invalid coercion", () => {
     const { ast } = parseYaml("count: 5\n");
-    const r = setOcPath(ast, parseOcPath("oc://x.yaml/count"), "abc");
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toBe("parse-error");
-    }
+    expect(() => setOcPath(ast, parseOcPath("oc://x.yaml/count"), "abc")).toThrow(
+      expect.objectContaining({ reason: "parse-error" }),
+    );
   });
 });
 
@@ -186,25 +153,20 @@ describe("universal verbs — yaml insertion", () => {
   it("appends to an empty yaml seq with `+`", () => {
     const { ast } = parseYaml("items: []\n");
     const r = setOcPath(ast, parseOcPath("oc://x.yaml/items/+"), '"a"');
-    expect(r.ok).toBe(true);
-    if (r.ok && r.ast.kind === "yaml") {
-      expect(r.ast.raw).toContain("items: [ a ]");
-    }
+    expect(r.raw).toContain("items: [ a ]");
   });
 
   it("adds key to yaml map with `+key`", () => {
     const { ast } = parseYaml("config:\n  a: 1\n");
     const r = setOcPath(ast, parseOcPath("oc://x.yaml/config/+b"), "2");
-    expect(r.ok).toBe(true);
-    if (r.ok && r.ast.kind === "yaml") {
-      expect(r.ast.raw).toContain("b: 2");
-    }
+    expect(r.raw).toContain("b: 2");
   });
 
   it("rejects duplicate map key on insertion", () => {
     const { ast } = parseYaml("config:\n  a: 1\n");
-    const r = setOcPath(ast, parseOcPath("oc://x.yaml/config/+a"), "99");
-    expect(r.ok).toBe(false);
+    expect(() => setOcPath(ast, parseOcPath("oc://x.yaml/config/+a"), "99")).toThrow(
+      expect.objectContaining({ reason: "unresolved" }),
+    );
   });
 
   it("rejects sentinel-bearing yaml replacements before raw emit", () => {

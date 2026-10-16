@@ -433,9 +433,7 @@ describe("prepareCliBundleMcpConfig", () => {
     expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer lb-tk-123");
     expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe("");
     await prepareCliBundleMcpCaptureAttempt({
-      mode: "claude-config-file",
-      backend: prepared.backend,
-      env: prepared.env,
+      preparedBackend: prepared,
       captureKey: "attempt-123",
     });
     const attemptRaw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {

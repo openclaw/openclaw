@@ -3,6 +3,7 @@ import { NODE_PERMISSION_STATES } from "../node-permissions.js";
 import { NODE_PRESENCE_ALIVE_REASONS } from "../node-presence.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 export { NODE_PRESENCE_ALIVE_REASONS } from "../node-presence.js";
 
@@ -47,7 +48,7 @@ export const NodePresenceAlivePayloadSchema = closedObject({
 export const NodePresenceActivityPayloadSchema = Type.Union([
   closedObject({
     idleSeconds: Type.Integer({ minimum: 0, maximum: 2_592_000 }),
-    source: Type.Optional(Type.Union([Type.Literal("app"), Type.Literal("system")])),
+    source: Type.Optional(stringLiteralUnion(["app", "system"])),
     saturated: Type.Optional(Type.Boolean()),
   }),
   closedObject({

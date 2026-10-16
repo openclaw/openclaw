@@ -6,12 +6,12 @@ import type { SecretsApplyPlan, SecretsPlanTarget } from "./plan.js";
 import { isValidSecretProviderAlias } from "./ref-contract.js";
 import { resolveSecretPlanTargetByPathCore } from "./target-registry-query.js";
 
-type PluginSecretRefProviderMapping = {
+export type PluginSecretRefProviderMapping = {
   providerId: string;
   secretId: string;
 };
 
-type PluginSecretRefConfigTargetMapping = {
+export type PluginSecretRefConfigTargetMapping = {
   path: string;
   agentId?: string;
   secretId: string;

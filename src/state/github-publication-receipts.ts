@@ -92,14 +92,18 @@ function ownerFor(identity: string) {
   return owner;
 }
 
-githubPublicationReceipts.subscribeFacts((change) => {
+githubPublicationReceipts.subscribeFacts((change, deletionPending) => {
   const identity = change.kind === "committed" ? change.receipt.source.identity : change.identity;
   if (typeof identity !== "string") {
     return;
   }
   const owner = ownerFor(identity);
   if (change.kind === "pending") {
-    owner.pending.add(change.operationId);
+    // Bindings are immutable: inserts and status writes cannot revoke an existing one.
+    // Only deletion must deny use before its tombstone arrives. Unknown outcomes still fence below.
+    if (deletionPending) {
+      owner.pending.add(change.operationId);
+    }
   } else if (change.kind === "settled") {
     owner.pending.delete(change.operationId);
   } else if (change.kind === "unknown") {

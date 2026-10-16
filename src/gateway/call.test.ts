@@ -398,60 +398,39 @@ afterEach(() => {
 });
 
 describe("callGateway url resolution", () => {
-  it.each(["local config"])(
-    "binds an observed %s endpoint without replacing its authentication",
-    async (source) => {
-      setGatewayNetworkDefaults();
-      const expected =
-        source === "local config" ? "ws://127.0.0.1:18789" : "wss://gateway.example/ws";
-      if (source === "local config") {
-        setGatewayConfig({ mode: "local", auth: { token: "fixture-local-token" } });
-      } else {
-        setGatewayConfig({
-          mode: "remote",
-          remote: { url: expected, token: "fixture-remote-token" },
-        });
-      }
-      if (source === "environment") {
-        process.env.OPENCLAW_GATEWAY_URL = expected;
-        process.env.OPENCLAW_GATEWAY_TOKEN = "fixture-env-token";
-      }
-      await callGateway({
-        method: "sessions.patch",
-        params: { key: "agent:main:observed", label: "observed destination" },
-        expectUrl: expected,
-      });
-      expect(lastClientOptions?.url).toBe(expected);
-      expect(lastClientOptions?.token).toBe(
-        source === "local config" ? "fixture-local-token" : "fixture-env-token",
-      );
+  it("binds an observed local endpoint without replacing its authentication", async () => {
+    setGatewayNetworkDefaults();
+    const expected = "ws://127.0.0.1:18789";
+    setGatewayConfig({ mode: "local", auth: { token: "fixture-local-token" } });
+    await callGateway({
+      method: "sessions.patch",
+      params: { key: "agent:main:observed", label: "observed destination" },
+      expectUrl: expected,
+    });
+    expect(lastClientOptions?.url).toBe(expected);
+    expect(lastClientOptions?.token).toBe("fixture-local-token");
 
-      // The user's snapshot names the first endpoint; a later CLI invocation
-      // reloads configuration before applying its selected-session edit.
-      if (source === "environment") {
-        process.env.OPENCLAW_GATEWAY_URL = "wss://replacement.example/ws";
-      } else {
-        setGatewayConfig({
-          mode: "remote",
-          remote: { url: "wss://replacement.example/ws", token: "fixture-replacement-token" },
-        });
-      }
-      startCalls = 0;
-      lastClientOptions = null;
-      lastRequestOptions = null;
-      await expect(
-        callGateway({
-          method: "sessions.patch",
-          mode: GATEWAY_CLIENT_MODES.CLI,
-          params: { key: "agent:main:observed", label: "must not retarget" },
-          expectUrl: expected,
-        }),
-      ).rejects.toThrow("Gateway destination changed");
-      expect(startCalls).toBe(0);
-      expect(lastClientOptions).toBeNull();
-      expect(lastRequestOptions).toBeNull();
-    },
-  );
+    // The user's snapshot names the first endpoint; a later CLI invocation
+    // reloads configuration before applying its selected-session edit.
+    setGatewayConfig({
+      mode: "remote",
+      remote: { url: "wss://replacement.example/ws", token: "fixture-replacement-token" },
+    });
+    startCalls = 0;
+    lastClientOptions = null;
+    lastRequestOptions = null;
+    await expect(
+      callGateway({
+        method: "sessions.patch",
+        mode: GATEWAY_CLIENT_MODES.CLI,
+        params: { key: "agent:main:observed", label: "must not retarget" },
+        expectUrl: expected,
+      }),
+    ).rejects.toThrow("Gateway destination changed");
+    expect(startCalls).toBe(0);
+    expect(lastClientOptions).toBeNull();
+    expect(lastRequestOptions).toBeNull();
+  });
 
   it("does not disable an explicitly empty expected endpoint", async () => {
     const expectUrl = "";
@@ -490,25 +469,17 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
-  it.each([
-    {
-      url: "wss://override.example/ws",
-      password: undefined,
-      token: "test-token",
-      readsConfig: true,
-    },
-  ])(
-    "connects to $url despite an unreadable config",
-    async ({ url, password, token, readsConfig }) => {
-      getRuntimeConfig.mockImplementation(() => {
-        throw new Error("invalid config");
-      });
-      await callGatewayCli({ method: "health", url, password, token });
-      expect(getRuntimeConfig.mock.calls.length > 0).toBe(readsConfig);
-      expect(lastClientOptions).toMatchObject({ url, password, token });
-      expect(lastClientOptions?.edgeAuthHeaders).toBeUndefined();
-    },
-  );
+  it("connects to an explicit URL despite an unreadable config", async () => {
+    const url = "wss://override.example/ws";
+    const token = "test-token";
+    getRuntimeConfig.mockImplementation(() => {
+      throw new Error("invalid config");
+    });
+    await callGatewayCli({ method: "health", url, token });
+    expect(getRuntimeConfig).toHaveBeenCalled();
+    expect(lastClientOptions).toMatchObject({ url, password: undefined, token });
+    expect(lastClientOptions?.edgeAuthHeaders).toBeUndefined();
+  });
 
   it("reconnects with admin only after sessions.create cwd returns structured escalation", async () => {
     const scopeAttempts: Array<readonly string[] | undefined> = [];
@@ -762,46 +733,41 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.preauthHandshakeTimeoutMs).toBe(2_345);
   });
 
-  it("uses stored device auth for the exact normalized url override origin", async () => {
-    setLocalLoopbackGatewayConfig();
-    loadOriginDeviceTokenMock.mockImplementation((...args: unknown[]) =>
-      (args[0] as { gatewayScope: string }).gatewayScope === "wss://other.example/rpc"
-        ? deviceAuth("remote-device-token")
-        : null,
-    );
+  it.each([false, true])(
+    "binds URL auth to its normalized origin (explicit=%s)",
+    async (explicit) => {
+      setLocalLoopbackGatewayConfig();
+      loadOriginDeviceTokenMock.mockImplementation((...args: unknown[]) =>
+        (args[0] as { gatewayScope: string }).gatewayScope === "wss://other.example/rpc"
+          ? deviceAuth("remote-device-token")
+          : null,
+      );
 
-    await callGatewayCli({
-      method: "node.list",
-      url: "wss://other.example/rpc/?ignored=1",
-      useStoredDeviceAuth: true,
-    });
+      await callGatewayCli({
+        method: "node.list",
+        url: "wss://other.example/rpc/?ignored=1",
+        useStoredDeviceAuth: true,
+        token: explicit ? "explicit-token" : undefined,
+        requiredStoredDeviceAuthScopes: explicit
+          ? ["operator.read", "operator.pairing"]
+          : undefined,
+      });
 
-    expect(lastClientOptions?.token).toBeUndefined();
-    expect(lastClientOptions?.deviceAuthScope).toBe("wss://other.example/rpc");
-    expect(loadOriginDeviceTokenMock).toHaveBeenCalledWith({
-      gatewayScope: "wss://other.example/rpc",
-      deviceId: deviceIdentityState.value.deviceId,
-      role: "operator",
-      env: process.env,
-    });
-  });
-
-  it("lets explicit url auth win while binding issued tokens to that origin", async () => {
-    setLocalLoopbackGatewayConfig();
-
-    await callGatewayCli({
-      method: "node.list",
-      url: "wss://other.example/rpc/?ignored=1",
-      token: "explicit-token",
-      useStoredDeviceAuth: true,
-      requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
-    });
-
-    expect(lastClientOptions?.token).toBe("explicit-token");
-    expect(lastClientOptions?.deviceAuthScope).toBe("wss://other.example/rpc");
-    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(loadOriginDeviceTokenMock).not.toHaveBeenCalled();
-  });
+      expect(lastClientOptions?.token).toBe(explicit ? "explicit-token" : undefined);
+      expect(lastClientOptions?.deviceAuthScope).toBe("wss://other.example/rpc");
+      if (explicit) {
+        expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
+        expect(loadOriginDeviceTokenMock).not.toHaveBeenCalled();
+      } else {
+        expect(loadOriginDeviceTokenMock).toHaveBeenCalledWith({
+          gatewayScope: "wss://other.example/rpc",
+          deviceId: deviceIdentityState.value.deviceId,
+          role: "operator",
+          env: process.env,
+        });
+      }
+    },
+  );
 
   registerGatewayCallLocalBackendAuthTests({
     callGateway,
@@ -910,29 +876,24 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.message).not.toContain("secret-token");
   });
 
-  it.each([false])("loads dispatch config with runtime snapshot=%s", async (runtimeSnapshot) => {
+  it("loads dispatch config without a runtime snapshot", async () => {
     const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
     const configPath = path.join(tempStateDir, "openclaw.json");
     fs.writeFileSync(
       configPath,
       JSON.stringify({
         gateway: { mode: "local", bind: "loopback", port: 18800, auth: { mode: "none" } },
-        ...(!runtimeSnapshot ? { channels: { telegram: { dmPolicy: 42 } } } : {}),
+        channels: { telegram: { dmPolicy: 42 } },
       }),
     );
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    if (runtimeSnapshot) {
-      setRuntimeConfigSnapshot({
-        gateway: { mode: "local", bind: "loopback", port: 18801, auth: { mode: "none" } },
-      });
-    }
     try {
       gatewayConfigMocks.useActualDispatchConfig = true;
       loadDeviceAuthTokenMock.mockReturnValue(null);
       resolveGatewayPort.mockImplementation((config) => config?.gateway?.port ?? 18789);
       await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
-      expect(lastClientOptions?.url).toBe(`ws://127.0.0.1:${runtimeSnapshot ? 18801 : 18800}`);
+      expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
       expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
     } finally {
       resetConfigRuntimeState();

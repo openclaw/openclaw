@@ -1,49 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { coerceToFailoverError, FailoverError } from "../../agents/failover-error.js";
+import { FailoverError } from "../../agents/failover-error.js";
+import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
+import { ContextPreparationTimeoutError } from "../../agents/failover/local-preparation-error.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
-import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
-  buildEmptyInteractiveReplyPayload,
   buildExternalRunFailureReply,
   buildKnownAgentRunFailureReplyPayload,
+  buildPreflightCompactionFailureText,
 } from "./agent-runner-failure-reply.js";
-import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 
-describe("buildEmptyInteractiveReplyPayload", () => {
-  it("surfaces missing output for a mentioned group request even when silence is allowed", () => {
-    const expectation = resolveSourceReplyExpectation({
-      ctx: {
-        Provider: "discord",
-        Surface: "discord",
-        ChatType: "group",
-        InboundEventKind: "user_request",
-        WasMentioned: true,
-      },
-      cfg: { agents: { defaults: { silentReply: { group: "allow" } } } },
-    });
-    const payload = buildEmptyInteractiveReplyPayload({
-      completion: resolveReplyCompletion(expectation, "empty"),
-    });
-
-    expect(payload?.isError).toBe(true);
-    expect(payload?.text).not.toBe(SILENT_REPLY_TOKEN);
-    expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
-  });
-
-  it("does not add an error for a ready reply", () => {
-    const completion = resolveReplyCompletion("required", "ready");
-    expect(buildEmptyInteractiveReplyPayload({ completion })).toBeUndefined();
-  });
+it("shows unshrinkable request guidance without verbose diagnostics", () => {
+  const reason =
+    "The estimated foreground request budget still exceeds the 32768-token model window " +
+    "(fixed instructions and tools: 40000; pending input: 10; retained history: 20). " +
+    "No further history compaction can make this request fit. Use /context detail to reduce fixed context, shorten the request, or select a larger-context model.";
+  expect(
+    buildPreflightCompactionFailureText(`Preflight compaction required but failed: ${reason}`),
+  ).toBe(`⚠️ ${reason}`);
 });
 
 describe("buildExternalRunFailureReply", () => {
@@ -210,41 +191,26 @@ describe("buildExternalRunFailureReply", () => {
 
   it.each([
     {
-      name: "wrapped local worker timeout",
-      makeError: () =>
-        new Error("preparation failed: secret-canary", {
-          cause: new WorkerTaskError("worker task timed out", "timeout"),
-        }),
-      localWorker: true,
+      error: new WorkerTaskError("worker task timed out", "timeout"),
+      text: "A local worker task timed out. Please try again.",
     },
-  ])("preserves failure origin for $name", ({ makeError, localWorker }) => {
-    const error = coerceToFailoverError(makeError(), { provider: "openai", model: "test-model" });
-    if (!error) {
-      throw new Error("Expected the existing failover classifier to recognize the fixture");
-    }
-    const reply = buildExternalRunFailureReply(
-      { message: error.message, error },
-      { includeDetails: false },
-    );
-    expect(reply.isGenericRunnerFailure).toBe(false);
-    expect(reply.text).not.toContain("secret-canary");
-    if (localWorker) {
-      expect(reply.text).toMatch(/local worker/i);
-      expect(reply.text).not.toMatch(/HTTP|openai\/test-model|context preparation/);
-    } else if (error.reason === "timeout") {
-      expect(reply.text).toBe(
-        "⚠️ The request took too long. Check the conversation for any completed work before trying again.",
-      );
-      expect(error).toMatchObject({
-        reason: "timeout",
-        status: 408,
-        provider: "openai",
-        model: "test-model",
-      });
-    } else {
-      expect(reply.text).toContain("AI service is busy");
-      expect(reply.text).not.toMatch(/local worker/i);
-    }
+    {
+      error: new ContextPreparationTimeoutError(new WorkerTaskError("private-canary", "timeout")),
+      text: "Context preparation timed out locally. Please try again. If this persists, check Gateway logs for slow context reads.",
+    },
+  ])("preserves local stage guidance without exposing diagnostics: $text", ({ error, text }) => {
+    const wrapped = new Error("private-wrapper-canary", { cause: error });
+    expect(buildExternalRunFailureReply({ message: wrapped.message, error: wrapped })).toEqual({
+      text,
+      isGenericRunnerFailure: false,
+    });
+    expect(
+      buildKnownAgentRunFailureReplyPayload({
+        err: wrapped,
+        sessionCtx: { Provider: "telegram", Surface: "telegram", ChatType: "direct" },
+        resolvedVerboseLevel: "off",
+      }),
+    ).toMatchObject({ text, isError: true });
   });
 });
 
@@ -281,6 +247,64 @@ describe("buildKnownAgentRunFailureReplyPayload", () => {
       expect(payload?.text).not.toMatch(/took too long|private-canary|Sanitized provider failure/);
     },
   );
+
+  describe("local auth-profile cooldown diagnostics", () => {
+    const groupCtx = { ...sessionCtx, ChatType: "group" } as TemplateContext;
+    const diagnostic = (provider: string, model: string) =>
+      `Auth profile "${provider}:alice-team-plan" is temporarily unavailable for ${provider}/${model}.`;
+    const cooldown = (provider: string, model: string) =>
+      new FailoverError(diagnostic(provider, model), {
+        reason: "rate_limit",
+        code: AUTH_PROFILE_COOLDOWN_ERROR_CODE,
+        provider,
+        model,
+        profileId: `${provider}:alice-team-plan`,
+      });
+    const chained = (provider: string, model: string) =>
+      new FailoverError(
+        `All models failed (1): ${provider}/${model}: ${diagnostic(provider, model)}`,
+        {
+          reason: "rate_limit",
+          attempts: [
+            {
+              provider,
+              model,
+              reason: "rate_limit",
+              code: AUTH_PROFILE_COOLDOWN_ERROR_CODE,
+              error: diagnostic(provider, model),
+            },
+          ],
+        },
+      );
+
+    it.each([
+      ["direct OpenAI", cooldown("openai", "gpt-5.5")],
+      ["fallback OpenAI", chained("openai", "gpt-5.5")],
+      ["fallback with a hint-shaped label", chained("xai", "grok-4")],
+    ])("keeps the saved-login label out of %s replies", (_name, err) => {
+      expect(
+        buildKnownAgentRunFailureReplyPayload({
+          err,
+          sessionCtx: groupCtx,
+          resolvedVerboseLevel: "off",
+        })?.text,
+      ).toBe("⚠️ The AI service needs a short break. Please try again in a few minutes.");
+    });
+
+    it("still forwards provider-authored usage-limit guidance", () => {
+      const hint = "You've hit your usage limit. Try again in 3 hours.";
+      expect(
+        buildKnownAgentRunFailureReplyPayload({
+          err: new FailoverError("All models failed (1)", {
+            reason: "rate_limit",
+            attempts: [{ provider: "openai", model: "gpt-5.5", reason: "rate_limit", error: hint }],
+          }),
+          sessionCtx: groupCtx,
+          resolvedVerboseLevel: "off",
+        })?.text,
+      ).toBe(`⚠️ ${hint}`);
+    });
+  });
 
   it("keeps HTTP server failures ahead of connection wording in provider details", () => {
     const error = new FailoverError("503 connection error: private-canary", {

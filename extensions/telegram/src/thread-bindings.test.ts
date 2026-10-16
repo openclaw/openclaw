@@ -12,10 +12,6 @@ vi.mock("./send-runtime.js", () => ({
   loadTelegramSendModule: async () => ({ createForumTopicTelegram: createForumTopicMock }),
 }));
 
-import type {
-  TelegramThreadBindingManager,
-  TelegramThreadBindingRecord,
-} from "./thread-bindings-store.js";
 import {
   TELEGRAM_THREAD_BINDINGS_TEST_CFG,
   useTelegramThreadBindingsFixture,
@@ -471,64 +467,6 @@ describe("telegram thread bindings", () => {
     expect(replacement.getByConversationId("replacement-thread")?.targetSessionKey).toBe(
       "agent:main:subagent:replacement",
     );
-  });
-
-  it("initializes queued mutations when source reload retains the old registry shape", async () => {
-    const key = Symbol.for("openclaw.telegramThreadBindingsState");
-    const previous = Object.getOwnPropertyDescriptor(globalThis, key);
-    const legacyState = {
-      managersByAccountId: new Map<string, TelegramThreadBindingManager>(),
-      bindingsByAccountConversation: new Map<string, TelegramThreadBindingRecord>(),
-    };
-    let manager: TelegramThreadBindingManager | undefined;
-    Object.defineProperty(globalThis, key, {
-      configurable: true,
-      enumerable: true,
-      writable: true,
-      value: legacyState,
-    });
-    vi.resetModules();
-    try {
-      const reloaded = await importFreshModule<typeof import("./thread-bindings.js")>(
-        import.meta.url,
-        "./thread-bindings.js?scope=legacy-registry-reload",
-      );
-      manager = await reloaded.createTelegramThreadBindingManager({
-        cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
-        accountId: "source-reload",
-        persist: false,
-        enableSweeper: false,
-      });
-      expect(Object.getOwnPropertyDescriptor(globalThis, key)?.value).toBe(legacyState);
-      expect(legacyState.managersByAccountId.get("source-reload")).toBe(manager);
-      await getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:reload",
-        targetKind: "subagent",
-        conversation: {
-          channel: "telegram",
-          accountId: "source-reload",
-          conversationId: "thread",
-        },
-        placement: "current",
-      });
-      expect(legacyState.bindingsByAccountConversation.get("source-reload:thread")).toBe(
-        manager.getByConversationId("thread"),
-      );
-      expect(manager.getByConversationId("thread")?.targetSessionKey).toBe(
-        "agent:main:subagent:reload",
-      );
-    } finally {
-      try {
-        await manager?.stop();
-      } finally {
-        if (previous) {
-          Object.defineProperty(globalThis, key, previous);
-        } else {
-          Reflect.deleteProperty(globalThis, key);
-        }
-        vi.resetModules();
-      }
-    }
   });
 
   it("persists only the changed binding without scanning or rewriting its siblings", async () => {

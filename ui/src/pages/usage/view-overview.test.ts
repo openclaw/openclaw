@@ -1,5 +1,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { UsageAggregates, UsageProps, UsageSessionEntry } from "./types.ts";
@@ -83,9 +85,6 @@ describe("UsageInsights", () => {
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
     expect(buttons).toHaveLength(9);
     expect(tooltips).toHaveLength(9);
-    await Promise.all(
-      [...container.querySelectorAll("openclaw-agent-row-chip")].map((chip) => chip.updateComplete),
-    );
     expect(
       [...container.querySelectorAll(".usage-list-item .agent-row-chip")].map((chip) =>
         chip.getAttribute("data-agent-id"),
@@ -242,6 +241,126 @@ describe("SessionsCard", () => {
     expect(container.querySelector(".session-bar-title")?.textContent).toBe("Beta");
     expect(container.querySelector(".sessions-sort select")).toBe(select);
     expect(document.activeElement).toBe(select);
+  });
+
+  it("updates retained rows and shift selection across selection, mode, and roster changes", () => {
+    const base = createUsageProps();
+    const [display, setDisplay] = createSignal(base.display);
+    const [filters, setFilters] = createSignal(base.filters);
+    const [sessions, setSessions] = createSignal([session("Alpha"), session("Beta")]);
+    const onSelectSession = vi.fn();
+    const usage = {
+      ...base,
+      get display() {
+        return display();
+      },
+      get filters() {
+        return filters();
+      },
+      get data() {
+        return { ...base.data, overview: createUsageOverview({ selectedRows: sessions() }) };
+      },
+      callbacks: { ...base.callbacks, details: { ...base.callbacks.details, onSelectSession } },
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    mountSolid(
+      () =>
+        SessionsCard({
+          get sessions() {
+            return sessions();
+          },
+          usage,
+          totalSessions: 2,
+        }),
+      { container },
+    );
+    flush();
+    const first = container.querySelector<HTMLButtonElement>(".session-bar-selection")!;
+    first.focus();
+
+    setFilters({ ...base.filters, selectedSessions: ["Alpha"] });
+    setDisplay({ ...base.display, chartMode: "cost" });
+    flush();
+    expect(container.querySelector(".session-bar-selection")).toBe(first);
+    expect(document.activeElement).toBe(first);
+    expect(first.getAttribute("aria-pressed")).toBe("true");
+    const values = [...container.querySelectorAll(".session-bar-value")];
+    expect(values).toHaveLength(4);
+    expect(values.every((value) => value.textContent?.startsWith("$"))).toBe(true);
+
+    setSessions([session("Beta"), { ...session("Alpha", 250), label: "Renamed", channel: "web" }]);
+    setDisplay(base.display);
+    flush();
+    const buttons = [...container.querySelectorAll<HTMLButtonElement>(".session-bar-selection")];
+    expect(buttons[1]).toBe(first);
+    expect(first.querySelector(".session-bar-title")?.textContent).toBe("Renamed");
+    expect(first.querySelector(".session-bar-meta")?.textContent).toContain("channel:web");
+    expect(
+      first.closest(".session-bar-row")?.querySelector(".session-bar-value")?.textContent,
+    ).toBe("250");
+    first.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+    expect(onSelectSession).toHaveBeenLastCalledWith("Alpha", true, ["Beta", "Alpha"]);
+  });
+
+  it("keeps metadata and unavailable usage labels localized without replacing a row", async () => {
+    const restoreI18n = captureI18nStateForTesting();
+    const entry = session("Alpha");
+    const sessionUsage = entry.usage!;
+    sessionUsage.durationMs = 60_000;
+    sessionUsage.usageReport = { state: "unavailable" };
+    const base = createUsageProps();
+    const [display, setDisplay] = createSignal(base.display);
+    const usage = {
+      ...base,
+      get display() {
+        return display();
+      },
+    };
+    const overview = createUsageOverview({
+      total: 1,
+      tableSessionCount: 1,
+      tableTotals: {
+        tokens: sessionUsage.totalTokens,
+        cost: sessionUsage.totalCost,
+        errors: 0,
+        usageReport: sessionUsage.usageReport,
+      },
+    });
+    const container = document.createElement("div");
+    try {
+      await i18n.setLocale("en");
+      mountSolid(() => SessionsCard({ sessions: [entry], usage, overview, totalSessions: 1 }), {
+        container,
+      });
+      flush();
+      const row = container.querySelector(".session-bar-row");
+      const value = () => row?.querySelector(".session-bar-value")?.textContent;
+      const average = () => container.querySelector(".sessions-card-stats > span")?.textContent;
+      expect(row?.querySelector(".session-bar-meta")?.textContent).toContain("dur:1m");
+      expect(value()).toBe("unknown");
+      expect(average()).toContain("unknown");
+      await i18n.setLocale("de");
+      flush();
+      expect(container.querySelector(".session-bar-row")).toBe(row);
+      const germanMinute = new Intl.NumberFormat("de", {
+        style: "unit",
+        unit: "minute",
+        unitDisplay: "narrow",
+      }).format(1);
+      expect(row?.querySelector(".session-bar-meta")?.textContent).toContain(`dur:${germanMinute}`);
+      expect(value()).toBe("unbekannt");
+      expect(average()).toContain("unbekannt");
+      setDisplay({ ...base.display, chartMode: "cost" });
+      flush();
+      expect(value()).toBe("unbekannt");
+      await i18n.setLocale("en");
+      flush();
+      expect(container.querySelector(".session-bar-row")).toBe(row);
+      expect(value()).toBe("unknown");
+      expect(average()).toContain("unknown");
+    } finally {
+      await restoreI18n();
+    }
   });
 
   it("renders the server recent roster without changing its all-roster average", () => {

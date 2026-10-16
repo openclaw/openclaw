@@ -49,6 +49,17 @@ describe("cron listPage sort guards", () => {
     expect(secondPage.snapshotRevision).toBe(firstPage.snapshotRevision);
   });
 
+  it("preserves list revisions for large Unicode and escaped payloads", async () => {
+    const job = createBaseJob({
+      name: "Unicode report 🦞",
+      payload: { kind: "systemEvent", text: '🦞 日本語 "quoted" \\path\n\t'.repeat(1024) },
+    });
+
+    const page = await listPage(createMockCronStateForJobs({ jobs: [job] }));
+
+    expect(page.snapshotRevision).toBe("sha256:fS8eVTHy9mbmpjFKHm3pEcvOobmxd1rMQpDjfh3qmKM");
+  });
+
   it("preserves phrase searches across existing cron job fields", async () => {
     const job = createBaseJob({
       id: "report-job",
@@ -71,11 +82,19 @@ describe("cron listPage sort guards", () => {
       createBaseJob({ id: "job-scoped", sessionKey: "agent:ops:main" }),
     ];
     const state = createMockCronStateForJobs({ jobs });
-    state.deps.defaultAgentId = " Ops ";
+    let defaultAgentId = " Ops ";
+    const resolveDefaultAgentId = vi.fn(() => defaultAgentId);
+    state.deps.resolveDefaultAgentId = resolveDefaultAgentId;
 
     const page = await listPage(state, { agentId: " OPS " });
 
     expect(page.jobs.map((job) => job.id)).toEqual(["job-ops", "job-scoped", "job-unset"]);
+    expect(resolveDefaultAgentId).toHaveBeenCalledOnce();
+
+    defaultAgentId = "main";
+    const changed = await listPage(state, { agentId: "ops" });
+    expect(changed.jobs.map((job) => job.id)).toEqual(["job-ops", "job-scoped"]);
+    expect(resolveDefaultAgentId).toHaveBeenCalledTimes(2);
   });
 
   it("shares immutable requested rows until a list revision changes", async () => {

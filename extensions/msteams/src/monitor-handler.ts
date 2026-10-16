@@ -97,7 +97,7 @@ export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
         const isPersonal = conversationType === "personal";
 
         if (isPersonal && msteamsCfg?.welcomeCard !== false) {
-          const botName = ctx.activity?.recipient?.name ?? undefined;
+          const botName = ctx.activity?.recipient?.name;
           const card = buildWelcomeCard({
             botName,
             promptStarters: msteamsCfg?.promptStarters,
@@ -109,7 +109,7 @@ export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
             deps.log.debug?.("failed to send welcome card", { error: formatUnknownError(err) });
           }
         } else if (!isPersonal && msteamsCfg?.groupWelcomeCard === true) {
-          const botName = ctx.activity?.recipient?.name ?? undefined;
+          const botName = ctx.activity?.recipient?.name;
           try {
             await ctx.sendActivity(buildGroupWelcomeText(botName));
             deps.log.info("sent group welcome message");

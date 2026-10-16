@@ -11,6 +11,7 @@ import type {
   UsersListResult,
   UsersSelfResult,
 } from "../../../../packages/gateway-protocol/src/schema/users.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { replaceConfigFile } from "../../../config/config.js";
 import {
   getRuntimeConfigSnapshot,
@@ -814,6 +815,13 @@ describe("gateway connect pairing exemptions", () => {
       const identityName = `auth-none-${name.replaceAll(" ", "-")}`;
       const loaded = loadDeviceIdentity(identityName);
       let pairedWs: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
+      const metadataWritten = createDeferred();
+      const recordAccess = devicePairing.recordPairedDeviceAccess;
+      const metadata = vi
+        .spyOn(devicePairing, "recordPairedDeviceAccess")
+        .mockImplementation((...args) =>
+          recordAccess(...args).finally(() => metadataWritten.resolve()),
+        );
 
       try {
         const unpaired = await connectReq(started.ws, {
@@ -851,6 +859,7 @@ describe("gateway connect pairing exemptions", () => {
           prePairDevice: false,
         });
         expect(pairedConnect.ok, JSON.stringify(pairedConnect)).toBe(true);
+        await metadataWritten.promise;
 
         const paired = await getPairedDevice(loaded.identity.deviceId);
         expect(paired?.approvedScopes).toEqual(approvedScopes);
@@ -860,6 +869,7 @@ describe("gateway connect pairing exemptions", () => {
         });
         expect(paired?.lastSeenReason).toBe("connect");
       } finally {
+        metadata.mockRestore();
         pairedWs?.close();
         started.ws.close();
         await started.server.close();

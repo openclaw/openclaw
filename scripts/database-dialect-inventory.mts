@@ -26,7 +26,9 @@ function productionFile(file: string) {
     /^(?:src|extensions|packages)\/.*\.(?:ts|mts|sql)$/u.test(file) &&
     !excluded.test(file) &&
     // PostgreSQL shares JSON function/operator names with SQLite; these artifacts contain no SQLite.
-    !/^src\/state\/postgres-schema\.generated\/[^/]+\.postgres\.sql$/u.test(file)
+    !/^src\/state\/postgres-schema\.generated\/[^/]+\.postgres\.sql$/u.test(file) &&
+    // Captured SQLite catalog text is comparison data, never executable SQL. Source DDL stays counted.
+    !/^src\/state\/postgres-schema\.generated\/sqlite-(?:state|agent)-catalogs\.ts$/u.test(file)
   );
 }
 
@@ -65,6 +67,21 @@ export function changedProductionFiles(root: string, base: string, staged: boole
 function findSites(file: string, source: ts.SourceFile): DialectSite[] {
   const sites: DialectSite[] = [];
   const add = (match: DialectMatch, position: number) => {
+    // These engine owners define/call PostgreSQL functions, not SQLite connection UDFs.
+    if (
+      match.construct === "custom-function" &&
+      (file === "src/infra/database-engine/postgres-search-schema.ts" ||
+        file === "src/infra/database-engine/postgres-vector.ts")
+    ) {
+      return;
+    }
+    // This PostgreSQL-only worker owns a connection-local spool, not SQLite temp-schema debt.
+    if (
+      match.construct === "temp-schema" &&
+      file === "extensions/memory-core/src/memory/manager-publication-postgres.ts"
+    ) {
+      return;
+    }
     const { line, character } = source.getLineAndCharacterOfPosition(position);
     sites.push({
       ...match,

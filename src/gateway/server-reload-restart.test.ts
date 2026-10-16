@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import * as restartModule from "../infra/restart.js";
-import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
@@ -124,6 +127,70 @@ describe("gateway restart readiness preflight", () => {
       expect(assertRestartReady).toHaveBeenCalledTimes(2);
       expect(prepareRuntimeConfig).toHaveBeenCalledOnce();
       expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+    } finally {
+      coordinator.stopRestartRetries();
+    }
+  });
+
+  it("prepares outside the restart-signal fence so lease holders can finish", async () => {
+    vi.useFakeTimers();
+    // A config reload holds the plugin lifecycle lease and needs root admission
+    // before it can release it; restart preparation waits for that lease.
+    const holderGate = Promise.withResolvers<void>();
+    const lease = Promise.withResolvers<void>();
+    void holderGate.promise.then(() =>
+      runWithGatewayIndependentRootWorkAdmission(async () => {}, "reload:config").then(
+        lease.resolve,
+      ),
+    );
+    const prepareRuntimeConfig = vi.fn(async () => {
+      holderGate.resolve();
+      await lease.promise;
+      return {} as OpenClawConfig;
+    });
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const coordinator = createCoordinator({
+      assertRestartReady: vi.fn(),
+      logReload,
+      requestRecoveryRestart,
+    });
+
+    try {
+      coordinator.requestGatewayRestart(restartPlan, {} as OpenClawConfig, {
+        prepareRuntimeConfig,
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(prepareRuntimeConfig).toHaveBeenCalledOnce();
+      expect(requestRecoveryRestart).toHaveBeenCalledExactlyOnceWith(
+        "config reload: gateway.port",
+        undefined,
+      );
+      expect(logReload.warn).not.toHaveBeenCalledWith(expect.stringContaining("failed"));
+    } finally {
+      coordinator.stopRestartRetries();
+    }
+  });
+
+  it("reports a pending restart preparation instead of waiting silently", async () => {
+    vi.useFakeTimers();
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const coordinator = createCoordinator({ logReload, requestRecoveryRestart });
+
+    try {
+      coordinator.requestGatewayRestart(restartPlan, {} as OpenClawConfig, {
+        prepareRuntimeConfig: () => new Promise<OpenClawConfig>(() => {}),
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(logReload.warn).toHaveBeenLastCalledWith(
+        expect.stringMatching(
+          /^restart still deferred after \d+ms with restart preparation pending; no active work$/,
+        ),
+      );
     } finally {
       coordinator.stopRestartRetries();
     }

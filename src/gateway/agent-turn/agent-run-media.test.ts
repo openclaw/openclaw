@@ -225,7 +225,7 @@ async function runMediaTurn(
     } finally {
       await lifecycle.dispose();
     }
-    return { payloads: [], meta: { durationMs: 0 } };
+    return { payloads: [], meta: { durationMs: 0, terminalReply: { disposition: "empty" } } };
   });
   const readMessage = () =>
     asOptionalRecord(

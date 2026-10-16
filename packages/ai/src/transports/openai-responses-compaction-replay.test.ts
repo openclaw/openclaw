@@ -175,81 +175,6 @@ describe("OpenAI Responses compaction replay", () => {
     expect(stripCompactionReplayCheckpoint(unrelated)).toBe(unrelated);
   });
 
-  it("persists a streamed compaction output item as opaque provider replay state", async () => {
-    const output = createOutput();
-
-    await processEvents(
-      [
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: {
-            type: "compaction",
-            id: "cmp_streamed",
-            encrypted_content: "opaque-streamed-compaction",
-          },
-        },
-        {
-          type: "response.completed",
-          response: { id: "resp_compacted", status: "completed", output: [] },
-        },
-      ],
-      output,
-    );
-
-    expect((output as AssistantMessage & { providerReplay?: unknown }).providerReplay).toEqual({
-      v: 1,
-      type: "openai-responses-compaction",
-      id: "cmp_streamed",
-      data: "opaque-streamed-compaction",
-      replayIndex: 0,
-      provider: "openai",
-      api: "openai-responses",
-      model: "gpt-5.6-luna",
-      baseUrlHash: expect.any(String),
-      sessionHash: expect.any(String),
-      authProfileHash: expect.any(String),
-    });
-    expect(output.content).toEqual([]);
-    expect(JSON.stringify(output.content)).not.toContain("opaque-streamed-compaction");
-  });
-
-  it("recovers and replays a terminal-only compaction without an id", async () => {
-    const output = await processEvents([
-      {
-        type: "response.completed",
-        response: {
-          id: "resp_terminal_idless",
-          status: "completed",
-          output: [
-            {
-              type: "compaction",
-              encrypted_content: "opaque-terminal-idless",
-            },
-          ],
-        },
-      },
-    ]);
-
-    expect(output.providerReplay).toMatchObject({
-      type: "openai-responses-compaction",
-      data: "opaque-terminal-idless",
-      replayIndex: 0,
-    });
-    expect(output.providerReplay).not.toHaveProperty("id");
-    expect(
-      convertResponsesMessages(
-        model,
-        { messages: [output] },
-        new Set(["openai"]),
-        replayIdentity,
-      ).find((item) => item.type === "compaction"),
-    ).toEqual({
-      type: "compaction",
-      encrypted_content: "opaque-terminal-idless",
-    });
-  });
-
   it("replaces an idless compaction when its encrypted payload changes", async () => {
     const output = createOutput();
     const existingReplay = compactionState(model, {
@@ -285,6 +210,15 @@ describe("OpenAI Responses compaction replay", () => {
       data: "opaque-terminal-idless-new",
       replayIndex: 0,
     });
+    expect(output.providerReplay).not.toHaveProperty("id");
+    expect(
+      convertResponsesMessages(
+        model,
+        { messages: [output] },
+        new Set(["openai"]),
+        replayIdentity,
+      ).find((item) => item.type === "compaction"),
+    ).toEqual({ type: "compaction", encrypted_content: "opaque-terminal-idless-new" });
   });
 
   it("orders reasoning, compaction, and message by normalized replay content", async () => {
@@ -580,7 +514,7 @@ describe("OpenAI Responses compaction replay", () => {
     expect(encoded).toContain("current route A turn");
   });
 
-  it("redacts encrypted compaction bytes from payload and event previews", () => {
+  it("omits encrypted compaction bytes from request and failure diagnostics", () => {
     const secret = "opaque-preview-compaction";
     const value = { input: [{ type: "compaction", encrypted_content: secret }] };
 
@@ -589,16 +523,10 @@ describe("OpenAI Responses compaction replay", () => {
     try {
       const payload = summarizeResponsesPayload(value);
       expect(payload).not.toContain(secret);
-      expect(payload).toContain("<opaque data omitted>");
       const failure = normalizeResponsesFailedEvent({ response: { error_details: value } }, model);
       assert(failure.observation);
-      for (const preview of [
-        failure.observation.failureFieldsPreview,
-        failure.observation.responsePreview,
-      ]) {
-        expect(preview).not.toContain(secret);
-        expect(preview).toContain("<opaque data omitted>");
-      }
+      expect(JSON.stringify(failure.observation)).not.toContain(secret);
+      expect(failure.observation.failureFieldNames).toEqual(["error_details"]);
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;

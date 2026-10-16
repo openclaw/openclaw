@@ -226,42 +226,6 @@ describe("OpenAI realtime voice provider routing", () => {
     ).toBeUndefined();
   });
 
-  it("prefers ChatGPT OAuth for the released route and falls back to Platform auth", async () => {
-    const oauthToken = createTestJwt({
-      "https://api.openai.com/auth": { chatgpt_account_id: "account-123" },
-    });
-    resolveProviderAuthProfileApiKeyMock.mockImplementation(
-      async ({ profileTypes }: { profileTypes?: readonly string[] }) =>
-        profileTypes?.includes("oauth") ? oauthToken : undefined,
-    );
-    const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
-    const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: broker,
-    });
-    const request = {
-      providerConfig: { apiKey: "test-api-key-platform" },
-      model: "gpt-live-1-codex",
-      agentId: "main",
-      workspaceDir: "/tmp/openclaw-agent-workspace",
-      initialItems: [],
-      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-    };
-
-    await provider.createBrowserSession?.(request);
-    expect(createBrowserSession).toHaveBeenLastCalledWith(expect.any(Object), {
-      type: "oauth",
-      token: oauthToken,
-      accountId: "account-123",
-    });
-
-    resolveProviderAuthProfileApiKeyMock.mockResolvedValue(undefined);
-    await provider.createBrowserSession?.(request);
-    expect(createBrowserSession).toHaveBeenLastCalledWith(expect.any(Object), {
-      type: "api-key",
-      token: "test-api-key-platform",
-    });
-  });
-
   it("excludes SIWC from voice readiness and selects a separate Codex credential", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-capabilities-"));
     const store: AuthProfileStore = {

@@ -63,6 +63,7 @@ import {
 } from "./update-command-recovery.js";
 import {
   collectServiceInspectionFailureFacts,
+  recordServiceReconciliationWarning,
   resolveMutableUpdateFailure,
   type MutableUpdateExecutionResult,
 } from "./update-command-result.js";
@@ -120,7 +121,7 @@ export async function executeMutableUpdate(
       : (params.packageInstallTarget?.manager ?? "unknown");
   if (opts.recovery) {
     throw new UpdatePreMutationError(
-      "rollback-state-unverified",
+      "update-recovery-pending",
       "Full-state checkpoint recovery is deferred.",
     );
   }
@@ -375,7 +376,8 @@ export async function executeMutableUpdate(
       if (params.updateInstallKind === "package") {
         await assertUpdateDatabaseEngineContexts(
           admission!.contexts,
-          async () => asNullableRecord(asNullableRecord(manifest)?.openclaw)?.databaseEngines,
+          asNullableRecord(asNullableRecord(manifest)?.openclaw)?.databaseEngines,
+          asNullableRecord(asNullableRecord(manifest)?.openclaw)?.postgresFamilies,
         );
       }
       // Staged manifests own package schema support; Git builds refresh their admitted versions.
@@ -605,7 +607,8 @@ export async function executeMutableUpdate(
         inspectGitTarget: async (target, installTarget) => {
           await assertUpdateDatabaseEngineContexts(
             admission!.contexts,
-            async () => target.databaseEngines,
+            target.databaseEngines,
+            target.postgresFamilies,
           );
           retentionInstallTarget = installTarget;
           await recordInspectedGitTarget(target, recordPhase, assertExecutionCurrent);
@@ -640,7 +643,8 @@ export async function executeMutableUpdate(
           assertReadableGitMetadata(target.metadataUnreadable);
           await assertUpdateDatabaseEngineContexts(
             admission!.contexts,
-            async () => target.databaseEngines,
+            target.databaseEngines,
+            target.postgresFamilies,
           );
           admittedTargetSchemaVersions = target.schemaVersions;
           await beforeActivate(gitMutationRoots ?? [params.root]);
@@ -663,6 +667,13 @@ export async function executeMutableUpdate(
     }));
   }
 
+  if (originalManagedServiceRuntime && !originalManagedServiceRuntime.definition.runtimePin) {
+    recordServiceReconciliationWarning(
+      result,
+      originalManagedServiceRuntime.service.serviceEnv ?? {},
+      "runtime pins not yet migrated; preserved the current runtime; the post-update Doctor step migrates them",
+    );
+  }
   result = await settleMutableUpdateResult(params, {
     result,
     failure,

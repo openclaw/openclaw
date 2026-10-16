@@ -95,6 +95,16 @@ describe("ChatHistoryCursorResultSchema", () => {
 });
 
 describe("ChatStatusEventSchema", () => {
+  it("accepts optional local model wait reasons and rejects unsupported claims", () => {
+    const event = { ...statusEvent, phase: "waiting_for_model" };
+    for (const waitReason of [undefined, "response", "slot"]) {
+      expect(
+        Value.Check(ChatEventSchema, { ...event, ...(waitReason ? { waitReason } : {}) }),
+      ).toBe(true);
+    }
+    expect(Value.Check(ChatEventSchema, { ...event, waitReason: "busy" })).toBe(false);
+  });
+
   it("accepts closed startup phases through the chat event union", () => {
     expect(Value.Check(ChatStatusEventSchema, statusEvent)).toBe(true);
     expect(Value.Check(ChatEventSchema, statusEvent)).toBe(true);

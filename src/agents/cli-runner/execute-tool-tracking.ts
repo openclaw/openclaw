@@ -245,6 +245,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     }
     const toolArgs = params.args;
     const isMessagingSend = isMessagingToolSendAction(params.toolName, toolArgs);
+    const sourceReplyPayload = isMessagingSend
+      ? extractMessagingToolSourceReplyPayload(params.result)
+      : undefined;
     const content = isMessagingSend ? extractCliMessagingContent(toolArgs, params.result) : {};
     const confirmedTarget =
       params.target && extractMessagingToolSendResult(params.target, params.result);
@@ -266,17 +269,17 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       }),
       deliveryConfirmed: true,
     });
-    const sourceReplyFinal = deliveredCurrentSourceReply
-      ? resolveMessageToolSourceReplyFinal(toolArgs)
-      : undefined;
+    const sourceReplyFinal =
+      deliveredCurrentSourceReply || sourceReplyPayload
+        ? resolveMessageToolSourceReplyFinal(toolArgs)
+        : undefined;
     // WebChat sends every targetless message through the internal sink while the run's
     // own reply mode stays automatic; a final send there is still this turn's answer.
     if (
       !deliveredCurrentSourceReply &&
-      isMessagingSend &&
-      resolveMessageToolSourceReplyFinal(toolArgs) &&
-      context.params.inputProvenance?.kind !== "inter_session" &&
-      extractMessagingToolSourceReplyPayload(params.result)
+      sourceReplyPayload &&
+      sourceReplyFinal &&
+      context.params.inputProvenance?.kind !== "inter_session"
     ) {
       sourceReplyDelivered = true;
     }
@@ -284,9 +287,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       appendUniqueCliMessagingEvidence(messagingToolSentTexts, content.text ? [content.text] : []);
       appendUniqueCliMessagingEvidence(messagingToolSentMediaUrls, content.mediaUrls ?? []);
     }
-    if (deliveredCurrentSourceReply) {
-      didDeliverSourceReplyViaMessageTool = true;
-      const payload = extractMessagingToolSourceReplyPayload(params.result);
+    if (deliveredCurrentSourceReply || (sourceReplyPayload && sourceReplyFinal)) {
+      didDeliverSourceReplyViaMessageTool ||= deliveredCurrentSourceReply;
+      const payload = isMessagingSend
+        ? sourceReplyPayload
+        : extractMessagingToolSourceReplyPayload(params.result);
       if (payload) {
         if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
           messagingToolSourceReplyPayloads.shift();

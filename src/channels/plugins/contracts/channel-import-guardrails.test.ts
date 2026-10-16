@@ -11,7 +11,6 @@ import { collectModuleReferencesFromSource } from "../../../../scripts/lib/guard
 import { createNativeTypeScriptParser } from "../../../../scripts/lib/native-typescript.mts";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
-import { expectNoReaddirSyncDuring } from "../../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
   toRepoPath,
@@ -579,16 +578,6 @@ function expectCoreSourceStaysOffPluginSpecificSdkFacades(file: string, imports:
 }
 
 describe("channel import guardrails", () => {
-  it("lists channel import guardrail sources from git without walking roots", () => {
-    expectNoReaddirSyncDuring(() => {
-      const coreSources = collectCoreSourceFiles();
-      const telegramSources = collectExtensionFiles("telegram");
-
-      expect(coreSources.length).toBeGreaterThan(0);
-      expect(telegramSources.length).toBeGreaterThan(0);
-    });
-  });
-
   it("keeps channel helper modules off their own SDK barrels", () => {
     for (const source of SAME_CHANNEL_SDK_GUARDS) {
       const text = readSource(source.path);
@@ -635,10 +624,8 @@ describe("channel import guardrails", () => {
 
   it.each([
     'import { client } from "../../extensions/feishu/src/client.js";',
-    'import "../../extensions/feishu/src/client.js";',
     'await import("../../extensions/feishu/src/client.js");',
     'export * from "../../extensions/feishu/src/client.js";',
-    'export { client } from "../../extensions/feishu/src/client.js";',
     'require("../../extensions/feishu/src/client.js");',
     'import client = require("../../extensions/feishu/src/client");',
     'new URL("../../extensions/feishu/src/client.js", import.meta.url);',

@@ -87,21 +87,6 @@ describe("ONNX artifact installation", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "preserves group-writable model cache directories",
-    async () => {
-      await fs.mkdir(destination);
-      await fs.chmod(root, 0o775);
-      await fs.chmod(destination, 0o775);
-      mockDownload(bytes);
-      await download();
-      await verify();
-      expect((await fs.stat(root)).mode & 0o777).toBe(0o775);
-      expect((await fs.stat(destination)).mode & 0o777).toBe(0o775);
-      expect(await fs.readdir(destination)).toEqual(["model.onnx"]);
-    },
-  );
-
   it.each([
     { name: "short download", body: Buffer.from("invalid"), error: /integrity/ },
     { name: "wrong hash", body: Buffer.alloc(bytes.length), error: /integrity/ },

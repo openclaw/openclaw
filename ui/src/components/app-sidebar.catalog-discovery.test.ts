@@ -42,7 +42,7 @@ function discoveryGateway(request: GatewayRequestHandler) {
   gateway.publish({
     hello: {
       auth: { role: "operator", scopes: ["operator.read"] },
-      features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+      features: { methods: ["sessions.catalog.list"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
   return gateway;
@@ -121,7 +121,7 @@ describe("AppSidebar hidden catalog discovery", () => {
         await settle(sidebar);
         expect(sidebar.textContent).toContain("Current session");
         expect(sidebar.textContent).not.toContain("Retired session");
-        await vi.advanceTimersByTimeAsync(599_999);
+        await vi.advanceTimersByTimeAsync(119_999);
         expect(currentRequest).toHaveBeenCalledTimes(1);
         await vi.advanceTimersByTimeAsync(1);
         await settle(sidebar);
@@ -151,7 +151,7 @@ describe("AppSidebar hidden catalog discovery", () => {
       ...Array.from({ length: 7 }, (_, index) => `page-${index + 2}`),
     ]);
     expect(sidebar.sessionData.sessionCatalogPageDepths.values().next().value).toBe(7);
-    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.advanceTimersByTimeAsync(119_999);
     expect(request).toHaveBeenCalledTimes(8);
     await sidebar.sessionData.refreshSessionCatalogs();
     await settleLitElement(sidebar);
@@ -173,12 +173,12 @@ describe("AppSidebar hidden catalog discovery", () => {
             : catalogPage([]),
       );
     });
-    const { sidebar, gatewayHarness } = await mountDiscovery(request);
+    const { sidebar } = await mountDiscovery(request);
     added = true;
-    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(sidebar.textContent).not.toContain("Older session now visible");
     expect(request).toHaveBeenCalledTimes(3);
-    gatewayHarness.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(5_000);
     await settle(sidebar);
     expect(sidebar.textContent).toContain("Older session now visible");
@@ -389,8 +389,8 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
         page(cursor === "page-2" ? 2 : cursor === "page-3" ? 3 : 1, "Refreshed"),
       );
     });
-    const { sidebar, gateway } = await mountExpanded(request);
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    const { sidebar } = await mountExpanded(request);
+    document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(5_000);
     const issuedBeforeHide = 5;
     expect(request).toHaveBeenCalledTimes(issuedBeforeHide);
@@ -456,11 +456,11 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
 
       sidebar.requestUpdate();
       provider.remove();
-      expect(observed.has(scrollBody!)).toBe(false);
       const timersAfterDetach = vi.getTimerCount();
       const observationsAfterDetach = observe.mock.calls.length;
       await settleLitElement(sidebar);
-      // Solid disposal may retire existing timers; a detached owner must not add any.
+      // The bridge disposes its root after the same-turn reparenting window.
+      // Disposal may retire existing timers; a detached owner must not add any.
       expect.soft(vi.getTimerCount()).toBeLessThanOrEqual(timersAfterDetach);
       expect.soft(observe).toHaveBeenCalledTimes(observationsAfterDetach);
       expect.soft(observed.has(scrollBody!)).toBe(false);

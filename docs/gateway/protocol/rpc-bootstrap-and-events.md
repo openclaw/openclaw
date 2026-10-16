@@ -41,6 +41,26 @@ The row's own fields take precedence. Fields outside the sidebar projection are
 unrequested, not deletion receipts, just as with compact rows. Other clients can
 continue requesting compact or full rows without decoding shared facts.
 
+Sidebar replies include an opaque `rowsRevision`. A client can send it as
+`ifRowsRevision` on the same query to receive `rowsUnchanged: true` and an empty
+`sessions` array when the authorized rows are unchanged. Counts, defaults, and
+facets still describe the current full window.
+
+Clients that also accept row deltas send `ifRowsRevision: "delta:<revision>"`.
+When that query's previous row vector is still retained, `sessions` contains only
+changed or inserted rows, and `rowsDelta` contains `baseRevision` and `order`.
+Expand response-local shared facts, concatenate the cached base rows with those
+changed rows, then select the complete window by the integer indexes in `order`.
+Omitted base rows are removed; repeated raw keys across agents remain distinct. `count`
+still counts the complete window, including owner-first rows. Require a matching
+base revision before applying a delta. Revision misses, retired views, and reads
+without a useful delta return the normal full row array. Current authorization
+and selection always precede this comparison. The Gateway retains only one prior
+vector per bounded query view and clears it with the presentation owner.
+
+This mode is optional: bare revision tokens never receive deltas, and older
+Gateways treat the prefixed token as a miss and return full rows.
+
 Control UI list requests use a bounded diagnostic `source`:
 `sidebar`, `dashboard`, `activity`, `sessions-page`, `chat-pane`, `agent-roster`,
 `command-palette`, or `skill-workshop`.
@@ -163,6 +183,14 @@ updated. This is an additive protocol-v4 contract, with no capability negotiatio
 or protocol-version change.
 
 ## Common event families
+
+- `socket.drain`: session reset (`reset` or `new`) or deletion (`delete`) notice
+  for session-list and matching message subscribers. The payload includes
+  `sessionKey`, `reason`, `ts`, and, when available, `agentId` and `sessionId`.
+  It follows the same session access checks as other session events; clients
+  with `session-scoped-events` receive it only for their subscribed session.
+  This is a best-effort cache invalidation, not task completion, a WebSocket
+  transport drain, or a durable delivery receipt. Reconcile state after reconnects.
 
 - `chat`: UI chat updates such as `chat.inject` and other transcript-only chat
   events. A `state: "delta"` payload carries the append in `deltaText`.

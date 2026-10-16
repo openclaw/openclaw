@@ -23,6 +23,7 @@ import {
 } from "../../lib/model-auth.ts";
 import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.ts";
 import { formatCompletionRoute, type CompletionRoute } from "../../lib/model-runtime-label.ts";
+import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
@@ -51,6 +52,7 @@ export type DefaultModelsViewProps = {
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
   onUtilityChange: (model: string | null) => void;
+  onUtilityFallbackChange: (model: string | null) => void;
   onDecisionChange: (model: string | null) => void;
   onThinkingChange: (level: string) => void;
   onThinkingReset: () => void;
@@ -172,7 +174,7 @@ function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): Fas
 // Discovery progress does not change the saved selection or disable known models.
 function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
   return (
-    <>
+    <div class="model-providers__catalog-feedback">
       {props.catalogDiscovering ? (
         <div class="model-providers__catalog-progress" role="status" aria-live="polite">
           <span class="btn__spinner" aria-hidden="true" />
@@ -187,7 +189,55 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
           </button>
         </div>
       ) : undefined}
-    </>
+    </div>
+  );
+}
+
+function FallbackModel(props: {
+  label: string;
+  fallbacks: string[];
+  primary: string | undefined;
+  options: ModelPickerOption[];
+  disabled: boolean;
+  title: string;
+  onChange: (model: string | null) => void;
+}) {
+  return (
+    <SettingsRow
+      title={props.label}
+      description={
+        props.fallbacks.length > 1
+          ? t(
+              props.fallbacks.length === 2
+                ? "modelProviders.defaults.moreFallbackOne"
+                : "modelProviders.defaults.moreFallbacks",
+              { count: String(props.fallbacks.length - 1) },
+            )
+          : undefined
+      }
+      control={
+        <ModelPicker
+          label={props.label}
+          value={props.fallbacks[0] ?? ""}
+          options={[
+            {
+              value: "",
+              label:
+                props.fallbacks.length > 1
+                  ? t("modelProviders.defaults.clearFallbacks", {
+                      count: String(props.fallbacks.length),
+                    })
+                  : t("modelProviders.defaults.noFallback"),
+            },
+            ...props.options.filter((option) => option.value !== props.primary),
+          ]}
+          disabled={props.disabled}
+          title={props.title}
+          showSelectedDetail={true}
+          onChange={(value) => props.onChange(value || null)}
+        />
+      }
+    />
   );
 }
 
@@ -200,7 +250,6 @@ export function DefaultModels(props: DefaultModelsViewProps) {
       ? [...THINKING_LEVELS, props.thinkingLevel]
       : THINKING_LEVELS;
   const fastMode = () => (props.fastMode === undefined ? "" : formatFastModeValue(props.fastMode));
-  const fallback = () => props.selection.fallbacks[0] ?? "";
   const authProviders = createMemo(
     () =>
       new Map(
@@ -213,7 +262,8 @@ export function DefaultModels(props: DefaultModelsViewProps) {
   const options = createMemo(() =>
     dedupeByKey(props.models, modelCatalogRef).map((model) => modelOption(model, authProviders())),
   );
-  const utilityValue = () => props.selection.utilityModel ?? AUTOMATIC_UTILITY_VALUE;
+  const utilityValue = () =>
+    modelSettingPrimary(props.selection.utilityModel) ?? AUTOMATIC_UTILITY_VALUE;
   const utilityRoute = () => formatCompletionRoute(props.utilityRuntime);
   const utilityOptions = createMemo(() => {
     const ref = props.automaticUtilityModel;
@@ -312,6 +362,15 @@ export function DefaultModels(props: DefaultModelsViewProps) {
             />
           }
         />
+        <FallbackModel
+          label={t("modelProviders.defaults.utilityFallback")}
+          fallbacks={modelSettingFallbacks(props.selection.utilityModel)}
+          primary={modelSettingPrimary(props.selection.utilityModel)}
+          options={options()}
+          disabled={modelControlsDisabled() || saving() || utilityValue() === ""}
+          title={title()}
+          onChange={props.onUtilityFallbackChange}
+        />
         <SettingsRow
           title={t("chat.modelControls.decisionLabel")}
           description={t("chat.modelControls.decisionHelp")}
@@ -326,40 +385,14 @@ export function DefaultModels(props: DefaultModelsViewProps) {
             />
           }
         />
-        <SettingsRow
-          title={t("modelProviders.defaults.fallback")}
-          description={
-            props.selection.fallbacks.length > 1
-              ? t(
-                  props.selection.fallbacks.length === 2
-                    ? "modelProviders.defaults.moreFallbackOne"
-                    : "modelProviders.defaults.moreFallbacks",
-                  { count: String(props.selection.fallbacks.length - 1) },
-                )
-              : undefined
-          }
-          control={
-            <ModelPicker
-              label={t("modelProviders.defaults.fallback")}
-              value={fallback()}
-              options={[
-                {
-                  value: "",
-                  label:
-                    props.selection.fallbacks.length > 1
-                      ? t("modelProviders.defaults.clearFallbacks", {
-                          count: String(props.selection.fallbacks.length),
-                        })
-                      : t("modelProviders.defaults.noFallback"),
-                },
-                ...options().filter((option) => option.value !== props.selection.primary),
-              ]}
-              disabled={modelControlsDisabled() || saving() || !props.selection.primary}
-              title={title()}
-              showSelectedDetail={true}
-              onChange={(value) => props.onFallbackChange(value || null)}
-            />
-          }
+        <FallbackModel
+          label={t("modelProviders.defaults.fallback")}
+          fallbacks={props.selection.fallbacks}
+          primary={props.selection.primary}
+          options={options()}
+          disabled={modelControlsDisabled() || saving() || !props.selection.primary}
+          title={title()}
+          onChange={props.onFallbackChange}
         />
         <BehaviorSetting
           field={"thinking"}

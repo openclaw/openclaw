@@ -750,7 +750,7 @@ export function registerSkillsCli(program: Command) {
               }),
             ),
           ({ change }) =>
-            `Archived ${change.skillName}. Undo with: ${formatCliCommand(`openclaw skills workshop restore ${change.skillName}`)}\n`,
+            `Archived ${change.skillName}. Undo with: ${formatCliCommand(`openclaw skills workshop restore ${change.skillName} --agent ${change.agentId}`)}\n`,
         ),
     );
 

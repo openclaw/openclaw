@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import type { ApplicationContext } from "../../app/context.ts";
 import { REDACTED_SENTINEL, type JsonSchema } from "../../lib/config-form-utils.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -466,7 +466,7 @@ describe("grouped plugin settings", () => {
         connected: true,
         capture: () => scope,
         isCurrent: (candidate: unknown) => candidate === scope,
-      } as unknown as GatewayPageController;
+      } as unknown as GatewayPageBinding;
       await update({
         resolveCredential: (field) =>
           field.path.at(-1) === "apiKey"

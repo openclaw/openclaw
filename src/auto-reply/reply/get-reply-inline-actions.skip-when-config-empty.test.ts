@@ -244,9 +244,9 @@ describe("handleInlineActions", () => {
 
     expect(result).toMatchObject({
       kind: "continue",
-      cleanedBody: "use the monochrome version",
       queueModeOverride: "steer",
     });
+    expect(ctx.agentText).toBe("use the monochrome version");
   });
 
   it("prefers the target session entry when routing inline status through the shared status builder", async () => {
@@ -327,7 +327,6 @@ describe("handleInlineActions", () => {
       kind: "continue",
       directives: clearInlineDirectives("<@123> what's next?"),
       abortedLastRun: false,
-      cleanedBody: "<@123> what's next?",
     });
     expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
     expect(handleCommandsMock).toHaveBeenCalledTimes(1);
@@ -429,7 +428,6 @@ describe("handleInlineActions", () => {
       kind: "continue",
       directives: clearInlineDirectives("new message"),
       abortedLastRun: false,
-      cleanedBody: "new message",
     });
     expect(sessionStore["s:main"]?.abortCutoffMessageSid).toBeUndefined();
     expect(sessionStore["s:main"]?.abortCutoffTimestamp).toBeUndefined();
@@ -493,7 +491,7 @@ describe("handleInlineActions", () => {
       }),
     );
 
-    expect(result).toMatchObject({ kind: "continue", cleanedBody: body });
+    expect(result.kind).toBe("continue");
     expect(ctx.Body).toBe(body);
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
@@ -522,7 +520,7 @@ describe("handleInlineActions", () => {
       overrides: { cfg, allowTextCommands: true },
     });
 
-    expect(result).toMatchObject({ kind: "continue", cleanedBody: body });
+    expect(result.kind).toBe("continue");
     expect(ctx.agentText).toBe(body);
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
@@ -1110,7 +1108,8 @@ describe("handleInlineActions", () => {
         opts: { onBlockReply },
       },
     });
-    expect(result).toMatchObject({ kind: "continue", cleanedBody: expected });
+    expect(result.kind).toBe("continue");
+    expect(routing.cleanedBody).toBe(expected);
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
@@ -1184,10 +1183,8 @@ describe("handleInlineActions", () => {
       },
     });
     expect(routing.inlineCommand).toBe("/help");
-    expect(result).toMatchObject({
-      kind: "continue",
-      cleanedBody: expected,
-    });
+    expect(result.kind).toBe("continue");
+    expect(routing.cleanedBody).toBe(expected);
     expect(onBlockReply).toHaveBeenCalledExactlyOnceWith({
       text: "Sender help output",
       isStatusNotice: true,
@@ -1223,7 +1220,7 @@ describe("handleInlineActions", () => {
       },
     });
     const expected = "Act as an engineering advisor.\n\nFocus on:\ncompare /help and /commands";
-    expect(result).toMatchObject({ kind: "continue", cleanedBody: expected });
+    expect(result.kind).toBe("continue");
     expect(ctx.Body).toBe(expected);
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(
@@ -1382,7 +1379,7 @@ describe("sender command dispatch ownership", () => {
 
       if (shape === "skill") {
         const expected = expandedOfficeHoursRequest(commandText);
-        expect(result).toMatchObject({ kind: "continue", cleanedBody: expected });
+        expect(result.kind).toBe("continue");
         expect(sessionCtx.agentText).toBe(expected);
         expect(dispatched).toEqual([]);
         expect(onBlockReply).not.toHaveBeenCalled();
@@ -1396,7 +1393,8 @@ describe("sender command dispatch ownership", () => {
           text: commandReply,
           isStatusNotice: true,
         });
-        expect(result).toMatchObject({ kind: "continue", cleanedBody: expectedPrompt + suffix });
+        expect(result.kind).toBe("continue");
+        expect(sessionCtx.agentText).toBe(expectedPrompt + suffix);
       }
     },
   );

@@ -42,10 +42,8 @@ type ProviderUsageRefresh = ProviderUsageCacheIdentity & {
 
 const usageCacheByAgentId = new Map<string, ProviderUsageCacheEntry>();
 const usageRefreshByAgentId = new Map<string, ProviderUsageRefresh>();
-let cacheGeneration = 0;
 
 export function clearModelAuthStatusUsageCache(): void {
-  cacheGeneration += 1;
   usageCacheByAgentId.clear();
   usageRefreshByAgentId.clear();
   clearProviderUsageRuntimeSnapshot();
@@ -128,7 +126,6 @@ function scheduleProviderUsageRefresh(
   ) {
     return active.promise;
   }
-  const publishGeneration = cacheGeneration;
   // SWR replies and invalidation must retain publication and finalization ownership.
   const promise = trackAsyncWork(() =>
     loadProviderUsageSummary({
@@ -140,10 +137,7 @@ function scheduleProviderUsageRefresh(
     })
       .then((freshUsage) => {
         const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
-        if (
-          publishGeneration === cacheGeneration &&
-          usageRefreshByAgentId.get(params.agentId) === refresh
-        ) {
+        if (usageRefreshByAgentId.get(params.agentId) === refresh) {
           usageCacheByAgentId.set(params.agentId, {
             agentDir: params.agentDir,
             configRef: params.configRef,

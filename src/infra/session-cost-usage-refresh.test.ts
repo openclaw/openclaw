@@ -691,12 +691,12 @@ describe("session cost usage refresh", () => {
   );
 
   it.each([
-    { failure: "abort", closing: true, level: "debug" },
+    { failure: "abort", closing: true, level: "silent" },
     { failure: "abort", closing: false, level: "warn" },
     { failure: "write", closing: true, level: "warn" },
     { failure: "cleanup", closing: true, level: "warn" },
   ] as const)(
-    "logs $failure at $level with closing=$closing and settles the refresh queue",
+    "settles $failure with $level logging when closing=$closing",
     async ({ failure, closing, level }) => {
       await withRefreshFixture(async ({ agentId, sessionFiles }) => {
         const scope = new AsyncWorkScope();
@@ -737,10 +737,14 @@ describe("session cost usage refresh", () => {
                 : new AggregateError([aborted, writeFailure], aborted.message),
           );
           await scope.runWhenIdle(() => {});
-          expect(write).toHaveBeenCalledExactlyOnceWith(
-            expect.stringContaining(`"level":"${level}"`),
-          );
-          expect(write).toHaveBeenCalledWith(expect.stringContaining("background refresh"));
+          if (level === "silent") {
+            expect(write).not.toHaveBeenCalled();
+          } else {
+            expect(write).toHaveBeenCalledExactlyOnceWith(
+              expect.stringContaining(`"level":"${level}"`),
+            );
+            expect(write).toHaveBeenCalledWith(expect.stringContaining("background refresh"));
+          }
           expect(refresh).toHaveBeenCalledOnce();
           expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
         } finally {

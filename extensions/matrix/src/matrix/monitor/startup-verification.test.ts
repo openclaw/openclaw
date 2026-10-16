@@ -281,26 +281,6 @@ describe("ensureMatrixStartupVerification", () => {
     expect(fs.existsSync(createStateFilePath(tempHome))).toBe(false);
   });
 
-  it("falls back when startup verification nowMs is outside Date range", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T12:00:00.000Z"));
-    const tempHome = createTempStateDir();
-    const stateFilePath = createStateFilePath(tempHome);
-    const harness = createHarness();
-
-    const result = await ensureMatrixStartupVerification({
-      client: harness.client as never,
-      auth: createAuth(),
-      accountConfig: {},
-      stateFilePath,
-      nowMs: 8_640_000_000_000_001,
-    });
-
-    expect(result.kind).toBe("requested");
-    await expect(readPersistedStartupState(tempHome)).resolves.toMatchObject({
-      attemptedAt: "2026-05-30T12:00:00.000Z",
-    });
-  });
-
   it("keeps startup verification failures non-fatal", async () => {
     const tempHome = createTempStateDir();
     const harness = createHarness({

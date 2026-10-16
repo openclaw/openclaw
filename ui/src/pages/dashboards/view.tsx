@@ -14,7 +14,7 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import "../../styles/dashboards.css";
-import { DashboardPreview } from "./dashboard-preview.ts";
+import { DashboardPreview } from "./dashboard-preview.tsx";
 
 export type DashboardsRouteData = {
   result: SessionsListResult | null;

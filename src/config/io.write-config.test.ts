@@ -669,17 +669,6 @@ describe("config io write", () => {
     });
   }
 
-  itWithHome("preserves root $schema during partial writes", async (home) => {
-    const { configPath } = await writeConfigFixture(home, {
-      $schema: "https://openclaw.ai/config.json",
-      gateway: { mode: "local" },
-    });
-
-    const persisted = await writeGatewayPortAndReadConfig(home, configPath);
-    expect(persisted.$schema).toBe("https://openclaw.ai/config.json");
-    expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
-  });
-
   for (const mode of ["OPENCLAW_CONFIG_READONLY", "OPENCLAW_NIX_MODE"]) {
     itWithHome(mode + " preserves prefixed config without recovery snapshots", async (home) => {
       const configPath = configPathForHome(home);
@@ -3210,6 +3199,7 @@ describe("config io write", () => {
     "preserves authored tilde paths when runtime-shaped writes hand back absolute paths",
     async (home) => {
       const { configPath } = await writeConfigFixture(home, {
+        $schema: "https://openclaw.ai/config.json",
         logging: { file: "~/openclaw-upgrade-survivor/gateway.jsonl" },
       });
       const io = createFastConfigIO(home);
@@ -3226,6 +3216,7 @@ describe("config io write", () => {
       );
 
       const persisted = await readPersistedConfig(configPath);
+      expect(persisted.$schema).toBe("https://openclaw.ai/config.json");
       expect(persisted.logging?.file).toBe("~/openclaw-upgrade-survivor/gateway.jsonl");
       expect(persisted.logging?.level).toBe("debug");
     },

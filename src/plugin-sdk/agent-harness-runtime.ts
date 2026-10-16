@@ -58,6 +58,9 @@ export { resolveAgentExecutorController } from "../plugins/agent-executor-contro
 
 export { projectAgentActivityItem } from "../agents/agent-activity-presentation.js";
 export { projectAgentToolActivity } from "../infra/agent-activity-events.js";
+export { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
+export { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
+export type { StreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 
 export {
   formatToolProgressOutput,

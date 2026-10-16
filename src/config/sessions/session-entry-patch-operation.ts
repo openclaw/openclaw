@@ -21,6 +21,11 @@ import {
   type SessionEntryUsageUpdate,
 } from "./session-entry-usage.js";
 import {
+  projectSessionLifecyclePatch,
+  type SessionLifecyclePatchInput,
+  type SessionLifecyclePatchEffects,
+} from "./session-run-lifecycle-projection.js";
+import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
   type InternalSessionEntry as SessionEntry,
@@ -68,6 +73,7 @@ type SessionEntryPatchStep = (
       route: Omit<Parameters<typeof projectLastRoutePatch>[0], "existing">;
       creation: ReturnType<typeof buildSessionCreationStamp>;
     }
+  | { kind: "lifecycle"; lifecycle: SessionLifecyclePatchInput }
   | { kind: "public-fields"; patch: Partial<SessionEntry> }
   | {
       kind: "observer-digest";
@@ -101,6 +107,7 @@ type SessionEntryPatchStep = (
       recoverySourceRunId?: string;
       executionRunId: string;
       executionGeneration: string;
+      terminalRunId?: string;
     }
   | {
       kind: "compaction-accounting";
@@ -116,6 +123,7 @@ export type SessionEntryPatchOperation =
 export function projectSessionEntryPatch(
   params: Omit<Parameters<typeof mergeSessionEntryPatch>[0], "patch"> & {
     operation: SessionEntryPatchOperation;
+    onLifecycleProjection?: (effects: SessionLifecyclePatchEffects | undefined) => void;
   },
 ): SessionEntry | undefined {
   const operations =
@@ -124,7 +132,12 @@ export function projectSessionEntryPatch(
   let writeBase = params.writeBase;
   let next: SessionEntry | undefined;
   for (const operation of operations) {
-    const patch = reduceSessionEntryPatch(operation, writeBase, existing);
+    const patch = reduceSessionEntryPatch(
+      operation,
+      writeBase,
+      existing,
+      params.onLifecycleProjection,
+    );
     if (patch === null) {
       continue;
     }
@@ -167,10 +180,11 @@ export function reduceSessionBookkeeping(
   return reducer satisfies never;
 }
 
-function reduceSessionEntryPatch(
+export function reduceSessionEntryPatch(
   operation: SessionEntryPatchStep,
   entry: SessionEntry,
   existingEntry: SessionEntry | undefined,
+  onLifecycleProjection?: (effects: SessionLifecyclePatchEffects | undefined) => void,
 ): Partial<SessionEntry> | null {
   const expected = operation.expected;
   const expectedEntry = operation.kind === "public-fields" ? existingEntry : entry;
@@ -190,6 +204,11 @@ function reduceSessionEntryPatch(
     return null;
   }
   switch (operation.kind) {
+    case "lifecycle": {
+      const projection = projectSessionLifecyclePatch(entry, operation.lifecycle);
+      onLifecycleProjection?.(projection.patch ? projection.effects : undefined);
+      return projection.patch;
+    }
     case "inbound-metadata": {
       const patch = projectSessionMetaPatch({
         prepared: operation.metadata,
@@ -323,7 +342,9 @@ function reduceSessionEntryPatch(
           entry,
           recordTerminalSource: true,
           terminalSourceRunId: operation.recoverySourceRunId,
-          terminalRunId: entry.restartRecoveryDeliveryRunId ? undefined : operation.executionRunId,
+          terminalRunId:
+            operation.terminalRunId ??
+            (entry.restartRecoveryDeliveryRunId ? undefined : operation.executionRunId),
         }),
         restartRecoveryRuns: remainingRuns?.length ? remainingRuns : undefined,
         ...(terminalPending ? { pendingFinalDelivery: undefined } : {}),
@@ -347,7 +368,7 @@ function reduceSessionEntryPatch(
               status: terminalPending ? ("failed" as const) : ("done" as const),
             }
           : {}),
-        updatedAt: endedAt ?? Date.now(),
+        updatedAt: endedAt ?? entry.updatedAt,
       };
     }
   }

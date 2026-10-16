@@ -522,3 +522,13 @@ it("keeps Git operation workers independent of worktree allocation and registry 
   expect(closure).not.toContain("src/agents/worktrees/service-preparation.ts");
   expect(closure).not.toContain("src/agents/worktrees/allocation.ts");
 });
+
+it("keeps Ollama config metadata independent of provider runtime helpers", () => {
+  const closure = collectRuntimeImportClosure(process.cwd(), [
+    "extensions/ollama/src/defaults.ts",
+    "extensions/ollama/provider-policy-api.ts",
+  ]);
+  expect(closure).not.toContain("src/plugin-sdk/provider-model-shared.ts");
+  expect(closure).not.toContain("src/plugin-sdk/plugin-entry.ts");
+  expect(closure).not.toContain("src/plugins/provider-replay-helpers.ts");
+});

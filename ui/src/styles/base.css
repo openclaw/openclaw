@@ -228,37 +228,6 @@
   --hljs-deletion: #ffa198;
   --hljs-addition: #7ee787;
 
-  /* Web Awesome shadow parts otherwise retain its independent blue-gray palette.
-     Map its semantic colors once so menus, form controls, tabs, and dialogs
-     inherit built-in, imported, and personal themes together. */
-  --wa-color-surface-default: var(--bg);
-  --wa-color-surface-raised: var(--popover);
-  --wa-color-surface-lowered: var(--bg-muted);
-  --wa-color-surface-border: var(--border);
-  --wa-color-text-normal: var(--text);
-  --wa-color-text-quiet: var(--muted);
-  --wa-color-text-link: var(--link);
-  --wa-color-focus: var(--ring);
-  --wa-color-neutral-fill-quiet: var(--bg-muted);
-  --wa-color-neutral-fill-normal: var(--bg-hover);
-  --wa-color-neutral-border-normal: var(--border-strong);
-  --wa-color-neutral-border-loud: var(--muted);
-  --wa-color-neutral-on-quiet: var(--muted);
-  --wa-color-neutral-on-normal: var(--text);
-  --wa-color-brand-fill-quiet: var(--accent-subtle);
-  --wa-color-brand-fill-loud: var(--accent);
-  --wa-color-brand-on-quiet: var(--accent);
-  --wa-color-danger-fill-normal: var(--danger-subtle);
-  --wa-color-danger-on-quiet: var(--danger);
-  --wa-color-danger-on-normal: var(--danger);
-  --wa-form-control-background-color: var(--bg);
-  --wa-form-control-border-color: var(--border-strong);
-  --wa-form-control-activated-color: var(--accent);
-  --wa-form-control-label-color: var(--text);
-  --wa-form-control-value-color: var(--text);
-  --wa-form-control-hint-color: var(--muted);
-  --wa-form-control-placeholder-color: var(--muted);
-
   --mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-shortcut: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Symbol", sans-serif;
@@ -328,8 +297,7 @@
      (transparent border + content-box clip). Derived from --muted so every
      theme family and both modes follow with no override. scrollbar-color is a
      real property, not a token, but it lives here (not a second :root block)
-     to satisfy no-duplicate-selectors; it also inherits into shadow roots,
-     which is what gives Web Awesome ::part() surfaces their thumb tint. */
+     to satisfy no-duplicate-selectors; it also inherits into shadow roots. */
   --scrollbar-size: 12px;
   --scrollbar-thumb-inset: 3px;
   --scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
@@ -478,7 +446,7 @@
   }
 
   /* These two add a fixed cosmetic offset on top of the --radius-xl step in
-     their home rule (components.css); only the --radius-xl portion scales,
+     their home rule (agents.css); only the --radius-xl portion scales,
      matching that intent. */
   .md-preview-dialog__panel.md-preview-dialog__panel {
     border-radius: calc(20px * var(--openclaw-corner-radius-scale) + 6px);
@@ -508,39 +476,6 @@
   .chat-reply-context-menu.chat-reply-context-menu button,
   .chat-selection-popup.chat-selection-popup button {
     border-radius: calc(10px * var(--openclaw-corner-radius-scale) - 4px);
-    corner-shape: superellipse(1.5);
-  }
-
-  /* wa-dropdown/wa-popover/wa-select: the panel gets the same direct
-     border-radius as the part below, so nothing it contains inherits a
-     token from it. Their items are light-DOM children slotted into that
-     part with feature-specific classes (not a single enumerable selector,
-     and occasionally a plain <button> rather than <wa-dropdown-item>), so
-     --menu-radius/--menu-item-radius stay redeclared on the host purely to
-     reach those items by inheritance — the one remaining inheritable-token
-     exception in this block. It is bounded to these three purpose-built
-     menu/select components, whose entire subtree is menu chrome by
-     construction, unlike the arbitrary-content containers above. */
-  wa-dropdown,
-  wa-popover,
-  wa-select {
-    --menu-radius: calc(10px * var(--openclaw-corner-radius-scale));
-    --menu-item-radius: calc(var(--menu-radius) - var(--menu-padding));
-  }
-
-  /* Unlike the doubled classes above, this generic tag selector must outrank
-     dozens of concrete per-feature panels (.cron-job-menu::part(menu),
-     .usage-export-menu::part(menu), and so on app-wide) that each declare
-     their own border-radius from --menu-radius. A bare type selector can
-     never out-specificity a class selector no matter how it's repeated, so
-     !important is the only way for one generic rule to cover every
-     wa-dropdown/wa-popover/wa-select panel by design, matching this PR's
-     "any wa-dropdown, wa-popover or wa-select gets the treatment" intent. */
-  wa-dropdown::part(menu),
-  wa-popover::part(body),
-  wa-select::part(listbox),
-  wa-select::part(combobox) {
-    border-radius: calc(10px * var(--openclaw-corner-radius-scale)) !important;
     corner-shape: superellipse(1.5);
   }
 }
@@ -921,76 +856,6 @@ a:hover {
   text-decoration-thickness: 2px;
 }
 
-/* Web Awesome defaults checked switches to brand blue. Keep every switch on
-   the Control UI accent, matching native check controls and custom switches.
-   Its off state (track fill, border, thumb) defaults to the library's
-   blue-grey neutrals, so derive that from the theme tokens as well. */
-wa-switch {
-  --wa-form-control-activated-color: var(--accent);
-  --wa-form-control-background-color: color-mix(in srgb, var(--border-strong) 60%, transparent);
-  --wa-form-control-border-color: var(--muted);
-  --wa-color-focus: var(--ring);
-  /* The library sizes the track at 1.75x its height and the thumb at 0.75em,
-     leaving fractional insets (3.75px at 14px) that pixel-snap unevenly and
-     push the thumb off-center. Whole-pixel insets keep it centered. */
-  --width: calc(var(--height) + 2 * round(calc(var(--height) * 0.375), 1px));
-  --thumb-size: calc(var(--height) - 2 * round(calc((var(--height) - 0.75em) / 2), 1px));
-}
-
-/* Keep neutral menu hover, keyboard focus, and open submenus on the active theme.
-   Web Awesome dropdown items ship `cursor: pointer` on their shadow host.
-   Document rules beat `:host`, so route them through the policy here — and
-   re-add the disabled cue this override would otherwise clobber. */
-wa-dropdown-item {
-  --wa-color-neutral-fill-normal: var(--bg-hover);
-
-  cursor: var(--cursor-action);
-}
-
-wa-dropdown-item[disabled] {
-  cursor: not-allowed;
-}
-
-/* Options are menu rows, not solid primary actions. Keep their keyboard-current
-   fill and ink paired even when a theme has a very bright or dark accent. */
-wa-option {
-  --wa-form-control-activated-color: var(--bg-hover);
-  --current-text-color: var(--text);
-}
-
-/* The submenu safe triangle follows the pointer and can cover sibling rows,
-   trapping hover on tall or flipped menus. Let real rows receive the pointer;
-   Web Awesome still owns submenu closing and its pointer-exit grace period. */
-wa-dropdown-item::part(submenu)::before {
-  pointer-events: none;
-}
-
-/* Keep Web Awesome's checkbox rail trailing so it cannot shift menu icons and labels. */
-wa-dropdown-item[checkbox-adjacent] {
-  padding-inline-start: 1em;
-}
-
-wa-dropdown-item[type="checkbox"]::part(checkmark) {
-  order: 1;
-  margin-inline: 0.75em 0;
-}
-
-wa-dropdown-item[type="checkbox"] {
-  display: flex;
-  align-items: center;
-}
-
-/* Web Awesome owns these popup panels in shadow DOM, so shared tokens enter
-   through exported parts; feature styles continue to own content geometry. */
-wa-dropdown::part(menu),
-wa-dropdown-item::part(submenu),
-wa-popover::part(body),
-wa-select::part(listbox) {
-  background: var(--popover);
-  border-color: var(--overlay-border);
-  box-shadow: var(--overlay-shadow);
-}
-
 button,
 input,
 textarea,
@@ -1026,33 +891,18 @@ textarea,
   color: var(--selection-fg);
 }
 
-/* Canonical scrollbar for every scroll surface. scrollbar-color (:root above)
-   inherits, including into shadow roots; scrollbar-width (* above) does not.
-   Web Awesome shadow-DOM menus/listboxes are reachable via ::part(); no document
-   rule crosses that boundary on its own, so every rule below repeats the same
-   generic host group used for the shared corner treatment above. Enumerating
-   feature classes instead would leave every unlisted dropdown, listbox, and
-   popover on the raw platform scrollbar the moment one is added. */
-::-webkit-scrollbar,
-wa-dropdown::part(menu)::-webkit-scrollbar,
-wa-select::part(listbox)::-webkit-scrollbar,
-wa-popover::part(body)::-webkit-scrollbar {
+/* Canonical scrollbar for every light-DOM scroll surface, including owned overlays. */
+::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);
 }
 
 ::-webkit-scrollbar-track,
-::-webkit-scrollbar-corner,
-wa-dropdown::part(menu)::-webkit-scrollbar-track,
-wa-select::part(listbox)::-webkit-scrollbar-track,
-wa-popover::part(body)::-webkit-scrollbar-track {
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-::-webkit-scrollbar-thumb,
-wa-dropdown::part(menu)::-webkit-scrollbar-thumb,
-wa-select::part(listbox)::-webkit-scrollbar-thumb,
-wa-popover::part(body)::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   background-clip: content-box;
   border: var(--scrollbar-thumb-inset) solid transparent;
@@ -1061,13 +911,9 @@ wa-popover::part(body)::-webkit-scrollbar-thumb {
 
 /* :hover::-webkit-scrollbar-thumb (container hover) is safe here because html,
    body set overflow: clip above, so the document itself never scrolls and the
-   always-true html:hover/body:hover can't hover a document scrollbar. ::part()
-   surfaces get thumb-only hover; container hover can't chain through shadow. */
+   always-true html:hover/body:hover can't hover a document scrollbar. */
 ::-webkit-scrollbar-thumb:hover,
-:hover::-webkit-scrollbar-thumb,
-wa-dropdown::part(menu)::-webkit-scrollbar-thumb:hover,
-wa-select::part(listbox)::-webkit-scrollbar-thumb:hover,
-wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
+:hover::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb-hover);
   background-clip: content-box;
 }
@@ -1182,15 +1028,7 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  wa-dropdown,
-  wa-popover,
-  wa-select {
-    --show-duration: 0ms;
-    --hide-duration: 0ms;
-  }
-
-  .skeleton::after,
-  .chat-controls__inline-select[open] > wa-popup::part(popup) {
+  .skeleton::after {
     animation: none !important;
   }
 

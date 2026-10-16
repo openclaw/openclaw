@@ -67,7 +67,7 @@ export function showSecretRevealDialog(options: SecretRevealDialogOptions): Prom
             <Show when={options.note}>
               <p class="secret-reveal__note">{options.note}</p>
             </Show>
-            <div class="exec-approval-actions">
+            <openclaw-modal-actions class="exec-approval-actions">
               <button
                 type="button"
                 class={options.secret ? "btn primary" : "btn secret-reveal__dismiss"}
@@ -76,7 +76,7 @@ export function showSecretRevealDialog(options: SecretRevealDialogOptions): Prom
               >
                 {options.acknowledgeLabel}
               </button>
-            </div>
+            </openclaw-modal-actions>
           </div>
         </openclaw-modal-dialog>
       );

@@ -46,6 +46,14 @@ function videoResponse(body = "mp4-bytes", contentType: string | undefined = "vi
   );
 }
 
+it("rejects a duration that rounds to zero before submission", async () => {
+  const fetchFn = vi.fn<typeof fetch>();
+  await expect(runTask(fetchFn, { req: videoRequest({ durationSeconds: 0.4 }) })).rejects.toThrow(
+    "durationSeconds must be a positive duration",
+  );
+  expect(fetchFn).not.toHaveBeenCalled();
+});
+
 it("builds mode-specific image and reference inputs", () => {
   const cases: { req: Partial<VideoGenerationRequest>; expected: Record<string, unknown> }[] = [
     {

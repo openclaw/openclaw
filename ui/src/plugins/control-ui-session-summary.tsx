@@ -1,3 +1,4 @@
+import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -26,11 +27,15 @@ import { projectProgressCard } from "../lib/reactive/domain-keyed.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
+import { createSessionEventRefreshCoordinator } from "../lib/sessions/event-refresh-coordinator.ts";
 import { readSessionChangedEvent } from "../lib/sessions/reconcile.ts";
 import { uiSessionEventMatches, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
-import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import type {
+  ChatHistoryResponse,
+  ChatHistoryResult,
+} from "../pages/chat/chat-history-snapshot.ts";
+import { ChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
 import "../styles/chat/progress-card.css";
 import "../styles/sidebar-markdown.css";
 import "../styles/plugin-session-summary.css";
@@ -56,8 +61,7 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
   const [history, setHistory] = createSignal<ChatHistoryResult | null>(null);
   const [error, setError] = createSignal(false);
   let alive = true;
-  let pending = false;
-  let dirty = false;
+  let snapshot: ChatHistoryResult | null = null;
   const current = () =>
     untrack(
       () =>
@@ -84,36 +88,55 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
     if (!current()) {
       return;
     }
-    if (pending) {
-      dirty = true;
-      return;
-    }
-    pending = true;
-    dirty = false;
     setError(false);
-    try {
-      const result = await scope.client.request<ChatHistoryResult>("chat.history", {
+    const request = (cursor?: string) =>
+      scope.client.request<ChatHistoryResponse>("chat.history", {
         ...scope.session,
+        cursor,
         toolResultMaxChars: 2_000,
         limit: 20,
         maxChars: 12000,
       });
-      if (current()) {
-        setHistory(result);
+    try {
+      let result = await request(snapshot?.deltaCursor);
+      if (!current()) {
+        return;
       }
+      if ("kind" in result && result.kind === "reset") {
+        snapshot = null;
+        result = await request();
+        if (!current()) {
+          return;
+        }
+      }
+      if ("kind" in result) {
+        if (result.kind === "reset") {
+          throw new Error("History tail returned a reset");
+        }
+        let projection = createSessionProjection({}, snapshot?.messages ?? []);
+        for (const envelope of result.messages) {
+          if (!isRecord(envelope)) {
+            continue;
+          }
+          projection = reduceSessionProjection(projection, {
+            type: "messagePersisted",
+            message: envelope.message,
+            envelope,
+          });
+        }
+        snapshot = { ...result, messages: projection.messages.slice(-20) };
+      } else {
+        snapshot = { ...result, messages: result.messages?.slice(-20) };
+      }
+      setHistory(snapshot);
     } catch {
       if (current()) {
         setError(true);
       }
-    } finally {
-      if (current()) {
-        pending = false;
-        if (dirty) {
-          void refresh();
-        }
-      }
     }
   };
+  const refreshes = createSessionEventRefreshCoordinator({ active: true, refresh });
+  onCleanup(() => refreshes.dispose());
   onCleanup(
     scope.gateway.subscribeEvents((event) => {
       if (event.event !== "sessions.changed" && event.event !== "session.message") {
@@ -133,12 +156,12 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
           changed.agentId,
         )
       ) {
-        void refresh();
+        refreshes.schedule();
       }
     }),
   );
   onSettled(() => {
-    void refresh();
+    refreshes.scheduleRetry(0);
   });
   const messages = createMemo(() =>
     (history()?.messages ?? []).slice(-20).flatMap((message) => {
@@ -243,7 +266,7 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
                 <header class="plugin-session-summary__message-header">
                   <span class="plugin-session-summary__avatar">
                     {message().sender ? (
-                      <LitContent render={() => renderChatAuthorAvatar(message().sender)} />
+                      <ChatAuthorAvatar sender={message().sender} />
                     ) : message().agentId ? (
                       <AgentAvatar
                         option={{
@@ -285,7 +308,7 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
         <button
           class="btn"
           onClick={() => {
-            void refresh();
+            refreshes.scheduleRetry(0);
             void store.load(scope.session).catch(() => undefined);
           }}
         >

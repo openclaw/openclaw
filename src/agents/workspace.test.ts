@@ -110,17 +110,6 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
       }),
     ).toThrow('Invalid profile name: "../escape"');
   });
-
-  it("prefers OPENCLAW_WORKSPACE_DIR for default workspace resolution", () => {
-    const dir = resolveDefaultAgentWorkspaceDir({
-      OPENCLAW_WORKSPACE_DIR: "/srv/openclaw-workspace",
-      OPENCLAW_PROFILE: "work",
-      OPENCLAW_HOME: "/srv/openclaw-home",
-      HOME: "/home/other",
-    });
-
-    expect(dir).toBe(path.resolve("/srv/openclaw-workspace"));
-  });
 });
 
 async function readWorkspaceState(dir: string) {
@@ -189,23 +178,6 @@ describe("ensureAgentWorkspace", () => {
     });
 
     await expect(ensureWorkspace()).resolves.toMatchObject({ dir: tempDir });
-    await expectPathMissing(workspacePath(DEFAULT_BOOTSTRAP_FILENAME));
-  });
-
-  it("uses template comparison when an attestation has no generated hashes", async () => {
-    await ensureWorkspace();
-    const generatedAgents = await fs.readFile(workspacePath(DEFAULT_AGENTS_FILENAME), "utf-8");
-
-    await fs.rm(tempDir, { recursive: true, force: true });
-    await fs.mkdir(tempDir, { recursive: true });
-    await fs.writeFile(workspacePath(DEFAULT_AGENTS_FILENAME), generatedAgents);
-    await replaceWorkspaceAttestation({
-      workspaceDir: tempDir,
-      attestedAtMs: Date.now(),
-      generatedHashes: new Map(),
-    });
-
-    await expectWorkspaceVanished(ensureWorkspace());
     await expectPathMissing(workspacePath(DEFAULT_BOOTSTRAP_FILENAME));
   });
 

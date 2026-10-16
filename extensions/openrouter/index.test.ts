@@ -314,18 +314,6 @@ describe("openrouter provider hooks", () => {
     expect(model?.baseUrl).toBe("https://private.example.invalid/router/v1");
   });
 
-  it("preserves the canonical official destination for dynamically resolved default models", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const model = provider.resolveDynamicModel?.({
-      provider: "openrouter",
-      modelId: "openrouter/auto",
-      modelRegistry: { find: vi.fn(() => null) },
-      providerConfig: { baseUrl: "https://openrouter.ai/v1///" },
-    } as never);
-
-    expect(model?.baseUrl).toBe("https://openrouter.ai/api/v1");
-  });
-
   it("forwards configured proxy destination and headers to both usage requests", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const fetchFn = vi.fn<typeof fetch>(async () => Response.json({ data: { usage: 1 } }));
@@ -421,6 +409,25 @@ describe("openrouter provider hooks", () => {
       maxTokens: 64_000,
     });
   });
+
+  it.each(["typesafe/jev-1.13", "openrouter/~typesafe/jev-latest"])(
+    "keeps %s out of dynamic chat resolution",
+    async (modelId) => {
+      getLoadedOpenRouterModelCapabilitiesMock.mockClear();
+      loadOpenRouterModelCapabilitiesMock.mockClear();
+      const provider = await registerSingleProviderPlugin(openrouterPlugin);
+      const context = {
+        provider: "openrouter",
+        modelId,
+        modelRegistry: { find: vi.fn(() => null) },
+      } as never;
+
+      await provider.prepareDynamicModel?.(context);
+      expect(provider.resolveDynamicModel?.(context)).toBeUndefined();
+      expect(loadOpenRouterModelCapabilitiesMock).not.toHaveBeenCalled();
+      expect(getLoadedOpenRouterModelCapabilitiesMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps native OpenRouter namespace ids for capability lookup", async () => {
     getLoadedOpenRouterModelCapabilitiesMock.mockReset();
@@ -531,39 +538,20 @@ describe("openrouter provider hooks", () => {
     ).toBe("native");
   });
 
-  it("advertises xhigh thinking for OpenRouter-routed DeepSeek V4 models", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const expectedV4Levels = ["off", "minimal", "low", "medium", "high", "xhigh"];
-
-    expect(
-      provider
-        .resolveThinkingProfile?.({
-          provider: "openrouter",
-          modelId: "deepseek/deepseek-v4-pro",
-        } as never)
-        ?.levels.map((level) => level.id),
-    ).toEqual(expectedV4Levels);
-    expect(
-      provider.resolveThinkingProfile?.({
-        provider: "openrouter",
-        modelId: "openrouter/deepseek/deepseek-v4-flash",
-      } as never)?.defaultLevel,
-    ).toBe("high");
-    expect(
-      provider.resolveThinkingProfile?.({
-        provider: "openrouter",
-        modelId: "openai/gpt-5.4",
-      } as never),
-    ).toBe(undefined);
-  });
-
   it("exposes DeepSeek V4 thinking levels through the lightweight policy artifact", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "openrouter",
-        modelId: "openrouter/deepseek/deepseek-v4-pro",
-      })?.levels.map((level) => level.id),
-    ).toContain("xhigh");
+    const profile = resolveThinkingProfile({
+      provider: "openrouter",
+      modelId: "openrouter/deepseek/deepseek-v4-pro",
+    });
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(profile?.defaultLevel).toBe("high");
     expect(
       resolveThinkingProfile({
         provider: "openrouter",

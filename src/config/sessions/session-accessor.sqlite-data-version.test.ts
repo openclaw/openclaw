@@ -9,6 +9,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
@@ -132,7 +133,7 @@ describe("pre-device-folder session entries", () => {
     };
     const database = openOpenClawAgentDatabase(scope);
     // Persist the previous writer's shape, not a current upsert that could add defaults.
-    insertRaw(database.db, scope.sessionKey, previousEntry);
+    insertRaw(requireNativeSqliteDatabase(database.db), scope.sessionKey, previousEntry);
     await closeOpenClawAgentDatabasesAsync(scope.env.OPENCLAW_STATE_DIR);
     parseSessionEntryCalls.mockClear();
 
@@ -170,7 +171,10 @@ describe("SQLite retained session window references", () => {
   it("reads retained candidate windows freshly and honors owner exclusions", () => {
     const scope = createSessionScope("reference-window-candidates");
     const database = openOpenClawAgentDatabase(scope);
-    insertRaw(database.db, scope.sessionKey, { sessionId: "current", updatedAt: 1 });
+    insertRaw(requireNativeSqliteDatabase(database.db), scope.sessionKey, {
+      sessionId: "current",
+      updatedAt: 1,
+    });
     readReferencedSessionIds(database);
     const ids = Array.from({ length: 1201 }, (_, index) => `history-${index}`);
     runOpenClawAgentWriteTransaction((current) => {
@@ -289,9 +293,19 @@ describe("SQLite session entry cache", () => {
   it("omits saved prompts from usage inventory while preserving full transcript reads", async () => {
     const scope = createSessionScope("usage-inventory");
     const sessionId = "usage-inventory";
-    const skillsSnapshot = { prompt: "unused usage snapshot α🦞".repeat(4096), skills: [] };
+    const { skillsSnapshot, systemPromptReport } = savedPrompts(
+      "unused usage snapshot α🦞".repeat(4096),
+    );
     const worktree = { id: "usage-worktree", branch: "main", repoRoot: "/repo" };
-    await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1, skillsSnapshot, worktree });
+    const deviceFolder = { deviceId: "device-one", path: "/home/example/project" };
+    await upsertSessionEntryCore(scope, {
+      sessionId,
+      updatedAt: 1,
+      skillsSnapshot,
+      systemPromptReport,
+      worktree,
+      deviceFolder,
+    });
     const event = { type: "session", id: sessionId };
     expect(appendTranscriptEventSync({ ...scope, sessionId }, event).ok).toBe(true);
     const database = openOpenClawAgentDatabase(scope);
@@ -321,63 +335,18 @@ describe("SQLite session entry cache", () => {
       const full = listSessionTranscriptInstances(fullScope, options)[0];
       const listed = listSessionTranscriptInstances(scope, options)[0];
       expect(full?.entry.skillsSnapshot).toEqual(skillsSnapshot);
-      expect(listed).toEqual({ ...full, entry: { ...full?.entry, skillsSnapshot: undefined } });
+      expect(full?.entry.systemPromptReport).toEqual(systemPromptReport);
+      expect(listed).toEqual({
+        ...full,
+        entry: { ...full?.entry, skillsSnapshot: undefined, systemPromptReport: undefined },
+      });
       expect(listed?.entry.worktree).not.toBe(full?.entry.worktree);
       listed!.entry.worktree!.branch = "changed by reader";
+      listed!.entry.deviceFolder!.path = "/mutated-copy";
       expect(listSessionTranscriptInstances(scope, options)[0]?.entry.worktree).toEqual(worktree);
-    }
-  });
-
-  it("retains only listing metadata while full reads preserve saved prompt state", async () => {
-    const prompt = "large skill prompt".repeat(8192);
-    const scope = await seed("lazy-list-projection", {
-      label: "projected",
-      deviceFolder: { deviceId: "device-one", path: "/home/example/project" },
-      worktree: { id: "worktree-1", branch: "main", repoRoot: "/repo" },
-      ...savedPrompts(prompt),
-    });
-
-    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
-    try {
-      const fullEntry = listSessionEntriesCore({ agentId: scope.agentId, env: scope.env })[0]!
-        .entry;
-      parseSessionEntryCalls.mockClear();
-      const first = listingEntries(scope).get(scope.sessionKey);
-      const second = listingEntries(scope).get(scope.sessionKey);
-
-      expect(first).not.toBe(fullEntry);
-      expect(first?.worktree).toEqual(fullEntry.worktree);
-      expect(first?.deviceFolder).toEqual(fullEntry.deviceFolder);
-      expect(first?.skillsSnapshot).toBeUndefined();
-      expect(first?.systemPromptReport).toBeUndefined();
-      expect(second).toBe(first);
-      expect(cloneSpy).not.toHaveBeenCalled();
-      expect(parseSessionEntryCalls.mock.calls).toHaveLength(1);
-      expect(
-        parseSessionEntryCalls.mock.calls.every(([json]) => Buffer.byteLength(json) < 1024),
-      ).toBe(true);
-
-      fullEntry.worktree!.branch = "mutated full read";
-      fullEntry.skillsSnapshot!.prompt = "mutated full prompt";
-      const fullAgain = listSessionEntriesCore({ ...scope, projection: "full" })[0]?.entry;
-      expect(fullAgain?.worktree?.branch).toBe("main");
-      expect(fullAgain?.skillsSnapshot?.prompt).toBe(prompt);
-      expect(fullAgain?.systemPromptReport?.source).toBe("run");
-      expect(cloneSpy).not.toHaveBeenCalled();
-
-      const copiedListEntry = listSessionEntriesCore(scope)[0]?.entry;
-      expect(copiedListEntry?.worktree?.branch).toBe("main");
-      expect(copiedListEntry?.worktree).not.toBe(first?.worktree);
-      const view = openSessionEntryReadView(scope);
-      expect(view.get(scope.sessionKey)).toStrictEqual(copiedListEntry);
-      expect(view.entries()[0]?.entry).toStrictEqual(copiedListEntry);
-      copiedListEntry!.worktree!.branch = "mutated list copy";
-      copiedListEntry!.deviceFolder!.path = "/mutated-copy";
-      expect(first?.deviceFolder?.path).toBe("/home/example/project");
-      expect(first?.worktree?.branch).toBe("main");
-      expect(listingEntries(scope).get(scope.sessionKey)).toBe(first);
-    } finally {
-      cloneSpy.mockRestore();
+      expect(listSessionTranscriptInstances(scope, options)[0]?.entry.deviceFolder).toEqual(
+        deviceFolder,
+      );
     }
   });
 
@@ -445,30 +414,6 @@ describe("SQLite session entry cache", () => {
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
   });
 
-  it("publishes a native replacement without losing sibling metadata", async () => {
-    const { scope, sibling } = await seedPair("write-through");
-    openOpenClawAgentDatabase(scope);
-    const before = loadSessionEntry(scope)!;
-    const siblingBefore = listingEntries(scope).get(sibling.sessionKey);
-
-    parseSessionEntryCalls.mockClear();
-    replaceSessionEntrySync(scope, {
-      ...before,
-      label: "after",
-      updatedAt: 2,
-      skillsSnapshot: { prompt: "updated skill prompt", skills: [] },
-    });
-    parseSessionEntryCalls.mockClear();
-    const after = listingEntries(scope);
-    expect(after.get(scope.sessionKey)?.label).toBe("after");
-    expect(after.get(sibling.sessionKey)).toStrictEqual(siblingBefore);
-    expect(
-      parseSessionEntryCalls.mock.calls.every(([json]) => Buffer.byteLength(json) < 1024),
-    ).toBe(true);
-    expect(after.get(scope.sessionKey)?.skillsSnapshot).toBeUndefined();
-    expect(loadSessionEntry(scope)?.skillsSnapshot?.prompt).toBe("updated skill prompt");
-  });
-
   it("adds a native insertion to a warm snapshot without reparsing siblings", async () => {
     const scope = await seed("write-through-insert");
     openOpenClawAgentDatabase(scope);
@@ -523,7 +468,7 @@ describe("SQLite session entry cache", () => {
     expect(() =>
       runOpenClawAgentWriteTransaction((database) => {
         const updated = { ...borrowedBefore, label: "uncommitted", updatedAt: 2 };
-        writeRaw(database.db, scope.sessionKey, updated);
+        writeRaw(requireNativeSqliteDatabase(database.db), scope.sessionKey, updated);
         expect(loadSessionEntry({ ...scope, clone: false })?.label).toBe("uncommitted");
         throw new Error("roll back cache probe");
       }, scope),

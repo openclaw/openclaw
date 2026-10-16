@@ -41,7 +41,8 @@ import {
   WORKSPACE_PACKAGE_ALIAS_ENTRIES,
   WORKSPACE_PACKAGE_EXPORT_DIRS,
   WORKSPACE_PACKAGE_ALIAS_NAMES,
-  ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS,
+  workspacePackageExportAliasEntries,
+  workspacePackageAliasCandidates,
 } from "./sdk-alias-workspace.js";
 
 type PluginSdkAliasCandidateKind = "dist" | "src";
@@ -446,31 +447,6 @@ const BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN = /^(?:api|runtime-api|test-a
 const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
   /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(\.{1,2}\/[^"']+)["']/g;
 
-function normalizePackageExportSubpath(exportKey: string): string | null {
-  if (exportKey === ".") {
-    return "";
-  }
-  if (!exportKey.startsWith("./")) {
-    return null;
-  }
-  const subpath = exportKey.slice(2);
-  return subpath && !subpath.includes("..") ? subpath : null;
-}
-
-function resolvePackageExportImportPath(value: unknown): string | null {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (!isRecord(value)) {
-    return null;
-  }
-  return typeof value.import === "string"
-    ? value.import
-    : typeof value.default === "string"
-      ? value.default
-      : null;
-}
-
 function listRootPackagedWorkspacePackageAliasEntries(params: {
   packageRoot: string;
   packageName: string;
@@ -525,27 +501,9 @@ export function listWorkspacePackageExportAliasEntries(params: {
   const packageJson = readPluginSdkPackageJson(
     path.join(params.packageRoot, "packages", params.packageDir),
   );
-  const entries: WorkspacePackageAliasEntry[] = [];
-  for (const [exportKey, value] of Object.entries(packageJson?.exports ?? {})) {
-    const subpath = normalizePackageExportSubpath(exportKey);
-    const importPath = resolvePackageExportImportPath(value);
-    if (subpath === null || !importPath?.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
-      continue;
-    }
-    const distFile = importPath.slice("./dist/".length);
-    const srcFile = distFile.replace(/\.mjs$/u, ".ts");
-    entries.push({
-      packageName: params.packageName,
-      packageDir: params.packageDir,
-      subpath,
-      srcFile,
-      distFile,
-    });
-  }
+  const entries = workspacePackageExportAliasEntries({ ...params, exports: packageJson?.exports });
   const result =
-    entries.length > 0
-      ? entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath))
-      : listRootPackagedWorkspacePackageAliasEntries(params);
+    entries.length > 0 ? entries : listRootPackagedWorkspacePackageAliasEntries(params);
   cache.set(key, result);
   return result;
 }
@@ -750,22 +708,9 @@ function resolveWorkspacePackageAliasMap(
   for (const entry of workspacePackageAliasEntries) {
     const alias = entry.subpath ? `${entry.packageName}/${entry.subpath}` : entry.packageName;
     for (const kind of orderedKinds) {
-      const candidates =
-        kind === "dist"
-          ? [
-              ...(ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS.has(entry.packageDir)
-                ? [
-                    path.join(
-                      packageRoot,
-                      "dist",
-                      entry.packageDir,
-                      entry.distFile.replace(/\.mjs$/u, ".js"),
-                    ),
-                  ]
-                : []),
-              path.join(packageRoot, "packages", entry.packageDir, "dist", entry.distFile),
-            ]
-          : [path.join(packageRoot, "packages", entry.packageDir, "src", entry.srcFile)];
+      const candidates = workspacePackageAliasCandidates(entry, kind).map((candidate) =>
+        path.join(packageRoot, candidate),
+      );
       const candidate = candidates.find((candidatePath) => pluginCacheExistsSync(candidatePath));
       if (candidate) {
         aliasMap[alias] = normalizeJitiAliasTargetPath(candidate);

@@ -20,6 +20,7 @@ import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/sess
 import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -700,7 +701,9 @@ describe("memory manager agent database lifecycle", () => {
       cacheEnabled: true,
       sources: ["memory"],
     });
-    const db = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(
+      sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db,
+    );
     const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
     const interceptedPaths: Array<string | undefined> = [];
     let closeSettled: boolean;

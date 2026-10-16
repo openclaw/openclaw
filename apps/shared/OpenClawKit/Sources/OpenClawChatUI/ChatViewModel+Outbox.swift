@@ -26,6 +26,12 @@ public enum OpenClawChatOutboxMessageState: Equatable, Sendable {
 /// strictly in createdAt order when health recovers. A gateway ACK only moves
 /// a row to awaiting-confirmation; canonical history owns durable completion.
 extension OpenClawChatViewModel {
+    static func isRestartRejectedSend(_ error: Error) -> Bool {
+        guard let response = error as? GatewayResponseError else { return false }
+        return response.code == "UNAVAILABLE" && response.detailsReason == "gateway-restarting" &&
+            response.details["retryable"]?.boolValue == true
+    }
+
     /// True when this view model owns a gateway-scoped durable text outbox.
     public var supportsOfflineTextOutbox: Bool {
         self.outbox != nil
@@ -931,9 +937,9 @@ extension OpenClawChatViewModel {
                     reason: "Run failed to start (\(response.status)).")
             }
             return await self.finishAcceptedOutboxCommand(command, outbox: outbox)
-        } catch is OpenClawChatTransportSendError {
-            // The transport proved this payload never reached its request
-            // channel, so it is safe to retry automatically.
+        } catch let error where error is OpenClawChatTransportSendError || Self.isRestartRejectedSend(error) {
+            // Both a local non-send and the restart admission fence prove no
+            // run started. Keep the same command for reconnect without spending retries.
             _ = await outbox.markCommandQueued(
                 id: command.id,
                 attemptVersion: command.attemptVersion,

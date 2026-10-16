@@ -178,6 +178,9 @@ side of the host/worker boundary:
   for snapshot reads. `runEngineWorkerWrite` selects the extra PostgreSQL worker
   envelope using the kernel's transaction callback; SQLite executes the operation
   directly. Keep the kernel's own write-transaction API atomic on both engines.
+  `jsonPathValue(connection, value, path, kind)` projects an object-member JSON
+  path as text, a number, or JSON text. It preserves SQLite's `json_extract`
+  statement and bindings and selects the PostgreSQL expression for that engine.
 
 The worker entrypoint exports the `EngineConnection`, `StoreSchema`, and
 `DatabaseEngineAdapter` types; it does not export a PostgreSQL connection
@@ -185,6 +188,18 @@ constructor. Open physical connections through `openEngineStore`. A store
 without registered PostgreSQL DDL stays on SQLite; a selected PostgreSQL store that
 fails admission never falls back. See [Database engines](/reference/database-engines)
 for configuration, supported stores, durability, anchors, and observation events.
+
+Experimental search capabilities use the same worker entrypoint. Call
+`admitStoreSearch` with an admitted store and its existing index declarations to
+bind `TextIndex` and `VectorIndex` handles. `FullTextCapability` supplies native
+Kysely expressions; `VectorCapability` owns native candidate queries and derived
+index maintenance. Callers retain filters, limits, chronology, snippets' display
+bounds, and scoring policy. The adapter's existing capability labels remain
+diagnostic metadata. SQLite retains its L2 candidate selection and cosine
+reranking, with the memory owner's exact fallback when native vectors are
+unavailable. PostgreSQL search capabilities are currently `null` with an admission
+diagnostic; their later implementation will use explicitly documented native
+ranking rather than promise SQLite ranking equivalence.
 
 ### Owned stdio processes
 

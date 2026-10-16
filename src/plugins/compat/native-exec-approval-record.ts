@@ -14,7 +14,7 @@ export const NATIVE_EXEC_APPROVAL_COMPAT_RECORD = {
   surfaces: ["GatewayRequestHandlerOptions.sessionMutationCommitGuard for approval methods"],
   diagnostics: ["Shared per-plugin capability-family warning on legacy callback use"],
   tests: [
-    "src/plugin-sdk/exec-approval-compat.test.ts",
+    "test/type-contracts/exec-approval-compat.ts",
     "src/gateway/server-plugin-in-process-dispatch.commit-guards.test.ts",
   ],
   releaseNote:

@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { SessionSchema } from "../config/zod-schema.session-config.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   consumeSelectedSystemEventEntries,
   drainSystemEvents,
@@ -11,7 +14,11 @@ import {
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { recordSessionCreated } from "./session-created.js";
 import {
   listSessionStateEventsSince,
@@ -35,15 +42,61 @@ function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-created-notice-"));
+  setRuntimeConfigSnapshot({});
 });
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   resetSystemEventsForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
 describe("Home session creation notices", () => {
+  it("keeps creation and spawn signals together after a lost receipt without replay", async () => {
+    let records = 0;
+    const recording = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      const result = await scope.execute(command, executeOptions);
+      if (command.type === "sessionState.record" && ++records === 1) {
+        throw new SqliteWorkerError("Synthetic lost setup receipt", "outcome-unknown");
+      }
+      return result;
+    });
+    const params = {
+      sessionKey,
+      agentId: "ops",
+      entry: entry({ createdVia: "spawn", createdActor: { type: "agent", id: mainSessionKey } }),
+      spawned: { runId: "child-run", requesterSessionKey: mainSessionKey },
+    };
+    try {
+      await recordSessionCreated({}, params);
+      expect(records).toBe(1);
+      const events = (await listSessionStateEventsSince(sessionKey, "ops", 0)).events;
+      expect(events).toMatchObject([
+        { kind: "created", actorId: mainSessionKey },
+        { kind: "child_spawned", actorId: mainSessionKey, runId: "child-run" },
+      ]);
+      expect(peekSystemEvents(mainSessionKey)).toHaveLength(1);
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare(
+            `SELECT last_seen_sequence, notified_sequence, material_sequence
+           FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?`,
+          )
+          .get(mainSessionKey, sessionKey),
+      ).toEqual({
+        last_seen_sequence: events[1]!.sequence,
+        notified_sequence: events[1]!.sequence,
+        material_sequence: events[1]!.sequence,
+      });
+      await recordSessionCreated({}, params);
+      expect((await listSessionStateEventsSince(sessionKey, "ops", 0)).events).toEqual(events);
+      expect(peekSystemEvents(mainSessionKey)).toHaveLength(1);
+    } finally {
+      recording.mockRestore();
+    }
+  });
+
   it.each(["per-sender", "global"] as const)(
     "coalesces creation bursts while preserving reminder capacity with scope=%s",
     async (scope) => {

@@ -119,7 +119,7 @@ export async function assertCrabboxWarmImageMigrationReady(state: CrabboxState):
   }
 }
 
-function requireCanonicalProfile(record: WarmProfileRecord | undefined) {
+export function admitCrabboxWarmImageProfile(record: WarmProfileRecord | undefined) {
   if (record && record.version !== 3) {
     throw new Error(
       "Crabbox warm-image state requires migration; run openclaw doctor --fix before provisioning workers.",
@@ -312,16 +312,16 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
     deleteIf(key: string, predicate: (current: WarmProfileRecord) => boolean) {
       return compareProfile(store, key, (current) => ({
         operation: "delete",
-        action: current && predicate(requireCanonicalProfile(current)!) ? "delete" : "keep",
+        action: current && predicate(admitCrabboxWarmImageProfile(current)!) ? "delete" : "keep",
       }));
     },
     async lookup(key: string) {
-      return requireCanonicalProfile(await store.lookup(key));
+      return admitCrabboxWarmImageProfile(await store.lookup(key));
     },
     async entries() {
       const entries = await store.entries();
       for (const entry of entries) {
-        entry.value = requireCanonicalProfile(entry.value)!;
+        entry.value = admitCrabboxWarmImageProfile(entry.value)!;
       }
       return entries;
     },
@@ -330,7 +330,7 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
       update: (current: WarmProfileRecord | undefined) => WarmProfileRecord | undefined,
     ) {
       return compareProfile(store, key, (current) => {
-        const value = update(requireCanonicalProfile(current));
+        const value = update(admitCrabboxWarmImageProfile(current));
         return value === undefined
           ? { operation: "update", action: "keep" }
           : { operation: "update", action: "set", value };
@@ -443,11 +443,11 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
       assertCurrent: () => void;
     }) {
       let rejection: string | undefined;
-      let acceptedOwnerJson: string | undefined;
+      let owner: Awaited<ReturnType<typeof lookupLease>>;
       await canonical.update(params.key, (current) => {
         params.assertCurrent();
         rejection = undefined;
-        acceptedOwnerJson = undefined;
+        owner = undefined;
         const record = withCrabboxWarmImageDisplayFacts(
           current ?? {
             version: 3,
@@ -456,12 +456,15 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
           },
           params.displayFacts,
         );
-        if (Object.hasOwn(record.allocations, params.id)) {
-          acceptedOwnerJson = JSON.stringify({
+        const existing = Object.hasOwn(record.allocations, params.id)
+          ? record.allocations[params.id]
+          : undefined;
+        if (existing) {
+          owner = {
             key: params.key,
             projectKey: record.projectKey,
-            ...record.allocations[params.id],
-          });
+            ...existing,
+          };
           return params.displayFacts ? record : undefined;
         }
         if (Object.keys(record.allocations).length >= WARM_IMAGE_MAX_ALLOCATIONS) {
@@ -480,50 +483,44 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
           )
             ? { kind: "checkpoint", checkpointId: record.image.checkpointId }
             : { kind: "cold" };
-        const next = {
+        const allocation: WarmAllocationRecord = {
+          choice,
+          ...(choice.kind === "cold"
+            ? { coldReason: params.coldReason ?? "snapshot-unavailable" }
+            : {}),
+          ...params.allocation,
+          imageGeneration:
+            choice.kind === "checkpoint"
+              ? { checkpointId: choice.checkpointId, createdAtMs: record.image!.createdAtMs }
+              : null,
+          ...(choice.kind === "cold" && record.image?.pinned
+            ? {
+                publicationBase: {
+                  checkpointId: record.image.checkpointId,
+                  createdAtMs: record.image.createdAtMs,
+                },
+              }
+            : {}),
+        };
+        owner = {
+          key: params.key,
+          projectKey: record.projectKey,
+          ...allocation,
+        };
+        return {
           ...record,
           ...(choice.kind === "cold"
             ? { latestColdReason: params.coldReason ?? "snapshot-unavailable" }
             : {}),
-          allocations: {
-            ...record.allocations,
-            [params.id]: {
-              choice,
-              ...(choice.kind === "cold"
-                ? { coldReason: params.coldReason ?? "snapshot-unavailable" }
-                : {}),
-              ...params.allocation,
-              imageGeneration:
-                choice.kind === "checkpoint"
-                  ? { checkpointId: choice.checkpointId, createdAtMs: record.image!.createdAtMs }
-                  : null,
-              ...(choice.kind === "cold" && record.image?.pinned
-                ? {
-                    publicationBase: {
-                      checkpointId: record.image.checkpointId,
-                      createdAtMs: record.image.createdAtMs,
-                    },
-                  }
-                : {}),
-            },
-          },
+          allocations: { ...record.allocations, [params.id]: allocation },
         };
-        acceptedOwnerJson = JSON.stringify({
-          key: params.key,
-          projectKey: next.projectKey,
-          ...next.allocations[params.id],
-        });
-        return next;
       });
       // Publish only the rejection from the observation accepted by the store.
       if (rejection) {
         throw new Error(rejection);
       }
-      const owner = await lookupLease(params.id);
-      if (!owner || JSON.stringify(owner) !== acceptedOwnerJson) {
-        throw new Error(
-          "Crabbox allocation changed before provisioning completed; retry the worker operation.",
-        );
+      if (!owner) {
+        throw new Error("Crabbox allocation was not recorded.");
       }
       return owner;
     },
@@ -611,8 +608,7 @@ export async function listCrabboxWarmImages(state: CrabboxState, env?: NodeJS.Pr
   );
 }
 
-export function projectCrabboxWarmImage(key: string, record: WarmProfileRecord) {
-  const value = requireCanonicalProfile(record)!;
+export function projectCrabboxWarmImage(key: string, value: WarmProfileRecord) {
   return {
     profileKey: key,
     profileId: value.profileId,

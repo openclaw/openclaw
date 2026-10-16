@@ -20,7 +20,7 @@ const AGENT_HARNESS_TOOL_CONSTRUCTION_COMPAT_RECORD = {
     "TypeScript @deprecated annotations and migration documentation; bounded capability-family warnings on legacy preparation",
   ],
   tests: [
-    "src/plugin-sdk/agent-harness-async-compat.test.ts",
+    "test/type-contracts/agent-harness-async-compat.ts",
     "src/agents/harness/host-capability.test.ts",
     "src/plugins/compat/registry.test.ts",
   ],

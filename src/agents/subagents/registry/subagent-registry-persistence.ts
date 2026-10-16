@@ -21,7 +21,13 @@ import {
 } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
-import { immutableSubagentRun, subagentRuns } from "./subagent-registry-memory.js";
+import {
+  compactSubagentRunForMemory,
+  immutableSubagentRun,
+  isSubagentRunPayloadEvicted,
+  restoreSubagentRunPayload,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import type { SubagentRunMutation } from "./subagent-registry-mutation.types.js";
 import type {
   PendingRegistryWrite,
@@ -31,6 +37,8 @@ import type {
   SubagentRegistryWorkerWrite,
   SubagentRunMutationOptions,
 } from "./subagent-registry-persistence.types.js";
+import { readFullSubagentRuns } from "./subagent-registry-read-cache.js";
+import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery-helpers.js";
 import {
   consumeFreshSubagentRegistryRows,
   publishSubagentRunsAfterAtomicStore,
@@ -172,7 +180,7 @@ function publishRows(
   for (const [runId, next] of postimages) {
     if (next) {
       retainSubagentRunRuntimeOwner(runs.get(runId), next);
-      runs.set(runId, immutableSubagentRun(next));
+      runs.set(runId, compactSubagentRunForMemory(next));
     } else {
       runs.delete(runId);
     }
@@ -225,7 +233,6 @@ export async function runSubagentRegistryWorkerWrite<T>(
         assertCurrent: write.assertCurrent,
         createAdmission: () => {
           let phase: "waiting" | "transaction" | "commit" = "waiting";
-          const eventPhases = new Map<number, "transaction" | "commit">();
           const authorityName =
             write.kind === "registry" ? "Queued registry write" : "Subagent completion write";
           admission = createSqliteWorkerOperationAdmission((request, grant) => {
@@ -243,15 +250,7 @@ export async function runSubagentRegistryWorkerWrite<T>(
               typeof facts.eventIndex === "number"
             ) {
               const event = write.terminalEvents?.[facts.eventIndex];
-              if (
-                !event ||
-                phase !== "transaction" ||
-                !(
-                  (request.stage === "transaction" && !eventPhases.has(facts.eventIndex)) ||
-                  (request.stage === "commit" &&
-                    eventPhases.get(facts.eventIndex) === "transaction")
-                )
-              ) {
+              if (!event || phase !== "transaction" || request.stage !== "commit") {
                 throw new Error("Subagent terminal event admission requested out of order");
               }
               write.assertCurrent();
@@ -259,7 +258,6 @@ export async function runSubagentRegistryWorkerWrite<T>(
               if (!grant()) {
                 throw new Error("Subagent terminal event admission expired");
               }
-              eventPhases.set(facts.eventIndex, request.stage);
               return;
             }
             if (
@@ -378,8 +376,8 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
     if (
       !current ||
       !isSameSubagentRunOwner(current, recovery.expected) ||
-      current.execution.status !== "terminal" ||
-      !current.requesterSettleWake ||
+      (!(current.execution.status === "terminal" && current.requesterSettleWake) &&
+        !isRetiredSubagentExecution(current)) ||
       getGatewayContextResolver(current) !== recovery.previousResolver ||
       recovery.previousResolver() !== undefined ||
       recovery.resolver() !== recovery.gateway
@@ -424,6 +422,26 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
       const entry = runs.get(runId) ?? preparedRows?.get(runId);
       if (entry) {
         rows.set(runId, immutableSubagentRun(entry));
+      }
+    }
+    const evictedIds = [...rows.values()]
+      .filter(isSubagentRunPayloadEvicted)
+      .map((row) => row.runId);
+    if (evictedIds.length) {
+      const payloads = await readFullSubagentRuns(
+        context,
+        { kind: "ids", runIds: evictedIds },
+        { current: true },
+      );
+      authority.assertCurrent();
+      for (const runId of evictedIds) {
+        const payload = payloads.get(runId);
+        if (!payload) {
+          throw new SubagentRegistryMutationRejectedError(
+            "Retained subagent payload is unavailable",
+          );
+        }
+        rows.set(runId, restoreSubagentRunPayload(rows.get(runId)!, payload));
       }
     }
     const planned = plan(rows);
@@ -557,7 +575,7 @@ export async function restoreSubagentRunsFromDisk(params: {
           continue;
         }
         retainSubagentRunRuntimeOwner(params.runs.get(runId), entry);
-        params.runs.set(runId, entry);
+        params.runs.set(runId, compactSubagentRunForMemory(entry));
         rememberRestoredSubagentRunNotification(entry);
         subagentRuns.settleCommittedOwnership(entry);
         added += 1;
@@ -621,7 +639,7 @@ function reconcileRetiredSubagentRegistryWrites(
       const row = restored.get(id);
       if (row) {
         retainSubagentRunRuntimeOwner(runs.get(id), row);
-        runs.set(id, immutableSubagentRun(row));
+        runs.set(id, compactSubagentRunForMemory(row));
       } else {
         runs.delete(id);
       }

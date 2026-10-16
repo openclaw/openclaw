@@ -144,54 +144,40 @@ async function projectPublishedModelRuntimeOwner<T>(
   }
   assertLifetime();
   const input = normalizePreparedModelRuntimeInput(rawInput);
-  for (;;) {
-    let replacement = context.getPendingReplacement(input);
-    while (replacement) {
-      // Individual owners may finish before a multi-owner publication commits. The lifecycle gate
-      // makes the generation visible atomically only after every owner and auth mutation is ready.
-      assertPreparedModelRuntimeAdmissionCanWait();
-      await replacement.promise;
-      assertLifetime();
-      // Superseding a gate wakes its readers before the successor has committed.
-      replacement = context.getPendingReplacement(input);
-    }
-    const existing = resolvePublishedOwner(context.owners, input, {
-      allowConfiguredWorkspaceFallback:
-        rawInput.workspaceDir === undefined ||
-        rawInput.agentId === undefined ||
-        rawInput.runtimePluginSelections === undefined,
-    });
-    if (
-      input.readOnly &&
-      existing &&
-      !preparedModelRuntimeConfigsMatch(existing.input.config, input.config)
-    ) {
-      throw new PreparedModelRuntimeOwnerNotPublishedError(
-        `prepared read-only model runtime owner was not published for the requested config (${input.agentDir})`,
-      );
-    }
-    // Generated catalogs are lifecycle artifacts, not a live-edit surface. Config/plugin reload,
-    // doctor/auth repair, and auth publication replace owners; external edits require restart.
-    if (existing?.pending) {
-      // Auth republication may be queued behind plugin drainage even for passive metadata reads.
-      assertPreparedModelRuntimeAdmissionCanWait(existing);
-      try {
-        await existing.pending;
-      } catch {
-        // Preserve the current owner's recorded publication error on the next pass.
-      }
-      assertLifetime();
-      // A config reload may replace this owner while its auth publication is pending.
-      continue;
-    }
-    if (existing?.needsRefresh) {
-      throw existing.refreshError ?? new Error("prepared model runtime refresh is pending");
-    }
-    if (existing?.snapshot) {
-      return project(existing, existing.snapshot);
-    }
+  const replacement = context.getPendingReplacement(input);
+  if (replacement) {
+    assertPreparedModelRuntimeAdmissionCanWait();
+    await replacement.promise;
+    assertLifetime();
+  }
+  const existing = resolvePublishedOwner(context.owners, input, {
+    allowConfiguredWorkspaceFallback:
+      rawInput.workspaceDir === undefined ||
+      rawInput.agentId === undefined ||
+      rawInput.runtimePluginSelections === undefined,
+  });
+  if (
+    input.readOnly &&
+    existing &&
+    !preparedModelRuntimeConfigsMatch(existing.input.config, input.config)
+  ) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
-      `prepared model runtime owner was not published for ${input.agentDir}`,
+      `prepared read-only model runtime owner was not published for the requested config (${input.agentDir})`,
     );
   }
+  if (existing?.pending) {
+    assertPreparedModelRuntimeAdmissionCanWait(existing);
+    await existing.pending;
+    assertLifetime();
+  }
+  // An overlapping reload may fail this read; the next request selects its replacement.
+  if (existing?.needsRefresh) {
+    throw existing.refreshError ?? new Error("prepared model runtime refresh is pending");
+  }
+  if (existing?.snapshot) {
+    return project(existing, existing.snapshot);
+  }
+  throw new PreparedModelRuntimeOwnerNotPublishedError(
+    `prepared model runtime owner was not published for ${input.agentDir}`,
+  );
 }

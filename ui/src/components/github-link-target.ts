@@ -7,6 +7,12 @@ import {
 type GitHubItemTarget = { kind: "issue" | "pull"; owner: string; repo: string; number: number };
 export type GitHubLinkTarget = GitHubItemTarget & { href: string };
 
+export function formatGitHubItemReference(
+  item: Pick<GitHubItemTarget, "owner" | "repo" | "number">,
+): string {
+  return `${item.owner}/${item.repo}#${item.number}`;
+}
+
 export function decodeGitHubPathSegment(value: string): string | null {
   try {
     const decoded = decodeURIComponent(value);

@@ -194,6 +194,12 @@ longer package exports: `agent-runtime-test-contracts`,
 `ssrf-runtime-internal` is a JavaScript-only host runtime reserved for exact
 trusted local-service plugins; it is not a public plugin authoring API.
 
+The private-local `session-key-runtime` provides pure cron/dreaming session-key
+classification and usage-counted transcript filename parsing. Bundled memory
+readers use it without loading session storage, artifact cleanup, or archive
+compression. Filename parsing shares a pure grammar with the artifact helpers.
+Existing memory session facades retain these exports for installed plugin compatibility.
+
 ### Bundled plugin helper subpaths
 
 Bundled-only helper modules are private-local after the July 2026 sweep.
@@ -276,11 +282,12 @@ runtime splinters have been removed; bundled-only helpers are private-local.
     | `plugin-sdk/provider-auth-result` | Private-local after July 2026; Standard OAuth auth-result builder |
     | `plugin-sdk/provider-env-vars` | Private-local after July 2026; Provider auth env-var lookup helpers |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials`, OpenAI Codex auth-import helpers, deprecated `resolveOpenClawAgentDir` compatibility export |
+    | `plugin-sdk/model-ref-parse` | Private-local after July 2026; Lightweight model-reference parsing, Cloud-source classification with `isCloudModelRef`, provider-id normalization, and `findNormalizedProviderValue` for configured provider lookup without the broad auth runtime |
     | `plugin-sdk/provider-model-shared` | Private-local after July 2026; `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `resolveFamilyForwardCompatModel`, `selectPreferredLocalModelId`, `normalizeModelCompat`, `parseModelRef`, shared replay-policy builders, provider-endpoint helpers, and shared model-id normalization helpers |
     | `plugin-sdk/provider-catalog-live-runtime` | Private-local after July 2026; Live provider model catalog helpers for guarded `/models`-style discovery: `buildLiveModelProviderConfig`, provider-owned `projectRows`, `buildOpenAICompatibleLiveModels` (the default projection, for provider projections that refine its rows), `fetchLiveProviderModelRows`, `getCachedLiveProviderModelRows`, `fetchLiveProviderModelIds`, `LiveModelCatalogHttpError`, `clearLiveCatalogCacheForTests`, TTL cache, and static fallback |
     | `plugin-sdk/provider-catalog-runtime` | Provider catalog augmentation runtime hook and plugin-provider registry interfaces for contract tests |
     | `plugin-sdk/provider-catalog-shared` | Private-local after July 2026; `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
-    | `plugin-sdk/provider-http` | Private-local after July 2026; Generic provider HTTP/endpoint capability helpers, provider HTTP errors, and audio transcription multipart form helpers |
+    | `plugin-sdk/provider-http` | Private-local after July 2026; Generic provider HTTP/endpoint capability helpers, `resolveProviderTransportSsrFPolicy` for the shared model-provider exact-origin/private-network policy, `createProviderCredentialMatcher` for exact active-credential reflection checks, provider HTTP errors, and audio transcription multipart form helpers |
     | `plugin-sdk/provider-binary-stream` | Direct-reader bounded binary streams with fitting-prefix delivery and explicit overflow/release errors |
     | `plugin-sdk/provider-web-fetch-contract` | Private-local after July 2026; Narrow web-fetch config/selection contract helpers such as `enablePluginInConfig` and `WebFetchProviderPlugin` |
     | `plugin-sdk/provider-web-fetch` | Private-local after July 2026; Web-fetch provider registration/cache helpers |
@@ -418,7 +425,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/plugin-runtime` | Deprecated broad barrel for plugin command/hook/http/interactive helpers; prefer focused plugin runtime subpaths |
     | `plugin-sdk/hook-runtime` | Deprecated broad barrel for webhook/internal hook pipeline helpers; prefer focused hook/plugin runtime subpaths |
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
-    | `plugin-sdk/process-runtime` | Private-local after July 2026; bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, configurable TERM-to-KILL grace, `createOwnedStdioProcess` / `closeOwnedStdioProcess` and `OwnedStdioProcess` / `OwnedStdioProcessOptions` for bidirectional CLI lifetime and cleanup, `prepareSecretInputStdio` for one-shot credential descriptors, and `createCpuTrackedWorker` for shared Worker resource and lifecycle diagnostics |
+    | `plugin-sdk/process-runtime` | Private-local after July 2026; Darwin process snapshots and tree inspection (native under Bun, bounded ps under Node), bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, configurable TERM-to-KILL grace, `createOwnedStdioProcess` / `closeOwnedStdioProcess` and `OwnedStdioProcess` / `OwnedStdioProcessOptions` for bidirectional CLI lifetime and cleanup, `prepareSecretInputStdio` for one-shot credential descriptors, and `createCpuTrackedWorker` for shared Worker resource and lifecycle diagnostics |
     | `plugin-sdk/node-host` | Private-local after July 2026; Node-host executable resolution and PTY resume helpers |
     | `plugin-sdk/node-selection-runtime` | Private-local bundled runtime facade for shared capability-gated node selection policy |
     | `plugin-sdk/cli-argv` | Dependency-light root-option parsing for CLI metadata, including `getRootOptionAwareCommandPath` and `consumeRootOptionToken` |
@@ -454,7 +461,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId`. Use `normalizeAgentId` when omitted input should resolve to `main`; use the Result-returning `normalizeAgentIdStrict` for an explicitly supplied ID that must not fall back to the default agent. |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Private-local after July 2026; Shared target resolver helpers |
-    | `plugin-sdk/string-normalization-runtime` | Private-local after July 2026; Slug/string normalization and ASCII control-character detection helpers |
+    | `plugin-sdk/string-normalization-runtime` | Private-local after July 2026; Slug/string normalization, ASCII control-character detection, and literal chat-display sanitization and escaping helpers |
     | `plugin-sdk/request-url` | Private-local after July 2026; Extract string URLs from fetch/request-like inputs |
     | `plugin-sdk/run-command` | Timed command runner with normalized stdout/stderr results |
     | `plugin-sdk/param-readers` | Common tool/CLI param readers |
@@ -548,6 +555,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/speech-provider` | Private-local JavaScript-only host runtime for official plugins; speech provider types, configuration and directive helpers, and the OpenAI-compatible provider factory without host registry or synthesis imports. |
     | `plugin-sdk/speech-settings` | Lightweight TTS config resolution and normalization primitives without provider registries or synthesis runtime |
     | `plugin-sdk/realtime-transcription` | Private-local after July 2026; Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
+    | `plugin-sdk/realtime-transcription-provider` | Private official-plugin facade for descriptor types and shared transcript byte accounting without loading session transports. Use this when constructing capability catalogs. |
     | `plugin-sdk/realtime-transcription-session` | Private-local JavaScript-only host runtime for official plugins; shared WebSocket session construction and types without loading the host provider registry. Use this for provider implementation imports. |
     | `plugin-sdk/realtime-bootstrap-context` | Private-local after July 2026; `resolveRealtimeBootstrapContextInstructions` loads bounded profile context, with optional workspace-relative `files: readonly string[]` and `maxChars` (default `12000`). `resolveRealtimeVoiceAgentContextInstructions` adds the always-present agent-context paragraph and configured identity when `includeIdentity: true` (default `false`). Default profile names and their type remain available as `REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES` and `RealtimeBootstrapContextFileName`. |
     | `plugin-sdk/realtime-voice-audio-queue` | Private-local JavaScript-only host runtime for bundled or separately published official plugins; narrow bounded audio queue interface for lazy realtime voice provider facades without importing the broader realtime voice runtime; not for third-party plugins |
@@ -599,7 +607,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/memory-core-host-engine-sessions` | Private-local after July 2026; Memory session transcript and query helpers. Runtime archive inventory uses `loadArchivedSessionsAsync`, `resolveMemorySessionTargetsAsync`; `loadArchivedSessions` retains its synchronous contract. |
     | `plugin-sdk/memory-core-host-engine-schema` | Private-local memory index schema and sqlite-vec operations shared by Doctor, host maintenance, and native publication workers |
     | `plugin-sdk/memory-core-host-engine-indexing` | Private-local immutable chunk preparation, annotations, hashes, and embedding input limits for indexing workers |
-    | `plugin-sdk/memory-core-host-engine-knn` | Private-local read-only SQLite ownership checks, sqlite-vec, and text/vector primitives for isolated retrieval workers and children |
+    | `plugin-sdk/memory-core-host-engine-knn` | Private-local read-only SQLite ownership checks, sqlite-vec, text/vector primitives, and query token expansion for isolated retrieval workers and children |
     | `plugin-sdk/memory-core-host-engine-storage` | Private-local after July 2026; Memory host storage engine exports |
     | `plugin-sdk/memory-core-host-secret` | Private-local after July 2026; Memory host secret helpers |
     | `plugin-sdk/memory-core-host-status` | Private-local after July 2026; Memory host status helpers |

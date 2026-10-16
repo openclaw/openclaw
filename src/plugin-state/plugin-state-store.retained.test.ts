@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, afterAll, beforeAll, beforeEach, vi } from "vitest";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import type { OpenRetainedKeyedStoreOptions } from "../plugin-sdk/plugin-state-runtime.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -9,6 +10,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -21,6 +23,16 @@ import {
   seedPluginStateEntriesForTests,
   clearPluginStateStoreForTests,
 } from "./plugin-state-store.test-helpers.js";
+
+const moveFault = useSqliteWorkerFault([
+  {
+    name: "fail_last_retained_move",
+    match: /^delete from plugin_state_entries\b/u,
+    sql: `CREATE TEMP TRIGGER fail_last_retained_move BEFORE DELETE ON main.plugin_state_entries
+      WHEN OLD.plugin_id = 'retained-storage-test' AND OLD.namespace = 'history' AND OLD.entry_key = '64'
+      BEGIN SELECT RAISE(ABORT, 'synthetic retained move failure'); END;`,
+  },
+]);
 
 describe("plugin-state-store.retained", () => {
   const pluginId = "retained-storage-test";
@@ -170,6 +182,104 @@ describe("plugin-state-store.retained", () => {
             (entry) => entry.key,
           ),
         ).toEqual([key(99), key(100)]);
+      });
+    });
+
+    it("rolls back a later move batch and publishes the complete retry to existing readers", async () => {
+      await withOpenClawTestState({ label: "retained-storage-move-batches" }, async () => {
+        const entries = Array.from({ length: 65 }, (_, id) => ({
+          sourceKey: String(id),
+          targetKey: key(id),
+        }));
+        seedPluginStateEntriesForTests([
+          ...entries.map((entry, id) => ({
+            pluginId,
+            namespace: "history",
+            key: entry.sourceKey,
+            value: { id },
+            createdAt: id + 100,
+          })),
+          {
+            pluginId,
+            namespace: "@retained.history",
+            key: key(0),
+            value: { id: -1 },
+            createdAt: 1,
+          },
+          {
+            pluginId,
+            namespace: "@retained.history",
+            key: key(64),
+            value: { id: -2 },
+            createdAt: 2,
+            expiresAt: Date.now() - 1_000,
+          },
+        ]);
+        const before = openOpenClawStateDatabase()
+          .db.prepare(
+            "SELECT * FROM plugin_state_entries WHERE plugin_id = ? ORDER BY namespace, entry_key",
+          )
+          .all(pluginId);
+        expect(before).toHaveLength(67);
+        await closeOpenClawStateDatabaseAsync();
+        const source = createPluginStateKeyedStore<{ id: number }>(pluginId, {
+          namespace: "history",
+          maxEntries: 100,
+        });
+        const retained = createPluginStateKeyedStore<{ id: number }>(pluginId, retainedOptions);
+        expect(await retained.moveEntriesFrom({ namespace: "history", entries: [] })).toBe(0);
+        let commits = 0;
+        const stop = pluginStatePublication.subscribeFacts((change) => {
+          if (change.kind === "committed") {
+            commits += 1;
+          }
+        });
+        try {
+          const move = { namespace: "history", entries };
+          moveFault.enable();
+          await expect(retained.moveEntriesFrom(move)).rejects.toMatchObject({
+            code: "PLUGIN_STATE_WRITE_FAILED",
+            cause: { message: "synthetic retained move failure" },
+          });
+          moveFault.disable();
+          expect(commits).toBe(0);
+          await closeOpenClawStateDatabaseAsync();
+          expect(
+            openOpenClawStateDatabase()
+              .db.prepare(
+                "SELECT * FROM plugin_state_entries WHERE plugin_id = ? ORDER BY namespace, entry_key",
+              )
+              .all(pluginId),
+          ).toEqual(before);
+          await closeOpenClawStateDatabaseAsync();
+
+          expect(await source.lookup("0")).toEqual({ id: 0 });
+          expect(await source.lookup("64")).toEqual({ id: 64 });
+          expect(await retained.lookup(key(1))).toBeUndefined();
+          expect(await retained.lookup(key(64))).toBeUndefined();
+          expect(await source.entries()).toHaveLength(65);
+          expect(await retained.entries()).toEqual([
+            { key: key(0), value: { id: -1 }, createdAt: 1 },
+          ]);
+          expect(await retained.moveEntriesFrom(move)).toBe(65);
+          expect(commits).toBe(1);
+          expect(await source.lookup("0")).toBeUndefined();
+          expect(await source.lookup("64")).toBeUndefined();
+          expect(await source.entries()).toEqual([]);
+          expect(await retained.lookup(key(1))).toEqual({ id: 1 });
+          expect(await retained.lookup(key(64))).toEqual({ id: 64 });
+          expect(await retained.entries()).toEqual([
+            { key: key(0), value: { id: -1 }, createdAt: 1 },
+            ...entries.slice(1).map((entry, index) => ({
+              key: entry.targetKey,
+              value: { id: index + 1 },
+              createdAt: index + 101,
+            })),
+          ]);
+        } finally {
+          moveFault.disable();
+          stop();
+        }
       });
     });
 

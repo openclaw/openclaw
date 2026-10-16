@@ -36,6 +36,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
@@ -505,6 +506,9 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     restartRecoveryStatus: entry?.mainRestartRecovery?.tombstone ? "tombstoned" : undefined,
+    restartRecoveryCycleId: entry?.mainRestartRecovery?.tombstone
+      ? entry.mainRestartRecovery.cycleId
+      : undefined,
     thinkingLevel: input.thinkingProjection.thinkingLevel,
     contextWindow: input.contextWindowProfile.contextWindow,
     contextWindows: input.contextWindowProfile.contextWindows,
@@ -575,6 +579,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   return {
     row,
     source: {
+      parsedKey: parseAgentSessionKey(key),
       cfg,
       entry,
       selectedModel: input.selectedModel,
@@ -612,6 +617,7 @@ export function presentSessionRow(
     options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
   const { subagentRun, subagentOwner, fields } = projectGatewaySessionRunState({
     key: row.key,
+    parsedKey: source.parsedKey,
     entry,
     now,
     rowContext: {
@@ -638,13 +644,14 @@ export function presentSessionRow(
   row.estimatedCostUsd =
     source.estimatedCostUsd ??
     asNonNegativeFiniteNumber(source.lightweight ? undefined : usage?.estimatedCostUsd);
-  const children = source.childLinks?.flatMap(({ key, entry: childEntry }) => {
+  const children = source.childLinks?.flatMap(({ key, parsedKey, entry: childEntry }) => {
     if (options.excludedChildKeys?.has(key)) {
       return [];
     }
     const childActive = projectGatewaySessionRunState({
       key,
       entry: childEntry,
+      parsedKey,
       now,
       rowContext: {
         subagentRuns,
@@ -656,6 +663,7 @@ export function presentSessionRow(
       !resolveSessionChildOwners({
         key,
         entry: childEntry,
+        parsedKey,
         now,
         subagentRuns,
         hasActiveRun: childActive,

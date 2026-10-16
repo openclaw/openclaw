@@ -8,11 +8,12 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
+import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
-import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   buildManagedMediaFailureBlock,
   createManagedOutgoingMediaBlocks,
@@ -24,6 +25,10 @@ import type { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webch
 const MANAGED_OUTGOING_MEDIA_PATH_PREFIX = "/api/chat/media/outgoing/";
 
 export type AssistantDisplayContentBlock = Record<string, unknown>;
+export type AssistantDisplayMediaBySource = ReadonlyMap<
+  string,
+  readonly AssistantDisplayContentBlock[]
+>;
 
 /** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
 export function combineNonStreamingReplyParts(parts: readonly string[]): string {
@@ -144,6 +149,7 @@ export async function buildAssistantReplyContentFromInputs(
 ): Promise<{
   assistantContent: AssistantDisplayContentBlock[] | undefined;
   persistedAssistantContent: AssistantDisplayContentBlock[] | undefined;
+  mediaBySource?: AssistantDisplayMediaBySource;
 }> {
   const payloads = params.inputs.map((input) =>
     input.kind === "raw" ? input.payload : input.plan.payload,
@@ -184,6 +190,7 @@ export async function buildAssistantReplyContentFromInputs(
     1;
   const content: Array<AssistantDisplayContentBlock | [string, ...string[]]> = [];
   const persistedContent: AssistantDisplayContentBlock[] = [];
+  const mediaBySource = new Map<string, readonly AssistantDisplayContentBlock[]>();
   const persistSensitiveDisplay = !payloads.some(
     (payload) =>
       payload.sensitiveMedia === true &&
@@ -200,7 +207,7 @@ export async function buildAssistantReplyContentFromInputs(
     const text = displayText(stripReplyMediaFailureFallback(payload.text, mediaFailures), {
       preserveBoundaries: preserveTextBoundaries,
     });
-    if (text && (isPrepared || !isSuppressedControlReplyText(text))) {
+    if (text) {
       if (statusNotice) {
         content.push({ type: "text", text, openclawStatusNotice: true });
       } else {
@@ -217,7 +224,7 @@ export async function buildAssistantReplyContentFromInputs(
     // Display text may merge across payloads. Transcript captions and directives
     // stay attached to their source payload instead of matching display slots.
     const transcriptText = params.transcriptMediaMessage?.payloadTexts[entry.sourceIndex] ?? text;
-    if (transcriptText && (isPrepared || !isSuppressedControlReplyText(transcriptText))) {
+    if (transcriptText) {
       persistedContent.push({
         type: "text",
         text: transcriptText,
@@ -240,6 +247,9 @@ export async function buildAssistantReplyContentFromInputs(
     if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
       continue;
     }
+    const sourceMedia = new Map(
+      collectReplyMediaEntries(payload).map((media) => [media.url.trim(), media.sourceUrls]),
+    );
     const mediaBlocks = await createManagedOutgoingMediaBlocks({
       assertCurrent: params.assertCurrent,
       abortSignal: params.abortSignal,
@@ -248,6 +258,11 @@ export async function buildAssistantReplyContentFromInputs(
       items: prepareOutgoingMediaFromReplyPayload(payload, metadataSource),
       localRoots: params.managedMediaLocalRoots,
       continueOnPrepareError: true,
+      onPrepared: (item, blocks) => {
+        for (const url of [item.url, ...(sourceMedia.get(item.url.trim()) ?? [])]) {
+          mediaBySource.set(normalizeMediaReferenceForComparison(url), blocks);
+        }
+      },
       onPrepareError: (error) => {
         params.onManagedMediaPrepareError?.(error.message);
       },
@@ -279,6 +294,7 @@ export async function buildAssistantReplyContentFromInputs(
         : undefined;
   return {
     assistantContent,
+    ...(mediaBySource.size > 0 ? { mediaBySource } : {}),
     persistedAssistantContent:
       persistedContent.length > 0
         ? persistedContent

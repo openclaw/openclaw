@@ -311,7 +311,7 @@ describe("executeActViaPlaywright batches", () => {
           actions: [
             { kind: "type", ref: "1", text: "value" },
             { kind: "hover", ref: "2" },
-            { kind: "press", key: "Enter", delayMs: Number.NaN },
+            { kind: "press", key: "Enter", delayMs: 0 },
           ],
         },
       ],

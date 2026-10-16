@@ -6,6 +6,11 @@ import {
   reduceIosScreenshotEvidence,
 } from "../../scripts/ios-screenshot-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  DOWNLOAD_ARTIFACT_V8,
+  readCiWorkflow,
+  type WorkflowStep,
+} from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const TARGET_SHA = "a".repeat(40);
@@ -42,74 +47,77 @@ function provenance(targetSha = TARGET_SHA) {
   };
 }
 
-function writeFamilySource(
+function writeCombinedSource(
   root: string,
-  family: Family,
+  selectedFamily: Family = "iphone",
   options: {
     retry?: string;
     retryTestResult?: "fail" | "pass";
     retryWithoutXcresult?: boolean;
   } = {},
 ) {
-  const screenshots = path.join(root, family, "screenshots");
-  const xcresults = path.join(root, family, "xcresults");
+  const screenshots = path.join(root, "screenshots");
+  const xcresults = path.join(root, "xcresults");
   fs.mkdirSync(screenshots, { recursive: true });
   fs.mkdirSync(xcresults, { recursive: true });
-  const device =
-    family === "iphone"
-      ? "iPhone 17 Pro Max"
-      : family === "ipad-13"
-        ? "iPad Pro 13-inch (M5)"
-        : "Apple Watch Ultra 3 (49mm)";
-  const names = family === "watch" ? ["01-now-face"] : SCREENSHOTS;
   const captureAttempts = [];
-  for (const name of names) {
-    fs.writeFileSync(path.join(screenshots, `${device}-${name}.png`), PNG);
-    if (family !== "watch") {
-      const retried = options.retry === name;
-      captureAttempts.push({
-        deviceName: device,
-        screenshotName: name,
-        attempt: 1,
-        captureOutcome: retried ? "failed" : "succeeded",
-      });
-      if (!(retried && options.retryWithoutXcresult)) {
-        const attemptOne = path.join(xcresults, `${device}-${name}-attempt-1.xcresult`);
-        fs.mkdirSync(attemptOne, { recursive: true });
-        fs.writeFileSync(
-          path.join(attemptOne, "summary.txt"),
-          retried ? (options.retryTestResult ?? "pass") : "pass",
-        );
-      }
-      if (options.retry === name) {
+  let selectedDevice = "";
+  for (const family of ["iphone", "ipad-13", "watch"] as const) {
+    const device =
+      family === "iphone"
+        ? "iPhone 17 Pro Max"
+        : family === "ipad-13"
+          ? "iPad Pro 13-inch (M5)"
+          : "Apple Watch Ultra 3 (49mm)";
+    if (family === selectedFamily) {
+      selectedDevice = device;
+    }
+    const names = family === "watch" ? ["01-now-face"] : SCREENSHOTS;
+    for (const name of names) {
+      fs.writeFileSync(path.join(screenshots, `${device}-${name}.png`), PNG);
+      if (family !== "watch") {
+        const retried = family === selectedFamily && options.retry === name;
         captureAttempts.push({
           deviceName: device,
           screenshotName: name,
-          attempt: 2,
-          captureOutcome: "succeeded",
+          attempt: 1,
+          captureOutcome: retried ? "failed" : "succeeded",
         });
-        const attemptTwo = path.join(xcresults, `${device}-${name}-attempt-2.xcresult`);
-        fs.mkdirSync(attemptTwo, { recursive: true });
-        fs.writeFileSync(path.join(attemptTwo, "summary.txt"), "pass");
+        if (!(retried && options.retryWithoutXcresult)) {
+          const attemptOne = path.join(xcresults, `${device}-${name}-attempt-1.xcresult`);
+          fs.mkdirSync(attemptOne, { recursive: true });
+          fs.writeFileSync(
+            path.join(attemptOne, "summary.txt"),
+            retried ? (options.retryTestResult ?? "pass") : "pass",
+          );
+        }
+        if (retried) {
+          captureAttempts.push({
+            deviceName: device,
+            screenshotName: name,
+            attempt: 2,
+            captureOutcome: "succeeded",
+          });
+          const attemptTwo = path.join(xcresults, `${device}-${name}-attempt-2.xcresult`);
+          fs.mkdirSync(attemptTwo, { recursive: true });
+          fs.writeFileSync(path.join(attemptTwo, "summary.txt"), "pass");
+        }
       }
     }
   }
-  if (family !== "watch") {
-    fs.writeFileSync(
-      path.join(xcresults, "capture-attempts.json"),
-      JSON.stringify({ schemaVersion: 1, attempts: captureAttempts }),
-    );
-  }
-  return { device, screenshots, xcresults };
+  fs.writeFileSync(
+    path.join(xcresults, "capture-attempts.json"),
+    JSON.stringify({ schemaVersion: 1, attempts: captureAttempts }),
+  );
+  return { device: selectedDevice, screenshots, xcresults };
 }
 
-function containerName(family: Family, targetSha = TARGET_SHA) {
-  const shard = family === "watch" ? "ipad-13" : family;
-  return `ios-release-screenshot-shard-${shard}-${targetSha}`;
+function containerName(targetSha = TARGET_SHA) {
+  return `ios-release-screenshot-capture-${targetSha}`;
 }
 
 function familyDirectory(input: string, family: Family, targetSha = TARGET_SHA) {
-  return path.join(input, containerName(family, targetSha), family);
+  return path.join(input, containerName(targetSha), family);
 }
 
 function manifestPath(input: string, family: Family, targetSha = TARGET_SHA) {
@@ -122,21 +130,24 @@ function collectAll(
   runAttempts: Partial<Record<Family, number>> = {},
 ) {
   const output = path.join(root, "collected");
-  for (const family of ["iphone", "ipad-13", "watch"] as const) {
-    const source = writeFamilySource(root, family);
-    collectIosScreenshotEvidence({
-      family,
-      screenshotDirectory: source.screenshots,
-      xcresultDirectory: source.xcresults,
-      outputDirectory: path.join(output, containerName(family, targetSha)),
-      provenance: { ...provenance(targetSha), runAttempt: runAttempts[family] ?? 2 },
-      readXcresultSummary: (resultPath) => {
-        const result = fs.readFileSync(path.join(resultPath, "summary.txt"), "utf8");
-        return result === "pass"
-          ? { testResult: "Passed", failedTests: 0 }
-          : { testResult: "Failed", failedTests: 1 };
-      },
-    });
+  const source = writeCombinedSource(root);
+  collectIosScreenshotEvidence({
+    screenshotDirectory: source.screenshots,
+    xcresultDirectory: source.xcresults,
+    outputDirectory: path.join(output, containerName(targetSha)),
+    provenance: provenance(targetSha),
+    readXcresultSummary: (resultPath) => {
+      const result = fs.readFileSync(path.join(resultPath, "summary.txt"), "utf8");
+      return result === "pass"
+        ? { testResult: "Passed", failedTests: 0 }
+        : { testResult: "Failed", failedTests: 1 };
+    },
+  });
+  for (const [family, runAttempt] of Object.entries(runAttempts)) {
+    const filePath = manifestPath(output, family as Family, targetSha);
+    const manifest = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    manifest.runAttempt = runAttempt;
+    fs.writeFileSync(filePath, JSON.stringify(manifest));
   }
   return output;
 }
@@ -167,11 +178,42 @@ function updateAllManifests(input: string, mutate: (manifest: Record<string, any
 }
 
 describe("iOS screenshot evidence", () => {
-  it.each([{ reducerAttempt: 4, iphoneAttempt: 3 }])(
+  it("reduces the workflow's single named artifact extraction layout", () => {
+    const workflow = readCiWorkflow();
+    const download = workflow.jobs["ios-screenshot-evidence"].steps.find(
+      (step: WorkflowStep) => step.uses === DOWNLOAD_ARTIFACT_V8,
+    ) as WorkflowStep;
+    const revision = "${{ needs.preflight.outputs.checkout_revision }}";
+    expect(download.with?.name).toBe(`ios-release-screenshot-capture-${revision}`);
+    expect(download.with?.pattern).toBeUndefined();
+
+    const root = tempDirs.make("ios-screenshot-receiver-");
+    const input = collectAll(root);
+    const workspace = path.join(root, "workspace");
+    const receiverPath = path.join(
+      workspace,
+      String(download.with?.path).replace(revision, TARGET_SHA),
+    );
+    // download-artifact v8 extracts a single match directly into the requested path.
+    fs.cpSync(path.join(input, containerName()), receiverPath, { recursive: true });
+    const output = path.join(root, "reduced");
+    reduceAll(path.join(workspace, "apps/ios/build/ScreenshotEvidenceInputs"), output);
+
+    expect(fs.readdirSync(path.join(output, "apps/ios/fastlane/screenshots/en-US"))).toHaveLength(
+      9,
+    );
+    expect(fs.readdirSync(path.join(output, "apps/ios/build/SnapshotTestResults"))).toHaveLength(8);
+  });
+
+  it.each([{ reducerAttempt: 4, captureAttempt: 3 }])(
     "reduces successful device captures across workflow retries: %j",
-    ({ reducerAttempt, iphoneAttempt }) => {
+    ({ reducerAttempt, captureAttempt }) => {
       const root = tempDirs.make("ios-screenshot-evidence-");
-      const input = collectAll(root, TARGET_SHA, { iphone: iphoneAttempt });
+      const input = collectAll(root, TARGET_SHA, {
+        iphone: captureAttempt,
+        "ipad-13": captureAttempt,
+        watch: captureAttempt,
+      });
       const output = path.join(root, "reduced");
 
       reduceAll(input, output, { ...provenance(), runAttempt: reducerAttempt });
@@ -188,9 +230,9 @@ describe("iOS screenshot evidence", () => {
       expect(manifest).toMatchObject({
         runAttempt: reducerAttempt,
         families: [
-          { family: "ipad-13", runAttempt: 2 },
-          { family: "iphone", runAttempt: iphoneAttempt },
-          { family: "watch", runAttempt: 2 },
+          { family: "ipad-13", runAttempt: captureAttempt },
+          { family: "iphone", runAttempt: captureAttempt },
+          { family: "watch", runAttempt: captureAttempt },
         ],
       });
       expect(iphoneManifest.captureAttempts).toHaveLength(4);
@@ -215,11 +257,13 @@ describe("iOS screenshot evidence", () => {
     "rejects a passing retry after a failed capture: %j",
     (options) => {
       const root = tempDirs.make("ios-screenshot-retry-");
-      const source = writeFamilySource(root, "iphone", { retry: "02-chat-connected", ...options });
+      const source = writeCombinedSource(root, "iphone", {
+        retry: "02-chat-connected",
+        ...options,
+      });
 
       expect(() =>
         collectIosScreenshotEvidence({
-          family: "iphone",
           screenshotDirectory: source.screenshots,
           xcresultDirectory: source.xcresults,
           outputDirectory: path.join(root, "collected"),
@@ -235,7 +279,7 @@ describe("iOS screenshot evidence", () => {
 
   it("requires the successful capture to have a passing xcresult", () => {
     const root = tempDirs.make("ios-screenshot-missing-xcresult-");
-    const source = writeFamilySource(root, "iphone");
+    const source = writeCombinedSource(root, "iphone");
     fs.rmSync(
       path.join(source.xcresults, `${source.device}-02-chat-connected-attempt-1.xcresult`),
       { recursive: true },
@@ -243,7 +287,6 @@ describe("iOS screenshot evidence", () => {
 
     expect(() =>
       collectIosScreenshotEvidence({
-        family: "iphone",
         screenshotDirectory: source.screenshots,
         xcresultDirectory: source.xcresults,
         outputDirectory: path.join(root, "collected"),
@@ -258,16 +301,16 @@ describe("iOS screenshot evidence", () => {
       label: "renamed",
       mutate: (input: string) =>
         fs.renameSync(
-          path.join(input, containerName("iphone")),
-          path.join(input, `ios-release-screenshot-shard-renamed-${TARGET_SHA}`),
+          path.join(input, containerName()),
+          path.join(input, `ios-release-screenshot-capture-renamed-${TARGET_SHA}`),
         ),
     },
     {
-      label: "Watch in the iPhone shard",
+      label: "renamed Watch family",
       mutate: (input: string) =>
         fs.renameSync(
           familyDirectory(input, "watch"),
-          path.join(input, containerName("iphone"), "watch"),
+          path.join(input, containerName(), "unknown-watch"),
         ),
     },
   ])("rejects $label artifact container topology", ({ mutate }) => {
@@ -278,12 +321,12 @@ describe("iOS screenshot evidence", () => {
     expect(() => reduceAll(input, path.join(root, "reduced"))).toThrow(/topology mismatch/u);
   });
 
-  it("rejects one shard job's families from different attempts", () => {
+  it("rejects one capture job's families from different attempts", () => {
     const root = tempDirs.make("ios-screenshot-mixed-attempt-");
     const input = collectAll(root, TARGET_SHA, { watch: 1 });
 
     expect(() => reduceAll(input, path.join(root, "reduced"))).toThrow(
-      `${containerName("watch")} mixes evidence from different workflow run attempts`,
+      `${containerName()} mixes evidence from different workflow run attempts`,
     );
   });
 
@@ -440,7 +483,7 @@ describe("iOS screenshot evidence", () => {
 
   it("rejects an invalid PNG signature before collection", () => {
     const root = tempDirs.make("ios-screenshot-signature-");
-    const source = writeFamilySource(root, "watch");
+    const source = writeCombinedSource(root, "watch");
     fs.writeFileSync(
       path.join(source.screenshots, `${source.device}-01-now-face.png`),
       "not a png",
@@ -448,23 +491,22 @@ describe("iOS screenshot evidence", () => {
 
     expect(() =>
       collectIosScreenshotEvidence({
-        family: "watch",
         screenshotDirectory: source.screenshots,
         xcresultDirectory: source.xcresults,
         outputDirectory: path.join(root, "collected"),
         provenance: provenance(),
+        readXcresultSummary: () => ({ testResult: "Passed", failedTests: 0 }),
       }),
     ).toThrow("invalid PNG signature");
   });
 
   it("rejects unexpected screenshots in a device shard", () => {
     const root = tempDirs.make("ios-screenshot-unexpected-");
-    const source = writeFamilySource(root, "iphone");
+    const source = writeCombinedSource(root, "iphone");
     fs.writeFileSync(path.join(source.screenshots, `${source.device}-99-unexpected.png`), PNG);
 
     expect(() =>
       collectIosScreenshotEvidence({
-        family: "iphone",
         screenshotDirectory: source.screenshots,
         xcresultDirectory: source.xcresults,
         outputDirectory: path.join(root, "collected"),
@@ -473,6 +515,35 @@ describe("iOS screenshot evidence", () => {
       }),
     ).toThrow("PNG union mismatch");
   });
+
+  it.each(["PNG", "xcresult", "ledger"] as const)(
+    "rejects an unrecognized device in the combined %s source",
+    (kind) => {
+      const root = tempDirs.make("ios-screenshot-unknown-device-");
+      const source = writeCombinedSource(root);
+      if (kind === "PNG") {
+        fs.writeFileSync(path.join(source.screenshots, "Unknown-01-control-connected.png"), PNG);
+      } else if (kind === "xcresult") {
+        fs.mkdirSync(
+          path.join(source.xcresults, "Unknown-01-control-connected-attempt-1.xcresult"),
+        );
+      } else {
+        const ledgerPath = path.join(source.xcresults, "capture-attempts.json");
+        const ledger = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
+        ledger.attempts.push({ ...ledger.attempts[0], deviceName: "Unknown" });
+        fs.writeFileSync(ledgerPath, JSON.stringify(ledger));
+      }
+      expect(() =>
+        collectIosScreenshotEvidence({
+          screenshotDirectory: source.screenshots,
+          xcresultDirectory: source.xcresults,
+          outputDirectory: path.join(root, "collected"),
+          provenance: provenance(),
+          readXcresultSummary: () => ({ testResult: "Passed", failedTests: 0 }),
+        }),
+      ).toThrow(/combined .*union/u);
+    },
+  );
 
   it("rejects unexpected capture attempt entries in a shard manifest", () => {
     const root = tempDirs.make("ios-screenshot-unexpected-xcresult-");

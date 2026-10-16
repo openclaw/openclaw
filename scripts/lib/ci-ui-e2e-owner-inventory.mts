@@ -219,7 +219,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/activity-polish.e2e.test.ts",
     ["activity"],
     [
-      "ui/src/components/image-lightbox.ts",
+      "ui/src/components/image-lightbox.tsx",
       "ui/src/lib/session-pull-requests.ts",
       "ui/src/pages/activity/activity-page.ts",
     ],
@@ -285,10 +285,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/agent-model-fallback-ownership.e2e.test.ts",
     ["agents-home", "agents", "config"],
-    [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/components/multi-select-registration.ts",
-    ],
+    ["ui/src/components/agent-select-registration.ts", "ui/src/components/multi-select.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/agent-select-avatar-timeout.e2e.test.ts",
@@ -337,7 +334,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/avatar-initial-emoji.e2e.test.ts",
     ["agents-home", "agents", "config", "usage"],
-    ["ui/src/components/agent-emoji-picker.ts", "ui/src/components/agent-select-registration.ts"],
+    ["ui/src/components/agent-emoji-picker.tsx", "ui/src/components/agent-select-registration.ts"],
     ["ui/src/styles/agent-emoji-picker.css"],
   ),
   pageWatch(
@@ -407,7 +404,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-attachment-remove.e2e.test.ts",
     ["chat", "new-session"],
-    ["ui/src/components/image-lightbox.ts"],
+    ["ui/src/components/image-lightbox.tsx"],
   ),
   pageWatch("ui/src/e2e/chat-attachment-spacing.e2e.test.ts", ["chat", "profile"]),
   pageWatch(
@@ -658,7 +655,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-omitted-image-placeholder.e2e.test.ts",
     ["chat"],
-    ["ui/src/components/image-lightbox.ts"],
+    ["ui/src/components/image-lightbox.tsx"],
   ),
   pageWatch("ui/src/e2e/chat-only-model.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-outbox-agent-scope.e2e.test.ts", ["chat"]),
@@ -937,7 +934,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-video-gallery.e2e.test.ts",
     ["chat"],
-    ["ui/src/components/image-lightbox.ts"],
+    ["ui/src/components/image-lightbox.tsx"],
   ),
   pageWatch("ui/src/e2e/chat-widget-autosize.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-widget-sandbox.e2e.test.ts", ["chat", "connection"]),
@@ -1562,7 +1559,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/new-session-page.transition.e2e.test.ts",
     ["chat", "new-session"],
     [
-      "ui/src/components/image-lightbox.ts",
+      "ui/src/components/image-lightbox.tsx",
       "ui/src/components/modal-dialog.ts",
       "ui/src/pages/chat/chat-page.ts",
       "ui/src/pages/chat/chat-pane.ts",
@@ -1599,7 +1596,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/plugins-config-mutation.e2e.test.ts",
     ["agents-home", "agents", "config", "plugins", "workboard"],
-    ["ui/src/components/multi-select-registration.ts", "ui/src/lib/plugins/index.ts"],
+    ["ui/src/components/multi-select.tsx", "ui/src/lib/plugins/index.ts"],
   ),
   pageWatch(
     "ui/src/e2e/plugins-schema-controls.e2e.test.ts",
@@ -1852,7 +1849,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/session-progress-hovercard.e2e.test.ts",
     ["activity", "chat", "profile"],
     [
-      "ui/src/components/channel-avatar.ts",
+      "ui/src/components/solid/channel-avatar.tsx",
       "ui/src/components/session-menu.ts",
       "ui/src/components/viewer-facepile.ts",
       "ui/src/lib/session-pull-requests.ts",

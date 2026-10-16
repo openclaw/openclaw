@@ -32,7 +32,7 @@ final class VoiceWakeOverlayController {
     }
 
     struct Actions: Sendable {
-        let send: @MainActor @Sendable (UUID, String) -> Void
+        let send: @MainActor @Sendable (UUID) -> Void
         let updateEditedText: @MainActor @Sendable (UUID, String) -> Void
         let didPresent: AppVoiceRuntime.UIAction
         let didDismiss: @MainActor @Sendable (UUID, SendOutcome) -> Void
@@ -45,7 +45,7 @@ final class VoiceWakeOverlayController {
     static func liveActions(state: AppState) -> Actions {
         let sessions = state.voiceRuntime.sessions
         return Actions(
-            send: { sessions.sendNow(token: $0, reason: $1) },
+            send: { sessions.sendNow(token: $0) },
             updateEditedText: { sessions.updateEditedText(token: $0, text: $1) },
             didPresent: { state.earBoostActive = true },
             didDismiss: { token, outcome in
@@ -56,7 +56,6 @@ final class VoiceWakeOverlayController {
             })
     }
 
-    let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.overlay")
     let enableUI: Bool
 
     /// Keep the voice wake overlay above any other OpenClaw windows, but below the system’s pop-up menus.

@@ -1,6 +1,15 @@
-import { createMemo, createSignal, onCleanup, untrack } from "solid-js";
-import { createChatComposerContext } from "./chat-composer-frame.ts";
-import { getChatComposerState } from "./chat-composer-state.ts";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { ComposerDictationOwner } from "../composer-dictation.ts";
+import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
+import {
+  createChatComposerContext,
+  createComposerDictationOptions,
+} from "./chat-composer-frame.ts";
+import { createComposerPrediction } from "./chat-composer-prediction.ts";
+import { createComposerQuestionPanel } from "./chat-composer-question.tsx";
+import { getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.tsx";
 
@@ -44,22 +53,100 @@ export function ChatComposer(props: ChatComposerInput) {
   const currentProps = new Proxy(props, {
     get: (target, key) => (key === "onRequestUpdate" ? requestUpdate : Reflect.get(target, key)),
   });
+  const microphonePicker = (state.microphonePicker ??= new ComposerMicrophoneOwner());
+  state.dictation ??= new ComposerDictationOwner(
+    untrack(() => createComposerDictationOptions(currentProps, state, microphonePicker)),
+  );
+  const voice = { dictation: state.dictation, picker: microphonePicker };
+  onCleanup(
+    voice.dictation.subscribe(() => {
+      if (voice.dictation.locksComposer) {
+        state.editRevision += 1;
+        currentProps.onDismissRealtimeTalkError?.();
+      }
+    }),
+  );
+  const dictation = projectOwner(voice.dictation, (owner) => owner);
+  const microphone = projectOwner(voice.picker, (owner) => owner);
+  const prediction = createComposerPrediction(() => {
+    const options = currentProps.composerPredictions;
+    const client = currentProps.gatewayClient;
+    if (!options || !client) {
+      return null;
+    }
+    return {
+      gateway: options.gateway,
+      client,
+      sessionKey: currentProps.sessionKey,
+      sessionId: currentProps.currentSessionId ?? null,
+      enabled: options.enabled,
+      eligible:
+        options.active &&
+        currentProps.connected &&
+        currentProps.canSend &&
+        !currentProps.submitDisabledReason &&
+        !currentProps.suggestionComposer &&
+        !currentProps.realtimeTalkActive &&
+        !state.composerComposing &&
+        !state.dictation?.active &&
+        !currentProps.goalDraftMode &&
+        !currentProps.replyTarget &&
+        !(currentProps.getDraft?.() ?? currentProps.draft) &&
+        !state.composerTextarea?.value &&
+        !(currentProps.getAttachments?.() ?? currentProps.attachments)?.length &&
+        !(currentProps.getPendingAttachmentReads?.() ?? currentProps.pendingAttachmentReads) &&
+        document.visibilityState !== "hidden",
+      idle: !isChatRunWorking(currentProps) && !currentProps.sending && !currentProps.queue.length,
+    };
+  });
+  const questionPanel = createComposerQuestionPanel(() => currentProps, state);
   const context = createMemo(() => {
+    dictation.read();
+    microphone.read();
     revision();
     // Lit owners can change local state without changing a prop's identity.
     void props.renderRevision;
     computingFrame = true;
     try {
-      return createChatComposerContext(currentProps);
+      return createChatComposerContext(currentProps, voice, prediction, questionPanel());
     } finally {
       computingFrame = false;
     }
   });
+  createEffect(
+    () => [context().mentionDirectory, context().emojiEnabled, context().draftKey] as const,
+    ([directory, emojiEnabled, draftKey], previous) => {
+      state.mentionMenu.syncDirectory(directory);
+      if (!emojiEnabled || draftKey !== previous?.[2]) {
+        state.emojiMenu.close();
+      }
+    },
+  );
+  createEffect(
+    () => [context().dictationOptions, currentProps.composerPredictions] as const,
+    ([options]) => {
+      voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
+      voice.dictation.update(options);
+      untrack(() => prediction.sync());
+    },
+  );
+  onSettled(() => listen(document, "visibilitychange", () => prediction.sync()));
   onCleanup(() => {
     disposed = true;
     state.textareaRef?.();
     state.composerInputRef?.();
   });
+  createEffect(
+    () => [context().clearSlashMenu, context().clearSkillMenu] as const,
+    ([slash, skill]) => {
+      if (slash) {
+        getChatComposerState(props.paneId).slashMenu.reset();
+      }
+      if (skill) {
+        getChatComposerState(props.paneId).skillMenu.reset();
+      }
+    },
+  );
   const fields = new Map(
     Object.keys(untrack(context)).map((key) => [
       key,

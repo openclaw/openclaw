@@ -64,6 +64,13 @@ incognito owner during its separate migration.
 
 ### Retained helper contracts
 
+The question-reaction helpers in `openclaw/plugin-sdk/question-gateway-runtime`
+remain available for existing third-party plugins without a contract change. Bundled
+channels no longer use question reactions. New integrations should declare
+native question input through
+[`agentPrompt.questionInputMode`](/plugins/sdk-channel-plugins#what-your-plugin-owns)
+or let the agent ask in plain text. No removal date has been announced.
+
 `openclaw/plugin-sdk/sandbox.resolveSandboxRuntimeStatus` is deprecated. Await
 `resolveSandboxRuntimeStatusAsync` for a session lookup, or use
 `resolvePreparedSandboxRuntimeStatus` with an already selected full session entry
@@ -136,6 +143,20 @@ so hosts no longer pass `props.session` to `session-header` accessories. The
 helper still mounts, but its link never renders. Plugins built against
 2026.10.1 keep loading. Render a custom accessory instead. The
 `plugin-sdk-session-header-link` record allows removal after 2027-01-12.
+
+### Private runtime facade exports
+
+Some `openclaw/plugin-sdk/*` subpaths ship as JavaScript-only runtime facades
+without a `types` export condition. They are not a typed third-party contract,
+but published plugins still import named helpers from them, and a missing name
+fails ESM linking so the whole plugin stops loading. OpenClaw 2026.10.5 betas
+removed some of these names. Exports with published external importers are
+restored and deprecated under the `plugin-sdk-private-runtime-shipped-exports`
+record, which lists each `subpath.name` surface and allows removal after
+2027-01-15. Examples include `readApprovalReactionDeliveryMetadata` from
+`approval-reaction-runtime`, web-search credential setters from
+`provider-web-search`, and `wrapWebContent` from `provider-web-fetch`. Move to
+a typed public subpath that exports the helper, or keep a plugin-local copy.
 
 ### Harness tool construction
 
@@ -491,8 +512,8 @@ supported. The publication source also accepts the execution object shape shippe
 in `v2026.9.9`. The `v2026.10.1-beta.1` shape retains its callable
 `capturePreparedGenerationClaim` method in parameter-derived types; internal
 native-adoption capabilities are not required from plugins. Ordinary preparation
-reuses a completed native generation; host
-admission can request current schema proof through an optional third argument.
+and host admission reuse a completed native generation and its published schema
+facts. The two-argument contract is also unchanged in `v2026.10.3`.
 
 The `agent-execution-preparation-released-signature` compatibility record is
 active, with no deprecation warning or required migration. Breaking the released
@@ -726,6 +747,16 @@ Plan-based migrations can use
 `definePluginDoctorMigrationFromPlans(...)` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
+
+For legacy SQLite migrations, declare
+`sqliteOnly: { family: "state" }` (or the destination's other configurable
+database family) on `PluginDoctorStateMigration`. The host runs detection before
+porting that family to PostgreSQL and refuses pending work with
+`openclaw doctor --fix` guidance. When the family's effective engine is already
+PostgreSQL, the host skips detection, repair, and backup-resource callbacks and
+records an intentional non-outcome. An optional `postgresNote` in `sqliteOnly`
+can explain retained legacy artifacts or rebuilding from authoritative sources.
+Migrations without this declaration keep their existing behavior.
 
 Migrations may supply a read-only `collectBackupResources` callback, including
 through `definePluginDoctorMigrationFromPlans(...)`. Return absolute paths with

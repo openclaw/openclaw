@@ -5,6 +5,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelDirectoryEntry } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 type TargetResolverModule = typeof import("./target-resolver.js");
 
 let resetDirectoryCache: TargetResolverModule["resetDirectoryCache"];
@@ -70,21 +71,6 @@ async function expectOkResolution(
     throw new Error("expected successful target resolution");
   }
   return result;
-}
-
-function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
-    throw new Error(`expected ${label} input to be an object`);
-  }
-  return arg as Record<string, unknown>;
 }
 
 describe("resolveMessagingTarget (directory fallback)", () => {
@@ -340,9 +326,16 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       input: "support",
       plugin: replacementPlugin,
     });
+    const cachedFirst = await expectOkResolution({
+      cfg,
+      channel: "richchat",
+      input: "support",
+      plugin: firstPlugin,
+    });
 
     expect(first.target.to).toBe("first-id");
     expect(replacement.target.to).toBe("replacement-id");
+    expect(cachedFirst.target.to).toBe("first-id");
     expect(firstListGroups).toHaveBeenCalledOnce();
     expect(replacementListGroups).toHaveBeenCalledOnce();
   });
@@ -450,7 +443,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listPeersLive).toHaveBeenCalledTimes(1);
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.resolveTarget).toHaveBeenCalledOnce();
-    expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe("+15551234567");
+    expect(mockFirstRecordArg(mocks.resolveTarget, "target resolver").input).toBe("+15551234567");
   });
 
   it("fails closed after directory and plugin misses unless normalized fallback is explicit", async () => {

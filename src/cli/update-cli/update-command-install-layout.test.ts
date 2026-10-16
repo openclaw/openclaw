@@ -13,6 +13,7 @@ import {
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import * as windowsUser from "../../infra/windows-user-sid.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isReportableUpdateRun } from "../../shared/update-outcome.js";
@@ -32,11 +33,13 @@ vi.mock("../../infra/update-triage.js", () => ({
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const windowsUserSid = "S-1-5-21-100";
 let root: string;
 let output: unknown[];
 let lines: string[];
 
 beforeEach(async () => {
+  vi.spyOn(windowsUser, "readWindowsUserSid").mockReturnValue(windowsUserSid);
   const base = dirs.make("update-install-layout-");
   root = path.join(base, "app");
   await fs.mkdir(path.join(root, "dist"), { recursive: true });
@@ -120,7 +123,10 @@ it.each([
     });
     expect(renderUpdateRunReport(run).markdown).toContain(action);
     expect(isReportableUpdateRun(run)).toBe(false);
-    expect(output[0]).toMatchObject({ runId: run.runId, run: { origin: run.origin } });
+    const publicOrigin = { ...run.origin };
+    delete publicOrigin.windowsUserSid;
+    expect(output[0]).toMatchObject({ runId: run.runId, run: { origin: publicOrigin } });
+    expect(JSON.stringify(output)).not.toContain(windowsUserSid);
     await expect(fs.readFile(path.join(root, "package.json"), "utf8")).resolves.toContain(
       '"2026.9.4"',
     );
@@ -274,7 +280,9 @@ it.skipIf(process.platform === "win32").each([false, true])(
         status: "skipped",
         origin: { nextAction: expect.stringContaining("brew upgrade openclaw-cli") },
       });
-      expect(output[0]).toMatchObject({ runId: run.runId, run: { origin: run.origin } });
+      const publicOrigin = { ...run.origin };
+      delete publicOrigin.windowsUserSid;
+      expect(output[0]).toMatchObject({ runId: run.runId, run: { origin: publicOrigin } });
       const report = renderUpdateRunReport(run).markdown;
       expect(report).toContain("brew upgrade openclaw-cli");
       expect(report).toContain("openclaw gateway restart");
@@ -288,8 +296,9 @@ it.skipIf(process.platform === "win32").each([false, true])(
       });
       await updateStatusCommand({ json: true });
       expect(output[1]).toMatchObject({
-        lastRun: { runId: run.runId, status: "skipped", origin: run.origin },
+        lastRun: { runId: run.runId, status: "skipped", origin: publicOrigin },
       });
+      expect(JSON.stringify(output)).not.toContain(windowsUserSid);
     } else {
       expect(output[0]).not.toHaveProperty("runId");
       await expect(fs.stat(resolveOpenClawStateSqlitePath(process.env))).rejects.toMatchObject({

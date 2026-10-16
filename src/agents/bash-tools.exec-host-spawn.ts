@@ -31,7 +31,9 @@ export async function prepareHostExecSpawn(params: {
   return {
     mode: params.usePty ? ("pty" as const) : ("child" as const),
     argv: params.githubProfileDir
-      ? buildGitHubExecLaunchArgv(shellArgv, params.githubProfileDir)
+      ? buildGitHubExecLaunchArgv(shellArgv, params.githubProfileDir, {
+          githubHost: params.env.GH_HOST,
+        })
       : shellArgv,
     env: params.env,
     cwd: params.workdir,

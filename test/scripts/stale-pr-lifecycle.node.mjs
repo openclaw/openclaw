@@ -604,6 +604,53 @@ describe("Barnacle PR inactivity", () => {
     assert.equal(evaluatePullRequest(h.state, NOW + 7 * 86_400_000).action, "close");
   });
 
+  it("retains a saturated PR's warning, continues the scan, and does not warn twice", async () => {
+    const seed = snapshot();
+    seed.comments = [];
+    seed.pr.labels = Array.from({ length: 100 }, (_, i) => ({ name: `label-${i}` }));
+    const h = harness(seed);
+    const logs = [];
+    h.options.github.rest.issues.addLabels = async () => {
+      h.writes.push("label");
+      throw Object.assign(new Error("Validation Failed. Issues cannot have more than 100 labels"), {
+        status: 422,
+      });
+    };
+    const options = {
+      ...h.options,
+      targets: [10, 11],
+      dryRun: false,
+      core: { info: (line) => logs.push(line), warning() {} },
+    };
+    const first = await runStalePullRequests(options);
+    assert.equal(first.considered, 2);
+    assert.equal(first.unfinished, false);
+    assert.partialDeepStrictEqual(first.decisions[0], {
+      number: 10,
+      action: "warn",
+      reason: "label-capacity",
+      commentId: 200,
+    });
+    assert.ok(logs.some((line) => line.includes('"reason":"label-capacity"')));
+    assert.equal(h.state.comments.length, 1);
+    assert.deepEqual(h.state.pr.labels, seed.pr.labels);
+    await runStalePullRequests(options);
+    assert.deepEqual(h.writes, ["warning", "label"]);
+  });
+
+  it("still fails for other label validation errors", async () => {
+    const seed = snapshot();
+    seed.comments = [];
+    const h = harness(seed);
+    h.options.github.rest.issues.addLabels = async () => {
+      throw Object.assign(new Error("Validation Failed: invalid label"), { status: 422 });
+    };
+    await assert.rejects(
+      runStalePullRequests({ ...h.options, dryRun: false }),
+      /Unfinished PR mutation.*invalid label/,
+    );
+  });
+
   for (const witness of ["review", "workflow-run"])
     it(`retains an eight-day bound warning despite a recent bot ${witness}`, () => {
       const seed = snapshot();

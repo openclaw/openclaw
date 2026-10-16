@@ -25,7 +25,6 @@ import {
   createDefaultMediaGenerateBackgroundScheduler,
   createMediaGenerationTaskLifecycle,
   scheduleMediaGenerationTaskCompletion,
-  type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
   type MediaGenerationExecutionResult,
   type MediaGenerationTaskHandle,
@@ -69,7 +68,6 @@ export type MediaGenerateToolOptions = {
   sandbox?: MediaToolSandbox;
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
-  onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
 };
 
 const GENERATION_LABELS = {
@@ -178,7 +176,6 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
       requesterAgentId: options?.requesterAgentId,
       requesterOrigin: options?.requesterOrigin,
       scheduleBackgroundWork,
-      onAsyncTaskStarted: options?.onAsyncTaskStarted,
       onFailure: (message: string, meta?: Record<string, unknown>) => logger.warn(message, meta),
     }),
     sandboxConfig: resolveMediaToolSandboxConfig(
@@ -335,7 +332,6 @@ export async function runMediaGenerationTask(params: {
   requestKey: string;
   providerId?: string;
   scheduleBackgroundWork: MediaGenerateBackgroundScheduler;
-  onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
   onFailure: (message: string, meta?: Record<string, unknown>) => void;
   detailExtras?: Record<string, unknown>;
   messages?: Array<string | undefined>;
@@ -419,18 +415,6 @@ export async function runMediaGenerationTask(params: {
         }),
       );
       resourcesTransferred = true;
-      try {
-        await params.onAsyncTaskStarted?.(
-          `${title} generation started; wait for the generated ${generationLabel} completion event.`,
-        );
-      } catch (error) {
-        params.onFailure("Media generation async-start callback failed", {
-          toolName,
-          taskId: handle.taskId,
-          runId: handle.runId,
-          error,
-        });
-      }
       return {
         content: [
           {

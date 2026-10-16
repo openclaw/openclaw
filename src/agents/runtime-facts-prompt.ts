@@ -16,6 +16,7 @@ export async function buildRuntimeFactsContext(
     cfg: OpenClawConfig;
     executionHost?: boolean;
     sessionTarget?: AgentRunSessionTarget;
+    runId?: string;
   },
 ): Promise<RuntimeContextFragment[]> {
   const includeEmptySnapshots = params.includeEmptySnapshots === true;
@@ -25,6 +26,7 @@ export async function buildRuntimeFactsContext(
     cfg: params.cfg,
     controllerSessionKey: params.sessionKey,
     controllerAgentId: params.agentId,
+    runId: params.runId,
     includeSpawnContext: canSpawn,
   });
   if (subagentContext || (canSpawn && includeEmptySnapshots)) {

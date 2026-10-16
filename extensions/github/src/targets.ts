@@ -10,11 +10,11 @@ export type GitHubTarget =
   | GitHubItemTarget
   | { kind: "commit"; owner: string; repo: string; sha: string };
 
-function isValidOwner(value: string): boolean {
+export function isValidOwner(value: string): boolean {
   return /^(?=.{1,39}$)[a-z\d](?:[a-z\d-]*[a-z\d])?$/iu.test(value);
 }
 
-function isValidRepo(value: string): boolean {
+export function isValidRepo(value: string): boolean {
   if (value.length < 1 || value.length > 100) {
     return false;
   }
@@ -76,7 +76,10 @@ const GITHUB_LINK_PATH = new RegExp(
   "u",
 );
 
-export function parseGitHubLinkParams(value: unknown): {
+export function parseGitHubLinkParams(
+  value: unknown,
+  host = "github.com",
+): {
   target: GitHubTarget;
   url: string;
   agentId?: string;
@@ -96,7 +99,7 @@ export function parseGitHubLinkParams(value: unknown): {
     const url = new URL(value.url);
     if (
       url.protocol !== "https:" ||
-      url.hostname !== "github.com" ||
+      url.hostname !== host ||
       url.username ||
       url.password ||
       url.port ||
@@ -125,7 +128,7 @@ export function parseGitHubLinkParams(value: unknown): {
   }
 }
 
-export function githubTargetUrl(target: GitHubTarget): string {
+export function githubTargetUrl(target: GitHubTarget, host = "github.com"): string {
   const id = target.kind === "commit" ? target.sha : target.number;
-  return `https://github.com/${target.owner}/${target.repo}/${target.kind === "issue" ? "issues" : target.kind}/${id}`;
+  return `https://${host}/${target.owner}/${target.repo}/${target.kind === "issue" ? "issues" : target.kind}/${id}`;
 }

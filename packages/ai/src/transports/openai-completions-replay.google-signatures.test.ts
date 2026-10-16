@@ -174,7 +174,7 @@ describe("openai completions params", () => {
       );
     });
 
-    it.each(["gemini-3-flash-preview", "gemini-4-argon"])(
+    it.each(["gemini-3-flash-preview", "gemini-3.8-flash", "gemini-4-argon"])(
       "uses the skip-validator signature for unsigned %s replay",
       (id) => {
         const target = { ...geminiModel, id };

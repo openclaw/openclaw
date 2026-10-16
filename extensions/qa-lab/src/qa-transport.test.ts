@@ -1,4 +1,3 @@
-// Qa Lab tests cover shared transport behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
@@ -6,6 +5,61 @@ import {
   waitForQaTransportAccountReady,
   waitForQaTransportOutboundSequence,
 } from "./qa-transport.js";
+
+type State = ReturnType<typeof createQaBusState>;
+function outbound(
+  state: State,
+  text: string,
+  overrides: Partial<Parameters<State["addOutboundMessage"]>[0]> = {},
+) {
+  return state.addOutboundMessage({ accountId: "default", to: "dm:alice", text, ...overrides });
+}
+function edit(state: State, messageId: string, text: string) {
+  return state.editMessage({ accountId: "default", messageId, text });
+}
+
+function createAdapter(
+  state: State,
+  overrides: Partial<Parameters<typeof createQaStateBackedTransportAdapter>[1]> = {},
+) {
+  return createQaStateBackedTransportAdapter(state, {
+    id: "live",
+    label: "Live",
+    accountId: "sut",
+    requiredPluginIds: [],
+    supportedActions: [],
+    sendInbound: async (input) => state.addInboundMessage(input),
+    createGatewayConfig: () => ({}),
+    waitReady: async () => undefined,
+    buildAgentDelivery: ({ target }) => ({
+      channel: "live",
+      to: target,
+      replyChannel: "live",
+      replyTo: target,
+    }),
+    handleAction: async () => undefined,
+    createReportNotes: () => [],
+    ...overrides,
+  });
+}
+
+function waitForSequence(
+  state: State,
+  input: Partial<Parameters<typeof waitForQaTransportOutboundSequence>[0]["input"]> = {},
+) {
+  return waitForQaTransportOutboundSequence({
+    accountId: "default",
+    input: {
+      conversationId: "alice",
+      finalSettleMs: 0,
+      finalTextIncludes: "final marker",
+      minimumPreviewEvents: 1,
+      timeoutMs: 25,
+      ...input,
+    },
+    readEvents: () => state.getSnapshot().events,
+  });
+}
 
 describe("waitForQaTransportAccountReady", () => {
   it("keeps channel-status probes inside the readiness deadline", async () => {
@@ -43,31 +97,14 @@ describe("createQaStateBackedTransportAdapter", () => {
     const resetTransport = vi.fn(() => {
       expect(state.getSnapshot().messages).toHaveLength(1);
     });
-    const captureArtifacts = vi.fn(async () => ({
-      artifacts: [{ kind: "channel-driver-smoke" as const, path: "readiness.json" }],
-    }));
+    const artifacts = [{ kind: "channel-driver-smoke" as const, path: "readiness.json" }];
+    const captureArtifacts = vi.fn(async () => ({ artifacts }));
     const createRuntimePreloads = vi.fn(() => ["file:///qa-preload.mjs"]);
-    const adapter = createQaStateBackedTransportAdapter(state, {
-      id: "live",
-      label: "Live",
-      accountId: "sut",
-      requiredPluginIds: [],
+    const adapter = createAdapter(state, {
       prepareFlow: vi.fn(),
-      supportedActions: [],
       resetTransport,
       captureArtifacts,
       createRuntimePreloads,
-      sendInbound: async (input) => state.addInboundMessage(input),
-      createGatewayConfig: () => ({}),
-      waitReady: async () => undefined,
-      buildAgentDelivery: ({ target }) => ({
-        channel: "live",
-        to: target,
-        replyChannel: "live",
-        replyTo: target,
-      }),
-      handleAction: async () => undefined,
-      createReportNotes: () => [],
     });
 
     await adapter.reset();
@@ -75,7 +112,7 @@ describe("createQaStateBackedTransportAdapter", () => {
     expect(resetTransport).toHaveBeenCalledOnce();
     expect(adapter.prepareFlow).toBeTypeOf("function");
     await expect(adapter.captureArtifacts?.({ outputDir: "/qa-output" })).resolves.toEqual({
-      artifacts: [{ kind: "channel-driver-smoke", path: "readiness.json" }],
+      artifacts,
     });
     expect(captureArtifacts).toHaveBeenCalledWith({ outputDir: "/qa-output" });
     expect(adapter.createRuntimePreloads?.()).toEqual(["file:///qa-preload.mjs"]);
@@ -94,32 +131,13 @@ describe("createQaStateBackedTransportAdapter", () => {
       },
       "private-native-message-id",
     );
-    const adapter = createQaStateBackedTransportAdapter(state, {
-      id: "live",
-      label: "Live",
-      accountId: "sut",
-      requiredPluginIds: [],
-      supportedActions: [],
+    const adapter = createAdapter(state, {
       describeTransportState: () =>
         "telegram observer polls=3; updates=2; filtered=1; matched=1; update kinds=[message]; terminal error=none",
-      sendInbound: async (input) => state.addInboundMessage(input),
-      createGatewayConfig: () => ({}),
-      waitReady: async () => undefined,
-      buildAgentDelivery: ({ target }) => ({
-        channel: "live",
-        to: target,
-        replyChannel: "live",
-        replyTo: target,
-      }),
-      handleAction: async () => undefined,
-      createReportNotes: () => [],
     });
 
     const error = await adapter
-      .waitForOutboundSequence?.({
-        finalTextIncludes: "missing final",
-        timeoutMs: 5,
-      })
+      .waitForOutboundSequence?.({ finalTextIncludes: "missing final", timeoutMs: 5 })
       .catch((caught: unknown) => caught);
     const message = String(error);
 
@@ -136,37 +154,16 @@ describe("createQaStateBackedTransportAdapter", () => {
 describe("waitForQaTransportOutboundSequence", () => {
   it("returns preview and final edit events for one threaded message", async () => {
     const state = createQaBusState();
-    state.createThread({
-      conversationId: "qa-room",
-      createdBy: "alice",
-      title: "QA thread",
-    });
-    const preview = state.addOutboundMessage({
-      accountId: "default",
+    state.createThread({ conversationId: "qa-room", createdBy: "alice", title: "QA thread" });
+    const preview = outbound(state, "preview", {
       senderId: "openclaw",
-      text: "preview",
       threadId: "42",
       to: "thread:qa-room/42",
     });
-    state.editMessage({
-      accountId: "default",
-      messageId: preview.id,
-      text: "final marker",
-    });
+    edit(state, preview.id, "final marker");
 
     await expect(
-      waitForQaTransportOutboundSequence({
-        accountId: "default",
-        input: {
-          conversationId: "qa-room",
-          finalSettleMs: 0,
-          finalTextIncludes: "final marker",
-          minimumPreviewEvents: 1,
-          threadId: "42",
-          timeoutMs: 100,
-        },
-        readEvents: () => state.getSnapshot().events,
-      }),
+      waitForSequence(state, { conversationId: "qa-room", threadId: "42", timeoutMs: 100 }),
     ).resolves.toMatchObject({
       events: [{ kind: "sent" }, { kind: "edited" }],
       final: { text: "final marker", threadId: "42" },
@@ -178,54 +175,26 @@ describe("waitForQaTransportOutboundSequence", () => {
     { description: "after the final marker", failureBeforeFinal: false },
   ])("rejects an owned-account failure reply $description", async ({ failureBeforeFinal }) => {
     const state = createQaBusState();
-    const preview = state.addOutboundMessage({
-      accountId: "default",
-      to: "dm:alice",
-      text: "owned preview",
-    });
+    const preview = outbound(state, "owned preview");
     const addFailure = () =>
-      state.addOutboundMessage({
-        accountId: "default",
-        to: "dm:alice",
+      outbound(state, "⚠️ agent failed before reply: provider rejected this request", {
         isError: true,
-        text: "⚠️ agent failed before reply: provider rejected this request",
       });
 
     if (failureBeforeFinal) {
       addFailure();
     }
-    state.editMessage({
-      accountId: "default",
-      messageId: preview.id,
-      text: "final marker",
-    });
+    edit(state, preview.id, "final marker");
     if (!failureBeforeFinal) {
       addFailure();
     }
 
-    await expect(
-      waitForQaTransportOutboundSequence({
-        accountId: "default",
-        input: {
-          conversationId: "alice",
-          finalSettleMs: 0,
-          finalTextIncludes: "final marker",
-          minimumPreviewEvents: 1,
-          timeoutMs: 25,
-        },
-        readEvents: () => state.getSnapshot().events,
-      }),
-    ).rejects.toThrow("provider rejected this request");
+    await expect(waitForSequence(state)).rejects.toThrow("provider rejected this request");
   });
 
   it("ignores stale, foreign-account, and inbound failure replies", async () => {
     const state = createQaBusState();
-    state.addOutboundMessage({
-      accountId: "default",
-      to: "dm:alice",
-      isError: true,
-      text: "⚠️ agent failed before reply: stale failure",
-    });
+    outbound(state, "⚠️ agent failed before reply: stale failure", { isError: true });
     const sinceCursor = state.getSnapshot().cursor;
 
     state.addOutboundMessage({
@@ -240,36 +209,11 @@ describe("waitForQaTransportOutboundSequence", () => {
       senderId: "alice",
       text: "⚠️ agent failed before reply: inbound failure",
     });
-    state.editMessage({
-      accountId: "default",
-      messageId: inbound.id,
-      text: "⚠️ agent failed before reply: edited inbound failure",
-    });
-    const preview = state.addOutboundMessage({
-      accountId: "default",
-      to: "dm:alice",
-      text: "owned preview",
-    });
-    state.editMessage({
-      accountId: "default",
-      messageId: preview.id,
-      text: "final marker",
-    });
+    edit(state, inbound.id, "⚠️ agent failed before reply: edited inbound failure");
+    const preview = outbound(state, "owned preview");
+    edit(state, preview.id, "final marker");
 
-    await expect(
-      waitForQaTransportOutboundSequence({
-        accountId: "default",
-        input: {
-          conversationId: "alice",
-          finalSettleMs: 0,
-          finalTextIncludes: "final marker",
-          minimumPreviewEvents: 1,
-          sinceCursor,
-          timeoutMs: 25,
-        },
-        readEvents: () => state.getSnapshot().events,
-      }),
-    ).resolves.toMatchObject({
+    await expect(waitForSequence(state, { sinceCursor })).resolves.toMatchObject({
       events: [{ kind: "sent" }, { kind: "edited" }],
       final: { accountId: "default", direction: "outbound", id: preview.id },
     });
@@ -277,96 +221,40 @@ describe("waitForQaTransportOutboundSequence", () => {
 
   it("does not accept a matching preview that is deleted during final settling", async () => {
     const state = createQaBusState();
-    const preview = state.addOutboundMessage({
-      accountId: "default",
-      senderId: "openclaw",
-      text: "preview",
-      to: "dm:alice",
-    });
-    state.editMessage({
-      accountId: "default",
-      messageId: preview.id,
-      text: "final marker",
-    });
+    const preview = outbound(state, "preview", { senderId: "openclaw" });
+    edit(state, preview.id, "final marker");
     setTimeout(() => {
       state.deleteMessage({ accountId: "default", messageId: preview.id });
     }, 5);
 
-    await expect(
-      waitForQaTransportOutboundSequence({
-        accountId: "default",
-        input: {
-          conversationId: "alice",
-          finalSettleMs: 20,
-          finalTextIncludes: "final marker",
-          minimumPreviewEvents: 1,
-          timeoutMs: 50,
-        },
-        readEvents: () => state.getSnapshot().events,
-      }),
-    ).rejects.toThrow("timed out after 50ms");
+    await expect(waitForSequence(state, { finalSettleMs: 20, timeoutMs: 50 })).rejects.toThrow(
+      "timed out after 50ms",
+    );
   });
 
   it("does not count an already-final send as a preview", async () => {
     const state = createQaBusState();
-    state.addOutboundMessage({
-      accountId: "default",
-      senderId: "openclaw",
-      text: "stale preview",
-      to: "dm:alice",
-    });
+    outbound(state, "stale preview", { senderId: "openclaw" });
     const sinceCursor = state.getSnapshot().cursor;
-    const final = state.addOutboundMessage({
-      accountId: "default",
-      senderId: "openclaw",
-      text: "final marker",
-      to: "dm:alice",
-    });
-    state.editMessage({
-      accountId: "default",
-      messageId: final.id,
-      text: "final marker",
-    });
+    const final = outbound(state, "final marker", { senderId: "openclaw" });
+    edit(state, final.id, "final marker");
 
-    await expect(
-      waitForQaTransportOutboundSequence({
-        accountId: "default",
-        input: {
-          conversationId: "alice",
-          finalSettleMs: 0,
-          finalTextIncludes: "final marker",
-          minimumPreviewEvents: 1,
-          sinceCursor,
-          timeoutMs: 20,
-        },
-        readEvents: () => state.getSnapshot().events,
-      }),
-    ).rejects.toThrow("timed out after 20ms");
+    await expect(waitForSequence(state, { sinceCursor, timeoutMs: 20 })).rejects.toThrow(
+      "timed out after 20ms",
+    );
   });
 
   it("ignores foreign-account and inbound edit events when proving a final reply", async () => {
     const state = createQaBusState();
-    const expected = state.addOutboundMessage({
-      accountId: "default",
-      to: "dm:alice",
-      text: "owned preview",
-    });
-    state.editMessage({
-      accountId: "default",
-      messageId: expected.id,
-      text: "final marker",
-    });
+    const expected = outbound(state, "owned preview");
+    edit(state, expected.id, "final marker");
 
     const foreign = state.addOutboundMessage({
       accountId: "other",
       to: "dm:alice",
       text: "foreign preview",
     });
-    state.editMessage({
-      accountId: "other",
-      messageId: foreign.id,
-      text: "final marker",
-    });
+    state.editMessage({ accountId: "other", messageId: foreign.id, text: "final marker" });
 
     const inbound = state.addInboundMessage({
       accountId: "default",
@@ -374,30 +262,10 @@ describe("waitForQaTransportOutboundSequence", () => {
       senderId: "alice",
       text: "inbound original",
     });
-    state.editMessage({
-      accountId: "default",
-      messageId: inbound.id,
-      text: "inbound preview",
-    });
-    state.editMessage({
-      accountId: "default",
-      messageId: inbound.id,
-      text: "final marker",
-    });
+    edit(state, inbound.id, "inbound preview");
+    edit(state, inbound.id, "final marker");
 
-    await expect(
-      waitForQaTransportOutboundSequence({
-        accountId: "default",
-        input: {
-          conversationId: "alice",
-          finalSettleMs: 0,
-          finalTextIncludes: "final marker",
-          minimumPreviewEvents: 1,
-          timeoutMs: 50,
-        },
-        readEvents: () => state.getSnapshot().events,
-      }),
-    ).resolves.toMatchObject({
+    await expect(waitForSequence(state, { timeoutMs: 50 })).resolves.toMatchObject({
       events: [{ kind: "sent" }, { kind: "edited" }],
       final: { accountId: "default", direction: "outbound", id: expected.id },
     });

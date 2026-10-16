@@ -54,6 +54,72 @@ afterEach(() => {
 describe("gateway request suspension admission", () => {
   registerSuspensionHandoffLifecycleTests();
 
+  it.each([false, true])(
+    "reopens user RPCs after an abandoned drain, even with renewal: %s",
+    async (renew) => {
+      vi.useFakeTimers();
+      const cron = {
+        pauseScheduling: vi.fn(),
+        resumeScheduling: vi.fn(),
+        getSuspensionBlockerCount: () => 0,
+      };
+      const warn = vi.fn();
+      const context = {
+        getRuntimeConfig: () => ({}),
+        cron,
+        logGateway: { warn, info: vi.fn() },
+        chatAbortControllers: new Map(),
+        chatQueuedTurns: new Map(),
+        terminalSessions: { size: 1 },
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
+      const prepare = () =>
+        dispatch({
+          method: "gateway.suspend.prepare",
+          scope: "operator.admin",
+          handler: expectDefined(suspendHandlers["gateway.suspend.prepare"], "prepare handler"),
+          requestParams: { requestId: "abandoned-controller", drain: true },
+          context,
+          core: true,
+        });
+      const read = () =>
+        dispatch({
+          method: "sessions.list",
+          scope: "operator.read",
+          handler: ({ respond }) => respond(true, { sessions: [] }),
+          context,
+          core: true,
+        });
+      const initial = prepare();
+      await initial.request;
+      expect(initial.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "draining" }),
+      );
+      const fenced = read();
+      await fenced.request;
+      expect(fenced.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE" }),
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      if (renew) {
+        const renewal = prepare();
+        await renewal.request;
+        expect(renewal.respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "draining" }),
+        );
+      }
+      await vi.advanceTimersByTimeAsync(15_000);
+      const reopened = read();
+      await reopened.request;
+      expect(reopened.respond).toHaveBeenCalledWith(true, { sessions: [] });
+      expect(cron.resumeScheduling).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("drain deadline expired"));
+    },
+  );
+
   it("refuses a committed service-stop read when close overtakes lazy preparation", async () => {
     markGatewayRestartDraining("stop (SIGTERM)");
     const preparing = deferred();

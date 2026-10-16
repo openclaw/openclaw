@@ -135,7 +135,7 @@ keep the existing synchronous fallback.
 
   </Accordion>
   <Accordion title="api.runtime.state">
-    State directory resolution and SQLite-backed keyed storage.
+    State directory resolution and engine-aware keyed storage.
 
     ```typescript
     const stateDir = api.runtime.state.resolveStateDir(process.env);
@@ -165,6 +165,14 @@ keep the existing synchronous fallback.
     );
     const blob = await blobs.lookup("artifact-1");
     ```
+
+    Keyed stores use the boot-selected `state` family engine. To open an additional
+    physical state root, pass `env: { ...process.env, OPENCLAW_STATE_DIR: root }`
+    in the store options. Every root retains the same keyed-store contract and,
+    on PostgreSQL, gets its own anchor UUID and namespace from the engine owner.
+    Declare the root through [`backupResources`](/plugins/manifest/surfaces#backupresources-reference)
+    with `databaseFamily: "state"` so port, backup, update, and Doctor can discover
+    it after the account is disabled. Never allocate PostgreSQL schemas in a plugin.
 
     For command-owned writes, `store.register(key, value, { assertCurrent })`
     and `store.delete(key, { assertCurrent })` carry the captured owner assertion
@@ -213,9 +221,13 @@ keep the existing synchronous fallback.
 
     `openBlobStore<TMetadata>(...)` stores bounded binary payloads in shared SQLite without base64 or file sidecars. It requires per-entry, per-namespace byte, and row limits; copies byte arrays at the API boundary; and lists metadata without loading every BLOB. `register(...)` is an explicit upsert, including for expired keys. `registerIfAbsent(...)` provides collision-safe creation: an expired key remains occupied until its owner claims it with `deleteExpiredKey(key)` or `deleteExpired()`, preserving metadata needed to remove related named artifacts after the SQLite commit. Any row with a TTL is transient and excluded from backup/restore even before it expires; omit TTL for durable, restorable state. Host fuses cap each BLOB at 100 MiB, each plugin at 512 MiB of physically stored BLOBs, and each plugin at 50,000 physically stored rows, including expired rows awaiting owner cleanup. Use `registerIfAbsent(...)` with `overflowPolicy: "reject-new"` when external materializations must not be silently orphaned by replacement or eviction.
 
+    Current host blob stores return `PluginBlobStoreWithReceipts<TMetadata>`. Its `registerIfAbsentWithReceipt(...)` method returns the committed `{ createdAt, expiresAt? }` timestamps, or `undefined` when the key is occupied. Use this receipt to publish artifact timestamps without reading back the payload. `PluginBlobStore<TMetadata>` remains unchanged for existing adapters, and `registerIfAbsent(...)` still returns a boolean.
+
     Blob mutations use the shared SQLite worker and keep quota checks and changes in one transaction. `lookup` and `entries` use the retained read-only worker path. Missing stores stay absent. Ordinary unselected reads observe independently committed data; an unrelated cached native cursor can retain an older view. An explicitly selected snapshot keeps its private source through completion. Await all methods before publishing dependent artifacts or removing their storage. Shared reader admission is bounded: process inventories sequentially or with bounded concurrency, and join every started operation before reporting a batch failure or completing shutdown. Worker errors preserve `PluginBlobStoreError` classification, operation, path, and causal errors. Byte copying, metadata serialization, and complete result materialization still use caller memory; this is not a streaming BLOB API.
 
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
+
+    Sources with revocable per-event authority require `queue.enqueueAuthorized(id, payload, { assertCurrent, receivedAt?, laneKey?, metadata? })`. Its synchronous assertion is composed with the queue owner at transaction and final commit admission; the callback never crosses into stored JSON. The method is optional only for existing external queue implementations. A source requiring it must refuse when it is absent, not fall back to unguarded `enqueue`. Revoking one source does not retire the shared account queue.
 
     Host ingress queues provide `listUnsettled({ orderBy })`, returning `{ pending, claims }` from one snapshot in the shared-state broker, ordered with queue mutations. The shared drain uses this coherent view so a claim released during inspection cannot let a later event overtake its lane head. The method remains optional for existing external queue implementations until a separately announced compatibility window ends; only those implementations retain the separate `listPending`/`listClaims` path. A failed snapshot read never falls back to separate reads.
 

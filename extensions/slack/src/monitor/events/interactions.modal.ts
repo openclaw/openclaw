@@ -1,7 +1,9 @@
 import type { AllMiddlewareArgs } from "@slack/bolt";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
-import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
+import {
+  dispatchSlackPluginInteractiveHandler,
+  type SlackInteractiveHandlerResult,
+} from "../../interactive-dispatch.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -60,26 +62,17 @@ function shouldHandleSlackModalLifecycleBody(body: unknown): boolean {
 }
 
 function resolveSlackPluginSystemEventPayload(
-  result: unknown,
+  result: SlackInteractiveHandlerResult,
 ): Record<string, unknown> | undefined {
-  const systemEvent = asOptionalObjectRecord(asOptionalObjectRecord(result)?.systemEvent);
+  const systemEvent = result?.systemEvent;
   if (!systemEvent) {
     return undefined;
   }
-  const output: Record<string, unknown> = {};
-  if (typeof systemEvent.summary === "string" && systemEvent.summary.trim()) {
-    output.summary = systemEvent.summary;
-  }
-  if (typeof systemEvent.reference === "string" && systemEvent.reference.trim()) {
-    output.reference = systemEvent.reference;
-  }
-  if (
-    systemEvent.data &&
-    typeof systemEvent.data === "object" &&
-    !Array.isArray(systemEvent.data)
-  ) {
-    output.data = systemEvent.data;
-  }
+  const output = {
+    ...(systemEvent.summary?.trim() ? { summary: systemEvent.summary } : {}),
+    ...(systemEvent.reference?.trim() ? { reference: systemEvent.reference } : {}),
+    ...(systemEvent.data ? { data: systemEvent.data } : {}),
+  };
   return Object.keys(output).length > 0 ? output : undefined;
 }
 

@@ -57,6 +57,8 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
 
     When returning a guarded response for streaming, use `responseWithRelease(response, release)` from `openclaw/plugin-sdk/fetch-runtime` to retain request ownership until its body completes, fails, or is cancelled. Consume or cancel bodies explicitly for prompt release; garbage collection of abandoned wrappers provides only best-effort cleanup.
 
+    Guarded fetch accepts `streamTimeoutMs` for header/body inactivity independently of the whole-request `timeoutMs`; when both are supplied, `timeoutMs` takes precedence. The existing `createPinnedDispatcher` helper also accepts `streamTimeoutMs` as its fifth argument. These stream settings retain TCP/TLS connection deadlines and default to the existing transport policy when omitted.
+
     `api.runtime.channel.mentions` is the shared inbound mention-policy surface for bundled channel plugins that use runtime injection:
 
     ```typescript

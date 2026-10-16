@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -51,6 +58,50 @@ describe("native CI failure collection", () => {
       },
     });
   }
+
+  it("OpenClawKit trait builds share a fresh scratch and clean it after testing", () => {
+    const root = fixture();
+    const optOut = step(
+      "macos-swift",
+      "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
+    );
+    const tests = step("macos-swift", "OpenClawKit tests");
+    const result = run(
+      root,
+      `
+swift() { printf '%s\\n' "$*" >> "$TRACE"; }
+export -f swift
+${optOut.run}
+if [[ -f "$GITHUB_ENV" ]]; then source "$GITHUB_ENV"; fi
+${tests.run}
+${step("macos-swift", "Clean OpenClawKit build scratch").run}
+`,
+      { GITHUB_ENV: path.join(root, "environment"), OPENCLAWKIT_TEST_EXECUTION: "serial" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const commands = readFileSync(path.join(root, "trace"), "utf8").trim().split("\n");
+    const scratchPaths = commands.map((command) => command.match(/--scratch-path (\S+)/)?.[1]);
+    expect(scratchPaths[0]).toBeTruthy();
+    expect(new Set(scratchPaths).size).toBe(1);
+    expect(existsSync(scratchPaths[0]!)).toBe(false);
+    expect(commands[0]).toContain("show-dependencies --disable-default-traits");
+    expect(commands[1]).toContain("--target OpenClawKit --disable-default-traits");
+    expect(commands[2]).toContain("test --package-path apps/shared/OpenClawKit");
+    expect(commands[2]).not.toContain("--disable-default-traits");
+    expect(
+      evaluateWorkflowExpression(
+        `\${{ ${step("macos-swift", "Clean OpenClawKit build scratch").if} }}`,
+        {
+          eventName: "schedule",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          cancelled: true,
+          failed: true,
+          env: { OPENCLAWKIT_SCRATCH: scratchPaths[0]! },
+        },
+      ),
+    ).toBe(true);
+  });
 
   it.each(["macos-swift", "ios-build"])(
     "%s runs formatting after Swift lint fails and retains the failure",

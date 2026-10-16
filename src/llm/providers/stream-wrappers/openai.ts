@@ -280,6 +280,8 @@ export function createOpenAIResponsesContextManagementWrapper(
           ? resolveOpenAIResponsesServerCompactionPlan(model, {
               ...extraParams,
               serviceTier: payload.service_tier,
+              fastMode: undefined,
+              fast_mode: undefined,
             }).threshold
           : policy.compactThreshold;
       applyOpenAIResponsesPayloadPolicy(payload, { ...policy, compactThreshold });

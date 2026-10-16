@@ -392,7 +392,6 @@ export function createSessionRowPlacementProjection(
                   assertCurrent() {
                     assertActive();
                     assertSessionCurrent?.();
-                    privateMemory.binding?.actor.assertReadable();
                     privateMemory.authority.assertCurrent();
                   },
                 },

@@ -43,6 +43,9 @@ supports input progress; completed tool calls retain only parsed `arguments`.
 It is the live block, not a per-event snapshot: a consumer that lags behind the
 producer reads the latest value, or none once the call has finished.
 
+The Mistral adapter reports unreadable tool definitions as a stream error before
+sending a model request. It does not silently omit those tools from the request.
+
 The explicit `@openclaw/ai/internal/anthropic`, `google-model-family`, `openai`,
 `openai-completions-compat`, `openai-responses-payload-policy`, `retry-after`, `runtime`, `shared`, and
 `tool-schema` subpaths exist for the OpenClaw application itself.

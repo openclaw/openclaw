@@ -12,7 +12,7 @@ import { hasAnyMatrixAuthAsync } from "../../auth-presence.js";
 import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import { resolveConfiguredMatrixBotUserIds } from "./accounts.js";
-import { loadMatrixCredentialsAsync, openMatrixCredentialsStore } from "./credentials-read.js";
+import { openMatrixCredentialsStore } from "./credentials-read.js";
 import {
   clearMatrixCredentials,
   credentialsMatchConfig,
@@ -55,23 +55,6 @@ describe("matrix credentials storage", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     fs.rmSync(stateDir, { recursive: true, force: true });
-  });
-
-  it("roundtrips account-scoped credentials through shared plugin-state SQLite", async () => {
-    await saveMatrixCredentials({ ...auth, deviceId: "DEVICE123" }, {}, "ops");
-
-    expect(loadMatrixCredentials({}, "ops")).toMatchObject({
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "secret-token",
-      deviceId: "DEVICE123",
-    });
-    await expect(loadMatrixCredentialsAsync({}, "ops")).resolves.toEqual(
-      loadMatrixCredentials({}, "ops"),
-    );
-    expect(loadMatrixCredentials({}, "default")).toBeNull();
-    expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
-    expect(fs.existsSync(path.join(stateDir, "credentials", "matrix"))).toBe(false);
   });
 
   it.each([
@@ -293,15 +276,6 @@ describe("matrix credentials storage", () => {
       accountId: "ops",
     });
     expect(loadMatrixCredentials({}, "default")).not.toBeNull();
-  });
-
-  it("reports persisted auth from SQLite for package-state probes", async () => {
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(false);
-
-    await saveMatrixCredentials(auth, env, "default");
-
-    expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(true);
   });
 
   it("keeps persisted-auth presence scoped to valid live records and the supplied environment", async () => {

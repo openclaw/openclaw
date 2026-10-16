@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import {
@@ -8,7 +9,7 @@ import {
 } from "../provider-icon-data.ts";
 import { Icon } from "./icon.tsx";
 
-function ProviderAsset(props: { icon: string; assetPath: string; class?: string }) {
+function ProviderAsset(props: { icon: string; assetPath: string; class?: JSX.ClassValue }) {
   return (
     <span
       class={["provider-brand-icon", props.class]}
@@ -19,7 +20,7 @@ function ProviderAsset(props: { icon: string; assetPath: string; class?: string 
   );
 }
 
-export function ProviderFallbackIcon(props: { label: string; class?: string }) {
+export function ProviderFallbackIcon(props: { label: string; class?: JSX.ClassValue }) {
   return (
     <span
       class={["provider-brand-icon", "provider-brand-icon--fallback", props.class]}
@@ -30,7 +31,7 @@ export function ProviderFallbackIcon(props: { label: string; class?: string }) {
   );
 }
 
-export function ProviderBrandIcon(props: { provider: string; class?: string }) {
+export function ProviderBrandIcon(props: { provider: string; class?: JSX.ClassValue }) {
   const icon = createMemo(() => resolveProviderIconName(props.provider));
   return (
     <Show

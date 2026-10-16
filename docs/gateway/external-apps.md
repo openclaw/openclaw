@@ -88,7 +88,8 @@ available while the Gateway is still draining. Controllers may reconnect after t
 call resume. The
 [Admin HTTP RPC plugin](/plugins/admin-http-rpc) remains available for hosts
 that cannot speak WebSocket at all. If every control path is lost, the
-two-minute lease expiry reopens admission automatically.
+lease expiry reopens admission automatically: 45 seconds for a drain, or two
+minutes for an idle freeze/snapshot lease.
 
 Closing the Gateway cancels background work queued by operator reconnects without
 waiting for suspension expiry. Shutdown still waits for work already running to finish.
@@ -148,7 +149,7 @@ IDs are trimmed, must contain a non-whitespace character, and are limited to
 }
 ```
 
-If `drain: true` finds active work, preparation acquires a renewable lease,
+If `drain: true` finds active work, preparation acquires a bounded lease,
 pauses new automatic cron scheduling, closes admission to unrelated new work,
 and returns:
 
@@ -173,6 +174,18 @@ it closes, the controller resumes the Gateway, or the lease expires. With
 `terminalPolicy: "terminate"`, that same terminal remains open but does not
 block readiness. Neither policy terminates or detaches terminals during
 preparation, polling, renewal, resume, or lease expiry.
+
+Drain leases expire **45 seconds after initial preparation**: a 30-second drain
+budget plus 15 seconds for handoff or cleanup. Repeating prepare, polling, and
+reaching `ready` do not extend that deadline. A lost controller therefore cannot
+leave users fenced for minutes. RPC connections may close and reconnect without
+releasing the lease; CLI and HTTP controllers use separate connections for each
+call. A successful handoff must commit shutdown before expiry. Expiry never
+interrupts admitted work or discards pending writes; it resumes scheduling and
+reopens admission, logging a warning. Controllers must defer if they cannot
+complete handoff within the deadline. Entry and exit logs identify the owner
+request, lease, caller, and reason; suspension IDs remain absent from public
+presence events.
 
 Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
 `retryAfterMs`. A held drain recommends five-second polling so completed work
@@ -275,14 +288,14 @@ With `drain: true`, the same suspension owner instead keeps admission closed
 and cron scheduling paused until existing work settles. Already-owned cron
 completion and reconciliation continue.
 
-Both draining and ready leases share a two-minute budget starting before work
-inspection. Preparation that exhausts that budget resumes scheduling and fails
-instead of returning an expired lease. Clock rollback does not extend the budget.
-Repeat `prepare` before
-`expiresAtMs` with the same `requestId`, terminal policy, and drain mode to renew
-the same `suspensionId` unless a restart handoff is armed; changing any of those values conflicts with the
-existing lease. Use `status` for routine polling and reserve `prepare` for
-renewal to avoid consuming the write budget. Explicit resume and lease expiry
+The lease budget starts before work inspection: 45 seconds with `drain: true`,
+or two minutes for refuse-only freeze/snapshot preparation. Preparation that
+exhausts its budget resumes scheduling and fails instead of returning an expired
+lease. Clock rollback does not extend the budget. Repeat `prepare` before
+`expiresAtMs` with the same `requestId`, terminal policy, and drain mode to
+observe the same `suspensionId`; changing any of those values conflicts with the
+existing lease. Only refuse-only leases renew, and only before a restart handoff
+is armed. Use `status` for routine polling to avoid consuming the write budget. Explicit resume and lease expiry
 restore scheduling before reopening admission. Leases remain in memory and
 disappear if the Gateway process exits.
 Restart emission that becomes due during a ready lease waits until the lease

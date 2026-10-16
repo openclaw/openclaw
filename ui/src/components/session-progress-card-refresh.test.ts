@@ -42,7 +42,7 @@ describe("progress card refresh control", () => {
     vi.unstubAllGlobals();
   });
   it.each([false, true])(
-    "refreshes from the header without toggling or dragging (collapsed: %s)",
+    "refreshes from the options menu without toggling or dragging (collapsed: %s)",
     async (collapsed) => {
       const onRefresh = vi.fn();
       const onManipulate = vi.fn();
@@ -61,11 +61,22 @@ describe("progress card refresh control", () => {
         );
       show();
       await Promise.resolve();
+      const options = container.querySelector<HTMLButtonElement>(
+        ".session-progress-card__options",
+      )!;
+      const openMenu = async () => {
+        if (options.getAttribute("aria-expanded") !== "true") {
+          options.click();
+          flush();
+          await vi.waitFor(() => expect(options.getAttribute("aria-expanded")).toBe("true"));
+        }
+      };
+      await openMenu();
       const details = container.querySelector("details")!;
       const summary = container.querySelector("summary")!;
       const button = container.querySelector<HTMLButtonElement>(".session-progress-card__refresh")!;
       expect(button.closest(".session-progress-card__summary-expanded")).toBeNull();
-      expect(button.getAttribute("aria-label")).toBe("Refresh task progress");
+      expect(button.textContent).toContain("Refresh task progress");
       expect(button.querySelector("svg path")).not.toBeNull();
       const down = new MouseEvent("pointerdown", { bubbles: true, button: 0, clientY: 100 });
       Object.defineProperties(down, { isPrimary: { value: true }, pointerId: { value: 1 } });
@@ -76,6 +87,7 @@ describe("progress card refresh control", () => {
       expect(onManipulate).not.toHaveBeenCalled();
       expect(details.open).toBe(!collapsed);
       show("pending");
+      await openMenu();
       expect(button.disabled).toBe(true);
       expect(button.getAttribute("aria-busy")).toBe("true");
       button.click();
@@ -89,7 +101,7 @@ describe("progress card refresh control", () => {
       show("failed");
       expect(container.textContent).not.toContain("Use refresh to retry");
       expect(button.disabled).toBe(false);
-      expect(button.getAttribute("aria-label")).toBe("Retry progress refresh");
+      expect(button.textContent).toContain("Retry progress refresh");
       expect(container.querySelector("[role=status]")?.textContent).toContain(
         "Previous update kept",
       );
@@ -104,6 +116,8 @@ describe("progress card refresh control", () => {
       show("updated");
       expect(container.querySelector("[role=status]")?.textContent).toBe("Task progress updated");
       expect(details.open).toBe(!collapsed);
+      options.click();
+      flush();
       summary.click();
       expect(details.open).toBe(collapsed);
     },

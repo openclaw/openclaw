@@ -7,7 +7,6 @@ import {
   For,
   Show,
   onCleanup,
-  untrack,
 } from "solid-js";
 import type {
   EnvironmentSummary,
@@ -218,32 +217,31 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           draft.loading = false;
         });
         stopPolling();
-        queueMicrotask(() =>
-          untrack(() => {
-            if (!gateway.isCurrent(scope)) {
-              return;
-            }
-            if (refreshAgain) {
-              refreshAgain = false;
-              void load();
-            } else if (
-              view.inventory?.environments.some(
-                (environment) =>
-                  environment.preparation &&
-                  environment.worker &&
-                  !environment.worker.attachedSessionIds.length &&
-                  ["requested", "provisioning", "bootstrapping", "ready"].includes(
-                    environment.worker.state,
-                  ),
-              ) ||
-              view.result?.images.some(
-                (image) => image.capture && image.capture.phase !== "uncertain",
-              )
-            ) {
-              pollTimer = setTimeout(() => void load(), 10_000);
-            }
-          }),
-        );
+        // This native microtask samples settled state once for polling, without subscribing.
+        queueMicrotask(() => {
+          if (!gateway.isCurrent(scope)) {
+            return;
+          }
+          if (refreshAgain) {
+            refreshAgain = false;
+            void load();
+          } else if (
+            view.inventory?.environments.some(
+              (environment) =>
+                environment.preparation &&
+                environment.worker &&
+                !environment.worker.attachedSessionIds.length &&
+                ["requested", "provisioning", "bootstrapping", "ready"].includes(
+                  environment.worker.state,
+                ),
+            ) ||
+            view.result?.images.some(
+              (image) => image.capture && image.capture.phase !== "uncertain",
+            )
+          ) {
+            pollTimer = setTimeout(() => void load(), 10_000);
+          }
+        });
       }
     }
   }
@@ -521,6 +519,11 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       ),
     ),
   );
+  const unlabeledImages = createMemo(() =>
+    (view.result?.images ?? [])
+      .filter((image) => !image.projectKey && !image.projectLabel && !image.projectRoot)
+      .toSorted((a, b) => (a.profileId ?? a.profileKey).localeCompare(b.profileId ?? b.profileKey)),
+  );
   const unlabeledBuilds = createMemo(() =>
     (view.inventory?.environments ?? []).filter(
       (environment) =>
@@ -649,26 +652,13 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           <CloudWorkerSnapshotPolicy />
           <Show
             when={
-              view.result?.images.some(
-                (image) => !image.projectKey && !image.projectLabel && !image.projectRoot,
-              ) ||
+              unlabeledImages().length ||
               view.result?.legacyLeases.length ||
               unlabeledBuilds().length
             }
           >
             <SettingsSection title={t("cloudWorkersPage.environments.machineImages")}>
-              <For
-                each={
-                  view.result?.images
-                    .filter(
-                      (image) => !image.projectKey && !image.projectLabel && !image.projectRoot,
-                    )
-                    .toSorted((a, b) =>
-                      (a.profileId ?? a.profileKey).localeCompare(b.profileId ?? b.profileKey),
-                    ) ?? []
-                }
-                keyed={(image) => image.profileKey}
-              >
+              <For each={unlabeledImages()} keyed={(image) => image.profileKey}>
                 {(image) => (
                   <CloudWorkerSnapshotRow
                     image={image()}

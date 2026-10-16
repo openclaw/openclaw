@@ -24,6 +24,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -444,9 +445,10 @@ it.each(["reader", "writer"] as const)(
           .prepare("INSERT INTO cache_entries(scope, key, blob, updated_at) VALUES (?, ?, ?, ?)")
           .run("checkpoint-proof", "new-frame", Buffer.from("retained"), 2);
       } else {
-        const prepare = database.db.prepare.bind(database.db);
+        const db = requireNativeSqliteDatabase(database.db);
+        const prepare = db.prepare.bind(db);
         let checkpointObserved = false;
-        const checkpoint = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+        const checkpoint = vi.spyOn(db, "prepare").mockImplementation((sql) => {
           const statement = prepare(sql);
           if (sql === "PRAGMA wal_checkpoint(TRUNCATE);" && !checkpointObserved) {
             const get = statement.get.bind(statement);

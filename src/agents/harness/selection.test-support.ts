@@ -100,4 +100,5 @@ export const privateHarnessParamCases = [
   { field: "preparedSessionTarget", value: { target: {}, assertCurrent: () => undefined } },
   { field: "onContextAccountingEvent", value: () => undefined },
   { field: "onCompactionRequestBudget", value: () => undefined },
+  { field: "prepareContinuationRetryCount", value: () => undefined },
 ] as const;

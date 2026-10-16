@@ -2,6 +2,7 @@ import {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { ContextEnginePromptCacheObservationChange as PromptCacheChange } from "../../context-engine/types.js";
@@ -10,6 +11,7 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import type { NormalizedUsage } from "../usage.js";
 import { log } from "./logger.js";
+import { fingerprintMessage, type PromptHistoryFingerprint } from "./prompt-cache-history.js";
 import type { ProviderPromptCachePrefix } from "./provider-prompt-serialization.js";
 import type { ProviderPromptState } from "./provider-prompt-state.js";
 
@@ -81,28 +83,8 @@ type PromptCacheTracker = {
   unmeasuredChanges?: PromptCacheChange[] | null;
 };
 
-type PromptHistoryFingerprint = {
-  role: string;
-  envelopeFields: Map<string, string>;
-  envelopeDigest: string;
-  contentKind: "string" | "blocks";
-  blocks: string[];
-  blockFields: Map<string, string>[];
-  stringBlock?: WeakRef<PromptStringFingerprint>;
-};
-
-type PromptStringFingerprint = { value: string; digest: string };
-
 const trackers = new Map<string, PromptCacheTracker>();
-const stringFingerprints = new WeakMap<Message, PromptStringFingerprint>();
-type RecordFingerprint = {
-  digest: string;
-  fields: Map<string, string>;
-  primitives: Map<string, unknown>;
-};
-// Primitive revisions avoid rehashing retained text; nested values remain mutable.
-const recordFingerprints = new WeakMap<object, RecordFingerprint>();
-// Schemas are provider-owned declarations; unlike transcript blocks, they do not mutate in place.
+// Unpublished provider declarations retain their existing identity contract.
 const toolSchemaFingerprints = new WeakMap<object, string>();
 const MAX_TRACKERS = 512;
 const historyRewriteWarnings = createDedupeCache({ ttlMs: 0, maxSize: MAX_TRACKERS });
@@ -143,55 +125,6 @@ const HISTORY_BLOCK_FIELDS = new Set([
   "mimeType",
   "index",
 ]);
-
-function fingerprintText(value: string): string {
-  // UTF-8 replaces lone surrogates; escape those without serializing ordinary prompt text.
-  return value.isWellFormed()
-    ? `text:${sha256Hex(value)}`
-    : `escaped:${sha256Hex(stableStringify(value))}`;
-}
-
-function fingerprintRecord(record: object, omit?: string): RecordFingerprint {
-  const previous = recordFingerprints.get(record);
-  let fields = previous ? undefined : new Map<string, string>();
-  const primitives = previous?.primitives ?? new Map<string, unknown>();
-  for (const [key, value] of Object.entries(record)) {
-    if (key === omit) {
-      continue;
-    }
-    const primitive = value === null || typeof value !== "object";
-    const digest =
-      primitive && previous?.primitives.has(key) && Object.is(previous.primitives.get(key), value)
-        ? previous.fields.get(key)!
-        : typeof value === "string"
-          ? fingerprintText(value)
-          : sha256Hex(stableStringify(value));
-    if (!previous || previous.fields.get(key) !== digest) {
-      (fields ??= new Map(previous?.fields)).set(key, digest);
-    }
-    if (primitive) {
-      primitives.set(key, value);
-    } else {
-      primitives.delete(key);
-    }
-  }
-  for (const key of previous?.fields.keys() ?? []) {
-    if (!Object.hasOwn(record, key)) {
-      (fields ??= new Map(previous?.fields)).delete(key);
-      primitives.delete(key);
-    }
-  }
-  if (!fields && previous) {
-    return previous;
-  }
-  const fingerprint = {
-    digest: sha256Hex(stableStringify(Object.fromEntries(fields!))),
-    fields: fields!,
-    primitives,
-  };
-  recordFingerprints.set(record, fingerprint);
-  return fingerprint;
-}
 
 function describeHistoryChange(
   previous: PromptHistoryFingerprint,
@@ -257,49 +190,6 @@ function describeHistoryChange(
     }
   }
   return `changed fields: ${fields.slice(0, MAX_HISTORY_DIFF_FIELDS).join(", ")}${fields.length > MAX_HISTORY_DIFF_FIELDS ? ", …" : ""}`;
-}
-
-function fingerprintMessage(
-  message: Message,
-  previous?: PromptHistoryFingerprint,
-): PromptHistoryFingerprint {
-  const { content } = message;
-  let stringBlock: PromptHistoryFingerprint["stringBlock"];
-  let blocks: string[];
-  let fingerprints: RecordFingerprint[] = [];
-  if (typeof content === "string") {
-    // Transcript messages own text memos; diagnostics retain only weak references.
-    const previousMemo = previous?.stringBlock?.deref() ?? stringFingerprints.get(message);
-    const memo =
-      previousMemo?.value === content
-        ? previousMemo
-        : { value: content, digest: fingerprintText(content) };
-    stringFingerprints.set(message, memo);
-    stringBlock = new WeakRef(memo);
-    blocks = [memo.digest];
-  } else {
-    stringFingerprints.delete(message);
-    fingerprints = content.map((block) => fingerprintRecord(block));
-    blocks = fingerprints.map(({ digest }) => digest);
-  }
-  const envelope = fingerprintRecord(message, "content");
-  if (
-    previous?.envelopeDigest === envelope.digest &&
-    previous.contentKind === (typeof content === "string" ? "string" : "blocks") &&
-    previous.blocks.length === blocks.length &&
-    previous.blocks.every((digest, index) => digest === blocks[index])
-  ) {
-    return previous;
-  }
-  return {
-    role: message.role,
-    envelopeFields: envelope.fields,
-    envelopeDigest: envelope.digest,
-    contentKind: typeof content === "string" ? "string" : "blocks",
-    blocks,
-    blockFields: fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS).map(({ fields }) => fields),
-    stringBlock,
-  };
 }
 
 const MIN_CACHE_BREAK_TOKEN_DROP = 1_000;
@@ -517,7 +407,9 @@ export function collectPromptCacheTools(
       const { description, parameters } = tool;
       let schemaDigest: string | undefined;
       if (parameters) {
-        schemaDigest = toolSchemaFingerprints.get(parameters);
+        schemaDigest =
+          getPublishedRuntimeToolInputSchema(parameters)?.canonicalFingerprint ??
+          toolSchemaFingerprints.get(parameters);
         if (!schemaDigest) {
           schemaDigest = sha256Hex(stableStringify(parameters));
           toolSchemaFingerprints.set(parameters, schemaDigest);

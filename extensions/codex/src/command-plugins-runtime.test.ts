@@ -275,7 +275,7 @@ describe("Codex plugin command context", () => {
   it("releases a lease acquired after the deadline without sending a startup RPC", async () => {
     const test = await fixture();
     test.request.mockRestore();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     let finishAcquisition!: (client: typeof test.harness.client) => void;
     const acquired = new Promise<typeof test.harness.client>((resolve) => {
       finishAcquisition = resolve;
@@ -297,11 +297,11 @@ describe("Codex plugin command context", () => {
     );
     try {
       await acquiring;
-      await vi.advanceTimersByTimeAsync(60_001);
+      await vi.advanceTimersByTimeAsync(600_001);
       finishAcquisition(test.harness.client);
       await vi.advanceTimersByTimeAsync(0);
       expect(failure).toBeInstanceOf(Error);
-      expect(String(failure)).toContain("timed out");
+      expect(failure).toMatchObject({ name: "AgentHarnessPreflightError" });
       expect(test.harness.writes).toHaveLength(0);
       expect(run).not.toHaveBeenCalled();
       expect(test.release).toHaveBeenCalledOnce();

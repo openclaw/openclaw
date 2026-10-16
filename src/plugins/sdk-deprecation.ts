@@ -1,6 +1,7 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getPluginExecutionFrame } from "./plugin-instance-invocation.js";
 import { getPluginRegistryState } from "./runtime-state.js";
+import { recordPluginSdkDeprecationUsage } from "./sdk-deprecation-usage.js";
 
 // Source imports and SDK bundles share the budget, including across plugin reloads.
 const warned = resolveGlobalSingleton(
@@ -94,11 +95,21 @@ export function warnPluginSdkDeprecation(params: {
       ? candidate
       : undefined;
   const key = JSON.stringify([pluginId ?? null, params.family]);
+  const removeAfter = sqliteRemovalFamilies.has(params.family) ? "2026-12-31" : undefined;
+  if (pluginId) {
+    recordPluginSdkDeprecationUsage(
+      pluginId,
+      `${params.family}:${params.method}`,
+      params.method,
+      params.replacement,
+      removeAfter,
+    );
+  }
   if (warned.has(key)) {
     return;
   }
   warned.add(key);
-  const removal = sqliteRemovalFamilies.has(params.family)
+  const removal = removeAfter
     ? "Final compatibility day: 2026-12-31. Removal ships in the first January 2027 stable release; no SDK major is required."
     : "Removal requires an announced ordinary stable release window.";
   process.emitWarning(

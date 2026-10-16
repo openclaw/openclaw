@@ -245,6 +245,11 @@ Presence is intentionally ephemeral:
 
 This keeps the list fresh and avoids unbounded memory growth.
 
+Expiry and eviction use the heartbeat's wall-clock timestamp. A host clock
+correction may retain stale rows or expire fresh ones early. Full presence updates
+or reconnects republish current metadata; stale rows clear as wall time catches up
+or on restart. Presence is best effort; it does not grant device authority.
+
 ## Remote/tunnel caveat (loopback IPs)
 
 When a client connects over an SSH tunnel / local port forward, the Gateway

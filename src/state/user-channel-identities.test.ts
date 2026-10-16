@@ -12,10 +12,12 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
   linkUserChannelIdentity,
   resolveUserChannelIdentity,
   unlinkUserChannelIdentity,
+  userChannelIdentitySubject,
 } from "./user-channel-identities.js";
 import {
   changeCanonicalUserChannelIdentity,
@@ -25,7 +27,11 @@ import {
   prepareUserProfileRolePolicyAuthority,
   prepareUserProfileSelectionAuthority,
 } from "./user-channel-identity-operations.js";
-import { readUserProfileAliasRevision } from "./user-profile-events.js";
+import { readProfileAuthority } from "./user-profile-authority.js";
+import {
+  captureUserProfileAuthorityRead,
+  readUserProfileAliasRevision,
+} from "./user-profile-events.js";
 import {
   getUserProfileDisplay,
   readResidentUserProfileIdentity,
@@ -196,6 +202,50 @@ it("serves profile authority from committed catalog facts without another worker
   }
 });
 
+it("releases an expired commit fence before retrying a channel identity change", async () => {
+  const options = stateOptions();
+  const profile = ensureProfileForEmail("owner@example.test", options);
+  linkUserChannelIdentity(profile.id, identity, options);
+  const context = captureOpenClawStateWorkerContext(options);
+  const authority = await captureUserProfileAuthorityRead(
+    context.admission,
+    userChannelIdentitySubject(identity),
+  );
+  const settled = authority.transferSettled([]);
+  let expired = false;
+  const admissionSpy = probe.admission(operationAdmission, (request, grant, admit) => {
+    if (request.stage !== "commit" || expired) {
+      admit(request, grant);
+      return;
+    }
+    expired = true;
+    const clock = vi.spyOn(process.hrtime, "bigint");
+    try {
+      admit(request, (beforeRelease) =>
+        grant(() => {
+          beforeRelease?.();
+          expect(readProfileAuthority(settled)).toBe("pending");
+          // Expire the real shared decision after fencing, without delaying the native worker.
+          clock.mockReturnValue(process.hrtime.bigint() + 2_000_000_000n);
+        }),
+      );
+    } finally {
+      clock.mockRestore();
+    }
+    expect(readProfileAuthority(settled)).toBe("current");
+  });
+  try {
+    await expect(
+      changeCanonicalUserChannelIdentity("unlink", profile.id, identity, options),
+    ).resolves.toEqual({ kind: "unlinked", removed: true });
+    expect(expired).toBe(true);
+    expect(resolveUserChannelIdentity(identity, options)).toBeUndefined();
+    expect(readProfileAuthority(settled)).toBe("current");
+  } finally {
+    admissionSpy.mockRestore();
+  }
+});
+
 it("revokes the exact prepared binding before worker commit acknowledgement", async () => {
   const options = stateOptions();
   const otherOptions = stateOptions();
@@ -224,14 +274,16 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
     expect(prepared?.isCurrent()).toBe(true);
     let observedCommitGrant = false;
     const admissionSpy = probe.admission(operationAdmission, (request, grant, admit) => {
-      admit(request, () => {
-        if (request.stage === "commit") {
-          observedCommitGrant = true;
-          // This executes before the worker receives permission to COMMIT.
-          expect(prepared?.isCurrent()).toBe(false);
-        }
-        return grant();
-      });
+      admit(request, (beforeRelease) =>
+        grant(() => {
+          beforeRelease?.();
+          if (request.stage === "commit") {
+            observedCommitGrant = true;
+            // This executes before the worker receives permission to COMMIT.
+            expect(prepared?.isCurrent()).toBe(false);
+          }
+        }),
+      );
     });
     try {
       await changeCanonicalUserChannelIdentity("unlink", ada.id, identity, options);

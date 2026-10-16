@@ -339,6 +339,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
       method: "sessions.patch",
       params: { key: row.key, unread: false, agentId },
+      sessionScope: true,
+      session: row,
     });
     // Read-only navigation must remain silent: absence of mutation access is
     // not an operation failure and should not latch the unread retry guard.
@@ -397,6 +399,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       const access = readSessionMethodAccess(this.context.gateway.snapshot, {
         method: "sessions.patch",
         params: { key: run.key, unread: false, agentId },
+        sessionScope: true,
+        session: run,
       });
       if (!access.allowed) {
         continue;

@@ -507,25 +507,25 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
       }
     } catch (err) {
       const errorMsg = formatTtsProviderError(provider, err);
+      const reasonCode = isTtsTimeoutError(err) ? "timeout" : "provider_error";
       const latencyMs = Date.now() - providerStart;
       errors.push(errorMsg);
       attempts.push({
         provider,
         outcome: "failed",
-        reasonCode: isTtsTimeoutError(err) ? "timeout" : "provider_error",
+        reasonCode,
         latencyMs,
         persona: persona?.id,
         personaBinding: resolvePersonaBinding(persona, provider),
         error: errorMsg,
       });
-      const rawError = sanitizeTtsErrorForLog(err);
       if (provider === primaryProvider) {
         const hasFallbacks = providers.length > 1;
         logVerbose(
-          `${params.logLabel}: primary provider ${provider} failed (${rawError})${hasFallbacks ? "; trying fallback providers." : "; no fallback providers configured."}`,
+          `${params.logLabel}: primary provider ${provider} failed (${reasonCode})${hasFallbacks ? "; trying fallback providers." : "; no fallback providers configured."}`,
         );
       } else {
-        logVerbose(`${params.logLabel}: ${provider} failed (${rawError}); trying next provider.`);
+        logVerbose(`${params.logLabel}: ${provider} failed (${reasonCode}); trying next provider.`);
       }
     }
   }

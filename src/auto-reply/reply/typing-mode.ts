@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { TypingMode } from "../../config/types.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { TypingPolicy } from "../types.js";
 import type { TypingController } from "./typing.js";
 
@@ -102,7 +101,7 @@ export function createTypingSignaler(params: {
     },
     async signalTextDelta(text?: string) {
       const trimmed = disabled ? undefined : normalizeOptionalString(text);
-      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+      if (!trimmed) {
         return;
       }
       hasRenderableText = true;

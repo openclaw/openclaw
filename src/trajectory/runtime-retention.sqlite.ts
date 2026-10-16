@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import { engineTextHexSql } from "../infra/database-engine/text-bytes.js";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import {
   readSqliteDatabaseSiblingWriteRevision,
   withSqliteDatabaseWriteScope,
@@ -46,8 +47,8 @@ type Sweep = {
   expiredRuns: number;
   unprotectedRuns: number;
 };
-const sweeps = new WeakMap<DatabaseSync, Sweep>();
-const observedConnections = new WeakSet<DatabaseSync>();
+const sweeps = new WeakMap<EngineConnection, Sweep>();
+const observedConnections = new WeakSet<EngineConnection>();
 
 export function trajectoryRuntimeRetentionState(owner: RetentionOwner) {
   let state = states.get(owner);
@@ -75,7 +76,7 @@ function compareRuns(left: Run, right: Run): number {
   );
 }
 
-function readRuns(database: DatabaseSync, sessionId?: string, runId?: string | null): Run[] {
+function readRuns(database: EngineConnection, sessionId?: string, runId?: string | null): Run[] {
   const db = getNodeSqliteKysely<Pick<DB, "trajectory_runtime_events">>(database);
   let query = db
     .selectFrom("trajectory_runtime_events")
@@ -84,8 +85,8 @@ function readRuns(database: DatabaseSync, sessionId?: string, runId?: string | n
       eb.fn.max<number>("created_at").as("newest"),
       eb.fn.sum<number>(eb(eb.fn<number>("octet_length", ["event_json"]), "+", 1)).as("bytes"),
       eb.fn.countAll<number>().as("events"),
-      eb.fn<string>("hex", [eb.cast("session_id", "blob")]).as("sessionOrder"),
-      eb.fn<string>("hex", [eb.cast("run_id", "blob")]).as("runOrder"),
+      engineTextHexSql(database, eb.ref("session_id")).as("sessionOrder"),
+      engineTextHexSql(database, eb.ref("run_id")).as("runOrder"),
     ])
     .groupBy(["session_id", "run_id"]);
   if (sessionId !== undefined) {
@@ -106,7 +107,7 @@ function readRuns(database: DatabaseSync, sessionId?: string, runId?: string | n
 
 /** The read worker performs the sweep's only full-store aggregate. */
 export function prepareTrajectoryRuntimeRetention(
-  database: DatabaseSync,
+  database: EngineConnection,
   input: TrajectoryRuntimeRetentionInput,
   now: number,
 ): TrajectoryRuntimeRetentionPlan {
@@ -118,7 +119,7 @@ export function prepareTrajectoryRuntimeRetention(
   };
 }
 
-function changes(database: DatabaseSync, native: boolean): number | undefined {
+function changes(database: EngineConnection, native: boolean): number | undefined {
   if (native) {
     return readSqliteNativeMutationRevision(database);
   }
@@ -132,10 +133,13 @@ function changes(database: DatabaseSync, native: boolean): number | undefined {
 }
 
 /** The shared lease is revoked by the coordinator before releasing its native owner. */
-export function beginTrajectoryRuntimeRetention(database: DatabaseSync, lease: Int32Array): string {
+export function beginTrajectoryRuntimeRetention(
+  database: EngineConnection,
+  lease: Int32Array,
+): string {
   if (!observedConnections.has(database)) {
     observedConnections.add(database);
-    registerNodeSqliteDisposeCallback(database, () => {
+    registerNodeSqliteDisposeCallback(sqlPublicationAnchor(database), () => {
       const active = sweeps.get(database);
       if (active) {
         Atomics.store(active.lease, 0, 0);
@@ -164,7 +168,7 @@ export function beginTrajectoryRuntimeRetention(database: DatabaseSync, lease: I
   return sweep.id;
 }
 
-function currentSweep(database: DatabaseSync): Sweep | undefined {
+function currentSweep(database: EngineConnection): Sweep | undefined {
   const sweep = sweeps.get(database);
   if (
     sweep &&
@@ -181,7 +185,7 @@ function currentSweep(database: DatabaseSync): Sweep | undefined {
 }
 
 function stageRetentionMutation(
-  database: DatabaseSync,
+  database: EngineConnection,
   sweep: Sweep,
   receipt?: { sessionId: string; runs: Run[] },
 ) {
@@ -197,7 +201,7 @@ function stageRetentionMutation(
 }
 
 /** Capture before mutation; publish only after the enclosing transaction commits. */
-export function captureTrajectoryRuntimeRetentionMutation(database: DatabaseSync) {
+export function captureTrajectoryRuntimeRetentionMutation(database: EngineConnection) {
   const sweep = currentSweep(database);
   if (!sweep) {
     return undefined;
@@ -209,7 +213,7 @@ export function captureTrajectoryRuntimeRetentionMutation(database: DatabaseSync
 }
 
 /** Session metadata upserts preserve trajectory rows and need only a committed mutation counter. */
-export function captureTrajectoryRuntimeRetentionMetadataMutation(database: DatabaseSync) {
+export function captureTrajectoryRuntimeRetentionMetadataMutation(database: EngineConnection) {
   const sweep = currentSweep(database);
   return sweep ? () => stageRetentionMutation(database, sweep) : undefined;
 }
@@ -249,7 +253,7 @@ function replaceSession(sweep: Sweep, sessionId: string, rows: Run[]) {
 
 /** Reconcile receipts and advance the sorted cursor before acquiring the writer lock. */
 export function selectTrajectoryRuntimeRetentionBatch(
-  database: DatabaseSync,
+  database: EngineConnection,
   input: { sweepId: string; snapshot?: TrajectoryRuntimeRetentionPlan },
 ) {
   const sweep = currentSweep(database);

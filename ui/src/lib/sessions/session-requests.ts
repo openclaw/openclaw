@@ -5,7 +5,10 @@ import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { expandSessionRowFacts } from "../../../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  expandSessionRowFacts,
+  SESSION_ROWS_DELTA_PREFIX,
+} from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
@@ -193,20 +196,32 @@ export async function requestSessionListParams(
     const previous = request.rowMode === "sidebar" ? cache?.get(key) : undefined;
     const result = await client.request<SessionsListResult | undefined>("sessions.list", {
       ...request,
-      ...(previous ? { ifRowsRevision: previous.revision } : {}),
+      ...(previous ? { ifRowsRevision: `${SESSION_ROWS_DELTA_PREFIX}${previous.revision}` } : {}),
     });
     if (!result || !isCurrent()) {
       return null;
     }
-    const { sharedFacts, rowsUnchanged, ...list } = result;
+    const { sharedFacts, rowsUnchanged, rowsDelta, ...list } = result;
     if (rowsUnchanged && (!previous || result.rowsRevision !== previous.revision)) {
       throw new Error("The session query returned an unknown row revision. Try again.");
     }
-    const sessions = rowsUnchanged
+    let sessions = rowsUnchanged
       ? previous!.sessions
       : sharedFacts
         ? expandSessionRowFacts(list.sessions, sharedFacts)
         : list.sessions;
+    if (rowsDelta) {
+      if (!previous || rowsDelta.baseRevision !== previous.revision) {
+        throw new Error("The session query returned an unknown row revision. Try again.");
+      }
+      const rows = [...previous.sessions, ...sessions];
+      sessions = rowsDelta.order.map((index) => {
+        if (!Number.isInteger(index) || index < 0 || index >= rows.length) {
+          throw new Error("The session query returned an incomplete row delta. Try again.");
+        }
+        return rows[index]!;
+      });
+    }
     if (request.rowMode === "sidebar" && result.rowsRevision) {
       const retained = cache ?? new Map();
       retained.delete(key);

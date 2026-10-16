@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   resolveHistoryMessageSequence,
   resolveVisibleHistoryProjection,
@@ -19,7 +19,7 @@ import { transcriptEventNavigationSql, transcriptEventRunIdSql } from "./transcr
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 // These derived facts omit transcript bodies and remain inside the admitted snapshot.
-const inputMessageJson = (database: DatabaseSync) =>
+const inputMessageJson = (database: EngineConnection) =>
   /* kysely-allow-raw: Project only input provenance and exact run correlation without hydrating message bodies. */
   sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql(database, "event")}, '$.message.role'),
     'idempotencyKey', json_extract(${transcriptEventNavigationSql(database, "event")}, '$.message.idempotencyKey'),
@@ -55,21 +55,6 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
     ...projection.resolved,
   });
   const visible = resolveVisibleMessagePositions(projection);
-  const history = resolveVisibleHistoryProjection(projection);
-  const { messageEnd } = resolveVisibleHistoryRange(
-    history,
-    params.messageSeq - 1,
-    params.messageSeq,
-  );
-  const scannedThroughMessagePosition =
-    messageEnd <= visible.kept.length
-      ? (visible.kept[messageEnd - 1] ?? -1)
-      : visible.postStart + messageEnd - visible.kept.length - 1;
-  const hidden = {
-    hidden: true as const,
-    scannedThroughMessageSeq: params.messageSeq,
-    scannedThroughMessagePosition,
-  };
   const keptPositions =
     /* kysely-allow-raw: Bind the exact retained display positions without SQLite's variable limit. */
     sql<number>`(SELECT value FROM json_each(${JSON.stringify(visible.kept)}))`;
@@ -126,6 +111,21 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
     }
     readAfter = anchor.message_position;
   }
+  const history = resolveVisibleHistoryProjection(projection);
+  const { messageEnd } = resolveVisibleHistoryRange(
+    history,
+    params.messageSeq - 1,
+    params.messageSeq,
+  );
+  const scannedThroughMessagePosition =
+    messageEnd <= visible.kept.length
+      ? (visible.kept[messageEnd - 1] ?? -1)
+      : visible.postStart + messageEnd - visible.kept.length - 1;
+  const hidden = {
+    hidden: true as const,
+    scannedThroughMessageSeq: params.messageSeq,
+    scannedThroughMessagePosition,
+  };
   // A reply's visibility cannot depend on later transcript entries. Resume only
   // beyond already inspected inputs when another output from this run is read.
   const laterInputs = userInputs

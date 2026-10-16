@@ -55,6 +55,45 @@ describe("snapshot write serialization and scheduling", () => {
     vi.useRealTimers();
   });
 
+  it("keeps pairing QR credentials in memory without writing them to the browser cache", async () => {
+    const content = [
+      { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
+      {
+        type: "openclaw_pairing_qr",
+        image_url: "data:image/png;base64,cGFpcmluZy1xci1maXh0dXJl",
+        terminalText: "synthetic pairing QR",
+        sensitive: true,
+        expiresAtMs: Date.now() + 60_000,
+      },
+      { type: "image", url: "https://example.com/photo.png" },
+    ];
+    const value = {
+      ...snapshot(),
+      messages: [{ role: "assistant", content, openclawDisplayContent: content }],
+    };
+
+    store.write(sessionKey, value);
+    await store.flush();
+
+    const storedContent = [
+      { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
+      { type: "image", url: "https://example.com/photo.png" },
+    ];
+    expect(await readStoredChatSnapshotRecord(sessionKey)).toMatchObject({
+      snapshot: {
+        ...snapshot(),
+        messages: [
+          { role: "assistant", content: storedContent, openclawDisplayContent: storedContent },
+        ],
+      },
+    });
+    expect(value.messages[0]?.content).toBe(content);
+    expect(value.messages[0]?.openclawDisplayContent).toBe(content);
+    expect(content).toHaveLength(3);
+    expect(content[1]?.image_url).toBe("data:image/png;base64,cGFpcmluZy1xci1maXh0dXJl");
+    expect(content[1]?.terminalText).toBe("synthetic pairing QR");
+  });
+
   it.each([
     {
       name: "transcript display facts and progress",

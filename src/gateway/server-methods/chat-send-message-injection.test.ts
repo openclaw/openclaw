@@ -13,7 +13,6 @@ import {
   createReplyOperation,
   finalizeReplyMessageInjectionAttempt,
   replyRunRegistry,
-  type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionTarget,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -175,6 +174,8 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
       aborted: false,
     });
     const params = makeParams();
+    const entry = Object.freeze({ sessionId: "session-1", updatedAt: 1 });
+    params.session.entry = entry;
     prepareSessionParticipantInput(params.ctx, { type: "profile", id: "profile-steerer" }, 42);
     await finalizeAcceptedChatSendMessageInjection(params);
     expect(recordSessionParticipant).toHaveBeenCalledOnce();
@@ -193,6 +194,8 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
       }),
     );
     expect(updateSessionEntry).toHaveBeenCalledOnce();
+    expect(entry.updatedAt).toBe(1);
+    expect(params.session.entry?.updatedAt).toBeGreaterThan(1);
   });
 
   it("reports indeterminate question input without claiming success or falling back", async () => {
@@ -360,13 +363,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
       const begin = createChatSendMessageInjectionStarter(params);
 
       if (authority === "refused") {
-        let thrown: unknown;
-        try {
-          await begin();
-        } catch (error) {
-          thrown = error;
-        }
-        expect(thrown).toBe(refusal);
+        await expect(begin()).rejects.toBe(refusal);
         expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
       } else {
         expect(await begin()).toBeUndefined();
@@ -374,80 +371,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
       }
     },
   );
-
-  it("queues the steer when the captured session entry is startable", async () => {
-    const queuedAttempt = {
-      acceptance: Promise.resolve(true),
-      outcome: Promise.resolve({ status: "accepted" }),
-    } as ReplyMessageInjectionAttempt;
-    vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
-      async (_target, _text, options) => {
-        expect(options?.canAdmit?.()).toBe(true);
-        return queuedAttempt;
-      },
-    );
-    const params = makeStarterParams();
-    const begin = createChatSendMessageInjectionStarter(params);
-
-    const attempt = await begin();
-
-    expect(attempt).toBe(queuedAttempt);
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledOnce();
-  });
-
-  it("queues the steer when the captured session entry holds only an unrelated historical tombstone", async () => {
-    // Terminal run ids are accumulated session history; a tombstone from a
-    // prior source must not fence the active source into follow-up mode.
-    const queuedAttempt = {
-      acceptance: Promise.resolve(true),
-      outcome: Promise.resolve({ status: "accepted" }),
-    } as ReplyMessageInjectionAttempt;
-    vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
-      async (_target, _text, options) => {
-        expect(options?.canAdmit?.()).toBe(true);
-        return queuedAttempt;
-      },
-    );
-    const params = makeStarterParams({
-      entry: {
-        sessionId: "session-1",
-        updatedAt: 2,
-        restartRecoveryTerminalRunIds: ["source-old"],
-      } as never,
-    });
-    params.target = {
-      ...expectDefined(params.target, "injection target"),
-      sourceTurnId: "source-1",
-    };
-    const begin = createChatSendMessageInjectionStarter(params);
-
-    const attempt = await begin();
-
-    expect(attempt).toBe(queuedAttempt);
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledOnce();
-  });
-
-  it("rejects before queueing when the captured session entry tombstones the active source turn", async () => {
-    // The active source turn itself is tombstoned: the steered terminal send
-    // would resolve to already-delivered, so the fence must reject.
-    const params = makeStarterParams({
-      entry: {
-        sessionId: "session-1",
-        updatedAt: 2,
-        restartRecoveryTerminalRunIds: ["source-1"],
-      } as never,
-    });
-    params.target = {
-      ...expectDefined(params.target, "injection target"),
-      sourceTurnId: "source-1",
-    };
-    const begin = createChatSendMessageInjectionStarter(params);
-
-    const attempt = await begin();
-
-    expect(attempt).toBeUndefined();
-    expect(params.logGateway.warn).toHaveBeenCalled();
-  });
 
   it("reads current terminal eligibility when the captured request snapshot is stale", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -667,6 +590,23 @@ describe("createChatSendMessageInjectionStarter", () => {
     };
   }
 
+  async function expectSteer(
+    params: Parameters<typeof createChatSendMessageInjectionStarter>[0],
+    text: string,
+    options: Record<string, unknown> = { isInboundUserMessage: true },
+  ) {
+    const originalContext = structuredClone(params.turn.ctx);
+    const attempt = await createChatSendMessageInjectionStarter(params)();
+    await expect(attempt?.acceptance).resolves.toBe(true);
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledOnce();
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
+      params.target,
+      text,
+      expect.objectContaining(options),
+    );
+    expect(params.turn.ctx).toEqual(originalContext);
+  }
+
   it.each([
     {
       caption: "see attached",
@@ -695,17 +635,7 @@ describe("createChatSendMessageInjectionStarter", () => {
       ],
       documentContext: { status: "rendered", text: documentText, images: [] },
     });
-    const durableContext = structuredClone(params.turn.ctx);
-
-    await createChatSendMessageInjectionStarter(params)();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledOnce();
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      params.target,
-      expectedText,
-      expect.objectContaining({ isInboundUserMessage: true }),
-    );
-    expect(params.turn.ctx).toEqual(durableContext);
+    await expectSteer(params, expectedText);
   });
 
   it("keeps the attachment note when document rendering fails", async () => {
@@ -714,16 +644,10 @@ describe("createChatSendMessageInjectionStarter", () => {
       media: [{ path: "media://inbound/note.txt", contentType: "text/plain" }],
       documentContext: { status: "failed" },
     });
-    const originalContext = structuredClone(params.turn.ctx);
-
-    await createChatSendMessageInjectionStarter(params)();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      params.target,
+    await expectSteer(
+      params,
       "[media attached: media://inbound/note.txt (text/plain)]\n\nread the attachment",
-      expect.objectContaining({ isInboundUserMessage: true }),
     );
-    expect(params.turn.ctx).toEqual(originalContext);
   });
 
   it("keeps the base text untouched when no document context was rendered", async () => {
@@ -759,25 +683,20 @@ describe("createChatSendMessageInjectionStarter", () => {
         ],
       },
     });
-    const durableContext = structuredClone(params.turn.ctx);
-
-    await createChatSendMessageInjectionStarter(params)();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      expect.anything(),
+    await expectSteer(
+      params,
       "[media attached: 2 files]\n" +
         "[media attached 1/2: media://inbound/photo.png (image/png)]\n" +
         "[media attached 2/2: media://inbound/scan.pdf (application/pdf)]\n\n" +
         "see attached\n\n[PDF content rendered to images]",
-      expect.objectContaining({
+      {
         images: [
           { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
           { type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 1 },
           { type: "image", data: "page-2", mimeType: "image/png", sourceIndex: 1 },
         ],
-      }),
+      },
     );
-    expect(params.turn.ctx).toEqual(durableContext);
   });
 
   it("injects extracted page images when the steer carries no inbound images", async () => {

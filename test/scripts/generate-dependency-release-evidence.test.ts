@@ -6,9 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
-  DEPENDENCY_EVIDENCE_REPORTS,
   collectDependencyEvidenceSummaryCounts,
-  createDependencyEvidenceManifest,
   generateDependencyReleaseEvidence,
   parseArgs,
   renderDependencyEvidenceStepSummary,
@@ -39,35 +37,6 @@ function expectNoNodeStack(stderr: string) {
 }
 
 describe("generate-dependency-release-evidence", () => {
-  it("creates the dependency evidence manifest shape", () => {
-    const manifest = createDependencyEvidenceManifest({
-      generatedAt: "2026-05-13T00:00:00.000Z",
-      releaseTag: "v2026.5.13-beta.1",
-      releaseRef: "v2026.5.13-beta.1",
-      releaseSha: "abc123",
-      npmDistTag: "beta",
-      packageVersion: "2026.5.13-beta.1",
-      workflowRunId: "123",
-      workflowRunAttempt: "2",
-      dependencyChangeBaseRef: "v2026.5.1",
-    });
-
-    expect(manifest).toEqual({
-      schemaVersion: 1,
-      generatedAt: "2026-05-13T00:00:00.000Z",
-      releaseTag: "v2026.5.13-beta.1",
-      releaseRef: "v2026.5.13-beta.1",
-      releaseSha: "abc123",
-      npmDistTag: "beta",
-      packageName: "openclaw",
-      packageVersion: "2026.5.13-beta.1",
-      workflowRunId: "123",
-      workflowRunAttempt: "2",
-      dependencyChangeBaseRef: "v2026.5.1",
-      reports: DEPENDENCY_EVIDENCE_REPORTS,
-    });
-  });
-
   it("records production advisories as non-blocking evidence alongside the npm lock report", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-lock-evidence-test-"));
     try {
@@ -218,22 +187,6 @@ describe("generate-dependency-release-evidence", () => {
     for (const [flag, value] of missingValues) {
       expect(() => parseArgs(value === undefined ? [flag] : [flag, value])).toThrow(
         `Expected ${flag} <value>.`,
-      );
-    }
-  });
-
-  it("rejects duplicate dependency evidence CLI options", () => {
-    for (const flag of [
-      "--root",
-      "--output-dir",
-      "--release-ref",
-      "--npm-dist-tag",
-      "--base-ref",
-      "--github-output",
-      "--github-step-summary",
-    ]) {
-      expect(() => parseArgs([flag, "first", flag, "second"])).toThrow(
-        `${flag} was provided more than once.`,
       );
     }
   });

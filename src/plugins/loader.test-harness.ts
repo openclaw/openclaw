@@ -326,7 +326,10 @@ export function loadRegistryFromSinglePlugin(params: {
   plugin: TempPlugin;
   pluginConfig?: Record<string, unknown>;
   includeWorkspaceDir?: boolean;
-  options?: Omit<Parameters<typeof loadOpenClawPlugins>[0], "cache" | "workspaceDir" | "config">;
+  options?: Omit<
+    NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>,
+    "cache" | "workspaceDir" | "config"
+  >;
 }) {
   const pluginConfig = params.pluginConfig ?? {};
   return loadOpenClawPlugins({
@@ -344,7 +347,7 @@ export function loadRegistryFromSinglePlugin(params: {
 
 export function loadRegistryFromAllowedPlugins(
   plugins: TempPlugin[],
-  options?: Omit<Parameters<typeof loadOpenClawPlugins>[0], "cache" | "config">,
+  options?: Omit<NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>, "cache" | "config">,
 ) {
   return loadOpenClawPlugins({
     cache: false,

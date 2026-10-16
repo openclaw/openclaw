@@ -1,7 +1,8 @@
 import { createRouter, definePage, type RouteMatch, type Router } from "@openclaw/uirouter";
+import type { JSX } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
-import { solidContent } from "../lit/solid-content.tsx";
+import type { SolidRouteProps } from "../app-route-types.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import {
   disposeRouterOutlets,
@@ -15,7 +16,7 @@ type TestContext = { label: string };
 type TestData = { label: string };
 type TestOwnerMatch = Pick<RouteMatch<string, unknown, TestData>, "data" | "location">;
 type TestModule = {
-  render: (data: TestData | undefined) => unknown;
+  renderSolid: (props: SolidRouteProps<TestData>) => JSX.Element;
   retainOnNavigate?: boolean;
   renderOwnerKey?: (
     match: TestOwnerMatch,
@@ -53,14 +54,14 @@ describe("openclaw-router-outlet", () => {
           component: () => ({
             retainOnNavigate: true,
             renderOwnerKey: () => "retained-page",
-            render: () => solidContent(ParkedRoute, {}),
+            renderSolid: () => <ParkedRoute />,
           }),
           loader: () => ({ label: "page" }),
         }),
         definePage({
           id: "next",
           path: "/next",
-          component: () => ({ render: () => <p>Current destination</p> }),
+          component: () => ({ renderSolid: () => <p>Current destination</p> }),
         }),
       ],
     });
@@ -102,12 +103,12 @@ describe("openclaw-router-outlet", () => {
         <div data-testid="owned-route">{props.label}</div>
       </>
     );
-    const renderOwnedRoute = vi.fn((data: TestData | undefined) =>
-      data ? solidContent(OwnedRoute, { label: data.label }) : undefined,
+    const renderOwnedRoute = (props: SolidRouteProps<TestData>) => (
+      <OwnedRoute label={props.data?.label ?? ""} />
     );
     const ownedModule: TestModule = {
       renderOwnerKey: () => "shared-owner",
-      render: renderOwnedRoute,
+      renderSolid: renderOwnedRoute,
     };
     const context = { label: "page" };
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
@@ -133,7 +134,6 @@ describe("openclaw-router-outlet", () => {
 
     const navigation = router.navigate("next", context);
     await settleOutlet(outlet);
-    expect(renderOwnedRoute).toHaveBeenCalledWith(undefined, true);
     expect(outlet.querySelector("mcp-app-view")).toBe(appView);
     expect(outlet.querySelector('[data-testid="owned-route"]')?.textContent).toBe("page");
     expect(teardownView).not.toHaveBeenCalled();
@@ -182,7 +182,7 @@ describe("openclaw-router-outlet", () => {
     expect(outlet.textContent).not.toContain("Loading panel");
 
     routeModule.resolve({
-      render: (data) => <div data-testid="route-page">{data?.label}</div>,
+      renderSolid: (props) => <div data-testid="route-page">{props.data?.label}</div>,
     });
     await navigation;
     await settleOutlet(outlet);
@@ -215,7 +215,7 @@ describe("openclaw-router-outlet", () => {
           id: "page",
           path: "/page",
           component: () => ({
-            render: () => solidContent(RetiringRoute, {}),
+            renderSolid: () => <RetiringRoute />,
           }),
           loader: () => ({ label: "page" }),
         }),
@@ -223,7 +223,7 @@ describe("openclaw-router-outlet", () => {
           id: "next",
           path: "/next",
           component: () => ({
-            render: () => <div data-testid="route-next">next</div>,
+            renderSolid: () => <div data-testid="route-next">next</div>,
           }),
           loader: () => ({ label: "next" }),
         }),
@@ -272,8 +272,8 @@ describe("openclaw-router-outlet", () => {
           id: "page",
           path: "/page",
           component: () => ({
-            render: (data: TestData | undefined) => (
-              <div data-testid="route-page">{data?.label ?? "pending"}</div>
+            renderSolid: (props: SolidRouteProps<TestData>) => (
+              <div data-testid="route-page">{props.data?.label ?? "pending"}</div>
             ),
           }),
           loader: (context) => {
@@ -405,7 +405,7 @@ describe("openclaw-router-outlet", () => {
             }
             // Vite remembers a failed CSS dependency as seen, so a repeated
             // component import can succeed without the required stylesheet.
-            return { render: () => <div data-testid="unstyled-page">Agents</div> };
+            return { renderSolid: () => <div data-testid="unstyled-page">Agents</div> };
           },
           loader: (context) => ({ label: context.label }),
         }),

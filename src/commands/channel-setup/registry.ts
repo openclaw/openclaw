@@ -13,28 +13,20 @@ export function resolveChannelSetupWizardAdapterForPlugin(
     return undefined;
   }
   const { setupWizard } = plugin;
-  if (!setupWizard || typeof setupWizard !== "object") {
+  if (!setupWizard) {
     return undefined;
   }
-  if (
-    "getStatus" in setupWizard &&
-    typeof setupWizard.getStatus === "function" &&
-    "configure" in setupWizard &&
-    typeof setupWizard.configure === "function"
-  ) {
+  if ("getStatus" in setupWizard) {
     return setupWizard;
   }
-  if ("status" in setupWizard && "credentials" in setupWizard) {
-    const cached = setupWizardAdapters.get(plugin);
-    if (cached) {
-      return cached;
-    }
-    const adapter = buildChannelSetupWizardAdapterFromSetupWizard({
-      plugin,
-      wizard: setupWizard,
-    });
-    setupWizardAdapters.set(plugin, adapter);
-    return adapter;
+  const cached = setupWizardAdapters.get(plugin);
+  if (cached) {
+    return cached;
   }
-  return undefined;
+  const adapter = buildChannelSetupWizardAdapterFromSetupWizard({
+    plugin,
+    wizard: setupWizard,
+  });
+  setupWizardAdapters.set(plugin, adapter);
+  return adapter;
 }

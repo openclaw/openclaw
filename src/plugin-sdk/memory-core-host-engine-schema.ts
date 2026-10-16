@@ -1,5 +1,10 @@
 // Memory schema operations shared by host maintenance and native publication workers.
 export {
+  memoryStandingIntentSearchSchema,
+  memoryTextSearchSchema,
+  memoryVectorSearchSchema,
+} from "../../packages/memory-host-sdk/src/host/memory-search-schema.js";
+export {
   dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
   ensureMemoryChunkProvenance,
@@ -23,4 +28,4 @@ export {
 export {
   loadSqliteVecExtension,
   loadSqliteVecExtensionFromPath,
-} from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
+} from "../infra/database-engine/sqlite-vec.js";

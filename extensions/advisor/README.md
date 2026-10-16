@@ -87,9 +87,11 @@ Reviews keep the session's model and context; there is no separate model setting
 The fork cannot execute tools, persist conversation messages, or send replies.
 The plugin needs conversation access and prompt injection permission through
 `plugins.entries.advisor.hooks` (the normal trusted-plugin defaults). At most one
-review runs per session. Resetting the session, disabling the plugin, or stopping
-its service cancels pending reviews, including verification. Gateway info logs
-record each stage's token usage (input, cache reads/writes, and output) and elapsed
-time, plus whether advice was steered or queued.
+review runs per session. Aborting a run cancels its pending review, including
+verification, without queuing advice. A new user turn also cancels any unfinished
+review of the preceding turn. Resetting the session, disabling the plugin, or
+stopping its service cancels pending reviews. Gateway info logs record each
+stage's token usage (input, cache reads/writes, and output) and elapsed time,
+plus whether advice was steered or queued.
 
 Docs: https://docs.openclaw.ai/concepts/experimental-features#advisor

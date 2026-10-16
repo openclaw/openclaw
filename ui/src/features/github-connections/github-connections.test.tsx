@@ -59,12 +59,16 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
     undefined,
     { requireConfiguredAgent: true },
   );
+  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const context = {
     basePath: "/ui",
     navigate: vi.fn(),
     gateway: {
       snapshot,
-      subscribe: () => () => undefined,
+      subscribe: (listener: (next: ApplicationGatewaySnapshot) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
     },
     agents,
     settingsAgentSelection,
@@ -81,6 +85,12 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
   return {
     element,
     context,
+    replaceProfile: (id: string) => {
+      snapshot.selfUser = { ...snapshot.selfUser!, id };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
   };
 }
 
@@ -251,3 +261,40 @@ it.each([
     expect(element.textContent).not.toContain("Use a PAT instead");
   },
 );
+
+it("closes setup and resets its purpose when the same Gateway snapshot changes profile", async () => {
+  const request = vi.fn(async (method: string) =>
+    method === "users.github.status"
+      ? { personal: disconnected, system }
+      : {
+          agentId: "main",
+          selectedScope: "system",
+          selected: { scope: "system", configured: true, identity: system },
+          effective: system,
+        },
+  );
+  const { element, replaceProfile } = mount(["operator.admin"], "profile-a", request);
+  const button = (label: string) =>
+    Array.from(element.querySelectorAll("button")).find(
+      (entry) => entry.textContent?.trim() === label,
+    )!;
+  await waitForFast(() => expect(button("Change System GitHub").disabled).toBe(false));
+  button("Change System GitHub").click();
+  await waitForFast(() =>
+    expect(element.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value).toBe(
+      "system",
+    ),
+  );
+  button("Use a PAT instead").click();
+  await waitForFast(() => expect(element.querySelector(".settings-secret input")).not.toBeNull());
+  replaceProfile("profile-b");
+  await waitForFast(() => expect(element.querySelector("[data-github-setup]")).toBeNull());
+  await waitForFast(() => expect(button("Manage connections").disabled).toBe(false));
+  button("Manage connections").click();
+  await waitForFast(() =>
+    expect(element.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value).toBe(
+      "personal",
+    ),
+  );
+  expect(element.querySelector(".settings-secret input")).toBeNull();
+});

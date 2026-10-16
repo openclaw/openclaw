@@ -34,7 +34,7 @@ describe("AppSidebar session catalog pagination", () => {
       gateway.publish({
         hello: {
           auth: { role: "operator", scopes: ["operator.read"] },
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+          features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const mounted = await mountSidebar(
@@ -92,7 +92,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       const hello = {
         auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+        features: { methods: ["sessions.catalog.list"] },
       } as ApplicationGatewaySnapshot["hello"];
       gateway.publish({ hello });
       const mounted = await mountSidebar(
@@ -174,7 +174,7 @@ describe("AppSidebar session catalog pagination", () => {
       gateway.publish({
         hello: {
           auth: { role: "operator", scopes: ["operator.read"] },
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+          features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar, context } = await mountSidebar(
@@ -281,7 +281,7 @@ describe("AppSidebar session catalog pagination", () => {
 
   registerCatalogPageHostTests();
 
-  it("discards a load-more response after a catalog change replaces its cursor", async () => {
+  it("discards a load-more response after a catalog refresh replaces its cursor", async () => {
     vi.useFakeTimers();
     try {
       let resolveStalePage!: (value: ReturnType<typeof catalogPage>) => void;
@@ -296,14 +296,14 @@ describe("AppSidebar session catalog pagination", () => {
           catalogPage([{ threadId: "thread-1", name: "Updated" }], "replacement-page"),
         )
         .mockResolvedValueOnce(catalogPage([{ threadId: "thread-3", name: "Replacement" }]));
-      const { gateway, sidebar } = await mountSessionCatalogSidebar({
+      const { sidebar } = await mountSessionCatalogSidebar({
         request,
       } as unknown as GatewayBrowserClient);
 
       const loadMore = () =>
         sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
       loadMore()?.click();
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(5_000);
       await sidebar.updateComplete;
       expect(sidebar.textContent).toContain("Updated");
@@ -345,7 +345,7 @@ describe("AppSidebar session catalog pagination", () => {
         if (errorPage === "expanded page") {
           request.mockResolvedValueOnce(catalogErrorPage("Page refresh failed"));
         }
-        const { gateway, sidebar } = await mountSessionCatalogSidebar({
+        const { sidebar } = await mountSessionCatalogSidebar({
           request,
         } as unknown as GatewayBrowserClient);
 
@@ -356,7 +356,7 @@ describe("AppSidebar session catalog pagination", () => {
         await sidebar.updateComplete;
         expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.sessions).toHaveLength(2);
 
-        gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+        document.dispatchEvent(new Event("visibilitychange"));
         await vi.advanceTimersByTimeAsync(5_000);
         await sidebar.updateComplete;
         const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
@@ -396,19 +396,19 @@ describe("AppSidebar session catalog pagination", () => {
           catalogPage([{ threadId: "thread-3", name: "Reappeared" }], "page-2"),
         )
         .mockResolvedValue(catalogErrorPage("Replay failed"));
-      const { gateway, sidebar } = await mountSessionCatalogSidebar({
+      const { sidebar } = await mountSessionCatalogSidebar({
         request,
       } as unknown as GatewayBrowserClient);
       sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
 
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(5_000);
       await sidebar.updateComplete;
       expect(sidebar.sessionData.sessionCatalogs[0]?.hosts).toEqual([]);
 
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(4_999);
       expect(sidebar.sessionData.sessionCatalogs[0]?.hosts).toEqual([]);
       await vi.advanceTimersByTimeAsync(1);

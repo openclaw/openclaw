@@ -13,7 +13,12 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { advanceCronActiveJobGeneration, markCronJobActive } from "../active-jobs.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import {
+  CronJobsStoreChangedError,
+  loadCronStore,
+  noteCronJobsStoreCommit,
+  saveCronStore,
+} from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabaseForTest,
@@ -21,7 +26,8 @@ import {
   finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.test-support.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronStoredJob } from "../types.js";
+import { updateWithPrecondition } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { createCronRunHandle } from "./run-history.js";
 import { createCronServiceState } from "./state.js";
@@ -44,7 +50,6 @@ function claimReceipt(storePath: string, job: CronJob, startedAtMs: number) {
     claimCronRunReceiptInDatabaseForTest({
       database: db,
       prepared,
-      resolveAgentId: (current) => current.agentId ?? "main",
     }),
   );
 }
@@ -54,6 +59,146 @@ function authorOutcome(outcome: Omit<TimedCronRunOutcome, "completionStatus" | "
 }
 
 describe("cron outcome receipt finalization", () => {
+  it.each(["current", "legacy definition", "legacy state"])(
+    "accepts the first guarded update after publishing a completed run (%s)",
+    async (shape) => {
+      const { storePath } = fixtures.makeStorePath();
+      const startedAt = Date.now();
+      const job: CronStoredJob = createDueIsolatedJob({
+        id: "guarded-completed-run",
+        nowMs: startedAt,
+        nextRunAtMs: startedAt,
+      });
+      job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt };
+      job.runtimeAuthority = {
+        version: 1,
+        runtimeId: "fixture",
+        namespace: "fixture.apps",
+        payload: { apps: [{ id: "calendar" }] },
+      };
+      job.state.runningAtMs = startedAt;
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      if (shape === "legacy definition") {
+        // Runtime settlement preserves legacy definitions rather than inserting defaults.
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.enabled') WHERE store_key = ? AND job_id = ?",
+          )
+          .run(cronStoreKey(storePath), job.id);
+      }
+      const runReceipt = claimReceipt(storePath, job, startedAt);
+      const state = createCronRegressionState({
+        storePath,
+        nowMs: () => startedAt + 10,
+        runIsolatedAgentJob: vi.fn(),
+      });
+      state.schedulerStarted = true;
+      await list(state);
+      await finalizeCompletedCronRunOutcomes(state, [
+        authorOutcome({
+          jobId: job.id,
+          job,
+          activeJobMarker: markCronJobActive(job.id),
+          runReceipt,
+          runReceiptContext: captureOpenClawStateWorkerContext(),
+          status: "ok",
+          startedAt,
+          endedAt: startedAt + 10,
+        }),
+      ]);
+      const completed = (await loadCronStore(storePath)).jobs[0]!;
+      expect(completed.state).toMatchObject({
+        lastRunStatus: "ok",
+        lastRunAtMs: startedAt,
+        lastDurationMs: 10,
+      });
+      if (shape === "legacy state") {
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "UPDATE cron_jobs SET state_json = json_remove(state_json, '$.lastRunStatus') WHERE store_key = ? AND job_id = ?",
+          )
+          .run(cronStoreKey(storePath), job.id);
+        noteCronJobsStoreCommit(storePath);
+      }
+      const precondition = vi.fn((current: CronJob) => {
+        expect(current.enabled).toBe(shape === "legacy definition" ? undefined : true);
+        if (shape === "legacy state") {
+          expect(current.state.lastRunStatus).toBeUndefined();
+          expect(current.state.lastStatus).toBe("ok");
+        }
+      });
+
+      await updateWithPrecondition(state, job.id, { enabled: false }, precondition);
+
+      expect(precondition).toHaveBeenCalledOnce();
+      expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+        enabled: false,
+        runtimeAuthority: job.runtimeAuthority,
+        state: {
+          lastRunStatus: "ok",
+          lastRunAtMs: startedAt,
+          lastDurationMs: 10,
+        },
+      });
+    },
+  );
+
+  it.each(["definition", "authority", "run identity"] as const)(
+    "rejects a guarded update when the observed %s changes",
+    async (change) => {
+      const { storePath } = fixtures.makeStorePath();
+      const now = Date.now();
+      const job: CronStoredJob = createDueIsolatedJob({
+        id: "guarded-change",
+        nowMs: now,
+        nextRunAtMs: now,
+      });
+      job.state.runningAtMs = now;
+      job.state.runningReceiptId = "observed-run";
+      job.runtimeAuthority = {
+        version: 1,
+        runtimeId: "fixture",
+        namespace: "fixture.apps",
+        payload: { apps: [{ id: "calendar" }] },
+      };
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      const state = createCronRegressionState({
+        storePath,
+        nowMs: () => now,
+        runIsolatedAgentJob: vi.fn(),
+      });
+      const precondition = vi.fn(async () => {
+        const current = await loadCronStore(storePath);
+        const changed = current.jobs[0]!;
+        if (change === "definition") {
+          changed.name = "changed by another writer";
+        } else if (change === "authority") {
+          delete changed.runtimeAuthority;
+          changed.runtimeAuthorityRecoveryRequired = true;
+        } else {
+          changed.state.runningReceiptId = "replacement-run";
+        }
+        await saveCronStore(storePath, current);
+      });
+
+      await expect(
+        updateWithPrecondition(state, job.id, { enabled: false }, precondition),
+      ).rejects.toBeInstanceOf(CronJobsStoreChangedError);
+
+      expect(precondition).toHaveBeenCalledOnce();
+      const retained = (await loadCronStore(storePath)).jobs[0]!;
+      expect(retained.enabled).toBe(true);
+      if (change === "definition") {
+        expect(retained.name).toBe("changed by another writer");
+      } else if (change === "authority") {
+        expect(retained.runtimeAuthority).toBeUndefined();
+        expect(retained.runtimeAuthorityRecoveryRequired).toBe(true);
+      } else {
+        expect(retained.state.runningReceiptId).toBe("replacement-run");
+      }
+    },
+  );
+
   it("refreshes the public job view after a committed terminal reply is lost", async () => {
     const { storePath } = fixtures.makeStorePath();
     const startedAt = Date.parse("2026-02-06T10:05:00.000Z");

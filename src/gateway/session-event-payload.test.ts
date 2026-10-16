@@ -2,6 +2,20 @@ import { expect, it } from "vitest";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 
+it("clears transient title pending in both event and nested session snapshots", () => {
+  const sessionRow = { key: "agent:main:dashboard:title", kind: "direct" as const, updatedAt: 1 };
+  expect(
+    buildGatewaySessionSnapshot({
+      sessionRow: { ...sessionRow, titlePending: true },
+      includeSession: true,
+    }),
+  ).toMatchObject({ titlePending: true, session: { titlePending: true } });
+  expect(buildGatewaySessionSnapshot({ sessionRow, includeSession: true })).toMatchObject({
+    titlePending: false,
+    session: { titlePending: false },
+  });
+});
+
 it("clears automatic-label metadata when a subscribed client merges a later snapshot", () => {
   const sessionRow = { key: "agent:main:node-device", kind: "direct" as const, updatedAt: 1 };
   const previous = buildGatewaySessionSnapshot({

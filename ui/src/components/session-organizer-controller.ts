@@ -34,6 +34,7 @@ import {
   type SidebarSessionPatch,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
+import { sidebarSessionHasArchiveDescendants } from "./session-menu-descendants.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
 
@@ -110,13 +111,11 @@ export class SessionOrganizerController {
 
   archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
     return this.runOperation((operations, scope) =>
-      operations.archiveSessionWithUndo(this.host, session, scope),
-    );
-  }
-
-  archiveSessionTreeWithUndo(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.archiveSessionTreeWithUndo(this.host, session, scope),
+      operations.archiveSessionWithUndo(
+        this.host,
+        { ...session, hasArchiveDescendants: sidebarSessionHasArchiveDescendants(session) },
+        scope,
+      ),
     );
   }
 

@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { i18n, t } from "../../i18n/index.ts";
@@ -11,6 +10,8 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import {
   createReactiveDraftHarness,
@@ -59,17 +60,18 @@ describe("chat composer suggestion accessibility", () => {
     const { container } = createReactiveDraftHarness({ onSlashIntent });
 
     inputDraftAtEnd(container, "Polish this with $pro:");
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
-    const renderedTextarea = getComposerTextarea(container);
-    expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
-    expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
-    expect(renderedTextarea?.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
-    expect(renderedTextarea?.hasAttribute("aria-expanded")).toBe(false);
-    expect(renderedTextarea?.getAttribute("aria-haspopup")).toBe("listbox");
-    expect(onSlashIntent).toHaveBeenCalledOnce();
+    await waitForSolid(() => {
+      const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
+      const renderedTextarea = getComposerTextarea(container);
+      expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
+      expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
+      expect(renderedTextarea?.getAttribute("aria-controls")).toBe(
+        "chat-single-skill-menu-listbox",
+      );
+      expect(renderedTextarea?.hasAttribute("aria-expanded")).toBe(false);
+      expect(renderedTextarea?.getAttribute("aria-haspopup")).toBe("listbox");
+      expect(onSlashIntent).toHaveBeenCalledOnce();
+    });
   });
 
   it.each(["/", "/tools "])("keeps %s options accessible while navigating and closing", (draft) => {
@@ -268,16 +270,27 @@ describe("chat composer suggestion accessibility", () => {
       }
       refresh.resolve();
       await refresh.promise;
-      await Promise.resolve();
-      if (dismissed) {
-        expect(container.querySelector(".slash-menu")).toBeNull();
-      } else {
-        expect(
-          Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
-            (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
-          ),
-        ).toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
-      }
+      await waitForSolid(() => {
+        if (dismissed) {
+          expect(container.querySelector(".slash-menu")).toBeNull();
+        } else {
+          expect(
+            Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
+              (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
+            ),
+          ).toEqual([
+            "default",
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra",
+          ]);
+        }
+      });
     },
   );
 
@@ -308,6 +321,7 @@ describe("chat composer suggestion accessibility", () => {
     // Finish hooks unwind in reverse registration order.
     onTestFinished(() => verifyFinished());
     const { container } = createReactiveDraftHarness();
+    onTestFinished(cleanupSolid);
     const textarea = getComposerTextarea(container);
     verifyFinished = () => {
       try {
@@ -315,7 +329,7 @@ describe("chat composer suggestion accessibility", () => {
         textarea.dispatchEvent(new Event("select", { bubbles: true }));
         expect(container.querySelector("textarea")).toBeNull();
       } finally {
-        render(nothing, container);
+        cleanupSolid();
         resetChatViewState();
       }
     };

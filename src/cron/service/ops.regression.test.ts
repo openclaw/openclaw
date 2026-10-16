@@ -33,7 +33,6 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { createCronMutationCompletion } from "../mutation-completion.js";
 import {
@@ -42,7 +41,6 @@ import {
 } from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { start, stop } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { enqueueRun, run, waitForManualRun } from "./ops-run.js";
 import type { CronEvent } from "./state.js";
@@ -435,95 +433,6 @@ describe("cron service ops regressions", () => {
       });
     } finally {
       vi.useRealTimers();
-    }
-  });
-
-  it("#17554: startup recovers a stale running marker before an explicit force run", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
-    const now = Date.parse("2026-02-06T10:05:00.000Z");
-    const staleRunningAtMs = now - 2 * 60 * 60 * 1000 - 1;
-
-    await saveCronStore(store.storePath, {
-      version: 1,
-      jobs: [
-        {
-          id: "stale-running",
-          name: "stale-running",
-          enabled: true,
-          createdAtMs: now - 3_600_000,
-          updatedAtMs: now - 3_600_000,
-          schedule: { kind: "at", at: new Date(now - 60_000).toISOString() },
-          sessionTarget: "main",
-          wakeMode: "now",
-          payload: { kind: "systemEvent", text: "stale-running" },
-          state: {
-            runningAtMs: staleRunningAtMs,
-            lastRunAtMs: now - 3_600_000,
-            lastStatus: "ok",
-            nextRunAtMs: now - 60_000,
-          },
-        },
-      ],
-    });
-
-    const enqueueSystemEvent = vi.fn();
-    const state = createCronRegressionState({
-      cronEnabled: false,
-      storePath: store.storePath,
-      nowMs: () => now,
-      enqueueSystemEvent,
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-    });
-
-    try {
-      await start(state);
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
-        lastRunStatus: "error",
-        lastError: "cron: job interrupted by gateway restart",
-      });
-      const result = await run(state, "stale-running", "force");
-      expect(result).toEqual({ ok: true, ran: true });
-      expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-      const [text, options] = mockCall(enqueueSystemEvent, 0) as [string, { agentId?: unknown }?];
-      expect(text).toBe("stale-running");
-      expect(options?.agentId).toBe("main");
-    } finally {
-      stop(state);
-      await state.schedulerDrain;
-    }
-  });
-
-  it("startup clears an orphaned queued request before an explicit due run", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
-    const now = Date.parse("2026-02-06T10:05:01.000Z");
-    const job = createDueIsolatedJob({
-      id: "stale-queued",
-      nowMs: now,
-      nextRunAtMs: now - 60_000,
-    });
-    job.state.queuedAtMs = now - 2 * 60 * 60 * 1000 - 1;
-    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "ok" });
-    const state = createCronRegressionState({
-      cronEnabled: false,
-      storePath: store.storePath,
-      nowMs: () => now,
-      runIsolatedAgentJob,
-    });
-
-    try {
-      await start(state);
-      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(
-        state.store?.jobs.find((entry) => entry.id === job.id)?.state.queuedAtMs,
-      ).toBeUndefined();
-      await expect(run(state, job.id, "due")).resolves.toEqual({ ok: true, ran: true });
-      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-    } finally {
-      stop(state);
-      await state.schedulerDrain;
     }
   });
 

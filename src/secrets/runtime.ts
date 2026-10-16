@@ -498,7 +498,8 @@ function patchResolvedSecretRefLeaves(params: {
   defaults: NonNullable<OpenClawConfig["secrets"]>["defaults"];
 }): ResolvedSecretRefPatch {
   if (parseSecretRef(params.source, params.defaults)) {
-    return isDeepStrictEqual(params.source, params.resolved)
+    return isDeepStrictEqual(params.current, params.resolved) ||
+      isDeepStrictEqual(params.source, params.resolved)
       ? { changed: false, value: params.current }
       : { changed: true, value: params.resolved };
   }
@@ -644,14 +645,13 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
       if (getRuntimeConfigSnapshotMetadata()?.revision !== runtimeMetadata.revision) {
         return false;
       }
-      return activateSecretsRuntimeSnapshotIfCurrent(
-        refreshedSnapshot,
-        candidate.expectedRevision,
-        {
-          preserveActivationLineage: true,
-          runtimeSourceConfig,
-        },
-      );
+      return activateSecretsRuntimeSnapshotStateIfCurrent({
+        ...createSecretsRuntimeSnapshotActivation(refreshedSnapshot),
+        expectedRevision: candidate.expectedRevision,
+        preserveActivationLineage: true,
+        runtimeSourceConfig,
+        preserveRuntimeConfigPublication: !modelsPatch.changed,
+      });
     };
     const activated = await activateProviderAuthRuntimeSnapshot({
       snapshot: refreshedSnapshot,

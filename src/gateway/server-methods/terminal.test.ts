@@ -390,7 +390,11 @@ describe("terminal gateway policy", () => {
         list: async () => [],
         read: async (request) => ({ ...request, items: [] }),
         openTerminal: async () => {
-          vi.setSystemTime(TERMINAL_OPEN_DEADLINE_MS);
+          // Rewind the wall clock by 90s, then advance monotonic time to the
+          // deadline. The deadline is monotonic, so the rewind must not save
+          // the open from expiring.
+          vi.setSystemTime(-90_000);
+          vi.advanceTimersByTime(TERMINAL_OPEN_DEADLINE_MS);
           return { kind: "local", argv: ["codex", "resume", "thread"] };
         },
       });
@@ -411,6 +415,43 @@ describe("terminal gateway policy", () => {
         undefined,
         expect.objectContaining({ message: "terminal open timed out" }),
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens a terminal despite a 90s wall-clock forward jump during catalog lookup", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      installCatalog({
+        id: "codex",
+        label: "Codex",
+        list: async () => [],
+        read: async (request) => ({ ...request, items: [] }),
+        openTerminal: async () => {
+          // Jump the wall clock forward by 90s mid-open. Under the bug
+          // (Date.now seed) the deadline already expired at t=30s, so a
+          // forward jump to t=90s would falsely reject this healthy open.
+          // Under the fix (performance.now seed) the monotonic clock is
+          // still at 0, so the open stays within budget.
+          vi.setSystemTime(90_000);
+          return { kind: "local", argv: ["codex", "resume", "thread"] };
+        },
+      });
+      const { opts, sessions, respond } = makeOpts(
+        {
+          cols: 80,
+          rows: 24,
+          catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread" },
+        },
+        { enabled: true },
+      );
+
+      await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+
+      expect(sessions.open).toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(true, expect.any(Object));
     } finally {
       vi.useRealTimers();
     }

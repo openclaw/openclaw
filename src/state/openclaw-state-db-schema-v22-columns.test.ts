@@ -26,6 +26,26 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
+
+function siblingStatistics(database: DatabaseSync) {
+  return ["sqlite_stat1", "sqlite_stat4"].flatMap((table) => {
+    if (!database.prepare("SELECT 1 FROM sqlite_schema WHERE name = ?").get(table)) {
+      return [];
+    }
+    return [
+      {
+        table,
+        rows: database
+          .prepare(`SELECT * FROM ${table}
+            WHERE tbl NOT IN ('acp_sessions', 'operator_approvals', 'cron_run_receipts',
+              'execution_decision_facts', 'skill_workshop_changes')
+            ORDER BY tbl, idx, rowid`)
+          .all(),
+      },
+    ];
+  });
+}
 
 it("preserves local columns, constraints, indexes, and triggers during cursor backfill", () => {
   using db = new DatabaseSync(":memory:");
@@ -228,6 +248,11 @@ describe("v21 upgrade preserves portable cursor and resume identities", () => {
       "session-c",
       '{"agentSessionId":"other"}',
     );
+    db.exec(`DROP TABLE secret_store_entries;
+      INSERT INTO acp_replay_sessions
+        (session_id, session_key, cwd, complete, created_at, updated_at, next_seq, estimated_bytes)
+        VALUES ('retained-replay', 'retained-key', '/synthetic', 1, 1, 1, 0, 0);
+      ANALYZE;`);
     // Persisted opaque cursors name historical rowids, including gaps and non-key insertion order.
     expect(
       db
@@ -261,10 +286,26 @@ describe("v21 upgrade preserves portable cursor and resume identities", () => {
       fs.mkdirSync(path.dirname(pathname), { recursive: true });
       fs.copyFileSync(template, pathname);
       const options = { env: { OPENCLAW_STATE_DIR: stateDir }, path: pathname };
-      if (owner === "doctor") {
-        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-      }
-      const { db } = openOpenClawStateDatabase(options);
+      using scope = new DatabaseSync(pathname, { readOnly: true });
+      const statistics = siblingStatistics(scope);
+      const { db } = await assertSqliteMigrationScopePreserved(
+        scope,
+        [
+          "schema_meta",
+          "config_machine_state",
+          "sqlite_stat1",
+          "sqlite_stat4",
+          "acp_sessions",
+          ...STATE_CURSOR_TABLES_V22,
+        ],
+        () => {
+          if (owner === "doctor") {
+            expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+          }
+          return openOpenClawStateDatabase(options);
+        },
+      );
+      expect(siblingStatistics(scope)).toEqual(statistics);
       expect(db.prepare("PRAGMA user_version").get()).toEqual({
         user_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });
@@ -304,6 +345,46 @@ describe("v21 upgrade preserves portable cursor and resume identities", () => {
           { cursor_id: 30 },
         ]);
       }
+      await closeOpenClawStateDatabaseAsync();
+    },
+  );
+
+  it.each([
+    { name: "additive columns", change: "ALTER TABLE sandbox_registry_entries DROP COLUMN image" },
+    {
+      name: "a drifted index on a migration table",
+      change: `DROP INDEX idx_operator_approvals_status_expiry;
+        CREATE INDEX idx_operator_approvals_status_expiry ON operator_approvals(status, approval_id)`,
+    },
+  ])(
+    "retains supported upgrades when the source also needs repair for $name",
+    async ({ change }) => {
+      const stateDir = directories.make("v21-portable-repair-");
+      const pathname = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+      fs.mkdirSync(path.dirname(pathname), { recursive: true });
+      fs.copyFileSync(template, pathname);
+      const approvalRowsSql =
+        "SELECT approval_id, presentation_json, status FROM operator_approvals ORDER BY approval_id";
+      let approvals: unknown;
+      {
+        using source = new DatabaseSync(pathname);
+        source.exec(change);
+        approvals = source.prepare(approvalRowsSql).all();
+      }
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir }, path: pathname };
+      expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+      const { db } = openOpenClawStateDatabase(options);
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+      expect(db.prepare("SELECT image FROM sandbox_registry_entries").all()).toEqual([]);
+      expect(
+        db
+          .prepare("PRAGMA index_info(idx_operator_approvals_status_expiry)")
+          .all()
+          .map((row) => row.name),
+      ).toEqual(["status", "expires_at_ms", "approval_id"]);
+      expect(db.prepare(approvalRowsSql).all()).toEqual(approvals);
       await closeOpenClawStateDatabaseAsync();
     },
   );

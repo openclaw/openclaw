@@ -20,6 +20,7 @@ export async function finalizeReplyAgentRun(
       entry: context.activeSessionEntry,
       writer: context.execution.sessionWriter,
       operation: context.replyOperation,
+      activitySummaryCompletion: context.activitySummaryCompletion,
       prepareRestartClaimCleanup: context.prepareRestartClaimCleanup,
       publish(entry) {
         context.activeSessionEntry = entry;
@@ -33,15 +34,8 @@ export async function finalizeReplyAgentRun(
       const accounting = await accountAgentTurn(current);
       const prepared = await prepareReplyAgentPayloads({ context: current, accounting });
       if (prepared.kind === "return") {
-        const refreshDiagnostics =
-          context.followupRun.run.verboseLevelOverride !== "off" ||
-          context.followupRun.run.traceAuthorized === true;
-        const activeSessionEntry =
-          refreshDiagnostics && completion
-            ? await completion.refresh()
-            : accounting.activeSessionEntry;
         const diagnostics = await buildReplyDiagnosticsPayload({
-          activeSessionEntry,
+          activeSessionEntry: accounting.activeSessionEntry,
           followupRun: context.followupRun,
           accounting,
           cfg: context.cfg,

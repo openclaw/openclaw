@@ -1,4 +1,5 @@
 // Exercises CLI routing receipts at the exact post-admission dispatch boundary.
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
 import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.types.js";
@@ -12,6 +13,7 @@ import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
+import { persistAuthProfileBatch } from "../auth-profiles/upsert-with-lock.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
@@ -126,6 +128,48 @@ describe("CLI model-routing receipt authority", () => {
     cliBackendsTesting.resetDepsForTest();
     await fixture.cleanup();
   });
+
+  it.each(["native", "selected", "automatic"] as const)(
+    "keeps scheduled CLI credentials under their recorded owner (%s)",
+    async (kind) => {
+      const agentDir = path.join(fixture.session.dir, "credential-owner");
+      const profileId = "test-cli:current";
+      await persistAuthProfileBatch({
+        agentDir,
+        profiles: [
+          {
+            profileId,
+            credential: { type: "api_key", provider: "test-cli", key: "synthetic-cron-key" },
+          },
+        ],
+      });
+      const prepareExecution = vi.fn(async () => undefined);
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            ...buildDefaultTestCliBackend(),
+            authEpochMode: "profile-only",
+            autoSelectAuthProfile: kind === "automatic",
+            prepareExecution,
+          },
+        ],
+      });
+      const prepared = fixture.prepare({
+        agentDir,
+        trigger: "cron",
+        nativeAuthOnly: true,
+        ...(kind === "selected" ? { authProfileId: profileId } : {}),
+      });
+      if (kind === "native") {
+        expect((await prepared).effectiveAuthProfileId).toBeUndefined();
+        expect(prepareExecution).toHaveBeenCalledOnce();
+      } else {
+        await expect(prepared).rejects.toThrow("Automation has no recorded inference account");
+        expect(prepareExecution).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("checks the logical model before CLI preparation and retains a current model guard through dispatch", async () => {
     const config = { agents: { defaults: { model: "fixture/allowed" } } };

@@ -43,6 +43,9 @@ vi.mock("./commands-compact.runtime.js", async (importOriginal) => ({
   isEmbeddedAgentRunAbortableForCompaction: () => false,
 }));
 
+// Cold runtime imports are setup work, not part of the compaction deadline.
+await import("./commands-compact.runtime.js");
+
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-plugin-compact-");
 
 let registry: PluginRegistry;
@@ -628,13 +631,13 @@ describe("handlePluginCommand", () => {
     const cfg = { commands: { text: true } } as OpenClawConfig;
     expect(
       shouldBypassPluginOwnedBindingForCommand(
-        {
+        finalizeInboundContext({
           Body: "/card",
           CommandAuthorized: true,
           CommandSource: "text",
           Provider: "whatsapp",
           Surface: "whatsapp",
-        } as never,
+        }),
         cfg,
         replyOptions,
       ),

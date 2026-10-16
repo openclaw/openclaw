@@ -7,6 +7,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runSetupInferenceTurn } from "../../system-agent/setup-inference-turn.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { WizardSession } from "../../wizard/session.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
@@ -17,8 +18,12 @@ import {
   createOperatorClient,
 } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
-import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
+import {
+  createAdmittedWizardSession,
+  whenAdmittedWizardSessionSettled,
+} from "./setup-admission.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+import { publishWizardLoginSession, startWizardLogin } from "./wizard-login.js";
 import { wizardHandlers } from "./wizard.js";
 
 it.each([
@@ -172,6 +177,77 @@ it.each([
         session.cancel();
         await whenAdmittedWizardSessionSettled(session);
       }
+    });
+  },
+);
+
+it.each(["admission", "publication"])(
+  "releases login setup when its connection closes before %s",
+  async (phase) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const connection = new AbortController();
+      const client = createOperatorClient({
+        profileId: "login-owner",
+        scopes: ["operator.admin"],
+      });
+      client.connectionSignal = connection.signal;
+      const context = createContext();
+      Object.assign(context, createWizardSessionTracker());
+      const respond = vi.fn();
+      const createSession = vi.fn(
+        () =>
+          new WizardSession(async (prompter) => {
+            await prompter.confirm({ message: "Continue setup?" });
+          }),
+      );
+      const params = {
+        client,
+        context,
+        sessionId: "disconnected-login",
+        respond,
+        assertCurrent: vi.fn(),
+        createSession,
+      };
+      if (phase === "admission") {
+        connection.abort(new Error("Connection closed before admission"));
+        try {
+          await expect(startWizardLogin(params)).rejects.toThrow(
+            "Connection closed before admission",
+          );
+        } finally {
+          for (const session of context.wizardSessions.values()) {
+            session.cancel();
+            await whenAdmittedWizardSessionSettled(session);
+          }
+        }
+        expect(createSession).not.toHaveBeenCalled();
+      } else {
+        const session = expectDefined(
+          await createAdmittedWizardSession(createSession),
+          "admitted login session",
+        );
+        try {
+          connection.abort(new Error("Connection closed before publication"));
+          await publishWizardLoginSession({ ...params, session });
+          expect(session.signal.aborted).toBe(true);
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              message: "Login is no longer available on this connection.",
+            }),
+          );
+        } finally {
+          session.cancel();
+          await whenAdmittedWizardSessionSettled(session);
+        }
+      }
+      expect(context.wizardSessions.size).toBe(0);
+      const replacement = expectDefined(
+        await createAdmittedWizardSession(() => new WizardSession(async () => {})),
+        "replacement setup admission",
+      );
+      await whenAdmittedWizardSessionSettled(replacement);
     });
   },
 );

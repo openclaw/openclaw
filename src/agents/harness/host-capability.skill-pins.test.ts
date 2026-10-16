@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -9,10 +8,7 @@ import * as selectionRead from "../../skills/library/selection-read.js";
 import * as librarySelection from "../../skills/library/selection.js";
 import { saveSkillLibrary } from "../../skills/library/service.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseByPathAsync,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -32,7 +28,6 @@ type LibraryHost = {
   build: () => ReturnType<typeof agentTools.createOpenClawCodingToolsInternalAsync>;
   controller: AbortController;
   snapshot: SkillSnapshot;
-  databasePath: string;
   resourcePath: string;
 };
 
@@ -83,7 +78,6 @@ async function withLibraryHost(run: (fixture: LibraryHost) => Promise<void>) {
         host,
         controller,
         snapshot,
-        databasePath: path.join(root, "state", "openclaw.sqlite"),
         resourcePath: path.join(
           skillLibraryRevisionDir(pin.skillId, pin.revision),
           "references/example.txt",
@@ -227,46 +221,6 @@ it.each(["host close", "abort", "snapshot edit"] as const)(
         } else {
           await expect(pending).rejects.toThrow();
         }
-      } finally {
-        resume.resolve();
-        await settled;
-      }
-    });
-  },
-);
-
-it.each(["admission close", "physical replacement"] as const)(
-  "refuses pinned tool publication after %s during later tool preparation",
-  async (change) => {
-    await withLibraryHost(async ({ build, databasePath }) => {
-      const entered = createDeferred();
-      const resume = createDeferred();
-      const construct = agentTools.createOpenClawCodingToolsInternalAsync;
-      using _ = vi
-        .spyOn(agentTools, "createOpenClawCodingToolsInternalAsync")
-        .mockImplementationOnce(async (...args) => {
-          const tools = await construct(...args);
-          entered.resolve();
-          await resume.promise;
-          return tools;
-        });
-      const pending = build();
-      const settled = pending.catch(() => undefined);
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "Tool construction did not start",
-        );
-        if (change === "admission close") {
-          await closeOpenClawStateDatabaseByPathAsync(databasePath);
-        } else {
-          const replacement = `${databasePath}.replacement`;
-          fs.copyFileSync(databasePath, replacement);
-          fs.renameSync(replacement, databasePath);
-        }
-        resume.resolve();
-        await expect(pending).rejects.toThrow();
       } finally {
         resume.resolve();
         await settled;

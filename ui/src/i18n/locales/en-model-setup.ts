@@ -3,6 +3,8 @@ import { en } from "./en.ts";
 
 const enModelSetup = {
   modelSetup: {
+    waitingForApproval: "Waiting for approval in your browser…",
+    providerConnected: "{provider} is connected",
     discovery: {
       title: "On this Gateway",
       description:

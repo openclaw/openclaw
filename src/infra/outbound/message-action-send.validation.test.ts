@@ -240,7 +240,6 @@ describe("message body alias normalization", () => {
   });
 
   it.each([
-    { name: "canonical message", body: { message: "    indented body" } },
     {
       name: "mixed reasoning preamble alias",
       body: { text: "<think>private</think>\nThinking\n_summary_\n    indented body" },

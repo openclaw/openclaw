@@ -10,14 +10,13 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createSidebarFullMessageLoader } from "../chat-pane-sidebar-layout.ts";
 import { createTestChatPane } from "../chat-pane.test-support.ts";
-import "./chat-detail-slot.ts";
 import type {
   SidebarContent,
   SidebarFullMessageLoader,
   ToolOutputSidebarContent,
 } from "./chat-sidebar-content-types.ts";
+import { mountCard } from "./chat-tool-cards.test-support.tsx";
 import { ChatToolOutput } from "./chat-tool-output.ts";
-import { renderToolFixture, renderToolCard } from "./chat-tool-render.test-support.ts";
 
 type Panel = HTMLElement & {
   content: ToolOutputSidebarContent;
@@ -232,15 +231,16 @@ describe("tool output inspection", () => {
     const card = outputCard({ outputText: output });
     const open = vi.fn<(content: SidebarContent) => void>();
     const root = document.createElement("div");
-    await renderToolFixture(
-      renderToolCard(card, {
+    await mountCard(
+      card,
+      {
         messageKey: "calls",
         sessionKey: "global",
         agentId: "work",
         expanded: true,
         onToggleExpanded: vi.fn(),
         onOpenSidebar: open,
-      }),
+      },
       root,
     );
     expect(root.textContent).not.toContain("TAIL");

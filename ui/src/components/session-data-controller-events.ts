@@ -1,6 +1,5 @@
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
@@ -230,10 +229,8 @@ export function refreshSidebarSessionList(
 }
 
 type SessionGatewayEventOwner = {
-  presencePayload: PresencePayload | undefined;
+  publishPresence(payload: unknown): void;
   handleSessionCatalogHostEvent(payload: unknown): void;
-  handleSessionCatalogChanged(payload: unknown): void;
-  requestSessionDataUpdate(): void;
 };
 
 export function subscribeSessionDataGatewayEvents(
@@ -247,16 +244,8 @@ export function subscribeSessionDataGatewayEvents(
       }
       return;
     }
-    if (event.event === "sessions.catalog.changed") {
-      if (canCallGatewayMethod(gateway.snapshot, "sessions.catalog.list", "operator.read")) {
-        owner.handleSessionCatalogChanged(event.payload);
-      }
-      return;
-    }
     if (event.event === "presence") {
-      const presence = readPresenceEntries(event.payload);
-      owner.presencePayload = presence ? { presence } : undefined;
-      owner.requestSessionDataUpdate();
+      owner.publishPresence(event.payload);
     }
   });
 }

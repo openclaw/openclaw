@@ -24,6 +24,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -131,7 +132,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
       expect(historySequence).toBe(historyLane.retiredSequence);
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const statements = trackSqliteStatementExecutions(
-        database.db,
+        requireNativeSqliteDatabase(database.db),
         ["whole-store-projection"] as const,
         (sql) => {
           const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
@@ -229,7 +230,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
 
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
     const statements = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["whole-store-projection", "transcript-full-hydration"] as const,
       (sql) => {
         const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ").trim();

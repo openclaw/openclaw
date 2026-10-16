@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { sqliteSchemaFixture } from "../infra/sqlite-schema-contract.test-support.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { VERSION } from "../version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -110,7 +111,7 @@ describe("shared-state canonical index repair", () => {
         repairCanonicalSqliteIndexes(
           requireNativeSqliteDatabase(reopened.db),
           reopened.path,
-          oldSchema,
+          sqliteSchemaFixture(oldSchema),
         ),
       ).toEqual([index]);
       expect(

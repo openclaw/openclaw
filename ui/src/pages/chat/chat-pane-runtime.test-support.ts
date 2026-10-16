@@ -2,6 +2,7 @@ import { render as renderSolid } from "@solidjs/web";
 import { createComponent } from "solid-js";
 import { vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { ChatPaneRuntimeView } from "./chat-pane-runtime-view.tsx";
@@ -34,8 +35,17 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
             return;
           }
           this.runtime.isConnected = false;
+          const runtime = this.runtime;
+          // The fixture forwards protected runtime fields; match the production bridge's context.
+          const context = Reflect.get(runtime, "context") as ApplicationContext;
           this.dispose = renderSolid(
-            () => createComponent(ChatPaneRuntimeView, { runtime: this.runtime }),
+            () =>
+              createComponent(ApplicationProvider, {
+                value: context,
+                get children() {
+                  return createComponent(ChatPaneRuntimeView, { runtime });
+                },
+              }),
             this,
           );
         }

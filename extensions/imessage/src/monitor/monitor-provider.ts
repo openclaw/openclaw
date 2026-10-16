@@ -45,7 +45,6 @@ import {
   createNonExitingRuntime,
   danger,
   logVerbose,
-  shouldLogVerbose,
   sleepWithAbort,
   warn,
 } from "openclaw/plugin-sdk/runtime-env";
@@ -62,7 +61,6 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import type { IMessageApprovalGatewayRuntime } from "../approval-gateway-types.js";
@@ -80,10 +78,6 @@ import {
   resolveIMessageRemoteAttachmentRoots,
 } from "../media-contract.js";
 import { imessageRpcSupportsMethod, probeIMessage, probeIMessagePrivateApi } from "../probe.js";
-import {
-  hasIMessageQuestionReactionTarget,
-  maybeResolveIMessageQuestionReaction,
-} from "../question-reactions.js";
 import { resolveIMessageRemoteHost } from "../remote-host.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
@@ -423,14 +417,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
               entries.length === 1
                 ? expectDefined(entries[0], "single iMessage dispatch entry").message
                 : combineIMessagePayloads(entries.map((entry) => entry.message));
-            if (entries.length > 1 && shouldLogVerbose()) {
-              const text = combined.text ?? "";
-              const preview = sliceUtf16Safe(text, 0, 50);
-              const ellipsis = text.length > 50 ? "..." : "";
-              logVerbose(
-                `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
-              );
-            }
             await handleMessageNow(combined, admissionLifecycle);
             await settle();
           } catch (err) {
@@ -594,11 +580,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       process.env,
       accountInfo.accountId,
     ).catch(() => []);
-    const isQuestionReaction = hasIMessageQuestionReactionTarget({
-      accountId: accountInfo.accountId,
-      message,
-      bodyText,
-    });
     const decision = await resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
@@ -617,7 +598,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       groupHistories,
       echoCache: sentMessageCache,
       selfChatCache,
-      reactionNotifications: isQuestionReaction ? "all" : imessageCfg.reactionNotifications,
+      reactionNotifications: imessageCfg.reactionNotifications,
       logVerbose,
     });
 
@@ -722,18 +703,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     }
 
     if (decision.kind === "reaction") {
-      if (
-        await maybeResolveIMessageQuestionReaction({
-          cfg,
-          accountId: accountInfo.accountId,
-          message,
-          bodyText,
-          senderId: decision.senderNormalized,
-          logDebug: logVerbose,
-        })
-      ) {
-        return;
-      }
       enqueueIMessageReactionSystemEvent({ decision, runtime, logVerbose });
       return;
     }
@@ -882,14 +851,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       allowFrom,
       normalizeEntry: normalizeIMessageHandle,
     });
-    if (shouldLogVerbose()) {
-      const preview = truncateUtf16Safe(ctxPayload.Body ?? "", 200).replace(/\n/g, "\\n");
-      logVerbose(
-        `imessage inbound: chatId=${chatId ?? "unknown"} from=${ctxPayload.From} len=${
-          (ctxPayload.Body ?? "").length
-        } preview="${preview}"`,
-      );
-    }
 
     const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
     const typingTarget = ctxPayload.To;

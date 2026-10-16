@@ -1,14 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
-  SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import { retryAsync } from "openclaw/plugin-sdk/speech-provider";
+import { createSpeechDirectiveParser, retryAsync } from "openclaw/plugin-sdk/speech-provider";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -100,28 +98,10 @@ function readGoogleTtsOverrides(
   };
 }
 
-function parseDirectiveToken(
-  ctx: SpeechDirectiveTokenParseContext,
-): SpeechDirectiveTokenParseResult {
-  switch (ctx.key) {
-    case "voicename":
-    case "voice_name":
-    case "google_voice":
-    case "googlevoice":
-      if (!ctx.policy.allowVoice) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { voiceName: ctx.value } };
-    case "google_model":
-    case "googlemodel":
-      if (!ctx.policy.allowModelId) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { model: ctx.value } };
-    default:
-      return { handled: false };
-  }
-}
+const parseDirectiveToken = createSpeechDirectiveParser({
+  voiceName: ["allowVoice", ["voicename", "voice_name", "google_voice", "googlevoice"]],
+  model: ["allowModelId", ["google_model", "googlemodel"]],
+});
 
 type GoogleTtsSynthesisRequest = Pick<
   SpeechSynthesisRequest,

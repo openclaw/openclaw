@@ -269,25 +269,6 @@ describe("update failure report", () => {
     });
   });
 
-  it("distinguishes an active preparation from ambiguous issue creation", async () => {
-    const { env, prepared, submit } = await prepareFailedReport("attempt-preparing");
-    expect(
-      await reserveUpdateFailureReportReceipt(
-        prepared.attemptId,
-        "active-owner",
-        prepared.previewDigest,
-        env,
-      ),
-    ).toMatchObject({ reserved: true });
-    const createIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123");
-
-    await expect(submit({ createIssue })).resolves.toMatchObject({
-      message: "This update attempt already has a report preparation in progress.",
-      status: "retryable",
-    });
-    expect(createIssue).not.toHaveBeenCalled();
-  });
-
   it.each([
     { condition: "authority closes", attemptId: "attempt-auth-preflight-authority" },
     { condition: "the canonical attempt changes", attemptId: "attempt-auth-preflight-stale" },

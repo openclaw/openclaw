@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -10,11 +9,6 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-  type PreparedAgentRunAdmission,
-} from "../admitted-run-context.js";
 import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import { markCodeModeControlTool } from "../code-mode-control-tools.js";
 import {
@@ -24,9 +18,31 @@ import {
 } from "../runtime/internal-hooks.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
-import type { AnyAgentTool } from "../tools/common.js";
 import { runWithAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import {
+  admissionFixture,
+  bindTool,
+  testTool,
+  workspaceDefaults,
+} from "./host-capability.shard.test-support.js";
+
+function pendingWorkspace(sessionKey: string, assertCurrent = () => {}) {
+  const ready = createDeferred();
+  const waiting = createDeferred();
+  return {
+    ready,
+    waiting,
+    scope: {
+      sessionKey,
+      assertCurrent,
+      waitUntilReady: () => {
+        waiting.resolve();
+        return ready.promise;
+      },
+    },
+  };
+}
 
 vi.mock("../agent-tools.before-tool-call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent-tools.before-tool-call.js")>()),
@@ -35,78 +51,16 @@ vi.mock("../agent-tools.before-tool-call.js", async (importOriginal) => ({
 }));
 const mockRunBefore = vi.mocked(runBeforeToolCallHook);
 
-type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
-
-const admissions: PreparedAgentRunAdmission[] = [];
-
-async function admittedAttempt(
-  runId = "run-1",
-  overrides: Omit<Partial<HostAttempt>, "admittedRunContext" | "runId"> = {},
-): Promise<{ attempt: HostAttempt; admission: PreparedAgentRunAdmission }> {
-  setRuntimeConfigSnapshot(overrides.config ?? {}, overrides.config);
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "host-capability-test", state: "present" },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-  });
-  admissions.push(admission);
-  const admittedRunContext = await admission.admit("plugin-harness", `harness-${runId}`);
-  return {
-    admission,
-    attempt: {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      runId,
-      cwd: "/attempt/worktree",
-      workspaceDir: "/workspace",
-      currentChannelId: "chat-1",
-      messageChannel: "telegram",
-      ...overrides,
-      admittedRunContext,
-    },
-  };
-}
-
-function testTool(execute = vi.fn(async () => ({ content: [], details: {} }))): {
-  tool: AnyAgentTool;
-  execute: typeof execute;
-} {
-  return {
-    execute,
-    tool: {
-      name: "read",
-      label: "Read",
-      description: "read",
-      parameters: Type.Object({}),
-      execute,
-    },
-  };
-}
-
-function bindTool(
-  attempt: HostAttempt,
-  tool: AnyAgentTool,
-): {
-  host: ReturnType<typeof createAgentHarnessHostCapabilities>;
-  bound: AnyAgentTool;
-} {
-  const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-  const [bound] = host.capabilities.bindToolSurface([tool]);
-  if (!bound) {
-    throw new Error("expected bound tool");
-  }
-  return { host, bound };
+const fixture = admissionFixture(workspaceDefaults);
+const closeAdmissions = fixture.closeAdmissions;
+function admittedAttempt(...args: Parameters<typeof fixture.admittedAttempt>) {
+  const config = args[1]?.config;
+  setRuntimeConfigSnapshot(config ?? {}, config);
+  return fixture.admittedAttempt(...args);
 }
 
 afterEach(() => {
-  for (const admission of admissions.splice(0)) {
-    admission.close();
-  }
+  closeAdmissions();
   resetAgentRunRegistryForTest();
   clearRuntimeConfigSnapshot();
 });
@@ -115,12 +69,36 @@ beforeEach(() => {
 });
 
 describe("agent harness workspace readiness and boundaries", () => {
+  it.each(["host", "admission"] as const)(
+    "retires continuation retry preparation with its %s owner",
+    async (owner) => {
+      const prepare = vi.fn();
+      const { attempt, admission } = await admittedAttempt("retry-settings", {
+        prepareContinuationRetryCount: prepare,
+      });
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const retained = host.capabilities.prepareContinuationRetryCount;
+      expect(retained).toBeTypeOf("function");
+      // The host captures the receiver before the plugin can mutate its input.
+      attempt.prepareContinuationRetryCount = vi.fn();
+      retained?.({ cwd: "/attempt/worktree" });
+      expect(prepare).toHaveBeenCalledExactlyOnceWith({ cwd: "/attempt/worktree" });
+      if (owner === "host") {
+        host.close();
+      } else {
+        admission.close();
+      }
+      expect(() => retained?.({ cwd: "/attempt/worktree" })).toThrow();
+      expect(prepare).toHaveBeenCalledOnce();
+      host.close();
+    },
+  );
+
   it.each(["read", "pdf", "workspace_plugin"])(
     "waits for the workspace before %s runs while independent tools remain usable",
     async (name) => {
       const { attempt } = await admittedAttempt("pending-workspace");
-      const ready = createDeferred();
-      const waiting = createDeferred();
+      const { ready, waiting, scope } = pendingWorkspace(attempt.sessionKey!);
       const { tool, execute } = testTool();
       tool.name = name;
       if (name === "workspace_plugin") {
@@ -131,16 +109,8 @@ describe("agent harness workspace readiness and boundaries", () => {
       const code = testTool();
       code.tool.name = "exec";
       markCodeModeControlTool(code.tool);
-      const host = await runWithAgentWorkspaceReadiness(
-        {
-          sessionKey: attempt.sessionKey!,
-          waitUntilReady: () => {
-            waiting.resolve();
-            return ready.promise;
-          },
-          assertCurrent: () => {},
-        },
-        async () => createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" }),
+      const host = await runWithAgentWorkspaceReadiness(scope, async () =>
+        createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" }),
       );
       const [bound, independent, codeControl] = host.capabilities.bindToolSurface([
         tool,
@@ -163,8 +133,7 @@ describe("agent harness workspace readiness and boundaries", () => {
 
   it("checks host authority after workspace readiness before preparing a tool", async () => {
     const { attempt } = await admittedAttempt("pending-workspace-preparation");
-    const ready = createDeferred();
-    const waiting = createDeferred();
+    const { ready, waiting, scope } = pendingWorkspace(attempt.sessionKey!);
     const { tool } = testTool();
     const prepare = vi.fn<InternalToolExecutionPreparer>(async () => ({
       kind: "immediate",
@@ -172,16 +141,8 @@ describe("agent harness workspace readiness and boundaries", () => {
       dispose() {},
     }));
     attachInternalToolExecutionPreparer(tool, prepare);
-    const { host, bound } = await runWithAgentWorkspaceReadiness(
-      {
-        sessionKey: attempt.sessionKey!,
-        waitUntilReady: () => {
-          waiting.resolve();
-          return ready.promise;
-        },
-        assertCurrent: () => {},
-      },
-      async () => bindTool(attempt, tool),
+    const { host, bound } = await runWithAgentWorkspaceReadiness(scope, async () =>
+      bindTool(attempt, tool),
     );
     const pending = getInternalToolExecutionPreparer(bound)!({ toolCallId: "prepare", args: {} });
     await Promise.race([waiting.promise, pending]);
@@ -196,23 +157,14 @@ describe("agent harness workspace readiness and boundaries", () => {
     "holds native %s admission and rechecks workspace ownership after the wait",
     async (toolName) => {
       const { attempt } = await admittedAttempt("pending-native-workspace");
-      const ready = createDeferred();
-      const waiting = createDeferred();
       let current = true;
-      const host = await runWithAgentWorkspaceReadiness(
-        {
-          sessionKey: attempt.sessionKey!,
-          waitUntilReady: () => {
-            waiting.resolve();
-            return ready.promise;
-          },
-          assertCurrent: () => {
-            if (!current) {
-              throw new Error("workspace owner replaced");
-            }
-          },
-        },
-        async () => createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" }),
+      const { ready, waiting, scope } = pendingWorkspace(attempt.sessionKey!, () => {
+        if (!current) {
+          throw new Error("workspace owner replaced");
+        }
+      });
+      const host = await runWithAgentWorkspaceReadiness(scope, async () =>
+        createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" }),
       );
       const pending = host.capabilities.runBeforeToolCall({ toolName, params: {} });
       await Promise.race([waiting.promise, pending]);

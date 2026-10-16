@@ -19,7 +19,7 @@ import {
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
-  it.each(["fresh", "prefix", "complete"] as const)(
+  it.each(["fresh", "prefix", "complete", "unindexed"] as const)(
     "archives redundant session headers after a %s import",
     async (state) => {
       const header = {
@@ -42,14 +42,17 @@ describe("runDoctorSessionSqlite", () => {
       ].map((event) => JSON.stringify(event));
       const store = createLegacyStore({ transcriptLines: lines });
       const original = fs.readFileSync(store.transcriptPath);
+      if (state === "unindexed") {
+        fs.writeFileSync(store.storePath, "{}\n");
+      }
       const scope = {
         agentId: "main",
         env: store.env,
         sessionId: "session-1",
-        sessionKey: "agent:main:main",
+        sessionKey: state === "unindexed" ? "agent:main:recovered:session-1" : "agent:main:main",
         storePath: store.storePath,
       };
-      if (state !== "fresh") {
+      if (state === "prefix" || state === "complete") {
         const prefix = path.join(store.tempDir, "prefix.jsonl");
         fs.writeFileSync(
           prefix,
@@ -94,42 +97,60 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each([{ cwd: "/other" }, { version: 2 }, { extra: "different" }])(
-    "retains a conflicting same-id session header (%j)",
-    async (difference) => {
-      const header = {
-        type: "session",
-        version: 3,
-        id: "session-1",
-        cwd: "/fixture",
-        timestamp: "",
-      };
-      const store = createLegacyStore({
-        transcriptLines: [
-          JSON.stringify(header),
-          JSON.stringify({
-            type: "message",
-            id: "one",
-            parentId: null,
-            message: { role: "user", content: "first" },
-          }),
-          JSON.stringify({ ...header, ...difference }),
-        ],
-      });
-      const original = fs.readFileSync(store.transcriptPath);
-      const report = await importLegacyStore(store);
-      expect(report.targets[0]?.issues).toContainEqual(
-        expect.objectContaining({ code: "sqlite_transcript_count_mismatch" }),
+  it.each(
+    [{ cwd: "/other" }, { version: 2 }, { extra: "different" }].flatMap((difference) =>
+      [false, true].map((unindexed) => ({ difference, unindexed })),
+    ),
+  )("retains a conflicting same-id session header (%j)", async ({ difference, unindexed }) => {
+    const header = {
+      type: "session",
+      version: 3,
+      id: "session-1",
+      cwd: "/fixture",
+      timestamp: "",
+    };
+    const store = createLegacyStore({
+      transcriptLines: [
+        JSON.stringify(header),
+        JSON.stringify({
+          type: "message",
+          id: "one",
+          parentId: null,
+          message: { role: "user", content: "first" },
+        }),
+        JSON.stringify({ ...header, ...difference }),
+      ],
+    });
+    if (unindexed) {
+      fs.writeFileSync(store.storePath, "{}\n");
+    }
+    const original = fs.readFileSync(store.transcriptPath);
+    const report = await importLegacyStore(store);
+    expect(report.targets[0]?.issues).toContainEqual(
+      expect.objectContaining({
+        code: unindexed ? "historical_transcript_deferred" : "sqlite_transcript_count_mismatch",
+      }),
+    );
+    let retainedTranscriptPath = store.transcriptPath;
+    if (unindexed) {
+      const archive = expectDefined(
+        readMigrationManifest(report.migrationRun?.manifestPath).targets[0]?.completedMoves.find(
+          (move) => move.sourcePath === store.transcriptPath,
+        ),
+        "protected conflicting transcript",
       );
+      expect(archive.artifact?.classification).toBe("protected");
+      retainedTranscriptPath = archive.archivePath;
+    } else {
       expect(
         readMigrationManifest(report.migrationRun?.manifestPath).targets[0]
           ?.validationBeforeArchive,
       ).toBe("failed");
       expect(report.totals.archivedLegacyStoreFiles).toBe(0);
-      expect(fs.readFileSync(store.transcriptPath)).toEqual(original);
       expect(fs.existsSync(store.storePath)).toBe(true);
-    },
-  );
+    }
+    expect(fs.readFileSync(retainedTranscriptPath)).toEqual(original);
+  });
 
   it.each(["orphaned", "rename-failure"] as const)(
     "recovers the complete SQLite file set (%s)",

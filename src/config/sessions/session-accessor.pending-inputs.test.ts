@@ -15,6 +15,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptMessage,
@@ -886,10 +887,13 @@ describe("accepted input custody", () => {
       .prepare("SELECT * FROM session_pending_inputs ORDER BY seq")
       .all();
     expect(storedBefore.map((row) => row.state)).toEqual(["queued", "queued"]);
-    const counter = trackSqliteStatementExecutions(current.db, ["pending"], (sqlText) =>
-      sqlText.startsWith("select ") && sqlText.includes('from "session_pending_inputs"')
-        ? "pending"
-        : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(current.db),
+      ["pending"],
+      (sqlText) =>
+        sqlText.startsWith("select ") && sqlText.includes('from "session_pending_inputs"')
+          ? "pending"
+          : null,
     );
     try {
       expect(await listSessionPendingInputs(scope())).toMatchObject({
@@ -926,10 +930,13 @@ describe("accepted input custody", () => {
     const storedBefore = current.db
       .prepare("SELECT * FROM session_pending_inputs ORDER BY seq")
       .all();
-    const counter = trackSqliteStatementExecutions(current.db, ["pending"], (sqlText) =>
-      sqlText.startsWith("select ") && sqlText.includes('from "session_pending_inputs"')
-        ? "pending"
-        : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(current.db),
+      ["pending"],
+      (sqlText) =>
+        sqlText.startsWith("select ") && sqlText.includes('from "session_pending_inputs"')
+          ? "pending"
+          : null,
     );
     try {
       expect(await readSessionPendingInput(scope(), first.inputId)).toMatchObject({

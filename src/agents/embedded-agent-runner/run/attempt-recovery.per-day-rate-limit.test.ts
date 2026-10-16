@@ -127,4 +127,37 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(sleepWithAbort).not.toHaveBeenCalled();
     expect(fixture.failoverRetryController.transientRetryCount).toBe(0);
   });
+
+  it.each<[string, "proceed" | "retry", number]>([
+    // MiniMax Token Plan 2056 from #172165, without Retry-After.
+    [
+      '429: {"error":{"message":"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)","type":"rate_limit_error"},"type":"error"}',
+      "proceed",
+      0,
+    ],
+    // z.ai weekly/monthly quota from #173436.
+    ["429 您已达到每周/每月使用上限，您的限额将在 2026-10-20 00:00:00 重置。", "proceed", 0],
+    ["429 您已达到每周使用上限，请等待限额重置。", "proceed", 0],
+    ["429 您已达到每月使用上限，请等待限额重置。", "proceed", 0],
+    ["429 额度已用尽", "proceed", 0],
+    ["429 配额已用尽", "proceed", 0],
+    ["429 您已达到每分钟使用上限，请稍后重试。", "retry", 1],
+    ["429 请求过于频繁，请稍后重试", "retry", 1],
+    ["429 请求过于频繁; please retry later", "retry", 1],
+  ])(
+    "recovers Chinese rate limits without retrying exhausted quotas: %s",
+    async (errorMessage, action, retries) => {
+      vi.mocked(sleepWithAbort).mockClear();
+      const fixture = await recoverAfterTransportDrop({
+        errorMessage,
+        diagnostics: [],
+        content: [],
+        replaySafe: true,
+      });
+
+      expect(fixture.recovery.action).toBe(action);
+      expect(sleepWithAbort).toHaveBeenCalledTimes(retries);
+      expect(fixture.failoverRetryController.transientRetryCount).toBe(retries);
+    },
+  );
 });

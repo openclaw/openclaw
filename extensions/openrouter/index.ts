@@ -1,5 +1,5 @@
-import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeOpenRouterModelFamilyId } from "openclaw/plugin-sdk/model-ref-parse";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderResolveDynamicModelContext,
@@ -18,13 +18,10 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-family";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { buildOpenRouterDecisionProvider, isOpenRouterDecisionModel } from "./decision-provider.js";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import {
-  isOpenRouterMistralModelId,
-  normalizeOpenRouterApiModelId,
-  normalizeOpenRouterModelFamilyId,
-} from "./models.js";
+import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./models.js";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -37,7 +34,10 @@ import {
   OPENROUTER_BASE_URL,
   resolveOpenRouterApiBaseUrl,
 } from "./provider-catalog.js";
-import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
+import {
+  resolveOpenRouterConfiguredExtraParams,
+  resolveOpenRouterExtraParamsForTransport,
+} from "./provider-routing.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
 import { resolveOpenRouterThinkingProfile } from "./thinking-policy.js";
@@ -137,66 +137,13 @@ function sanitizePromptModelId(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
-function openRouterModelConfigKey(modelId: string): string {
-  const providerPrefix = `${PROVIDER_ID}/`;
-  return modelId.trim().toLowerCase().startsWith(providerPrefix)
-    ? modelId
-    : `${PROVIDER_ID}/${modelId}`;
-}
-
-function findConfiguredOpenRouterModelParams(
-  ctx: OpenRouterFusionPromptContext,
-): Record<string, unknown> | undefined {
-  const configuredModels = ctx.config?.agents?.defaults?.models;
-  if (!configuredModels) {
-    return undefined;
-  }
-
-  const normalizedModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
-  const directKeys = [
-    openRouterModelConfigKey(ctx.modelId),
-    openRouterModelConfigKey(normalizedModelId),
-    `${PROVIDER_ID}/${ctx.modelId}`,
-    `${PROVIDER_ID}/${normalizedModelId}`,
-  ];
-  for (const key of directKeys) {
-    const params = readRecord(configuredModels[key]?.params);
-    if (params) {
-      return params;
-    }
-  }
-
-  for (const [rawKey, entry] of Object.entries(configuredModels)) {
-    const slashIndex = rawKey.indexOf("/");
-    if (slashIndex <= 0) {
-      continue;
-    }
-    const provider = rawKey.slice(0, slashIndex).trim().toLowerCase();
-    const modelId = rawKey.slice(slashIndex + 1);
-    const candidateModelId = normalizeOpenRouterApiModelId(modelId) ?? modelId;
-    if (
-      provider === PROVIDER_ID &&
-      candidateModelId.trim().toLowerCase() === normalizedModelId.trim().toLowerCase()
-    ) {
-      return readRecord(entry.params);
-    }
-  }
-
-  return undefined;
-}
-
 function resolveFusionExtraBody(
   ctx: OpenRouterFusionPromptContext,
 ): Record<string, unknown> | undefined {
-  const params = {
-    ...readRecord(ctx.config?.agents?.defaults?.params),
-    ...findConfiguredOpenRouterModelParams(ctx),
-    ...(ctx.agentId ? readRecord(resolveAgentConfig(ctx.config ?? {}, ctx.agentId)?.params) : {}),
-  };
-  if (Object.keys(params).length === 0) {
-    return undefined;
-  }
-  return readRecord(Object.hasOwn(params, "extra_body") ? params.extra_body : params.extraBody);
+  const params = resolveOpenRouterConfiguredExtraParams(ctx);
+  return params
+    ? readRecord(Object.hasOwn(params, "extra_body") ? params.extra_body : params.extraBody)
+    : undefined;
 }
 
 function resolveOpenRouterFusionPromptContribution(
@@ -314,7 +261,10 @@ export default defineSingleProviderPluginEntry({
           return { provider: buildOpenrouterProvider() };
         },
       },
-      resolveDynamicModel: buildDynamicOpenRouterModel,
+      resolveDynamicModel: (ctx) =>
+        isOpenRouterDecisionModel(normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId)
+          ? undefined
+          : buildDynamicOpenRouterModel(ctx),
       // Resolve the catalog model even when a configured row already exists.
       preferRuntimeResolvedModel: (ctx) => {
         const configuredProvider = findNormalizedProviderValue(
@@ -334,6 +284,9 @@ export default defineSingleProviderPluginEntry({
         );
       },
       prepareDynamicModel: async (ctx) => {
+        if (isOpenRouterDecisionModel(normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId)) {
+          return;
+        }
         await loadOpenRouterModelCapabilities(
           normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
         );
@@ -404,6 +357,7 @@ export default defineSingleProviderPluginEntry({
     };
   },
   register(api) {
+    api.registerDecisionProvider(buildOpenRouterDecisionProvider());
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
     api.registerMusicGenerationProvider(buildOpenRouterMusicGenerationProvider());

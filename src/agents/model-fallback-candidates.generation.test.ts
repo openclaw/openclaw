@@ -9,15 +9,59 @@ import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { projectPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
+import {
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+  withPluginRegistrationContext,
+} from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 describe("fallback candidates across provider generations", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
+
+  it("keeps fallback candidates current as provider registration adds hooks", () => {
+    const provider = "registering-fallback";
+    const cfg: OpenClawConfig = { agents: { defaults: {} } };
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: provider, providers: [provider] }],
+    });
+    const builder = createTestPluginRegistry();
+    const record = createPluginRecord({ id: provider });
+    const resolve = () =>
+      resolveModelCandidateChain({
+        cfg,
+        provider,
+        model: "preview",
+        fallbacksOverride: [],
+      }).map(({ model }) => model);
+
+    withPluginMetadataSnapshotScope(
+      metadataSnapshot,
+      () => {
+        withPluginRegistrationContext(builder.registry, provider, () => {
+          expect(resolve()).toEqual(["preview"]);
+          builder.registerProvider(record, {
+            id: provider,
+            label: "Registering fallback",
+            auth: [],
+            normalizeModelId: ({ modelId }) =>
+              modelId === "preview" ? "published-model" : undefined,
+          });
+          expect(resolve()).toEqual(["published-model"]);
+        });
+        expect(withPluginRuntimeRegistryScope(builder.registry, resolve)).toEqual([
+          "published-model",
+        ]);
+      },
+      { compatibleConfigs: [cfg] },
+    );
+  });
 
   it("refreshes native candidates when an agent switches to and from ACP", () => {
     const agent: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string] = {
@@ -298,11 +342,6 @@ describe("fallback candidates across provider generations", () => {
                 { compatibleConfigs: [cfg] },
               );
         expect(candidates).toEqual(expected(model));
-        for (const candidate of candidates) {
-          candidate.model = "caller-mutation";
-          candidate.routeOrigin = "configured-primary";
-          candidate.routeResolution = "raw";
-        }
       }
       expect(
         withPluginMetadataSnapshotScope(metadataSnapshot, resolve, { compatibleConfigs: [cfg] }),

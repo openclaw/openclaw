@@ -179,7 +179,7 @@ it.each(["scope", "physical store"] as const)(
           await fs.rename(scope.storePath, originalPath);
           await fs.copyFile(originalPath, scope.storePath);
           release.resolve();
-          await expect(pending).rejects.toThrow("captured database owner");
+          await expect(pending).rejects.toThrow("Agent database changed during repair admission");
         } else {
           scope.sessionId = "replacement";
           scope.sessionKey = "agent:other:replacement";

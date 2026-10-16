@@ -66,6 +66,7 @@ describe("multi-Gateway suite acquisition ownership", () => {
         return {
           port: owner.port,
           hookToken: "synthetic-hook",
+          state: { writeAuthProfiles: async () => {} },
           startGateway: async () => {},
           stopGateway,
           cleanup: async () => {

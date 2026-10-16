@@ -42,6 +42,7 @@ function requiredString(params: Record<string, unknown>, key: string): string {
   return value;
 }
 
+/** Transport admission, ticket identity, and in-flight coalescing stay synchronous. */
 export class BoardWidgetBridgeController {
   private frame: HTMLIFrameElement;
   private ticket: string;

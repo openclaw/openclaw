@@ -248,19 +248,15 @@ export function createBeamMirrorRunner(params: {
     candidate: BeamMirrorCandidate,
     fingerprint: string,
   ) => {
+    tracked.delete(key);
     tracked.set(key, { candidate, fingerprint, expiresAt: now() + BEAM_RETENTION_MS });
     if (tracked.size <= MIRROR_RETRY_CAP) {
       return;
     }
-    // Never discard the upload just accepted by the receiver, even after a clock rollback.
-    let oldest: [string, TrackedMirrorSession] | undefined;
-    for (const item of tracked) {
-      if (item[0] !== key && (!oldest || item[1].expiresAt < oldest[1].expiresAt)) {
-        oldest = item;
-      }
-    }
-    if (oldest) {
-      tracked.delete(oldest[0]);
+    // At capacity, retry order is best effort; retain the just-acknowledged upload.
+    for (const oldest of tracked.keys()) {
+      tracked.delete(oldest);
+      break;
     }
   };
 

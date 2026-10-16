@@ -18,6 +18,7 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
@@ -326,7 +327,7 @@ it.runIf(process.platform !== "win32")(
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
       const replacementPath = `${databasePath}.native-replacement`;
       const displacedPath = `${databasePath}.native-original`;
-      await backup(database.db, replacementPath);
+      await backup(requireNativeSqliteDatabase(database.db), replacementPath);
       const commit = replyInitialization.commitReplySessionInitialization;
       vi.spyOn(replyInitialization, "commitReplySessionInitialization").mockImplementation(
         async (params) => {

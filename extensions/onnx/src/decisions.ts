@@ -50,9 +50,6 @@ function rubric(question: DecisionQuestion) {
 }
 
 function probabilities(logits: readonly number[]): number[] {
-  if (logits.length < 2 || logits.some((value) => !Number.isFinite(value))) {
-    throw new Error("ONNX returned invalid label logits.");
-  }
   const max = Math.max(...logits);
   const weights = logits.map((value) => Math.exp(value - max));
   const sum = weights.reduce((total, value) => total + value, 0);
@@ -73,15 +70,9 @@ export function createOnnxProvider(
       }
       try {
         const entries = Object.entries(batch.questions);
-        if (entries.length === 0 || entries.length > 32) {
-          throw new UnsupportedInputError("Unsupported batch size.");
-        }
         const text = render(batch.state);
         const inputs = entries.map(([, question]): ClassificationInput => {
           const selected = rubric(question);
-          if (selected.labels.length < 2 || selected.labels.length > 64) {
-            throw new UnsupportedInputError("Unsupported label count.");
-          }
           return {
             text,
             task: "decision",
@@ -91,19 +82,18 @@ export function createOnnxProvider(
               : { instructions: render(question.instructions) }),
           };
         });
-        const results = await client.classify(context.model, inputs, context.signal);
+        const results = await client.classify(
+          context.model,
+          inputs,
+          context.signal,
+          context.isAdmissible,
+        );
         context.signal.throwIfAborted();
-        if (results.length !== entries.length) {
-          throw new Error("ONNX returned an incomplete batch.");
-        }
         const answers = new Map<string, DecisionAnswer>();
         let inputTokens = 0;
         entries.forEach(([id, question], index) => {
           const result = results[index]!;
           const labels = inputs[index]!.labels;
-          if (result.logits.length !== labels.length) {
-            throw new Error("ONNX returned an incomplete distribution.");
-          }
           const values = probabilities(result.logits);
           inputTokens += result.inputTokens;
           if (question.type === "boolean") {

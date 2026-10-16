@@ -35,6 +35,91 @@ beforeEach(() => {
 });
 
 describe("embedded Tool Search prompt parity", () => {
+  it("keeps explicit task creation discoverable in Code Mode and removes revoked capability guidance", async () => {
+    const fixture = createFixture({ pendingImageCount: 0 });
+    const config = {
+      agents: { defaults: { experimental: { localModelLean: false } } },
+      tools: { codeMode: true },
+    };
+    const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+      config,
+      modelToolsEnabled: true,
+      executeTool: async () => ({ content: [], details: {} }),
+    });
+    const admission = prepareSystemAgentRunAdmission(
+      config,
+      fixture.input.attempt.runId,
+      "main",
+      "session-create-prompt-test",
+    );
+    try {
+      const surface = runtime.compactTools([createStubTool("sessions_create")]);
+      const capabilityToolNames = new Set(["sessions_create"]);
+      expect(surface.tools.map((tool) => tool.name)).not.toContain("sessions_create");
+      const attempt = {
+        ...fixture.input.attempt,
+        admittedRunContext: await admission.admit("embedded"),
+        config,
+        prompt: "spin up a new task",
+        promptMode: "full",
+        sessionKey: "agent:main:dashboard:task",
+        workspaceDir: "/workspace",
+        model: makeProviderModelFixture({
+          provider: "openai",
+          id: "test-model",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+        }),
+      } as EmbeddedRunAttemptParams;
+      const prepared = await prepareEmbeddedAttemptSystemPrompt({
+        activeContextEngine: undefined,
+        attempt,
+        bootstrap: {
+          ...buildBootstrapBudgetState({ files: [] }),
+          bootstrapMode: "full",
+          contextFiles: [],
+          bootstrapInjectionStats: [],
+          shouldRecordCompletedBootstrapTurn: false,
+          workspaceNotes: [],
+        },
+        setup: createAttemptSetupFixture({
+          effectiveCwd: "/workspace",
+          effectiveWorkspace: "/workspace",
+          getProviderRuntimeHandle: () => ({
+            provider: attempt.provider,
+            modelId: attempt.modelId,
+            prepared: true,
+          }),
+        }),
+        capabilityToolNames,
+        effectiveTools: surface.tools,
+        isRawModelRun: false,
+        modelToolsEnabled: true,
+        skillsPrompt: "",
+        codeModeActive: true,
+        toolSearchDirectoryEnabled: false,
+        toolSearchRuntimeConfig: runtime.config,
+        toolSearchCatalogRef: runtime.toolSearchCatalogRef,
+      });
+      expect(prepared.systemPromptText).toContain('"spin up a new task"');
+      expect(prepared.systemPromptText).toContain("`sessions_create`");
+      expect(prepared.systemPromptText).toContain("no completion event or yield expectation");
+      expect(prepared.systemPromptText).not.toContain("## Delegation");
+
+      const restricted = runtime.compactTools([createStubTool("sessions")]);
+      capabilityToolNames.clear();
+      capabilityToolNames.add("sessions");
+      if (!prepared.prepareToolPrompt) {
+        throw new Error("Expected tool-capability prompt refresh");
+      }
+      const refreshPrompt = await prepared.prepareToolPrompt(restricted.tools);
+      expect(refreshPrompt(prepared.systemPromptText)).not.toContain("`sessions_create`");
+    } finally {
+      admission.close();
+      runtime.cleanup();
+    }
+  });
+
   it.each([
     { mode: "tools" as const, toolsAllow: undefined },
     ...(["tools", "directory"] as const).flatMap((mode) =>

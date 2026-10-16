@@ -1,9 +1,8 @@
-import { types } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
+import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
   type SessionHistoryWorkerDatabase,
@@ -194,25 +193,12 @@ export function createSessionHistoryWorkerReaders(
       const eventSeqs: number[] | undefined = input.includeEventJson ? [] : undefined;
       const parts: Uint8Array[] = [];
       let decoder: TextDecoder | undefined;
-      const receiveChunk = (value: unknown) => {
-        if (
-          !isRecord(value) ||
-          value.kind !== "transcript-hydration-chunk" ||
-          typeof value.encoding !== "string" ||
-          !Array.isArray(value.frames)
-        ) {
-          throw new Error("Session history worker returned an invalid transcript chunk");
-        }
+      const receiveChunk = (raw: unknown) => {
+        // SAFETY: The paired local hydration worker constructs this typed envelope.
+        const value = raw as SessionTranscriptHydrationChunk;
         // The worker holds one storage encoding for the entire read snapshot.
         decoder ??= new TextDecoder(value.encoding, { ignoreBOM: true });
         for (const frame of value.frames) {
-          if (
-            !isRecord(frame) ||
-            !types.isUint8Array(frame.data) ||
-            typeof frame.endOfEvent !== "boolean"
-          ) {
-            throw new Error("Session history worker returned an invalid transcript frame");
-          }
           parts.push(frame.data);
           if (frame.endOfEvent) {
             const json = decoder.decode(parts.length === 1 ? parts[0] : Buffer.concat(parts));
@@ -302,7 +288,6 @@ export function createSessionHistoryWorkerReaders(
       facts: value.facts,
     })),
     readEntryCurrent: reader("session-entry-current", (value) => value.entry),
-    readDiagnosticText: reader("session-diagnostic-text", (value) => value.text),
     // The native reader validates the selected file. Replacement after that read is best effort.
     readEntries: async (scope, continuation, expectedIdentity, ifRevision) => {
       const captured = expectedIdentity && { ...expectedIdentity };
@@ -321,18 +306,11 @@ export function createSessionHistoryWorkerReaders(
     readStoreProjection: reader("session-store-projection", (value) => value),
     readStoreSummary: reader("session-store-summary", (value) => value.summary),
     readIdentityEvidence: reader("session-identity-evidence", (value) => value.evidence),
-    readProjectionStatus: async (input, signal) =>
-      await runRequest(
-        () => ({ kind: "projection-status", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => value,
-        signal,
-      ),
-    readEntryPresence: async (scope) =>
-      await runRequest(
-        () => ({ kind: "session-row-presence", scope }),
-        JSON.stringify(scope).length * 2,
-        (value) => value,
-      ),
+    readProjectionStatus: reader("projection-status", (value) => value),
+    readEntryPresence: reader(
+      "session-row-presence",
+      (value) => value,
+      (scope) => ({ kind: "session-row-presence", scope }),
+    ),
   };
 }

@@ -111,12 +111,18 @@ describe("Gateway request start fairness", () => {
       const mutation = start("chat.send", "viewer");
       void start("chat.history", "viewer");
       void start("sessions.list", "viewer");
+      void start("cron.list", "viewer");
       void start("sessions.create", "another-viewer");
       await nextTurn();
-      expect([...starts]).toEqual(["chat.history", "sessions.list", "sessions.create"]);
+      expect([...starts]).toEqual([
+        "chat.history",
+        "sessions.list",
+        "cron.list",
+        "sessions.create",
+      ]);
       held[0]!.resolve();
       await Promise.all([subscription, unsubscribe, mutation]);
-      expect(starts.slice(3)).toEqual([
+      expect(starts.slice(4)).toEqual([
         "sessions.messages.subscribe",
         "sessions.messages.unsubscribe",
         "chat.send",

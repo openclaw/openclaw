@@ -1,6 +1,22 @@
 #!/bin/bash
 # Shared by both installer profiles; only function definitions belong here.
 
+validate_git_checkout() {
+    local repo_dir="$1"
+    if [[ ! -e "$repo_dir/.git" ]]; then
+        [[ ! -d "$repo_dir" || -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]] && return 0
+        installer_error "Git install dir exists but is not a git repo: ${repo_dir}. Choose the checkout root containing .git or a new empty directory, then retry."
+        return 1
+    fi
+    # Git accepts directories and linked-worktree gitfiles. Explicit metadata
+    # prevents an incomplete checkout from borrowing an enclosing repo's HEAD.
+    if git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
+        return 0
+    fi
+    installer_error "Git checkout has no commit: ${repo_dir}. Move or remove this incomplete checkout, then retry."
+    return 1
+}
+
 detect_downloader() {
     if command -v curl &> /dev/null; then
         DOWNLOADER="curl"
@@ -324,17 +340,13 @@ verify_git_rebase_recovery() {
 }
 
 checkout_git_openclaw_ref() {
-    local repo_dir="$1"
-    local ref="$2"
-    local original_head=""
-    local original_status=""
+    local repo_dir="$1" ref="$2"
+    local original_head="" original_status="" branch_worktree=""
     local namespaces=(heads tags)
 
     GIT_REF_KIND=""
 
-    if [[ -z "$ref" ]]; then
-        return 0
-    fi
+    [[ -n "$ref" ]] || return 0
 
     # Full commit IDs pin source bytes, even when a remote ref has the same name.
     # Bundled/existing checkouts already have the object and need no remote lookup.
@@ -354,15 +366,20 @@ checkout_git_openclaw_ref() {
         return 0
     fi
 
+    # Detach branches owned by another worktree instead of moving its ref.
+    # Main still selects the local branch before the optional remote rebase.
+    if [[ "$(git -C "$repo_dir" symbolic-ref --quiet HEAD || true)" != "refs/heads/$ref" ]]; then
+        branch_worktree="$(git -C "$repo_dir" branch --list "$ref" --format='%(worktreepath)')"
+    fi
+
     if [[ "$ref" == "main" ]]; then
         installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
-        installer_step "Checking out main" git -C "$repo_dir" checkout main
+        local checkout_args=(main)
+        [[ -z "$branch_worktree" ]] || checkout_args=(--detach refs/heads/main)
+        installer_step "Checking out main" git -C "$repo_dir" checkout "${checkout_args[@]}"
         if [[ "$GIT_UPDATE" == "1" ]]; then
-            if ! original_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
-                installer_error "Could not record repository state before updating from origin/main"
-                return 1
-            fi
-            if ! original_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
+            if ! original_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)" ||
+               ! original_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
                 installer_error "Could not record repository state before updating from origin/main"
                 return 1
             fi
@@ -391,7 +408,9 @@ checkout_git_openclaw_ref() {
         if git -C "$repo_dir" ls-remote --exit-code origin "refs/${namespace}/${ref}" >/dev/null 2>&1; then
             if [[ "$namespace" == "heads" ]]; then
                 installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
-                installer_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
+                local checkout_args=(-B "$ref")
+                [[ -z "$branch_worktree" ]] || checkout_args=(--detach)
+                installer_step "Checking out ${ref}" git -C "$repo_dir" checkout "${checkout_args[@]}" "origin/$ref"
                 GIT_REF_KIND="moving"
             else
                 installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"

@@ -69,6 +69,7 @@ export async function deferBackgroundCompactionCleanup(params: {
       timeoutMs: params.timeoutMs,
     });
   } catch {
+    // A failed wait follows the same bounded cancellation path as its deadline.
   } finally {
     if (outcome !== "completed") {
       await cancelBackgroundCompactionBeforeTeardown(params.session);
@@ -78,17 +79,23 @@ export async function deferBackgroundCompactionCleanup(params: {
     await params.bridge.awaitAgentEventChain();
     try {
       await params.session.disconnect();
-    } catch {}
+    } catch {
+      // Disconnect must not prevent releasing the client and proxy below.
+    }
     params.cleanupToolBridge?.();
     await params.cleanupByokProxy?.();
     if (outcome !== "completed" && params.deleteSessionOnIncompleteCleanup && params.sdkSessionId) {
       try {
         await params.handle.client.deleteSession(params.sdkSessionId);
-      } catch {}
+      } catch {
+        // The native checkpoint is already marked unusable; deletion is best effort.
+      }
     }
     try {
       await params.pool.release(params.handle);
-    } catch {}
+    } catch {
+      // Deferred teardown must not replace the already-returned turn outcome.
+    }
   }
   return outcome;
 }

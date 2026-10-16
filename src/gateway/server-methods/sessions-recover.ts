@@ -38,6 +38,9 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
     const recovered = await recoverGatewaySession({
       cfg: context.getRuntimeConfig(),
       key: params.key,
+      mode: params.mode,
+      sessionId: params.sessionId,
+      recoveryCycleId: params.recoveryCycleId,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(creation.actor ? { actor: creation.actor } : {}),
       ...(client?.authenticatedUserProfile
@@ -54,6 +57,14 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
           ...continuation,
           client,
           ...(commitGuard ? { commitGuard } : {}),
+          assertAdmittedSourceCurrent: () => {
+            authority.commitGuard?.();
+            // The input commit replaces recovery state; its old row guard ends at admission.
+            (
+              sessionMutationAuthorization?.assertAdmittedSourceCurrent ??
+              sessionMutationAuthorization?.assertCurrent
+            )?.();
+          },
           context,
           ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
           req,

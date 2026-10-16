@@ -1,17 +1,39 @@
 /**
  * Tests helper logic for live agent probe configuration and result handling.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const runExecMock = vi.hoisted(() => vi.fn());
+// mock-isolation: Child execution is the external I/O boundary; this fixture must not spawn a CLI.
+vi.mock("../process/exec.js", () => ({ runExec: runExecMock }));
+
 import {
   assertCronJobMatches,
   assertLiveImageProbeReply,
   buildLiveCronProbeMessage,
   createLiveCronProbeSpec,
   resolveOpenClawCliProcessArgs,
+  runOpenClawCliJson,
   shouldRunLiveImageProbe,
 } from "./live-agent-probes.js";
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("live-agent-probes", () => {
+  it("runs CLI probes through standalone identity without a loose entry", async () => {
+    vi.stubGlobal("__openclawStandaloneRootUrl", "file:///standalone/runtime/");
+    runExecMock.mockResolvedValueOnce({ stdout: '{"ok":true}', stderr: "" });
+
+    await expect(runOpenClawCliJson(["cron", "list"], {})).resolves.toEqual({ ok: true });
+    expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
+      process.execPath,
+      ["cron", "list", "--timeout", "30000"],
+      expect.objectContaining({ cwd: process.cwd(), baseEnv: {} }),
+    );
+  });
+
   it("uses the source runner when packaged CLI output is absent", () => {
     expect(resolveOpenClawCliProcessArgs(["cron", "list"], false)).toEqual([
       "scripts/run-node.mjs",

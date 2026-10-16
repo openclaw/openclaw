@@ -14,10 +14,45 @@ import {
   fetchLoadedOllamaModelNames,
   fetchOllamaModels,
   queryOllamaModelShowInfo,
+  toDynamicOllamaModel,
   type OllamaTagModel,
 } from "./provider-models.js";
 
 describe("ollama provider models", () => {
+  it.each([
+    { tagSize: "1.5B", expected: 1_500_000_000 },
+    { tagSize: "494M", expected: 494_000_000 },
+    { tagSize: "1.2T", expected: 1_200_000_000_000 },
+    { tagSize: "4B", showCount: 70_000_000_000, expected: 70_000_000_000 },
+    { showSize: "32.8B", expected: 32_800_000_000 },
+    { tagSize: "unknown", expected: undefined },
+  ])(
+    "keeps total parameter metadata through discovery: %j",
+    async ({ tagSize, showCount, showSize, expected }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) =>
+          requestUrl(input).endsWith("/api/tags")
+            ? jsonResponse({
+                models: [{ name: "custom-model", details: { parameter_size: tagSize } }],
+              })
+            : jsonResponse({
+                capabilities: ["completion"],
+                model_info: { "general.parameter_count": showCount },
+                details: { parameter_size: showSize },
+              }),
+        ),
+      );
+      const provider = await buildOllamaProvider("http://127.0.0.1:11434");
+      const model = expectDefined(provider.models[0], "discovered model");
+      expect(model.parameterCount).toBe(expected);
+      expect(
+        toDynamicOllamaModel({ provider: "ollama", providerConfig: provider, model })
+          .parameterCount,
+      ).toBe(expected);
+    },
+  );
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -121,15 +156,68 @@ describe("ollama provider models", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
-  it("resolves known cloud context windows for bare and :cloud model refs", () => {
-    // A suffixed ref must not silently drop to the generic default when live
-    // inspection is unavailable; both spellings name the same cloud model.
-    for (const modelId of ["kimi-k3", "kimi-k3:cloud"]) {
-      expect(buildOllamaModelDefinition(modelId)).toEqual(
-        expect.objectContaining({ id: modelId, contextWindow: 1_048_576 }),
-      );
+  it.each([
+    { id: "minimax-m2.7", contextWindow: 196_608, maxTokens: 204_800 },
+    { id: "minimax-m3", contextWindow: 524_288, maxTokens: 524_288 },
+    { id: "kimi-k3", contextWindow: 1_048_576, maxTokens: 1_048_576 },
+    { id: "glm-5.2", contextWindow: 1_000_000, maxTokens: 131_072 },
+  ])("keeps the cloud output budget for $id aliases", ({ id, contextWindow, maxTokens }) => {
+    for (const modelId of [id, `${id}:cloud`, `${id}-cloud`]) {
+      expect(
+        buildOllamaModelDefinition(modelId, undefined, undefined, { remote: true }),
+      ).toMatchObject({
+        id: modelId,
+        contextWindow,
+        maxTokens,
+      });
     }
   });
+
+  it.each([
+    { name: "local-model", baseUrl: "http://127.0.0.1:11434", maxTokens: 8192 },
+    { name: "minimax-m3", baseUrl: "http://127.0.0.1:11434", maxTokens: 8192 },
+    { name: "kimi-k3", baseUrl: "http://127.0.0.1:11434", maxTokens: 8192 },
+    { name: "minimax-m3", baseUrl: "https://ollama.com", maxTokens: 524_288 },
+    { name: "kimi-k3", baseUrl: "https://ollama.com", maxTokens: 1_048_576 },
+    { name: "glm-5.2:cloud", baseUrl: "http://127.0.0.1:11434", maxTokens: 131_072 },
+    { name: "unknown:cloud", baseUrl: "http://127.0.0.1:11434", maxTokens: 262_144 },
+    { name: "unknown", baseUrl: "https://ollama.com", maxTokens: 262_144 },
+    {
+      name: "remote-stub",
+      baseUrl: "http://127.0.0.1:11434",
+      remote_host: "https://ollama.com",
+      maxTokens: 262_144,
+    },
+    {
+      name: "remote-model-stub",
+      baseUrl: "http://127.0.0.1:11434",
+      remote_model: "upstream-model",
+      maxTokens: 262_144,
+    },
+  ])(
+    "discovers $name output limits at $baseUrl",
+    async ({ name, baseUrl, remote_host, remote_model, maxTokens }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) =>
+          requestUrl(input).endsWith("/api/tags")
+            ? jsonResponse({ models: [{ name, remote_host, remote_model }] })
+            : jsonResponse({
+                capabilities: ["completion"],
+                model_info: { "test.context_length": 262_144 },
+              }),
+        ),
+      );
+      const provider = await buildOllamaProvider(baseUrl);
+      const model = expectDefined(provider.models[0], "discovered model");
+      expect(
+        toDynamicOllamaModel({ provider: "ollama", providerConfig: provider, model }),
+      ).toMatchObject({
+        id: name,
+        maxTokens,
+      });
+    },
+  );
 
   it("uses Modelfile num_ctx when it expands the discovered context window", async () => {
     const models: OllamaTagModel[] = [{ name: "llama3-32k:latest" }];

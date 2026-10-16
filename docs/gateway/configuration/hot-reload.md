@@ -14,6 +14,12 @@ The Gateway applies revisioned config snapshots automatically. Most settings do
 not need a manual restart. `~/.openclaw/openclaw.json` remains the config source,
 including JSON5, `$include`, and environment substitutions.
 
+Startup waits for the config watcher's initial reconciliation, queued file-stability
+checks, and any resulting reload attempt before completing. Initial config
+publication cannot race the first request after startup.
+Credential refreshes that leave the effective config unchanged preserve pending
+work instead of invalidating its config snapshot.
+
 Writes made through the running Gateway publish their committed snapshot
 directly to the reload owner. They do not wait for a file-watcher event or its
 debounce window. Runtime consumers keep reading the last successfully applied
@@ -107,6 +113,11 @@ returns `UNAVAILABLE` with the committed config details. It does not wait for
 another file event. Repair the file, run `config.get`, then reapply the intended
 config. The Gateway does not overwrite the external edit.
 
+When the Gateway applies a valid external edit picked up by that final reread,
+a waiting write whose saved values were overwritten reports `superseded`
+instead of success. An unrelated edit that preserves the saved values can still
+complete successfully. Run `config.get` before reapplying.
+
 If you see `config reload skipped (invalid config)` or startup reports `Invalid
 config`, inspect the config, run `openclaw config validate`, then run `openclaw
 doctor --fix` for repair. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config)
@@ -168,6 +179,15 @@ Changes to `agents.defaults.models`, agent model selection and fallbacks, and
 own plugin settings still follows its plugin reload policy.
 Overlapping model or credential changes use the newer write's runtime application;
 superseding an earlier publication does not itself require a Gateway restart.
+
+After a transient connection failure, an in-flight turn using a directly configured
+provider can retry with an endpoint whose hot reload has completed. It keeps the same
+model, permissions, prompt, conversation history, and model limits while resolving
+credentials, headers, and request settings from the updated provider config.
+Removing a key also takes effect when the updated local provider requires no authentication.
+Auth-profile, native-runtime, dynamically prepared, and managed local-service
+transports keep their admitted settings; start a new turn after changing those.
+Caller request overrides also retain their selected transport.
 
 Agent sandbox tool allow/deny lists under `agents.entries.<id>.tools.sandbox`
 hot-apply without restarting plugin services. Workboard reads live session facts;
@@ -272,7 +292,8 @@ their original handlers. Workspace changes reload directory hooks from the
 newly selected workspace. Reload does not replay `gateway:startup`.
 
 Under `gateway.controlUi`, the `enabled`, `environment`, `github`,
-`sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, `experimental.customPlugins`, and
+`sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, `experimental.customPlugins`,
+`experimental.claws`, and
 `automaticallyFetchFavicons` settings hot-apply. Reload open Control UI pages to
 pick up the environment label, CLI agent picker, embed preferences, and favicon
 display preference; the Gateway process keeps running. `allowedOrigins` and
@@ -429,6 +450,10 @@ Agent requests waiting to start pause while plugin hot reload drains the old
 runtime. They continue with the replacement when it is ready, or with the
 previous runtime after a successful rollback. You do not need to resend these
 requests. Failed restoration or Gateway shutdown still reports a failure.
+Already-admitted turns retain their runtime generation through nested model work.
+Unrelated plugin-owned settings do not invalidate a prepared `chat.send`; session,
+model, tool-policy, and core plugin admission-policy changes still recheck the
+facts used for admission.
 If a replacement fails before activation, rollback restores the previous configured
 model context limits without waiting for model discovery.
 

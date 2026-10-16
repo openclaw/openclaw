@@ -1,4 +1,4 @@
-import type { CodexAppServerRuntimeOptions } from "./app-server/config.js";
+import type { CodexAppServerRuntimeOptions, CodexPluginConfig } from "./app-server/config.js";
 import type {
   CodexThread,
   CodexThreadForkParams,
@@ -10,6 +10,32 @@ import type {
   CodexThreadItemsListParams,
   CodexThreadItemsListResponse,
 } from "./app-server/protocol.js";
+
+/** Bounded native metadata prepared by projectCodexCatalogNativeThread. */
+export type CodexCatalogNativeThread = Pick<
+  CodexThread,
+  | "id"
+  | "projectId"
+  | "sessionId"
+  | "ephemeral"
+  | "name"
+  | "cwd"
+  | "modelProvider"
+  | "cliVersion"
+  | "path"
+  | "originator"
+  | "createdAt"
+  | "updatedAt"
+  | "recencyAt"
+  | "preview"
+  | "source"
+  | "gitInfo"
+  | "status"
+>;
+
+export type CodexCatalogNativePage = Omit<CodexThreadListResponse, "data"> & {
+  data: CodexCatalogNativeThread[];
+};
 
 export type CodexCatalogHome = {
   /** Revalidate discovery before a new operation captures its source. */
@@ -72,7 +98,7 @@ export type CodexSessionCatalogControl = {
   forkContext?: {
     client: import("./app-server/client.js").CodexAppServerClient;
     appServer: CodexAppServerRuntimeOptions;
-    pluginConfig: unknown;
+    pluginConfig: CodexPluginConfig;
     agentDir: string;
     localSessionsRoot?: string;
   };

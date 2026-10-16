@@ -1,4 +1,4 @@
-// Workboard tests cover the sqlite batch card read path.
+// Workboard tests cover batched card persistence and hydration.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -123,7 +123,82 @@ function withStores<T>(run: (dbPath: string) => Promise<T>): Promise<T> {
   });
 }
 
-describe("workboard sqlite batch card read", () => {
+describe("workboard sqlite batch card persistence", () => {
+  it("replaces ordered child collections across batches and clears them on a later write", async () => {
+    await withStores(async (dbPath) => {
+      const stores = createKernelStores(dbPath);
+      const original = fixtureCard(0);
+      // Descending IDs make resetting ordinals at the next batch observable on readback.
+      const children = Array.from({ length: 65 }, (_, index) => fixtureCard(100 - index));
+      const replacement: WorkboardCard = {
+        ...original,
+        title: "Replaced children",
+        updatedAt: original.updatedAt + 1,
+        labels: children.map((card) => card.labels[0]!),
+        events: children.flatMap((card) => card.events!),
+        metadata: {
+          ...original.metadata,
+          attempts: children.flatMap((card) => card.metadata!.attempts!),
+          comments: children.flatMap((card) => card.metadata!.comments!),
+          links: children.flatMap((card) => card.metadata!.links!),
+          proof: children.flatMap((card) => card.metadata!.proof!),
+          artifacts: children.flatMap((card) => card.metadata!.artifacts!),
+          attachments: children.flatMap((card) =>
+            card.metadata!.attachments!.map((attachment) =>
+              Object.assign(attachment, { cardId: original.id }),
+            ),
+          ),
+          diagnostics: children.flatMap((card) =>
+            card.metadata!.diagnostics!.map((diagnostic) =>
+              Object.assign(diagnostic, { detail: card.title }),
+            ),
+          ),
+          notifications: children.flatMap((card) => card.metadata!.notifications!),
+          workerLogs: children.flatMap((card) => card.metadata!.workerLogs!),
+        },
+      };
+      try {
+        await stores.cards.register(original.id, { version: 1, card: original });
+        const before = sqliteStatements.count;
+        await expect(
+          stores.cards.registerIfUpdatedAt(
+            replacement.id,
+            { version: 1, card: replacement },
+            original.updatedAt,
+          ),
+        ).resolves.toBe(true);
+        if (!workboardTestDatabaseInput()) {
+          // A row-at-a-time write exceeds 700 statements for this bounded fixture.
+          expect(sqliteStatements.count - before).toBeLessThan(100);
+        }
+        await expect(stores.cards.lookup(original.id)).resolves.toEqual({
+          version: 1,
+          card: replacement,
+        });
+        const cleared = {
+          ...replacement,
+          updatedAt: replacement.updatedAt + 1,
+          labels: [],
+          events: [],
+          metadata: undefined,
+        };
+        await expect(
+          stores.cards.registerIfUpdatedAt(
+            cleared.id,
+            { version: 1, card: cleared },
+            replacement.updatedAt,
+          ),
+        ).resolves.toBe(true);
+        await expect(stores.cards.lookup(original.id)).resolves.toEqual({
+          version: 1,
+          card: { ...cleared, events: undefined },
+        });
+      } finally {
+        await stores.close();
+      }
+    });
+  });
+
   // Counts statements by intercepting the native SQLite open boundary.
   test.each(["worker log", "proof"])("hydrates once when adding a %s", async (operation) => {
     await withStores(async (dbPath) => {
@@ -342,7 +417,7 @@ describe("workboard sqlite batch card read", () => {
   });
 
   it.each(["constraint", "binding"])(
-    "rolls back a grouped write and claim after a later child %s fails",
+    "rolls back earlier batches, grouped writes, and claims after a later child %s fails",
     async (fault) => {
       await withStores(async (dbPath) => {
         const sibling = fixtureCard(0);
@@ -380,7 +455,11 @@ describe("workboard sqlite batch card read", () => {
             metadata: {
               ...target.metadata,
               comments: [
-                { id: "replacement-comment", body: "First row", createdAt: 1000 },
+                ...Array.from({ length: 65 }, (_, index) => ({
+                  id: `replacement-comment-${index}`,
+                  body: `Row ${index}`,
+                  createdAt: 1000,
+                })),
                 invalidComment,
               ],
             },

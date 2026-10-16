@@ -34,6 +34,19 @@ session titles, Activity recaps, and plugin `runtime.llm.complete` calls.
 Each request records a start and one completion or error with its duration;
 token and cost accounting remains separate in `model.usage`.
 
+Codex app-server turns also emit one `model.response.observed` diagnostic for
+each distinct provider response received during the turn. OpenTelemetry records
+it as an `openclaw.model.response.observed` event on the turn's model-call span,
+with a hashed response identifier and token fields reported by the native
+runtime (`usage_source = native-normalized`, `usage_scope = response`).
+Its timestamp records receipt by OpenClaw, not provider completion. Missing
+usage stays absent, including cache-write counts or totals omitted by the native
+runtime. Uncached input is derived only when every cache component was reported;
+prompt tokens use the native input count. No request duration or tool-to-response relationship is
+inferred. These events do not add token or duration metrics. Aggregate accounting
+continues to use `model.usage`; dropped diagnostic events or missing provider
+usage can leave the response observations incomplete.
+
 ## Claude Code CLI model-call fidelity
 
 Claude Code CLI turns emit one synthetic, turn-level `openclaw.model.call`

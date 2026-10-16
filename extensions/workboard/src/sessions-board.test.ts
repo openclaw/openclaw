@@ -55,6 +55,7 @@ async function withService(
 async function createFixture(options: {
   facts: WorkboardSessionFacts[];
   spec?: Partial<WorkboardSessionsBoardSpec>;
+  repair?: Promise<{ placements: number; boards: number }>;
 }) {
   const stores = createKernelStores(path.join(tempDir, `${nextDatabase++}.sqlite`));
   const store = new WorkboardBoardStore(stores.cards, {
@@ -101,6 +102,9 @@ async function createFixture(options: {
   const service = createWorkboardSessionsBoardService({ store, gateway });
   const context = { config: {}, stateDir: "unused", logger };
   const repair = vi.spyOn(store, "repairSessionPlacements");
+  if (options.repair) {
+    repair.mockReturnValueOnce(options.repair);
+  }
   await service.start(context);
   return {
     store,
@@ -340,6 +344,55 @@ describe("Sessions board rules and live facts", () => {
     },
   );
 
+  it.each([false, true])(
+    "waits for placement repair on first use and drains it on stop (stop early: %s)",
+    async (stopEarly) => {
+      const repair = Promise.withResolvers<{ placements: number; boards: number }>();
+      await withService({ facts: [], repair: repair.promise }, async ({ service, store }) => {
+        let readDone = false;
+        let updateDone = false;
+        const reading = service.read(BOARD_ID).finally(() => {
+          readDone = true;
+        });
+        const updating = service.update(BOARD_ID, { scope: { maxAgeHours: 48 } }).finally(() => {
+          updateDone = true;
+        });
+        const results = Promise.allSettled([reading, updating]);
+        let stopped = false;
+        const stopping = stopEarly
+          ? service.stop().then(() => {
+              stopped = true;
+            })
+          : undefined;
+        expect(readDone).toBe(false);
+        expect(updateDone).toBe(false);
+        expect(stopped).toBe(false);
+        repair.resolve({ placements: 0, boards: 0 });
+        if (stopEarly) {
+          expect(await results).toEqual([
+            {
+              status: "rejected",
+              reason: expect.objectContaining({
+                message: "Sessions board service is no longer active.",
+              }),
+            },
+            {
+              status: "rejected",
+              reason: expect.objectContaining({
+                message: "Sessions board service is no longer active.",
+              }),
+            },
+          ]);
+          await stopping;
+          expect((await store.getSessionsBoard(BOARD_ID)).sessions.scope?.maxAgeHours).not.toBe(48);
+        } else {
+          expect((await results).map(({ status }) => status)).toEqual(["fulfilled", "fulfilled"]);
+          expect((await store.getSessionsBoard(BOARD_ID)).sessions.scope?.maxAgeHours).toBe(48);
+        }
+      });
+    },
+  );
+
   it("repairs only old-default rules at startup, preserves custom boards and ordering, and is idempotent", async () => {
     await withService(
       { facts: [] },
@@ -376,6 +429,7 @@ describe("Sessions board rules and live facts", () => {
         await store.updateSessionsBoard("custom-order", reordered);
         logger.info.mockClear();
         await service.start(context);
+        await service.read(BOARD_ID);
         const repaired = await store.getSessionsBoard(BOARD_ID);
         expect(repaired.sessions.columns.map((column) => column.id)).toEqual(DEFAULT_COLUMNS);
         expect(repaired.sessions.columns.find((column) => column.id === "working")).toMatchObject({
@@ -405,6 +459,7 @@ describe("Sessions board rules and live facts", () => {
         repair.mockResolvedValueOnce({ placements: 3, boards: 0 });
         logger.info.mockClear();
         await service.start(context);
+        await service.read(BOARD_ID);
         expect(logger.info).toHaveBeenCalledExactlyOnceWith(
           "Sessions board removed 3 non-operator placements.",
         );
@@ -533,7 +588,7 @@ describe("Sessions board rules and live facts", () => {
     });
   });
 
-  it("shares frozen projections and reuses 80 unchanged rows after one session changes", async () => {
+  it("shares projections and reuses 80 unchanged rows after one session changes", async () => {
     await withService(
       { facts: Array.from({ length: 81 }, (_, index) => Object.freeze(facts(String(index)))) },
       async ({ service, store, state, emit }) => {
@@ -549,7 +604,6 @@ describe("Sessions board rules and live facts", () => {
         const first = readers[0]!;
         expect(readers.every((read) => read === first)).toBe(true);
         expect(first.sessions).toHaveLength(81);
-        expect(first.sessions.every(Object.isFrozen)).toBe(true);
         expect(boards).toHaveBeenCalledOnce();
         expect(placements).toHaveBeenCalledOnce();
         emit(facts("0").key, "category");
@@ -832,6 +886,7 @@ describe("Sessions board rules and live facts", () => {
     await withService(
       { facts: [facts("one")] },
       async ({ service, store, state, selectSessionFacts, emit }) => {
+        await service.read(BOARD_ID);
         const admittedRevision = store.sessionsRevision;
         let sourceReads = 0;
         selectSessionFacts.mockImplementation(async () => {

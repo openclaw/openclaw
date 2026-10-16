@@ -1,5 +1,6 @@
-import { For, Show, createEffect, createMemo, onCleanup, untrack } from "solid-js";
+import { For, Show, createEffect, createMemo, untrack } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
+import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { DockLayoutController } from "../dock-layout-controller.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
@@ -7,6 +8,7 @@ import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
 import { Icon } from "../solid/icon.tsx";
 import type { PanelEmptyStateElement, PanelEmptyStateProps } from "../solid/panel-empty-state.tsx";
 import "../solid/panel-empty-state.tsx";
+import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../tooltip.ts";
 import type { TerminalSessionInfo } from "./terminal-connection.ts";
@@ -90,13 +92,10 @@ export function TerminalPanelHostedActions(props: {
   view: () => TerminalPanelViewState;
   ref: (element: HTMLSpanElement) => void;
 }) {
-  const toggle = () => props.view().picker.onToggle();
-  const focusOut = (event: FocusEvent) => props.view().picker.onFocusOut(event);
-  const upload = () => props.view().upload.chooseFiles();
-  const dock = () => props.view().onDock("bottom");
+  // Header content moves outside the panel's delegated event root.
+  const toggle = nativeListener("click", () => props.view().picker.onToggle());
+  const focusOut = nativeListener("focusout", (event) => props.view().picker.onFocusOut(event));
   let trigger!: HTMLButtonElement;
-  let uploadButton: HTMLButtonElement | undefined;
-  let dockButton!: HTMLButtonElement;
   createEffect(
     () => props.view().hosted,
     (hosted) => {
@@ -105,21 +104,14 @@ export function TerminalPanelHostedActions(props: {
       }
     },
   );
-  onCleanup(() => {
-    trigger.removeEventListener("click", toggle);
-    trigger.removeEventListener("focusout", focusOut);
-    uploadButton?.removeEventListener("click", upload);
-    dockButton.removeEventListener("click", dock);
-  });
   return (
     <span ref={props.ref} style={{ display: "contents" }}>
       <openclaw-tooltip prop:content={t("terminal.sessions")}>
         <button
           ref={(element) => {
             trigger = element;
-            // Header content is outside the panel's delegated event root.
-            element.addEventListener("click", toggle);
-            element.addEventListener("focusout", focusOut);
+            toggle(element);
+            focusOut(element);
             untrack(() => props.view().picker.triggerRef(element));
           }}
           class="rail-header__action"
@@ -134,10 +126,7 @@ export function TerminalPanelHostedActions(props: {
       <Show when={props.view().upload.uploadsEnabled()}>
         <openclaw-tooltip prop:content={t("terminal.addFiles")}>
           <button
-            ref={(element) => {
-              uploadButton = element;
-              element.addEventListener("click", upload);
-            }}
+            ref={nativeListener("click", () => props.view().upload.chooseFiles())}
             class="rail-header__action"
             type="button"
             aria-label={t("terminal.addFiles")}
@@ -149,10 +138,7 @@ export function TerminalPanelHostedActions(props: {
       </Show>
       <openclaw-tooltip prop:content={t("terminal.dockBottom")}>
         <button
-          ref={(element) => {
-            dockButton = element;
-            element.addEventListener("click", dock);
-          }}
+          ref={nativeListener("click", () => props.view().onDock("bottom"))}
           class="rail-header__action"
           type="button"
           aria-label={t("terminal.dockBottom")}
@@ -247,17 +233,11 @@ function ActionButton(props: {
   onClick: () => void;
 }) {
   return (
-    <button
+    <PanelIconButton
+      {...props}
       class={props.class ?? "rail-header__action tp-icon"}
-      type="button"
-      title={props.label}
-      aria-label={props.label}
-      disabled={props.disabled}
-      data-new-tab-action={props.newTab ? "" : undefined}
-      onClick={() => props.onClick()}
-    >
-      <Icon name={props.icon} />
-    </button>
+      icon={<Icon name={props.icon} />}
+    />
   );
 }
 

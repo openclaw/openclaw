@@ -20,7 +20,10 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "./provider-http.js";
 
-export { selectSupportedVideoDuration } from "../video-generation/duration-support.js";
+export {
+  normalizeVideoGenerationDuration,
+  selectSupportedVideoDuration,
+} from "../video-generation/duration-support.js";
 
 export type {
   GeneratedVideoAsset,

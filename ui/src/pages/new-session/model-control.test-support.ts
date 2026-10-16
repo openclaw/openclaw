@@ -5,6 +5,7 @@ import type { ApplicationContext, ApplicationGateway } from "../../app/context.t
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { NewSessionModelControlView } from "./model-control-view.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
 
@@ -92,19 +93,22 @@ export function renderControl(
     thinkingDefault: "medium",
   },
 ) {
-  const container = document.createElement("div");
-  mountSolid(
-    () =>
-      createComponent(NewSessionModelControlView, {
-        control,
-        options: {
-          ...(agent ? { agent } : {}),
-          agentId,
-          context,
-          sending: false,
-        },
-      }),
-    { container },
+  const { container } = mountSolid(() =>
+    createComponent(NewSessionModelControlView, {
+      control,
+      options: {
+        ...(agent ? { agent } : {}),
+        agentId,
+        context,
+        sending: false,
+      },
+    }),
   );
+  const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker");
+  if (picker) {
+    picker.open = true;
+    picker.dispatchEvent(new Event("toggle"));
+    flush();
+  }
   return container;
 }

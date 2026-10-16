@@ -58,7 +58,8 @@ const mocks = vi.hoisted(() => ({
   nativeRuntimeDir: "",
   stops: 0,
 }));
-vi.mock("../daemon/service-process-membership.js", () => ({
+vi.mock("../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service-process-membership.js")>()),
   // This in-memory service places Doctor outside its synthetic process scope.
   inspectServiceProcessMembershipSync: (pid: number) =>
     pid === mocks.gatewayPid ? "outside" : "unknown",

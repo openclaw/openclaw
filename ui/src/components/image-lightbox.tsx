@@ -1,24 +1,26 @@
 import Panzoom, { type PanzoomObject } from "@panzoom/panzoom";
-import {
-  createEffect,
-  createMemo,
-  createRenderEffect,
-  createSignal,
-  onCleanup,
-  Show,
-  untrack,
-} from "solid-js";
-import { BROWSER_IMAGE_MIME_TYPES } from "../../../src/shared/browser-image-mime-types.js";
+import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
+import {
+  downloadLightboxImage,
+  externalLightboxImageUrl,
+  resolveLightboxOriginalUrl,
+} from "./image-lightbox-files.ts";
 import {
   canSwipeLightboxVideo,
-  ImageLightboxGalleryController,
+  createImageLightboxGallery,
   exitLightboxVideoFullscreen,
   trapLightboxTabFocus,
 } from "./image-lightbox-gallery.ts";
 import { panImageWithKeyboard } from "./image-lightbox-keyboard.ts";
-import { LightboxAction, LightboxHeader, lightboxImageStyle } from "./image-lightbox-view.tsx";
+import {
+  LightboxAction,
+  LightboxChrome,
+  LightboxImageQualityStatus,
+  lightboxImageStyle,
+} from "./image-lightbox-view.tsx";
 import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
 import { Icon } from "./solid/icon.tsx";
 import imageLightboxStyles from "./image-lightbox.css?inline";
@@ -33,7 +35,8 @@ const SLIDE_DURATION_MS = 180;
 type ImageLightboxProps = {
   connectVideo?: ImageLightboxItem["connectVideo"];
   gallery?: ImageLightboxGallery;
-  loadFullResolution?: ImageLightboxItem["loadFullResolution"];
+  loadDisplayImage?: ImageLightboxItem["loadDisplayImage"];
+  readOriginalBlob?: ImageLightboxItem["readOriginalBlob"];
   mediaKind: "image" | "video";
   src: string;
   originalSrc: string;
@@ -44,23 +47,9 @@ type ImageLightboxProps = {
 
 type ImageLightboxElement = SolidBridgeElement<ImageLightboxProps>;
 
-function mimeTypeEssence(value: string): string {
-  return value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-}
-
-function dataUrlMimeType(source: string): string | undefined {
-  const mediaType = /^data:([^,]*)/i.exec(source)?.[1];
-  return mediaType === undefined ? undefined : mimeTypeEssence(mediaType);
-}
-
 function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElement) {
-  // The view lifecycle synchronously publishes controller and media-state changes.
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const controller = new ImageLightboxGalleryController(() => setRevision((value) => value + 1));
-  const galleryState = () => {
-    revision();
-    return controller;
-  };
+  const gallery = createImageLightboxGallery();
+  const galleryState = gallery.state;
   const hasGallery = () => galleryState().count > 1;
   const currentImage = () => galleryState().current;
   const [openOriginalUrl, setOpenOriginalUrl] = createSignal("", { ownedWrite: true });
@@ -90,8 +79,6 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
     | undefined;
   const touchPointers = new Set<number>();
   let suppressDoubleClick = false;
-  let dialogElement: HTMLElement | undefined;
-  let stageElement: HTMLDivElement | undefined;
   const handleImageLoad = (event: Event) => {
     const target = event.currentTarget;
     if (target instanceof HTMLImageElement && target === image()) {
@@ -207,8 +194,8 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
       : undefined;
     if (
       event.pointerType === "touch" &&
-      controller.count > 1 &&
-      !controller.busy &&
+      gallery.peek().count > 1 &&
+      !gallery.peek().busy &&
       scale() <= 1 &&
       (props.mediaKind !== "video" || canSwipeLightboxVideo(video(), event))
     ) {
@@ -253,7 +240,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
       stage()?.setPointerCapture(event.pointerId);
     }
     const delta = x * direction() < 0 ? 1 : -1;
-    swipe.offset = controller.canMove(delta) ? x : x * 0.2;
+    swipe.offset = gallery.canMove(delta) ? x : x * 0.2;
     const currentSlide = slide();
     if (currentSlide) {
       currentSlide.style.transform = `translateX(${swipe.offset}px)`;
@@ -271,7 +258,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
         if (
           Math.abs(swipe.offset) >= SWIPE_THRESHOLD_PX &&
           scale() <= 1 &&
-          controller.canMove(delta)
+          gallery.canMove(delta)
         ) {
           void navigate(delta, swipe.offset);
         } else {
@@ -324,12 +311,12 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
   }
 
   async function navigate(delta: number, offset = 0) {
-    if (controller.count <= 1 || !controller.canMove(delta)) {
+    if (gallery.peek().count <= 1 || !gallery.canMove(delta)) {
       animateSlide(offset);
       return;
     }
     video()?.pause();
-    const changed = await controller.move(delta);
+    const changed = await gallery.move(delta);
     if (!host.isConnected || disposed) {
       return;
     }
@@ -360,56 +347,31 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
     const request = ++originalUrlRequest;
     revokeOriginalBlobUrl();
     setResolvingOriginal(false);
-    if (controller.current?.loadFullResolution) {
+    if (gallery.peek().current?.kind !== "video" || gallery.peek().current?.loadDisplayImage) {
       setOpenOriginalUrl("");
       return;
     }
-    const current = controller.current;
+    const current = gallery.peek().current;
     const source = (
       current?.connectVideo
         ? (video()?.getAttribute("src") ?? "")
         : current?.originalSrc || current?.src || fallbackOriginalSrc || fallbackSrc
     ).trim();
-    if (!source) {
-      setOpenOriginalUrl("");
-      return;
-    }
-    const sourcePrefix = source.slice(0, 5).toLowerCase();
-    const isDataUrl = sourcePrefix === "data:";
-    const isBlobUrl = sourcePrefix === "blob:";
-    if (!isDataUrl && !isBlobUrl) {
-      setOpenOriginalUrl(source);
-      return;
-    }
     setOpenOriginalUrl("");
-    const sourceType = isDataUrl ? dataUrlMimeType(source) : undefined;
-    // Reject active data formats before fetching. Incoming blob URLs still need
-    // their fetched MIME checked because top-level blobs inherit the app origin.
-    if (isDataUrl && (!sourceType || !BROWSER_IMAGE_MIME_TYPES.has(sourceType))) {
-      return;
-    }
     setResolvingOriginal(true);
     try {
-      const response = await fetch(source);
-      const blob = await response.blob();
-      if (
-        !host.isConnected ||
-        disposed ||
-        request !== originalUrlRequest ||
-        !BROWSER_IMAGE_MIME_TYPES.has(mimeTypeEssence(blob.type))
-      ) {
-        return;
+      const prepared = await resolveLightboxOriginalUrl(
+        source,
+        () => host.isConnected && !disposed && request === originalUrlRequest,
+      );
+      if (prepared && request === originalUrlRequest && !disposed) {
+        originalBlobUrl = prepared.blobUrl ?? "";
+        setOpenOriginalUrl(prepared.url);
       }
-      if (isBlobUrl) {
-        setOpenOriginalUrl(source);
-        return;
-      }
-      originalBlobUrl = URL.createObjectURL(blob);
-      setOpenOriginalUrl(originalBlobUrl);
     } catch {
-      // The image remains viewable inline; omit an unusable original-link action.
+      // The selected media remains viewable; omit an unusable external link.
     } finally {
-      if (request === originalUrlRequest) {
+      if (request === originalUrlRequest && !disposed) {
         setResolvingOriginal(false);
       }
     }
@@ -424,7 +386,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
     }
     const nativePlayer = event.composedPath().some((target) => target instanceof HTMLVideoElement);
     if (
-      controller.count > 1 &&
+      gallery.peek().count > 1 &&
       !nativePlayer &&
       !event.shiftKey &&
       !event.altKey &&
@@ -453,11 +415,21 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
     trapLightboxTabFocus(event, host.querySelectorAll<HTMLElement>(".action, video[controls]"));
   };
 
+  const downloadCurrentImage = () => {
+    const item = gallery.peek().current ?? {
+      src: props.src,
+      originalSrc: props.originalSrc,
+      title: props.imageTitle,
+      readOriginalBlob: props.readOriginalBlob,
+    };
+    return downloadLightboxImage(item.originalSrc || item.src, item.title, item.readOriginalBlob);
+  };
+
   const emitClose = (event?: Event) => {
     if (event?.type === "modal-cancel" && exitLightboxVideoFullscreen(video(), event)) {
       return;
     }
-    controller.stopPlayer();
+    gallery.stopPlayer();
     host.dispatchEvent(
       new CustomEvent("image-lightbox-close", {
         bubbles: true,
@@ -471,7 +443,8 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
         props.src,
         props.originalSrc,
         props.gallery,
-        props.loadFullResolution,
+        props.loadDisplayImage,
+        props.readOriginalBlob,
         props.connectVideo,
         props.imageWidth,
         props.imageHeight,
@@ -479,13 +452,15 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
       ] as const,
     { equals: (previous, next) => previous.every((value, index) => Object.is(value, next[index])) },
   );
-  createRenderEffect(
+  // Source identity owns decoded-image leases and the native player, not just display state.
+  createEffect(
     galleryInputs,
     ([
       src,
       originalSrc,
-      gallery,
-      loadFullResolution,
+      items,
+      loadDisplayImage,
+      readOriginalBlob,
       connectVideo,
       imageWidth,
       imageHeight,
@@ -494,7 +469,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
       cancelSwipe();
       destroyPanzoom();
       setScale(1);
-      controller.reset(gallery, {
+      gallery.reset(items, {
         kind: mediaKind,
         connectVideo,
         src,
@@ -503,28 +478,28 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
         title: untrack(() => props.imageTitle),
         width: imageWidth,
         height: imageHeight,
-        loadFullResolution,
+        loadDisplayImage,
+        readOriginalBlob,
       });
       resetVersion += 1;
-      setRevision((value) => value + 1);
     },
   );
   createEffect(
-    () => ({ revision: revision(), src: props.src, originalSrc: props.originalSrc }),
+    () => ({ selected: galleryState(), src: props.src, originalSrc: props.originalSrc }),
     ({ src, originalSrc }) => {
       if (disposed || !host.isConnected) {
         return;
       }
       const selectionChanged =
-        displayedResetVersion !== resetVersion || displayedIndex !== controller.index;
+        displayedResetVersion !== resetVersion || displayedIndex !== gallery.peek().index;
       if (selectionChanged) {
         displayedResetVersion = resetVersion;
-        displayedIndex = controller.index;
+        displayedIndex = gallery.peek().index;
         destroyPanzoom();
         setScale(1);
       }
-      controller.connectPlayer(video());
-      const source = video()?.getAttribute("src") ?? controller.current?.src ?? src;
+      gallery.connectPlayer(video());
+      const source = video()?.getAttribute("src") ?? gallery.peek().current?.src ?? src;
       if (selectionChanged || displayedSource !== source) {
         displayedSource = source;
         void resolveOriginalUrl(src, originalSrc);
@@ -538,13 +513,10 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
   motionQuery?.addEventListener("change", handleMotionPreferenceChange);
   onCleanup(() => {
     disposed = true;
-    controller.dispose();
     cancelSwipe();
     touchPointers.clear();
     slideAnimation?.cancel();
     motionQuery?.removeEventListener("change", handleMotionPreferenceChange);
-    dialogElement?.removeEventListener("keydown", handleKeydown, true);
-    stageElement?.removeEventListener("pointerdown", handleStagePointerDown, true);
     destroyPanzoom();
     originalUrlRequest += 1;
     revokeOriginalBlobUrl();
@@ -564,18 +536,21 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
             : t("chat.imageLightbox.label", { title: title() })
         }
         onModal-cancel={emitClose}
-        ref={(element) => {
-          dialogElement = element;
-          element.addEventListener("keydown", handleKeydown, true);
-        }}
+        ref={nativeListener("keydown", handleKeydown, true)}
       >
-        <section class="lightbox">
-          <LightboxHeader
-            title={title()}
-            originalUrl={openOriginalUrl()}
-            resolvingOriginal={hasGallery() && resolvingOriginal()}
-            isVideo={props.mediaKind === "video"}
-            onClose={emitClose}
+        <LightboxChrome
+          title={title()}
+          originalUrl={openOriginalUrl()}
+          externalImageUrl={externalLightboxImageUrl(currentImage() ?? props)}
+          resolvingOriginal={hasGallery() && resolvingOriginal()}
+          isVideo={props.mediaKind === "video"}
+          onDownloadImage={downloadCurrentImage}
+          onClose={emitClose}
+        >
+          <LightboxImageQualityStatus
+            upgrading={galleryState().upgrading}
+            failed={galleryState().upgradeFailed}
+            onRetry={() => gallery.retryDisplayImage()}
           />
           <div
             class={
@@ -585,10 +560,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
                   ? "stage stage--gallery"
                   : "stage"
             }
-            ref={(element) => {
-              stageElement = element;
-              element.addEventListener("pointerdown", handleStagePointerDown, true);
-            }}
+            ref={nativeListener("pointerdown", handleStagePointerDown, true)}
             onPointerMove={handleStagePointerMove}
             onPointerUp={handleStagePointerUp}
             onPointerCancel={handleStagePointerCancel}
@@ -604,6 +576,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
                     src={currentImage()?.src ?? props.src}
                     alt={title()}
                     referrerpolicy="no-referrer"
+                    decoding="async"
                     onLoad={handleImageLoad}
                     onError={handleImageError}
                     onDragStart={(event) => event.preventDefault()}
@@ -613,9 +586,9 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
             >
               <video
                 class="video"
-                onLoadedData={() => controller.updateVideoStatus("ready")}
-                onPlaying={() => controller.updateVideoStatus("ready")}
-                onError={() => controller.updateVideoStatus("unavailable")}
+                onLoadedData={() => gallery.updateVideoStatus("ready")}
+                onPlaying={() => gallery.updateVideoStatus("ready")}
+                onError={() => gallery.updateVideoStatus("unavailable")}
                 aria-label={title()}
                 controls
                 autoplay
@@ -630,7 +603,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
               label={
                 props.mediaKind === "video" ? "common.previous" : "chat.imageLightbox.previous"
               }
-              disabled={!galleryState().canMove(-1) || galleryState().busy}
+              disabled={galleryState().busy || galleryState().index === 0}
               action={() => navigate(-1)}
             >
               <Icon name="chevronLeft" />
@@ -638,7 +611,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
             <LightboxAction
               class="navigation next"
               label={props.mediaKind === "video" ? "common.next" : "chat.imageLightbox.next"}
-              disabled={!galleryState().canMove(1) || galleryState().busy}
+              disabled={galleryState().busy || galleryState().index + 1 >= galleryState().count}
               action={() => navigate(1)}
             >
               <Icon name="chevronRight" />
@@ -669,7 +642,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
               <Show
                 when={galleryState().videoStatus === "unavailable" && galleryState().videoRetryable}
               >
-                <button class="action" onClick={() => controller.retryVideo()}>
+                <button class="action" onClick={() => gallery.retryVideo()}>
                   {t("common.retry")}
                 </button>
               </Show>
@@ -703,7 +676,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
               </LightboxAction>
             </div>
           </Show>
-        </section>
+        </LightboxChrome>
       </openclaw-modal-dialog>
     </>
   );
@@ -716,7 +689,8 @@ export const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
     properties: {
       connectVideo: { default: undefined, attribute: false },
       gallery: { default: undefined, attribute: false },
-      loadFullResolution: { default: undefined, attribute: false },
+      loadDisplayImage: { default: undefined, attribute: false },
+      readOriginalBlob: { default: undefined, attribute: false },
       mediaKind: { default: "image" },
       src: { default: "" },
       originalSrc: { default: "" },

@@ -20,7 +20,7 @@ import {
 } from "../app/update-schedule-projection.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import "../styles/sidebar-update-card.css";
 import { isUpdateRunAttentionVisible } from "./sidebar-attention-update.ts";
 import { SidebarNotificationCard } from "./sidebar-notification-card.tsx";

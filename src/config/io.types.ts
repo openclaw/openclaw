@@ -55,6 +55,8 @@ export type ConfigWriteOptions = {
   assertConfigPathForWrite?: () => void;
   /** Internal synchronous live-owner assertion checked at guarded publication effects. */
   assertCurrent?: () => void;
+  /** Synchronous requester admission immediately before publication; not post-commit ownership. */
+  assertBeforePublish?: () => void;
   /** Paths that must be removed from the persisted payload. */
   unsetPaths?: string[][];
   /** Caller-authored paths that stay persisted even when equal to defaults. */

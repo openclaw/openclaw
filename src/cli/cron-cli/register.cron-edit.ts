@@ -116,6 +116,9 @@ export function registerCronEditCommand(cron: Command) {
           if (typeof opts.script === "string" && !readNonBlankString(opts.script)) {
             throw new CronCliError("--script must not be blank");
           }
+          if (typeof opts.command === "string" && !readNonBlankString(opts.command)) {
+            throw new CronCliError("--command must not be blank");
+          }
           const commandCwd = parseCronStringOption(opts.commandCwd, "--command-cwd");
           let existingJobPromise: Promise<CronJobForEdit> | undefined;
           let expectedConfigRevision: string | undefined;

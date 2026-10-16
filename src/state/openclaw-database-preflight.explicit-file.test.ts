@@ -92,7 +92,7 @@ describe("explicit copied shared-state preflight", () => {
         const databasePath = createExplicitStateDatabase();
         execDatabase(
           databasePath,
-          "DROP INDEX idx_task_runs_status; CREATE INDEX idx_task_runs_status ON task_runs(task_id);",
+          "DROP INDEX idx_task_runs_runtime_run; CREATE INDEX idx_task_runs_runtime_run ON task_runs(task_id);",
         );
         return databasePath;
       },
@@ -102,8 +102,8 @@ describe("explicit copied shared-state preflight", () => {
         issues: [
           {
             code: "missing-or-drifted-index",
-            message: "missing or drifted index idx_task_runs_status",
-            objectName: "idx_task_runs_status",
+            message: "missing or drifted index idx_task_runs_runtime_run",
+            objectName: "idx_task_runs_runtime_run",
           },
         ],
       },

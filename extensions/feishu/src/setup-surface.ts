@@ -359,9 +359,7 @@ export async function runFeishuLogin(params: {
 export const feishuSetupWizard: ChannelSetupWizard = {
   channel,
   resolveAccountIdForConfigure: ({ accountOverride, defaultAccountId, cfg }) =>
-    (typeof accountOverride === "string" && accountOverride.trim()
-      ? accountOverride.trim()
-      : undefined) ??
+    (accountOverride?.trim() || undefined) ??
     resolveDefaultFeishuAccountId(cfg) ??
     defaultAccountId,
   resolveShouldPromptAccountIds: () => false,
@@ -380,7 +378,9 @@ export const feishuSetupWizard: ChannelSetupWizard = {
         try {
           const { probeFeishu } = await import("./probe.js");
           probeResult = await probeFeishu(account);
-        } catch {}
+        } catch {
+          // The optional connection probe must not prevent configuring credentials offline.
+        }
       }
       if (!configured) {
         return [`Feishu: ${t("wizard.channels.statusNeedsAppCredentials")}`];

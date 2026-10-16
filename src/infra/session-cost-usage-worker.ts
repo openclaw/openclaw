@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   collectErrorGraphCandidates,
   toErrorObject,
@@ -68,6 +67,7 @@ import {
   type UsageCostWorkerReply,
   type UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { isTransientSqliteError } from "./unhandled-rejections.js";
 import type { WorkerTaskChannel } from "./worker-task-server.js";
@@ -173,17 +173,14 @@ export async function executeUsageCostWorker(
   if (!cacheDatabase) {
     throw new Error("Usage cache database is not owned by this worker operation");
   }
-  const readCache = <T>(read: (db: DatabaseSync) => T, missing: T): T => {
+  const readCache = <T>(read: (db: EngineConnection) => T, missing: T): T => {
     const result = withOpenClawAgentDatabaseReadOnly(({ db }) => read(db), {
       ...cacheDatabase,
       env,
     });
     return result.found ? result.value : missing;
   };
-  const readMetadata = async (): Promise<{
-    found: boolean;
-    rows: SessionCostUsageRollupRow[];
-  }> => {
+  const readMetadata = async (): Promise<SessionCostUsageRollupRow[]> => {
     const receipt = refreshInputs?.rollupReceipt();
     const cached =
       selectedPaths?.flatMap((filePath) => {
@@ -193,7 +190,7 @@ export async function executeUsageCostWorker(
     const cachedKeys = new Set(cached.map((row) => row.key));
     const missing = selectedPaths?.filter((filePath) => !cachedKeys.has(filePath));
     if (missing?.length === 0) {
-      return { found: true, rows: cached };
+      return cached;
     }
     return control.runNativeSection(() =>
       readDatabase(cacheDatabase, () => {
@@ -206,35 +203,28 @@ export async function executeUsageCostWorker(
           for (const row of rows) {
             refreshInputs?.retainRollup(receipt, { row });
           }
-          return { found: result.found, rows: [...cached, ...rows] };
+          return [...cached, ...rows];
         } catch (error) {
           if (!isTransientSqliteError(error)) {
             throw error;
           }
-          return { found: false, rows: [] };
+          return [];
         }
       }),
     );
   };
-  const readBody = (row: SessionCostUsageRollupRow) =>
-    control.runNativeSection(() =>
-      readDatabase(cacheDatabase, () =>
-        readCache((db) => readSessionCostUsageRollupBodyInDatabase(db, row), undefined),
-      ),
-    );
   const readPartitionedBody = async (row: SessionCostUsageRollupRow) => {
     const receipt = refreshInputs?.rollupReceipt();
     const cached = refreshInputs?.readRollup(row.key, receipt);
-    if (
-      cached?.body &&
-      cached.row.updatedAt === row.updatedAt &&
-      cached.row.valueJson === row.valueJson
-    ) {
+    if (cached?.body) {
       return cached.body;
     }
     const body = await control.runNativeSection(() =>
       readDatabase(cacheDatabase, () =>
-        readCache((db) => readSessionCostUsageRollupWithPartitionsInDatabase(db, row), undefined),
+        readCache(
+          (db) => readSessionCostUsageRollupWithPartitionsInDatabase(db, row.key),
+          undefined,
+        ),
       ),
     );
     if (body) {
@@ -490,7 +480,7 @@ export async function executeUsageCostWorker(
     }
   }
 
-  const { found: cacheFound, rows } = await readMetadata();
+  const rows = await readMetadata();
   const byPath = new Map(rows.map((row) => [row.key, row]));
 
   const requestedFiles = selectedFiles.filter((file) => file !== undefined);
@@ -500,19 +490,33 @@ export async function executeUsageCostWorker(
   const files = operation.sessionFiles ? requestedFiles : await inventory(operation.sessionsDir);
   const filesByPath = new Map(files.map((file) => [file.filePath, file]));
   let pruned = false;
-  for (const row of rows) {
-    if (filesByPath.has(row.key)) {
-      continue;
+  if (!operation.sessionFiles) {
+    let batch: UsageCostWorkerHostEffects["prune-rows"]["input"] = [];
+    let batchBytes = 0;
+    const sendBatch = async () => {
+      const transfers = batch.map((row) => row.value.buffer);
+      await host("prune-rows", batch, transfers);
+      batch = [];
+      batchBytes = 0;
+    };
+    for (const row of rows) {
+      if (filesByPath.has(row.key)) {
+        continue;
+      }
+      const value = new TextEncoder().encode(row.valueJson);
+      const rowBytes = value.byteLength + 2 * row.key.length;
+      // Preserve single-row delivery for oversized metadata without growing other batches.
+      if (batch.length > 0 && (batch.length >= 64 || batchBytes + rowBytes > 1024 * 1024)) {
+        await sendBatch();
+      }
+      batch.push({ key: row.key, value, updatedAt: row.updatedAt });
+      batchBytes += rowBytes;
+      pruned = true;
     }
-    pruned = true;
-    const bytes = new TextEncoder().encode(row.valueJson);
-    await host("prune-row", { key: row.key, value: bytes, updatedAt: row.updatedAt }, [
-      bytes.buffer,
-    ]);
-  }
-  // Missing stores have nothing to prune; a real rollup write owns their creation.
-  if (!operation.sessionFiles && cacheFound) {
-    await host("prune", {});
+    if (batch.length > 0) {
+      await sendBatch();
+      await host("prune", {});
+    }
   }
   const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
@@ -550,6 +554,30 @@ export async function executeUsageCostWorker(
   const batchDeadline = maxFiles ? performance.now() + 10_000 : Infinity;
   let completedFiles = 0;
   let changed = pruned;
+  let pending: UsageCostWorkerHostEffects["write"]["input"] = [];
+  let pendingRollups: Array<Parameters<ReturnType<typeof usageRefreshInputs>["retainRollup"]>[1]> =
+    [];
+  let pendingTransfers: ArrayBuffer[] = [];
+  let pendingBytes = 0;
+  let flushAt = performance.now() + 1_000;
+  const flush = async () => {
+    if (pending.length === 0) {
+      return;
+    }
+    const written = await host("write", pending, pendingTransfers);
+    if (!written) {
+      throw new Error("Usage rollup batch was not committed");
+    }
+    const receipt = refreshInputs?.rollupReceipt();
+    for (const rollup of pendingRollups) {
+      refreshInputs?.retainRollup(receipt, rollup);
+    }
+    pending = [];
+    pendingRollups = [];
+    pendingTransfers = [];
+    pendingBytes = 0;
+    flushAt = performance.now() + 1_000;
+  };
   for (const { file, row, envelope, rebuild } of stale) {
     if (completedFiles > 0 && (completedFiles === maxFiles || performance.now() >= batchDeadline)) {
       break;
@@ -570,7 +598,11 @@ export async function executeUsageCostWorker(
         body = snapshot;
         priorPartitions = snapshot?.partitions ?? [];
       } else {
-        body = await readBody(row);
+        body = await control.runNativeSection(() =>
+          readDatabase(cacheDatabase, () =>
+            readCache((db) => readSessionCostUsageRollupBodyInDatabase(db, row.key), undefined),
+          ),
+        );
       }
       previous = body
         ? decodeUsageCostRollup(row.valueJson, operation.pricingFingerprint, body.blob)
@@ -616,7 +648,6 @@ export async function executeUsageCostWorker(
     const dates = new Set(partitions.map((partition) => partition.date));
     const removedDates = envelope?.projection?.dates.filter((date) => !dates.has(date)) ?? [];
     const value = new TextEncoder().encode(valueJson);
-    // Host transfer detaches these buffers; retain a bounded copy only after a successful write.
     const retainedBytes =
       2 * valueJson.length +
       blob.byteLength +
@@ -624,35 +655,40 @@ export async function executeUsageCostWorker(
         (bytes, partition) => bytes + 2 * partition.valueJson.length + partition.blob.byteLength,
         0,
       );
-    const retainedBody =
-      retainedBytes <= 8 * 1024 * 1024
-        ? { blob: Uint8Array.from(blob), partitions: structuredClone(partitions) }
-        : undefined;
-    const written = await host(
-      "write",
-      {
-        key: file.filePath,
-        value,
-        blob,
-        updatedAt: entry.scannedAt,
-        partitions: changedPartitions,
-        removedDates,
-        replacePartitions,
-      },
-      [value.buffer, blob.buffer, ...changedPartitions.map((partition) => partition.blob.buffer)],
-    );
-    if (!written) {
-      throw new Error(`usage rollup changed while refreshing: ${file.filePath}`);
+    const body = retainedBytes <= 8 * 1024 * 1024 ? { blob, partitions } : undefined;
+    pendingBytes += value.byteLength + retainedBytes;
+    pending.push({
+      key: file.filePath,
+      value,
+      blob,
+      updatedAt: entry.scannedAt,
+      partitions: changedPartitions,
+      removedDates,
+      replacePartitions,
+    });
+    pendingRollups.push({
+      row: { key: file.filePath, valueJson, updatedAt: entry.scannedAt },
+      body,
+    });
+    pendingTransfers.push(value.buffer);
+    // Retained bodies stay in this worker; channel cloning copies only the
+    // changed partitions sent to the host. Oversized bodies transfer ownership.
+    if (!body) {
+      pendingTransfers.push(
+        blob.buffer,
+        ...changedPartitions.map((partition) => partition.blob.buffer),
+      );
     }
-    if (retainedBody) {
-      refreshInputs?.retainRollup(refreshInputs.rollupReceipt(), {
-        row: { key: file.filePath, valueJson, updatedAt: entry.scannedAt },
-        body: retainedBody,
-      });
+    // Bound retained bytes and writer occupancy; a single transcript may exceed
+    // the byte/time limit.
+    if (pending.length === 50 || pendingBytes >= 1024 * 1024 || performance.now() >= flushAt) {
+      await flush();
     }
     changed = true;
     completedFiles++;
   }
+  // Refresh completion (including a yielded batch) promises committed totals.
+  await flush();
   if (stale.length === completedFiles) {
     return { kind: "refresh", changed };
   }

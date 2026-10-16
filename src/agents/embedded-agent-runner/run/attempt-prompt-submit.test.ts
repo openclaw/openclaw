@@ -624,6 +624,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
           sessionAgentId: "main",
           runtimeModel: "test-model",
           systemPromptText: input.systemPrompt,
+          hasBaselineTools: () => false,
           applyPromptBuildToolsAllow: () => [],
           setActiveSessionSystemPrompt: vi.fn(),
           setLeasedSteering: vi.fn(),

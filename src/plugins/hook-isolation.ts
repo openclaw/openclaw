@@ -62,10 +62,8 @@ function containsSharedMemory(value: unknown, seen: Set<object>): boolean {
 
 export function cloneHookIsolationValue<T>(hookName: PluginHookName, value: T): T {
   try {
-    if (containsSharedMemory(value, new Set<object>())) {
-      throw new TypeError("shared memory cannot be isolated");
-    }
     const cloned = structuredClone(value);
+    // Inspect exactly what crosses the boundary, including values produced by getters.
     if (containsSharedMemory(cloned, new Set<object>())) {
       throw new TypeError("shared memory cannot be isolated");
     }

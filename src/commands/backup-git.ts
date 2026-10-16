@@ -1,6 +1,7 @@
 import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
-import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, readConfigFileSnapshot } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { assertHomogeneousDatabaseEngines } from "../infra/database-engine/registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
@@ -60,9 +61,14 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
   if (!options.all && !explicit) {
     throw new Error("Choose at least one Git backup scope: --all, --global, or --agent <id>.");
   }
+  const globalPath = options.all || options.global ? resolveOpenClawStateSqlitePath() : undefined;
+  if (globalPath) {
+    assertNotUpdateCapturePath(globalPath, resolveStateDir());
+  }
+  const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
+  assertHomogeneousDatabaseEngines(config, "backup");
   let agents: Array<{ agentId: string; databasePath: string }> = [];
   if (options.all || normalizedAgents.length > 0) {
-    const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
     const agentIds = options.all
       ? listAgentIds(config).toSorted()
       : normalizedAgents.map((agent) => resolveConfiguredAgentId(config, agent));
@@ -72,11 +78,9 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
     path: string;
     identity: GitBackupIdentity;
   }> = [];
-  if (options.all || options.global) {
-    const selectedPath = resolveOpenClawStateSqlitePath();
-    assertNotUpdateCapturePath(selectedPath, resolveStateDir());
+  if (globalPath) {
     databases.push({
-      path: selectedPath,
+      path: globalPath,
       identity: { role: "global" },
     });
   }
@@ -121,6 +125,7 @@ export async function backupGitInitCommand(
 
 export async function backupGitCreateCommand(runtime: RuntimeEnv, options: BackupGitCreateOptions) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
+  const databases = await resolveCreateDatabases(options);
   if (options.push && !options.excludeSecrets) {
     runtime.error(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
   }
@@ -131,7 +136,7 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
       createGitBackup({
         repositoryPath,
         stateDir: resolveStateDir(),
-        databases: await resolveCreateDatabases(options),
+        databases,
         all: options.all,
         excludeSecrets: options.excludeSecrets,
         push: options.push,
@@ -228,6 +233,8 @@ export async function backupGitRestoreCommand(
     json?: boolean;
   },
 ) {
+  const config = await readConfigFileSnapshot({ observe: false });
+  assertHomogeneousDatabaseEngines(config.config, "restore");
   const result = await restoreGitBackupRef({
     repositoryPath: resolveRequiredBackupPath(options.repository, "--repository"),
     identity: resolveOneIdentity(options),

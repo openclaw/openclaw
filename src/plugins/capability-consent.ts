@@ -249,6 +249,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   env?: NodeJS.ProcessEnv;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  requireCapabilityConsent?: boolean;
   recordOfficialCapabilities?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   previousDeclared?: PluginAcceptedDeclaredSurface;
@@ -294,8 +295,9 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     // Reinstalls preserve authored disablement; required consent still precedes commit.
     // Only update-only flows defer it in preparePluginUpdateCapabilityConsent.
   }
-  const acknowledgment =
-    (official && !params.recordOfficialCapabilities) || !params.enabled || acceptanceCurrent
+  const acknowledgment = params.requireCapabilityConsent
+    ? await params.onCapabilityConsent?.(review)
+    : (official && !params.recordOfficialCapabilities) || !params.enabled || acceptanceCurrent
       ? { reviewToken: review.reviewToken }
       : (params.acknowledgeCapabilities ?? (await params.onCapabilityConsent?.(review)));
   // Review and staged-package rollback remain cancellable. Lock only when
@@ -339,9 +341,10 @@ export function createManagedPluginArtifactConsentHandler(params: {
   expectedIntegrity?: string;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  requireCapabilityConsent?: boolean;
   /** Preserve official provenance while recording an explicit setup acceptance. */
   recordOfficialCapabilities?: boolean;
-  beforePersistentEffect?: () => void | Promise<void>;
+  beforePersistentEffect?: (artifact: PluginInstallArtifactConsentRequest) => void | Promise<void>;
   previousRecords?: Record<string, PluginInstallRecord>;
   previousPluginOwners?: ReadonlyMap<string, string>;
   /** Update-only flows may defer consent while every known package entry is disabled. */
@@ -406,8 +409,11 @@ export function createManagedPluginArtifactConsentHandler(params: {
         sourceRecord: artifact.sourceRecord,
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
+        requireCapabilityConsent: params.requireCapabilityConsent,
         recordOfficialCapabilities: params.recordOfficialCapabilities,
-        beforePersistentEffect: params.beforePersistentEffect,
+        ...(params.beforePersistentEffect
+          ? { beforePersistentEffect: () => params.beforePersistentEffect?.(artifact) }
+          : {}),
         ...(previousRecord ? { previousRecord } : {}),
         ...(previousDeclared ? { previousDeclared } : {}),
         mode: artifact.mode,
