@@ -6,44 +6,28 @@ import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
-import {
-  createTestSessionCapability,
-  sessionsResult,
-} from "../lib/sessions/session-capability.test-support.ts";
+import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import {
   createContext,
   createGatewayHarness,
   createSidebarElement,
-  mountSidebar,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import {
-  createTestGatewayClient,
-  type GatewayRequestHandler,
-} from "../test-helpers/gateway-client.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
 } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import { childToggle, mountRoster } from "./app-sidebar-freshness.test-support.ts";
 import {
   storeSidebarSessionOwnerFilter,
   storeSidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import "./app-sidebar.tsx";
-
-async function mountSessionRoster(request: GatewayRequestHandler) {
-  const gateway = createGatewayHarness(createTestGatewayClient(request));
-  const sessions = createTestSessionCapability(gateway.gateway);
-  await sessions.refresh({ agentId: "main", force: true });
-  return {
-    ...(await mountSidebar(gateway.gateway, sessions, "panel", TWO_AGENTS)),
-    sessions,
-  };
-}
 
 describe("AppSidebar automatic list scope replacement", () => {
   it("publishes a pending status-filter list before its data frame and restores identical rows", async () => {
@@ -57,22 +41,20 @@ describe("AppSidebar automatic list scope replacement", () => {
     };
     const response = sessionsResult([row], 1);
     const pending = deferred<ReturnType<typeof sessionsResult>>();
-    const { sidebar, context, provider, sessions } = await mountSessionRoster(
-      async (method, raw) => {
-        const params = asOptionalRecord(raw);
-        if (method === "sessions.subscribe") {
-          return { subscribed: true };
-        }
-        if (method !== "sessions.list") {
-          return {};
-        }
-        return params?.archived === true
-          ? pending.promise
-          : params?.archived === "all"
-            ? response
-            : sessionsResult([], 0);
-      },
-    );
+    const { sidebar, context, provider, sessions } = await mountRoster(async (method, raw) => {
+      const params = asOptionalRecord(raw);
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      if (method !== "sessions.list") {
+        return {};
+      }
+      return params?.archived === true
+        ? pending.promise
+        : params?.archived === "all"
+          ? response
+          : sessionsResult([], 0);
+    }, TWO_AGENTS);
     let unsubscribe: (() => void) | undefined;
     try {
       sidebar.connected = true;
@@ -147,30 +129,29 @@ describe("AppSidebar automatic list scope replacement", () => {
     );
     let roots = [previousParent];
     const parents: unknown[] = [];
-    const { sidebar, context, provider, sessions } = await mountSessionRoster(
-      async (method, raw) => {
-        const params = asOptionalRecord(raw);
-        if (method === "sessions.subscribe") {
-          return { subscribed: true };
-        }
-        if (method === "sessions.describe") {
-          return {
-            session: [...roots, ...children].find((row) => row.key === params?.key) ?? null,
-          };
-        }
-        if (method !== "sessions.list") {
-          return {};
-        }
-        if (params?.spawnedBy) {
-          parents.push(params.spawnedBy);
-          return sessionsResult(
-            children.filter((row) => row.spawnedBy === params.spawnedBy),
-            2,
-          );
-        }
-        return sessionsResult(roots, 1);
-      },
-    );
+    const { sidebar, context, provider, sessions } = await mountRoster(async (method, raw) => {
+      const params = asOptionalRecord(raw);
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      if (method === "sessions.describe") {
+        return {
+          session: [...roots, ...children].find((row) => row.key === params?.key) ?? null,
+        };
+      }
+      if (method !== "sessions.list") {
+        return {};
+      }
+      if (params?.spawnedBy) {
+        parents.push(params.spawnedBy);
+        return sessionsResult(
+          children.filter((row) => row.spawnedBy === params.spawnedBy),
+          2,
+        );
+      }
+      return sessionsResult(roots, 1);
+    }, TWO_AGENTS);
+    const data = sidebar.sessionData;
     try {
       context.connectionBootstrap.setForegroundRoute(undefined);
       sidebar.activeRouteId = "chat";
@@ -183,11 +164,7 @@ describe("AppSidebar automatic list scope replacement", () => {
       await sessions.refresh({ agentId: "main", force: true });
       await settleLitElement(sidebar);
       expect(parents).toEqual([]);
-      expect(
-        sidebar
-          .querySelector(`[data-child-session-toggle="${previousParent.key}"]`)
-          ?.getAttribute("aria-expanded"),
-      ).toBe("false");
+      expect(childToggle(sidebar, previousParent.key)?.getAttribute("aria-expanded")).toBe("false");
 
       context.connectionBootstrap.setForegroundRoute(null);
       await waitForFast(() =>
@@ -195,13 +172,11 @@ describe("AppSidebar automatic list scope replacement", () => {
       );
       await settleLitElement(sidebar);
       expect(parents).toHaveLength(2);
-      expect(sidebar.sessionData.childSessionRowsByParent[previousParent.key]).toBeUndefined();
-      expect(sidebar.sessionData.childSessionRowsByParent[mainParent.key]?.[0]?.key).toBe(
+      expect(data.childSessionRowsByParent[previousParent.key]).toBeUndefined();
+      expect(data.childSessionRowsByParent[mainParent.key]?.[0]?.key).toBe(
         mainParent.childSessions![0],
       );
-      const expand = sidebar.querySelector<HTMLButtonElement>(
-        `[data-child-session-toggle="${nextParent.key}"]`,
-      );
+      const expand = childToggle(sidebar, nextParent.key);
       // The newly discovered child reveals its parent after the background queue drains.
       expect(expand?.getAttribute("aria-expanded")).toBe("true");
       expect(sidebar.textContent).toContain(`${nextParent.key} child`);
@@ -225,25 +200,23 @@ describe("AppSidebar automatic list scope replacement", () => {
           [{ key: `agent:${agentId}:archived`, kind: "direct", archived: true, label }],
           1,
         );
-      const { sidebar, context, provider, sessions } = await mountSessionRoster(
-        async (method, raw) => {
-          const params = asOptionalRecord(raw);
-          if (method === "sessions.subscribe") {
-            return { subscribed: true };
-          }
-          if (method !== "sessions.list") {
-            return {};
-          }
-          if (params?.archived !== true) {
-            return sessionsResult([], 0);
-          }
-          targets.push(params.agentId);
-          if (params.agentId === "research") {
-            return previous.promise;
-          }
-          return archived("main", `Main archived ${++mainReads}`);
-        },
-      );
+      const { sidebar, context, provider, sessions } = await mountRoster(async (method, raw) => {
+        const params = asOptionalRecord(raw);
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method !== "sessions.list") {
+          return {};
+        }
+        if (params?.archived !== true) {
+          return sessionsResult([], 0);
+        }
+        targets.push(params.agentId);
+        if (params.agentId === "research") {
+          return previous.promise;
+        }
+        return archived("main", `Main archived ${++mainReads}`);
+      }, TWO_AGENTS);
       try {
         sidebar.connected = true;
         await settleLitElement(sidebar);
@@ -309,38 +282,36 @@ describe("AppSidebar automatic list scope replacement", () => {
       const previous = deferred<ReturnType<typeof sessionsResult>>();
       const parents: unknown[] = [];
       let primaryReads = 0;
-      const { sidebar, context, provider, sessions } = await mountSessionRoster(
-        async (method, raw) => {
-          const params = asOptionalRecord(raw);
-          if (method === "sessions.subscribe") {
-            return { subscribed: true };
-          }
-          if (method === "sessions.describe") {
-            return { session: rows.find((row) => row.key === params?.key) ?? null };
-          }
-          if (method !== "sessions.list") {
-            return {};
-          }
-          if (params?.spawnedBy) {
-            parents.push(params.spawnedBy);
-            return params.spawnedBy === mainParent
-              ? previous.promise
-              : sessionsResult(
-                  rows.filter((row) => row.spawnedBy === params.spawnedBy),
-                  2,
-                );
-          }
-          primaryReads += 1;
-          const knownParents =
-            nextAgent === "main"
-              ? [mainParent, researchParent]
-              : [params?.agentId === "research" ? researchParent : mainParent];
-          return sessionsResult(
-            rows.filter((row) => knownParents.includes(row.key)),
-            1,
-          );
-        },
-      );
+      const { sidebar, context, provider, sessions } = await mountRoster(async (method, raw) => {
+        const params = asOptionalRecord(raw);
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method === "sessions.describe") {
+          return { session: rows.find((row) => row.key === params?.key) ?? null };
+        }
+        if (method !== "sessions.list") {
+          return {};
+        }
+        if (params?.spawnedBy) {
+          parents.push(params.spawnedBy);
+          return params.spawnedBy === mainParent
+            ? previous.promise
+            : sessionsResult(
+                rows.filter((row) => row.spawnedBy === params.spawnedBy),
+                2,
+              );
+        }
+        primaryReads += 1;
+        const knownParents =
+          nextAgent === "main"
+            ? [mainParent, researchParent]
+            : [params?.agentId === "research" ? researchParent : mainParent];
+        return sessionsResult(
+          rows.filter((row) => knownParents.includes(row.key)),
+          1,
+        );
+      }, TWO_AGENTS);
       try {
         sidebar.activeRouteId = "chat";
         sidebar.sessionKey = mainParent;
@@ -370,9 +341,7 @@ describe("AppSidebar automatic list scope replacement", () => {
           expect(sidebar.textContent).not.toContain("Stale Main child");
         }
         expect(parents).toEqual([mainParent, researchParent]);
-        const expand = sidebar.querySelector<HTMLButtonElement>(
-          `[data-child-session-toggle="${researchParent}"]`,
-        );
+        const expand = childToggle(sidebar, researchParent);
         expect(expand).not.toBeNull();
         // Only the cross-agent roster discovers a new child after the initial baseline.
         expect(expand?.getAttribute("aria-expanded")).toBe(nextAgent === "main" ? "false" : "true");

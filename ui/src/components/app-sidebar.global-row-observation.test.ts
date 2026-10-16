@@ -4,24 +4,22 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import {
-  createAgentSelectionCapability,
-  selectApplicationSession,
-} from "../app/agent-selection.ts";
-import { createSessionCapability, type SessionRowObservation } from "../lib/sessions/index.ts";
+import { selectApplicationSession } from "../app/agent-selection.ts";
+import type { SessionRowObservation } from "../lib/sessions/index.ts";
 import type { SessionPatch, SessionPatchResult } from "../lib/sessions/patch.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import { loadChatRoute } from "../pages/chat/route-loader.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import {
-  createContext,
-  createGatewayHarness,
-  mountSidebarContext,
-} from "../test-helpers/app-sidebar.ts";
+import { createGatewayHarness } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import {
+  rowElement,
+  waitForRequest,
+  mountSelectedRoster,
+} from "./app-sidebar-freshness.test-support.ts";
 import "./app-sidebar.tsx";
 
 const requireRecord = createRequireRecord("object", "expected-label");
@@ -147,21 +145,12 @@ describe("sidebar global row observation", () => {
         },
         sessionKey: "agent:main:workspace",
       });
-      gateway.setSessionKey = (sessionKey) => harness.publish({ sessionKey });
-      const selection = createAgentSelectionCapability(
-        gateway,
-        {
-          state: { agentsList },
-          subscribe: () => () => undefined,
-        },
-        { load: () => "main", save: () => undefined },
+      const { provider, sidebar, sessions, selection, context } = await mountSelectedRoster(
+        harness,
+        agentsList,
+        "main",
       );
-      const sessions = createSessionCapability(gateway, selection);
-      const context = {
-        ...createContext(gateway, sessions, agentsList),
-        agentSelection: selection,
-      };
-      const { provider, sidebar } = await mountSidebarContext(context, "panel", "sessions");
+      const data = sidebar.sessionData;
       sidebar.connected = true;
       let recovery: Promise<void> | undefined;
       let action: Promise<unknown> | undefined;
@@ -192,7 +181,7 @@ describe("sidebar global row observation", () => {
         await waitForFast(() => expect(workListRequests).toBe(1));
         await waitForFast(() => expect(describeRequests).toBe(1));
         const assertAlias = (expected: GatewaySessionRow) => {
-          const row = sidebar.querySelector(`[data-session-key="${route.sessionKey}"]`);
+          const row = rowElement(sidebar, route.sessionKey);
           expect.soft(row?.textContent).toContain(expected.label);
           expect
             .soft(row?.classList.contains("session-row-host--running"))
@@ -222,7 +211,7 @@ describe("sidebar global row observation", () => {
           });
         };
         workDescribe.resolve({ session: work });
-        await sidebar.sessionData.loadActiveSessionLineage(route.sessionKey);
+        await data.loadActiveSessionLineage(route.sessionKey);
         await sidebar.updateComplete;
         assertAlias(work);
         expect(sessions.state.loading).toBe(true);
@@ -244,7 +233,7 @@ describe("sidebar global row observation", () => {
           recovery = sessions.refresh({ agentId: "work", force: true });
           recoveryList.resolve(sessionsResult([replacement], 600));
           await recovery;
-          await sidebar.sessionData.loadActiveSessionLineage(route.sessionKey);
+          await data.loadActiveSessionLineage(route.sessionKey);
           await sidebar.updateComplete;
           assertAlias(replacement);
           const { key, agentId, ...fields } = completed;
@@ -280,16 +269,16 @@ describe("sidebar global row observation", () => {
           await import("./session-organizer-operations.runtime.ts");
           const beginPatch = async (patch: SessionPatch) => {
             action = sidebar.sessionOrganizer.patchSession(visibleRow(), patch);
-            await waitForFast(() =>
-              expect(request).toHaveBeenCalledWith(
-                "sessions.patch",
-                expect.objectContaining({
-                  key: route.sessionKey,
-                  agentId: "work",
-                  expectedSessionId: "work-global",
-                  ...patch,
-                }),
-              ),
+            await waitForRequest(
+              request,
+              "sessions.patch",
+              {
+                key: route.sessionKey,
+                agentId: "work",
+                expectedSessionId: "work-global",
+                ...patch,
+              },
+              true,
             );
             await sidebar.updateComplete;
           };
@@ -371,7 +360,7 @@ describe("sidebar global row observation", () => {
         await recovery;
         await waitForFast(() => {
           expect(sessions.state.agentId).toBe("work");
-          expect(sidebar.sessionData.sessionsAgentId).toBe("work");
+          expect(data.sessionsAgentId).toBe("work");
         });
         await sidebar.updateComplete;
         expect(sessions.state.result?.sessions).toHaveLength(1);

@@ -17,6 +17,14 @@ import "../test-helpers/app-sidebar-suite.ts";
 import { createGateway, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import {
+  childToggle,
+  findRow,
+  rowElement,
+  waitForRequest,
+  mountRoster,
+  placement,
+} from "./app-sidebar-freshness.test-support.ts";
 import "./app-sidebar.tsx";
 
 const requireRecord = createRequireRecord("object", "expected-label");
@@ -45,6 +53,7 @@ describe("sidebar routed-lineage freshness", () => {
     const sessions = createTestSessionCapability(gateway);
     await sessions.refresh({ agentId: "main", force: true });
     const { sidebar, provider } = await mountSidebar(gateway, sessions);
+
     try {
       await sidebar.updateComplete;
       expect(sidebar.findSidebarHovercardRowByKey(parent.key)?.attention).toEqual({
@@ -123,29 +132,20 @@ describe("sidebar routed-lineage freshness", () => {
         unexpectedMethods.push(method);
         throw new Error(`Unexpected Gateway method: ${method}`);
       });
-      const gateway = createGateway(createTestGatewayClient(request));
-      const sessions = createTestSessionCapability(gateway);
-      await sessions.refresh({ agentId: "main", force: true });
-      const { sidebar, provider } = await mountSidebar(gateway, sessions);
+      const { sidebar, provider, sessions } = await mountRoster(request);
+      const data = sidebar.sessionData;
       const pending: Promise<unknown>[] = [];
       let stopReentry: () => void = () => undefined;
       try {
         sidebar.activeRouteId = "chat";
         sidebar.sessionKey = first.key;
-        const firstLineage = sidebar.sessionData.loadActiveSessionLineage(first.key);
-        const children = sidebar.sessionData.loadChildSessions(parentKey);
+        const firstLineage = data.loadActiveSessionLineage(first.key);
+        const children = data.loadChildSessions(parentKey);
         pending.push(firstLineage, children);
         await firstLineage;
-        await waitForFast(() =>
-          expect(request).toHaveBeenCalledWith(
-            "sessions.list",
-            expect.objectContaining({ spawnedBy: parentKey }),
-          ),
-        );
+        await waitForRequest(request, "sessions.list", { spawnedBy: parentKey }, true);
         await sidebar.updateComplete;
-        const toggle = sidebar.querySelector<HTMLButtonElement>(
-          `[data-child-session-toggle="${parentKey}"]`,
-        );
+        const toggle = childToggle(sidebar, parentKey);
         if (!toggle) {
           throw new Error("Expected the parent's child-session toggle");
         }
@@ -162,59 +162,49 @@ describe("sidebar routed-lineage freshness", () => {
             ) {
               stopReentry();
               sidebar.sessionKey = second.key;
-              pending.push(sidebar.sessionData.loadActiveSessionLineage(second.key));
+              pending.push(data.loadActiveSessionLineage(second.key));
             }
           });
         } else {
           sidebar.sessionKey = second.key;
-          const nextLineage = sidebar.sessionData.loadActiveSessionLineage(second.key);
+          const nextLineage = data.loadActiveSessionLineage(second.key);
           pending.push(nextLineage);
-          await waitForFast(() =>
-            expect(request).toHaveBeenCalledWith("sessions.describe", { key: second.key }),
-          );
+          await waitForRequest(request, "sessions.describe", { key: second.key });
           secondDescribe.reject(new Error("Selected sibling describe temporarily unavailable"));
           await nextLineage;
           await sidebar.updateComplete;
         }
         if (returnToFirst) {
           sidebar.sessionKey = first.key;
-          const replacementLineage = sidebar.sessionData.loadActiveSessionLineage(first.key);
+          const replacementLineage = data.loadActiveSessionLineage(first.key);
           pending.push(replacementLineage);
           await replacementLineage;
           await sidebar.updateComplete;
         }
         const primaryKeys = [parentKey, first.key];
         expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual(primaryKeys);
-        expect(sidebar.sessionData.loadingChildSessionKeys.has(parentKey)).toBe(true);
+        expect(data.loadingChildSessionKeys.has(parentKey)).toBe(true);
 
         childRead.resolve(listed);
         await children;
         await sidebar.updateComplete;
-        expect(
-          sidebar.sessionData.childSessionRowsByParent[parentKey]?.map((row) => row.key),
-        ).toEqual(reentrant ? [first.key] : [first.key, second.key]);
-        if (!reentrant) {
-          expect(
-            sidebar.querySelector(`[data-session-key="${second.key}"]`)?.textContent,
-          ).toContain(second.label);
-        }
-        expect(sidebar.querySelector(`[data-session-key="${first.key}"]`)?.textContent).toContain(
-          refreshedFirst.label,
+        expect(data.childSessionRowsByParent[parentKey]?.map((row) => row.key)).toEqual(
+          reentrant ? [first.key] : [first.key, second.key],
         );
+        if (!reentrant) {
+          expect(rowElement(sidebar, second.key)?.textContent).toContain(second.label);
+        }
+        expect(rowElement(sidebar, first.key)?.textContent).toContain(refreshedFirst.label);
         expect(sidebar.sessionKey).toBe(returnToFirst ? first.key : second.key);
         // Accepted child facts update existing primary members without changing selection.
-        expect(sessions.state.result?.sessions.find((row) => row.key === first.key)).toMatchObject(
-          refreshedFirst,
-        );
+        expect(findRow(sessions.state.result, first.key)).toMatchObject(refreshedFirst);
         if (reentrant) {
           expect(request).toHaveBeenCalledWith("sessions.describe", { key: second.key });
-          expect(sidebar.sessionData.activeSessionLineageSelectedRow?.key).not.toBe(first.key);
+          expect(data.activeSessionLineageSelectedRow?.key).not.toBe(first.key);
           expect(sessions.state.result?.sessions).toHaveLength(primaryKeys.length);
         } else {
           expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual(primaryKeys);
-          expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual(
-            primaryKeys,
-          );
+          expect(data.sessionsResult?.sessions.map((row) => row.key)).toEqual(primaryKeys);
         }
         expect(unexpectedMethods).toEqual([]);
       } finally {
@@ -237,19 +227,6 @@ describe("sidebar routed-lineage freshness", () => {
     async ({ selectedPage, updatedAt }) => {
       const parentKey = "agent:main:paged-parent";
       const key = "agent:main:paged-child";
-      const placement = (status: "available" | "offline") => ({
-        state: "active" as const,
-        generation: 1,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        stateChangedAtMs: 1,
-        environmentId: "worker:device",
-        activeOwnerEpoch: 1,
-        workerBundleHash: "a".repeat(64),
-        workspaceBaseManifestRef: "manifest",
-        remoteWorkspaceDir: "/workspace",
-        runner: { kind: "device" as const, status },
-      });
       const selected: GatewaySessionRow = {
         key,
         sessionId: "paged-child-session",
@@ -300,11 +277,8 @@ describe("sidebar routed-lineage freshness", () => {
         }
         return method === "chat.history" ? historyRead.promise : {};
       });
-      const client = createTestGatewayClient(request);
-      const gateway = createGateway(client);
-      const sessions = createTestSessionCapability(gateway);
-      await sessions.refresh({ agentId: "main", force: true });
-      const { sidebar, provider } = await mountSidebar(gateway, sessions);
+      const { client, sessions, sidebar, provider } = await mountRoster(request);
+      const data = sidebar.sessionData;
       const { state } = createTestChatPane({ client, sessions });
       state.sessionKey = key;
       state.sessionsResult = sessions.state.result;
@@ -313,15 +287,10 @@ describe("sidebar routed-lineage freshness", () => {
       try {
         sidebar.activeRouteId = "chat";
         sidebar.sessionKey = key;
-        pending.push(sidebar.sessionData.loadActiveSessionLineage(key));
-        const children = sidebar.sessionData.loadChildSessions(parentKey);
+        pending.push(data.loadActiveSessionLineage(key));
+        const children = data.loadChildSessions(parentKey);
         pending.push(children);
-        await waitForFast(() =>
-          expect(request).toHaveBeenCalledWith(
-            "sessions.list",
-            expect.objectContaining({ spawnedBy: parentKey, limit: 100 }),
-          ),
-        );
+        await waitForRequest(request, "sessions.list", { spawnedBy: parentKey, limit: 100 }, true);
         const canonicalRevision = sessions.canonicalListRevision;
         const loaded = refreshPageChat(state, {
           historyLoad: loadChatHistory(state, { deferBranches: true }),
@@ -331,9 +300,7 @@ describe("sidebar routed-lineage freshness", () => {
         pending.push(loaded);
         historyRead.resolve({ messages: [], sessionInfo: historyRow });
         await loaded;
-        expect(sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
-          historyRow.label,
-        );
+        expect(findRow(sessions.state.result, key)?.label).toBe(historyRow.label);
         expect(sessions.canonicalListRevision).toBe(canonicalRevision);
         firstPage.resolve(page(firstRows, 0));
         await children;
@@ -347,15 +314,13 @@ describe("sidebar routed-lineage freshness", () => {
             )
             .map(([, params]) => (params as { offset?: number }).offset ?? 0),
         ).toEqual([0, 100]);
-        expect(sidebar.sessionData.childSessionRowsByParent[parentKey]).toHaveLength(101);
+        expect(data.childSessionRowsByParent[parentKey]).toHaveLength(101);
         const expected = selectedPage === 1 ? historyRow : selected;
-        expect(sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject({
+        expect(findRow(sessions.state.result, key)).toMatchObject({
           label: expected.label,
           placement: expected.placement,
         });
-        expect(sidebar.querySelector(`[data-session-key="${key}"]`)?.textContent).toContain(
-          expected.label,
-        );
+        expect(rowElement(sidebar, key)?.textContent).toContain(expected.label);
       } finally {
         provider.remove();
         sessions.dispose();
@@ -418,15 +383,13 @@ describe("sidebar routed-lineage freshness", () => {
         }
         return sessionsResult(query.search === child.key ? [fresh] : [parent], 10);
       });
-      const gateway = createGateway(createTestGatewayClient(request));
-      const sessions = createTestSessionCapability(gateway);
-      await sessions.refresh({ agentId: "main", force: true });
-      const { sidebar, provider, context } = await mountSidebar(gateway, sessions, "panel", {
+      const { sidebar, provider, sessions, context } = await mountRoster(request, {
         defaultId: "main",
         mainKey: "main",
         scope: "per-sender",
         agents: [{ id: "main" }, { id: "worker" }],
       });
+      const data = sidebar.sessionData;
       const query = buildSessionsListQuery(context, {
         deepLinkSessionKey: child.key,
         includeGlobal: true,
@@ -438,47 +401,36 @@ describe("sidebar routed-lineage freshness", () => {
       try {
         sidebar.activeRouteId = "sessions";
         await sidebar.updateComplete;
-        childLoad = sidebar.sessionData.loadChildSessions(parentKey);
-        sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();
-        await waitForFast(() =>
-          expect(request).toHaveBeenCalledWith(
-            "sessions.list",
-            expect.objectContaining({ spawnedBy: parentKey, limit: 100 }),
-          ),
-        );
+        childLoad = data.loadChildSessions(parentKey);
+        childToggle(sidebar)!.click();
+        await waitForRequest(request, "sessions.list", { spawnedBy: parentKey, limit: 100 }, true);
         const primary = sessions.state.result;
         const canonicalRevision = sessions.canonicalListRevision;
         if (firstPageLoaded) {
           firstPage.resolve(page(0));
-          await waitForFast(() =>
-            expect(request).toHaveBeenCalledWith(
-              "sessions.list",
-              expect.objectContaining({ spawnedBy: parentKey, offset: 100 }),
-            ),
+          await waitForRequest(
+            request,
+            "sessions.list",
+            { spawnedBy: parentKey, offset: 100 },
+            true,
           );
         }
         await sessions.refreshList({ ...query, force: true });
         expect(sessions.listSnapshot(query).result?.sessions).toEqual([fresh]);
         expect(sessions.canonicalListRevision).toBe(canonicalRevision);
         expect(sessions.state.result).toBe(primary);
-        expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
-          parentKey,
-        ]);
+        expect(data.sessionsResult?.sessions.map((row) => row.key)).toEqual([parentKey]);
         firstPage.resolve(page(0));
         secondPage.resolve(page(100));
         await childLoad;
         await sidebar.updateComplete;
-        expect(
-          sidebar.sessionData.childSessionRowsByParent[parentKey]?.map((row) => row.key),
-        ).toEqual(children.map((row) => row.key));
-        expect
-          .soft(sidebar.querySelector(`[data-session-key="${child.key}"]`)?.textContent)
-          .toContain(fresh.label);
+        expect(data.childSessionRowsByParent[parentKey]?.map((row) => row.key)).toEqual(
+          children.map((row) => row.key),
+        );
+        expect.soft(rowElement(sidebar, child.key)?.textContent).toContain(fresh.label);
         expect.soft(sidebar.findSidebarHovercardRowByKey(child.key)).toMatchObject(fresh);
         expect(
-          sidebar
-            .querySelector("[data-child-session-toggle]")
-            ?.classList.contains("sidebar-child-session-toggle--running"),
+          childToggle(sidebar)?.classList.contains("sidebar-child-session-toggle--running"),
         ).toBe(true);
         expect(sessions.state.result).toBe(primary);
       } finally {
@@ -523,19 +475,7 @@ describe("sidebar routed-lineage freshness", () => {
         label: "Described selected child",
         updatedAt,
         owner: { actor: owner },
-        placement: {
-          state: "active" as const,
-          generation: 1,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          stateChangedAtMs: 1,
-          environmentId: "worker:device",
-          activeOwnerEpoch: 1,
-          workerBundleHash: "a".repeat(64),
-          workspaceBaseManifestRef: "manifest",
-          remoteWorkspaceDir: "/workspace",
-          runner: { kind: "device" as const, status: "available" as const },
-        },
+        placement: placement("available"),
       };
       const filtered = {
         ...described,
@@ -602,44 +542,34 @@ describe("sidebar routed-lineage freshness", () => {
         }
         return {};
       });
-      const gateway = createGateway(createTestGatewayClient(request));
-      const sessions = createTestSessionCapability(gateway);
-      await sessions.refresh({ agentId: "main", force: true });
-      const { sidebar, provider } = await mountSidebar(gateway, sessions);
+      const { sidebar, provider, sessions } = await mountRoster(request);
+      const data = sidebar.sessionData;
       let lineage: Promise<void> | undefined;
       let refresh: Promise<void> | undefined;
       try {
         await activateSessionMenuValue(sidebar, "owner:ada");
         await waitForFast(() => {
           expect(sidebar.sessionOwnerFilterId).toBe(owner.id);
-          expect(sidebar.sessionData.sessionsLoading).toBe(false);
-          expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
-            initial.key,
-          ]);
+          expect(data.sessionsLoading).toBe(false);
+          expect(data.sessionsResult?.sessions.map((row) => row.key)).toEqual([initial.key]);
         });
         // Finish the initial filter request before opening the held successor read.
-        await sidebar.sessionData.refreshSidebarSessions();
+        await data.refreshSidebarSessions();
         holdFiltered = true;
         if (first === "filtered list") {
-          refresh = sidebar.sessionData.refreshSidebarSessions();
+          refresh = data.refreshSidebarSessions();
           await waitForFast(() => expect(heldReads).toBe(1));
         }
         sidebar.activeRouteId = "chat";
         sidebar.sessionKey = key;
-        lineage = sidebar.sessionData.loadActiveSessionLineage(key);
-        await waitForFast(() => expect(request).toHaveBeenCalledWith("sessions.describe", { key }));
+        lineage = data.loadActiveSessionLineage(key);
+        await waitForRequest(request, "sessions.describe", { key });
         selectedRead.resolve({ session: described });
         if (primaryListed && differentParents) {
           parentRead.resolve({ session: describedParent });
-          await waitForFast(() =>
-            expect(
-              sidebar.querySelector(`[data-session-key="${describedParentKey}"]`),
-            ).not.toBeNull(),
-          );
+          await waitForFast(() => expect(rowElement(sidebar, describedParentKey)).not.toBeNull());
         }
-        await waitForFast(() =>
-          expect(request).toHaveBeenCalledWith("sessions.describe", { key: describedParentKey }),
-        );
+        await waitForRequest(request, "sessions.describe", { key: describedParentKey });
         expect(
           request.mock.calls.filter(
             ([method, params]) =>
@@ -647,19 +577,17 @@ describe("sidebar routed-lineage freshness", () => {
           ),
         ).toHaveLength(1);
         if (first === "describe") {
-          refresh = sidebar.sessionData.refreshSidebarSessions();
+          refresh = data.refreshSidebarSessions();
           await waitForFast(() => expect(heldReads).toBe(1));
         }
         filteredRead.resolve(result([parent, filtered]));
         await refresh;
         const expected = first === "filtered list" ? described : filtered;
-        expect(
-          sidebar.sessionData.sessionsResult?.sessions.find((row) => row.key === key)?.label,
-        ).toBe(expected.label);
+        expect(findRow(data.sessionsResult, key)?.label).toBe(expected.label);
         parentRead.resolve({ session: describedParent });
         await lineage;
         await sidebar.updateComplete;
-        expect.soft(sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject({
+        expect.soft(findRow(sessions.state.result, key)).toMatchObject({
           label: expected.label,
           placement: expected.placement,
         });
@@ -667,19 +595,12 @@ describe("sidebar routed-lineage freshness", () => {
           label: expected.label,
           placementState: expected.placement.state,
         });
-        expect(sidebar.querySelector(`[data-session-key="${key}"]`)?.textContent).toContain(
-          expected.label,
-        );
-        expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
-          parentKey,
-          key,
-        ]);
-        expect(sidebar.querySelector(`[data-session-key="${other.key}"]`)).toBeNull();
+        expect(rowElement(sidebar, key)?.textContent).toContain(expected.label);
+        expect(data.sessionsResult?.sessions.map((row) => row.key)).toEqual([parentKey, key]);
+        expect(rowElement(sidebar, other.key)).toBeNull();
         if (differentParents) {
-          expect(sidebar.sessionData.activeSessionLineageRoot?.key).toBe(expected.spawnedBy);
-          expect(
-            sidebar.querySelector(`[data-session-key="${expected.spawnedBy}"]`),
-          ).not.toBeNull();
+          expect(data.activeSessionLineageRoot?.key).toBe(expected.spawnedBy);
+          expect(rowElement(sidebar, expected.spawnedBy)).not.toBeNull();
         }
       } finally {
         provider.remove();

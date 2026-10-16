@@ -5,27 +5,22 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import {
-  createAgentSelectionCapability,
-  selectApplicationSession,
-} from "../app/agent-selection.ts";
-import { createSessionCapability } from "../lib/sessions/index.ts";
+import { selectApplicationSession } from "../app/agent-selection.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import {
-  createTestSessionCapability,
-  sessionsResult,
-} from "../lib/sessions/session-capability.test-support.ts";
+import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import { activateSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
-import {
-  createContext,
-  createGatewayHarness,
-  mountSidebar,
-  mountSidebarContext,
-  type SidebarLifecycleState,
-} from "../test-helpers/app-sidebar.ts";
+import { createGatewayHarness, type SidebarLifecycleState } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import {
+  childToggle,
+  findRow,
+  rowElement,
+  waitForRequest,
+  mountRoster,
+  mountSelectedRoster,
+} from "./app-sidebar-freshness.test-support.ts";
 import "./app-sidebar.tsx";
 
 const mainAgents: AgentsListResult = {
@@ -34,21 +29,8 @@ const mainAgents: AgentsListResult = {
   scope: "per-sender",
   agents: [{ id: "main" }],
 };
-async function mountFixture(
-  request: Parameters<typeof createTestGatewayClient>[0],
-  agents: AgentsListResult | null = null,
-  user?: { id: string; label: string },
-) {
-  const harness = createGatewayHarness(createTestGatewayClient(request));
-  if (user) {
-    harness.publish({ selfUser: { id: user.id, name: user.label } });
-  }
-  const sessions = createTestSessionCapability(harness.gateway);
-  await sessions.refresh({ agentId: "main", force: true });
-  return { ...(await mountSidebar(harness.gateway, sessions, "panel", agents)), harness, sessions };
-}
 function sessionTree(sidebar: SidebarLifecycleState, selected: string) {
-  const row = (key: string) => sidebar.querySelector(`[data-session-key="${key}"]`);
+  const row = (key: string) => rowElement(sidebar, key);
   const parent = () =>
     row(selected)
       ?.closest("[data-session-tree]")
@@ -108,36 +90,28 @@ describe("sidebar routed-lineage freshness", () => {
       }
       return {};
     });
-    const { sidebar, provider, sessions } = await mountFixture(request, mainAgents);
-    const row = () => sidebar.querySelector(`[data-session-key="${selected.key}"]`);
+    const { sidebar, provider, sessions } = await mountRoster(request, mainAgents);
+    const data = sidebar.sessionData;
+    const row = () => rowElement(sidebar, selected.key);
     try {
       sidebar.activeRouteId = "chat";
       sidebar.sessionKey = selected.key;
-      await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith("sessions.describe", { key: mainKey }),
-      );
+      await waitForRequest(request, "sessions.describe", { key: mainKey });
       await waitForFast(() => expect(row()).not.toBeNull());
 
       sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
-      expect(sidebar.sessionData.childSessionRowsByParent).toEqual({});
-      expect(sidebar.sessionData.activeSessionLineageSelectedRow).toMatchObject({
+      expect(data.childSessionRowsByParent).toEqual({});
+      expect(data.activeSessionLineageSelectedRow).toMatchObject({
         key: selected.key,
         sessionId: selected.sessionId,
       });
-      await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith(
-          "sessions.list",
-          expect.objectContaining({ archived: true }),
-        ),
-      );
-      await waitForFast(() => expect(sidebar.sessionData.sessionsResult?.sessions).toEqual([]));
+      await waitForRequest(request, "sessions.list", { archived: true }, true);
+      await waitForFast(() => expect(data.sessionsResult?.sessions).toEqual([]));
       await sidebar.updateComplete;
       expect(row()).toBeNull();
 
       initialParent.resolve({ session: parent });
-      await waitForFast(() =>
-        expect(sidebar.sessionData.activeSessionLineageRoot?.key).toBe(mainKey),
-      );
+      await waitForFast(() => expect(data.activeSessionLineageRoot?.key).toBe(mainKey));
       await sidebar.updateComplete;
       expect(
         request.mock.calls.filter(
@@ -146,8 +120,8 @@ describe("sidebar routed-lineage freshness", () => {
       ).toHaveLength(1);
       expect(sidebar.sessionKey).toBe(selected.key);
       expect(sidebar.activeRouteId).toBe("chat");
-      expect(sidebar.sessionData.activeSessionLineageSelectedRow?.key).toBe(selected.key);
-      expect(sidebar.sessionData.sessionsResult?.sessions).toEqual([]);
+      expect(data.activeSessionLineageSelectedRow?.key).toBe(selected.key);
+      expect(data.sessionsResult?.sessions).toEqual([]);
       expect(row()).toBeNull();
 
       const describes = () =>
@@ -157,11 +131,11 @@ describe("sidebar routed-lineage freshness", () => {
       const settledDescribes = describes().length;
       await sessions.refresh({ agentId: "main", force: true });
       await sidebar.updateComplete;
-      await sidebar.sessionData.loadActiveSessionLineage(selected.key);
+      await data.loadActiveSessionLineage(selected.key);
       await sidebar.updateComplete;
       expect(describes()).toHaveLength(settledDescribes);
-      expect(sidebar.sessionData.activeSessionLineageSelectedRow?.key).toBe(selected.key);
-      expect(sidebar.sessionData.sessionsResult?.sessions).toEqual([]);
+      expect(data.activeSessionLineageSelectedRow?.key).toBe(selected.key);
+      expect(data.sessionsResult?.sessions).toEqual([]);
       expect(row()).toBeNull();
     } finally {
       provider.remove();
@@ -218,33 +192,25 @@ describe("sidebar routed-lineage freshness", () => {
         }
         return method === "sessions.describe" ? described.promise : {};
       });
-      const { sidebar, provider, sessions } = await mountFixture(request);
+      const { sidebar, provider, sessions } = await mountRoster(request);
+      const data = sidebar.sessionData;
       try {
         sidebar.activeRouteId = "chat";
         sidebar.sessionKey = key;
-        const lineage = sidebar.sessionData.loadActiveSessionLineage(key);
-        await waitForFast(() => expect(request).toHaveBeenCalledWith("sessions.describe", { key }));
-        sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
-        await waitForFast(() =>
-          expect(request).toHaveBeenCalledWith(
-            "sessions.list",
-            expect.objectContaining({ spawnedBy: parentKey }),
-          ),
-        );
+        const lineage = data.loadActiveSessionLineage(key);
+        await waitForRequest(request, "sessions.describe", { key });
+        childToggle(sidebar)?.click();
+        await waitForRequest(request, "sessions.list", { spawnedBy: parentKey }, true);
         if (first === "lineage") {
           described.resolve({ session: stale });
           await waitForFast(() =>
-            expect(sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
-              stale.label,
-            ),
+            expect(findRow(sessions.state.result, key)?.label).toBe(stale.label),
           );
           listed.resolve(sessionsResult([fresh, sibling], 3));
         } else {
           listed.resolve(sessionsResult([fresh, sibling], 3));
           await waitForFast(() =>
-            expect(sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
-              fresh.label,
-            ),
+            expect(findRow(sessions.state.result, key)?.label).toBe(fresh.label),
           );
           described.resolve({ session: stale });
         }
@@ -254,10 +220,8 @@ describe("sidebar routed-lineage freshness", () => {
         );
         await sidebar.updateComplete;
         expect(sidebar.textContent).toContain("Loaded sibling");
-        expect
-          .soft(sidebar.querySelector(`[data-session-key="${key}"]`)?.textContent)
-          .not.toContain(stale.label);
-        expect.soft(sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject({
+        expect.soft(rowElement(sidebar, key)?.textContent).not.toContain(stale.label);
+        expect.soft(findRow(sessions.state.result, key)).toMatchObject({
           label: fresh.label,
           updatedAt: fresh.updatedAt,
           status: "done",
@@ -374,7 +338,8 @@ describe("selected lineage after managed list admission", () => {
         }
         return {};
       });
-      const { sidebar, provider, sessions, harness } = await mountFixture(request, mainAgents, ada);
+      const { sidebar, provider, sessions, harness } = await mountRoster(request, mainAgents, ada);
+      const data = sidebar.sessionData;
       const { row, parent: parentOfSelected, expand } = sessionTree(sidebar, key);
       let originalLineage: Promise<void> | undefined;
       try {
@@ -382,15 +347,15 @@ describe("selected lineage after managed list admission", () => {
         await activateSessionMenuValue(sidebar, "status:all");
         await waitForFast(() => {
           expect(managedReads).toBeGreaterThan(0);
-          expect(sidebar.sessionData.sessionsLoading).toBe(false);
-          expect(sidebar.sessionData.sessionsResult?.sessions.map((entry) => entry.key)).toEqual(
+          expect(data.sessionsLoading).toBe(false);
+          expect(data.sessionsResult?.sessions.map((entry) => entry.key)).toEqual(
             knownParent ? [key, p2] : [key],
           );
         });
         sidebar.activeRouteId = "chat";
         sidebar.sessionKey = key;
         await waitForFast(() => expect(parentReads).toBe(1));
-        originalLineage = sidebar.sessionData.loadActiveSessionLineage(key);
+        originalLineage = data.loadActiveSessionLineage(key);
         if (!pendingIncarnation) {
           await originalLineage;
           await waitForFast(() => expect(row(p1)).not.toBeNull());
@@ -418,8 +383,8 @@ describe("selected lineage after managed list admission", () => {
         await waitForFast(() => {
           expect(primaryReads).toBeGreaterThan(0);
           expect(managedReads).toBeGreaterThan(originalManagedReads);
-          expect(sidebar.sessionData.sessionsLoading).toBe(false);
-          expect(sidebar.sessionData.sessionsResult?.sessions[0]).toMatchObject({
+          expect(data.sessionsLoading).toBe(false);
+          expect(data.sessionsResult?.sessions[0]).toMatchObject({
             sessionId: current.sessionId,
             parentSessionKey: current.parentSessionKey,
             label: current.label,
@@ -430,7 +395,7 @@ describe("selected lineage after managed list admission", () => {
         if (pendingIncarnation) {
           await waitForFast(() => expect(parentReads).toBe(2));
         }
-        await sidebar.sessionData.loadActiveSessionLineage(key);
+        await data.loadActiveSessionLineage(key);
         await sidebar.updateComplete;
         await expand(expectedParent);
         const beforePrimary = {
@@ -583,26 +548,25 @@ describe("selected lineage after a full sessions.changed event", () => {
         }
         return {};
       });
-      const { sidebar, provider, sessions, harness } = await mountFixture(request, mainAgents, ada);
+      const { sidebar, provider, sessions, harness } = await mountRoster(request, mainAgents, ada);
+      const data = sidebar.sessionData;
       const { row, parent: directParent, expand } = sessionTree(sidebar, key);
       try {
         if (filtered) {
           // Status filtering owns a separate managed query without requiring involvement membership.
           await activateSessionMenuValue(sidebar, "status:all");
           await waitForFast(() => {
-            expect(sidebar.sessionData.sessionsLoading).toBe(false);
-            expect(sidebar.sessionData.sessionsResult?.sessions.map((entry) => entry.key)).toEqual([
-              p1,
-            ]);
+            expect(data.sessionsLoading).toBe(false);
+            expect(data.sessionsResult?.sessions.map((entry) => entry.key)).toEqual([p1]);
           });
         }
         sidebar.activeRouteId = "chat";
         sidebar.sessionKey = key;
-        await waitForFast(() => expect(sidebar.sessionData.activeSessionLineageRoot?.key).toBe(p1));
+        await waitForFast(() => expect(data.activeSessionLineageRoot?.key).toBe(p1));
         await expand(p1);
         await waitForFast(() => {
           expect(controllerChildReads).toBe(1);
-          expect(sidebar.sessionData.loadingChildSessionKeys.has(p1)).toBe(false);
+          expect(data.loadingChildSessionKeys.has(p1)).toBe(false);
           expect(directParent()).toBe(p1);
           expect(row(key)?.textContent).toContain(child.label);
         });
@@ -660,7 +624,7 @@ describe("selected lineage after a full sessions.changed event", () => {
         });
         await vi.advanceTimersByTimeAsync(5_000);
         await waitForFast(() =>
-          expect(sessions.state.result?.sessions.find((entry) => entry.key === key)).toMatchObject({
+          expect(findRow(sessions.state.result, key)).toMatchObject({
             sessionId: child.sessionId,
             label: current.label,
             parentSessionKey: expectedParent,
@@ -678,9 +642,7 @@ describe("selected lineage after a full sessions.changed event", () => {
         // retires the old query before its scheduled refresh runs.
         expect(controllerChildReads).toBe(reparent ? 1 : 2);
         if (mode === "status-filtered omitted") {
-          expect(sidebar.sessionData.sessionsResult?.sessions.map((entry) => entry.key)).toEqual([
-            p1,
-          ]);
+          expect(data.sessionsResult?.sessions.map((entry) => entry.key)).toEqual([p1]);
         }
         await waitForFast(() => expect(row(key)?.textContent).toContain(current.label));
         await waitForFast(() => expect(row(expectedParent)).not.toBeNull());
@@ -691,7 +653,7 @@ describe("selected lineage after a full sessions.changed event", () => {
         recovery = true;
         await sessions.refresh({ agentId: "main", force: true });
         if (filtered) {
-          await sidebar.sessionData.refreshSidebarSessions();
+          await data.refreshSidebarSessions();
         }
         await waitForFast(() => expect(row(expectedParent)).not.toBeNull());
         await expand(expectedParent);
@@ -821,21 +783,12 @@ describe("sidebar routed-lineage freshness", () => {
       },
       sessionKey: "agent:work:main",
     });
-    gateway.setSessionKey = (sessionKey) => harness.publish({ sessionKey });
-    const selection = createAgentSelectionCapability(
-      gateway,
-      {
-        state: { agentsList },
-        subscribe: () => () => undefined,
-      },
-      { load: () => "work", save: () => undefined },
+    const { provider, sidebar, sessions, selection } = await mountSelectedRoster(
+      harness,
+      agentsList,
+      "work",
     );
-    const sessions = createSessionCapability(gateway, selection);
-    const context = {
-      ...createContext(gateway, sessions, agentsList),
-      agentSelection: selection,
-    };
-    const { provider, sidebar } = await mountSidebarContext(context, "panel", "sessions");
+    const data = sidebar.sessionData;
     sidebar.connected = true;
     try {
       harness.publish({});
@@ -855,7 +808,7 @@ describe("sidebar routed-lineage freshness", () => {
       selectApplicationSession({ selection, gateway, sessionKey: child.key });
       sidebar.activeRouteId = "chat";
       sidebar.sessionKey = child.key;
-      await sidebar.sessionData.loadActiveSessionLineage(child.key);
+      await data.loadActiveSessionLineage(child.key);
       await sidebar.updateComplete;
       // Reveal the loaded section without fetching the next Gateway page.
       for (let page = 0; page < 20; page += 1) {
@@ -878,12 +831,10 @@ describe("sidebar routed-lineage freshness", () => {
         ),
       ).toBe(false);
 
-      const parentRow = sidebar.querySelector(`[data-session-key="${parent.key}"]`);
+      const parentRow = rowElement(sidebar, parent.key);
       expect.soft(parentRow?.textContent ?? "").toContain(parent.label);
       expect.soft(sidebar.textContent).not.toContain(foreign.label);
-      expect(
-        sidebar.querySelector(`[data-session-key="${child.key}"]`)?.textContent ?? "",
-      ).toContain(child.label);
+      expect(rowElement(sidebar, child.key)?.textContent ?? "").toContain(child.label);
       expect(sidebar.sessionKey).toBe(child.key);
       expect(selection.state.selectedId).toBe("work");
     } finally {
