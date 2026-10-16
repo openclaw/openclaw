@@ -34,7 +34,7 @@
       "mxcBinaryPath": {
         "type": "string",
         "minLength": 1,
-        "description": "Absolute path to the MXC executor (wxc-exec.exe). When unset, the executor is discovered from the installed @microsoft/mxc-sdk."
+        "description": "Absolute path to an MXC 1.0 executor in an architecture directory (<dir>\\<x64|arm64>\\wxc-exec.exe) with mxc_ffi.dll from the same release beside it. When unset, both are taken from the installed @microsoft/mxc-sdk."
       },
       "containment": {
         "type": "string",
@@ -54,7 +54,7 @@
       },
       "debug": {
         "type": "boolean",
-        "description": "Forward verbose debug output from the MXC SDK launcher."
+        "description": "Write the resolved MXC native component paths and MXC SDK warnings to stderr."
       },
       "mxcPolicyPaths": {
         "type": "array",
@@ -72,7 +72,7 @@
   "uiHints": {
     "mxcBinaryPath": {
       "label": "MXC Executor Path",
-      "help": "Optional absolute path to the MXC executor (wxc-exec.exe). Leave unset to auto-discover from the installed @microsoft/mxc-sdk.",
+      "help": "Optional absolute path to an MXC 1.0 executor (<dir>\\<x64|arm64>\\wxc-exec.exe) with mxc_ffi.dll from the same release beside it. Leave unset to use the installed @microsoft/mxc-sdk.",
       "advanced": true
     },
     "containment": {
@@ -90,7 +90,7 @@
     },
     "debug": {
       "label": "Debug Logging",
-      "help": "Forward verbose debug output from the MXC SDK launcher.",
+      "help": "Write the resolved MXC native component paths and MXC SDK warnings to stderr.",
       "advanced": true
     },
     "mxcPolicyPaths": {

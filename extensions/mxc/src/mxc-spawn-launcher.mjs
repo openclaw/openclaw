@@ -1,8 +1,15 @@
 #!/usr/bin/env node
 
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+
+const EXECUTOR_NAME = "wxc-exec.exe";
+const NATIVE_LIBRARY_NAME = "mxc_ffi.dll";
+
+// Exit statuses owned by the launcher rather than the sandboxed command.
+export const EXIT_TIMED_OUT = 124;
+export const EXIT_LAUNCHER_FAILURE = 127;
 
 export function decodePayload(argv) {
   const payloadFileIndex = argv.indexOf("--payload-file");
@@ -15,7 +22,36 @@ export function decodePayload(argv) {
   }
   const payloadJson = readFileSync(payloadFile, "utf8");
   rmSync(path.dirname(payloadFile), { force: true, recursive: true });
-  return JSON.parse(payloadJson);
+  const payload = JSON.parse(payloadJson);
+  if (!payload || typeof payload !== "object" || !payload.request) {
+    throw new Error("MXC launcher payload is missing its container request");
+  }
+  return payload;
+}
+
+function sdkArch() {
+  return process.arch === "arm64" ? "arm64" : "x64";
+}
+
+/**
+ * Re-checks the native components the plugin pinned. The SDK falls back to its
+ * packaged binaries when an override directory is missing, so a vanished
+ * override must fail here instead of silently running different binaries.
+ */
+export function assertPinnedNativeComponents(env = process.env, fileExists = existsSync) {
+  const ffiDir = env.MXC_FFI_DIR;
+  const binDir = env.MXC_BIN_DIR;
+  if (!ffiDir || !binDir) {
+    throw new Error("MXC launcher requires MXC_FFI_DIR and MXC_BIN_DIR from the plugin");
+  }
+  const nativeLibraryPath = path.join(ffiDir, NATIVE_LIBRARY_NAME);
+  const executorPath = path.join(binDir, sdkArch(), EXECUTOR_NAME);
+  for (const file of [nativeLibraryPath, executorPath]) {
+    if (!fileExists(file)) {
+      throw new Error(`MXC native component is missing: ${file}`);
+    }
+  }
+  return { nativeLibraryPath, executorPath };
 }
 
 const FORWARDED_SIGNAL_EXIT_GRACE_MS = 1000;
@@ -29,139 +65,219 @@ function formatErrorStack(error) {
 }
 
 // The exec supervisor or runCommandBuffered owns descendant-tree cancellation.
-// This SDK bridge must stay alive for close; exiting the launcher is not that join.
-export function forwardSignals(spawned, options = {}) {
+// This SDK bridge must stay alive until wait() settles; exiting the launcher is not that join.
+/**
+ * Kills the sandbox on a forwarded signal and, after a grace period, records the
+ * signal exit status and kills it again. The handlers are installed before spawn
+ * resolves; a signal that arrives earlier kills the process as soon as it exists.
+ * MXC 1.0 `kill()` already terminates the sandbox; completion still belongs to
+ * `wait()`.
+ */
+export function forwardSignals(options = {}) {
+  let target;
+  let pendingKill = false;
   let exitTimer;
   let forcedExitCode;
+  const exitGraceMs = options.exitGraceMs ?? FORWARDED_SIGNAL_EXIT_GRACE_MS;
+  const killTarget = () => {
+    try {
+      target?.kill();
+    } catch {
+      // Ignore kill errors while the sandbox process is already exiting.
+    }
+  };
+  const scheduleForcedExit = (signal) => {
+    if (exitTimer) {
+      return;
+    }
+    exitTimer = (options.setTimeout ?? setTimeout)(() => {
+      forcedExitCode = signalExitCode(signal);
+      killTarget();
+    }, exitGraceMs);
+    exitTimer?.unref?.();
+  };
+  const onSignal = options.onSignal ?? ((signal, handler) => process.on(signal, handler));
+  const offSignal = options.offSignal ?? ((signal, handler) => process.off(signal, handler));
   const listeners = new Map();
   for (const signal of FORWARDED_SIGNALS) {
     const listener = () => {
-      try {
-        spawned.kill(signal);
-      } catch {
-        // The sandbox may already be closing.
-      }
-      if (exitTimer) {
-        return;
-      }
-      exitTimer = (options.setTimeout ?? setTimeout)(() => {
-        forcedExitCode = signalExitCode(signal);
-        // Reap the owned sandbox, not this launcher or its pending output.
-        try {
-          spawned.kill("SIGKILL");
-        } catch {
-          // Completion still belongs to the sandbox's close notification.
-        }
-      }, options.exitGraceMs ?? FORWARDED_SIGNAL_EXIT_GRACE_MS);
-      exitTimer?.unref?.();
+      pendingKill = true;
+      killTarget();
+      scheduleForcedExit(signal);
     };
-    process.on(signal, listener);
+    onSignal(signal, listener);
     listeners.set(signal, listener);
   }
   return {
+    attach(spawned) {
+      target = spawned;
+      if (pendingKill) {
+        killTarget();
+      }
+    },
+    signaled: () => pendingKill,
     exitCode: () => forcedExitCode,
     dispose() {
       if (exitTimer) {
         (options.clearTimeout ?? clearTimeout)(exitTimer);
       }
       for (const [signal, listener] of listeners) {
-        process.off(signal, listener);
+        offSignal(signal, listener);
       }
+      listeners.clear();
     },
   };
 }
 
-function bridgeStdio(pty) {
-  const output = pty.onData((data) => process.stdout.write(data));
-  const onData = (data) => pty.write(data);
-  const onEnd = () => pty.write("\x04");
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", onData);
-  process.stdin.on("end", onEnd);
-  return () => {
-    output.dispose();
-    process.stdin.off("data", onData);
-    process.stdin.off("end", onEnd);
-    process.stdin.pause();
-  };
-}
+const processIo = () => ({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
 
-function bridgeChildProcess(child) {
-  // pipe owns backpressure; leave process output open for natural final draining.
-  child.stdout?.pipe(process.stdout, { end: false });
-  child.stderr?.pipe(process.stderr, { end: false });
-  if (child.stdin) {
-    process.stdin.pipe(child.stdin);
-  }
-  return () => {
-    child.stdout?.unpipe(process.stdout);
-    child.stderr?.unpipe(process.stderr);
-    if (child.stdin) {
-      process.stdin.unpipe(child.stdin);
-      child.stdin.destroy();
+function pipeOutput(source, sink, stderr) {
+  return new Promise((resolve) => {
+    if (!source) {
+      resolve();
+      return;
     }
-    process.stdin.pause();
-  };
-}
-
-async function attachPtyProcess(spawned) {
-  const disposeStdio = bridgeStdio(spawned);
-  const signals = forwardSignals(spawned);
-  let exitSubscription;
-  try {
-    // node-pty emits onExit after its terminal output socket closes.
-    const { exitCode, signal } = await new Promise((resolve) => {
-      exitSubscription = spawned.onExit(resolve);
+    source.pipe(sink, { end: false });
+    source.once("end", resolve);
+    source.once("close", resolve);
+    source.once("error", (error) => {
+      stderr.write(`MXC output stream failed: ${formatErrorStack(error)}\n`);
+      resolve();
     });
-    process.exitCode =
-      signals.exitCode() ?? (typeof exitCode === "number" ? exitCode : signalExitCode(signal));
-  } finally {
-    exitSubscription?.dispose();
-    signals.dispose();
-    disposeStdio();
-  }
+  });
 }
 
-async function attachChildProcess(spawned) {
-  const disposeStdio = bridgeChildProcess(spawned);
-  const signals = forwardSignals(spawned);
-  /** @type {Error | undefined} */
-  let failure;
-  const onError = (error) => {
-    failure = error;
-  };
-  spawned.on("error", onError);
-  // EPIPE is normal when a sandbox finishes before the invoking input producer.
-  const onInputError = (error) => {
-    if (error.code !== "EPIPE") {
-      failure = error;
-      spawned.kill("SIGTERM");
-    }
-  };
-  spawned.stdin?.on("error", onInputError);
-  try {
-    const { exitCode, signal } = await new Promise((resolve) => {
-      spawned.once("close", (code, exitSignal) => resolve({ exitCode: code, signal: exitSignal }));
-    });
-    if (failure) {
-      throw failure;
-    }
-    process.exitCode =
-      signals.exitCode() ?? (typeof exitCode === "number" ? exitCode : signalExitCode(signal));
-  } finally {
-    signals.dispose();
-    disposeStdio();
-    spawned.off("error", onError);
-    spawned.stdin?.off("error", onInputError);
+/** Forwards launcher stdin into the sandbox and returns a disposer that releases it. */
+function forwardInput(stdin, input, onEnd) {
+  if (!input) {
+    stdin.resume();
+    return () => stdin.pause();
   }
+  input.on("error", () => {
+    // The sandbox may close stdin before the host stops writing.
+  });
+  const onData = (data) => {
+    input.write(data);
+  };
+  const onStdinEnd = () => onEnd(input);
+  stdin.on("data", onData);
+  stdin.once("end", onStdinEnd);
+  return () => {
+    stdin.off("data", onData);
+    stdin.off("end", onStdinEnd);
+    stdin.pause();
+    input.destroy?.();
+  };
 }
 
-export async function launchSandbox(spawnSandboxFromConfig, config, options, bridges = {}) {
-  const spawned = await spawnSandboxFromConfig(config, options ?? {});
-  if (typeof spawned.onData === "function") {
-    await (bridges.pty ?? attachPtyProcess)(spawned);
+/**
+ * Bridges a spawned process to the launcher's stdio and resolves with the exit
+ * status the launcher should report.
+ */
+export async function bridgeProcess(spawned, { pty, debug }, io, deadline) {
+  let outputs;
+  let disposeInput;
+  if (pty) {
+    disposeInput = forwardInput(io.stdin, spawned.input, (input) => input.write("\x04"));
+    outputs = [pipeOutput(spawned.output, io.stdout, io.stderr)];
   } else {
-    await (bridges.child ?? attachChildProcess)(spawned);
+    disposeInput = forwardInput(io.stdin, spawned.standardInput, (input) => input.end());
+    outputs = [
+      pipeOutput(spawned.standardOutput, io.stdout, io.stderr),
+      pipeOutput(spawned.standardError, io.stderr, io.stderr),
+    ];
+  }
+  let result;
+  try {
+    result = await spawned.wait();
+    // Freeze the deadline at completion so it cannot fire while output drains.
+    deadline?.settle();
+    await Promise.all(outputs);
+  } finally {
+    disposeInput();
+  }
+  if (debug) {
+    for (const warning of spawned.warnings ?? []) {
+      io.stderr.write(`[mxc] warning: ${warning}\n`);
+    }
+  }
+  if (result.timedOut || deadline?.fired()) {
+    io.stderr.write("MXC sandbox command timed out and was terminated.\n");
+    return EXIT_TIMED_OUT;
+  }
+  return result.exitCode;
+}
+
+// Extra time the executor waits past the launcher-owned PTY deadline. It only
+// matters if the launcher fails to kill the sandbox itself.
+export const PTY_EXECUTOR_BACKSTOP_MS = 5000;
+
+/**
+ * MXC 1.0 runs ProcessContainer PTY sessions through wxc-exec under node-pty.
+ * That result never reports `timedOut`, and wxc-exec's timeout status (-1) is
+ * indistinguishable from a command that exits -1. The launcher therefore owns
+ * the PTY deadline: it reports a timeout only when its own timer killed a
+ * sandbox that had not completed and no forwarded signal had already cancelled it.
+ */
+export function armPtyDeadline(spawned, timeoutMs, signals, timers = {}) {
+  let fired = false;
+  let settled = false;
+  const timer = (timers.setTimeout ?? setTimeout)(() => {
+    if (settled || signals.signaled()) {
+      return;
+    }
+    fired = true;
+    try {
+      spawned.kill();
+    } catch {
+      // The sandbox may already be exiting; wait() still owns completion.
+    }
+  }, timeoutMs);
+  timer?.unref?.();
+  const settle = () => {
+    if (!settled) {
+      settled = true;
+      (timers.clearTimeout ?? clearTimeout)(timer);
+    }
+  };
+  return { fired: () => fired, settle };
+}
+
+function positiveTimeoutMs(request) {
+  const timeoutMs = request?.timeoutMs;
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : undefined;
+}
+
+/**
+ * Runs one sandbox request and resolves with the exit status to report. `sdk`
+ * supplies the v1 `spawn` and `spawnWithPty` functions so tests can substitute
+ * them. Signal forwarding created here is released before returning.
+ */
+export async function launchSandbox(sdk, request, options = {}, signals, io, timers) {
+  const forwarded = signals ?? forwardSignals();
+  let deadline;
+  try {
+    const ptyTimeoutMs = options.pty ? positiveTimeoutMs(request) : undefined;
+    const spawnRequest =
+      ptyTimeoutMs === undefined
+        ? request
+        : { ...request, timeoutMs: ptyTimeoutMs + PTY_EXECUTOR_BACKSTOP_MS };
+    const spawned = options.pty
+      ? await sdk.spawnWithPty(spawnRequest)
+      : await sdk.spawn(spawnRequest);
+    forwarded.attach(spawned);
+    if (ptyTimeoutMs !== undefined) {
+      deadline = armPtyDeadline(spawned, ptyTimeoutMs, forwarded, timers);
+    }
+    const exitCode = await bridgeProcess(spawned, options, io, deadline);
+    return forwarded.exitCode() ?? exitCode;
+  } finally {
+    deadline?.settle();
+    if (!signals) {
+      forwarded.dispose();
+    }
   }
 }
 
@@ -193,14 +309,46 @@ function isMain() {
   return import.meta.url === pathToFileURL(path.resolve(mainPath)).href;
 }
 
-export async function main() {
+async function loadSdk() {
+  return import("@microsoft/mxc-sdk/v1");
+}
+
+/** Host probe for readiness: prints the probe output as JSON. */
+async function probeMain() {
+  assertPinnedNativeComponents();
+  const { probe } = await loadSdk();
+  const output = probe();
+  process.stdout.write(`${JSON.stringify({ probe: output })}\n`);
+  return 0;
+}
+
+export async function main(argv = process.argv.slice(2)) {
+  let signals;
   try {
-    const { config, options } = decodePayload(process.argv.slice(2));
-    const { spawnSandboxFromConfig } = await import("@microsoft/mxc-sdk");
-    await launchSandbox(spawnSandboxFromConfig, config, options);
+    if (argv.includes("--probe")) {
+      process.exitCode = await probeMain();
+    } else {
+      signals = forwardSignals();
+      const { request, options } = decodePayload(argv);
+      const pinned = assertPinnedNativeComponents();
+      if (options?.debug) {
+        process.stderr.write(
+          `[mxc] native library ${pinned.nativeLibraryPath}; executor ${pinned.executorPath}\n`,
+        );
+      }
+      process.exitCode = await launchSandbox(
+        await loadSdk(),
+        request,
+        options ?? {},
+        signals,
+        processIo(),
+      );
+    }
   } catch (error) {
     process.stderr.write(`${formatErrorStack(error)}\n`);
-    process.exitCode = 127;
+    process.exitCode = EXIT_LAUNCHER_FAILURE;
+  } finally {
+    signals?.dispose();
   }
 }
 

@@ -1,15 +1,17 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { probe, type ContainerRequest } from "@microsoft/mxc-sdk/v1";
 import { afterEach, describe, expect, test } from "vitest";
-import { resolveMxcBinaryPath } from "../src/binary-resolver.js";
+import { buildMxcNativeEnv, resolveMxcNativeBinaries } from "../src/binary-resolver.js";
 import type { MxcConfig } from "../src/config.js";
 import { createMxcSandboxBackendHandle } from "../src/mxc-backend.js";
-import { assertMxcReadiness } from "../src/readiness.js";
+import { resolveMxcLauncherPath } from "../src/plugin-root.js";
+import { buildLauncherEnv } from "../src/windows-env.js";
 
-// The plugin passes raw ContainerConfig to wxc-exec; --dry-run validates its
-// wire schema without creating a container.
+// Exercises the generated v1 request against the installed MXC SDK 1.0 native
+// components: the SDK validates it through mxc_ffi, and the real launcher runs it.
 const describeOnWindows = describe.runIf(process.platform === "win32");
 
 const tempDirs: string[] = [];
@@ -20,51 +22,36 @@ afterEach(() => {
   }
 });
 
-function readLauncherPayload(argv: readonly string[]): {
-  config: Record<string, unknown>;
-  options: { executablePath: string };
-} {
+function readLauncherRequest(argv: readonly string[]): ContainerRequest {
   const payloadFile = argv[argv.indexOf("--payload-file") + 1];
   if (!payloadFile) {
     throw new Error(`expected --payload-file in argv: ${JSON.stringify(argv)}`);
   }
-  return JSON.parse(readFileSync(payloadFile, "utf-8"));
+  return (JSON.parse(readFileSync(payloadFile, "utf-8")) as { request: ContainerRequest })
+    .request;
 }
 
-function dryRunConfig(
-  executablePath: string,
-  config: Record<string, unknown>,
-): { exitCode: number; output: string } {
-  const configBase64 = Buffer.from(JSON.stringify(config)).toString("base64");
-  try {
-    const output = execFileSync(executablePath, ["--dry-run", "--config-base64", configBase64], {
+describeOnWindows("MXC SDK 1.0 request contract", () => {
+  test("the launcher probe loads the pinned native components", () => {
+    const output = execFileSync(process.execPath, [resolveMxcLauncherPath(), "--probe"], {
       encoding: "utf-8",
-      stdio: "pipe",
+      env: buildLauncherEnv(buildMxcNativeEnv(resolveMxcNativeBinaries())),
       timeout: 30_000,
       windowsHide: true,
     });
-    return { exitCode: 0, output };
-  } catch (error) {
-    const failure = error as { status?: number; stdout?: string; stderr?: string };
-    return {
-      exitCode: failure.status ?? -1,
-      output: `${failure.stdout ?? ""}${failure.stderr ?? ""}`,
+    const result = JSON.parse(output) as {
+      probe: { tier?: string; error?: string };
     };
-  }
-}
 
-describeOnWindows("MXC SDK wire contract", () => {
-  test("readiness accepts the pinned wxc-exec host probe", () => {
-    const executablePath = resolveMxcBinaryPath();
-
-    expect(() => assertMxcReadiness({ executablePath })).not.toThrow();
+    expect(result.probe.error).toBeUndefined();
+    expect(result.probe.tier).toEqual(expect.any(String));
   });
 
   test.each([
     { name: "no workspace access, blocked network", network: "none", workspaceAccess: "none" },
     { name: "read-write workspace, default network", network: "default", workspaceAccess: "rw" },
-  ] as const)("pinned wxc-exec accepts the generated config ($name)", async (variant) => {
-    const root = mkdtempSync(path.join(tmpdir(), "mxc-wire-contract-"));
+  ] as const)("MXC accepts and runs the generated request ($name)", async (variant) => {
+    const root = mkdtempSync(path.join(tmpdir(), "mxc-request-contract-"));
     tempDirs.push(root);
     const workdir = path.join(root, "sandbox");
     const agentWorkspaceDir = path.join(root, "workspace");
@@ -80,16 +67,22 @@ describeOnWindows("MXC SDK wire contract", () => {
 
     const handle = createMxcSandboxBackendHandle({
       config,
-      runtimeId: "openclaw-mxc-wire-contract",
+      runtimeId: "openclaw-mxc-request-contract",
       workdir,
       agentWorkspaceDir,
       workspaceAccess: variant.workspaceAccess,
     });
     const spec = await handle.buildExecSpec({ command: "echo contract", env: {}, usePty: false });
-    let validation: { exitCode: number; output: string };
+    let run: ReturnType<typeof spawnSync>;
     try {
-      const payload = readLauncherPayload(spec.argv);
-      validation = dryRunConfig(payload.options.executablePath, payload.config);
+      const requestProbe = probe(readLauncherRequest(spec.argv));
+      expect(requestProbe.error).toBeUndefined();
+      run = spawnSync(spec.argv[0] ?? "", spec.argv.slice(1), {
+        encoding: "utf-8",
+        env: spec.env,
+        timeout: 60_000,
+        windowsHide: true,
+      });
     } finally {
       await handle.finalizeExec?.({
         status: "completed",
@@ -98,6 +91,10 @@ describeOnWindows("MXC SDK wire contract", () => {
         token: spec.finalizeToken,
       });
     }
-    expect(validation).toEqual({ exitCode: 0, output: expect.any(String) });
+
+    expect({ status: run.status, stdout: String(run.stdout).trim() }).toEqual({
+      status: 0,
+      stdout: "contract",
+    });
   });
 });
