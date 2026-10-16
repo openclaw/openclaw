@@ -14,37 +14,46 @@ import {
 import { waitForPluginCacheRetirement } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
-let canvasMigrations: PluginDoctorStateMigration[];
 let noDataMigrations: { pluginId: string; migration: PluginDoctorStateMigration }[];
 beforeAll(async () => {
-  ({ stateMigrations: canvasMigrations } = await loadBundledPluginFacade<{
-    stateMigrations: PluginDoctorStateMigration[];
-  }>({ pluginId: "canvas", artifactBasename: "doctor-contract-api.ts" }));
-  const pluginIds = ["crabbox", "workboard", "memory-core"];
-  const selectedIds = new Set([
+  const ids = new Set([
     "crabbox-warm-profile-v3",
     "workboard-28-kv-to-sqlite",
     "memory-core-qmd-workspace-retired",
     "memory-core-qmd-file-locks-to-sqlite-leases",
   ]);
-  noDataMigrations = (
-    await Promise.all(
-      pluginIds.map(async (pluginId) => {
-        const { stateMigrations } = await loadBundledPluginFacade<{
-          stateMigrations: PluginDoctorStateMigration[];
-        }>({ pluginId, artifactBasename: "doctor-contract-api.ts" });
-        return stateMigrations
-          .filter((migration) => selectedIds.has(migration.id))
-          .map((migration) => ({ pluginId, migration }));
-      }),
-    )
-  ).flat();
+  noDataMigrations = [];
+  for (const pluginId of ["crabbox", "workboard", "memory-core"]) {
+    const { stateMigrations } = await loadBundledPluginFacade<{
+      stateMigrations: PluginDoctorStateMigration[];
+    }>({ pluginId, artifactBasename: "doctor-contract-api.ts" });
+    noDataMigrations.push(
+      ...stateMigrations
+        .filter((migration) => ids.has(migration.id))
+        .map((migration) => ({ pluginId, migration })),
+    );
+  }
 });
 
 const tempDirs: string[] = [];
 let stateDir: string;
+let input: PluginDoctorMigrationResourceCollectionParams;
+let fixtureMigration: PluginDoctorStateMigration;
 beforeEach(() => {
   stateDir = makeTrackedTempDir("openclaw-migration-resource-warning", tempDirs);
+  input = {
+    config: {},
+    env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_HOME: stateDir },
+    stateDir,
+    requireLocalResources: true,
+    warnings: [],
+  };
+  fixtureMigration = {
+    id: "resource-fixture",
+    label: "Resource fixture",
+    detectLegacyState: vi.fn(() => null),
+    migrateLegacyState: vi.fn(() => ({ changes: [], warnings: [] })),
+  };
 });
 afterEach(async () => {
   try {
@@ -56,18 +65,11 @@ afterEach(async () => {
   }
 });
 
-function params(): PluginDoctorMigrationResourceCollectionParams {
-  return {
-    config: {},
-    env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_HOME: stateDir },
-    stateDir,
-    requireLocalResources: true,
-    warnings: [],
-  };
+function collectResources(migration: PluginDoctorStateMigration, pluginId: string) {
+  return preparePluginDoctorMigrationResources([{ pluginId, migration }], input);
 }
 
 it("does not claim missing recovery coverage for bundled core-only and disposable migrations", async () => {
-  const input = params();
   expect(noDataMigrations).toHaveLength(4);
   const result = await preparePluginDoctorMigrationResources(noDataMigrations, input);
   expect(result.resources).toEqual([]);
@@ -75,22 +77,11 @@ it("does not claim missing recovery coverage for bundled core-only and disposabl
 });
 
 it("warns once per undeclared owner without running its migration", async () => {
-  const shipped = canvasMigrations.find(
-    (entry) => entry.id === "canvas-custom-root-documents-to-core",
-  );
-  if (!shipped) {
-    throw new Error("Missing shipped Canvas migration");
-  }
-  // Canvas declares its inventory; strip it to exercise the undeclared-owner path.
-  const { collectBackupResources: _declared, ...migration } = shipped;
-  const detect = vi.spyOn(migration, "detectLegacyState");
-  const migrate = vi.spyOn(migration, "migrateLegacyState");
-  const input = params();
   const result = await preparePluginDoctorMigrationResources(
     [
-      { pluginId: "canvas", migration },
-      { pluginId: "canvas", migration: { ...migration, id: "second-action" } },
-      { pluginId: "other-owner", migration },
+      { pluginId: "canvas", migration: fixtureMigration },
+      { pluginId: "canvas", migration: { ...fixtureMigration, id: "second-action" } },
+      { pluginId: "other-owner", migration: fixtureMigration },
     ],
     input,
   );
@@ -108,14 +99,13 @@ it("warns once per undeclared owner without running its migration", async () => 
       "https://docs.openclaw.ai/cli/doctor/state-migrations#plugin-migration-recovery-coverage",
     );
   }
-  expect(detect).not.toHaveBeenCalled();
-  expect(migrate).not.toHaveBeenCalled();
+  expect(fixtureMigration.detectLegacyState).not.toHaveBeenCalled();
+  expect(fixtureMigration.migrateLegacyState).not.toHaveBeenCalled();
 });
 
 it.each(["declared", "malformed"] as const)(
   "preserves the SDK adapter's %s inventory without resolving migration plans",
   async (declaration) => {
-    const input = params();
     const source = path.join(stateDir, "planned.sqlite");
     const collectBackupResources = vi.fn(() => [{ path: source, kind: "sqlite" as const }]);
     const resolvePlans = vi.fn(() => []);
@@ -129,19 +119,16 @@ it.each(["declared", "malformed"] as const)(
           : (null as unknown as NonNullable<PluginDoctorStateMigration["collectBackupResources"]>),
     });
     if (declaration === "malformed") {
-      await expect(
-        preparePluginDoctorMigrationResources([{ pluginId: "planned-owner", migration }], input),
-      ).rejects.toThrow("collectBackupResources");
+      await expect(collectResources(migration, "planned-owner")).rejects.toThrow(
+        "collectBackupResources",
+      );
     } else {
       const contract = coercePluginDoctorContractModule({ stateMigrations: [migration] });
       const coerced = contract?.stateMigrations?.[0];
       if (!coerced) {
         throw new Error("Missing adapted migration");
       }
-      const result = await preparePluginDoctorMigrationResources(
-        [{ pluginId: "planned-owner", migration: coerced }],
-        input,
-      );
+      const result = await collectResources(coerced, "planned-owner");
       expect(result.resources).toEqual([{ path: source, kind: "sqlite" }]);
       expect(collectBackupResources).toHaveBeenCalledOnce();
       expect(collectBackupResources).toHaveBeenCalledWith(
@@ -155,23 +142,14 @@ it.each(["declared", "malformed"] as const)(
 
 it.each([
   ["non-array inventory", () => ({}), "Invalid migration backup inventory"],
-  [
-    "relative path",
-    () => [{ path: "relative.sqlite", kind: "sqlite" }],
-    "Invalid migration backup resource",
-  ],
+  ["relative path", () => [{ path: "relative.sqlite", kind: "sqlite" }]],
   [
     "parent traversal before normalization",
     () => [
       { path: `${stateDir}${path.sep}linked${path.sep}..${path.sep}data.sqlite`, kind: "sqlite" },
     ],
-    "Invalid migration backup resource",
   ],
-  [
-    "unknown kind",
-    () => [{ path: path.join(stateDir, "data"), kind: "unknown" }],
-    "Invalid migration backup resource",
-  ],
+  ["unknown kind", () => [{ path: path.join(stateDir, "data"), kind: "unknown" }]],
   [
     "conflicting kinds",
     () => [
@@ -180,15 +158,14 @@ it.each([
     ],
     "Conflicting migration backup resource kinds",
   ],
-] as const)("still refuses a declared %s", async (_label, collect, message) => {
-  const input = params();
-  const migration = {
-    ...canvasMigrations[0]!,
+] as const)("still refuses a declared %s", async (_label, collect, message?: string) => {
+  const invalid = {
+    ...fixtureMigration,
     collectBackupResources: collect as PluginDoctorStateMigration["collectBackupResources"],
   };
-  await expect(
-    preparePluginDoctorMigrationResources([{ pluginId: "invalid-owner", migration }], input),
-  ).rejects.toThrow(message);
+  await expect(collectResources(invalid, "invalid-owner")).rejects.toThrow(
+    message ?? "Invalid migration backup resource",
+  );
   expect(input.warnings).toEqual([]);
 });
 
@@ -223,7 +200,6 @@ it.each(["undeclared", "declared", "malformed"] as const)(
       }],
     };`,
     );
-    const input = params();
     const result = preparePluginDoctorMigrationBackupResources({
       ...input,
       config: {

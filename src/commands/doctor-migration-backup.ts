@@ -86,6 +86,23 @@ export async function backupDoctorMigrationDatabases(params: {
   if (!maintenance?.ownsSchemaMaintenance) {
     throw new Error("Pre-migration SQLite backups require Doctor maintenance ownership.");
   }
+  if (isStatePostgres()) {
+    const { backupDoctorPostgresMigration } = await import("./doctor-postgres-migration.js");
+    const changes = await backupDoctorPostgresMigration(params.env, maintenance);
+    const nativePaths = [...pending].filter((pathname) => pathname !== sharedPath);
+    const native = await backupDoctorSqliteDatabases({
+      ...params,
+      pendingDatabasePaths: nativePaths,
+      databasePaths: params.databasePaths.filter((pathname) => pathname !== sharedPath),
+      authority: { assertCurrent: () => maintenance.assertAdmission() },
+      stateFamilyBackedUp: true,
+    });
+    return {
+      ...native,
+      changes: [...changes, ...native.changes],
+      versionMigrations: params.pendingMigrations,
+    };
+  }
   const migrationTables = new Map<string, readonly string[]>();
   // Shipped updater checkpoints and general Doctor repairs keep full images.
   if (params.versionMigrationsOnly && !isStatePostgres() && !isUpdateDoctorLintPass(params.env)) {
@@ -180,6 +197,7 @@ export async function backupDoctorSqliteDatabases(params: {
   repair?: { key: string; validate: (database: DatabaseSync) => void };
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
   migrationTables?: ReadonlyMap<string, readonly string[]>;
+  stateFamilyBackedUp?: true;
 }): Promise<MigrationMessages> {
   const pending = new Set(params.pendingDatabasePaths);
   if (pending.size === 0) {
@@ -188,12 +206,14 @@ export async function backupDoctorSqliteDatabases(params: {
   // The registry and migration receipts must roll back with their agent databases.
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
   if (existsSync(sharedPath)) {
-    if (isStatePostgres()) {
+    if (isStatePostgres() && !params.stateFamilyBackedUp) {
       throw new Error(
-        "Doctor schema migrations require PostgreSQL state-family backup support, which is not available yet. Keep the current database and retry with an OpenClaw version that supports state-family PostgreSQL backups.",
+        "PostgreSQL state requires an exact state-family backup before native database repairs. Run the Doctor migration backup phase first.",
       );
     }
-    pending.add(sharedPath);
+    if (!isStatePostgres()) {
+      pending.add(sharedPath);
+    }
   }
   const { authority } = params;
   authority.assertCurrent();

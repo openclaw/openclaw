@@ -782,6 +782,7 @@ const enSettings = {
       automaticUnavailable: "No recommended small model",
       disabled: "Disabled",
       fallback: "Fallback Model",
+      utilityFallback: "Utility Fallback Model",
       noFallback: "No fallback model",
       clearFallbacks: "No fallback model (remove all {count})",
       moreFallbackOne: "1 more fallback after this one",

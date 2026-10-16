@@ -10,7 +10,6 @@ import {
   type PluginNodeInvokePrivateTransport,
 } from "./node-invoke-plugin-policy.js";
 import {
-  createApprovalClientLookup,
   createContext,
   createDemoPolicy,
   createNodeSession,
@@ -21,6 +20,7 @@ import {
   nodeCommandsConfig,
   setDangerousDemoCommandRegistry,
 } from "./node-invoke-plugin-policy.test-helpers.js";
+import { createApprovalClientLookup } from "./server-methods/approval-request.test-support.js";
 
 function createPrivateTransport() {
   const invoke = vi.fn<PluginNodeInvokePrivateTransport["invoke"]>(async (request) => {

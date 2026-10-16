@@ -419,8 +419,6 @@ export function createSessionRowRefresh(
         }
       }
       await pending.promise;
-      // Let the released page finish its response before resuming unrelated display work.
-      await yieldSessionListWork();
     }
     for (
       let pending = owner.prepareRegistryFacts();

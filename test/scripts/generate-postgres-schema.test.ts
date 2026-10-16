@@ -10,6 +10,7 @@ import {
   pendingPromotion,
 } from "../../scripts/generate-postgres-schema.mts";
 import { catalog as readCatalog, portTables } from "../../scripts/lib/postgres-schema-catalog.mts";
+import { generateSqliteSchemaCatalogs } from "../../scripts/lib/sqlite-schema-generation.mts";
 import { listOpenClawStateFeatureSchemas } from "../../src/state/openclaw-state-feature-schema.js";
 import type statePortMetadata from "../../src/state/postgres-schema.generated/state-port.json";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -228,6 +229,13 @@ describe("PostgreSQL schema generation", () => {
         "state-v23-v24.postgres.sql",
         "state-v24-v25.postgres.sql",
         "runtime.ts",
+        "sqlite-catalogs.ts",
+        "sqlite-state-catalogs.ts",
+        "sqlite-state-catalogs.json",
+        "sqlite-agent-catalogs.ts",
+        "sqlite-agent-catalogs.json",
+        "sqlite-daemon-catalogs.ts",
+        "sqlite-daemon-catalogs.json",
         "state-port.json",
       ].toSorted(),
     );
@@ -334,6 +342,30 @@ describe("PostgreSQL schema generation", () => {
         db.close();
       }
     }
+  });
+
+  it("generates computed fragments after their owner prepares native SQLite capabilities", async () => {
+    const fragments = [3, 8].map((dimensions) => ({
+      id: `memory-vector-${dimensions}`,
+      store: "memory",
+      sql: `CREATE TABLE memory_vector_${dimensions} (embedding BLOB CHECK (length(embedding) = vector_dimensions())) STRICT;`,
+      prepare: (db: DatabaseSync) => {
+        db.function("vector_dimensions", { deterministic: true }, () => dimensions);
+      },
+    }));
+    const first = fragments[0]!;
+    await expect(
+      generateSqliteSchemaCatalogs([{ id: first.id, store: first.store, sql: first.sql }], root),
+    ).rejects.toMatchObject({ cause: { message: expect.stringContaining("no such function") } });
+
+    const files = await generateSqliteSchemaCatalogs(fragments, root);
+    expect(JSON.parse(files["sqlite-memory-catalogs.json"]!)).toMatchObject({
+      tables: [3, 8].map((dimensions) => ({
+        name: `memory_vector_${dimensions}`,
+        sql: `CREATE TABLE memory_vector_${dimensions} (embedding BLOB CHECK (length(embedding) = vector_dimensions())) STRICT`,
+        columns: [{ name: "embedding", type: "BLOB" }],
+      })),
+    });
   });
 
   it("preserves mapped types, keys, defaults, index ordering, and foreign-key timing", async () => {

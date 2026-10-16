@@ -58,6 +58,24 @@ describe("configured Gateway model provider ownership", () => {
     expect(collectConfiguredAgentModelProviderIds({}, registry)).toEqual(new Set());
   });
 
+  it("loads providers selected only by utility primary and fallback refs", () => {
+    const registry = createManifestRegistry([
+      { id: "primary", providers: ["primary"] },
+      { id: "backup", providers: ["backup"] },
+      { id: "agent-backup", providers: ["agent-backup"] },
+      { id: "unused", providers: ["unused"] },
+    ]);
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { utilityModel: { primary: "primary/small", fallbacks: ["backup/small"] } },
+        entries: { main: { utilityModel: { fallbacks: ["agent-backup/small"] } } },
+      },
+    };
+    expect(collectConfiguredAgentModelProviderIds(config, registry)).toEqual(
+      new Set(["primary", "backup", "agent-backup"]),
+    );
+  });
+
   it("does not normalize unrelated rows in a large catalog", () => {
     let unrelatedNormalizationReads = 0;
     const unrelatedModels = Array.from({ length: 10_000 }, (_, index) => ({

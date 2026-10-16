@@ -10,7 +10,7 @@ import {
   createPanelRefreshStatus,
   failPanelRefresh,
 } from "../../components/panel-refresh-status.ts";
-import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
+import { createGitHubIdentity } from "../../features/github-connections/github-identity.ts";
 import { t } from "../../i18n/index.ts";
 import { selectableAgentsList } from "../../lib/agents/display.ts";
 import {
@@ -186,14 +186,12 @@ export function createAgentsPageState(
     unsubscribe: () => void;
   } | null = null;
   let normalizedLocation = "";
-  let githubProfileId: string | null = null;
   const configEditor = {
     getRuntimeConfig: () => context.runtimeConfig,
     canUpdate: (agentId: string) =>
       agentId === state.agentsSelectedId && canCall("config.set", "operator.admin"),
   };
-  const githubIdentity = new GitHubIdentityController({
-    requestUpdate: () => publish(),
+  const githubIdentity = createGitHubIdentity({
     runExternalMutation: (task, options) =>
       context.runtimeConfig.runExternalMutation(task, options),
   });
@@ -459,14 +457,7 @@ export function createAgentsPageState(
         void loadToolsCatalog(state, agentId);
       }
       loadEffectiveToolsForAgent(agentId);
-      if (
-        githubIdentity.statusReadable &&
-        !githubIdentity.status &&
-        !githubIdentity.loading &&
-        !githubIdentity.error
-      ) {
-        void githubIdentity.verify();
-      }
+      githubIdentity.ensureVerified();
       return;
     }
     if (state.agentsPanel === "channels" && !context.channels.state.channelsSnapshot) {
@@ -490,10 +481,6 @@ export function createAgentsPageState(
   function syncGitHubIdentity(agentId: string | null) {
     const snapshot = context.gateway.snapshot;
     const profileId = snapshot.selfUser?.id ?? null;
-    if (profileId !== githubProfileId) {
-      githubIdentity.dispose();
-      githubProfileId = profileId;
-    }
     const hasScope = (method: string, scope: GatewayMethodOperatorScope) =>
       canCallGatewayMethod(snapshot, method, scope, { requireAdvertisement: false });
     githubIdentity.sync({
@@ -503,6 +490,7 @@ export function createAgentsPageState(
         ? {
             kind: "shared",
             scope: "agent",
+            profileId,
             agentId,
             config: currentConfigObject(context.runtimeConfig.state),
           }
@@ -1069,7 +1057,6 @@ export function createAgentsPageState(
       }
       stopCatalog?.();
       resetModelCatalog();
-      githubIdentity.dispose();
       gateway.dispose();
     };
   });

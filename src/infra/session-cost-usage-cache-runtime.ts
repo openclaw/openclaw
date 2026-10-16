@@ -241,9 +241,6 @@ export async function loadSessionCostSummariesFromCache(params: SessionCostReadP
   remainingReportBytes?: number;
 }> {
   const result = await loadSessionCostResultFromCache(params);
-  if (result.kind !== "sessions") {
-    throw new Error("Usage worker returned an invalid session summary");
-  }
   return {
     summaries: result.summaries,
     cacheStatus: result.cacheStatus,

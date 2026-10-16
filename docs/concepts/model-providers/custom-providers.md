@@ -284,7 +284,7 @@ discovery, authentication, and managed local embeddings.
 llmman is configured via `models.providers` as an OpenAI-compatible local server. It pulls models as OCI artifacts and serves them through upstream `llama-server`, `vllm`, or `mlx-lm`, and can pair a local model with a hosted one under a single model id:
 
 - Provider: `llmman` (custom; `api: "openai-completions"`)
-- Auth: none enforced; set `LLMMAN_API_KEY=llmman-local` and use `apiKey: "${LLMMAN_API_KEY}"`
+- Auth: none on loopback, so set `LLMMAN_API_KEY=llmman-local`; off loopback, set it to the daemon's key. Use `apiKey: "${LLMMAN_API_KEY}"`
 - Default base URL: `http://127.0.0.1:17434/v1`
 - Example model: `llmman/qwen3.8`
 - Hybrid example: `llmman/llmman.hybrid/qwen3.8,openai/gpt-5.6-luna`

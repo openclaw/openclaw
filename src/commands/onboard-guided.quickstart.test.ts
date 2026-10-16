@@ -149,7 +149,7 @@ describe("runGuidedOnboarding quick start", () => {
 
   it("preserves external Gateway ownership and uses the existing browser handoff", async () => {
     const prompter = createWizardPrompter(undefined, { selectValues: ["quick"] });
-    const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const runBrowserHandoff = vi.fn(async () => true);
     const deps = setupDeps({
       prompter,
       runBrowserHandoff,

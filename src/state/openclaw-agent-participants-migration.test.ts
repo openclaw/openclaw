@@ -14,9 +14,8 @@ import {
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
-import { withLegacySessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
+import { LEGACY_PARTICIPANTS_SCHEMA } from "./openclaw-agent-schema-history.js";
 import { restoreEmptyV21StorageForHistoricalFixture } from "./openclaw-agent-schema-v21.test-support.js";
-import { sessionParticipantsSchemaSql } from "./openclaw-agent-session-participants-schema.js";
 
 const sessionKey = "agent:main:participant-migration";
 
@@ -113,7 +112,7 @@ describe("participant identity migration", () => {
         initial.db.exec(
           "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
         );
-        initial.db.exec(withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql()));
+        initial.db.exec(LEGACY_PARTICIPANTS_SCHEMA);
         initial.db
           .prepare(
             "INSERT INTO session_participants VALUES (?, 'human', 'profile', 'profile', 2, 30, 50)",
@@ -224,7 +223,7 @@ describe("participant identity migration", () => {
       restoreEmptyV21StorageForHistoricalFixture(requireNativeSqliteDatabase(initial.db));
       removeCanonicalValidationFromHistoricalAgentFixture(requireNativeSqliteDatabase(initial.db));
       initial.db.exec("DROP TABLE session_participants;");
-      initial.db.exec(withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql()));
+      initial.db.exec(LEGACY_PARTICIPANTS_SCHEMA);
       const kinds = [
         {
           type: "agent",

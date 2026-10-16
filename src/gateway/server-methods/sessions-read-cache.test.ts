@@ -665,16 +665,7 @@ describe("resident sessions.list", () => {
           hasActiveSubagentRun: true,
           runtimeMs: 2_000,
         });
-        // Runtime projection resolves active identities without enumerating the roster.
-        expect(select.mock.calls.length).toBeLessThanOrEqual(2 * (fresh.length + 1));
-        for (const [query, metadataOnly] of select.mock.calls) {
-          expect(query).toEqual({
-            agentId: "main",
-            sessionIdOrKey: expect.stringMatching(/^(agent:main:active|main-active)$/),
-            sortBy: null,
-          });
-          expect(metadataOnly).toBe(true);
-        }
+        expect(select).not.toHaveBeenCalled();
 
         const scope = { agentId: "main", sessionKey: "agent:main:active" };
         replaceSessionEntrySync(scope, { ...loadSessionEntry(scope)!, label: "Updated label" });

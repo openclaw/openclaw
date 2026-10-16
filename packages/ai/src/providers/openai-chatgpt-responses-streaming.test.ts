@@ -14,6 +14,43 @@ function createJwt(payload: Record<string, unknown>): string {
   return `${header}.${body}.signature`;
 }
 
+const apiKey = createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } });
+const sseOptions = { apiKey, transport: "sse" as const };
+
+function sseResponse(payload: object): Response {
+  return new Response(`data: ${JSON.stringify(payload)}\n\n`, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function installWebSocket(payload: object) {
+  class FixtureWebSocket extends EventTarget {
+    constructor() {
+      super();
+      queueMicrotask(() => this.dispatchEvent(new Event("open")));
+    }
+    send(): void {
+      queueMicrotask(() =>
+        this.dispatchEvent(Object.assign(new Event("message"), { data: JSON.stringify(payload) })),
+      );
+    }
+    close(): void {}
+  }
+  const fetchMock = vi.fn();
+  vi.stubGlobal("WebSocket", FixtureWebSocket);
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+async function collectEvents(stream: ReturnType<typeof streamOpenAICodexResponses>) {
+  const events = [];
+  for await (const event of stream) {
+    events.push(event);
+  }
+  return events;
+}
+
 describe("OpenAI ChatGPT Responses inference streaming", () => {
   afterEach(() => {
     closeOpenAICodexWebSocketSessions();
@@ -70,22 +107,9 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
         },
       },
     };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(`data: ${JSON.stringify(terminal)}\n\n`, {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-        }),
-      ),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sseResponse(terminal)));
 
-    const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    }).result();
+    const result = await streamOpenAICodexResponses(model, context, sseOptions).result();
 
     expect(result).toMatchObject({
       stopReason: "length",
@@ -113,26 +137,10 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
         usage: { input_tokens: 12, output_tokens: 3, total_tokens: 15 },
       },
     };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(`data: ${JSON.stringify(terminal)}\n\n`, {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-        }),
-      ),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sseResponse(terminal)));
 
-    const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    });
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
+    const stream = streamOpenAICodexResponses(model, context, sseOptions);
+    const events = await collectEvents(stream);
 
     expect(events.map((event) => event.type)).toEqual(["start", "error"]);
     expect(events.at(-1)).toMatchObject({
@@ -163,16 +171,8 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
       ),
     );
 
-    const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    });
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
+    const stream = streamOpenAICodexResponses(model, context, sseOptions);
+    const events = await collectEvents(stream);
 
     expect(events.at(-1)).toMatchObject({
       type: "error",
@@ -203,24 +203,11 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
       },
     };
     const payload = { type: "error", error };
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      new Response(`data: ${JSON.stringify(payload)}\n\n`, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      }),
-    );
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(sseResponse(payload));
     vi.stubGlobal("fetch", fetchMock);
 
-    const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    });
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
+    const stream = streamOpenAICodexResponses(model, context, sseOptions);
+    const events = await collectEvents(stream);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(events.filter((event) => event.type === "error" || event.type === "done")).toMatchObject(
@@ -252,45 +239,23 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
   });
 
   it("reports acceptance before the default WebSocket stream starts", async () => {
-    class AcceptedWebSocket extends EventTarget {
-      constructor() {
-        super();
-        queueMicrotask(() => this.dispatchEvent(new Event("open")));
-      }
-
-      send(): void {
-        queueMicrotask(() => {
-          this.dispatchEvent(
-            Object.assign(new Event("message"), {
-              data: JSON.stringify({
-                type: "response.completed",
-                response: {
-                  id: "resp_ws_accepted",
-                  status: "completed",
-                  output: [],
-                  usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-                },
-              }),
-            }),
-          );
-        });
-      }
-
-      close(): void {}
-    }
+    const fetchMock = installWebSocket({
+      type: "response.completed",
+      response: {
+        id: "resp_ws_accepted",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+      },
+    });
 
     const order: string[] = [];
     const acceptanceObserver = vi.fn(() => {
       order.push("accepted");
     });
-    const fetchMock = vi.fn();
-    vi.stubGlobal("WebSocket", AcceptedWebSocket);
-    vi.stubGlobal("fetch", fetchMock);
     const options = withProviderAcceptanceObserver(
       {
-        apiKey: createJwt({
-          "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-        }),
+        apiKey,
       },
       acceptanceObserver,
     );
@@ -306,47 +271,21 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
   });
 
   it("emits an error for a content-filtered incomplete WebSocket turn", async () => {
-    class ContentFilteredWebSocket extends EventTarget {
-      constructor() {
-        super();
-        queueMicrotask(() => this.dispatchEvent(new Event("open")));
-      }
-
-      send(): void {
-        queueMicrotask(() => {
-          this.dispatchEvent(
-            Object.assign(new Event("message"), {
-              data: JSON.stringify({
-                type: "response.incomplete",
-                response: {
-                  id: "resp_ws_filtered",
-                  incomplete_details: { reason: "content_filter" },
-                  output: [],
-                  usage: { input_tokens: 12, output_tokens: 3, total_tokens: 15 },
-                },
-              }),
-            }),
-          );
-        });
-      }
-
-      close(): void {}
-    }
-
-    const fetchMock = vi.fn();
-    vi.stubGlobal("WebSocket", ContentFilteredWebSocket);
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = installWebSocket({
+      type: "response.incomplete",
+      response: {
+        id: "resp_ws_filtered",
+        incomplete_details: { reason: "content_filter" },
+        output: [],
+        usage: { input_tokens: 12, output_tokens: 3, total_tokens: 15 },
+      },
+    });
 
     const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
+      apiKey,
       transport: "websocket",
     });
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
+    const events = await collectEvents(stream);
 
     expect(events.map((event) => event.type)).toEqual(["start", "error"]);
     expect(events.at(-1)).toMatchObject({
@@ -382,9 +321,7 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
+      apiKey,
       signal: controller.signal,
     }).result();
 
@@ -422,12 +359,7 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    }).result();
+    const result = await streamOpenAICodexResponses(model, context, sseOptions).result();
 
     expect(result.stopReason).toBe("error");
     expect(result.errorType).toBe("invalid_request_error");
@@ -479,37 +411,13 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     };
     const logWarn = vi.fn();
     configureAiTransportHost({ logWarn });
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-
-    class FailedResponseWebSocket extends EventTarget {
-      constructor() {
-        super();
-        queueMicrotask(() => this.dispatchEvent(new Event("open")));
-      }
-
-      send(): void {
-        queueMicrotask(() => {
-          this.dispatchEvent(
-            Object.assign(new Event("message"), { data: JSON.stringify(failedResponse) }),
-          );
-        });
-      }
-
-      close(): void {}
-    }
-    vi.stubGlobal("WebSocket", FailedResponseWebSocket);
+    const fetchMock = installWebSocket(failedResponse);
 
     const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
+      apiKey,
       transport,
     });
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
+    const events = await collectEvents(stream);
 
     expect(events.map((event) => event.type)).toEqual(["start", "error"]);
     expect(events.at(-1)).toMatchObject({

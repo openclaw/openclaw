@@ -4,7 +4,6 @@ import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
-import { icons } from "../../../components/icons.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -536,13 +535,13 @@ describe("chat header session menu", () => {
         {
           id: "plugin/export",
           label: "Export transcript",
-          icon: icons.plug,
+          icon: "plug",
           onActivate: exportTranscript,
         },
         {
           id: "stop-cloud-worker",
           label: "Stop cloud worker",
-          icon: icons.stop,
+          icon: "stop",
           variant: "danger",
           disabled: true,
           description: "Worker is restarting",

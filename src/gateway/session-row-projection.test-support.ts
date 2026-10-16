@@ -210,7 +210,6 @@ export function createSessionRowProjectionFixture(params: {
     // This row-only fixture cannot certify the resident owner's complete ancestry graph.
     ancestorRows: () => undefined,
     setArchivePageSize: () => {},
-    retainArchiveRows: () => ({ update: () => {}, release: () => {} }),
     modelFacts: (query) => describe(query)!.materialized.source,
     withPreparedExactRows: async (queries, consume) => {
       queries(cfg);

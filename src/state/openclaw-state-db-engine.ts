@@ -1,6 +1,9 @@
 import { getEnvironmentData } from "node:worker_threads";
-import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
-import type { PostgresSchemaFragment } from "../infra/database-engine/contract.js";
+import {
+  getDatabaseEngineInput,
+  getDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
+import type { PostgresSchemaFragment, StoreSchema } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import {
   admitPostgresPhysicalFacts,
@@ -37,9 +40,9 @@ const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
 
 export function stateEngineInput() {
-  const selected = getDatabaseEngineSelection()?.input;
+  const selected = getDatabaseEngineSelection();
   if (selected) {
-    return selected;
+    return getDatabaseEngineInput("state");
   }
   const connection: unknown =
     process.env.NODE_ENV === "test"
@@ -85,12 +88,15 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
       fragment.tables.some((table) => tables.has(table)) ? [] : fragment.tables,
     ),
   );
-  assertPostgresCatalog(
-    facts.catalog.filter(
-      (fact) => !fact.kind.endsWith("Definition") && fact.table !== "openclaw_schema_meta",
-    ),
-    runtime.expectedCatalog.filter((fact) => !absent.has(fact.table)),
-  );
+  // Older inspection schemas are checked against their migration's exact source DDL.
+  if (facts.version === OPENCLAW_STATE_SCHEMA_VERSION) {
+    assertPostgresCatalog(
+      facts.catalog.filter(
+        (fact) => !fact.kind.endsWith("Definition") && fact.table !== "openclaw_schema_meta",
+      ),
+      runtime.expectedCatalog.filter((fact) => !absent.has(fact.table)),
+    );
+  }
   if (fresh) {
     const now = Date.now();
     db.prepare(
@@ -110,10 +116,10 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
     .get();
   // SQLite may publish the current header without a redundant content-version row.
   if (
-    meta?.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION ||
+    meta?.schema_version !== facts.version ||
     meta.role !== "global" ||
     meta.agent_id !== null ||
-    (content !== undefined && content.value_json !== String(OPENCLAW_STATE_SCHEMA_VERSION))
+    (content !== undefined && content.value_json !== String(facts.version))
   ) {
     throw new Error(`PostgreSQL state metadata mismatch. ${recovery}`);
   }
@@ -141,7 +147,7 @@ const statePostgresSchema = {
   }),
 };
 
-export const stateEngineSchema = {
+export const stateEngineSchema: StoreSchema = {
   id: "state",
   version: OPENCLAW_STATE_SCHEMA_VERSION,
   sqlite: "",
@@ -227,6 +233,7 @@ export function openStatePostgresReadConnection(pathname: string, expectedIdenti
       prepareAnchor: () => {},
       openSqlite: () => {},
       existingOnly: true,
+      existingVersion: true,
       admitPostgres: admitStatePostgres,
       closeOnFailure: (connection, error) => {
         db = connection;

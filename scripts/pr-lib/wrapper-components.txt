@@ -83,6 +83,7 @@ packages/model-catalog-core/src/model-catalog-pricing.ts
 packages/model-catalog-core/src/model-catalog-reasoning.ts
 packages/model-catalog-core/src/model-catalog-refs.ts
 packages/model-catalog-core/src/model-catalog-types.ts
+packages/model-catalog-core/src/model-inference-capabilities.ts
 packages/model-catalog-core/src/provider-id.ts
 packages/model-catalog-core/src/provider-model-id-normalization.ts
 packages/model-catalog-core/src/provider-model-id-normalize.ts
@@ -252,6 +253,7 @@ src/agents/agent-runtime-id.ts
 src/agents/agent-scope-config.ts
 src/agents/agent-scope.ts
 src/agents/auth-profiles/authorization-contract.ts
+src/agents/auth-profiles/persisted-rows-receipt.ts
 src/agents/auth-profiles/sqlite-json.ts
 src/agents/auth-profiles/store-unreadable-error.ts
 src/agents/auth-profiles/store-update-commit.ts
@@ -369,6 +371,7 @@ src/infra/database-engine/postgres-schema.ts
 src/infra/database-engine/postgres-search-schema.ts
 src/infra/database-engine/postgres-search.ts
 src/infra/database-engine/postgres-vector.ts
+src/infra/database-engine/registry.ts
 src/infra/database-engine/search.ts
 src/infra/database-engine/sqlite-full-text.ts
 src/infra/database-engine/sqlite-search-schema.ts
@@ -1141,10 +1144,14 @@ src/infra/sqlite-recovery-snapshot.ts
 src/infra/sqlite-rollback-recovery.ts
 src/infra/sqlite-runtime-version.ts
 src/infra/sqlite-schema-admission.ts
+src/infra/sqlite-schema-catalog-types.ts
+src/infra/sqlite-schema-catalog.ts
 src/infra/sqlite-schema-contract-assembly.ts
 src/infra/sqlite-schema-contract.ts
+src/infra/sqlite-schema-dynamic.ts
 src/infra/sqlite-schema-ensure.ts
 src/infra/sqlite-schema-facts.ts
+src/infra/sqlite-schema-fingerprint.ts
 src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
 src/infra/sqlite-schema-lifetime.ts
@@ -1859,6 +1866,7 @@ src/state/openclaw-agent-schema-inspection-operations.worker.ts
 src/state/openclaw-agent-schema-inspection-response.ts
 src/state/openclaw-agent-schema-inspection-worker.ts
 src/state/openclaw-agent-schema.sql
+src/state/openclaw-agent-schema-history.ts
 src/state/openclaw-agent-schema.ts
 src/state/openclaw-agent-search-schema.ts
 src/state/openclaw-agent-session-participants-schema.ts
@@ -1868,6 +1876,7 @@ src/state/openclaw-agent-session-snapshots-schema.ts
 src/state/openclaw-agent-session-transcript-archive-schema.ts
 src/state/openclaw-agent-standing-intents-schema.ts
 src/state/openclaw-agent-storage-schema.ts
+src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts
 src/state/openclaw-agent-transcript-payload-migration.ts
 src/state/openclaw-agent-write-admission.ts
@@ -1935,9 +1944,18 @@ src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
 src/state/openclaw-state-db-transaction.ts
+src/state/openclaw-state-schema-retired.ts
+src/state/openclaw-state-schema-runtime.ts
 src/state/postgres-schema.generated/agent-runtime.ts
 src/state/postgres-schema.generated/agent-search-runtime.ts
 src/state/postgres-schema.generated/runtime.ts
+src/state/postgres-schema.generated/sqlite-agent-catalogs.json
+src/state/postgres-schema.generated/sqlite-agent-catalogs.ts
+src/state/postgres-schema.generated/sqlite-catalogs.ts
+src/state/postgres-schema.generated/sqlite-daemon-catalogs.json
+src/state/postgres-schema.generated/sqlite-daemon-catalogs.ts
+src/state/postgres-schema.generated/sqlite-state-catalogs.json
+src/state/postgres-schema.generated/sqlite-state-catalogs.ts
 src/state/openclaw-state-db.paths.ts
 src/state/openclaw-state-db.ts
 src/state/openclaw-state-feature-schema-ensure.ts
@@ -2194,6 +2212,7 @@ packages/ai/src/internal/shared.ts
 packages/ai/src/media-payload.ts
 packages/ai/src/model-utils.ts
 packages/ai/src/provider-options.ts
+packages/ai/src/provider-types.ts
 packages/ai/src/providers/anthropic-model-contract.ts
 packages/ai/src/providers/github-copilot-request-facts.ts
 packages/ai/src/providers/openai-reasoning-effort.ts

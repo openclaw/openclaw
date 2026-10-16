@@ -1,4 +1,4 @@
-import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
+import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import type { AgentFiles } from "./panels-files.tsx";
 import type { Agents } from "./view.tsx";
 
@@ -120,14 +120,7 @@ export function createAgentViewTestProps(
       toolsEffectiveError: null,
       toolsEffectiveResult: null,
       onOpenGitHubConnections: () => undefined,
-      githubIdentity: new GitHubIdentityController({
-        requestUpdate: () => undefined,
-        runExternalMutation: async () => ({
-          ok: false,
-          reason: "unavailable",
-          error: "Mutation unavailable in rendering test.",
-        }),
-      }),
+      githubIdentity: githubIdentityViewFixture(),
       runtimeSessionKey: "main",
       runtimeSessionMatchesSelectedAgent: false,
       onProfileChange: () => undefined,

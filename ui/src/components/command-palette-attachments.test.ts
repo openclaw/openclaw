@@ -7,7 +7,7 @@ import { CommandPaletteLoading } from "../app/app-shell-command-palette-loading-
 import { ShellCommandPaletteOwner } from "../app/app-shell-command-palette-loading.ts";
 import {
   COMMAND_PALETTE_ELEMENT,
-  LazyCustomElementRequestController,
+  createLazyCustomElementRequests,
 } from "../app/lazy-custom-element.ts";
 import { createWebPushCapability } from "../app/web-push.ts";
 import * as toast from "../lib/toast.ts";
@@ -48,7 +48,7 @@ function createLoading(
       {
         ...host,
         commandPaletteElement: COMMAND_PALETTE_ELEMENT,
-        lazyCustomElements: new LazyCustomElementRequestController({ requestUpdate: () => {} }),
+        lazyCustomElements: createLazyCustomElementRequests(),
         chatNavigationOptions: () => undefined,
         navigate: () => {},
       },
