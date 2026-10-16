@@ -14,9 +14,8 @@ import type { DiscordActionConfig, DiscordConfig, OpenClawConfig } from "../src/
 import { runMessageAction } from "../src/infra/outbound/message-action-runner.js";
 import { resolveAndApplyOutboundReplyToId } from "../src/infra/outbound/message-action-threading.js";
 import { isDeliveredCurrentSourceReply } from "../src/infra/outbound/source-reply-mirror.js";
-import { createPluginRegistry } from "../src/plugins/registry.js";
+import { createTestPluginRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
-import type { PluginRuntime } from "../src/plugins/runtime/types.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 
 // Discord API v10 GuildPublicThread channel type.
@@ -45,7 +44,9 @@ const channels = [current, sibling].map((id) => ({
 const voice = { guild_id: guildId, user_id: userId, channel_id: sibling, session_id: "fixture" };
 const events = [{ id: "100000000000000006", guild_id: guildId, name: "Planning" }];
 const getRequest = (path: string) => ({ method: "GET", path });
-const activeThreadsPath = `/guilds/${guildId}/threads/active`;
+const guildPath = `/guilds/${guildId}`;
+const activeThreadsPath = `${guildPath}/threads/active`;
+const exactCurrentOnly = "exact current conversation";
 const thread = (id: string, parent_id: string, name: string) => ({
   id,
   type: guildPublicThreadType,
@@ -54,6 +55,18 @@ const thread = (id: string, parent_id: string, name: string) => ({
   name,
 });
 const allowedThread = thread(allowedThreadId, current, "Allowed thread");
+const activeThreads = [
+  allowedThread,
+  thread(siblingThreadId, sibling, "Sibling thread"),
+  { id: unknownThreadId, name: "Unknown parent" },
+  thread(deniedThreadId, current, "Disabled child thread"),
+  {
+    id: missingGuildThreadId,
+    type: guildPublicThreadType,
+    parent_id: current,
+    name: "Missing guild metadata",
+  },
+];
 
 function metadataRead(
   action: ChannelMessageActionContext["action"],
@@ -86,30 +99,30 @@ const metadataReads = [
   metadataRead(
     "member-info",
     "memberInfo",
-    `/guilds/${guildId}/members/${userId}`,
+    `${guildPath}/members/${userId}`,
     { ok: true, member },
     { guildId, userId },
   ),
-  metadataRead("role-info", "roleInfo", `/guilds/${guildId}/roles`, { ok: true, roles: [role] }),
-  metadataRead("emoji-list", "reactions", `/guilds/${guildId}/emojis`, {
+  metadataRead("role-info", "roleInfo", `${guildPath}/roles`, { ok: true, roles: [role] }),
+  metadataRead("emoji-list", "reactions", `${guildPath}/emojis`, {
     ok: true,
     emojis: [
       { name: "alpha", identifier: "alpha:1", animated: true },
       { name: "beta", identifier: "beta:2" },
     ],
   }),
-  metadataRead("channel-list", "channelInfo", `/guilds/${guildId}/channels`, {
+  metadataRead("channel-list", "channelInfo", `${guildPath}/channels`, {
     ok: true,
     channels,
   }),
   metadataRead(
     "voice-status",
     "voiceStatus",
-    `/guilds/${guildId}/voice-states/${userId}`,
+    `${guildPath}/voice-states/${userId}`,
     { ok: true, voice },
     { guildId, userId },
   ),
-  metadataRead("event-list", "events", `/guilds/${guildId}/scheduled-events`, { ok: true, events }),
+  metadataRead("event-list", "events", `${guildPath}/scheduled-events`, { ok: true, events }),
 ];
 
 async function createFixture() {
@@ -120,11 +133,7 @@ async function createFixture() {
     guilds: { [guildId]: { channels: { "*": { enabled: true } } } },
   };
   const cfg: OpenClawConfig = { channels: { discord } };
-  const owner = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
+  const owner = createTestPluginRegistry();
   // Installer provenance is covered separately; this exercises the real registrar and adapter.
   const record = createPluginRecord({
     id: "discord",
@@ -144,59 +153,35 @@ async function createFixture() {
   setActivePluginRegistry(owner.registry);
   setRuntimeConfigSnapshot(cfg, cfg);
 
-  const routes = new Map<string, { body: unknown; status?: number }>([
-    ...channels.map((channel) => [`/channels/${channel.id}`, { body: channel }] as const),
-    ["/users/%40me", { body: { id: botId } }],
-    [`/guilds/${guildId}`, { body: { id: guildId, name: "Fixture", roles: [role] } }],
-    [`/guilds/${guildId}/members/${botId}`, { body: { user: { id: botId }, roles: [] } }],
-    [`/guilds/${guildId}/members/${userId}`, { body: member }],
-    [`/guilds/${guildId}/roles`, { body: [role] }],
-    [
-      `/guilds/${guildId}/emojis`,
-      {
-        body: [
-          { id: "2", name: "beta", roles: [guildId] },
-          { id: "1", name: "alpha", animated: true },
-          { id: null, name: "unusable" },
-        ],
-      },
-    ],
-    [`/guilds/${guildId}/channels`, { body: channels }],
-    [
-      activeThreadsPath,
-      {
-        body: {
-          threads: [
-            allowedThread,
-            thread(siblingThreadId, sibling, "Sibling thread"),
-            { id: unknownThreadId, name: "Unknown parent" },
-            thread(deniedThreadId, current, "Disabled child thread"),
-            {
-              id: missingGuildThreadId,
-              type: guildPublicThreadType,
-              parent_id: current,
-              name: "Missing guild metadata",
-            },
-          ],
-          members: [
-            { id: allowedThreadId },
-            { id: siblingThreadId },
-            { id: unknownThreadId },
-            { id: deniedThreadId },
-            { id: missingGuildThreadId },
-          ],
-          extra: "guild metadata must not escape",
-        },
-      },
-    ],
-    [`/guilds/${guildId}/voice-states/${userId}`, { body: voice }],
-    [`/guilds/${guildId}/scheduled-events`, { body: events }],
-    [`/channels/${sibling}/messages`, { body: [] }],
-    [`/channels/${dmId}`, { body: { id: dmId, type: 1 } }],
-    ["/users/@me/channels", { body: { id: dmId } }],
-    [`/channels/${dmId}/messages/${messageId}/reactions/%E2%9C%85/@me`, { body: {}, status: 204 }],
-    [`/channels/${dmId}/messages`, { body: { id: "100000000000000011", channel_id: dmId } }],
+  const routes = new Map<string, { body: unknown; status?: number }>();
+  const route = (path: string, body: unknown, status?: number) =>
+    routes.set(path, { body, status });
+  for (const channel of channels) {
+    route(`/channels/${channel.id}`, channel);
+  }
+  route("/users/%40me", { id: botId });
+  route(guildPath, { id: guildId, name: "Fixture", roles: [role] });
+  route(`${guildPath}/members/${botId}`, { user: { id: botId }, roles: [] });
+  route(`${guildPath}/members/${userId}`, member);
+  route(`${guildPath}/roles`, [role]);
+  route(`${guildPath}/emojis`, [
+    { id: "2", name: "beta", roles: [guildId] },
+    { id: "1", name: "alpha", animated: true },
+    { id: null, name: "unusable" },
   ]);
+  route(`${guildPath}/channels`, channels);
+  route(activeThreadsPath, {
+    threads: activeThreads,
+    members: activeThreads.map(({ id }) => ({ id })),
+    extra: "guild metadata must not escape",
+  });
+  route(`${guildPath}/voice-states/${userId}`, voice);
+  route(`${guildPath}/scheduled-events`, events);
+  route(`/channels/${sibling}/messages`, []);
+  route(`/channels/${dmId}`, { id: dmId, type: 1 });
+  route("/users/@me/channels", { id: dmId });
+  route(`/channels/${dmId}/messages/${messageId}/reactions/%E2%9C%85/@me`, {}, 204);
+  route(`/channels/${dmId}/messages`, { id: "100000000000000011", channel_id: dmId });
   const requests: Array<{ method: string; path: string }> = [];
   const transport = { onRequest: undefined as (() => void) | undefined };
   const server = createServer((request, response) => {
@@ -207,11 +192,11 @@ async function createFixture() {
     requests.push({ method: request.method ?? "", path });
     request.resume();
     transport.onRequest?.();
-    const route = routes.get(path);
-    response.writeHead(route?.status ?? (route ? 200 : 404), {
+    const reply = routes.get(path);
+    response.writeHead(reply?.status ?? (reply ? 200 : 404), {
       "content-type": "application/json",
     });
-    response.end(JSON.stringify(route?.body ?? { message: `Unexpected fixture route: ${path}` }));
+    response.end(JSON.stringify(reply?.body ?? { message: `Unexpected fixture route: ${path}` }));
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
@@ -269,6 +254,7 @@ async function createFixture() {
     context,
     dmContext,
     routes,
+    route,
     requests,
     transport,
     runPermissions: (target: string) =>
@@ -291,22 +277,31 @@ async function createFixture() {
 describe("registered Discord metadata reads", () => {
   let fixture: Awaited<ReturnType<typeof createFixture>>;
   const dispatch = (
-    action: ChannelMessageActionContext["action"],
+    action: ChannelMessageActionContext["action"] = fixture.context.action,
     params: ChannelMessageActionContext["params"] = { guildId },
     overrides: Partial<ChannelMessageActionContext> = {},
   ) => dispatchChannelMessageAction({ ...fixture.context, action, params, ...overrides });
+  const dispatchDetails = async (...args: Parameters<typeof dispatch>) =>
+    (await dispatch(...args))?.details;
   const dispatchDm = (target: string, overrides: Partial<ChannelMessageActionContext> = {}) =>
     dispatchChannelMessageAction({
       ...fixture.dmContext,
       params: { ...fixture.dmContext.params, target, to: target },
       ...overrides,
     });
+  const setChannels = (policy: NonNullable<DiscordConfig["guilds"]>[string]["channels"]) => {
+    fixture.discord.guilds = { [guildId]: { channels: policy } };
+  };
+  const expectRejected = async (
+    result: Promise<unknown>,
+    error: string | RegExp,
+    ...paths: string[]
+  ) => {
+    await expect(result).rejects.toThrow(error);
+    expect(fixture.requests).toEqual(paths.map(getRequest));
+  };
   const allowCurrentThreads = () => {
-    fixture.discord.guilds = {
-      [guildId]: {
-        channels: { [current]: { enabled: true }, [deniedThreadId]: { enabled: false } },
-      },
-    };
+    setChannels({ [current]: { enabled: true }, [deniedThreadId]: { enabled: false } });
   };
   const expectNoActiveInventory = () => {
     expect(fixture.requests).not.toContainEqual(getRequest(activeThreadsPath));
@@ -354,12 +349,12 @@ describe("registered Discord metadata reads", () => {
       if (metadata === "unavailable") {
         fixture.routes.delete(`/channels/${current}`);
       } else {
-        fixture.routes.set(metadata === "malformed" ? activeThreadsPath : `/channels/${current}`, {
-          body:
-            metadata === "malformed"
-              ? { threads: [{ id: allowedThreadId, parent_id: current }] }
-              : { ...channels[0], guild_id: sibling },
-        });
+        fixture.route(
+          metadata === "malformed" ? activeThreadsPath : `/channels/${current}`,
+          metadata === "malformed"
+            ? { threads: [{ id: allowedThreadId, parent_id: current }] }
+            : { ...channels[0], guild_id: sibling },
+        );
       }
 
       await expect(dispatch("thread-list", { guildId, channelId: current })).rejects.toThrow(
@@ -391,20 +386,19 @@ describe("registered Discord metadata reads", () => {
     `channel:${userId}`,
     `user:${dmId}`,
   ])("rejects another channel, user or namespace before I/O (%s)", async (target) => {
-    await expect(dispatchDm(target)).rejects.toThrow("exact current conversation");
-    expect(fixture.requests).toEqual([]);
+    await expectRejected(dispatchDm(target), exactCurrentOnly);
   });
 
   it.each(["account", "provider"])("retains current DM %s restrictions", async (mismatch) => {
-    await expect(
+    await expectRejected(
       dispatchDm(
         `channel:${dmId}`,
         mismatch === "account"
           ? { requesterAccountId: "other" }
           : { toolContext: { ...fixture.dmContext.toolContext, currentChannelProvider: "slack" } },
       ),
-    ).rejects.toThrow("exact current conversation");
-    expect(fixture.requests).toEqual([]);
+      exactCurrentOnly,
+    );
   });
 
   it.each([dmId, `channel:${dmId}`, `user:${userId}`])(
@@ -468,8 +462,7 @@ describe("registered Discord metadata reads", () => {
 
   it.each(metadataReads)("retains the $action action gate", async (read) => {
     fixture.discord.actions = { [read.gate]: false };
-    await expect(dispatch(read.action, read.params)).rejects.toThrow("disabled");
-    expect(fixture.requests).toEqual([]);
+    await expectRejected(dispatch(read.action, read.params), "disabled");
   });
 
   it.each(
@@ -477,27 +470,28 @@ describe("registered Discord metadata reads", () => {
       ["role-info", "emoji-list", "channel-list"].includes(action),
     ),
   )("retains guild and wildcard channel restrictions for $action", async (read) => {
-    const context = { ...fixture.context, action: read.action, params: read.params };
     fixture.discord.guilds = {};
-    await expect(dispatchChannelMessageAction(context)).rejects.toThrow("not allowed");
-    expect(fixture.requests).toEqual([{ method: "GET", path: `/guilds/${guildId}` }]);
-    fixture.discord.guilds = { [guildId]: { channels: { [current]: { enabled: true } } } };
-    await expect(dispatchChannelMessageAction(context)).rejects.toThrow(
-      "wildcard channel allowlist",
-    );
-    fixture.discord.guilds = {
-      [guildId]: { channels: { "*": { enabled: true }, [sibling]: { enabled: false } } },
-    };
-    await expect(dispatchChannelMessageAction(context)).rejects.toThrow(
-      "wildcard channel allowlist",
-    );
-    expect(fixture.requests).toEqual([{ method: "GET", path: `/guilds/${guildId}` }]);
+    await expectRejected(dispatch(read.action, read.params), "not allowed", guildPath);
+    for (const policy of [
+      { [current]: { enabled: true } },
+      { "*": { enabled: true }, [sibling]: { enabled: false } },
+    ]) {
+      setChannels(policy);
+      await expectRejected(
+        dispatch(read.action, read.params),
+        "wildcard channel allowlist",
+        guildPath,
+      );
+    }
   });
 
   it("checks the permissions destination before reading bot permissions", async () => {
-    fixture.discord.guilds = { [guildId]: { channels: { [current]: { enabled: true } } } };
-    await expect(dispatch("permissions", { channelId: sibling })).rejects.toThrow("not allowed");
-    expect(fixture.requests).toEqual([{ method: "GET", path: `/channels/${sibling}` }]);
+    setChannels({ [current]: { enabled: true } });
+    await expectRejected(
+      dispatch("permissions", { channelId: sibling }),
+      "not allowed",
+      `/channels/${sibling}`,
+    );
   });
 
   it("resolves a permissions channel through the shared message runner using only reads", async () => {
@@ -519,37 +513,34 @@ describe("registered Discord metadata reads", () => {
     `@${userId}`,
   ])("rejects a permissions user target without creating a DM (%s)", async (target) => {
     fixture.discord.allowFrom = [userId];
-    await expect(fixture.runPermissions(target)).rejects.toThrow(
+    await expectRejected(
+      fixture.runPermissions(target),
       /channel id is required|resolved to a user target/i,
     );
-    expect(fixture.requests).toEqual([]);
   });
 
   it("keeps filtered channel-list relaxation exclusive to direct operators", async () => {
-    fixture.discord.guilds = { [guildId]: { channels: { [sibling]: { enabled: false } } } };
-    const context = { ...fixture.context, action: "channel-list" as const };
-    await expect(dispatchChannelMessageAction(context)).rejects.toThrow(
-      "wildcard channel allowlist",
+    setChannels({ [sibling]: { enabled: false } });
+    await expectRejected(dispatch("channel-list"), "wildcard channel allowlist");
+    const result = await dispatchDetails(
+      "channel-list",
+      { guildId },
+      {
+        conversationReadOrigin: "direct-operator",
+      },
     );
-    expect(fixture.requests).toEqual([]);
-    expect(
-      (
-        await dispatch("channel-list", context.params, {
-          conversationReadOrigin: "direct-operator",
-        })
-      )?.details,
-    ).toEqual({ ok: true, channels: [channels[0]] });
+    expect(result).toEqual({ ok: true, channels: [channels[0]] });
   });
 
   it("rejects a forged operator origin without a current conversation", async () => {
-    await expect(
+    await expectRejected(
       dispatch(
         "role-info",
         { guildId, conversationReadOrigin: "direct-operator" },
         { toolContext: { currentChannelProvider: "discord" } },
       ),
-    ).rejects.toThrow("current provider and account context");
-    expect(fixture.requests).toEqual([]);
+      "current provider and account context",
+    );
   });
 
   it.each(["unverified", "legacy"] as const)(
@@ -560,23 +551,16 @@ describe("registered Discord metadata reads", () => {
       } else {
         fixture.plugin.actions.readAuthorityActions = undefined;
       }
-      await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
-        "exact current conversation",
-      );
-      expect(fixture.requests).toEqual([]);
+      await expectRejected(dispatch(), exactCurrentOnly);
     },
   );
 
   it("retains the original six-action read path and excludes mutations", async () => {
-    const context = { ...fixture.context, params: { channelId: sibling } };
-    expect(
-      (await dispatchChannelMessageAction({ ...context, action: "read" }))?.details,
-    ).toMatchObject({ ok: true, messages: [] });
+    const params = { channelId: sibling };
+    expect(await dispatchDetails("read", params)).toMatchObject({ ok: true, messages: [] });
     const reads = [...fixture.requests];
     for (const action of ["react", "edit", "delete", "pin", "unpin"] as const) {
-      await expect(dispatchChannelMessageAction({ ...context, action })).rejects.toThrow(
-        "exact current conversation",
-      );
+      await expect(dispatch(action, params)).rejects.toThrow(exactCurrentOnly);
     }
     expect(fixture.requests).toEqual(reads);
   });
@@ -584,16 +568,16 @@ describe("registered Discord metadata reads", () => {
   it("requires a token for an uncached metadata request", async () => {
     fixture.discord.token = "";
     vi.stubEnv("DISCORD_BOT_TOKEN", undefined);
-    await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(/token/i);
-    expect(fixture.requests).toEqual([]);
+    await expectRejected(dispatch(), /token/i);
   });
 
   it("returns unknown voice state as a normal absent result", async () => {
-    fixture.routes.set(`/guilds/${guildId}/voice-states/${userId}`, {
-      status: 404,
-      body: { code: 10065, message: "Unknown Voice State" },
-    });
-    expect((await dispatch("voice-status", { guildId, userId }))?.details).toEqual({
+    fixture.route(
+      `${guildPath}/voice-states/${userId}`,
+      { code: 10065, message: "Unknown Voice State" },
+      404,
+    );
+    expect(await dispatchDetails("voice-status", { guildId, userId })).toEqual({
       ok: true,
       voice: {
         guild_id: guildId,
@@ -607,13 +591,13 @@ describe("registered Discord metadata reads", () => {
   });
 
   it("resolves emoji-list from the current server channel", async () => {
-    expect((await dispatch("emoji-list", { limit: 1 }))?.details).toEqual({
+    expect(await dispatchDetails("emoji-list", { limit: 1 })).toEqual({
       ok: true,
       emojis: [{ name: "alpha", identifier: "alpha:1", animated: true }],
     });
     expect(fixture.requests).toEqual([
       { method: "GET", path: `/channels/${current}` },
-      { method: "GET", path: `/guilds/${guildId}/emojis` },
+      getRequest(`${guildPath}/emojis`),
     ]);
   });
 
@@ -621,26 +605,25 @@ describe("registered Discord metadata reads", () => {
     fixture.transport.onRequest = () => {
       fixture.record.enabled = false;
     };
-    await expect(dispatch("permissions", { channelId: sibling })).rejects.toThrow(
+    await expectRejected(
+      dispatch("permissions", { channelId: sibling }),
       "no longer active",
+      `/channels/${sibling}`,
     );
-    expect(fixture.requests).toEqual([{ method: "GET", path: `/channels/${sibling}` }]);
   });
 
   it.each([200, 403, 429])(
     "rejects stale metadata results, errors and retries (HTTP %s)",
     async (status) => {
-      fixture.routes.set(`/guilds/${guildId}/roles`, {
+      fixture.route(
+        `${guildPath}/roles`,
+        status === 200 ? [role] : { message: "Fixture error", retry_after: 0 },
         status,
-        body: status === 200 ? [role] : { message: "Fixture error", retry_after: 0 },
-      });
+      );
       fixture.transport.onRequest = () => {
         fixture.record.enabled = false;
       };
-      await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
-        "no longer active",
-      );
-      expect(fixture.requests).toEqual([{ method: "GET", path: `/guilds/${guildId}/roles` }]);
+      await expectRejected(dispatch(), "no longer active", `${guildPath}/roles`);
     },
   );
 });

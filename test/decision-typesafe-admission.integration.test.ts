@@ -25,7 +25,7 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
   const loading = createDeferredCore();
   const release = createDeferredCore();
   const proposed = { status: "proposed", shouldPruneTools: true };
-  // Prepare the real client outside the request deadline; suspend only its lazy import.
+  // Exclude cold client/policy setup from the consumer's 500 ms budget.
   const original = await vi.importActual("../extensions/typesafe/src/client.js");
   vi.doMock("../extensions/typesafe/src/client.js", async () => {
     loading.resolve();
@@ -108,8 +108,6 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     builder.registry.plugins.push(record);
     setActivePluginRegistry(builder.registry);
     const initial = publish(config(true));
-    // Keep host policy initialization outside the 500 ms consumer budget;
-    // the suspended import and DNS below exercise admission, not cold setup.
     resolveProviderHttpRequestConfigWithOriginTrust({
       provider: "typesafe",
       baseUrl: "http://localhost:" + server.claim.port + "/v1",
@@ -129,11 +127,15 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     expect(admitted).toMatchObject(proposed);
     expect(admittedRequests).toBe(1);
 
-    // Hold real DNS preparation. Labs opt-out permits admitted I/O; independent
-    // guards still reject it. Restoring config during cleanup must not erase an
-    // observed authority failure or poison shared provider health.
+    // Suspend DNS to revoke authority at final I/O, then restore without erasing failures.
     const guardedFetch = ssrfRuntime.fetchWithSsrFGuard;
-    for (const change of ["optout", "model", "authority", "provider-config", "secrets"] as const) {
+    for (const [change, nextConfig, reason] of [
+      ["optout", config(false), null],
+      ["model", config(true, { decisionModel: "typesafe/changed-model" }), "disabled"],
+      ["authority", undefined, null],
+      ["provider-config", config(true, { hostname: "127.0.0.1" }), "retiring"],
+      ["secrets", undefined, "retiring"],
+    ] as const) {
       const resolving = createDeferredCore();
       const resolved = createDeferredCore();
       const localConfig = publish(config(true));
@@ -173,32 +175,19 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
         await resolving.promise;
         if (change === "authority") {
           authorityError = originalError;
-        } else if (change === "provider-config") {
-          setRuntimeConfigSnapshot(config(true, { hostname: "127.0.0.1" }));
-        } else if (change === "secrets") {
-          clearSecretsRuntimeSnapshotState();
-          setRuntimeConfigSnapshot(localConfig);
         } else {
-          setRuntimeConfigSnapshot(
-            change === "model"
-              ? config(true, { decisionModel: "typesafe/changed-model" })
-              : config(false),
-          );
+          if (change === "secrets") {
+            clearSecretsRuntimeSnapshotState();
+          }
+          publish(nextConfig ?? localConfig);
         }
         resolved.resolve();
         const outcome = await captured;
         if (change === "authority") {
           expect(outcome).toEqual({ error: originalError });
-        } else if (change === "optout") {
-          expect(outcome).toMatchObject({ result: proposed });
         } else {
           expect(outcome).toMatchObject({
-            result: {
-              shouldPruneTools: false,
-              status: "unavailable",
-              reason:
-                change === "provider-config" || change === "secrets" ? "retiring" : "disabled",
-            },
+            result: reason ? { shouldPruneTools: false, status: "unavailable", reason } : proposed,
           });
         }
         expect(requests - before).toBe(change === "optout" ? 1 : 0);

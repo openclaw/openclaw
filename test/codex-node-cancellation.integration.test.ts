@@ -1,23 +1,22 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   createPluginRecord,
-  createPluginRegistry,
   createPluginRuntimeMock,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import codexPlugin from "../extensions/codex/index.js";
+import codexManifest from "../extensions/codex/openclaw.plugin.json" with { type: "json" };
 import { invokeRegisteredNodeHostCommand } from "../src/node-host/plugin-node-host.js";
-import { loadPluginManifest } from "../src/plugins/manifest.js";
+import { createTestPluginRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import { runWithSpawnBroker } from "../src/process/spawn-broker/context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "../src/process/spawn-broker/host.js";
 import { isPidDefinitelyDead } from "../src/shared/pid-alive.js";
-import { resolveBundledPluginPublicModulePath } from "../src/test-utils/bundled-plugin-public-surface.js";
 import { createDeferred, withTestTimeout } from "./helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const bufferedObservation = vi.hoisted(() => ({ returned: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
@@ -32,25 +31,22 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   };
 });
 
-const tempDirs: string[] = [];
 const wait = <T>(work: PromiseLike<T>, message: string) => withTestTimeout(work, 5_000, message);
 
-afterEach(async () => {
+afterEach(() => {
   resetPluginRuntimeStateForTest();
   bufferedObservation.returned.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  await Promise.all(
-    tempDirs.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
 });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
 
-describe.skipIf(skipBrokerTests)("registered Codex node cancellation settlement", () => {
-  it("keeps the session reserved until canceled late-PID work has closed", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-node-cleanup-"));
-    tempDirs.push(root);
+it.skipIf(skipBrokerTests)(
+  "keeps the session reserved until canceled late-PID work has closed",
+  async () => {
+    const root = tempDirs.make("codex-node-cleanup-");
     const codexHome = path.join(root, "codex-home");
     await fs.mkdir(codexHome);
     vi.stubEnv("CODEX_HOME", codexHome);
@@ -58,26 +54,13 @@ describe.skipIf(skipBrokerTests)("registered Codex node cancellation settlement"
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
     const pluginConfig = { sessionCatalog: { enabled: false } };
     const config = { plugins: { entries: { codex: { enabled: true, config: pluginConfig } } } };
-    const registry = createPluginRegistry({
-      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-      activateGlobalSideEffects: false,
-    });
-    const codexManifest = loadPluginManifest(
-      path.dirname(
-        resolveBundledPluginPublicModulePath({
-          pluginId: "codex",
-          artifactBasename: "openclaw.plugin.json",
-        }),
-      ),
+    const registry = createTestPluginRegistry(
+      createPluginRuntimeMock({ config: { current: () => config } }),
     );
-    if (!codexManifest.ok) {
-      throw new Error(codexManifest.error);
-    }
     const record = createPluginRecord({
       id: "codex",
       source: path.join(root, "index.js"),
-      nativeSessionCatalog: codexManifest.manifest.setup?.nativeSessionCatalog,
+      nativeSessionCatalog: codexManifest.setup.nativeSessionCatalog,
     });
     registry.registry.plugins.push(record);
     codexPlugin.register(registry.createApi(record, { config, pluginConfig }));
@@ -217,5 +200,5 @@ describe.skipIf(skipBrokerTests)("registered Codex node cancellation settlement"
     if (failures.length > 0) {
       throw new AggregateError(failures, "registered cancellation fixture failed");
     }
-  });
-});
+  },
+);
