@@ -61,13 +61,19 @@ export function setViewerPresenceContext(page: ChatPage) {
   const navigation = setNavigationContext(page);
   const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ sessionKeys: [] });
   const client = { request } as unknown as GatewayBrowserClient;
-  const hello = {
+  const hello: GatewayHelloOk = {
     type: "hello-ok",
     protocol: 1,
     auth: { role: "operator", scopes: [] },
     features: { methods: ["sessions.viewers.set"] },
-    snapshot: { sessionDefaults: { mainSessionKey: "agent:main:main" } },
-  } as GatewayHelloOk;
+    snapshot: {
+      sessionDefaults: {
+        defaultAgentId: "main",
+        mainKey: "main",
+        mainSessionKey: "agent:main:main",
+      },
+    },
+  };
   const snapshotListeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   (navigation.context as unknown as { gateway: ApplicationContext["gateway"] }).gateway = {
     snapshot: {

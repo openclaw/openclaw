@@ -5,7 +5,7 @@ export function resolveSessionContextLimit(
   session: Pick<GatewaySessionRow, "contextTokens" | "contextBudgetStatus"> | undefined,
 ): { tokens: number; fromLastPrompt: boolean } {
   const promptBudget = session?.contextBudgetStatus?.promptBudgetBeforeReserve;
-  if (typeof promptBudget === "number" && Number.isFinite(promptBudget) && promptBudget > 0) {
+  if (promptBudget != null && promptBudget > 0) {
     return { tokens: promptBudget, fromLastPrompt: true };
   }
   return { tokens: session?.contextTokens ?? 0, fromLastPrompt: false };

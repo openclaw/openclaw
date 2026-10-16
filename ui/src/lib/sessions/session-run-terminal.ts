@@ -99,7 +99,7 @@ function createSessionRunTerminalReconciler(
     const endedAt = replacementRunId ? terminal.endedAt : (row.endedAt ?? terminal.endedAt);
     const runtimeMs = replacementRunId
       ? undefined
-      : typeof row.startedAt === "number"
+      : row.startedAt !== undefined
         ? Math.max(0, endedAt - row.startedAt)
         : row.runtimeMs;
     const activeRunIds = row.activeRunIds?.length ? [] : row.activeRunIds;

@@ -291,11 +291,13 @@ export type ChatStreamSegment = {
   itemId?: string;
 };
 
-export function streamSegmentHasItemId(segment: { itemId?: unknown }): boolean {
-  return typeof segment.itemId === "string" && segment.itemId.trim().length > 0;
+export function streamSegmentHasItemId(segment: Pick<ChatStreamSegment, "itemId">): boolean {
+  return Boolean(segment.itemId?.trim());
 }
 
-export function streamSegmentUsesAccumulatedText(segment: { itemId?: unknown }): boolean {
+export function streamSegmentUsesAccumulatedText(
+  segment: Pick<ChatStreamSegment, "itemId">,
+): boolean {
   return !streamSegmentHasItemId(segment);
 }
 
