@@ -172,11 +172,13 @@ export function createContext(
 
 export function createPage(
   context: ApplicationContext,
-  options: { render?: boolean } = {},
+  options: { render?: boolean; attach?: boolean } = {},
 ): CronTestPage {
   // SAFETY: The native mount host receives the test facade below before it is returned.
   const page = document.createElement("section") as CronTestPage;
-  document.body.append(page);
+  if (options.attach !== false) {
+    document.body.append(page);
+  }
   let currentContext = context;
   let routeSearch = "";
   let state!: ReturnType<typeof createCronPage>;

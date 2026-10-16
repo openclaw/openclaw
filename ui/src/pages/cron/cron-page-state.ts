@@ -213,6 +213,12 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   onSettled(() => {
     active = true;
     bindContext();
+    // Routed content can settle before its host is attached.
+    queueMicrotask(() => {
+      if (active && !cron.cronStatus && !cron.cronLoading) {
+        ensureInitialData();
+      }
+    });
     document.addEventListener("visibilitychange", onActivation);
     globalThis.addEventListener("focus", onActivation);
     return () => {
@@ -738,7 +744,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     revision: projection.revision,
     publish,
     setRouteSearch,
-    highlightRun(element: HTMLElement, link: string) {
+    highlightRun(this: void, element: HTMLElement, link: string) {
       const current = { element, link };
       highlightedRun = current;
       afterRender();

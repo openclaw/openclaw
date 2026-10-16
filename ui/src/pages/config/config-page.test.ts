@@ -460,7 +460,7 @@ describe("media permission lifetime: Settings", () => {
 
 describe("ConfigPage camera selection", () => {
   it("persists only confirmed camera selections and ignores superseded failures", async () => {
-    const first = deferred<void>();
+    const first = deferred();
     switchActiveRealtimeTalkCameras
       .mockRejectedValueOnce(new Error("The selected camera is unavailable"))
       .mockReturnValueOnce(first.promise)
@@ -785,7 +785,8 @@ describe("ConfigPage runtime config lifecycle", () => {
       runtimeConfig,
     } as unknown as ApplicationContext;
     mountConfigPageState(context, { pageId: "updates" });
-    await runtimeConfig.ensureLoaded.mock.results[0].value;
+    // SAFETY: mounting flushes owner setup and starts ensureLoaded before returning.
+    await runtimeConfig.ensureLoaded.mock.results[0]!.value;
     await Promise.resolve();
 
     expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
