@@ -19,7 +19,6 @@ import {
 } from "../infra/diagnostic-events.js";
 import { enqueueCommandInLane, getQueueSize, resetCommandLane } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
-// Stuck session recovery integration tests cover end-to-end recovery diagnostics.
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   beginDiagnosticBackendActivity,
@@ -35,6 +34,66 @@ import { logMessageQueuedWithBacklogPolicy } from "./diagnostic-runtime.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 import { logSessionStateChange, startGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
+
+function enqueueQuiet<T>(lane: string, task: () => Promise<T>) {
+  return enqueueCommandInLane(lane, task, { warnAfterMs: Number.MAX_SAFE_INTEGER });
+}
+
+function createReplyFixture(name: string) {
+  const sessionKey = `agent:main:${name}`;
+  const sessionId = `${name}-session`;
+  const lane = resolveEmbeddedSessionLane(sessionKey);
+  const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+  return { sessionKey, sessionId, lane, operation };
+}
+
+function recoverQueuedReply(
+  sessionId: string,
+  sessionKey: string,
+  overrides: Partial<Parameters<typeof recoverStuckDiagnosticSession>[0]> = {},
+) {
+  return recoverStuckDiagnosticSession({
+    sessionId,
+    sessionKey,
+    ageMs: 720_000,
+    queueDepth: 1,
+    allowActiveAbort: true,
+    ...overrides,
+  });
+}
+
+function startRecoveryHeartbeat(
+  abortMs: number,
+  config: Parameters<typeof startGatewayDiagnosticHeartbeat>[1] = {
+    diagnostics: { enabled: true },
+  },
+) {
+  startGatewayDiagnosticHeartbeat(createTestGatewayScheduler("fake-timers"), config, {
+    recoverStuckSession: recoverStuckDiagnosticSession,
+    testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: abortMs },
+  });
+}
+
+function enqueueAbortableReply(lane: string, operation: ReturnType<typeof createReplyOperation>) {
+  const entered = createDeferred();
+  const active = enqueueQuiet(
+    lane,
+    () =>
+      new Promise<"aborted">((resolve) => {
+        entered.resolve();
+        const finish = () => {
+          operation.complete();
+          resolve("aborted");
+        };
+        if (operation.abortSignal.aborted) {
+          finish();
+        } else {
+          operation.abortSignal.addEventListener("abort", finish, { once: true });
+        }
+      }),
+  );
+  return { active, activeStarted: entered.promise };
+}
 
 async function expectPendingAfterEventLoopTurn(promise: Promise<unknown>): Promise<void> {
   let settled = false;
@@ -69,14 +128,7 @@ describe("stuck session recovery integration", () => {
     const lane = resolveEmbeddedSessionLane(sessionKey);
     const events: DiagnosticEventPayload[] = [];
     const unsubscribe = onDiagnosticEvent((event) => events.push(event));
-    startGatewayDiagnosticHeartbeat(
-      createTestGatewayScheduler("fake-timers"),
-      { diagnostics: { enabled: true } },
-      {
-        recoverStuckSession: recoverStuckDiagnosticSession,
-        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
-      },
-    );
+    startRecoveryHeartbeat(60_000);
     const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
     operation.setPhase("running");
     const entered = createDeferred();
@@ -103,18 +155,12 @@ describe("stuck session recovery integration", () => {
       noOutputTimeoutMs: 180_000,
       assertCurrent: () => {},
     });
-    const active = enqueueCommandInLane(
-      lane,
-      async () => {
-        entered.resolve();
-        await release.promise;
-      },
-      { warnAfterMs: Number.MAX_SAFE_INTEGER },
-    );
-    const deliver = vi.fn(async () => "delivered");
-    const queued = enqueueCommandInLane(lane, deliver, {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    const active = enqueueQuiet(lane, async () => {
+      entered.resolve();
+      await release.promise;
     });
+    const deliver = vi.fn(async () => "delivered");
+    const queued = enqueueQuiet(lane, deliver);
     logMessageQueuedWithBacklogPolicy({ sessionId, sessionKey, source: "test" }, true);
     try {
       await entered.promise;
@@ -162,52 +208,19 @@ describe("stuck session recovery integration", () => {
   it("gives a long request one bounded retry window before recovering queued delivery once", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse("2026-08-04T03:00:00Z"));
-    const sessionKey = "agent:main:repeated-requests";
-    const sessionId = "repeated-requests-session";
-    const lane = resolveEmbeddedSessionLane(sessionKey);
-    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    const { sessionKey, sessionId, lane, operation } = createReplyFixture("repeated-requests");
     operation.setPhase("running");
-    let markActiveStarted!: () => void;
-    const activeStarted = new Promise<void>((resolve) => {
-      markActiveStarted = resolve;
-    });
-    const active = enqueueCommandInLane(
-      lane,
-      () =>
-        new Promise<"aborted">((resolve) => {
-          markActiveStarted();
-          operation.abortSignal.addEventListener(
-            "abort",
-            () => {
-              operation.complete();
-              resolve("aborted");
-            },
-            { once: true },
-          );
-        }),
-      { warnAfterMs: Number.MAX_SAFE_INTEGER },
-    );
+    const { active, activeStarted } = enqueueAbortableReply(lane, operation);
     let deliveries = 0;
-    const queued = enqueueCommandInLane(
-      lane,
-      async () => {
-        deliveries += 1;
-        return "delivered";
-      },
-      { warnAfterMs: Number.MAX_SAFE_INTEGER },
-    );
+    const queued = enqueueQuiet(lane, async () => {
+      deliveries += 1;
+      return "delivered";
+    });
     await activeStarted;
 
     const events: DiagnosticEventPayload[] = [];
     const unsubscribe = onDiagnosticEvent((event) => events.push(event));
-    startGatewayDiagnosticHeartbeat(
-      createTestGatewayScheduler("fake-timers"),
-      { diagnostics: { enabled: true } },
-      {
-        recoverStuckSession: recoverStuckDiagnosticSession,
-        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 90_000 },
-      },
-    );
+    startRecoveryHeartbeat(90_000);
     logSessionStateChange({ sessionId, sessionKey, state: "processing" });
     markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId: sessionId });
     markDiagnosticModelStartedForTest({
@@ -273,18 +286,15 @@ describe("stuck session recovery integration", () => {
       const activeStarted = new Promise<void>((resolve) => {
         markActiveStarted = resolve;
       });
-      const active = enqueueCommandInLane(
+      const active = enqueueQuiet(
         lane,
         () =>
           new Promise<void>((resolve) => {
             releaseActive = resolve;
             markActiveStarted();
           }),
-        { warnAfterMs: Number.MAX_SAFE_INTEGER },
       );
-      const queued = enqueueCommandInLane(lane, async () => "delivered", {
-        warnAfterMs: Number.MAX_SAFE_INTEGER,
-      });
+      const queued = enqueueQuiet(lane, async () => "delivered");
       await activeStarted;
       operation.abortSignal.addEventListener(
         "abort",
@@ -325,17 +335,9 @@ describe("stuck session recovery integration", () => {
     const sessionId = "active-reply-session";
     const lane = resolveEmbeddedSessionLane(sessionKey);
 
-    void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
-    const queued = enqueueCommandInLane(lane, async () => "drained", {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
-    const operation = createReplyOperation({
-      sessionKey,
-      sessionId,
-      resetTriggered: false,
-    });
+    void enqueueQuiet(lane, () => new Promise<never>(() => {}));
+    const queued = enqueueQuiet(lane, async () => "drained");
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
 
     expect(getQueueSize(lane)).toBe(2);
 
@@ -369,12 +371,8 @@ describe("stuck session recovery integration", () => {
     };
 
     setActiveEmbeddedRun(activeSessionId, handle, activeSessionKey, sessionFile);
-    void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
-    const queued = enqueueCommandInLane(lane, async () => "drained", {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
+    void enqueueQuiet(lane, () => new Promise<never>(() => {}));
+    const queued = enqueueQuiet(lane, async () => "drained");
 
     const outcome = await recoverStuckDiagnosticSession({
       sessionId: fallbackSessionId,
@@ -399,53 +397,14 @@ describe("stuck session recovery integration", () => {
   });
 
   it("aborts registered pre-run lane work and drains queued messages", async () => {
-    const sessionKey = "agent:main:active-pre-run";
-    const sessionId = "active-pre-run-session";
-    const lane = resolveEmbeddedSessionLane(sessionKey);
-    const operation = createReplyOperation({
-      sessionKey,
-      sessionId,
-      resetTriggered: false,
-    });
-    let markActiveStarted!: () => void;
-    const activeStarted = new Promise<void>((resolve) => {
-      markActiveStarted = resolve;
-    });
-
-    const active = enqueueCommandInLane(
-      lane,
-      () =>
-        new Promise<"aborted">((resolve) => {
-          markActiveStarted();
-          if (operation.abortSignal.aborted) {
-            resolve("aborted");
-            return;
-          }
-          operation.abortSignal.addEventListener(
-            "abort",
-            () => {
-              operation.complete();
-              resolve("aborted");
-            },
-            { once: true },
-          );
-        }),
-      { warnAfterMs: Number.MAX_SAFE_INTEGER },
-    );
-    const queued = enqueueCommandInLane(lane, async () => "drained", {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
+    const { sessionKey, sessionId, lane, operation } = createReplyFixture("active-pre-run");
+    const { active, activeStarted } = enqueueAbortableReply(lane, operation);
+    const queued = enqueueQuiet(lane, async () => "drained");
 
     expect(getQueueSize(lane)).toBe(2);
     await activeStarted;
 
-    const outcome = await recoverStuckDiagnosticSession({
-      sessionId,
-      sessionKey,
-      ageMs: 720_000,
-      queueDepth: 1,
-      allowActiveAbort: true,
-    });
+    const outcome = await recoverQueuedReply(sessionId, sessionKey);
 
     await expect(active).resolves.toBe("aborted");
     await expect(queued).resolves.toBe("drained");
@@ -454,43 +413,15 @@ describe("stuck session recovery integration", () => {
   });
 
   it("keeps queued preflight compaction alive until its configured safety timeout", async () => {
-    const sessionKey = "agent:main:active-preflight";
-    const sessionId = "active-preflight-session";
-    const lane = resolveEmbeddedSessionLane(sessionKey);
-    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    const { sessionKey, sessionId, lane, operation } = createReplyFixture("active-preflight");
     operation.setPhase("preflight_compacting");
-    let markActiveStarted!: () => void;
-    const activeStarted = new Promise<void>((resolve) => {
-      markActiveStarted = resolve;
-    });
-    const active = enqueueCommandInLane(
-      lane,
-      () =>
-        new Promise<"aborted">((resolve) => {
-          markActiveStarted();
-          operation.abortSignal.addEventListener(
-            "abort",
-            () => {
-              operation.complete();
-              resolve("aborted");
-            },
-            { once: true },
-          );
-        }),
-      { warnAfterMs: Number.MAX_SAFE_INTEGER },
-    );
-    const queued = enqueueCommandInLane(lane, async () => "drained", {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
+    const { active, activeStarted } = enqueueAbortableReply(lane, operation);
+    const queued = enqueueQuiet(lane, async () => "drained");
     await activeStarted;
 
-    const outcome = await recoverStuckDiagnosticSession({
-      sessionId,
-      sessionKey,
-      // The session can be old even though it only just entered preflight.
+    const outcome = await recoverQueuedReply(sessionId, sessionKey, {
+      // Session age must not stand in for time spent in preflight.
       ageMs: 30 * 60_000,
-      queueDepth: 1,
-      allowActiveAbort: true,
       compactionSafetyTimeoutMs: 10 * 60_000,
     });
 
@@ -530,42 +461,14 @@ describe("stuck session recovery integration", () => {
       vi.setSystemTime(startMs + 12 * 60_000);
       const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
       operation.setPhase("preflight_compacting");
-      let markActiveStarted!: () => void;
-      const activeStarted = new Promise<void>((resolve) => {
-        markActiveStarted = resolve;
-      });
-      const active = enqueueCommandInLane(
-        lane,
-        () =>
-          new Promise<"aborted">((resolve) => {
-            markActiveStarted();
-            operation.abortSignal.addEventListener(
-              "abort",
-              () => {
-                operation.complete();
-                resolve("aborted");
-              },
-              { once: true },
-            );
-          }),
-        { warnAfterMs: Number.MAX_SAFE_INTEGER },
-      );
-      const queued = enqueueCommandInLane(lane, async () => "drained", {
-        warnAfterMs: Number.MAX_SAFE_INTEGER,
-      });
+      const { active, activeStarted } = enqueueAbortableReply(lane, operation);
+      const queued = enqueueQuiet(lane, async () => "drained");
       await activeStarted;
 
-      startGatewayDiagnosticHeartbeat(
-        createTestGatewayScheduler("fake-timers"),
-        {
-          diagnostics: { enabled: true },
-          agents: { defaults: { compaction: { timeoutSeconds: 600 } } },
-        },
-        {
-          recoverStuckSession: recoverStuckDiagnosticSession,
-          testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 90_000 },
-        },
-      );
+      startRecoveryHeartbeat(90_000, {
+        diagnostics: { enabled: true },
+        agents: { defaults: { compaction: { timeoutSeconds: 600 } } },
+      });
       await vi.advanceTimersByTimeAsync(90_000);
       await Promise.resolve();
 
@@ -610,12 +513,8 @@ describe("stuck session recovery integration", () => {
     operation.setPhase("preflight_compacting");
 
     await expect(
-      recoverStuckDiagnosticSession({
-        sessionId,
-        sessionKey,
+      recoverQueuedReply(sessionId, sessionKey, {
         ageMs: 30 * 60_000,
-        queueDepth: 1,
-        allowActiveAbort: true,
         compactionSafetyTimeoutMs: 10 * 60_000,
       }),
     ).resolves.toMatchObject({
@@ -635,10 +534,8 @@ describe("stuck session recovery integration", () => {
   it("keeps queued lane work behind reply-only force-clear settlement", async () => {
     vi.useFakeTimers();
     try {
-      const sessionKey = "agent:main:reply-only-force-clear";
-      const sessionId = "reply-only-force-clear-session";
-      const lane = resolveEmbeddedSessionLane(sessionKey);
-      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      const { sessionKey, sessionId, lane, operation } =
+        createReplyFixture("reply-only-force-clear");
       operation.attachBackend({
         kind: "embedded",
         cancel: () => {},
@@ -650,25 +547,13 @@ describe("stuck session recovery integration", () => {
         ownerCleared = true;
       });
 
-      void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
-        warnAfterMs: Number.MAX_SAFE_INTEGER,
+      void enqueueQuiet(lane, () => new Promise<never>(() => {}));
+      const queued = enqueueQuiet(lane, async () => {
+        expect(ownerCleared).toBe(true);
+        return "drained";
       });
-      const queued = enqueueCommandInLane(
-        lane,
-        async () => {
-          expect(ownerCleared).toBe(true);
-          return "drained";
-        },
-        { warnAfterMs: Number.MAX_SAFE_INTEGER },
-      );
 
-      const recovery = recoverStuckDiagnosticSession({
-        sessionId,
-        sessionKey,
-        ageMs: 720_000,
-        queueDepth: 1,
-        allowActiveAbort: true,
-      });
+      const recovery = recoverQueuedReply(sessionId, sessionKey);
       // The shared deadline can leave the owner-settlement clamp's final 100 ms.
       await vi.advanceTimersByTimeAsync(15_100);
 
@@ -690,10 +575,7 @@ describe("stuck session recovery integration", () => {
 
   it("leaves committed reply finalization to its existing lease before releasing queued work", async () => {
     vi.useFakeTimers();
-    const sessionKey = "agent:main:committed-finalization";
-    const sessionId = "committed-finalization-session";
-    const lane = resolveEmbeddedSessionLane(sessionKey);
-    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    const { sessionKey, sessionId, lane, operation } = createReplyFixture("committed-finalization");
     operation.setPhase("running");
     const entered = createDeferred();
     const release = createDeferred();
@@ -702,34 +584,23 @@ describe("stuck session recovery integration", () => {
       ownerCleared = true;
     });
     operation.abortSignal.addEventListener("abort", () => release.resolve(), { once: true });
-    const active = enqueueCommandInLane(
-      lane,
-      async () => {
-        entered.resolve();
-        await release.promise;
-      },
-      { warnAfterMs: Number.MAX_SAFE_INTEGER },
-    );
+    const active = enqueueQuiet(lane, async () => {
+      entered.resolve();
+      await release.promise;
+    });
     const deliver = vi.fn(async () => {
       expect(ownerCleared).toBe(true);
       return "delivered";
     });
-    const queued = enqueueCommandInLane(lane, deliver, {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
+    const queued = enqueueQuiet(lane, deliver);
     try {
       await entered.promise;
       operation.freezeAbort();
 
-      await expect(
-        recoverStuckDiagnosticSession({
-          sessionId,
-          sessionKey,
-          ageMs: 720_000,
-          queueDepth: 1,
-          allowActiveAbort: true,
-        }),
-      ).resolves.toMatchObject({ status: "skipped", action: "keep_lane" });
+      await expect(recoverQueuedReply(sessionId, sessionKey)).resolves.toMatchObject({
+        status: "skipped",
+        action: "keep_lane",
+      });
       await vi.advanceTimersByTimeAsync(59_999);
       expect(operation.result).toBeNull();
       expect(operation.abortSignal.aborted).toBe(false);
@@ -750,38 +621,9 @@ describe("stuck session recovery integration", () => {
   });
 
   it("reclaims continuous argument churn after its semantic progress clock becomes stale", async () => {
-    const sessionKey = "agent:main:argument-churn";
-    const sessionId = "argument-churn-session";
-    const lane = resolveEmbeddedSessionLane(sessionKey);
-    const operation = createReplyOperation({
-      sessionKey,
-      sessionId,
-      resetTriggered: false,
-    });
-    let markActiveStarted!: () => void;
-    const activeStarted = new Promise<void>((resolve) => {
-      markActiveStarted = resolve;
-    });
-
-    const active = enqueueCommandInLane(
-      lane,
-      () =>
-        new Promise<"aborted">((resolve) => {
-          markActiveStarted();
-          operation.abortSignal.addEventListener(
-            "abort",
-            () => {
-              operation.complete();
-              resolve("aborted");
-            },
-            { once: true },
-          );
-        }),
-      { warnAfterMs: Number.MAX_SAFE_INTEGER },
-    );
-    const queued = enqueueCommandInLane(lane, async () => "drained", {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
+    const { sessionKey, sessionId, lane, operation } = createReplyFixture("argument-churn");
+    const { active, activeStarted } = enqueueAbortableReply(lane, operation);
+    const queued = enqueueQuiet(lane, async () => "drained");
     await activeStarted;
 
     const proofNow = Date.now();
@@ -830,14 +672,7 @@ describe("stuck session recovery integration", () => {
   });
 
   it("releases a wedged lane after a clean abort when session work remains queued (#91700)", async () => {
-    const sessionKey = "agent:main:wedged-delivery";
-    const sessionId = "wedged-delivery-session";
-    const lane = resolveEmbeddedSessionLane(sessionKey);
-    const operation = createReplyOperation({
-      sessionKey,
-      sessionId,
-      resetTriggered: false,
-    });
+    const { sessionKey, sessionId, lane, operation } = createReplyFixture("wedged-delivery");
     operation.setPhase("running");
     // Cancel settles the registry (clean abort+drain) while the lane task that
     // hosted the run stays wedged, mirroring a hang past the run's own cleanup.
@@ -846,18 +681,10 @@ describe("stuck session recovery integration", () => {
       cancel: () => queueMicrotask(() => operation.complete()),
       isStreaming: () => false,
     });
-    void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
+    void enqueueQuiet(lane, () => new Promise<never>(() => {}));
     expect(getQueueSize(lane)).toBe(1);
 
-    const outcome = await recoverStuckDiagnosticSession({
-      sessionId,
-      sessionKey,
-      ageMs: 720_000,
-      queueDepth: 1,
-      allowActiveAbort: true,
-    });
+    const outcome = await recoverQueuedReply(sessionId, sessionKey);
 
     expect(outcome).toMatchObject({
       status: "aborted",
@@ -867,21 +694,12 @@ describe("stuck session recovery integration", () => {
       forceCleared: false,
       released: 1,
     });
-    const queued = enqueueCommandInLane(lane, async () => "drained", {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
+    const queued = enqueueQuiet(lane, async () => "drained");
     await expect(queued).resolves.toBe("drained");
   });
 
   it("does not reset a lane that unwedged and started a queued turn during the abort (#91700)", async () => {
-    const sessionKey = "agent:main:unwedged-during-abort";
-    const sessionId = "unwedged-during-abort-session";
-    const lane = resolveEmbeddedSessionLane(sessionKey);
-    const operation = createReplyOperation({
-      sessionKey,
-      sessionId,
-      resetTriggered: false,
-    });
+    const { sessionKey, sessionId, lane, operation } = createReplyFixture("unwedged-during-abort");
     operation.setPhase("running");
     let markHostStarted!: () => void;
     const hostStarted = new Promise<void>((resolve) => {
@@ -890,7 +708,7 @@ describe("stuck session recovery integration", () => {
     // Host task frees the lane on abort; the queued turn then pumps to active
     // and only it settles the registry, so the drain resolves with fresh work
     // already running — the race the queueDepth reset must not clobber.
-    const host = enqueueCommandInLane(
+    const host = enqueueQuiet(
       lane,
       () =>
         new Promise<"aborted">((resolve) => {
@@ -899,28 +717,17 @@ describe("stuck session recovery integration", () => {
             once: true,
           });
         }),
-      { warnAfterMs: Number.MAX_SAFE_INTEGER },
     );
     let releaseFreshTurn!: (value: "done") => void;
-    const freshTurn = enqueueCommandInLane(
-      lane,
-      () => {
-        operation.complete();
-        return new Promise<"done">((resolve) => {
-          releaseFreshTurn = resolve;
-        });
-      },
-      { warnAfterMs: Number.MAX_SAFE_INTEGER },
-    );
+    const freshTurn = enqueueQuiet(lane, () => {
+      operation.complete();
+      return new Promise<"done">((resolve) => {
+        releaseFreshTurn = resolve;
+      });
+    });
     await hostStarted;
 
-    const outcome = await recoverStuckDiagnosticSession({
-      sessionId,
-      sessionKey,
-      ageMs: 720_000,
-      queueDepth: 1,
-      allowActiveAbort: true,
-    });
+    const outcome = await recoverQueuedReply(sessionId, sessionKey);
 
     await expect(host).resolves.toBe("aborted");
     expect(outcome).toMatchObject({
@@ -930,9 +737,7 @@ describe("stuck session recovery integration", () => {
       released: 0,
     });
     // The fresh turn still owns the lane slot: later work must wait for it.
-    const third = enqueueCommandInLane(lane, async () => "third", {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
+    const third = enqueueQuiet(lane, async () => "third");
     await expectPendingAfterEventLoopTurn(third);
     expect(getQueueSize(lane)).toBe(2);
     releaseFreshTurn("done");
@@ -945,12 +750,8 @@ describe("stuck session recovery integration", () => {
     const sessionId = "unregistered-work-session";
     const lane = resolveEmbeddedSessionLane(sessionKey);
 
-    void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
-    const queued = enqueueCommandInLane(lane, async () => "drained", {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
+    void enqueueQuiet(lane, () => new Promise<never>(() => {}));
+    const queued = enqueueQuiet(lane, async () => "drained");
 
     expect(getQueueSize(lane)).toBe(2);
 

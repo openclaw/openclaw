@@ -52,6 +52,32 @@ vi.mock("../agents/embedded-agent-runner/force-clear-session-state.js", async (i
 describe("stuck session follow-up recovery", () => {
   const queueKeys = new Set<string>();
 
+  function followups(
+    sessionKey: string,
+    runFollowup: (run: FollowupRun) => Promise<void>,
+    mode: QueueSettings["mode"] = "followup",
+  ) {
+    queueKeys.add(sessionKey);
+    const settings: QueueSettings = { mode, debounceMs: 0, cap: 50 };
+    return (run: string | FollowupRun) => {
+      const item = typeof run === "string" ? createQueueTestRun({ prompt: run }) : run;
+      return enqueueFollowupRun(sessionKey, item, settings, "none", runFollowup);
+    };
+  }
+
+  function recoverWedgedReply(sessionKey: string, sessionId: string) {
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+    operation.setPhase("running");
+    return recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      ageMs: 720_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+  }
+
   afterEach(() => {
     for (const key of queueKeys) {
       clearFollowupQueue(key);
@@ -87,6 +113,13 @@ describe("stuck session follow-up recovery", () => {
       runId: "run-1",
     };
     const owner = createDiagnosticEmbeddedRunOwner(ref);
+    const startTool = (toolCallId: string, deadlineAtMs?: number) =>
+      markDiagnosticOwnedToolActivity(owner, {
+        phase: "start",
+        toolName: "exec",
+        toolCallId,
+        ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
+      });
     const activeEntered = createDeferred();
     const releaseActive = createDeferred();
     const dispatchRecovery = createDeferred();
@@ -175,25 +208,17 @@ describe("stuck session follow-up recovery", () => {
         testCase.progress === "tool-deadline" ||
         testCase.progress === "tool-no-deadline"
       ) {
-        markDiagnosticOwnedToolActivity(owner, {
-          phase: "start",
-          toolName: "exec",
-          toolCallId: "owned-process",
-          ...(testCase.progress === "tool-deadline" ? { deadlineAtMs: Date.now() + 150_000 } : {}),
-        });
+        startTool(
+          "owned-process",
+          testCase.progress === "tool-deadline" ? Date.now() + 150_000 : undefined,
+        );
       } else if (testCase.progress === "overlapping-tools" || testCase.progress === "mixed-tools") {
-        markDiagnosticOwnedToolActivity(owner, {
-          phase: "start",
-          toolName: "exec",
-          toolCallId: "old-process",
-          ...(testCase.progress === "mixed-tools" ? { deadlineAtMs: Date.now() + 900_000 } : {}),
-        });
+        startTool(
+          "old-process",
+          testCase.progress === "mixed-tools" ? Date.now() + 900_000 : undefined,
+        );
         vi.setSystemTime(Date.now() + 14 * 60_000);
-        markDiagnosticOwnedToolActivity(owner, {
-          phase: "start",
-          toolName: "exec",
-          toolCallId: "fresh-process",
-        });
+        startTool("fresh-process");
         vi.setSystemTime(Date.now() + 2 * 60_000);
       }
       dispatchRecovery.resolve();
@@ -227,12 +252,10 @@ describe("stuck session follow-up recovery", () => {
       vi.useFakeTimers();
       const sessionKey = `agent:main:wedged-${mode}-drain`;
       const sessionId = `wedged-${mode}-drain-session`;
-      const settings: QueueSettings = { mode, debounceMs: 0, cap: 50 };
       const activeEntered = createDeferred();
       const releaseZombie = createDeferred();
       const activeSettled = vi.fn();
       const calls: string[] = [];
-      queueKeys.add(sessionKey);
 
       const runFollowup = async (run: FollowupRun) => {
         calls.push(run.prompt);
@@ -241,6 +264,7 @@ describe("stuck session follow-up recovery", () => {
           await releaseZombie.promise;
         }
       };
+      const enqueue = followups(sessionKey, runFollowup, mode);
 
       try {
         const active = createQueueTestRun({ prompt: "active" });
@@ -248,26 +272,11 @@ describe("stuck session follow-up recovery", () => {
           onAdopted: async () => {},
           onSettled: activeSettled,
         };
-        enqueueFollowupRun(sessionKey, active, settings, "none", runFollowup);
+        enqueue(active);
         await activeEntered.promise;
-        enqueueFollowupRun(
-          sessionKey,
-          createQueueTestRun({ prompt: "pending" }),
-          settings,
-          "none",
-          runFollowup,
-        );
+        enqueue("pending");
 
-        const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-        operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
-        operation.setPhase("running");
-        const recovery = recoverStuckDiagnosticSession({
-          sessionId,
-          sessionKey,
-          ageMs: 720_000,
-          queueDepth: 1,
-          allowActiveAbort: true,
-        });
+        const recovery = recoverWedgedReply(sessionKey, sessionId);
         await vi.advanceTimersByTimeAsync(15_100);
 
         await expect(recovery).resolves.toMatchObject({
@@ -297,13 +306,11 @@ describe("stuck session follow-up recovery", () => {
     vi.useFakeTimers();
     const sessionKey = "agent:main:fresh-followup-owner";
     const sessionId = "fresh-followup-owner-session";
-    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
     const firstEntered = createDeferred();
     const secondEntered = createDeferred();
     const releaseFirst = createDeferred();
     const releaseSecond = createDeferred();
     const calls: string[] = [];
-    queueKeys.add(sessionKey);
 
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run.prompt);
@@ -315,34 +322,14 @@ describe("stuck session follow-up recovery", () => {
         await releaseSecond.promise;
       }
     };
+    const enqueue = followups(sessionKey, runFollowup);
 
     try {
-      enqueueFollowupRun(
-        sessionKey,
-        createQueueTestRun({ prompt: "stale" }),
-        settings,
-        "none",
-        runFollowup,
-      );
+      enqueue("stale");
       await firstEntered.promise;
-      enqueueFollowupRun(
-        sessionKey,
-        createQueueTestRun({ prompt: "fresh" }),
-        settings,
-        "none",
-        runFollowup,
-      );
+      enqueue("fresh");
 
-      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-      operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
-      operation.setPhase("running");
-      const recovery = recoverStuckDiagnosticSession({
-        sessionId,
-        sessionKey,
-        ageMs: 720_000,
-        queueDepth: 1,
-        allowActiveAbort: true,
-      });
+      const recovery = recoverWedgedReply(sessionKey, sessionId);
       releaseFirst.resolve();
       await vi.advanceTimersByTimeAsync(0);
       await secondEntered.promise;
@@ -364,13 +351,11 @@ describe("stuck session follow-up recovery", () => {
   it("continues pending work after releasing an ownerless stale lane task", async () => {
     const sessionKey = "agent:main:ownerless-lane-followup";
     const sessionId = "ownerless-lane-followup-session";
-    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
     const activeEntered = createDeferred();
     const releaseZombie = createDeferred();
     const laneEntered = createDeferred();
     const releaseLaneTask = createDeferred();
     const calls: string[] = [];
-    queueKeys.add(sessionKey);
 
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run.prompt);
@@ -379,6 +364,7 @@ describe("stuck session follow-up recovery", () => {
         await releaseZombie.promise;
       }
     };
+    const enqueue = followups(sessionKey, runFollowup);
     const laneTask = enqueueCommandInLane(resolveEmbeddedSessionLane(sessionKey), async () => {
       laneEntered.resolve();
       await releaseLaneTask.promise;
@@ -386,21 +372,9 @@ describe("stuck session follow-up recovery", () => {
 
     try {
       await laneEntered.promise;
-      enqueueFollowupRun(
-        sessionKey,
-        createQueueTestRun({ prompt: "active" }),
-        settings,
-        "none",
-        runFollowup,
-      );
+      enqueue("active");
       await activeEntered.promise;
-      enqueueFollowupRun(
-        sessionKey,
-        createQueueTestRun({ prompt: "pending" }),
-        settings,
-        "none",
-        runFollowup,
-      );
+      enqueue("pending");
 
       await expect(
         recoverStuckDiagnosticSession({
