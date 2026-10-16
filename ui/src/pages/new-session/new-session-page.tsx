@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
-import { renderSessionBackground } from "../../components/session-background-view.ts";
+import { SessionBackgroundView } from "../../components/session-background-view.ts";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
@@ -11,7 +11,6 @@ import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import { CatalogBar } from "./catalog-target-view.tsx";
@@ -259,7 +258,7 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
           },
         ]}
       >
-        <LitContent value={renderSessionBackground(page().context, "new-session")} />
+        <SessionBackgroundView context={page().context} surface="new-session" />
         <Show when={!catalog.isTarget(page().data)}>
           <NewSessionIncognitoControl
             submission={visibilityControl}

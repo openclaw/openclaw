@@ -138,7 +138,7 @@ describe("chat pane composer controls", () => {
   ])(
     "revalidates the $label configured model catalog when the picker opens",
     async ({ cachedCatalog }) => {
-      const container = document.createElement("div");
+      const container = document.body.appendChild(document.createElement("div"));
       const catalog = createDeferred<ModelCatalogResult>();
       const session: GatewaySessionRow = {
         key: "main",
@@ -154,15 +154,17 @@ describe("chat pane composer controls", () => {
           : catalog.promise,
       );
       const client = createTestGatewayClient(request);
+      const requestUpdate = vi.fn();
       const state = makeChatHost({
         client,
         connectionEpoch: 1,
         sessionKey: "main",
         sessionsResult: { ...createSessionsListResult(), sessions: [session] },
-        requestUpdate: vi.fn(),
+        requestUpdate,
       }) as unknown as ChatPageHost;
       state.chatModelSwitchPromises = {};
       onTestFinished(() => {
+        container.remove();
         retireChatMetadataRequests(state);
         state.sessions.dispose();
       });
@@ -177,6 +179,9 @@ describe("chat pane composer controls", () => {
         expect(state.chatModelCatalog).toEqual(cachedCatalog.models);
         expect(request).not.toHaveBeenCalled();
         await initialized;
+        requestUpdate.mockClear();
+        await refreshChatModelCatalogOnDemand(state);
+        expect(requestUpdate).not.toHaveBeenCalled();
         invalidateModelCatalogCache(client, scope);
       }
       renderPaneLegacyContent(composerControls(state), container);

@@ -20,6 +20,7 @@ import { createSolidApplicationContextProvider } from "../test-helpers/solid-app
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { readBackgroundImage } from "./session-background-image.ts";
 import { backgroundImageOpacityLimit } from "./session-background-opacity.ts";
+import { SessionBackgroundView } from "./session-background-view.tsx";
 import { SessionBackground, backgroundSourceForSurface } from "./session-background.ts";
 
 const profilePreferences = vi.hoisted(() => ({ ready: true }));
@@ -108,6 +109,27 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it("activates the lazy background slot when its existing theme owner changes from None", async () => {
+  const source = fixture();
+  source.settings.background = selectBackgroundSource({ kind: "none" });
+  const view = mountSolid(() =>
+    createComponent(SessionBackgroundView, {
+      context: source.context,
+      surface: "new-session",
+    }),
+  );
+  const slot = view.container.querySelector<HTMLElement>("openclaw-session-background")!;
+  expect(slot.hidden).toBe(true);
+
+  source.settings.background = selectBackgroundSource({ kind: "theme" });
+  source.notify();
+  await waitForSolid(() => {
+    expect(view.container.querySelector("openclaw-session-background")).toBe(slot);
+    expect(slot.hidden).toBe(false);
+    expect(slot.querySelector(".session-background__image--theme")).not.toBeNull();
+  });
 });
 
 it("keeps absent preferences distinct from None and independent disabled surfaces", () => {

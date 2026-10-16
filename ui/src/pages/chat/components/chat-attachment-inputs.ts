@@ -3,16 +3,18 @@ import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.typ
 import { appendChatAttachmentFiles } from "./chat-attachments.ts";
 
 export function clickComposerInput(target: HTMLElement, selector: string, anchor?: HTMLElement) {
-  const input = target
-    .closest(".agent-chat__composer-shell, .new-session-page__composer")
-    ?.querySelector<HTMLInputElement>(selector);
+  const composer = target.closest(".agent-chat__composer-shell, .new-session-page__composer");
+  const input = composer?.querySelector<HTMLInputElement>(selector);
   if (!input) {
     return;
   }
-  if (anchor) {
+  // Camera callbacks originate from a display:contents host, not the plus menu.
+  const pickerAnchor =
+    anchor ?? composer?.querySelector<HTMLElement>(".agent-chat__input-btn--attach");
+  if (pickerAnchor) {
     // iOS presents its native upload menu from the input's rendered rectangle.
     // Measure at activation so scrolling, resizing, and the keyboard cannot stale it.
-    const rect = anchor.getBoundingClientRect();
+    const rect = pickerAnchor.getBoundingClientRect();
     Object.assign(input.style, {
       display: "block",
       left: `${rect.left}px`,

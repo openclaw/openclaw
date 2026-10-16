@@ -1,9 +1,9 @@
-import { html, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import "../components/sidebar-attention.tsx";
 import "../components/sidebar-update-card.tsx";
 import "../styles.css";
-import { renderFloatingUpdateCard } from "./navigation-surface.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
@@ -28,32 +28,29 @@ function overlaps(left: DOMRect, right: DOMRect): boolean {
 describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
   it("keeps the floating refresh card clear of the collapsed chrome cluster", async () => {
     await useDesktopViewport();
-    render(
-      html`
-        <div
-          class="shell shell--navigation-rail shell--nav-collapsed"
-          style="animation: none; --shell-nav-rail-width: 52px"
-        >
-          <div class="shell-chrome-controls">
-            <button
-              class="shell-chrome-controls__button shell-chrome-controls__search"
-              type="button"
-              aria-label="Search"
-            ></button>
-          </div>
-          <main class="content">
-            ${renderFloatingUpdateCard({
-              navigationSurfaceHidden: true,
-              mobileNavLayout: false,
-              onboarding: false,
-              refreshRequired: true,
-              onRefresh: async () => false,
-            })}
-          </main>
+    mountSolid(() => (
+      <div
+        class="shell shell--navigation-rail shell--nav-collapsed"
+        style="animation: none; --shell-nav-rail-width: 52px"
+      >
+        <div class="shell-chrome-controls">
+          <button
+            class="shell-chrome-controls__button shell-chrome-controls__search"
+            type="button"
+            aria-label="Search"
+          ></button>
         </div>
-      `,
-      document.body,
-    );
+        <main class="content">
+          <FloatingUpdateCard
+            navigationSurfaceHidden={true}
+            mobileNavLayout={false}
+            onboarding={false}
+            refreshRequired={true}
+            onRefresh={async () => false}
+          />
+        </main>
+      </div>
+    ));
 
     const refreshCardHost = document.querySelector<
       HTMLElement & { updateComplete: Promise<boolean> }

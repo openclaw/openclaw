@@ -125,7 +125,7 @@ async function requestModelListPage(
 export function readModelListResult(value: unknown): CodexAppServerModelListResult {
   const response = assertCodexModelListResponse(value);
   const models = response.data.map(readCodexModel);
-  const nextCursor = response.nextCursor ?? undefined;
+  const nextCursor = response.nextCursor;
   return { models, ...(nextCursor ? { nextCursor } : {}) };
 }
 
@@ -147,7 +147,7 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     ...(description ? { description } : {}),
     hidden: value.hidden,
     isDefault: value.isDefault,
-    inputModalities: value.inputModalities,
+    inputModalities: value.inputModalities ?? ["text", "image"],
     serviceTiers: normalizeUniqueTrimmedStringList(
       (value.serviceTiers ?? []).map((tier) => tier.id),
     ),

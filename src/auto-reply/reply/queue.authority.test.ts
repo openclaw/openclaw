@@ -251,6 +251,7 @@ describe("followup queue authority", () => {
       }
       source.releaseRequest();
       scheduleFollowupDrain(key, async (run) => {
+        const abortSignal = resolveFollowupAbortSignal(run);
         const prepared = prepareChannelRunAdmission({
           cfg: {},
           runId: "collected-operator-revocation",
@@ -264,12 +265,12 @@ describe("followup queue authority", () => {
           const context = await prepared.admit("embedded");
           const assertCurrent = resolveAdmittedRunActiveAssertion(context)!;
           firstCancel.abort();
-          observations.push(resolveFollowupAbortSignal(run)?.aborted === true);
+          observations.push(abortSignal?.aborted === true);
           assertCurrent();
           effects.push("before revocation");
           await Promise.resolve();
           source.controller.abort();
-          observations.push(resolveFollowupAbortSignal(run)?.aborted === true);
+          observations.push(abortSignal?.aborted === true);
           try {
             assertCurrent();
             effects.push("after revocation");

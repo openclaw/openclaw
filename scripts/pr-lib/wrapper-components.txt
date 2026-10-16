@@ -1,4 +1,5 @@
 .github/workflows/pr-crabbox-gate-publisher.yml
+cli-invocation.mjs
 cli-root-options.mjs
 config/ci-test-timings.json
 node-compile-cache.mjs
@@ -1622,6 +1623,7 @@ src/process/output-drain.ts
 src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts
 src/process/spawn-broker/child-completion.ts
+src/process/spawn-broker/child-diagnostics.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/context.ts
@@ -1633,6 +1635,7 @@ src/process/spawn-broker/host.ts
 src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts
 src/process/spawn-broker/protocol.ts
+src/process/spawn-broker/resource-authority.ts
 src/process/spawn-broker/resource-host.ts
 src/process/spawn-broker/resource-protocol.ts
 src/process/spawn-diagnostics.ts

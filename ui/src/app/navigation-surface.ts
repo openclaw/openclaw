@@ -1,11 +1,9 @@
-import { html, nothing } from "lit";
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
 import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
-import type { ApplicationContext } from "./context.ts";
 
 export const NAVIGATION_RAIL_WIDTH = 52;
 
@@ -134,40 +132,4 @@ export function floatingSidebarAttentionVisible(params: {
   const attentionNeedsFloating =
     params.navigationSurfaceHidden && !params.mobileNavLayout && !params.onboarding;
   return attentionNeedsFloating && !params.compact;
-}
-
-export function renderFloatingUpdateCard(params: {
-  navigationSurfaceHidden: boolean;
-  mobileNavLayout: boolean;
-  onboarding: boolean;
-  compact?: boolean;
-  updateRun?: ApplicationContext["overlays"]["snapshot"]["updateRun"];
-  statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
-  refreshRequired: boolean;
-  onRefresh: () => Promise<boolean>;
-  onNavigate?: ApplicationContext["navigate"];
-}) {
-  const showAttention = floatingSidebarAttentionVisible(params);
-  const showUpdateCard = !params.compact && params.refreshRequired;
-  if (!showAttention && !showUpdateCard) {
-    return nothing;
-  }
-  return html`${
-    showAttention
-      ? html`<openclaw-sidebar-attention
-          class="sidebar-attention--floating"
-          .onNavigate=${params.onNavigate}
-        ></openclaw-sidebar-attention>`
-      : nothing
-  }${
-    showUpdateCard
-      ? html`<openclaw-sidebar-update-card
-          class="sidebar-update-card--floating"
-          .updateRun=${params.updateRun ?? null}
-          .statusBanner=${params.statusBanner ?? null}
-          .refreshRequired=${params.refreshRequired}
-          .onRefresh=${params.onRefresh}
-        ></openclaw-sidebar-update-card>`
-      : nothing
-  }`;
 }

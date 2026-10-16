@@ -31,6 +31,27 @@ function fixture(files: Record<string, string>) {
 }
 
 describe("standalone worker discovery", () => {
+  it("embeds self-targeted workers in root modules and emitted chunks", () => {
+    const files = {
+      "node-compile-cache.mjs":
+        'import { Worker as CacheWorker } from "node:worker_threads"; new CacheWorker(new URL(import.meta.url));',
+      "dist/node-compile-cache-chunk.mjs":
+        'import * as threads from "node:worker_threads"; new threads.Worker(new URL(import.meta.url));',
+      "dist/ordinary.mjs": "const location = new URL(import.meta.url);",
+      "dist/shadowed.mjs":
+        'import { Worker } from "node:worker_threads"; function local(Worker) { return new Worker(new URL(import.meta.url)); }',
+    };
+    const { runtimeRoot } = fixture(files);
+    expect(
+      discoverStandaloneWorkers({
+        runtimeRoot,
+        moduleEntries: Object.keys(files),
+        runtimeEntrypoints: {},
+        parse,
+      }),
+    ).toEqual(["dist/node-compile-cache-chunk.mjs", "node-compile-cache.mjs"]);
+  });
+
   it("retains manifest launchers without worker suffixes and adds built plugin workers once", () => {
     const { runtimeRoot } = fixture({
       "dist/process/supervisor/service-child-relay.js": "",
@@ -57,6 +78,7 @@ describe("standalone worker discovery", () => {
           broker: { distWorkerPath: "process/spawn-broker/worker.js" },
           duplicate: { distWorkerPath: "process/supervisor/service-child-relay.js" },
         },
+        parse,
       }),
     ).toEqual([
       "dist/extensions/example/store.worker.mjs",
@@ -74,6 +96,7 @@ describe("standalone worker discovery", () => {
         runtimeRoot,
         moduleEntries: [],
         runtimeEntrypoints: { missing: { distWorkerPath: "agents/github-exec-launcher.js" } },
+        parse,
       }),
     ).toThrow("Missing standalone worker outputs: dist/agents/github-exec-launcher.js");
   });

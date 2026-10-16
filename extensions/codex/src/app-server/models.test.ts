@@ -50,6 +50,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-registration", async (importOriginal)
 
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
 let listAllCodexAppServerModels: typeof import("./models.js").listAllCodexAppServerModels;
+let readModelListResult: typeof import("./models.js").readModelListResult;
 let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.test-support.js").resetSharedCodexAppServerClientForTests;
 
 const validModelListEntry = {
@@ -85,7 +86,8 @@ function paginatedModel(id: string, inputModalities: string[]) {
 
 describe("listCodexAppServerModels", () => {
   beforeAll(async () => {
-    ({ listCodexAppServerModels, listAllCodexAppServerModels } = await import("./models.js"));
+    ({ listCodexAppServerModels, listAllCodexAppServerModels, readModelListResult } =
+      await import("./models.js"));
     ({ resetSharedCodexAppServerClientForTests } = await import("./shared-client.test-support.js"));
   });
 
@@ -132,6 +134,13 @@ describe("listCodexAppServerModels", () => {
     await expect(listPromise).rejects.toThrow(/Invalid Codex app-server model\/list response/);
     harness.client.close();
     startSpy.mockRestore();
+  });
+
+  it("defaults omitted model modalities at model admission", () => {
+    const result = readModelListResult({ data: [validModelListEntry] });
+
+    expect(result.models[0]?.inputModalities).toEqual(["text", "image"]);
+    expect(validModelListEntry).not.toHaveProperty("inputModalities");
   });
 
   it("lists app-server models through the typed helper", async () => {

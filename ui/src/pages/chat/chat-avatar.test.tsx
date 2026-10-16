@@ -1,24 +1,35 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
+import { nothing, render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { currentThemeBranding, setCurrentThemeBranding } from "../../app/theme-branding.ts";
+import { resolveAvatarHat } from "../../components/agent-avatar-hat.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { ChatAvatar, ForwardedAvatar, type ChatAvatarProps } from "./chat-avatar-view.tsx";
 import {
   invalidateChatAvatarCache,
   refreshChatAvatar,
   refreshSenderAgentAvatars,
-  renderChatAvatar,
-  renderForwardedAvatar,
 } from "./chat-avatar.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAvatarUrl } from "./chat-state-route.ts";
-import { renderChatAuthorAvatar } from "./components/chat-author-avatar.ts";
+import { ChatAuthorAvatar, renderChatAuthorAvatar } from "./components/chat-author-avatar.ts";
 import { ChatWelcome } from "./components/chat-welcome.tsx";
+
+const legacyContainers: HTMLElement[] = [];
+
+function createLegacyContainer() {
+  const container = document.createElement("div");
+  legacyContainers.push(container);
+  return container;
+}
 
 function imageResponse() {
   return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } });
@@ -35,11 +46,137 @@ function identityCapability(host: ReturnType<typeof makeChatHost>) {
   });
 }
 
-function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
-  const container = document.createElement("div");
-  render(renderChatAvatar(...params), container);
-  return container.querySelector<HTMLElement>(".chat-avatar");
+function renderAvatar(
+  params: [
+    role: string,
+    assistant?: ChatAvatarProps["assistant"],
+    user?: ChatAvatarProps["user"],
+    sender?: ChatAvatarProps["sender"],
+    channelAvatar?: ChatAvatarProps["channelAvatar"],
+  ],
+) {
+  const [role, assistant, user, sender, channelAvatar] = params;
+  const view = mountSolid(() => (
+    <ChatAvatar
+      role={role}
+      assistant={assistant}
+      user={user}
+      sender={sender}
+      channelAvatar={channelAvatar}
+    />
+  ));
+  return view.container.querySelector<HTMLElement>(".chat-avatar");
 }
+
+it("refreshes a mounted channel portrait when Gateway credentials change", async () => {
+  setAvatarGatewayOrigin(window.location.origin, ["old-avatar-token"]);
+  const fetchAvatar = mockAvatarFetch();
+  vi.spyOn(URL, "createObjectURL")
+    .mockReturnValueOnce("blob:old-portrait")
+    .mockReturnValueOnce("blob:new-portrait");
+  const view = mountSolid(() => (
+    <ChatAuthorAvatar
+      sender={{
+        name: "Riley Adams",
+        identity: {
+          type: "observation",
+          pluginId: "telegram",
+          accountId: "sample-bot",
+          id: "1000000001",
+          senderKind: "human",
+        },
+      }}
+      channelAvatar={{
+        key: "agent:main:main",
+        channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain?v=credential-change",
+        origin: {
+          provider: "telegram",
+          accountId: "sample-bot",
+          chatType: "direct",
+          from: "telegram:1000000001",
+        },
+      }}
+    />
+  ));
+  await vi.waitFor(() =>
+    expect(view.container.querySelector("img")?.getAttribute("src")).toBe("blob:old-portrait"),
+  );
+  setAvatarGatewayOrigin(window.location.origin, ["new-avatar-token"]);
+  await vi.waitFor(() =>
+    expect(view.container.querySelector("img")?.getAttribute("src")).toBe("blob:new-portrait"),
+  );
+  expect(fetchAvatar).toHaveBeenLastCalledWith(
+    expect.any(String),
+    expect.objectContaining({ headers: { Authorization: "Bearer new-avatar-token" } }),
+  );
+});
+
+it("resolves a mounted agent-author portrait against the replacement Gateway", async () => {
+  setAvatarGatewayOrigin("https://gateway.example.test", ["old-avatar-token"]);
+  const fetchAvatar = mockAvatarFetch();
+  vi.spyOn(URL, "createObjectURL")
+    .mockReturnValueOnce("blob:old-agent-author")
+    .mockReturnValueOnce("blob:new-agent-author");
+  const view = mountSolid(() => (
+    <ChatAuthorAvatar
+      sender={{
+        name: "Ada",
+        identity: { type: "agent", id: "ada" },
+        profileAvatarUrl: "/avatar/ada",
+      }}
+    />
+  ));
+  await vi.waitFor(() =>
+    expect(view.container.querySelector("img")?.getAttribute("src")).toBe("blob:old-agent-author"),
+  );
+  const image = view.container.querySelector("img");
+  setAvatarGatewayOrigin("https://replacement.example.test", ["new-avatar-token"]);
+  await vi.waitFor(() =>
+    expect(view.container.querySelector("img")?.getAttribute("src")).toBe("blob:new-agent-author"),
+  );
+  expect(view.container.querySelector("img")).toBe(image);
+  expect(fetchAvatar).toHaveBeenLastCalledWith(
+    "https://replacement.example.test/avatar/ada",
+    expect.objectContaining({ headers: { Authorization: "Bearer new-avatar-token" } }),
+  );
+});
+
+it.each(["assistant", "local", "profile"] as const)(
+  "refreshes a mounted %s chat image when Gateway credentials change",
+  async (kind) => {
+    setAvatarGatewayOrigin("https://gateway.example.test", ["old-avatar-token"]);
+    const fetchAvatar = mockAvatarFetch();
+    vi.spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:old-chat-image")
+      .mockReturnValueOnce("blob:new-chat-image");
+    const url = kind === "profile" ? "/api/users/ada/avatar" : "/avatar/ada";
+    const view = mountSolid(() => (
+      <ChatAvatar
+        role={kind === "assistant" ? "assistant" : "user"}
+        assistant={
+          kind === "assistant"
+            ? { agentId: "ada", name: "Ada", avatar: url, textAvatar: "A" }
+            : undefined
+        }
+        user={kind === "local" ? { name: "Ada", avatar: url } : undefined}
+        sender={kind === "profile" ? { id: "ada", name: "Ada", profileAvatarUrl: url } : undefined}
+      />
+    ));
+    await vi.waitFor(() =>
+      expect(view.container.querySelector("img")?.getAttribute("src")).toBe("blob:old-chat-image"),
+    );
+    const image = view.container.querySelector("img");
+    setAvatarGatewayOrigin("https://gateway.example.test", ["new-avatar-token"]);
+    await vi.waitFor(() =>
+      expect(view.container.querySelector("img")?.getAttribute("src")).toBe("blob:new-chat-image"),
+    );
+    expect(view.container.querySelector("img")).toBe(image);
+    expect(fetchAvatar).toHaveBeenLastCalledWith(
+      `https://gateway.example.test${url}`,
+      expect.objectContaining({ headers: { Authorization: "Bearer new-avatar-token" } }),
+    );
+  },
+);
 
 it.each([["/console", "sample-bot", "1000000001", true]] as const)(
   "binds footer portraits at %s to account %s and sender %s",
@@ -56,7 +193,7 @@ it.each([["/console", "sample-bot", "1000000001", true]] as const)(
       },
     };
     const identity = { ...sender.identity };
-    const container = document.createElement("div");
+    const container = createLegacyContainer();
     render(
       renderChatAuthorAvatar(sender, "chat-author-avatar", undefined, {
         key: "agent:main:main",
@@ -74,7 +211,6 @@ it.each([["/console", "sample-bot", "1000000001", true]] as const)(
     expect(Boolean(container.querySelector("openclaw-channel-avatar"))).toBe(matches);
     expect(container.querySelector("[role=img]")?.getAttribute("aria-label")).toBe("Riley Adams");
     expect(sender.identity).toEqual(identity);
-    render(nothing, container);
   },
 );
 
@@ -162,6 +298,11 @@ function pendingUntilAbort<T>(signal: AbortSignal | null | undefined): Promise<T
 }
 
 afterEach(() => {
+  for (const container of legacyContainers) {
+    render(nothing, container);
+  }
+  legacyContainers.length = 0;
+  cleanupSolid();
   setAvatarGatewayOrigin(null);
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -181,23 +322,56 @@ describe("resolveChatAvatarUrl", () => {
   });
 });
 
-describe("renderChatAvatar", () => {
+describe("ChatAvatar", () => {
+  it("updates an image avatar's hat when the theme changes", () => {
+    const previous = currentThemeBranding();
+    const adorned = { ...previous, avatarHat: "party" as const };
+    const agentId = Array.from({ length: 100 }, (_, index) => `hat-agent-${index}`).find((id) =>
+      resolveAvatarHat(id, adorned),
+    )!;
+    setCurrentThemeBranding(resolveThemeBranding(undefined));
+    const view = mountSolid(() => (
+      <ChatAvatar
+        role="assistant"
+        assistant={{ agentId, name: "Assistant", avatar: "blob:portrait" }}
+      />
+    ));
+    try {
+      expect(view.container.querySelector(".chat-avatar-slot > .identity-avatar__hat")).toBeNull();
+      setCurrentThemeBranding(adorned);
+      flush();
+      expect(
+        view.container.querySelector(".chat-avatar-slot > .identity-avatar__hat--party"),
+      ).not.toBeNull();
+    } finally {
+      setCurrentThemeBranding(previous);
+      view.unmount();
+    }
+  });
   it("shares one agent face across welcome, transcript, forwarded messages, and typed author markers", async () => {
-    const container = document.createElement("div");
     const sender = {
       id: "display-id",
       name: "Scout",
       identity: { type: "agent", id: "scout" },
     } as const;
-    render(
-      html`
-        ${solidContent(ChatWelcome, { currentAgentId: "scout", assistantName: "Scout", assistantAvatar: null, onDraftChange: () => undefined, onSend: () => undefined })}
-        ${renderChatAvatar("assistant", { agentId: "scout", name: "Scout", avatar: null })}
-        ${renderForwardedAvatar("scout", { agentId: "main", agents: [{ id: "scout" }] })}
-        ${renderChatAuthorAvatar(sender)} ${renderChatAvatar("user", undefined, undefined, sender)}
-      `,
-      container,
-    );
+    const { container } = mountSolid(() => (
+      <>
+        <ChatWelcome
+          currentAgentId="scout"
+          assistantName="Scout"
+          assistantAvatar={null}
+          onDraftChange={() => undefined}
+          onSend={() => undefined}
+        />
+        <ChatAvatar
+          role="assistant"
+          assistant={{ agentId: "scout", name: "Scout", avatar: null }}
+        />
+        <ForwardedAvatar agentId="scout" options={{ agentId: "main", agents: [{ id: "scout" }] }} />
+        <ChatAuthorAvatar sender={sender} />
+        <ChatAvatar role="user" sender={sender} />
+      </>
+    ));
     await vi.waitFor(() =>
       expect(container.querySelectorAll(".identity-avatar__agent-face")).toHaveLength(5),
     );
@@ -251,25 +425,34 @@ describe("renderChatAvatar", () => {
     const response = createDeferred<Response>();
     const fetchAvatar = vi.spyOn(globalThis, "fetch").mockReturnValue(response.promise);
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:shared-agent");
-    const container = document.createElement("div");
     const avatar = "/avatar/main?v=1";
-    const welcome = (assistantAvatar: string | null, assistantAvatarUrl?: string) =>
-      solidContent(ChatWelcome, {
-        assistantName: "Main",
-        assistantAvatar,
-        assistantAvatarUrl,
-        onDraftChange: () => undefined,
-        onSend: () => undefined,
-      });
-    const part = render(
-      html`${welcome(avatar)}${welcome(null, avatar)}${renderChatAvatar("assistant", {
-        avatar,
-        name: "Main",
-      })}`,
-      container,
-    );
+    const mountWelcome = () =>
+      mountSolid(() => (
+        <>
+          <ChatWelcome
+            assistantName="Main"
+            assistantAvatar={avatar}
+            onDraftChange={() => undefined}
+            onSend={() => undefined}
+          />
+          <ChatWelcome
+            assistantName="Main"
+            assistantAvatar={null}
+            assistantAvatarUrl={avatar}
+            onDraftChange={() => undefined}
+            onSend={() => undefined}
+          />
+        </>
+      ));
+    let welcome = mountWelcome();
+    const transcript = mountSolid(() => (
+      <ChatAvatar role="assistant" assistant={{ avatar, name: "Main" }} />
+    ));
     const sources = () =>
-      [...container.querySelectorAll("img")].map((image) => image.getAttribute("src"));
+      [
+        ...welcome.container.querySelectorAll("img"),
+        ...transcript.container.querySelectorAll("img"),
+      ].map((image) => image.getAttribute("src"));
     expect(sources()).toEqual([null, null, null]);
     expect(fetchAvatar).toHaveBeenCalledOnce();
     expect(fetchAvatar).toHaveBeenCalledWith(
@@ -278,11 +461,10 @@ describe("renderChatAvatar", () => {
     );
     response.resolve(imageResponse());
     await vi.waitFor(() => expect(sources()).toEqual(Array(3).fill("blob:shared-agent")));
-    part.setConnected(false);
-    part.setConnected(true);
-    expect(sources()).toEqual(Array(3).fill("blob:shared-agent"));
+    welcome.unmount();
+    welcome = mountWelcome();
+    await vi.waitFor(() => expect(sources()).toEqual(Array(3).fill("blob:shared-agent")));
     expect(fetchAvatar).toHaveBeenCalledOnce();
-    render(nothing, container);
   });
 
   it("renders local user image and text avatars", () => {
@@ -295,23 +477,16 @@ describe("renderChatAvatar", () => {
     expect(textAvatar?.textContent?.trim()).toBe("AB");
 
     for (const avatar of ["data:image/png;base64,YQ==", "/custom.svg"]) {
-      const container = document.createElement("div");
-      const part = render(renderChatAvatar("user", undefined, { name: "Buns", avatar }), container);
-      part.setConnected(false);
-      part.setConnected(true);
+      const { container } = mountSolid(() => (
+        <ChatAvatar role="user" user={{ name: "Buns", avatar }} />
+      ));
       expect(container.querySelector("img")?.getAttribute("src")).toBe(avatar);
-      render(nothing, container);
     }
   });
 
   it("swaps a failing local user image to initials instead of a broken image", () => {
-    const container = document.createElement("div");
-    const renderUser = () =>
-      render(
-        renderChatAvatar("user", undefined, { name: "Buns", avatar: "/avatar/user" }),
-        container,
-      );
-    renderUser();
+    const [user, setUser] = createSignal({ name: "Buns", avatar: "/avatar/user" });
+    const { container } = mountSolid(() => <ChatAvatar role="user" user={user()} />);
     const slot = container.querySelector<HTMLElement>(".chat-avatar-slot");
     const image = slot?.querySelector("img");
     expect(image?.getAttribute("src")).toBe("/avatar/user");
@@ -321,7 +496,9 @@ describe("renderChatAvatar", () => {
     expect(slot?.classList.contains("is-fallback")).toBe(true);
     expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("B");
 
-    renderUser();
+    setUser({ ...user() });
+    flush();
+    expect(container.querySelector(".chat-avatar-slot")).toBe(slot);
     expect(slot?.classList.contains("is-fallback")).toBe(true);
     expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("B");
   });
@@ -533,17 +710,17 @@ describe("refreshSenderAgentAvatars", () => {
     host.chatMessages = forwardedMessages("research");
     const pending = refreshSenderAgentAvatars(host);
     await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
-    const container = document.createElement("div");
-    const renderSender = () =>
-      render(
-        renderForwardedAvatar("research", {
+    const [avatars, setAvatars] = createSignal(host.senderAgentAvatars);
+    const { container } = mountSolid(() => (
+      <ForwardedAvatar
+        agentId="research"
+        options={{
           agentId: "main",
           agents: host.agentsList.agents,
-          senderAgentAvatars: host.senderAgentAvatars,
-        }),
-        container,
-      );
-    renderSender();
+          senderAgentAvatars: avatars(),
+        }}
+      />
+    ));
     expect(container.querySelector("img")).toBeNull();
     await vi.waitFor(() =>
       expect(container.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
@@ -555,12 +732,12 @@ describe("refreshSenderAgentAvatars", () => {
     );
     response.resolve(new Response(null, { status: 404 }));
     await pending;
-    renderSender();
+    setAvatars(host.senderAgentAvatars);
+    flush();
     expect(container.querySelector("img")).toBeNull();
     await vi.waitFor(() =>
       expect(container.querySelector(".identity-avatar__agent-face")?.outerHTML).toBe(face),
     );
-    render(nothing, container);
     invalidateChatAvatarCache(host);
   });
 
@@ -745,14 +922,14 @@ describe("attributed sender avatars", () => {
     vi.spyOn(URL, "createObjectURL")
       .mockReturnValueOnce("blob:first-sender")
       .mockReturnValueOnce("blob:second-sender");
-    const container = document.createElement("div");
     const firstSender = {
       id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
       name: "Ada Lovelace",
       profileAvatarUrl: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar?v=1",
     };
 
-    render(renderChatAvatar("user", undefined, undefined, firstSender), container);
+    const [sender, setSender] = createSignal(firstSender);
+    const { container } = mountSolid(() => <ChatAvatar role="user" sender={sender()} />);
     const firstImage = await vi.waitFor(() => {
       const image = container.querySelector<HTMLImageElement>(".chat-avatar-slot img");
       expect(image?.getAttribute("src")).toBe("blob:first-sender");
@@ -763,13 +940,11 @@ describe("attributed sender avatars", () => {
       false,
     );
 
-    render(
-      renderChatAvatar("user", undefined, undefined, {
-        ...firstSender,
-        profileAvatarUrl: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar?v=2",
-      }),
-      container,
-    );
+    setSender({
+      ...firstSender,
+      profileAvatarUrl: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar?v=2",
+    });
+    flush();
     expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-pending")).toBe(
       true,
     );
@@ -791,17 +966,14 @@ describe("attributed sender avatars", () => {
     const fetchAvatar = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response(null, { status: 404 }));
-    const container = document.createElement("div");
     const sender = {
       id: "dd7c98e2-f51d-4590-b588-fa0682e165b7",
       identity: { type: "profile" as const, id: "dd7c98e2-f51d-4590-b588-fa0682e165b7" },
       name: "hrudolph",
       profileAvatarUrl: "/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar",
     };
-    const renderSender = () =>
-      render(renderChatAvatar("user", undefined, undefined, sender), container);
-
-    renderSender();
+    const [identity, setIdentity] = createSignal(sender);
+    const { container } = mountSolid(() => <ChatAvatar role="user" sender={identity()} />);
     expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-pending")).toBe(
       true,
     );
@@ -818,7 +990,8 @@ describe("attributed sender avatars", () => {
       expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
     );
 
-    renderSender();
+    setIdentity({ ...sender });
+    flush();
     expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
       true,
     );

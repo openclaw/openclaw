@@ -10,12 +10,12 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
-import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import type { DecisionModelEntry } from "../../components/model-picker-options.ts";
 import { MultiSelect } from "../../components/multi-select.tsx";
-import "../../components/tooltip.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
+import "../../components/tooltip.ts";
 import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
+import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
@@ -37,7 +37,6 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { ControllerHost } from "../../lib/subscriptions-controller.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { renderAgentPanelFacts } from "./panel-ui.tsx";
 
@@ -253,20 +252,15 @@ export function AgentOverview(
         <div class="settings-row settings-row--stacked">
           <div class="agent-identity-editor">
             <span class="agent-identity-editor__avatar" aria-hidden="true">
-              <LitContent
-                render={() =>
-                  renderAgentIdentityAvatar(
-                    {
-                      id: params.agent.id,
-                      avatar: identityAvatarUrl(),
-                      textAvatar:
-                        identityDraft().emoji ??
-                        resolveAgentTextAvatar(params.agent, params.agentIdentity),
-                    },
-                    "",
-                    identityImageError(),
-                  )
-                }
+              <AgentIdentityAvatar
+                agent={{
+                  id: params.agent.id,
+                  avatar: identityAvatarUrl(),
+                  textAvatar:
+                    identityDraft().emoji ??
+                    resolveAgentTextAvatar(params.agent, params.agentIdentity),
+                }}
+                onImageError={identityImageError()}
               />
             </span>
             <div class="agent-identity-editor__content">

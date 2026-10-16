@@ -9,7 +9,7 @@ import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts"
 import * as localStorageModule from "../../../local-storage.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import * as chatAvatar from "../chat-avatar.ts";
+import * as chatAvatar from "../chat-avatar-view.tsx";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
@@ -71,9 +71,11 @@ beforeEach(() => {
   vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
   vi.spyOn(markdown, "toStreamingMarkdownParts").mockImplementation(streamingMarkdownRenderMock);
-  vi.spyOn(chatAvatar, "renderChatAvatar").mockImplementation(
-    (role) => html`<div class="chat-avatar ${role}"></div>`,
-  );
+  vi.spyOn(chatAvatar, "ChatAvatar").mockImplementation((props) => {
+    const avatar = document.createElement("div");
+    avatar.className = `chat-avatar ${props.role}`;
+    return avatar;
+  });
 });
 
 type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];

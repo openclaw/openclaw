@@ -11,7 +11,7 @@ import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../components/tooltip.ts";
 import { emptyLegacyContent as litNothing, LitContent } from "../../../lit/solid-content.tsx";
-import { renderChatAvatar } from "../chat-avatar.ts";
+import { ChatAvatar, type ChatAvatarProps } from "../chat-avatar-view.tsx";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -77,7 +77,7 @@ export type StreamGroupOptions = StreamMessageOptions & {
   entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
   onReply?: (target: ChatReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
-  assistant?: Parameters<typeof renderChatAvatar>[1];
+  assistant?: ChatAvatarProps["assistant"];
   showAssistantAvatar?: boolean;
   startupLabel?: string;
   retryAt?: number;
@@ -235,10 +235,7 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
       (part) => part.kind === "reading-indicator" || (part.kind === "stream" && part.isStreaming),
     );
   const source = () => props.parts.find((part) => part.kind === "stream");
-  const avatar = () =>
-    source() && props.options.showAssistantAvatar !== false
-      ? renderChatAvatar("assistant", props.options.assistant)
-      : litNothing;
+  const hasAvatar = () => Boolean(source() && props.options.showAssistantAvatar !== false);
   const replyLine = () =>
     resolveGroupReplyLine(
       {
@@ -249,7 +246,7 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
       },
       props.options.resolveReplyPreview,
     );
-  const hasReply = () => replyLine().state !== "hidden" && avatar() !== litNothing;
+  const hasReply = () => replyLine().state !== "hidden" && hasAvatar();
   return (
     <div
       class={[
@@ -262,12 +259,14 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
       ]}
       data-chat-row-key={props.parts[0]?.key}
     >
-      <LitContent value={avatar()} />
+      <Show when={hasAvatar()}>
+        <ChatAvatar role="assistant" assistant={props.options.assistant} />
+      </Show>
       <div class="chat-group-messages">
         <ReplyLineView line={replyLine()} actions={props.options} />
         <StreamGroupParts parts={props.parts} options={props.options} presentation="standalone" />
       </div>
-      <ReplyLineConnector line={replyLine()} avatar={avatar()} />
+      <ReplyLineConnector line={replyLine()} avatar={hasAvatar() ? true : litNothing} />
       <Show when={startedAt() !== null}>
         <div class="chat-group-footer" aria-hidden={active() ? "true" : undefined}>
           <Show when={!active()}>
