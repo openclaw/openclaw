@@ -9,7 +9,10 @@ import {
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  requireNativeSqliteDatabase,
+  openOpenClawStateDatabase,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readSessionIngestionState,
@@ -185,7 +188,7 @@ describe("memory forget", () => {
       });
 
       const agentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
-      const db = agentDatabase.db;
+      const db = requireNativeSqliteDatabase(agentDatabase.db);
       const loaded = await loadSqliteVecExtension({ db });
       expect(loaded.ok).toBe(true);
       const schema = ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });

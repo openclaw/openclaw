@@ -13,6 +13,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
@@ -172,7 +173,7 @@ describe("committed pending input release", () => {
       const foreign = new DatabaseSync(primary.path);
       try {
         foreign.exec("BEGIN IMMEDIATE");
-        runWithSqliteBusyTimeout(primary.db, 1, () => {
+        runWithSqliteBusyTimeout(requireNativeSqliteDatabase(primary.db), 1, () => {
           expect(() => receipt.finish("cancelled")).not.toThrow();
           for (const source of sources) {
             expect(() => source.run(() => {})).toThrow("ownership ended");

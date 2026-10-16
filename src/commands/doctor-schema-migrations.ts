@@ -1,10 +1,15 @@
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteIntegrityOperationInWorker } from "../infra/sqlite-integrity-operation.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchemaSteps } from "../state/openclaw-agent-db-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
-import { repairOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
+import {
+  openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseSchema,
+} from "../state/openclaw-state-db.js";
 import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 
@@ -20,6 +25,15 @@ export async function prepareDoctorDatabaseMigrations(
   // Acquiring an agent lease opens shared state and writes lease/registry rows.
   // Finish state-only scoped migrations before that broader maintenance begins.
   for (const migration of migrations.filter((entry) => entry.kind === "state")) {
+    if (isStatePostgres()) {
+      withEngineStoreAdmission(() =>
+        openOpenClawStateDatabase({ path: migration.path, env: params.env }),
+      );
+      result.changes.push(
+        `Upgraded PostgreSQL state schema: v${migration.foundVersion} -> v${migration.supportedVersion}.`,
+      );
+      continue;
+    }
     const migrated = repairOpenClawStateDatabaseSchema({
       path: migration.path,
       env: params.env,

@@ -56,7 +56,7 @@ import {
   type PaneRuntimeConstructor,
 } from "./chat-pane-runtime.test-support.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
-import type { ChatStateController } from "./chat-state-controller.ts";
+import type { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import type {
@@ -101,7 +101,7 @@ export interface TestChatPane extends HTMLElement, SolidControllerHost {
   chatMessagesBySession?: ChatMessageCache;
   sessionSnapshotStore?: SessionSnapshotStore;
   chatState: Pick<
-    ChatStateController<ChatPageHost>,
+    ReturnType<typeof createChatState<ChatPageHost>>,
     "attach" | "composerPersistence" | "createRenderLifecycle" | "requestBackgroundUpdate"
   >;
   context: ApplicationContext;

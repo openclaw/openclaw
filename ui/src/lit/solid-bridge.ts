@@ -4,45 +4,14 @@ import {
   createRenderEffect,
   createRoot,
   createSignal,
-  getOwner,
   onCleanup,
   runWithOwner,
-  untrack,
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { JSX } from "../types/solid-elements.d.ts";
-import { mountLitContent } from "./solid-content.tsx";
-
-/** Temporary renderer island; remove with the last Lit route and template caller. */
-export function createLitContentRef(value: () => unknown): (element: HTMLElement) => void {
-  const owner = getOwner();
-  let host: HTMLElement;
-  let mount: ReturnType<typeof mountLitContent> | undefined;
-  let disposed = false;
-  onCleanup(() => {
-    disposed = true;
-    mount?.dispose();
-  });
-  queueMicrotask(() => {
-    if (disposed) {
-      return;
-    }
-    // Wait for connection outside Solid's flush: Lit can mount another Solid island.
-    runWithOwner(owner, () => {
-      const content = mountLitContent(undefined, host, { host });
-      mount = content;
-      createRenderEffect(value, (next) => {
-        content.update(next);
-      });
-    });
-  });
-  return (element) => {
-    host = element;
-  };
-}
 
 type Property<T> = {
   default: T;
@@ -368,32 +337,4 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         typeof BridgeElement,
     },
   );
-}
-
-/** Unported stateless templates exclusively own this adapter's descendants. */
-export function LitContent(props: {
-  render: () => unknown;
-  tag?: "span" | "div" | "code";
-  class?: string;
-}) {
-  // Host shape stays fixed while the template updates.
-  const tag = untrack(() => props.tag ?? "span");
-  const host = document.createElement(tag);
-  if (tag === "span") {
-    host.style.display = "contents";
-  }
-  const className = untrack(() => props.class ?? "lit-content");
-  if (className) {
-    host.className = className;
-  }
-  const mount = mountLitContent(undefined, host, { host });
-  // Commit Lit descendants before post-render observers inspect the host.
-  createRenderEffect(
-    () => props.render(),
-    (template) => {
-      mount.update(template);
-    },
-  );
-  onCleanup(mount.dispose);
-  return host;
 }

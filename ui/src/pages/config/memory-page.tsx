@@ -2,7 +2,15 @@ import type { JSX } from "@solidjs/web";
 // Controller for the Memory destination page. The URL owns the active tab;
 // this element projects Settings agent selection into Overview status and
 // consumes the global configuration controllers used by Settings.
-import { createEffect, createSignal, onCleanup, onSettled, Show, untrack } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onSettled,
+  Show,
+  untrack,
+} from "solid-js";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -27,8 +35,9 @@ import {
   type DreamingConfigPathSupport,
 } from "../agents/memory/dreaming.ts";
 import { AgentMemoryPanel } from "../agents/memory/memory-panel.tsx";
-import { dreamingConfigPath } from "./memory-defaults.ts";
-import { MemoryDreamingControls } from "./memory-dreaming.tsx";
+import { createCuratedSettingsEditor } from "./curated-settings-editor.ts";
+import { curatedSettingsPresentation } from "./curated-settings-presentation.ts";
+import { CuratedSettingsPanel } from "./curated-settings.tsx";
 import { MemoryMemories } from "./memory-memories.tsx";
 import { MemoryOverview, type MemoryOverviewStatus } from "./memory-overview.tsx";
 import {
@@ -56,6 +65,9 @@ registerEnglishCatalog(registerSettingsEnglish);
 /** Explicit-off sentinel; resolveSlotSelection maps it to an `off` selection. */
 const MEMORY_SLOT_OFF = "none";
 const MEMORY_SLOT_PATH = ["plugins", "slots", "memory"];
+// This compatible Dreaming placement is owned by Memory Core; the current engine
+// remains the config owner, including custom engines and same-ID overrides.
+const DREAMING_SETTINGS = curatedSettingsPresentation("memory-dreaming-settings");
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 
@@ -86,6 +98,9 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const agentSelection = projectAgentSelection(application.settingsAgentSelection);
   const runtime = projectRuntimeConfig(application.runtimeConfig);
   const agents = projectAgents(application.agents);
+  const dreamingConfigOwner = createMemo(
+    () => resolveConfiguredDreaming(currentConfigObject(runtime.read().state)).pluginId,
+  );
   const [catalog, setCatalog] = createSignal<MemoryCatalog>({
     kind: "unavailable",
   });
@@ -570,18 +585,18 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     });
   }
 
-  function patchDreaming(path: readonly string[], value: unknown) {
-    if (props.mutationDisabled) {
-      return;
-    }
-    const config = currentConfigObject(application.runtimeConfig.state);
-    const writePath = dreamingConfigPath(resolveConfiguredDreaming(config).pluginId, path);
-    if (value === undefined) {
-      application.runtimeConfig.removeFormValue(writePath);
-      return;
-    }
-    application.runtimeConfig.patchForm(writePath, value);
-  }
+  const editCuratedSettings = createCuratedSettingsEditor(DREAMING_SETTINGS, {
+    read: () => currentConfigObject(application.runtimeConfig.state),
+    parameters: (config) => ({ configOwner: resolveConfiguredDreaming(config).pluginId }),
+    canEdit: () =>
+      active &&
+      !props.mutationDisabled &&
+      application.runtimeConfig.state.connected &&
+      application.gateway.snapshot.phase === "connected" &&
+      readGatewayOperatorAccess(application.gateway.snapshot).canAdmin,
+    patch: (path, value) => application.runtimeConfig.patchForm(path, value),
+    remove: (path) => application.runtimeConfig.removeFormValue(path),
+  });
 
   function navigateTab(tab: MemoryTab) {
     application.navigate("memory", {
@@ -715,11 +730,14 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
         editor={activeTab() === "settings" ? props.buildEditor() : null}
         dreamingSettings={
           activeTab() === "settings" ? (
-            <MemoryDreamingControls
+            <CuratedSettingsPanel
+              presentation={DREAMING_SETTINGS}
+              parameters={{ configOwner: dreamingConfigOwner() }}
+              messageParameters={{ plugin: dreamingConfigOwner() }}
               config={currentConfigObject(runtime.read().state)}
               support={support()}
               disabled={props.mutationDisabled}
-              onPatch={patchDreaming}
+              onPatch={editCuratedSettings}
             />
           ) : null
         }

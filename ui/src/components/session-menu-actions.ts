@@ -10,7 +10,7 @@ import { customSnoozeStorageKey, readCustomSnooze } from "../lib/sessions/custom
 import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type { SessionCommunicationMenuAction } from "./session-communication-options.ts";
 import { SessionMenuSettings } from "./session-menu-settings.ts";
-import { SessionOwnerMenu } from "./session-owner-menu.ts";
+import { createSessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
 
 registerSessionOrganizationEnglish();
@@ -114,7 +114,7 @@ export type SessionMenuActionsState = {
 export class SessionMenuActions {
   private readonly context = useOptionalApplication();
   private readonly gateway = this.context ? projectGateway(this.context.gateway) : undefined;
-  readonly ownerMenu: SessionOwnerMenu;
+  readonly ownerMenu = createSessionOwnerMenu();
   readonly advanced;
   openCustomSnooze?: () => void;
   customSnoozeKeydown?: (event: KeyboardEvent) => boolean;
@@ -130,7 +130,6 @@ export class SessionMenuActions {
     private readonly onAction: (action: SessionManagementAction) => void,
     private readonly onClose: () => void,
   ) {
-    this.ownerMenu = new SessionOwnerMenu(host);
     this.advanced = new SessionMenuSettings(host, {
       context: () => this.context,
       readState: () => this.readState(),

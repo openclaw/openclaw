@@ -1,6 +1,6 @@
 // Plugin Prerelease Test Plan tests cover plugin prerelease test plan script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, matchesGlob } from "node:path";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -96,6 +96,8 @@ function runPluginPhaseValidation(params: {
 function runPluginManifest(
   phase: "all" | "candidate" | "independent",
   eventName = "workflow_dispatch",
+  runtimePolicy = "",
+  targetRoot?: string,
 ) {
   const workflow = readPluginPrereleaseWorkflow();
   const step = workflow.jobs.preflight.steps.find(
@@ -107,6 +109,7 @@ function runPluginManifest(
   const root = tempDirs.make("openclaw-plugin-prerelease-phase-");
   const outputPath = join(root, "github-output");
   const result = spawnSync("bash", ["-c", step.run], {
+    cwd: targetRoot,
     encoding: "utf8",
     env: {
       FULL_RELEASE_VALIDATION: eventName === "schedule" ? "false" : "true",
@@ -114,6 +117,7 @@ function runPluginManifest(
       GITHUB_OUTPUT: outputPath,
       PATH: process.env.PATH,
       PHASE: phase,
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy,
     },
   });
   return {
@@ -184,9 +188,42 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       vitestArgs: ["--reporter=json", "--outputFile=report.json"],
       requiresBun: false,
     },
+    {
+      name: "ordinary complete Bun trial with unqualified groups and report arguments",
+      fullReleaseValidation: false,
+      memory: false,
+      vitestArgs: ["--reporter=json", "--outputFile=report.json"],
+      runtimePolicy: " bun-all ",
+      expectedPolicy: "bun-all",
+      requiresBun: true,
+    },
+    {
+      name: "full release complete dual trial with unqualified groups",
+      fullReleaseValidation: true,
+      memory: false,
+      vitestArgs: [],
+      runtimePolicy: "dual-all",
+      expectedPolicy: "dual-all",
+      requiresBun: true,
+    },
+    {
+      name: "ordinary defaults despite an inherited compatibility policy",
+      fullReleaseValidation: false,
+      memory: true,
+      vitestArgs: [],
+      runtimePolicy: "bun-compatible",
+      requiresBun: false,
+    },
   ])(
     "selects runtime setup for $name",
-    async ({ fullReleaseValidation, memory, vitestArgs, requiresBun }) => {
+    async ({
+      fullReleaseValidation,
+      memory,
+      vitestArgs,
+      runtimePolicy,
+      expectedPolicy,
+      requiresBun,
+    }) => {
       const planGroups = [
         {
           config: "test/vitest/vitest.extension-database-workers.config.ts",
@@ -207,8 +244,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
           planGroups,
           fullReleaseValidation,
           vitestArgs,
+          env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy },
         }),
-      ).toEqual({ test_runtime_policy: requiresBun ? "dual" : "node", requires_bun: requiresBun });
+      ).toEqual({
+        test_runtime_policy: expectedPolicy ?? (requiresBun ? "dual" : "node"),
+        requires_bun: requiresBun,
+      });
     },
   );
 
@@ -374,6 +415,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     const dockerSuite = workflow.jobs["plugin-prerelease-docker-suite"];
 
     expect(workflow.on.workflow_dispatch.inputs.full_release_validation.default).toBe(false);
+    expect(workflow.on.workflow_dispatch.inputs.test_runtime_policy).toMatchObject({
+      default: "",
+      type: "string",
+    });
+    expect(manifest.env.OPENCLAW_CI_TEST_RUNTIME_POLICY).toBe("${{ inputs.test_runtime_policy }}");
     expect(manifest.env.FULL_RELEASE_VALIDATION).toBe(
       "${{ inputs.full_release_validation && 'true' || 'false' }}",
     );
@@ -387,6 +433,77 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "${{ inputs.full_release_validation && needs.preflight.outputs.run_plugin_prerelease_docker == 'true' }}",
     );
     expect(dockerSuite.secrets).toBeUndefined();
+  });
+
+  it("rejects an invalid extension batch trial before planning plugin work", () => {
+    const { result, output } = runPluginManifest("independent", "workflow_dispatch", "bun");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("test_runtime_policy must be bun-all or dual-all");
+    expect(output).toBe("");
+  });
+
+  it.each(["", "node", "dual", "bun-all", "dual-all"])(
+    "keeps the extension deadline proportional to the %s runtime policy",
+    (runtimePolicy) => {
+      const workflow = readPluginPrereleaseWorkflow();
+      expect(
+        evaluateWorkflowExpression(
+          workflow.jobs["plugin-prerelease-extension-shard"]["timeout-minutes"],
+          {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            matrix: { test_runtime_policy: runtimePolicy },
+          },
+        ),
+      ).toBe(runtimePolicy === "dual-all" ? 120 : 60);
+    },
+  );
+
+  it.each([
+    { name: "missing resolver", returnedRuntime: undefined },
+    {
+      name: "legacy Node resolver",
+      returnedRuntime: { test_runtime_policy: "node", requires_bun: false },
+    },
+    {
+      name: "qualified dual resolver",
+      returnedRuntime: { test_runtime_policy: "dual", requires_bun: true },
+    },
+    {
+      name: "missing Bun setup",
+      returnedRuntime: { test_runtime_policy: "dual-all", requires_bun: false },
+    },
+  ])("rejects an explicit trial with a frozen target's $name", ({ returnedRuntime }) => {
+    const targetRoot = tempDirs.make("openclaw-plugin-runtime-target-");
+    const scriptsRoot = join(targetRoot, "scripts", "lib");
+    mkdirSync(scriptsRoot, { recursive: true });
+    symlinkSync(join(process.cwd(), "node_modules"), join(targetRoot, "node_modules"), "dir");
+    writeFileSync(
+      join(scriptsRoot, "plugin-prerelease-test-plan.mjs"),
+      `export const assertPluginPrereleaseTestPlanComplete = () => ({ staticChecks: [], dockerLanes: [] });
+${returnedRuntime ? `export const resolvePluginPrereleaseExtensionRuntime = () => (${JSON.stringify(returnedRuntime)});` : ""}`,
+    );
+    writeFileSync(
+      join(scriptsRoot, "extension-test-plan.mjs"),
+      `export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 1;
+export const createExtensionTestShards = () => [{
+  index: 0, checkName: "extensions-fixture", extensionIds: ["fixture"],
+  planGroups: [{ config: "fixture.config.ts", roots: ["extensions/fixture"] }],
+}];`,
+    );
+
+    const { result, output } = runPluginManifest(
+      "independent",
+      "workflow_dispatch",
+      "dual-all",
+      targetRoot,
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Target ref does not support requested test_runtime_policy: dual-all",
+    );
+    expect(output).toBe("");
   });
 
   it("requires a complete immutable candidate for the plugin candidate phase", () => {

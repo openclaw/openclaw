@@ -205,7 +205,7 @@ export async function discoverBackupDatabasePaths(params: {
   const discovered = await collectStateDatabasePaths(params);
   const paths = [...discovered.values()].flatMap((database) => database.spellings);
   const plugins = resolvePluginMetadataSnapshot(params);
-  const capable = new Set(
+  const capable = new Set<string>(
     listDatabaseEngineStores()
       .filter((store) => store.postgres)
       .map((store) => store.id),

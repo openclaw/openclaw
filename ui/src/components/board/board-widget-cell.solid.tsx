@@ -14,7 +14,7 @@ import {
 import {
   ensureCustomElementDefined,
   isOptionalElementDefined,
-  LazyCustomElementRequestController,
+  createLazyCustomElementRequests,
 } from "../../app/lazy-custom-element.ts";
 import {
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
@@ -29,7 +29,7 @@ import {
 import { formatUiError } from "../../lib/format-error.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { showToast } from "../../lib/toast.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
@@ -115,10 +115,10 @@ function BoardWidgetCellContent(
     },
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
-  const loader = new LazyCustomElementRequestController({ requestUpdate });
+  const loader = createLazyCustomElementRequests();
+  const loadState = projectOwner(loader, (owner) => owner.visibleState);
   const loadError = () => {
-    revision();
-    const value = loader.visibleState;
+    const value = loadState.read();
     return value?.status === "error" ? value : undefined;
   };
   const appView = new BoardMcpAppLifecycle({
@@ -416,7 +416,7 @@ function BoardWidgetCellContent(
             when={loadError()}
             fallback={
               <Show
-                when={(revision(), isOptionalElementDefined(contribution()!))}
+                when={(loadState.revision(), isOptionalElementDefined(contribution()!))}
                 fallback={<Loading />}
               >
                 <BoardCoreWidget

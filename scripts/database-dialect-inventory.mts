@@ -26,7 +26,9 @@ function productionFile(file: string) {
     /^(?:src|extensions|packages)\/.*\.(?:ts|mts|sql)$/u.test(file) &&
     !excluded.test(file) &&
     // PostgreSQL shares JSON function/operator names with SQLite; these artifacts contain no SQLite.
-    !/^src\/state\/postgres-schema\.generated\/[^/]+\.postgres\.sql$/u.test(file)
+    !/^src\/state\/postgres-schema\.generated\/[^/]+\.postgres\.sql$/u.test(file) &&
+    // Captured SQLite catalog text is comparison data, never executable SQL. Source DDL stays counted.
+    !/^src\/state\/postgres-schema\.generated\/sqlite-(?:state|agent)-catalogs\.ts$/u.test(file)
   );
 }
 

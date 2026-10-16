@@ -411,7 +411,13 @@ collected explicitly. Other paths do not pass that context yet: a CLI-backed
 collector turn through the Gateway tool resolver can still be offered the tool
 and receive a successful `yielded` result. In every case a collector that yields
 is settled at its own terminal instead of pausing, so its waiter resolves rather
-than blocking for good.
+than blocking for good. A collector that an earlier version persisted as yielded
+without a result is settled by the first registry sweep after the registry
+restores, and `agents_wait` then returns it. The sweep keeps the outcome and end
+time that earlier version recorded: a row stored as `ok` returns `done` with the
+reply its yielded turn ended on, as a collector that yields now does. A row with
+no recorded outcome returns `failed` with an error that says why. Only collectors are settled this way: a child that declared a message wait
+stays paused until a continuation reaches it, however long that takes.
 
 The registry also continues a yielded sub-agent when its announced children
 settle, including an orchestrator spawned by cron. That internal settlement

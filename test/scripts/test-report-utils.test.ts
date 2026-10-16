@@ -205,6 +205,7 @@ assert.equal(runVitestJsonReport(${JSON.stringify({ config: path.join(root, "mis
           [entry],
           testRunnerFixtureEnv({
             PATH: bin,
+            OPENCLAW_BUN_PATH: process.versions.bun ? process.execPath : undefined,
             OPENCLAW_LIVE_USE_REAL_HOME: "0",
             TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
           }),

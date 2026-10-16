@@ -1,5 +1,6 @@
 import { sql } from "kysely";
 import { jsonArrayFrom, jsonObjectFrom } from "../../infra/database-engine/json-values.js";
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -64,7 +65,13 @@ export function hydrateSessionActorState(
 ): SessionActorStoredState {
   const keys = collectSessionEntryLookupKeys(target.sessionKey);
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
-  const tables = getAdmittedSqliteSchemaFacts(database.db)?.tables;
+  const tables =
+    getAdmittedSqliteSchemaFacts(database.db)?.tables ??
+    new Set(
+      getPostgresPhysicalFacts(database.db)
+        ?.catalog.filter((fact) => fact.kind === "table")
+        .map((fact) => fact.table),
+    );
   const rows = executeSqliteQuerySync(
     database.db,
     canonicalSessionValidationQuery(database, { metadata: true })

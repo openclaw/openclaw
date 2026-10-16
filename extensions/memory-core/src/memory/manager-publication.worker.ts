@@ -1,11 +1,16 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  admitStoreSearch,
+  type EngineConnection,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtensionFromPath,
   MEMORY_INDEX_VECTOR_TABLE,
   stageMemoryIndexSchemaExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
+  isPostgresSqlConnection,
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
   loadSqliteVecExtension,
@@ -32,6 +37,7 @@ import {
   withSqliteDatabaseWriteScope,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { requireMemorySearchDatabase } from "../memory-search-database.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { publishMemoryDatabaseTables } from "./manager-db-kernel.js";
 import {
@@ -55,6 +61,7 @@ import {
 } from "./manager-publication-task.js";
 import { MEMORY_INDEX_META_KEY, readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import { admitMemoryVectorIndex } from "./manager-search-knn.js";
+import { memoryTextSearchSchema, memoryVectorSearchSchema } from "./manager-search-schema.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -158,11 +165,63 @@ export function bindSqliteWorkerBackend(
   input: MemoryPublicationConnection,
   context: {
     databasePath: string;
-    database: DatabaseSync;
+    database: EngineConnection;
     admit(stage: "transaction" | "commit"): void;
   },
 ) {
-  const db = context.database;
+  if (isPostgresSqlConnection(context.database)) {
+    const db = context.database;
+    return bindSqliteWorkerDatabase<MemoryPublicationOperations>(db, {
+      execute(command) {
+        if (command.type !== "schema.admit" && command.type !== "vector.ensure") {
+          requireMemorySearchDatabase(db);
+          throw new Error("PostgreSQL memory publication is unavailable");
+        }
+        db.runTransaction(
+          () => {
+            context.admit("transaction");
+            if (command.type === "schema.admit") {
+              if (command.input.ftsEnabled) {
+                admitStoreSearch(
+                  db,
+                  memoryTextSearchSchema(command.input.ftsTokenizer ?? "unicode61"),
+                  { extension: "memory.text" },
+                );
+              }
+            } else {
+              admitStoreSearch(db, memoryVectorSearchSchema(command.input.dimensions), {
+                extension: "memory.vector",
+              });
+            }
+          },
+          {
+            withCommit: (commit) => {
+              context.admit("commit");
+              commit();
+            },
+          },
+        );
+        const facts = readMemoryDatabaseFacts(db);
+        return {
+          ok: true,
+          facts,
+          value:
+            command.type === "schema.admit"
+              ? {
+                  ftsAvailable: command.input.ftsEnabled,
+                  admission: {
+                    hasIndex: true,
+                    ftsAvailable: command.input.ftsEnabled,
+                    identity: readOpenClawAgentDatabaseIdentity({ db }),
+                    facts,
+                  },
+                }
+              : undefined,
+        };
+      },
+    });
+  }
+  const db = requireMemorySearchDatabase(context.database);
   let pragmas = agentConnectionPragmas.get(db);
   if ("kind" in input && !pragmas) {
     pragmas = {

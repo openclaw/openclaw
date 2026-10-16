@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   readSqliteDatabasePendingWriteToken,
   readSqliteDatabaseWriteTokenForPath,
@@ -24,7 +24,7 @@ const selectedSources = resolveGlobalSingleton(
   () =>
     new WeakMap<
       SessionEntryPublicationSource,
-      { database: DatabaseSync; mutationRevision: number }
+      { database: EngineConnection; mutationRevision: number }
     >(),
 );
 
@@ -36,7 +36,7 @@ export function discardSessionEntryPublicationSource(source: SessionEntryPublica
 
 /** Selection and final serialization must describe the same native transaction state. */
 export function captureSessionEntryPublicationSource(
-  database: DatabaseSync,
+  database: EngineConnection,
   source: SessionEntryPublicationSource,
 ): SessionEntryPublicationSource {
   const mutationRevision = readSqliteNativeMutationRevision(database);

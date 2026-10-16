@@ -367,7 +367,7 @@ describe("searchSessionTranscripts", () => {
           for (let index = 0; index < 80; index++) {
             insert({
               messageId: `${id}-${String(index).padStart(3, "0")}`,
-              text: "needle common payload",
+              text: `needle common payload${index < 10 ? "" : ` ${"padding ".repeat(40)}`}${index === 79 ? "sparse" : ""}`,
               role: index % 2 ? "assistant" : "user",
               timestamp: String(Math.floor(index / 4)),
             });
@@ -412,10 +412,12 @@ describe("searchSessionTranscripts", () => {
     try {
       for (const options of [
         { limit: 3 },
+        { limit: 25 },
         { limit: 25, order: "recent" },
         { limit: 3, sessionId: "permitted", role: "assistant" },
         { limit: 3, sessionId: "permitted", role: "assistant", order: "recent" },
         { limit: 3, query: "need", match: "prefix" },
+        { limit: 25, query: "sparse" },
         { limit: 25, sessionId: "dirty" },
       ] satisfies Partial<SessionTranscriptSearchParams>[]) {
         statements.length = 0;
@@ -429,7 +431,7 @@ describe("searchSessionTranscripts", () => {
         expect(statements).toHaveLength(1);
         const captured = statements[0]!;
         const { db, query, bindings } = captured;
-        const literal = options.match === "prefix" ? '"need"*' : '"needle"';
+        const literal = options.match === "prefix" ? '"need"*' : `"${options.query ?? "needle"}"`;
         // The previous query is the equivalence oracle; it still pays the unbounded snippet cost.
         const baseline = prepare
           .call(
@@ -495,10 +497,15 @@ describe("searchSessionTranscripts", () => {
         const bytecode = prepare.call(db, `EXPLAIN ${query}`).all(...bindings);
         const matchScan = bytecode.find((row) => row.opcode === "VFilter" && row.p4 === "M5")!;
         const firstContent = bytecode.find(
-          (row) => row.opcode === "VColumn" && row.p1 === matchScan.p1,
-        )!;
+          (row) => row.opcode === "VColumn" && row.p1 === matchScan.p1 && Number(row.p2) < 5,
+        );
         const scopeCheck = bytecode.find((row) => row.opcode === "NotFound")!;
-        expect(Number(firstContent.addr)).toBeGreaterThan(Number(scopeCheck.addr));
+        if (options.role || options.order === "recent") {
+          expect(Number(firstContent?.addr)).toBeGreaterThan(Number(scopeCheck.addr));
+        } else {
+          // Ranking rejects losing scores without loading their FTS content columns.
+          expect(firstContent).toBeUndefined();
+        }
       }
     } finally {
       spy.mockRestore();

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
@@ -6,18 +7,37 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { listAuditEvents } from "./audit-event-store.js";
+import { listAuditEvents, recordAuditEventInDatabase } from "./audit-event-store.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
 import { input, messageEvent, decisionReceipt } from "./audit-event-writer.test-support.js";
 import { createAuditEventRecorder } from "./audit-recorder.js";
-import { pageExecutionDecisionFactsForContextInDatabase } from "./execution-decision-facts.js";
+import {
+  pageExecutionDecisionFactsForContextInDatabase,
+  recordExecutionDecisionFactInDatabase,
+} from "./execution-decision-facts.js";
 import {
   configureExecutionIdentityAdmissionSink,
   createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
 } from "./execution-identity-admission.js";
+import {
+  captureExecutionIdentityAdmissionEnvelope,
+  persistExecutionIdentityAdmissionEnvelope,
+} from "./execution-identity.test-support.js";
+import { recordOutboundMessageProgressInDatabase } from "./message-delivery-progress-store.js";
+
+const pruneFault = useSqliteWorkerFault([
+  {
+    name: "fail_audit_identity_prune",
+    match: /^delete from execution_identity_contexts\b/u,
+    sql: `CREATE TEMP TRIGGER fail_audit_identity_prune BEFORE DELETE ON main.execution_identity_contexts
+      BEGIN SELECT RAISE(ABORT, 'synthetic identity prune failure'); END;`,
+  },
+]);
 
 let restoreConstructor: (() => void) | undefined;
 afterEach(async () => {
@@ -154,4 +174,83 @@ describe("audit writer shared worker", () => {
       expect(owner.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
     },
   );
+
+  it("keeps earlier family commits and later cleanup when one prune transaction fails", async () => {
+    const database = {
+      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-audit-prune-failure-") },
+    };
+    const options = { ...database, database: openOpenClawStateDatabase(database) };
+    const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+    try {
+      const receipt = decisionReceipt();
+      recordAuditEventInDatabase(input(), options);
+      persistExecutionIdentityAdmissionEnvelope(
+        captureExecutionIdentityAdmissionEnvelope(
+          {
+            runId: receipt.runId,
+            agentId: "main",
+            ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+            runtime: { kind: "embedded" },
+          },
+          {
+            now: 0,
+            contextId: receipt.contextId,
+            executionId: receipt.executionId,
+            runtimeInstanceId: "prune-runtime",
+          },
+        ),
+        { ...options, now: 0 },
+      );
+      recordExecutionDecisionFactInDatabase(receipt, { ...options, now: 0 });
+      recordOutboundMessageProgressInDatabase(
+        {
+          sourceId: "prune-progress",
+          sourceSequence: 1,
+          occurredAt: 0,
+          kind: "message",
+          action: "message.outbound.queued",
+          status: "started",
+          outcome: "queued",
+          actorType: "agent",
+          actorId: "main",
+          agentId: "main",
+          runId: "prune-run",
+          direction: "outbound",
+          channel: "qa-channel",
+          conversationKind: "direct",
+          targetId: "synthetic-target",
+        },
+        options,
+      );
+    } finally {
+      clock.mockRestore();
+    }
+    await closeOpenClawStateDatabaseAsync();
+
+    pruneFault.enable();
+    expect(
+      await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(database), {
+        type: "audit.writer.prune",
+        input: undefined,
+      }),
+    ).toEqual([
+      { status: "settled", deleted: 1 },
+      { status: "settled", error: expect.stringContaining("synthetic identity prune failure") },
+      { status: "settled", deleted: 1 },
+      { status: "settled", deleted: 1 },
+    ]);
+    pruneFault.disable();
+    await closeOpenClawStateDatabaseAsync();
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare(`
+          SELECT
+            (SELECT count(*) FROM audit_events) AS events,
+            (SELECT count(*) FROM execution_identity_contexts) AS identity_contexts,
+            (SELECT count(*) FROM execution_decision_facts) AS decisions,
+            (SELECT count(*) FROM outbound_message_progress) AS progress
+        `)
+        .get(),
+    ).toEqual({ events: 0, identity_contexts: 1, decisions: 0, progress: 0 });
+  });
 });

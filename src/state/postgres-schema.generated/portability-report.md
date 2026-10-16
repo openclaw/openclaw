@@ -7,6 +7,7 @@
 - Not covered: runtime-created memory FTS5 in src/infra/database-engine/sqlite-search-schema.ts; vec0 in src/infra/database-engine/sqlite-vector.ts.
 - Not covered: plugin-owned databases, including extensions/workboard/src/sqlite-store-schema.ts, extensions/logbook/src/store-schema.ts and extensions/team-reports/src/store-schema.ts.
 - Not covered: additive/startup repair DDL in src/state/*-schema.ts and _migration_.ts, including openclaw-agent-transcript-fts-schema.ts, openclaw-agent-board-schema.ts and openclaw-agent-canonical-validation-migration.ts.
+- Agent runtime update: the preceding agent search/cutover limitation is superseded. The generated PostgreSQL-only transcript projection and engine search admission enable agent transcript text search. PostgreSQL memory search still awaits its owner cutover.
 
 ## Counts
 

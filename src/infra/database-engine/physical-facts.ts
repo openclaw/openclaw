@@ -18,6 +18,8 @@ import {
   readPostgresSchema,
   recordPostgresSchema,
   verifyPostgresSchema,
+  withPostgresSearchExtensions,
+  retainPostgresSchema,
   type PostgresCapabilities,
 } from "./postgres-schema.js";
 
@@ -124,11 +126,13 @@ export function admitPostgresPhysicalFacts(params: {
     throw new Error(`PostgreSQL metadata identity or version mismatch. ${recovery}`);
   }
   if (params.schema) {
+    const schema = withPostgresSearchExtensions(params.schema, snapshot);
     if (params.recordSchema) {
-      recordPostgresSchema(params.db, params.namespace, params.schema, snapshot);
+      recordPostgresSchema(params.db, params.namespace, schema, snapshot);
     } else {
-      verifyPostgresSchema(params.db, params.namespace, params.schema, snapshot);
+      verifyPostgresSchema(params.db, params.namespace, schema, snapshot);
     }
+    retainPostgresSchema(params.db, schema);
   }
   if (params.expected) {
     assertPostgresCatalog(
@@ -150,6 +154,18 @@ export function admitPostgresPhysicalFacts(params: {
   };
   publishSqliteDatabaseAdmission(params.db, admissionKey, facts);
   return facts;
+}
+
+export function publishPostgresSearchExtensionFacts(
+  db: PostgresSqlConnection,
+  facts: PostgresPhysicalFacts,
+  catalog: readonly PostgresCatalogFact[],
+): void {
+  publishSqliteDatabaseAdmission(db, admissionKey, {
+    ...facts,
+    admissionId: randomUUID(),
+    catalog,
+  });
 }
 
 /** Optional native housekeeping is skipped on PostgreSQL; explicit native requests refuse below. */

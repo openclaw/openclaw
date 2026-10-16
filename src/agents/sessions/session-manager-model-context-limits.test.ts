@@ -12,6 +12,7 @@ import { transcriptEventJsonSql } from "../../config/sessions/transcript-payload
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { SessionManager } from "./session-manager.js";
@@ -155,8 +156,11 @@ it.each([false, true])(
         const full = source.buildSessionContext().messages;
         await verifyRead(() => {
           const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
-          const reads = trackSqliteStatementExecutions(database.db, ["sizes"], (query) =>
-            query.includes("octet_length(") && query.includes('as "bytes"') ? "sizes" : null,
+          const reads = trackSqliteStatementExecutions(
+            requireNativeSqliteDatabase(database.db),
+            ["sizes"],
+            (query) =>
+              query.includes("octet_length(") && query.includes('as "bytes"') ? "sizes" : null,
           );
           try {
             const selected = SessionManager.openModelContext(scope, {
@@ -262,13 +266,17 @@ it("avoids text copies of omitted message objects when SQLite supports binary JS
       ).toBe(1);
       let messageObjectCopies = 0;
       // Preserve SQLite extraction while observing whole-message text intermediates.
-      database.db.function("json_extract", { deterministic: true }, (json, jsonPath) => {
-        const value = extract.get(json, jsonPath)?.value ?? null;
-        if (typeof value === "string" && value.startsWith("{") && value.includes(marker)) {
-          messageObjectCopies++;
-        }
-        return value;
-      });
+      requireNativeSqliteDatabase(database.db).function(
+        "json_extract",
+        { deterministic: true },
+        (json, jsonPath) => {
+          const value = extract.get(json, jsonPath)?.value ?? null;
+          if (typeof value === "string" && value.startsWith("{") && value.includes(marker)) {
+            messageObjectCopies++;
+          }
+          return value;
+        },
+      );
       await verifyRead(() => {
         const context = SessionManager.openModelContext(scope, {
           limits: { maxBytes: 4096, maxEvents: 1 },

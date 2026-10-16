@@ -212,28 +212,34 @@ suite.define(() => {
         const textarea = page.locator(selector).first();
         await textarea.waitFor();
         await textarea.fill("Synthetic preference proof");
-        const reads = await page.evaluate(async (activeRoute) => {
-          const owner = document.querySelector(
-            activeRoute === "new" ? "openclaw-new-session-page" : "openclaw-chat-pane",
-          ) as HTMLElement & { requestUpdate(): void; updateComplete: Promise<unknown> };
-          const descriptor = Object.getOwnPropertyDescriptor(Storage.prototype, "getItem")!;
-          const keys: string[] = [];
-          Storage.prototype.getItem = function (key) {
-            if (/^openclaw\.control\.(settings|currentGateway|token)\./u.test(key)) {
-              keys.push(key);
+        const reads = await page.evaluate(
+          async ({ activeRoute, selector: textareaSelector }) => {
+            const owner = document.querySelector(
+              activeRoute === "new" ? "openclaw-new-session-page" : "openclaw-chat-pane",
+            ) as HTMLElement & { updateComplete: Promise<unknown> };
+            const input = document.querySelector<HTMLTextAreaElement>(textareaSelector)!;
+            const draft = input.value;
+            const descriptor = Object.getOwnPropertyDescriptor(Storage.prototype, "getItem")!;
+            const keys: string[] = [];
+            Storage.prototype.getItem = function (key) {
+              if (/^openclaw\.control\.(settings|currentGateway|token)\./u.test(key)) {
+                keys.push(key);
+              }
+              return Reflect.apply(descriptor.value, this, [key]);
+            };
+            try {
+              for (let index = 0; index < 10; index++) {
+                input.value = index % 2 === 0 ? `${draft} ` : draft;
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                await owner.updateComplete;
+              }
+              return keys;
+            } finally {
+              Object.defineProperty(Storage.prototype, "getItem", descriptor);
             }
-            return Reflect.apply(descriptor.value, this, [key]);
-          };
-          try {
-            for (let index = 0; index < 10; index++) {
-              owner.requestUpdate();
-              await owner.updateComplete;
-            }
-            return keys;
-          } finally {
-            Object.defineProperty(Storage.prototype, "getItem", descriptor);
-          }
-        }, route);
+          },
+          { activeRoute: route, selector },
+        );
         expect(reads).toEqual([]);
 
         const otherTab = await context.newPage();

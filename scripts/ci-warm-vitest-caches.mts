@@ -5,9 +5,11 @@ import { buildChildEnv } from "./ci-run-node-test-shard.mts";
 import { createVitestCacheWarmGroups } from "./lib/ci-node-test-plan.mts";
 import { BUN_UI_TEST_ENV, resolveCiTestRuntimeSelections } from "./lib/ci-test-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
+import { requirePinnedBun } from "./lib/pinned-bun.mts";
 
 // Consumer entrypoints choose their own reusable cache leaves; the planner owns
-// membership for both backend-local protected seeds.
+// membership for both backend-local protected seeds. Trial policies never expand
+// this publisher: it prepares the same qualified Node+Bun caches for every consumer.
 const hosted = process.env.CACHE_WARM_PLATFORM === "linux-hosted";
 const groups = createVitestCacheWarmGroups(hosted ? "hybrid-hosted" : "full");
 const ui = groups.find((group) => group.shard_name === "cache-warm:ui-package");
@@ -117,6 +119,8 @@ try {
     0,
     { runtime: "bun", cacheSlot: 0 },
   );
+  // The direct UI launcher bypasses shard admission; bind its verified runtime here.
+  bunEnv.OPENCLAW_BUN_PATH = requirePinnedBun(bunEnv);
   bunEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = bunEnv.OPENCLAW_VITEST_INCLUDE_FILE;
   delete bunEnv.OPENCLAW_VITEST_INCLUDE_FILE;
   await collect(

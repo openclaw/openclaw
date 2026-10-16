@@ -105,6 +105,90 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(provider).not.toHaveProperty("headers");
   });
 
+  it.each(["litellm", "LiteLLM"] as const)(
+    "preserves fresh %s fields and canonical unchanged fields from a whole-config auth result",
+    (updatedKey) => {
+      const model: ModelProviderConfig["models"][number] = {
+        id: "local-model",
+        name: "Local model",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 2048,
+      };
+      const canonical: ModelProviderConfig = {
+        baseUrl: "https://canonical.example/v1",
+        apiKey: "canonical-key",
+        headers: { "x-old": "remove" },
+        params: { canonicalKeep: true, shared: "canonical" },
+        models: [{ ...model, params: { canonicalValue: null, shared: "canonical" } }],
+      };
+      const alias: ModelProviderConfig = {
+        baseUrl: "https://alias.example/v1",
+        apiKey: "alias-key",
+        params: { aliasKeep: true, shared: "alias" },
+        request: { headers: { "x-route": "keep" } },
+        models: [
+          {
+            ...model,
+            params: { aliasValue: null, shared: "alias", rows: [{ id: "same", stale: true }] },
+          },
+        ],
+      };
+      const baseLocal = { models: { providers: { litellm: canonical, LiteLLM: alias } } };
+      const sourceRow = baseLocal.models.providers[updatedKey];
+      // Auth plugins may return the whole config, including unchanged duplicate rows.
+      const patch = {
+        models: {
+          providers: {
+            ...baseLocal.models.providers,
+            [updatedKey]: {
+              ...sourceRow,
+              baseUrl: "https://selected.example/v1",
+              apiKey: "selected-key",
+              headers: undefined,
+              params: { ...sourceRow.params, selected: true },
+              models: [
+                {
+                  ...model,
+                  params: {
+                    ...sourceRow.models[0]?.params,
+                    selectedValue: null,
+                    rows: [{ id: "same", selected: true }],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      const next = applyProviderAuthConfigPatch(baseLocal, patch, { providerConfigNormalizer });
+
+      expect(next.models?.providers).toEqual({
+        litellm: {
+          baseUrl: "https://selected.example/v1",
+          apiKey: "selected-key",
+          params: { canonicalKeep: true, aliasKeep: true, shared: "canonical", selected: true },
+          request: alias.request,
+          models: [
+            {
+              ...model,
+              params: {
+                canonicalValue: null,
+                aliasValue: null,
+                shared: "canonical",
+                selectedValue: null,
+                rows: [{ id: "same", selected: true }],
+              },
+            },
+          ],
+        },
+      });
+    },
+  );
+
   it("normalizes retired Google Gemini per-agent refs from provider config patches", () => {
     const patch = {
       agents: {

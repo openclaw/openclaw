@@ -10,12 +10,17 @@ import {
 import { LitContent } from "../../lit/solid-content.tsx";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { ChatProviderReviewDialog } from "./chat-provider-review-controller.tsx";
+import {
+  ChatProviderReviewDialog,
+  createChatProviderReview,
+  type ChatProviderReviewOwner,
+} from "./chat-provider-review-controller.tsx";
 import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 
 function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
   const runtime = untrack(() => props.runtime);
   runtime.mountPanelActions();
+  runtime.mountToolIcons();
   const [presented, setPresented] = createSignal(runtime.presented);
   const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
   const visibilityChanged = () => runtime.requestUpdate();
@@ -25,7 +30,7 @@ function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
     presented: () => presented() && visible(),
     read: () => {
       runtime.prepareRender();
-      return runtime.render();
+      return runtime.render(() => providerReview);
     },
   });
   const unsubscribe = runtime.subscribe(() => {
@@ -34,6 +39,10 @@ function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
     lifecycle.invalidate();
   });
   const frame = createMemo(() => lifecycle.snapshot());
+  const providerReview: ChatProviderReviewOwner = createChatProviderReview({
+    source: () => frame().providerReviewSource,
+    readState: () => runtime.readProviderReviewState(),
+  });
   createEffect(
     () => frame(),
     () => runtime.commitRender(),
@@ -45,7 +54,7 @@ function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
   return (
     <>
       <LitContent value={frame().layout} />
-      <ChatProviderReviewDialog controller={runtime.providerReview} revision={frame()} />
+      <ChatProviderReviewDialog owner={providerReview} />
       <Show when={frame().capabilityDialogs}>
         {(dialogs) => <ChatComposerCapabilityDialogs {...dialogs()} />}
       </Show>

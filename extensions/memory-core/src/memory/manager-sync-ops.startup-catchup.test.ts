@@ -16,7 +16,10 @@ import {
   publishSessionTranscriptUpdateByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  requireNativeSqliteDatabase,
+  observeHostDataSql,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -384,7 +387,7 @@ describe("session startup catch-up", () => {
       cwd: stateDir,
       message: { role: "user", content: "appended after queuing" },
     });
-    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     ensureMemorySessionTombstones(db);
     recordMemorySessionTombstonesInDatabase(db, {
       agentId: "main",

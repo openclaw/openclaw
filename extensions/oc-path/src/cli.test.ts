@@ -562,6 +562,96 @@ describe("openclaw path CLI", () => {
       },
     );
 
+    it.each([
+      {
+        label: "unresolved JSONC leaf",
+        file: "config.jsonc",
+        before: '{ "count": 1 }\n',
+        path: "oc://config.jsonc/missing",
+        value: "next",
+        expected: { ok: false, reason: "unresolved" },
+      },
+      {
+        label: "non-writable root with human detail",
+        file: "config.jsonc",
+        before: '{ "count": 1 }\n',
+        path: "oc://config.jsonc",
+        value: "next",
+        expected: "set failed: not-writable — root replacement is not supported via setOcPath",
+      },
+      {
+        label: "numeric coercion refusal",
+        file: "config.jsonc",
+        before: '{ "count": 1 }\n',
+        path: "oc://config.jsonc/count",
+        value: "oops",
+        expected: { ok: false, reason: "parse-error", detail: 'cannot coerce "oops" to number' },
+      },
+      {
+        label: "keyed insertion into an array",
+        file: "config.jsonc",
+        before: '{ "items": [1] }\n',
+        path: "oc://config.jsonc/items/+key",
+        value: "2",
+        expected: {
+          ok: false,
+          reason: "type-mismatch",
+          detail: "cannot insert by key into array",
+        },
+      },
+      {
+        label: "wildcard write refusal",
+        file: "config.jsonc",
+        before: '{ "items": [1] }\n',
+        path: "oc://config.jsonc/items/*",
+        value: "2",
+        expected: {
+          ok: false,
+          reason: "wildcard-not-allowed",
+          detail: "setOcPath requires a concrete path; use findOcPaths to enumerate matches first",
+        },
+      },
+      {
+        label: "non-keyed Markdown item with human output",
+        file: "AGENTS.md",
+        before: "## Tools\n- plain bullet\n",
+        path: "oc://AGENTS.md/tools/plain-bullet/plain-bullet",
+        value: "next",
+        expected: "set failed: no-item-kv",
+      },
+      {
+        label: "malformed JSONL record",
+        file: "events.jsonl",
+        before: '{"event":"keep"}\nbroken\n',
+        path: "oc://events.jsonl/L2",
+        value: '"next"',
+        expected: { ok: false, reason: "not-a-value-line" },
+      },
+    ])("preserves CLI rejection output and source bytes for $label", async (testCase) => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, testCase.file);
+      const before = Buffer.from(testCase.before, "utf8");
+      writeFileSync(filePath, before);
+      const rt = createTestRuntime();
+      const human = typeof testCase.expected === "string";
+
+      await pathSetCommand(
+        testCase.path,
+        testCase.value,
+        { cwd: workspaceDir, human, json: !human },
+        rt,
+      );
+
+      expect(rt.exitCode).toBe(1);
+      expect(stderrText(rt)).toBe("");
+      if (human) {
+        expect(stdoutText(rt)).toBe(testCase.expected);
+      } else {
+        expect(JSON.parse(stdoutText(rt))).toEqual(testCase.expected);
+      }
+      expect(readFileSync(filePath)).toEqual(before);
+    });
+
     describe.each(["\n", "\r\n"])("Markdown source preservation with %j", (ending) => {
       const frontmatter =
         '\uFEFF---\n# Keep the authored metadata.\nname: &shared "example"\ncopy: *shared\nempty: &empty\nempty_copy: *empty\n\ndescription: |\n  First line.\n  Second line.\nmetadata:\n  openclaw:\n    requires:\n      bins: [gh]\n---\n';

@@ -236,7 +236,7 @@ function normalizeConfiguredCompatStringList(value: unknown): string[] | undefin
   ) {
     return undefined;
   }
-  return [...value];
+  return value;
 }
 
 function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfig["compat"] {

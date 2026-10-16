@@ -12,6 +12,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -104,7 +105,7 @@ it("hydrates only old scoped candidates while protecting out-of-scope history re
     });
   }, options);
   const hydratedKeys: unknown[] = [];
-  database.db.function("artifact_snapshot_value", (key, valueJson) => {
+  requireNativeSqliteDatabase(database.db).function("artifact_snapshot_value", (key, valueJson) => {
     hydratedKeys.push(key);
     return valueJson;
   });

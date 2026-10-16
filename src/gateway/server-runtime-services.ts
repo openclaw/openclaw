@@ -123,6 +123,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
 }): void {
   const isRecovering = () =>
     getQueueSize(CommandLane.Background) > 0 ||
+    getQueueSize(CommandLane.RestartRecovery) > 0 ||
     getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0;
   const idle = {
     scheduler: params.scheduler,

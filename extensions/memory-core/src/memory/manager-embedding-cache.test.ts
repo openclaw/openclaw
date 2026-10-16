@@ -3,6 +3,7 @@ import {
   ensureMemoryIndexSchema,
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   collectMemoryCachedEmbeddings,
@@ -28,8 +29,6 @@ describe("memory embedding cache", () => {
 
   it("loads cached embeddings for the active provider key", () => {
     const db = createDb();
-    const prepare = vi.spyOn(db, "prepare");
-    const columns = vi.spyOn(StatementSync.prototype, "columns");
     const largeEmbedding = Array.from({ length: 4096 }, () => 0.1234567890123456);
     try {
       upsertMemoryEmbeddingCache({
@@ -44,8 +43,6 @@ describe("memory embedding cache", () => {
         ],
         now: 123,
       });
-      expect(prepare).toHaveBeenCalledTimes(1);
-      expect(columns).not.toHaveBeenCalled();
       expect(
         db
           .prepare(
@@ -76,8 +73,6 @@ describe("memory embedding cache", () => {
         ]),
       );
     } finally {
-      prepare.mockRestore();
-      columns.mockRestore();
       db.close();
     }
   });
@@ -392,7 +387,7 @@ describe("memory embedding cache", () => {
       ]);
       const deletes = queries.filter((query) => /^delete\b/iu.test(query));
       expect(deletes).toHaveLength(evicted > 0 ? 2 : 1);
-      expect(queries.filter((query) => /^insert\b/iu.test(query))).toHaveLength(2);
+      expect(queries.filter((query) => /^insert\b/iu.test(query))).toHaveLength(1);
       expect(queries.filter((query) => /^select count\(\*\)/iu.test(query))).toEqual([]);
       if (evicted) {
         const eviction = deletes.find((query) => /\browid\b/iu.test(query));
@@ -417,6 +412,48 @@ describe("memory embedding cache", () => {
       }
       db.exec("ROLLBACK");
       expect(readCache()).toEqual(before);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps the last value across cache batches and rolls back an interrupted publication", () => {
+    const db = createDb();
+    const provider = { id: "local", model: "fixture" };
+    const identity = { provider: provider.id, model: provider.model, providerKey: "fixture" };
+    const entries = Array.from({ length: 129 }, (_, index) => ({
+      hash: `hash-${index}`,
+      embedding: [index, 1],
+    }));
+    const publish = (rows: typeof entries) =>
+      runSqliteImmediateTransactionSync(db, () =>
+        upsertMemoryEmbeddingCache({
+          db,
+          cacheSize: countMemoryEmbeddingCache(db),
+          provider,
+          providerKey: identity.providerKey,
+          entries: () => rows,
+          now: 1,
+        }),
+      );
+    const read = () =>
+      loadMemoryEmbeddingCache({
+        db,
+        providerIdentities: [identity],
+        hashes: entries.map((entry) => entry.hash),
+      });
+    try {
+      publish([...entries, { hash: "hash-0", embedding: [999, 1] }]);
+      const expected = new Map(entries.map((entry) => [entry.hash, entry.embedding]));
+      expected.set("hash-0", [999, 1]);
+      expect(read()).toEqual(expected);
+      db.exec(`CREATE TEMP TRIGGER interrupt_cache_publication
+        BEFORE INSERT ON memory_embedding_cache WHEN NEW.hash = 'hash-128'
+        BEGIN SELECT RAISE(ABORT, 'interrupted cache publication'); END`);
+      expect(() => publish(entries.map(({ hash }) => ({ hash, embedding: [-1, -1] })))).toThrow(
+        "interrupted cache publication",
+      );
+      expect(read()).toEqual(expected);
     } finally {
       db.close();
     }

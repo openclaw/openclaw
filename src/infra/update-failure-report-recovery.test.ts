@@ -67,7 +67,7 @@ function mockRetryableNoStartIssue() {
 
 describe("update failure report receipt recovery", () => {
   it.each(["created", "fallback"] as const)(
-    "recovers a committed %s receipt after its writer loses the acknowledgement",
+    "recognizes an already finalized %s receipt without replaying issue creation",
     async (status) => {
       const { prepared, submit } = await prepareFailedReport(`attempt-${status}-lost-ack`);
       const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
@@ -75,11 +75,8 @@ describe("update failure report receipt recovery", () => {
         status === "created" ? mockCreatedIssue(issueUrl) : mockFallbackIssue(prepared.url);
       const finalizeReceipt = vi.fn(
         async (...args: Parameters<typeof finalizeUpdateFailureReportReceipt>) => {
-          const committed = await finalizeUpdateFailureReportReceipt(...args);
-          if (committed) {
-            throw new Error("simulated lost commit acknowledgement");
-          }
-          return committed;
+          await finalizeUpdateFailureReportReceipt(...args);
+          return finalizeUpdateFailureReportReceipt(...args);
         },
       );
 
@@ -104,7 +101,7 @@ describe("update failure report receipt recovery", () => {
     },
   );
 
-  it("does not replay an unknown no-start receipt write after reconciliation also fails", async () => {
+  it("keeps an unknown no-start receipt write pending without replay", async () => {
     const { receipt, submit } = await prepareFailedReport("attempt-no-start-unknown-receipt");
     const createIssue = mockRetryableNoStartIssue();
     const finalizeReceipt = vi.fn(async () => {

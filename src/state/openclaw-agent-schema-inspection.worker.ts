@@ -4,7 +4,6 @@ import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-databas
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
-import { adoptSqliteSchemaContracts } from "../infra/sqlite-schema-contract.js";
 import { withSqliteSourceReadDatabase } from "../infra/sqlite-source-handle.js";
 import {
   serializeAgentSchemaInspectionError,
@@ -17,7 +16,6 @@ import {
 } from "./openclaw-agent-schema-inspection.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import {
-  captureStateSchemaInspectionContracts,
   inspectStateDatabaseSchema,
   type StateSchemaInspectionInput,
 } from "./openclaw-state-schema-preflight.js";
@@ -54,7 +52,6 @@ process.on(
     try {
       if (request.type === "inspect-state") {
         const { input, snapshot } = request;
-        adoptSqliteSchemaContracts(input.schemaContracts ?? []);
         const inspect = (database: DatabaseSync) => inspectStateDatabaseSchema(database, input);
         let inspection;
         if (snapshot) {
@@ -76,10 +73,6 @@ process.on(
           requestId,
           ok: true,
           inspection: null,
-          schemaContracts: captureStateSchemaInspectionContracts().filter(
-            (contract) =>
-              !input.schemaContracts?.some((prior) => prior.schemaSql === contract.schemaSql),
-          ),
           stateInspection: inspection
             ? {
                 ...inspection,

@@ -5,7 +5,6 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { prepareDoctorDatabaseMigrations } from "../../commands/doctor-schema-migrations.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -24,6 +23,7 @@ import { withEngineStoreAdmission } from "./admission-scope.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
+import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -47,7 +47,8 @@ describe.skipIf(!connection)("PostgreSQL Doctor maintenance custody", () => {
     await client.connect();
     env = { ...process.env, OPENCLAW_STATE_DIR: directories.make("maintenance-postgres-") };
     installDatabaseEngineSelection({
-      input: { connection: connection!, schemaPrefix: "maintenance_conformance" },
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: connection!, schemaPrefix: "maintenance_conformance" },
     });
     namespace = withEngineStoreAdmission(() =>
       runOpenClawStateWriteTransaction(
@@ -186,32 +187,11 @@ describe.skipIf(!connection)("PostgreSQL Doctor maintenance custody", () => {
       await gateway!.release();
     }
   });
-
-  it("keeps schema migration blocked with an actionable state-family backup requirement", async () => {
-    const lock = await maintenanceLock(env);
-    expect(lock).not.toBeNull();
-    try {
-      const pathname = resolveOpenClawStateSqlitePath(env);
-      await expect(
-        lock!.run(() =>
-          prepareDoctorDatabaseMigrations({
-            env,
-            pendingDatabasePaths: [pathname],
-            databasePaths: [pathname],
-          }),
-        ),
-      ).rejects.toThrow(
-        "Keep the current database and retry with an OpenClaw version that supports state-family PostgreSQL backups",
-      );
-    } finally {
-      await lock!.release();
-    }
-  });
 });
 
 it("preserves the SQLite maintenance inspection statements byte for byte", () => {
   resetDatabaseEngineSelectionForTest();
-  installDatabaseEngineSelection({ input: undefined });
+  installDatabaseEngineSelection({ effectiveEngines: resolveDatabaseFamilyEngines({}) });
   const env = { ...process.env, OPENCLAW_STATE_DIR: directories.make("maintenance-sqlite-") };
   runOpenClawStateWriteTransaction(() => {}, { env });
   const pathname = resolveOpenClawStateSqlitePath(env);

@@ -52,10 +52,6 @@ const commandQueueMocks = vi.hoisted(() => ({
 vi.mock(import("../../process/command-queue.js"), async (importOriginal) => ({
   ...(await importOriginal()),
   ...commandQueueMocks,
-  prepareCommandLaneClear:
-    (...params: Parameters<typeof commandQueueMocks.clearCommandLane>) =>
-    () =>
-      commandQueueMocks.clearCommandLane(...params),
 }));
 
 const acpManagerMocks = vi.hoisted(() => ({
