@@ -39,6 +39,48 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function fixture(prefix: string, sql?: string) {
+  const root = tempDirs.make(`openclaw-integrity-${prefix}-`);
+  const source = path.join(root, "source.sqlite");
+  if (sql === undefined) {
+    fs.writeFileSync(source, "retained source");
+  } else {
+    const db = new (requireNodeSqlite().DatabaseSync)(source);
+    try {
+      db.exec(sql);
+    } finally {
+      db.close();
+    }
+  }
+  return { root, source };
+}
+
+function inspect(
+  source: string,
+  signal = new AbortController().signal,
+  timing?: SqliteIntegrityCheckTiming,
+) {
+  return assertSqliteIntegrityInWorker(source, 250, signal, undefined, timing);
+}
+
+function inScope<T>(run: () => Promise<T>) {
+  return withSqliteIntegrityWorkerScope(() => {}, run);
+}
+
+function useWorker(root: string, name: string, program: string) {
+  const worker = path.join(root, name);
+  fs.writeFileSync(worker, program);
+  vi.spyOn(processUrls, "resolveRuntimeProcessEntrypointUrl").mockReturnValue(
+    pathToFileURL(worker),
+  );
+}
+
+function expectElapsed(value: unknown) {
+  expect(value).toEqual(expect.any(Number));
+  expect(Number.isFinite(value)).toBe(true);
+  expect(value).toBeGreaterThanOrEqual(0);
+}
+
 describe("SQLite integrity child", () => {
   afterEach(() => vi.restoreAllMocks());
   it("does not publish a quick worker result as full integrity verification", async () => {
@@ -68,8 +110,7 @@ describe("SQLite integrity child", () => {
   });
 
   it("reports bounded progress while native integrity is blocked and stops after cancellation", async () => {
-    const source = path.join(tempDirs.make("openclaw-integrity-progress-"), "source.sqlite");
-    fs.writeFileSync(source, "retained source");
+    const { source } = fixture("progress");
     progress.mockClear();
     const worker = new ChildProcess();
     worker.send = vi.fn(() => true);
@@ -81,10 +122,7 @@ describe("SQLite integrity child", () => {
     const controller = new AbortController();
     vi.useFakeTimers();
     try {
-      const check = withSqliteIntegrityWorkerScope(
-        () => {},
-        () => assertSqliteIntegrityInWorker(source, 250, controller.signal),
-      );
+      const check = inScope(() => inspect(source, controller.signal));
       await vi.advanceTimersByTimeAsync(0);
       worker.emit("message", { type: "phase", phase: "checking" });
       await vi.advanceTimersByTimeAsync(30_000);
@@ -127,17 +165,7 @@ describe("SQLite integrity child", () => {
       }
       const timing: SqliteIntegrityCheckTiming = {};
       vi.mocked(fork).mockClear();
-      const check = withSqliteIntegrityWorkerScope(
-        () => {},
-        () =>
-          assertSqliteIntegrityInWorker(
-            source,
-            250,
-            new AbortController().signal,
-            undefined,
-            timing,
-          ),
-      );
+      const check = inScope(() => inspect(source, undefined, timing));
       if (damage === "healthy") {
         await expect(check).resolves.toBeUndefined();
       } else {
@@ -157,20 +185,14 @@ describe("SQLite integrity child", () => {
   );
 
   it("reports a SIGTERM close without an integrity verdict as an interruption", async () => {
-    const root = tempDirs.make("openclaw-integrity-signal-");
-    const source = path.join(root, "source.sqlite");
-    fs.writeFileSync(source, "retained source");
+    const { source } = fixture("signal");
     const worker = new ChildProcess();
     worker.send = vi.fn(() => {
       queueMicrotask(() => worker.emit("close", null, "SIGTERM"));
       return true;
     });
     vi.mocked(fork).mockReturnValueOnce(worker);
-    const failure = await assertSqliteIntegrityInWorker(
-      source,
-      250,
-      new AbortController().signal,
-    ).catch((error: unknown) => error);
+    const failure = await inspect(source).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(SqliteIntegrityWorkerInterruptedError);
     expect(failure).toMatchObject({ signal: "SIGTERM" });
@@ -190,9 +212,7 @@ describe("SQLite integrity child", () => {
       expect(fs.statSync(`${source}-wal`).size).toBeGreaterThan(32 * 1024 * 1024);
       vi.mocked(fork).mockClear();
 
-      await expect(
-        assertSqliteIntegrityInWorker(source, 250, new AbortController().signal),
-      ).resolves.toBeUndefined();
+      await expect(inspect(source)).resolves.toBeUndefined();
 
       expect(fork).toHaveBeenCalledExactlyOnceWith(
         expect.any(URL),
@@ -211,13 +231,11 @@ describe("SQLite integrity child", () => {
   ])(
     "joins a stuck scan before releasing ownership (reused=$reuse, cancelled=$cancel)",
     async ({ reuse, cancel }) => {
-      const root = tempDirs.make("openclaw-integrity-timeout-");
-      const source = path.join(root, "source.sqlite");
-      fs.writeFileSync(source, "retained source");
-      const worker = path.join(root, "blocked.mjs");
+      const { root, source } = fixture("timeout");
       const ready = path.join(root, "ready");
-      fs.writeFileSync(
-        worker,
+      useWorker(
+        root,
+        "blocked.mjs",
         `import fs from 'node:fs';
       process.on('SIGTERM', () => {});
       process.on('message', () => {
@@ -225,9 +243,6 @@ describe("SQLite integrity child", () => {
         process.send({ type: 'phase', phase: 'checking' });
       });
       setTimeout(() => process.exit(0), 35000);`,
-      );
-      vi.spyOn(processUrls, "resolveRuntimeProcessEntrypointUrl").mockReturnValue(
-        pathToFileURL(worker),
       );
       const actual =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -266,14 +281,12 @@ describe("SQLite integrity child", () => {
       }
       const started = performance.now();
       try {
-        const inspect = () =>
-          assertSqliteIntegrityInWorker(source, 250, controller.signal).finally(() => {
+        const run = () =>
+          inspect(source, controller.signal).finally(() => {
             // Ownership must end after close, not merely after requesting termination.
             expect(closeSignal).toBe("SIGKILL");
           });
-        await expect(
-          reuse ? withSqliteIntegrityWorkerScope(() => {}, inspect) : inspect(),
-        ).rejects.toThrow(
+        await expect(reuse ? inScope(run) : run()).rejects.toThrow(
           cancel
             ? "synthetic active maintenance abort"
             : `SQLite integrity check timed out after ${reuse ? 2 : 301} seconds (budget for 15 B) for ${source}. Stop the Gateway service and other OpenClaw processes using this database, then retry; if already stopped, check storage performance. (lastObservedPhase=checking)`,
@@ -314,9 +327,9 @@ describe("SQLite integrity child", () => {
         });
       }
       database.close();
-      const worker = path.join(root, "completed.mjs");
-      fs.writeFileSync(
-        worker,
+      useWorker(
+        root,
+        "completed.mjs",
         `import { DatabaseSync } from 'node:sqlite';
         process.once('message', ({ pathname }) => {
           const database = new DatabaseSync(pathname, { readOnly: true });
@@ -329,9 +342,6 @@ describe("SQLite integrity child", () => {
             process.send(verdict, () => process.disconnect());
           });
         });`,
-      );
-      vi.spyOn(processUrls, "resolveRuntimeProcessEntrypointUrl").mockReturnValue(
-        pathToFileURL(worker),
       );
       const actual =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -375,12 +385,10 @@ describe("SQLite integrity child", () => {
         return launched;
       });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const check = withSqliteIntegrityWorkerScope(
-        () => {},
-        () =>
-          assertSqliteIntegrityInWorker(source, 250, new AbortController().signal).finally(() => {
-            expect(closeDelivered).toBe(true);
-          }),
+      const check = inScope(() =>
+        inspect(source).finally(() => {
+          expect(closeDelivered).toBe(true);
+        }),
       );
       const outcome = check.catch((error: unknown) => error);
       const original = new Error("synthetic recorded IPC failure");
@@ -462,12 +470,10 @@ describe("SQLite integrity child", () => {
   ])(
     "waits for close and preserves the verdict independently of optional timing: $messages",
     async ({ messages, completes, checkMs, errorMessage }) => {
-      const root = tempDirs.make("openclaw-integrity-protocol-");
-      const source = path.join(root, "source.sqlite");
-      fs.writeFileSync(source, "retained source");
-      const worker = path.join(root, "messages.mjs");
-      fs.writeFileSync(
-        worker,
+      const { root, source } = fixture("protocol");
+      useWorker(
+        root,
+        "messages.mjs",
         `process.once('message', async () => {
         process.once('message', () => process.disconnect());
         for (const message of ${messages}) {
@@ -475,9 +481,6 @@ describe("SQLite integrity child", () => {
         }
         process.send({ type: 'test-ready' });
       });`,
-      );
-      vi.spyOn(processUrls, "resolveRuntimeProcessEntrypointUrl").mockReturnValue(
-        pathToFileURL(worker),
       );
       const actual =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -507,13 +510,7 @@ describe("SQLite integrity child", () => {
         return launched;
       });
       const timing: SqliteIntegrityCheckTiming = {};
-      const check = assertSqliteIntegrityInWorker(
-        source,
-        250,
-        new AbortController().signal,
-        undefined,
-        timing,
-      );
+      const check = inspect(source, undefined, timing);
       let settled = false;
       void check.then(
         () => {
@@ -541,9 +538,7 @@ describe("SQLite integrity child", () => {
           errorMessage ?? /without a completed check.*lastObservedPhase=checking/,
         );
       }
-      expect(timing.workerLifetimeElapsedMs).toEqual(expect.any(Number));
-      expect(Number.isFinite(timing.workerLifetimeElapsedMs)).toBe(true);
-      expect(timing.workerLifetimeElapsedMs).toBeGreaterThanOrEqual(0);
+      expectElapsed(timing.workerLifetimeElapsedMs);
       if (checkMs === undefined) {
         expect(timing).not.toHaveProperty("workerCheckElapsedMs");
       } else {
@@ -553,36 +548,28 @@ describe("SQLite integrity child", () => {
   );
 
   it("joins a queued cancellation and rejects callbacks inherited from a closed maintenance scope", async () => {
-    const source = path.join(tempDirs.make("openclaw-integrity-queue-"), "source.sqlite");
-    const database = new (requireNodeSqlite().DatabaseSync)(source);
-    database.exec("CREATE TABLE retained (value TEXT); INSERT INTO retained VALUES ('data');");
-    database.close();
+    const { source } = fixture(
+      "queue",
+      "CREATE TABLE retained (value TEXT); INSERT INTO retained VALUES ('data');",
+    );
     const abort = new AbortController();
     let late: (() => Promise<void>) | undefined;
     vi.mocked(fork).mockClear();
-    await withSqliteIntegrityWorkerScope(
-      () => {},
-      async () => {
-        const first = assertSqliteIntegrityInWorker(source, 250, new AbortController().signal);
-        const queued = assertSqliteIntegrityInWorker(source, 250, abort.signal);
-        const rejected = expect(queued).rejects.toThrow("queued maintenance cancelled");
-        abort.abort(new Error("queued maintenance cancelled"));
-        await first;
-        await rejected;
-        expect(fork).toHaveBeenCalledOnce();
-        const result = expectDefined(
-          vi.mocked(fork).mock.results[0],
-          "queued integrity fork result",
-        );
-        if (result.type !== "return") {
-          throw new Error("Integrity worker did not start");
-        }
-        expect(result.value.exitCode).toBe(0);
-        late = AsyncResource.bind(() =>
-          assertSqliteIntegrityInWorker(source, 250, new AbortController().signal),
-        );
-      },
-    );
+    await inScope(async () => {
+      const first = inspect(source);
+      const queued = inspect(source, abort.signal);
+      const rejected = expect(queued).rejects.toThrow("queued maintenance cancelled");
+      abort.abort(new Error("queued maintenance cancelled"));
+      await first;
+      await rejected;
+      expect(fork).toHaveBeenCalledOnce();
+      const result = expectDefined(vi.mocked(fork).mock.results[0], "queued integrity fork result");
+      if (result.type !== "return") {
+        throw new Error("Integrity worker did not start");
+      }
+      expect(result.value.exitCode).toBe(0);
+      late = AsyncResource.bind(() => inspect(source));
+    });
     await expect(late?.()).rejects.toThrow("maintenance scope is closed");
     expect(fork).toHaveBeenCalledOnce();
   });
@@ -594,20 +581,17 @@ describe("SQLite integrity child", () => {
   ])(
     "preserves error, timing and native close ownership: $failClosingPhase / $failOpen / $failNativeClose / $reuse",
     async ({ failClosingPhase, failOpen, failNativeClose, reuse }) => {
-      const root = tempDirs.make("openclaw-integrity-native-");
-      const source = path.join(root, "source.sqlite");
-      const db = new (requireNodeSqlite().DatabaseSync)(source);
-      db.exec(
+      const { root, source } = fixture(
+        "native",
         "PRAGMA foreign_keys = OFF; CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(parent_id INTEGER REFERENCES parent(id)); INSERT INTO child VALUES (42);",
       );
-      db.close();
       const entry = processUrls.resolveRuntimeProcessEntrypointUrl("sqliteIntegrity");
       const phases = path.join(root, "phases.jsonl");
       const closed = path.join(root, "closed.json");
       const resultPath = path.join(root, "result.json");
-      const worker = path.join(root, "observed-worker.mts");
-      fs.writeFileSync(
-        worker,
+      useWorker(
+        root,
+        "observed-worker.mts",
         `import fs from 'node:fs';
         import { createRequire } from 'node:module';
         const sqlite = createRequire(import.meta.url)('node:sqlite');
@@ -638,9 +622,6 @@ describe("SQLite integrity child", () => {
         };
         await import(${JSON.stringify(entry.href)});`,
       );
-      vi.spyOn(processUrls, "resolveRuntimeProcessEntrypointUrl").mockReturnValue(
-        pathToFileURL(worker),
-      );
       const timing: SqliteIntegrityCheckTiming = {};
       const expectedError = failNativeClose
         ? { message: "synthetic native close failure" }
@@ -650,11 +631,8 @@ describe("SQLite integrity child", () => {
               name: "SqliteIntegrityError",
               message: expect.stringContaining("foreign_key_check failed"),
             };
-      const inspect = () =>
-        assertSqliteIntegrityInWorker(source, 250, new AbortController().signal, undefined, timing);
-      await expect(
-        reuse ? withSqliteIntegrityWorkerScope(() => {}, inspect) : inspect(),
-      ).rejects.toMatchObject(expectedError);
+      const run = () => inspect(source, undefined, timing);
+      await expect(reuse ? inScope(run) : run()).rejects.toMatchObject(expectedError);
       const child = vi.mocked(fork).mock.results.at(-1)?.value as ReturnType<typeof fork>;
       expect(child.exitCode).toBe(0);
       expect(fs.existsSync(phases)).toBe(true);
@@ -677,9 +655,7 @@ describe("SQLite integrity child", () => {
         } else {
           expect(JSON.parse(fs.readFileSync(closed, "utf8"))).toEqual({ isOpen: false });
         }
-        expect(result.checkElapsedMs).toEqual(expect.any(Number));
-        expect(Number.isFinite(result.checkElapsedMs)).toBe(true);
-        expect(result.checkElapsedMs).toBeGreaterThanOrEqual(0);
+        expectElapsed(result.checkElapsedMs);
         expect(timing.workerCheckElapsedMs).toBe(result.checkElapsedMs);
       }
       expect(timing.workerLifetimeElapsedMs).toEqual(expect.any(Number));

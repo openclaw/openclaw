@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { DatabaseSync } from "node:sqlite";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import { SQLITE_CAPABILITY_PROBE } from "../../node-sqlite.mjs";
@@ -12,6 +11,24 @@ function probeSqlite(Database: unknown): unknown {
     Error,
     Uint8Array,
   });
+}
+
+const moduleUrl = new URL("../../node-sqlite.mjs", import.meta.url).href;
+const sharedProbe = `
+          const pending = detectCurrentSqliteCapabilities();
+          const samePending = pending === detectCurrentSqliteCapabilities();
+          const capabilities = await pending;
+          const sameResult = capabilities === await detectCurrentSqliteCapabilities();
+`;
+
+function runProbe(script: string, env?: NodeJS.ProcessEnv): unknown {
+  return JSON.parse(
+    execFileSync(
+      env ? resolveTestNodeExecPath() : process.execPath,
+      ["--input-type=module", "-e", script],
+      { encoding: "utf8", timeout: 10_000, ...(env ? { env } : {}) },
+    ),
+  );
 }
 
 describe("SQLite NUL capability probe", () => {
@@ -38,19 +55,13 @@ describe("SQLite NUL capability probe", () => {
               if (corruption === "throw") {
                 throw new Error("read failed");
               }
-              if (corruption === "text") {
-                this.row.text_value = "a";
-              }
-              if (corruption === "trailing") {
-                this.row.text_value = "a\0b";
-              }
-              if (corruption === "blob") {
-                this.row.blob_value = new Uint8Array([97]);
-              }
-              if (corruption === "json") {
-                this.row.json_value = '{"value":"a"}';
-              }
-              return this.row;
+              const overrides: Partial<Record<typeof corruption, Record<string, unknown>>> = {
+                text: { text_value: "a" },
+                trailing: { text_value: "a\0b" },
+                blob: { blob_value: new Uint8Array([97]) },
+                json: { json_value: '{"value":"a"}' },
+              };
+              return { ...this.row, ...overrides[corruption] };
             },
           };
         }
@@ -68,37 +79,8 @@ describe("SQLite NUL capability probe", () => {
     },
   );
 
-  it("round-trips NULs through the real loaded SQLite binding", () => {
-    expect(probeSqlite(DatabaseSync)).toMatchObject({
-      available: true,
-      text: true,
-      blob: true,
-      json: true,
-    });
-  });
-
-  it("executes the serialized SQLite probe in a fresh Node process", () => {
-    const output = execFileSync(
-      process.execPath,
-      ["-e", `process.stdout.write(JSON.stringify(${SQLITE_CAPABILITY_PROBE}))`],
-      { encoding: "utf8", timeout: 10_000 },
-    );
-    expect(JSON.parse(output)).toMatchObject({
-      available: true,
-      text: true,
-      blob: true,
-      json: true,
-    });
-  });
-
   it("shares one worker probe and joins its exit before returning capabilities", () => {
-    const moduleUrl = new URL("../../node-sqlite.mjs", import.meta.url).href;
-    const output = execFileSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        `
+    const output = runProbe(`
           import { DatabaseSync, StatementSync } from "node:sqlite";
           const counts = {};
           for (const [prototype, names] of [
@@ -121,19 +103,13 @@ describe("SQLite NUL capability probe", () => {
             worker.once("exit", () => workersExited++);
           });
           const { detectCurrentSqliteCapabilities } = await import(${JSON.stringify(moduleUrl)});
-          const pending = detectCurrentSqliteCapabilities();
-          const samePending = pending === detectCurrentSqliteCapabilities();
-          const capabilities = await pending;
-          const sameResult = capabilities === await detectCurrentSqliteCapabilities();
+          ${sharedProbe}
           process.stdout.write(JSON.stringify({
             asynchronous: pending instanceof Promise,
             samePending, sameResult, capabilities, workersStarted, workersExited, counts,
           }));
-        `,
-      ],
-      { encoding: "utf8", timeout: 10_000 },
-    );
-    expect(JSON.parse(output)).toMatchObject({
+        `);
+    expect(output).toMatchObject({
       asynchronous: true,
       samePending: true,
       sameResult: true,
@@ -147,13 +123,8 @@ describe("SQLite NUL capability probe", () => {
   it.each([false, true])(
     "validates real SQLite when Node denies workers (SQL failure=%s)",
     (sqlFailure) => {
-      const moduleUrl = new URL("../../node-sqlite.mjs", import.meta.url).href;
-      const output = execFileSync(
-        resolveTestNodeExecPath(),
-        [
-          "--input-type=module",
-          "-e",
-          `
+      const output = runProbe(
+        `
             import { DatabaseSync } from "node:sqlite";
             import { Worker } from "node:worker_threads";
             let closed = 0;
@@ -170,10 +141,7 @@ describe("SQLite NUL capability probe", () => {
             let workersStarted = 0;
             process.on("worker", () => workersStarted++);
             const { detectCurrentSqliteCapabilities, nodeRuntimeFailure } = await import(${JSON.stringify(moduleUrl)});
-            const pending = detectCurrentSqliteCapabilities();
-            const samePending = pending === detectCurrentSqliteCapabilities();
-            const capabilities = await pending;
-            const sameResult = capabilities === await detectCurrentSqliteCapabilities();
+            ${sharedProbe}
             let workerDenied;
             try {
               new Worker("", { eval: true });
@@ -191,14 +159,9 @@ describe("SQLite NUL capability probe", () => {
               },
             }));
           `,
-        ],
-        {
-          encoding: "utf8",
-          timeout: 10_000,
-          env: { ...process.env, NODE_OPTIONS: "--permission --allow-fs-read=*" },
-        },
+        { ...process.env, NODE_OPTIONS: "--permission --allow-fs-read=*" },
       );
-      expect(JSON.parse(output)).toMatchObject({
+      expect(output).toMatchObject({
         asynchronous: true,
         samePending: true,
         sameResult: true,
