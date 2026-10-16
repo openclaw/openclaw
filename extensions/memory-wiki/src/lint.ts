@@ -231,7 +231,7 @@ function collectPageIssues(
       );
     }
 
-    if (typeof page.confidence === "number" && page.confidence < 0.5) {
+    if (page.confidence !== undefined && page.confidence < 0.5) {
       addIssue(
         "low-confidence",
         page.relativePath,
@@ -262,7 +262,7 @@ function collectPageIssues(
         `${label} is missing structured evidence.`,
       );
     }
-    if (typeof claim.confidence === "number" && claim.confidence < 0.5) {
+    if (claim.confidence !== undefined && claim.confidence < 0.5) {
       addIssue(
         "claim-low-confidence",
         claim.pagePath,

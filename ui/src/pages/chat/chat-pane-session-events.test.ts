@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -11,6 +10,7 @@ import type {
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
 import { solidContent } from "../../lit/solid-content.tsx";
+import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -506,7 +506,7 @@ describe("mounted pane session event ownership", () => {
         const container = document.createElement("div");
         const draw = () => {
           const controls = composerControls(state, "example/primary");
-          render(controls.composerControls, container);
+          renderPaneLegacyContent(controls.composerControls, container);
           return container.querySelector<HTMLElement>("[data-chat-model-select]");
         };
         const initialModel = draw();
@@ -700,7 +700,7 @@ describe("mounted pane session event ownership", () => {
       expect(selectedChatSessionRow(state)).toMatchObject(observed);
       const container = document.createElement("div");
       const draw = () => {
-        render(
+        renderPaneLegacyContent(
           solidContent(ChatPermissionPicker, composerControls(state).permissionPicker),
           container,
         );

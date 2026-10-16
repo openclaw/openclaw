@@ -20,8 +20,8 @@ export function resolveSnapshotPlan(params: {
   hasPlaywright: boolean;
 }) {
   const mode = params.query.mode === "efficient" ? "efficient" : undefined;
-  const labels = toBoolean(params.query.labels) ?? undefined;
-  const urls = toBoolean(params.query.urls) ?? undefined;
+  const labels = toBoolean(params.query.labels);
+  const urls = toBoolean(params.query.urls);
   const explicitFormat =
     params.query.format === "aria" ? "aria" : params.query.format === "ai" ? "ai" : undefined;
   const format =

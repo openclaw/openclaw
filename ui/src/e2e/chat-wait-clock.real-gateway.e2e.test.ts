@@ -142,14 +142,19 @@ function assertClocks(measured: Awaited<ReturnType<typeof clocks>>, endedAt: num
 }
 async function capture(page: Page, parent: Locator, name: string, content: Locator[]) {
   const text = (await page.locator("body").textContent()) ?? "";
-  for (const secret of [
-    instance.gatewayToken,
-    instance.hookToken,
-    instance.homeDir,
-    instance.stateDir,
-    "synthetic-wait-fixture-key",
-  ]) {
-    expect(text.includes(secret), "capture contains private fixture data").toBe(false);
+  // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
+  const visibleText = await page.locator("body").innerText();
+  for (const [category, secret] of [
+    ["gatewayToken", instance.gatewayToken],
+    ["hookToken", instance.hookToken],
+    ["homeDir", instance.homeDir],
+    ["stateDir", instance.stateDir],
+    ["fixtureKey", "synthetic-wait-fixture-key"],
+  ] as const) {
+    expect(
+      text.includes(secret),
+      `${category}: visible-text-match=${visibleText.includes(secret)}`,
+    ).toBe(false);
   }
   expect(new URL(page.url()).hash).toBe("");
   expect(await page.locator(".community-invite-card:visible").count()).toBe(0);

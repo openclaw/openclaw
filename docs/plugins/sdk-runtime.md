@@ -128,7 +128,9 @@ local tool calls are also denied, with at most two additional inference attempts
 On Anthropic, changing tool choice invalidates the messages cache, but preserves
 the tool and system caches. Other APIs without a supported hosted-tool prohibition
 are rejected when the recorded request contains tools.
-Snapshots stay in bounded process memory until expiry or session cleanup.
+The built-in runtime keeps snapshots for up to 90 minutes, with a shared 64 MiB
+request-data budget and at most 1,000 sessions, until expiry or session cleanup.
+Keeping a snapshot does not retain the completed parent session or its transcript manager.
 The built-in runtime retains the prepared provider prefix instead of a second copy
 of conversation history. Forks convert only later publications and the side question;
 HTTP continuations retain the full prefix even when the parent sends only a suffix.

@@ -12,12 +12,9 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { renderSolidRef } from "../../../test-helpers/render-solid-ref.ts";
-import {
-  prepareMarkdownMedia,
-  renderMarkdownMedia,
-  type MarkdownMedia,
-} from "./chat-message-media-markdown.ts";
-import { renderMessageMarkdown } from "./chat-message-text.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { prepareMarkdownMedia, type MarkdownMedia } from "./chat-message-media-markdown.ts";
+import { renderMarkdownMedia, renderMessageMarkdown } from "./chat-message-text.test-support.ts";
 
 let container: HTMLDivElement;
 let blocks: ReturnType<typeof renderSolidRef>;
@@ -460,8 +457,13 @@ describe("streaming Markdown DOM", () => {
       expect(container.querySelector("button")).toBe(card);
       expect(card.textContent).toBe("denied");
       part.setConnected(false);
+      flush();
+      expect(connections).toEqual([false]);
+      expect(container.querySelector("button")).toBe(card);
       part.setConnected(true);
+      flush();
       expect(connections).toEqual([false, true]);
+      expect(container.querySelector("button")).toBe(card);
       policy = "allowed again";
       draw(source, { streaming: false, media: prepared.media });
       expect(card.textContent).toBe("allowed again");

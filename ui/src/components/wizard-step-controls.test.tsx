@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { choosePickerValue, updatePickers } from "../test-helpers/select-picker.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { WizardStepControls } from "./wizard-step-controls.tsx";
 
@@ -198,6 +199,34 @@ describe("WizardStepControls", () => {
       expect(cancel).toHaveBeenCalledOnce();
     },
   );
+
+  it("submits the channel ID from a single-choice picker", async () => {
+    const answer = vi.fn();
+    const { container } = mountSolid(() => (
+      <WizardStepControls
+        step={{
+          id: "channel",
+          type: "select",
+          message: "Choose a channel",
+          options: [
+            { label: "Telegram", value: "telegram" },
+            { label: "Discord", value: "discord" },
+          ],
+        }}
+        value="telegram"
+        busy={false}
+        inputId="wizard-channel"
+        presentation="channels"
+        channelSelect
+        onValueChange={vi.fn()}
+        onAnswer={answer}
+      />
+    ));
+    await updatePickers(container);
+    const picker = container.querySelector<HTMLElement>("openclaw-select-picker")!;
+    await choosePickerValue(picker, "discord");
+    expect(answer).toHaveBeenCalledExactlyOnceWith("discord");
+  });
 
   it("delegates channel multiselect toggles and submits the caller-owned selection", () => {
     const change = vi.fn();

@@ -9,9 +9,13 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/r
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
+import { withDoctorConfigMaintenance } from "../commands/doctor-config-flow.test-support.js";
+import { maybeRepairCronInferenceBindings } from "../commands/doctor/cron/inference-binding-migration.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import "../llm/ai-transport-host.js";
+import { connectUserModelAccountAsync } from "../state/user-model-account-operations.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
@@ -356,7 +360,12 @@ describe("legacy cron jobs without a recorded account through the real embedded 
     };
   }
 
-  async function runLegacyJob(params: { openaiApiKey?: string; storedProfile: boolean }) {
+  async function runLegacyJob(params: {
+    openaiApiKey?: string;
+    storedProfile: boolean;
+    personalFirst?: boolean;
+    migrate?: boolean;
+  }) {
     return await withOpenClawTestState(
       {
         label: "cron-legacy-account",
@@ -429,9 +438,18 @@ describe("legacy cron jobs without a recorded account through the real embedded 
             ],
           });
         }
+        if (params.personalFirst) {
+          const owner = ensureProfileForEmail("cron-legacy-owner@example.test");
+          const { authProfileId } = await connectUserModelAccountAsync({
+            ownerProfileId: owner.id,
+            credential: { type: "api_key", provider: "openai", key: "synthetic-personal-key" },
+            assertCurrent() {},
+          });
+          cfg.auth = { ...cfg.auth, order: { openai: [authProfileId, platformId] } };
+        }
         await state.writeConfig(cfg);
         setRuntimeConfigSnapshot(cfg);
-        const job: CronStoredJob = {
+        const stored: CronStoredJob = {
           id: "legacy-account",
           name: "Legacy account",
           agentId: "main",
@@ -445,6 +463,14 @@ describe("legacy cron jobs without a recorded account through the real embedded 
           payload: { kind: "agentTurn", message: "Reply.", lightContext: true },
           state: {},
         };
+        const storePath = state.statePath("cron", "jobs.json");
+        await saveCronJobsStore(storePath, { version: 1, jobs: [stored] });
+        const migration = params.migrate
+          ? await withDoctorConfigMaintenance(() =>
+              maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
+            )
+          : undefined;
+        const job = (await loadCronJobsStore(storePath)).jobs[0]!;
         try {
           const result = await runCronIsolatedAgentTurn({
             cfg,
@@ -455,7 +481,7 @@ describe("legacy cron jobs without a recorded account through the real embedded 
             sessionKey: "cron:legacy-account",
             lane: "cron",
           });
-          return { result, requests };
+          return { result, requests, migration, job };
         } finally {
           await resetPreparedModelRuntimeSnapshotsForTest();
         }
@@ -481,5 +507,20 @@ describe("legacy cron jobs without a recorded account through the real embedded 
     expect(result.status).toBe("error");
     expect(result.error).toContain("Automation has no recorded inference account");
     expect(requests).toEqual([]);
+  });
+
+  it("records the shared account a run plans, never a personal one listed first", async () => {
+    const { result, requests, migration, job } = await runLegacyJob({
+      storedProfile: true,
+      personalFirst: true,
+      migrate: true,
+    });
+
+    expect(migration?.changes.join("\n")).toContain(`retain ${platformId}`);
+    expect(job.inferenceBinding).toMatchObject({ profileId: platformId });
+    expect(result.status, result.error).toBe("ok");
+    expect(requests).toEqual([
+      { url: `${openaiUrl}/responses`, authorization: `Bearer ${platformKey}` },
+    ]);
   });
 });

@@ -1,9 +1,10 @@
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/composer.css";
-import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import "./chat-comment-pins.tsx";
 import { CommentPreviewChip, CommentPreviewRow } from "./chat-comment-preview.tsx";
@@ -57,6 +58,7 @@ function mountComments(count: number, top: number) {
     ),
     { container },
   );
+  flush();
   return container.querySelector<HTMLElement>(".chat-selection-annotations__chip")!;
 }
 
@@ -103,6 +105,17 @@ function contrast(element: HTMLElement) {
 }
 
 describe("annotation chip and hovercard", () => {
+  it("keeps comment rows adjacent for list numbering and spacing", () => {
+    mountComments(3, 430);
+    const list = container.querySelector(".chat-comment-preview__list")!;
+    expect(list.querySelectorAll(":scope > .chat-comment-preview__item")).toHaveLength(3);
+    const following = list.querySelectorAll<HTMLElement>(
+      ".chat-comment-preview__item + .chat-comment-preview__item",
+    );
+    expect(following).toHaveLength(2);
+    expect(getComputedStyle(following[0]!).marginTop).toBe("12px");
+  });
+
   it.each([1440, 390])(
     "reads the final line of a long comment by keyboard (%ipx)",
     async (width) => {

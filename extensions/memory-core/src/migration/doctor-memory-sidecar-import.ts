@@ -168,7 +168,9 @@ function readMemoryIndexMetaVectorDimensions(
     const parsed = JSON.parse(meta.value) as { vectorDims?: unknown };
     const dimensions = Number(parsed.vectorDims);
     return Number.isSafeInteger(dimensions) && dimensions > 0 ? dimensions : undefined;
-  } catch {}
+  } catch {
+    // Legacy vector dimensions can still come from the vector table definition or row width.
+  }
   return undefined;
 }
 

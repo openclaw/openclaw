@@ -4,7 +4,6 @@ import {
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
@@ -12,7 +11,7 @@ import {
   pollProviderOperationJson,
   postJsonResponse,
   resolveProviderOperationTimeoutMs,
-  resolveProviderHttpRequestConfig,
+  resolveProviderApiKeyHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asSafeIntegerInRange,
@@ -148,34 +147,21 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
       if ((req.inputVideos?.length ?? 0) > 0) {
         throw new Error("Together video generation does not support video reference inputs.");
       }
-      const auth = await resolveApiKeyForProvider({
-        provider: "together",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("Together API key missing");
-      }
-
       const fetchFn = fetch;
+      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+        await resolveProviderApiKeyHttpRequestConfig({
+          req,
+          missingApiKeyMessage: "Together API key missing",
+          baseUrl: resolveTogetherVideoBaseUrl(req),
+          defaultBaseUrl: TOGETHER_VIDEO_BASE_URL,
+          allowPrivateNetwork: false,
+          provider: "together",
+          capability: "video",
+        });
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs,
         label: "Together video generation",
       });
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveTogetherVideoBaseUrl(req),
-          defaultBaseUrl: TOGETHER_VIDEO_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "together",
-          capability: "video",
-          transport: "http",
-        });
       const model = normalizeOptionalString(req.model) ?? DEFAULT_TOGETHER_VIDEO_MODEL;
       const isWanModel =
         model === DEFAULT_TOGETHER_VIDEO_MODEL || TOGETHER_IMAGE_TO_VIDEO_MODELS.has(model);

@@ -2,7 +2,7 @@ import { nothing, render } from "lit";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { renderMessageImages } from "../pages/chat/components/chat-message-images.ts";
-import { renderMessageMarkdown } from "../pages/chat/components/chat-message-text.ts";
+import { renderMessageMarkdown } from "../pages/chat/components/chat-message-text.test-support.ts";
 import { exportWidget } from "../pages/chat/components/widget-export.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "../pages/chat/components/browser-tab-card.tsx";

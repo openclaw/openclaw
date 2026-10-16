@@ -419,8 +419,8 @@ async function screenshotWithLabelsOnPage(
       ? Math.max(1, Math.floor(opts.maxLabels))
       : ANNOTATION_MAX_LABELS_DEFAULT;
 
-  const refKey = normalizeOptionalString(opts.ref) ?? undefined;
-  const elementSelector = normalizeOptionalString(opts.element) ?? undefined;
+  const refKey = normalizeOptionalString(opts.ref);
+  const elementSelector = normalizeOptionalString(opts.element);
   const locator = screenshotLocator(page, refKey, elementSelector);
   const space: CoordinateSpace = opts.fullPage
     ? "fullpage"

@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -13,17 +12,24 @@ import {
   scheduleCommittedChatScroll,
 } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
-import { renderChatThread } from "./chat-thread.test-support.ts";
+import {
+  render,
+  renderChatThread,
+  mountTestTranscript,
+  numberedContentRows,
+  mcpRangeRows,
+  stubMcpAppLifecycle,
+  contact,
+  TranscriptTestHost,
+} from "../test-helpers/chat-transcript-native.tsx";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
-  mountTestTranscript,
   observedElements,
   resetTranscriptTestDom,
   resizeObservers,
   threadProps,
-  TranscriptTestHost,
   type TestContentRow,
   transcriptDomState,
   transcriptRows,
@@ -31,37 +37,6 @@ import {
 } from "./chat-transcript.test-support.ts";
 
 customElements.define("scroll-restore-test-host", TranscriptTestHost);
-
-function stubMcpAppLifecycle(
-  container: ParentNode,
-  teardown: () => Promise<void> = () => Promise.resolve(),
-) {
-  const app = expectDefined(
-    container.querySelector<HTMLElement>("mcp-app-view"),
-    "mounted MCP app",
-  );
-  const lifecycle = {
-    restartAfterTeardown: vi.fn(),
-    teardown: vi.fn(teardown),
-  };
-  return { app: Object.assign(app, lifecycle), ...lifecycle };
-}
-
-function numberedContentRows(length: number): TestContentRow[] {
-  return Array.from({ length }, (_, index) => ({
-    kind: "content",
-    key: `row:${index}`,
-    content: html`<div>row ${index}</div>`,
-  }));
-}
-
-function mcpRangeRows(appContent: unknown): TestContentRow[] {
-  return Array.from({ length: 24 }, (_, index) => ({
-    kind: "content" as const,
-    key: `row:${index}`,
-    content: index === 23 ? appContent : html`<div>row ${index}</div>`,
-  }));
-}
 
 describe("chat transcript controller", () => {
   beforeEach(installTranscriptDomMocks);
@@ -87,13 +62,13 @@ describe("chat transcript controller", () => {
       expect(observedElements.has(row)).toBe(true);
     }
     if (foreignHost) {
-      render(nothing, chatFace);
+      render(null, chatFace);
       transcript.hostUpdated();
       await flushDeferredRowPrune();
     }
     const dock = document.body.appendChild(document.createElement("div"));
     render(renderChatThread(props, transcript), dock);
-    // A foreign Lit host stamps after the pane's last update; attachment must follow the DOM ref.
+    // A foreign Solid host mounts after the pane's last update; attachment must follow the DOM ref.
     if (!foreignHost) {
       transcript.hostUpdated();
     }
@@ -109,8 +84,8 @@ describe("chat transcript controller", () => {
     transcript.hostDisconnected();
   });
 
-  it("measures newly inserted rows after Lit connects them", async () => {
-    // Lit invokes ref callbacks while a new row is still detached. Browsers
+  it("measures newly inserted rows after Solid connects them", async () => {
+    // Solid invokes ref callbacks while a new row is still detached. Browsers
     // report a zero offsetHeight there, which must not become the row's
     // durable virtual size before the following user bubble is positioned.
     transcriptDomState.detachedRowHeight = 0;
@@ -141,19 +116,23 @@ describe("chat transcript controller", () => {
     const host = new TranscriptTestHost();
     const transcript = new ChatTranscriptController(host, () => "native-measured-tail");
     const rows = numberedContentRows(6);
-    host.renderTranscript = () => html`
-      <div class="chat-thread">
-        ${transcript.renderSession("agent:main:native-measured-tail", (session) => {
-          session.setContentReady(true);
-          return session.render(
-            rows,
-            (row) => (row.kind === "content" ? row.content : nothing),
-            null,
-            false,
-          );
-        })}
-      </div>
-    `;
+    const scroller = document.createElement("div");
+    scroller.className = "chat-thread";
+    host.renderTranscript = () => {
+      const content = transcript.renderSession("agent:main:native-measured-tail", (session) => {
+        session.setContentReady(true);
+        return session.render(
+          rows,
+          (row) => (row.kind === "content" ? row.content : null),
+          null,
+          false,
+        );
+      });
+      if (scroller.firstChild !== content) {
+        scroller.replaceChildren(content);
+      }
+      return scroller;
+    };
     document.body.append(host);
     await host.settleUpdates();
     const extent = expectDefined(
@@ -176,18 +155,18 @@ describe("chat transcript controller", () => {
     const teardownPending = createDeferred();
     transcriptDomState.measuredRowHeight = 180;
     const initialRows = [
-      { kind: "content" as const, key: "app", content: html`<mcp-app-view></mcp-app-view>` },
-      { kind: "content" as const, key: "group:tool", content: html`<div>tool</div>` },
-      { kind: "content" as const, key: "group:reply", content: html`<div>reply</div>` },
+      { kind: "content" as const, key: "app", content: <mcp-app-view /> },
+      { kind: "content" as const, key: "group:tool", content: <div>tool</div> },
+      { kind: "content" as const, key: "group:reply", content: <div>reply</div> },
     ];
     const regroupedRows = [
-      { kind: "content" as const, key: "history", content: html`<div>history</div>` },
+      { kind: "content" as const, key: "history", content: <div>history</div> },
       {
         kind: "content" as const,
         key: "group:reply",
-        content: html`<div>regrouped</div>`,
+        content: <div>regrouped</div>,
       },
-      { kind: "content" as const, key: "group:next", content: html`<div>next</div>` },
+      { kind: "content" as const, key: "group:next", content: <div>next</div> },
     ];
     const { container, renderRows } = await mountTestTranscript("pane-mcp-rows", initialRows);
     for (const observer of resizeObservers) {
@@ -250,15 +229,27 @@ describe("chat transcript controller", () => {
         {
           kind: "content",
           key: "retained-row",
-          content: html`<div class="chat-bubble" data-message-id="retained">retained</div>`,
+          content: (
+            <div class="chat-bubble" data-message-id="retained">
+              retained
+            </div>
+          ),
         },
       ];
       const next: TestContentRow[] = [
         {
           kind: "content",
           key: "expanded-row",
-          content: html`<div class="chat-bubble" data-message-id="older">older</div>
-            <div class="chat-bubble" data-message-id="retained">retained</div>`,
+          content: (
+            <>
+              <div class="chat-bubble" data-message-id="older">
+                older
+              </div>
+              <div class="chat-bubble" data-message-id="retained">
+                retained
+              </div>
+            </>
+          ),
         },
       ];
       const { container, session, transcript, renderRows } = await mountTestTranscript(
@@ -272,20 +263,6 @@ describe("chat transcript controller", () => {
         );
         renderRows(initial);
         const bubble = expectDefined(container.querySelector(".chat-bubble"), "retained bubble");
-        const contact = (identifier: number, target: EventTarget): Touch => ({
-          identifier,
-          target,
-          clientX: 0,
-          clientY: 100,
-          pageX: 0,
-          pageY: 100,
-          screenX: 0,
-          screenY: 100,
-          radiusX: 1,
-          radiusY: 1,
-          rotationAngle: 0,
-          force: 1,
-        });
         const owned = contact(1, bubble);
         const remaining = outsideContact ? [contact(2, document.body)] : [];
         bubble.dispatchEvent(
@@ -354,17 +331,19 @@ describe("chat transcript controller", () => {
               {
                 kind: "content" as const,
                 key: "app",
-                content: html`<mcp-app-view></mcp-app-view>`,
+                content: <mcp-app-view />,
               },
-              { kind: "content" as const, key: "reply", content: html`<div>reply</div>` },
+              { kind: "content" as const, key: "reply", content: <div>reply</div> },
             ]
           : mcpRangeRows(
-              focused
-                ? html`<mcp-app-view
-                    ><iframe title="Retained application"></iframe
-                    ><button>focus app</button></mcp-app-view
-                  >`
-                : html`<mcp-app-view></mcp-app-view>`,
+              focused ? (
+                <mcp-app-view>
+                  <iframe title="Retained application" />
+                  <button>focus app</button>
+                </mcp-app-view>
+              ) : (
+                <mcp-app-view />
+              ),
             );
       const { container, renderRows } = await mountTestTranscript("pane-mcp-range", initialRows);
       const { app, teardown } = stubMcpAppLifecycle(container);
@@ -379,7 +358,7 @@ describe("chat transcript controller", () => {
       }
       renderRows(
         change === "append"
-          ? [...initialRows, { kind: "content", key: "next", content: html`<div>next</div>` }]
+          ? [...initialRows, { kind: "content", key: "next", content: <div>next</div> }]
           : [initialRows.at(-1)!, ...initialRows.slice(0, -1)],
       );
       if (change === "reorder") {
@@ -531,10 +510,10 @@ describe("chat transcript controller", () => {
         session.setContentReady(true);
         return session.render(
           rows,
-          (row) => (row.kind === "content" ? row.content : nothing),
+          (row) => (row.kind === "content" ? row.content : null),
           null,
           false,
-          html`<output>${policy.chatReadingHistory ? "Reading history" : "Following"}</output>`,
+          <output>{policy.chatReadingHistory ? "Reading history" : "Following"}</output>,
         );
       });
     try {
@@ -766,7 +745,7 @@ describe("chat transcript controller", () => {
       const typing: TestContentRow = {
         kind: "content",
         key: "presence:typing",
-        content: html`<div>Typing</div>`,
+        content: <div>Typing</div>,
       };
       const { container, renderRows } = await mountTestTranscript(
         "retired-end-index",
@@ -810,7 +789,7 @@ describe("chat transcript controller", () => {
         transcriptDomState.measuredRowHeight = 120;
         const next: TestContentRow[] = [
           ...content,
-          { kind: "content", key: "peer", content: html`<div>Peer</div>` },
+          { kind: "content", key: "peer", content: <div>Peer</div> },
           typing,
         ];
         renderRows(next);
@@ -1015,7 +994,7 @@ describe("chat transcript controller", () => {
         {
           kind: "content",
           key: "disclosure",
-          content: html`<button aria-expanded="false">Expand</button>`,
+          content: <button aria-expanded="false">Expand</button>,
         },
       ];
       const { container } = await mountTestTranscript(`disclosure-${interrupt}`, rows, transcript);
@@ -1057,8 +1036,8 @@ describe("chat transcript controller", () => {
       anchorToEnd: false,
     });
     const rows: TestContentRow[] = [
-      { kind: "content", key: "history", content: html`<div>History</div>` },
-      { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
+      { kind: "content", key: "history", content: <div>History</div> },
+      { kind: "content", key: "presence:typing", content: <div>Typing</div> },
     ];
     const { container, transcript, renderRows } = await mountTestTranscript(paneId, rows);
     try {
