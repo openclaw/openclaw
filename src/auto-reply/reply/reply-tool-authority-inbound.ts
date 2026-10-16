@@ -7,7 +7,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { RuntimeMsgContext } from "../templating.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";
-import type { ReplyToolAuthorityInput } from "./reply-tool-authority.js";
+import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
 export function applyReplyToolAuthorityOverlay(
   snapshot: ReplyToolAuthorityInput,
