@@ -73,18 +73,10 @@ function observeAliasRootProbes(stateDir: string) {
     return exists(candidate);
   });
   return {
-    finish(label: string, rows = 100) {
+    finish() {
       existsSpy.mockRestore();
       aliasSpy.mockRestore();
-      const observation = {
-        label,
-        rows,
-        aliasRootProbes,
-        otherRootProbes: allRootProbes - aliasRootProbes,
-        allRootProbes,
-      };
-      console.log(JSON.stringify(observation));
-      return observation;
+      return { aliasRootProbes, otherRootProbes: allRootProbes - aliasRootProbes };
     },
   };
 }
@@ -188,7 +180,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       profileAliases.readUserProfileAliases(callerId);
       const before = observeAliasRootProbes(stateDir);
       const foreign = await list();
-      const beforeCount = before.finish("list-foreign").aliasRootProbes;
+      const beforeCount = before.finish().aliasRootProbes;
       expect(foreign.sessions).toHaveLength(100);
       expect(foreign.sessions.every((row) => row.sharingRole === "viewer")).toBe(true);
       expect(beforeCount).toBe(0);
@@ -197,7 +189,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       await getSessionRowProjection(context)!.ensureMaterialized();
       const after = observeAliasRootProbes(stateDir);
       const owned = await list();
-      const afterCount = after.finish("list-merged").aliasRootProbes;
+      const afterCount = after.finish().aliasRootProbes;
       expect(new Set(owned.sessions.map((row) => row.key))).toEqual(new Set(keys));
       expect(owned.sessions.every((row) => row.sharingRole === "owner")).toBe(true);
       expect(afterCount).toBe(0);
@@ -232,55 +224,48 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
     });
   });
 
-  it.each([{ shape: "aliases", count: 1 }])(
-    "bounds cold and warm broadcaster lookup work for $shape keys",
-    async ({ shape, count }) => {
-      await withCreatorRows(async ({ stateDir, callerId, keys }) => {
-        using _ = { [Symbol.dispose]: (await profileAliases.prepareUserProfileCatalog()).release };
-        linkEmail("creator@preparation.test", callerId);
-        profileAliases.readUserProfileAliases(callerId);
-        const sessionKeys = shape === "aliases" ? ["prepared-0", keys[0]!].toSorted() : keys;
-        const recipients = eventClients(callerId);
-        const access = await prepareEventAccess({});
-        let phase = "cold";
-        const { broadcast } = createGatewayBroadcaster({
-          clients: new GatewayClientRegistry(recipients.map(({ client }) => client)),
-          canReceiveSessionEvent: (client, eventKeys, agentId, event, payload) => {
-            const observer = observeAliasRootProbes(stateDir);
-            const allowed = canReceiveSessionEvent({
-              cfg: {},
-              client,
-              sessionKeys: eventKeys,
-              prepared: access.forClient(client),
-              agentId,
-              event,
-              payload,
-            });
-            const probes = observer.finish(
-              `broadcast-${shape}-${phase}-${client.connId}`,
-              eventKeys.length,
-            );
-            expect.soft(probes.aliasRootProbes).toBe(0);
-            expect.soft(probes.otherRootProbes).toBeLessThanOrEqual(7);
-            return allowed;
-          },
-        });
-        for (phase of ["cold", "warm", "repeat"]) {
-          broadcast(
-            "session.suggestion",
-            { suggestion: { author: { id: "someone-else" } } },
-            { sessionKeys, agentId: "main" },
-          );
-        }
-        for (const { socket } of recipients) {
-          expect(socket.send).toHaveBeenCalledTimes(3);
-          expect(socket.send.mock.calls.map(([frame]) => JSON.parse(String(frame)).seq)).toEqual([
-            1, 2, 3,
-          ]);
-        }
-      }, count);
-    },
-  );
+  it("bounds cold and warm broadcaster lookup work for alias keys", async () => {
+    await withCreatorRows(async ({ stateDir, callerId, keys }) => {
+      using _ = { [Symbol.dispose]: (await profileAliases.prepareUserProfileCatalog()).release };
+      linkEmail("creator@preparation.test", callerId);
+      profileAliases.readUserProfileAliases(callerId);
+      const sessionKeys = ["prepared-0", keys[0]!].toSorted();
+      const recipients = eventClients(callerId);
+      const access = await prepareEventAccess({});
+      const { broadcast } = createGatewayBroadcaster({
+        clients: new GatewayClientRegistry(recipients.map(({ client }) => client)),
+        canReceiveSessionEvent: (client, eventKeys, agentId, event, payload) => {
+          const observer = observeAliasRootProbes(stateDir);
+          const allowed = canReceiveSessionEvent({
+            cfg: {},
+            client,
+            sessionKeys: eventKeys,
+            prepared: access.forClient(client),
+            agentId,
+            event,
+            payload,
+          });
+          const probes = observer.finish();
+          expect.soft(probes.aliasRootProbes).toBe(0);
+          expect.soft(probes.otherRootProbes).toBeLessThanOrEqual(7);
+          return allowed;
+        },
+      });
+      for (let pass = 0; pass < 3; pass++) {
+        broadcast(
+          "session.suggestion",
+          { suggestion: { author: { id: "someone-else" } } },
+          { sessionKeys, agentId: "main" },
+        );
+      }
+      for (const { socket } of recipients) {
+        expect(socket.send).toHaveBeenCalledTimes(3);
+        expect(socket.send.mock.calls.map(([frame]) => JSON.parse(String(frame)).seq)).toEqual([
+          1, 2, 3,
+        ]);
+      }
+    }, 1);
+  });
 
   it("reuses cold draft lookup work for typing roles and keeps warm visible events storage-free", async () => {
     await withCreatorRows(async ({ stateDir, callerId, keys }) => {
@@ -294,7 +279,6 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
         subscribers.subscribe(client.connId, sessionKey);
       }
       let visible = false;
-      let phase = "cold-draft";
       const { broadcast } = createGatewayBroadcaster({
         clients: new GatewayClientRegistry(recipients.map(({ client }) => client)),
         sessionMessageSubscribers: subscribers,
@@ -309,7 +293,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
             payload,
             prepared: access.forClient(client),
           });
-          const probes = observer.finish(`typing-${phase}-${client.connId}`, sessionKeys.length);
+          const probes = observer.finish();
           expect.soft(probes.otherRootProbes).toBe(0);
           expect(allowed).toBe(visible);
           return allowed;
@@ -317,12 +301,10 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       });
       const emit = () => broadcast("session.typing", { sessionKey, agentId: "main", typing: true });
       emit();
-      phase = "warm-draft";
       emit();
       await upsertSessionEntryCore({ agentId: "main", sessionKey }, { visibility: "shared" });
       await access.projection.prepareMembership();
       visible = true;
-      phase = "warm-shared";
       emit();
       for (const { socket } of recipients) {
         expect(socket.send).toHaveBeenCalledOnce();
@@ -647,7 +629,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       } finally {
         setActivePluginRegistry(previousRegistry);
       }
-      const probes = observer.finish("catalog-publications").aliasRootProbes;
+      const probes = observer.finish().aliasRootProbes;
       expect(respond.mock.calls[0]?.[0]).toBe(true);
       expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
       expect(broadcastToConnIds.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions).toEqual([]);

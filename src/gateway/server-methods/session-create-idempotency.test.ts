@@ -10,9 +10,7 @@ import type {
   RespondFn,
 } from "./types.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 function createFixture(handler?: GatewayRequestHandler) {
   const context = { dedupe: new Map() } as GatewayRequestContext;
@@ -57,17 +55,34 @@ function createFixture(handler?: GatewayRequestHandler) {
     return { done: Promise.resolve(wrapped(request)), respond };
   }
 
-  return { client, context, execute, invoke };
+  async function call(...args: Parameters<typeof invoke>) {
+    const { done, respond } = invoke(...args);
+    await done;
+    return respond;
+  }
+  return { client, context, execute, invoke, call };
+}
+
+function expectCached(respond: RespondFn, key: string) {
+  expect(respond).toHaveBeenCalledWith(true, { key }, undefined, { cached: true });
+}
+
+function expectRejected(respond: RespondFn, code: string, message?: unknown) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ code, ...(message ? { message } : {}) }),
+  );
 }
 
 describe("sessions.create process-lifetime idempotency", () => {
   it("replays reordered requests and added authorization without accepting downgraded scopes", async () => {
-    const { client, context, execute, invoke } = createFixture();
-    const first = invoke({ agentId: "main", idempotencyKey: "create-once", message: "hello" });
-    await first.done;
+    const { client, context, execute, call } = createFixture();
+    await call({ agentId: "main", idempotencyKey: "create-once", message: "hello" });
+
     context.dedupe.clear();
 
-    const added = invoke(
+    const added = await call(
       { message: "hello", idempotencyKey: "create-once", agentId: "main" },
       {
         ...client,
@@ -77,50 +92,36 @@ describe("sessions.create process-lifetime idempotency", () => {
         },
       },
     );
-    await added.done;
-    expect(execute).toHaveBeenCalledOnce();
-    expect(added.respond).toHaveBeenCalledWith(true, { key: "agent:main:create-once" }, undefined, {
-      cached: true,
-    });
 
-    const downgraded = invoke(
+    expect(execute).toHaveBeenCalledOnce();
+    expectCached(added, "agent:main:create-once");
+
+    const downgraded = await call(
       { agentId: "main", idempotencyKey: "create-once", message: "hello" },
       { ...client, connect: { ...client.connect, scopes: ["operator.write"] } },
     );
-    await downgraded.done;
-    expect(downgraded.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN", message: "missing scope: operator.admin" }),
-    );
+
+    expectRejected(downgraded, "FORBIDDEN", "missing scope: operator.admin");
     expect(execute).toHaveBeenCalledOnce();
 
-    const changedRole = invoke(
+    const changedRole = await call(
       { agentId: "main", idempotencyKey: "create-once", message: "hello" },
       { ...client, connect: { ...client.connect, role: "node" } },
     );
-    await changedRole.done;
-    expect(changedRole.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    );
+
+    expectRejected(changedRole, "FORBIDDEN");
     expect(execute).toHaveBeenCalledOnce();
 
-    const conflict = invoke({
+    const conflict = await call({
       agentId: "main",
       idempotencyKey: "create-once",
       message: "different",
     });
-    await conflict.done;
-    expect(conflict.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+
+    expectRejected(conflict, "INVALID_REQUEST");
     expect(execute).toHaveBeenCalledOnce();
 
-    const differentDevice = invoke(
+    const differentDevice = await call(
       { agentId: "main", idempotencyKey: "create-once", message: "hello" },
       {
         ...client,
@@ -130,30 +131,16 @@ describe("sessions.create process-lifetime idempotency", () => {
         },
       },
     );
-    await differentDevice.done;
-    expect(differentDevice.respond).toHaveBeenCalledWith(
-      true,
-      { key: "agent:main:create-once" },
-      undefined,
-      { cached: true },
-    );
+
+    expectCached(differentDevice, "agent:main:create-once");
     expect(execute).toHaveBeenCalledOnce();
   });
 
   it("rejects idempotent creation without a principal or device namespace", async () => {
-    const { execute, invoke } = createFixture();
-    const anonymous = invoke({ agentId: "main", idempotencyKey: "create-once" }, null as never);
+    const { execute, call } = createFixture();
+    const anonymous = await call({ agentId: "main", idempotencyKey: "create-once" }, null as never);
 
-    await anonymous.done;
-
-    expect(anonymous.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("identity"),
-      }),
-    );
+    expectRejected(anonymous, "INVALID_REQUEST", expect.stringContaining("identity"));
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -176,19 +163,13 @@ describe("sessions.create process-lifetime idempotency", () => {
       message: "different",
     });
     await conflicting.done;
-    expect(conflicting.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectRejected(conflicting.respond, "INVALID_REQUEST");
 
     const joined = invoke({ agentId: "main", idempotencyKey: "long-create", message: "hello" });
     release.resolve();
     await Promise.all([original.done, joined.done]);
     expect(execute).toHaveBeenCalledOnce();
-    expect(joined.respond).toHaveBeenCalledWith(true, { key: "agent:main:finished" }, undefined, {
-      cached: true,
-    });
+    expectCached(joined.respond, "agent:main:finished");
   });
 
   it("expires only settled successful results and immediately releases failed creates", async () => {
@@ -214,30 +195,21 @@ describe("sessions.create process-lifetime idempotency", () => {
   });
 
   it("enforces capacity per owner without evicting retained successful creations", async () => {
-    const { client, execute, invoke } = createFixture();
+    const { client, execute, invoke, call } = createFixture();
     for (let index = 0; index < DEDUPE_MAX; index += 1) {
       await invoke({ agentId: "main", idempotencyKey: `create-${index}` }).done;
     }
-    const overflow = invoke({ agentId: "main", idempotencyKey: "overflow" });
-    await overflow.done;
-    expect(overflow.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", message: expect.stringContaining("retry") }),
-    );
+    const overflow = await call({ agentId: "main", idempotencyKey: "overflow" });
+    expectRejected(overflow, "UNAVAILABLE", expect.stringContaining("retry"));
     expect(execute).toHaveBeenCalledTimes(DEDUPE_MAX);
 
-    const retained = invoke({ agentId: "main", idempotencyKey: "create-0" });
-    await retained.done;
-    expect(retained.respond).toHaveBeenCalledWith(true, { key: "agent:main:create-0" }, undefined, {
-      cached: true,
-    });
+    const retained = await call({ agentId: "main", idempotencyKey: "create-0" });
+    expectCached(retained, "agent:main:create-0");
     expect(execute).toHaveBeenCalledTimes(DEDUPE_MAX);
 
     const otherOwner = { ...client, authenticatedUserId: "other-owner" };
-    const otherCreation = invoke({ agentId: "main", idempotencyKey: "create-0" }, otherOwner);
-    await otherCreation.done;
-    expect(otherCreation.respond).toHaveBeenCalledWith(
+    const otherCreation = await call({ agentId: "main", idempotencyKey: "create-0" }, otherOwner);
+    expect(otherCreation).toHaveBeenCalledWith(
       true,
       { key: "agent:main:create-0" },
       undefined,
@@ -245,27 +217,16 @@ describe("sessions.create process-lifetime idempotency", () => {
     );
     expect(execute).toHaveBeenCalledTimes(DEDUPE_MAX + 1);
 
-    const otherReplay = invoke({ agentId: "main", idempotencyKey: "create-0" }, otherOwner);
-    await otherReplay.done;
-    expect(otherReplay.respond).toHaveBeenCalledWith(
-      true,
-      { key: "agent:main:create-0" },
-      undefined,
-      { cached: true },
-    );
+    const otherReplay = await call({ agentId: "main", idempotencyKey: "create-0" }, otherOwner);
+    expectCached(otherReplay, "agent:main:create-0");
     expect(execute).toHaveBeenCalledTimes(DEDUPE_MAX + 1);
 
     for (let index = 1; index < DEDUPE_MAX; index += 1) {
       await invoke({ agentId: "main", idempotencyKey: `create-${index}` }, otherOwner).done;
     }
     const thirdOwner = { ...client, authenticatedUserId: "third-owner" };
-    const processOverflow = invoke({ agentId: "main", idempotencyKey: "create-0" }, thirdOwner);
-    await processOverflow.done;
-    expect(processOverflow.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    const processOverflow = await call({ agentId: "main", idempotencyKey: "create-0" }, thirdOwner);
+    expectRejected(processOverflow, "UNAVAILABLE");
     expect(execute).toHaveBeenCalledTimes(DEDUPE_MAX * 2);
   });
 });

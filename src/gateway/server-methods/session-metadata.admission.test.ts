@@ -107,6 +107,42 @@ function invoke(
   return { done, respond, errors };
 }
 
+async function reserve(options: Awaited<ReturnType<typeof seedMetadata>>["options"]) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const reservation = runOpenClawAgentWorkerWrite(options, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  return { release, reservation };
+}
+
+function expectRejected(request: ReturnType<typeof invoke>) {
+  expect(request.respond.mock.calls.some(([ok]) => ok)).toBe(false);
+  expect(request.errors.length === 1 || request.respond.mock.calls[0]?.[0] === false).toBe(true);
+}
+
+async function sharingRole(
+  scope: Awaited<ReturnType<typeof seedMetadata>>["scope"],
+  viewer: GatewayClient,
+  identityId: string,
+) {
+  const target = (await resolveSessionSharingTargetAsync({
+    cfg: {},
+    sessionKey: scope.sessionKey,
+    agentId: scope.agentId,
+  }))!;
+  const { members } = await readSessionMembersInWorker(scope);
+  const role = resolveSessionSharingRole({
+    cfg: {},
+    client: viewer,
+    target,
+    isMember: members.some((member) => member.identityId === identityId),
+  });
+  return { target, role };
+}
+
 describe("session metadata writer admission", () => {
   it.each(["shared", "read-only", "suggest"] as const)(
     "preserves write-scoped viewer assignment for a %s session",
@@ -117,21 +153,7 @@ describe("session metadata writer admission", () => {
           const { scope, owner, other } = await seedMetadata(state);
           replaceSessionEntrySync(scope, { ...loadSessionEntry(scope)!, visibility });
           const viewer = identifiedClient(other.id);
-          const target = (await resolveSessionSharingTargetAsync({
-            cfg: {},
-            sessionKey: scope.sessionKey,
-            agentId: scope.agentId,
-          }))!;
-          expect(
-            resolveSessionSharingRole({
-              cfg: {},
-              client: viewer,
-              target,
-              isMember: (await readSessionMembersInWorker(scope)).members.some(
-                (member) => member.identityId === other.id,
-              ),
-            }),
-          ).toBe("viewer");
+          expect((await sharingRole(scope, viewer, other.id)).role).toBe("viewer");
           const context = sessionSharingTestContext(vi.fn());
           await initializeSessionReadContext(context);
           const request = invoke(
@@ -144,22 +166,9 @@ describe("session metadata writer admission", () => {
           expect(request.errors).toEqual([]);
           expect(request.respond.mock.calls[0]?.[0]).toBe(true);
           expect(loadSessionEntry(scope)?.owner?.actor).toEqual({ type: "human", id: other.id });
-          const current = (await resolveSessionSharingTargetAsync({
-            cfg: {},
-            sessionKey: scope.sessionKey,
-            agentId: scope.agentId,
-          }))!;
-          expect(current.entry.createdActor?.id).toBe(owner.id);
-          expect(
-            resolveSessionSharingRole({
-              cfg: {},
-              client: viewer,
-              target: current,
-              isMember: (await readSessionMembersInWorker(scope)).members.some(
-                (member) => member.identityId === other.id,
-              ),
-            }),
-          ).toBe("viewer");
+          const current = await sharingRole(scope, viewer, other.id);
+          expect(current.target.entry.createdActor?.id).toBe(owner.id);
+          expect(current.role).toBe("viewer");
         },
       );
     },
@@ -182,13 +191,7 @@ describe("session metadata writer admission", () => {
           context.getRuntimeConfig = () => cfg;
           setRuntimeConfigSnapshot(cfg);
           await initializeSessionReadContext(context);
-          const entered = createDeferredCore();
-          const release = createDeferredCore();
-          const reservation = runOpenClawAgentWorkerWrite(options, async () => {
-            entered.resolve();
-            await release.promise;
-          });
-          await entered.promise;
+          const { release, reservation } = await reserve(options);
           const params =
             method === "sessions.assignOwner"
               ? { key: scope.sessionKey, owner: { type: "human", id: other.id } }
@@ -208,10 +211,7 @@ describe("session metadata writer admission", () => {
             renameSync(options.path, retired.storePath);
             release.resolve();
             await Promise.all([reservation, request.done]);
-            expect(request.respond.mock.calls.some(([ok]) => ok)).toBe(false);
-            expect(
-              request.errors.length === 1 || request.respond.mock.calls[0]?.[0] === false,
-            ).toBe(true);
+            expectRejected(request);
             expect(existsSync(options.path)).toBe(false);
             for (const target of [retired, replacement]) {
               expect(loadSessionEntry(target)).toEqual(originalEntry);
@@ -259,13 +259,7 @@ describe("session metadata writer admission", () => {
         const before = structuredClone(await read());
         const context = sessionSharingTestContext(vi.fn());
         await initializeSessionReadContext(context);
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        const reservation = runOpenClawAgentWorkerWrite(options, async () => {
-          entered.resolve();
-          await release.promise;
-        });
-        await entered.promise;
+        const { release, reservation } = await reserve(options);
         const request = invoke(method, params, identifiedClient(owner.id), context);
         try {
           await setImmediate();
@@ -356,10 +350,7 @@ describe("session metadata writer admission", () => {
             await setImmediate();
             release.resolve();
             await Promise.all([reservation, request.done]);
-            expect(request.respond.mock.calls.some(([ok]) => ok)).toBe(false);
-            expect(
-              request.errors.length === 1 || request.respond.mock.calls[0]?.[0] === false,
-            ).toBe(true);
+            expectRejected(request);
             expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
             expect(await listSessionSuggestions(scope)).toEqual([]);
             if (kind === "owner") {
