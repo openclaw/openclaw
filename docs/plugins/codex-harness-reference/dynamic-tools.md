@@ -67,3 +67,6 @@ finish its turn while that approval is still waiting.
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when debugging
 the full tool payload.
+
+For the limits of checking the final tool surface before inference, see
+[Verify tool access before a Codex turn](/plugins/codex-harness/commands#verify-tool-access-before-a-codex-turn).
