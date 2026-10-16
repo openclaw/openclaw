@@ -1,4 +1,4 @@
-import type { ControlUiLinkReaderSection } from "openclaw/plugin-sdk/control-ui-link-reader";
+import type { ControlUiLinkReaderDetailParams } from "openclaw/plugin-sdk/control-ui-link-reader";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type GitHubItemTarget = {
@@ -85,7 +85,7 @@ export function parseGitHubLinkParams(
   url: string;
   agentId?: string;
   refresh: boolean;
-  section?: ControlUiLinkReaderSection;
+  section?: ControlUiLinkReaderDetailParams["section"];
   filesExpanded: boolean;
 } | null {
   if (

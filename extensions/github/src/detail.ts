@@ -1,7 +1,7 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   ControlUiLinkReaderDocument,
-  ControlUiLinkReaderSection,
+  ControlUiLinkReaderDetailParams,
 } from "openclaw/plugin-sdk/control-ui-link-reader";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchPullChecks } from "./detail-checks.js";
@@ -40,6 +40,7 @@ type GitHubDocument = ControlUiLinkReaderDocument & {
   files: GitHubFile[];
 };
 type CommentKind = "discussion" | "review" | "commit";
+type GitHubDetailSection = NonNullable<ControlUiLinkReaderDetailParams["section"]>;
 
 const DETAIL_JSON_MAX_BYTES = 1024 * 1024;
 const BODY_MAX_CHARS = 32 * 1024;
@@ -275,7 +276,7 @@ async function fetchDetail(
   readPage: ReadDetailPage,
   apiBaseUrl = GITHUB_API_ORIGIN,
   host = "github.com",
-  section?: ControlUiLinkReaderSection,
+  section?: GitHubDetailSection,
 ): Promise<ControlUiLinkReaderDocument> {
   const repoPath = `/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
   const repositoryUrl = apiBaseUrl + repoPath;
@@ -437,7 +438,7 @@ async function loadGitHubDetailWithIdentity(
   fetchImpl: typeof fetch = fetch,
   refresh = false,
   session?: SessionGitHubReadIdentity,
-  section?: ControlUiLinkReaderSection,
+  section?: GitHubDetailSection,
 ): Promise<ControlUiLinkReaderDocument> {
   const apiBaseUrl = session?.apiBaseUrl ?? GITHUB_API_ORIGIN;
   const parsed = parseGitHubTarget(target);
@@ -595,14 +596,14 @@ export function loadGitHubDetail(
   identity: ControlUiGitHubPreviewIdentity | undefined,
   fetchImpl: typeof fetch | undefined,
   refresh: boolean | undefined,
-  section: ControlUiLinkReaderSection | undefined,
+  section: GitHubDetailSection | undefined,
 ): Promise<ControlUiLinkReaderDocument>;
 export function loadGitHubDetail(
   target: GitHubTarget,
   identity?: ControlUiGitHubPreviewIdentity,
   fetchImpl: typeof fetch = fetch,
   refresh = false,
-  section?: ControlUiLinkReaderSection,
+  section?: GitHubDetailSection,
 ): Promise<ControlUiLinkReaderDocument> {
   return identity?.optionalAuth
     ? withOptionalGitHubAuth(identity.token, (token) =>
@@ -629,14 +630,14 @@ export function loadSessionGitHubDetail(
   identity: SessionGitHubReadIdentity,
   fetchImpl: typeof fetch | undefined,
   refresh: boolean | undefined,
-  section: ControlUiLinkReaderSection | undefined,
+  section: GitHubDetailSection | undefined,
 ): Promise<ControlUiLinkReaderDocument>;
 export function loadSessionGitHubDetail(
   target: GitHubTarget,
   identity: SessionGitHubReadIdentity,
   fetchImpl: typeof fetch = fetch,
   refresh = false,
-  section?: ControlUiLinkReaderSection,
+  section?: GitHubDetailSection,
 ): Promise<ControlUiLinkReaderDocument> {
   assertSessionGitHubTarget(target, identity);
   return loadGitHubDetailWithIdentity(target, identity, fetchImpl, refresh, identity, section);

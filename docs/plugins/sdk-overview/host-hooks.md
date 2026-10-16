@@ -537,7 +537,8 @@ independently authorize source access and current caller lifetime. Do not retain
 caller-bound authority for another section or start work beyond the request.
 Omitting `section` retains the full-document response, including for older hosts
 and tools. Readers without `progressive: true` receive the existing full-document
-request. Section types are exported from `openclaw/plugin-sdk/control-ui-link-reader`.
+request. The existing `ControlUiLinkReaderDetailParams` and
+`ControlUiLinkReaderDocument` exports describe these fields without extra SDK aliases.
 
 A reader may set `sessionScoped: true` to receive the foreground pane's `sessionKey`
 on preview and detail requests. This is a context hint, never authority: its Gateway
