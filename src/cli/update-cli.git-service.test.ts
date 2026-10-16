@@ -24,6 +24,12 @@ const readText = (file: string) => fs.readFile(file, "utf8");
 const expectText = (file: string) => expect(readText(file)).resolves;
 const manifest = (root: string) => path.join(root, "package.json");
 const gatewayArgs = (entry: string) => ["node", entry, "gateway", "run"];
+const devUpdate = (root: string, options: Parameters<typeof cli.updateCommand>[0] = {}) =>
+  withEnvAsync({ OPENCLAW_GIT_DIR: root }, () =>
+    cli.updateCommand({ channel: "dev", yes: true, ...options }),
+  );
+const expectFailure = (updating: Promise<unknown>) =>
+  expect(updating).rejects.toEqual(new cli.ExitError(1));
 const packageFixture = (root: string, version: string, git = false, builtSha?: string) =>
   writeOpenClawPackageFixture(root, version, { entrySource: "export {};\n", git, builtSha });
 async function createProfile(profile: string) {
@@ -227,9 +233,7 @@ it.each(["stopped", "throws", "refused"] as const)(
       });
     }
 
-    await expect(cli.updateCommand({ yes: true, json: failure === "refused" })).rejects.toEqual(
-      new cli.ExitError(1),
-    );
+    await expectFailure(cli.updateCommand({ yes: true, json: failure === "refused" }));
 
     if (failure === "refused") {
       expect(mocks.serviceStop).not.toHaveBeenCalled();
@@ -252,6 +256,7 @@ it.each(["stopped", "throws", "refused"] as const)(
 it.each(["owned", "foreign"])(
   "uses only the owned profile when switching package installs to dev (%s service)",
   async (serviceOwnership) => {
+    const owned = serviceOwnership === "owned";
     const prefix = f.tempDirs.make("openclaw-update-package-service-root-");
     const nodeModules = path.join(prefix, "lib", "node_modules");
     const packageRoot = path.join(nodeModules, "openclaw");
@@ -260,18 +265,16 @@ it.each(["owned", "foreign"])(
     const packageEntrypoint = await packageFixture(packageRoot, "2026.4.20");
     const gitEntrypoint = await packageFixture(gitRoot, "2026.4.21", true, sha);
     const canonicalGitRoot = await fs.realpath(gitRoot);
-    const serviceEntrypoint =
-      serviceOwnership === "owned"
-        ? packageEntrypoint
-        : await packageFixture(
-            f.tempDirs.make("openclaw-update-foreign-service-root-"),
-            "2026.4.20",
-            // A source checkout is not adopted by package-root planning.
-            true,
-            "b".repeat(40),
-          );
+    const serviceEntrypoint = owned
+      ? packageEntrypoint
+      : await packageFixture(
+          f.tempDirs.make("openclaw-update-foreign-service-root-"),
+          "2026.4.20",
+          // A source checkout is not adopted by package-root planning.
+          true,
+          "b".repeat(40),
+        );
     // The backup owner coalesces by path for the lifetime of the process.
-    const owned = serviceOwnership === "owned";
     const caller = await storedProfile(`package-git-${serviceOwnership}-caller`, "caller");
     const managed = await storedProfile(`package-git-${serviceOwnership}-managed`, "managed");
     const selected = owned ? managed : caller;
@@ -293,7 +296,7 @@ it.each(["owned", "foreign"])(
           backupAtDoctorEntry = await fs
             .readFile(`${selected.config}.pre-update`, "utf8")
             .catch(() => undefined);
-          if (serviceOwnership === "foreign") {
+          if (!owned) {
             await expectStoredProfile(managed);
             expect.soft(await fs.readdir(managed.state)).toEqual(managedFilesBefore);
           }
@@ -327,7 +330,7 @@ it.each(["owned", "foreign"])(
     expect.soft(backupAtDoctorEntry).toBe(selected.bytes);
     await expectStoredProfile(caller, owned ? caller.backup : caller.bytes);
     expect.soft(await readText(managed.config)).toBe(managed.bytes);
-    if (serviceOwnership === "foreign") {
+    if (!owned) {
       await expectStoredProfile(managed);
       expect.soft(await fs.readdir(managed.state)).toEqual(managedFilesBefore);
       expect(checks.gatewayCommandCall(gitEntrypoint, "install")).toBeUndefined();
@@ -336,10 +339,10 @@ it.each(["owned", "foreign"])(
     }
     expect
       .soft(mocks.serviceStop, checks.getErrorOutput() + checks.getLogOutput())
-      .toHaveBeenCalledTimes(serviceOwnership === "owned" ? 1 : 0);
+      .toHaveBeenCalledTimes(owned ? 1 : 0);
     expect.soft(cli.updateGitCheckout).toHaveBeenCalledTimes(1);
     expect.soft(mutationAdmitted).toHaveBeenCalledOnce();
-    expect(checks.freshRestartCalls()).toHaveLength(serviceOwnership === "owned" ? 1 : 0);
+    expect(checks.freshRestartCalls()).toHaveLength(owned ? 1 : 0);
     expect(
       cli.defaultRuntime.exit,
       checks.getErrorOutput() + checks.getLogOutput(),
@@ -370,11 +373,7 @@ it.runIf(process.platform !== "win32")(
       async ({ gitRoot: stagingRoot, opts: options }) => {
         expect(options.gitArtifactStorageRoot).toBe(path.dirname(stagingRoot));
         await options.inspectGitTarget({});
-        await writeOpenClawPackageFixture(stagingRoot, "2026.8.17", {
-          git: true,
-          builtSha: sha,
-          entrySource: "export {};\n",
-        });
+        await packageFixture(stagingRoot, "2026.8.17", true, sha);
         await options.prepareGitExposure?.(stagingRoot, sha, undefined);
         await options.validateCandidate(stagingRoot);
         await checks.requireValue(options.beforeGitMutation, "Git mutation admission")({});
@@ -403,12 +402,8 @@ it.runIf(process.platform !== "win32")(
         ),
     );
 
-    await withEnvAsync({ OPENCLAW_GIT_DIR: checkoutAlias }, async () => {
-      await cli
-        .updateCommand({ channel: "dev", yes: true, restart: false })
-        .catch((error: unknown) => {
-          throw new Error(checks.getErrorOutput() + checks.getLogOutput(), { cause: error });
-        });
+    await devUpdate(checkoutAlias, { restart: false }).catch((error: unknown) => {
+      throw new Error(checks.getErrorOutput() + checks.getLogOutput(), { cause: error });
     });
 
     const installCall = checks.packageInstallCommandCall();
@@ -437,20 +432,18 @@ it("leaves the git service untouched when package-to-Git staging fails", async (
   const root = f.tempDirs.make("openclaw-update-package-to-git-fail-");
   const prefix = path.join(root, "prefix");
   const nodeModules = path.join(prefix, "lib", "node_modules");
-  const packageRoot = path.join(nodeModules, "openclaw");
+  const { pkgRoot: packageRoot } = await f.setupInstalledPackageAtNodeModules(
+    nodeModules,
+    "2026.4.20",
+  );
   const shim = path.join(prefix, "bin", "openclaw");
   const gitRoot = path.join(root, "git-root");
   const sha = "a".repeat(40);
-  await writeOpenClawPackageFixture(packageRoot, "2026.4.20", {
-    entrySource: "export {};\n",
-    inventory: true,
-  });
   await fs.mkdir(path.dirname(shim), { recursive: true });
   await fs.writeFile(shim, "old package shim\n", { mode: 0o755 });
   const gitEntry = await packageFixture(gitRoot, "2026.8.18", true, sha);
   const packageBefore = await readText(manifest(packageRoot));
   const shimBefore = await readText(shim);
-  f.mockPackageInstallStatus(packageRoot);
   f.mockFileBackedPathExists();
   f.mockRunningManagedGateway(gatewayArgs(gitEntry));
   cli.mockGitUpdateAfterMutation(
@@ -463,11 +456,7 @@ it("leaves the git service untouched when package-to-Git staging fails", async (
     return undefined;
   });
 
-  await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
-    await expect(cli.updateCommand({ channel: "dev", yes: true, json: true })).rejects.toEqual(
-      new cli.ExitError(1),
-    );
-  });
+  await expectFailure(devUpdate(gitRoot, { json: true }));
 
   const installCalls = checks
     .commandCalls()
@@ -521,21 +510,16 @@ it("recovers only an untouched package service after source publication fails", 
     });
   });
 
-  await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
-    await expect(cli.updateCommand({ channel: "dev", yes: true, json: true })).rejects.toEqual(
-      new cli.ExitError(1),
-    );
-  });
+  await expectFailure(devUpdate(gitRoot, { json: true }));
 
   expect(mocks.candidateValidation).toHaveBeenCalledOnce();
-  expect(checks.lastWriteJsonCall()).toMatchObject({ reason: "source-rollback-failed" });
   expect(
     (await fs.readdir(nodeModules)).filter(
       (entry) =>
         entry.startsWith(".openclaw.update-stage-") ||
         entry.startsWith(".openclaw.package-backup-"),
-    ).length,
-  ).toBe(0);
+    ),
+  ).toEqual([]);
   expect(checks.doctorCommandCall()).toBeUndefined();
   expect(await fs.realpath(pkgRoot)).toBe(pkgRoot);
   expect(JSON.parse(await readText(manifest(pkgRoot)))).toMatchObject({ version: "2026.4.20" });
@@ -543,6 +527,7 @@ it("recovers only an untouched package service after source publication fails", 
   expect(checks.freshRestartCalls()).toHaveLength(1);
   expect(checks.freshRestartCalls()[0]?.[0]).toContain(entryPath);
   expect(checks.lastWriteJsonCall()).toMatchObject({
+    reason: "source-rollback-failed",
     status: "error",
     recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.4.20" },
   });
@@ -558,7 +543,7 @@ it("never starts the candidate after plugin post-update invalidates config", asy
     vi.mocked(cli.readConfigFileSnapshot).mockResolvedValue(invalidPostUpdateSnapshot);
     return pluginSyncResult(f.baseConfig);
   });
-  f.mockRunningManagedGateway(["node", serviceEntrypoint, "gateway", "run"]);
+  f.mockRunningManagedGateway(gatewayArgs(serviceEntrypoint));
   cli.mockGitUpdateAfterMutation();
   vi.mocked(cli.runExec).mockImplementation(async (_file, args) => {
     if (args[1] === "config" && args[2] === "validate") {
@@ -570,7 +555,7 @@ it("never starts the candidate after plugin post-update invalidates config", asy
     return { stdout: new Date(Date.now() - 1000).toString(), stderr: "" };
   });
 
-  await expect(cli.updateCommand({ yes: true })).rejects.toEqual(new cli.ExitError(1));
+  await expectFailure(cli.updateCommand({ yes: true }));
 
   expect(mocks.serviceStop).toHaveBeenCalledTimes(1);
   checks.expectNoSideEffects(mocks.serviceRestart, cli.runDaemonRestart);
@@ -589,7 +574,7 @@ it("disarms legacy updater jobs before stopping the gateway without polluting JS
   const tempDir = f.tempDirs.make("openclaw-update-json-stop-service-");
   const { nodeModules, entryPath } = await f.setupInstalledPackageRoot(tempDir);
   const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-  f.mockRunningManagedGateway(["node", entryPath, "gateway", "run"]);
+  f.mockRunningManagedGateway(gatewayArgs(entryPath));
   mocks.serviceStop.mockImplementationOnce(async (params: { stdout?: NodeJS.WritableStream }) => {
     params.stdout?.write("Stopped systemd service: openclaw-gateway.service\n");
   });
@@ -615,15 +600,10 @@ it("uses a manager-effective global user unit during update preflight", async ()
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   const entrypoint = path.join(process.cwd(), "dist", "index.js");
   const command = createGlobalUserServiceCommand(entrypoint);
+  f.mockRunningManagedGateway(gatewayArgs(entrypoint));
   mocks.serviceReadCommand.mockImplementation(async (_env, options) =>
     options?.requireEffective ? command : null,
   );
-  mocks.serviceLoaded.mockResolvedValue(true);
-  mocks.serviceReadRuntime.mockResolvedValue({
-    status: "running",
-    pid: mocks.gatewayFixturePid,
-    state: "running",
-  });
   mocks.serviceDefinitionMutationCapability.mockResolvedValue({
     kind: "sealed",
     detail: "privileged global user unit",

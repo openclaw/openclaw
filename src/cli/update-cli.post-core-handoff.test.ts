@@ -38,11 +38,35 @@ function closeChild(child: EventEmitter, code: number | null = 0, signal: string
   child.emit("exit", code, signal);
   child.emit("close", code, signal);
 }
-function exitingChild() {
+function exitingChild(code = 0) {
   const child = new EventEmitter();
-  queueMicrotask(() => closeChild(child));
+  queueMicrotask(() => closeChild(child, code));
   return child;
 }
+function commitResult(env: NodeJS.ProcessEnv, result: unknown) {
+  const file = checks.requireValue(env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, "child result");
+  fsSync.writeFileSync(file, JSON.stringify(result));
+  return file;
+}
+const readJson = (file: string) => JSON.parse(fsSync.readFileSync(file, "utf8"));
+function freshContinuation() {
+  vi.mocked(cli.resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+    f.FRESH_POST_UPDATE_ENTRYPOINT,
+  );
+  mocks.readPackageVersion.mockResolvedValueOnce(null);
+}
+function profileState(profile: string) {
+  const state = f.profileStateDir(profile);
+  f.initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: state });
+  return state;
+}
+const untilSignal = (signal: Promise<unknown>, updating: Promise<unknown>, message: string) =>
+  Promise.race([
+    signal,
+    updating.then(() => {
+      throw new Error(message);
+    }),
+  ]);
 
 const continueFreshPostCore = () =>
   cli.continuePostCoreUpdateInFreshProcess({
@@ -57,10 +81,8 @@ const continueFreshPostCore = () =>
 
 it("keeps stopped owned-service config and plugin state through fresh post-core handoff", async () => {
   const updatedEntrypoint = await f.setupManagedGitRootRefresh(true);
-  const managedState = f.profileStateDir("work");
-  f.initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: managedState });
-  const personalState = f.profileStateDir("personal");
-  f.initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: personalState });
+  const managedState = profileState("work");
+  const personalState = profileState("personal");
   const managedConfig = { ...f.baseConfig, update: { channel: "beta" as const } };
   const managedSnapshot = f.configSnapshot(managedConfig, {
     path: path.join(managedState, "openclaw.json"),
@@ -95,12 +117,8 @@ it("keeps stopped owned-service config and plugin state through fresh post-core 
   let handedRecords: unknown;
   mocks.spawn.mockImplementationOnce((_node, _argv, options) => {
     const env = (options as { env?: NodeJS.ProcessEnv }).env;
-    handedConfig = JSON.parse(
-      fsSync.readFileSync(env?.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH ?? "", "utf-8"),
-    );
-    handedRecords = JSON.parse(
-      fsSync.readFileSync(env?.OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH ?? "", "utf-8"),
-    );
+    handedConfig = readJson(env?.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH ?? "");
+    handedRecords = readJson(env?.OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH ?? "");
     return exitingChild();
   });
 
@@ -136,8 +154,9 @@ it("keeps stopped owned-service config and plugin state through fresh post-core 
   expect(checks.gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
   expect(checks.freshRestartCalls()).toHaveLength(1);
   expect(checks.getLogOutput()).toContain("Gateway: restarted and verified.");
-  expect(checks.spawnCall()?.[2]?.env?.OPENCLAW_SERVICE_MARKER).toBeUndefined();
-  expect(checks.spawnCall()?.[2]?.env?.[GATEWAY_SERVICE_RUNTIME_PID_ENV]).toBeUndefined();
+  expect([handoffEnv.OPENCLAW_SERVICE_MARKER, handoffEnv[GATEWAY_SERVICE_RUNTIME_PID_ENV]]).toEqual(
+    [undefined, undefined],
+  );
   expect(handedConfig).toEqual({ sourceConfig: managedConfig, authoredConfig: managedConfig });
   expect(handedRecords).toEqual(managedRecords);
   const restartIndex = checks
@@ -151,8 +170,7 @@ it("keeps stopped owned-service config and plugin state through fresh post-core 
 });
 
 it("keeps foreign-service updates in the caller profile", async () => {
-  const personalState = f.profileStateDir("personal");
-  f.initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: personalState });
+  const personalState = profileState("personal");
   const { root, entrypoints } = f.setupUpdatedRootRefresh();
   const foreignRoot = f.tempDirs.make("openclaw-update-foreign-profile-");
   const foreignEntrypoint = await writeOpenClawPackageFixture(foreignRoot, "2026.4.21", {
@@ -179,27 +197,16 @@ it("keeps foreign-service updates in the caller profile", async () => {
     async (candidate: string) =>
       entrypoints.includes(candidate) || candidate.endsWith("package.json"),
   );
-  f.initializeExistingUpdateProfile({
-    ...process.env,
-    OPENCLAW_STATE_DIR: f.profileStateDir("work"),
-  });
-  await withEnvAsync(
-    {
-      OPENCLAW_PROFILE: "personal",
-      OPENCLAW_STATE_DIR: personalState,
-      OPENCLAW_GATEWAY_PORT: "19111",
-    },
-    async () => {
-      await cli.updateCommand({ yes: true });
-    },
-  );
-
-  checks.expectNoSideEffects(mocks.serviceStop, mocks.serviceRestart);
-  expect(checks.spawnCall()?.[2]?.env).toMatchObject({
+  profileState("work");
+  const callerEnv = {
     OPENCLAW_PROFILE: "personal",
     OPENCLAW_STATE_DIR: personalState,
     OPENCLAW_GATEWAY_PORT: "19111",
-  });
+  };
+  await withEnvAsync(callerEnv, () => cli.updateCommand({ yes: true }));
+
+  checks.expectNoSideEffects(mocks.serviceStop, mocks.serviceRestart);
+  expect(checks.spawnCall()?.[2]?.env).toMatchObject(callerEnv);
 });
 
 it("never pipes JSON post-core output to stdout", async () => {
@@ -276,15 +283,6 @@ it("keeps the candidate stopped through plugin convergence and only restarts the
           ...createChangedPostCoreUpdateOptions().pluginUpdate,
           status: "error",
           changed: false,
-          warnings: [
-            {
-              pluginId: "demo",
-              reason: "missing-extension-entry: ./dist/index.js",
-              message:
-                'Plugin "demo" failed post-core payload smoke check (missing-extension-entry): ./dist/index.js',
-              guidance: ["Run openclaw update repair to retry post-update plugin repair."],
-            },
-          ],
           npm: {
             changed: false,
             outcomes: [
@@ -316,10 +314,7 @@ it("keeps the candidate stopped through plugin convergence and only restarts the
     mocks.spawn.mock.invocationCallOrder[0],
     "plugin child start",
   );
-  expect(activations.filter((entry) => !entry.afterPlugin)).toEqual([]);
-  expect(activations.filter((entry) => entry.afterPlugin)).toEqual([
-    { version: "1.0.0", afterPlugin: true },
-  ]);
+  expect(activations).toEqual([{ version: "1.0.0", afterPlugin: true }]);
   expect(checks.gatewayCommandCall(entryPath, "install")).toBeUndefined();
   expect(checks.gatewayCommandCall(entryPath, "restart")?.[0]).toContain("--preserve-definition");
   expect(mocks.resumeScheduledTaskAutoStartAfterUpdate.mock.invocationCallOrder[0]).toBeGreaterThan(
@@ -330,19 +325,16 @@ it("keeps the candidate stopped through plugin convergence and only restarts the
 it.each(["spawn", "phase"])(
   "restores the exact plugin index revision when post-core %s fails",
   async (failureKind) => {
+    const before = { version: "2026.5.28" };
+    const after = { version: "2026.4.29" };
     const { root } = f.setupUpdatedRootRefresh({
       admitMutation: true,
-      targetVersion: "2026.4.29",
+      targetVersion: after.version,
       gatewayUpdateImpl: async (updatedRoot) =>
-        cli.makeOkUpdateResult({
-          mode: "npm",
-          root: updatedRoot,
-          before: { version: "2026.5.28" },
-          after: { version: "2026.4.29" },
-        }),
+        cli.makeOkUpdateResult({ mode: "npm", root: updatedRoot, before, after }),
     });
     mocks.readPackageVersion.mockImplementation(async (pkgRoot: string) =>
-      pkgRoot === root ? "2026.4.29" : "2026.5.28",
+      pkgRoot === root ? after.version : before.version,
     );
     const previousPersistedIndex = {
       policyHash: "previous-policy",
@@ -361,13 +353,11 @@ it.each(["spawn", "phase"])(
       if (failureKind === "spawn") {
         throw new Error("post-core spawn failed");
       }
-      const child = new EventEmitter();
-      fsSync.writeFileSync(
-        options.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH,
-        JSON.stringify({ status: "failed", error: "pre-plugin Doctor failed before convergence" }),
-      );
-      queueMicrotask(() => closeChild(child, 1));
-      return child;
+      commitResult(options.env, {
+        status: "failed",
+        error: "pre-plugin Doctor failed before convergence",
+      });
+      return exitingChild(1);
     });
 
     await expect(cli.updateCommand({ yes: true, restart: false })).rejects.toEqual(
@@ -379,13 +369,7 @@ it.each(["spawn", "phase"])(
           failureKind === "spawn"
             ? "post-core spawn failed"
             : "pre-plugin Doctor failed before convergence",
-        result: expect.objectContaining({
-          status: "error",
-          mode: "npm",
-          root,
-          before: { version: "2026.5.28" },
-          after: { version: "2026.4.29" },
-        }),
+        result: expect.objectContaining({ status: "error", mode: "npm", root, before, after }),
       }),
     );
     expect(cli.defaultRuntime.exit).not.toHaveBeenCalled();
@@ -403,19 +387,13 @@ it.each(["spawn", "phase"])(
 
 it("joins Windows taskkill after the committed post-core child closes", async () => {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-  vi.mocked(cli.resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
-    f.FRESH_POST_UPDATE_ENTRYPOINT,
-  );
-  mocks.readPackageVersion.mockResolvedValueOnce(null);
+  freshContinuation();
   const helperStarted = createDeferred();
   const releaseHelper = createDeferred();
   let helperSettled = false;
   const child = Object.assign(new EventEmitter(), { pid: 4242, kill: vi.fn() });
   mocks.spawn.mockImplementationOnce((_node, _args, options) => {
-    fsSync.writeFileSync(
-      options.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH,
-      JSON.stringify({ status: "ok" }),
-    );
+    commitResult(options.env, { status: "ok" });
     return child;
   });
   vi.mocked(cli.runExec).mockImplementationOnce(async (command, args) => {
@@ -431,12 +409,11 @@ it("joins Windows taskkill after the committed post-core child closes", async ()
   const settled = vi.fn();
   void updating.then(settled, settled);
   try {
-    await Promise.race([
+    await untilSignal(
       helperStarted.promise,
-      updating.then(() => {
-        throw new Error("post-core returned before stopping its child");
-      }),
-    ]);
+      updating,
+      "post-core returned before stopping its child",
+    );
     await nextTurn();
     expect(settled).not.toHaveBeenCalled();
     releaseHelper.resolve();
@@ -457,10 +434,7 @@ it.each(["overlapping-reads", "close-before-read", "termination-error"] as const
     if (overlapping) {
       f.setupUpdatedRootRefresh();
     } else {
-      vi.mocked(cli.resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
-        f.FRESH_POST_UPDATE_ENTRYPOINT,
-      );
-      mocks.readPackageVersion.mockResolvedValueOnce(null);
+      freshContinuation();
     }
     const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
     const reading = createDeferred();
@@ -486,11 +460,7 @@ it.each(["overlapping-reads", "close-before-read", "termination-error"] as const
       },
     );
     mocks.spawn.mockImplementationOnce((_node, _args, options) => {
-      resultPath = options.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
-      fsSync.writeFileSync(
-        checks.requireValue(resultPath, "committed child result"),
-        JSON.stringify({ status: "ok" }),
-      );
+      resultPath = commitResult(options.env, { status: "ok" });
       if (race !== "close-before-read") {
         child.kill.mockImplementation(() => {
           queueMicrotask(() => {
@@ -513,12 +483,7 @@ it.each(["overlapping-reads", "close-before-read", "termination-error"] as const
     );
     try {
       if (race !== "termination-error") {
-        await Promise.race([
-          reading.promise,
-          updating.then(() => {
-            throw new Error("update finished before held result reads");
-          }),
-        ]);
+        await untilSignal(reading.promise, updating, "update finished before held result reads");
         if (!overlapping) {
           closeChild(child, null, "SIGTERM");
         }

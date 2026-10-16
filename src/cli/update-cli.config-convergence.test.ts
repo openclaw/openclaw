@@ -43,6 +43,16 @@ const profileEnv = (profile: string, state: string) => ({
   OPENCLAW_STATE_DIR: state,
   OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
 });
+function primeManagedProfile(root: string, state: string) {
+  f.mockRunningManagedGateway(serviceArgs(root));
+  f.primeServiceCommand(serviceArgs(root), {
+    OPENCLAW_SERVICE_MARKER: "openclaw",
+    OPENCLAW_SERVICE_KIND: "gateway",
+    ...profileEnv("work", state),
+  });
+}
+const expectUpdateFailure = (options: Parameters<typeof cli.updateCommand>[0]) =>
+  expect(cli.updateCommand(options)).rejects.toEqual(new cli.ExitError(1));
 async function writeProfile(state: string, config: unknown) {
   f.initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: state });
   f.tempDirsToCleanup.add(state);
@@ -73,15 +83,13 @@ it("does not migrate authored config for a refused target stable/main", async ()
       return { snapshot: f.configSnapshot({}, { valid: true }), repaired: true };
     },
   );
-  await withConfig(configPath, async () => {
-    await expect(cli.updateCommand({ channel: "stable", tag: "main", yes: true })).rejects.toEqual(
-      new cli.ExitError(1),
-    );
-  });
+  await withConfig(configPath, () =>
+    expectUpdateFailure({ channel: "stable", tag: "main", yes: true }),
+  );
   expect(await fs.readFile(configPath, "utf8")).toBe(before);
-  expect(cli.replaceConfigFile).not.toHaveBeenCalled();
-  expect(mocks.legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel).not.toHaveBeenCalled();
   checks.expectNoSideEffects(
+    cli.replaceConfigFile,
+    mocks.legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel,
     mocks.launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
   );
 });
@@ -147,21 +155,14 @@ it("refuses a foreign legacy caller without an explicit channel request", async 
   const serviceBefore = await fs.readFile(servicePath, "utf8");
   mocks.readPackageVersion.mockResolvedValue(VERSION);
   f.primeNpmChannelTag("latest", VERSION);
-  f.mockRunningManagedGateway(serviceArgs(root));
-  f.primeServiceCommand(serviceArgs(root), {
-    OPENCLAW_SERVICE_MARKER: "openclaw",
-    OPENCLAW_SERVICE_KIND: "gateway",
-    ...profileEnv("work", serviceState),
-  });
+  primeManagedProfile(root, serviceState);
   const createConfigIO = await useFileBackedConfigIO();
   const { replaceConfigFile: writeActualConfig } = await import("../config/mutate.js");
   readFrom(createConfigIO);
   vi.mocked(cli.replaceConfigFile).mockImplementation(writeActualConfig);
-  await withEnvAsync(profileEnv("personal", callerState), async () => {
-    await expect(cli.updateCommand({ yes: true, json: true })).rejects.toEqual(
-      new cli.ExitError(1),
-    );
-  });
+  await withEnvAsync(profileEnv("personal", callerState), () =>
+    expectUpdateFailure({ yes: true, json: true }),
+  );
   expect(await fs.readFile(callerPath, "utf8")).toBe(callerBefore);
 
   expect(await fs.readFile(servicePath, "utf8")).toBe(serviceBefore);
@@ -196,13 +197,7 @@ it.each(["caller", "service"] as const)(
     if (owner === "service") {
       const serviceState = f.profileStateDir("work");
       await writeProfile(serviceState, { gateway: { mode: "local", bind: "lan" } });
-      f.mockRunningManagedGateway(serviceArgs(root));
-      const serviceEnv = {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-        ...profileEnv("work", serviceState),
-      };
-      f.primeServiceCommand(serviceArgs(root), serviceEnv);
+      primeManagedProfile(root, serviceState);
       const selected = await createConfigIO({
         env: { ...process.env, ...profileEnv("work", serviceState) },
         observe: false,
@@ -224,11 +219,7 @@ it.each(["caller", "service"] as const)(
     });
     await withConfig(
       configPath,
-      async () => {
-        await expect(
-          cli.updateCommand({ channel: "beta", yes: true, restart: false, json: true }),
-        ).rejects.toEqual(new cli.ExitError(1));
-      },
+      () => expectUpdateFailure({ channel: "beta", yes: true, restart: false, json: true }),
       owner === "service" ? { OPENCLAW_PROFILE: "personal" } : {},
     );
     expect(mocks.candidateValidation).toHaveBeenCalledTimes(1);
@@ -266,9 +257,7 @@ it("does not auto-repair legacy config when authored includes are present", asyn
     }),
   );
 
-  await expect(cli.updateCommand({ channel: "beta", yes: true })).rejects.toEqual(
-    new cli.ExitError(1),
-  );
+  await expectUpdateFailure({ channel: "beta", yes: true });
 
   checks.expectNoSideEffects(cli.replaceConfigFile, cli.runCommandWithTimeout);
   expect(checks.getLogOutput()).toContain("Update mode: package");
@@ -284,12 +273,9 @@ it("does not persist the requested channel when the package update fails", async
     return commandResult();
   });
 
-  await expect(cli.updateCommand({ channel: "beta", yes: true })).rejects.toEqual(
-    new cli.ExitError(1),
-  );
+  await expectUpdateFailure({ channel: "beta", yes: true });
 
-  expect(cli.replaceConfigFile).not.toHaveBeenCalled();
-  expect(cli.defaultRuntime.exit).not.toHaveBeenCalled();
+  checks.expectNoSideEffects(cli.replaceConfigFile, cli.defaultRuntime.exit);
 });
 
 it("restores pre-update channel model overrides when post-core resume restores a channel", async () => {
@@ -458,11 +444,9 @@ it("does not activate or finalize a failed Git update", async () => {
 
   f.mockNoopPostUpdatePluginConvergence();
 
-  await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
-    await expect(cli.updateCommand({ channel: "dev", yes: true, restart: false })).rejects.toEqual(
-      new cli.ExitError(1),
-    );
-  });
+  await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, () =>
+    expectUpdateFailure({ channel: "dev", yes: true, restart: false }),
+  );
 
   expect(checks.packageInstallCommandCall()?.[0]).toBeUndefined();
   checks.expectNoSideEffects(mocks.spawn, cli.replaceConfigFile, completionCacheSpy);
