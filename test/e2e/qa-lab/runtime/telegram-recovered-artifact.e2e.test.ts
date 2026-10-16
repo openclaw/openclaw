@@ -14,6 +14,7 @@ import {
   startQaMockOpenAiServer,
   writeJson,
 } from "../../../../extensions/qa-lab/api.js";
+import { isProjectedForwardedMessage } from "../../../../src/gateway/chat-display-projection.helpers.js";
 import type { SessionsListResult } from "../../../../src/gateway/session-utils.types.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
@@ -444,6 +445,9 @@ test("delivers a recovered artifact once while preserving its inter-session tran
       )
       .toBe(false);
     expect(documents).toHaveLength(0);
+    // Route setup can read workspace context. Count every tool in the recovery
+    // turn only after that seed run has settled, so extra recovery calls still fail.
+    const recoveryToolStart = toolCalls.length;
     enterPhase("turn");
     const turnLogMark = gateway.markLogs();
     const receipt = (await gateway.call("chat.send", {
@@ -518,12 +522,24 @@ test("delivers a recovered artifact once while preserving its inter-session tran
     const history = (await gateway.call("chat.history", { sessionKey, limit: 30 })) as {
       messages: Array<{ role: string; content: unknown }>;
     };
-    expect(
-      history.messages.filter(
-        (message) =>
-          message.role === "assistant" && JSON.stringify(message.content).includes(marker),
-      ),
-    ).toHaveLength(1);
+    const markerMessages = history.messages.filter(
+      (message) => message.role === "assistant" && JSON.stringify(message.content).includes(marker),
+    );
+    // History displays forwarded requests as assistants. Preserve that input's
+    // provenance while counting authored recovery independently.
+    const forwardedMessages = markerMessages.filter(isProjectedForwardedMessage);
+    expect(forwardedMessages).toHaveLength(1);
+    expect(forwardedMessages[0]).toMatchObject({
+      provenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+        sourceSessionKey: "agent:qa:artifact-requester",
+      },
+      senderSession: { sessionKey: "agent:qa:artifact-requester" },
+    });
+    expect(markerMessages.filter((message) => !isProjectedForwardedMessage(message))).toHaveLength(
+      1,
+    );
     await expect
       .poll(
         async () => (await sessions()).sessions.find((row) => row.key === sessionKey)?.hasActiveRun,
@@ -535,7 +551,7 @@ test("delivers a recovered artifact once while preserving its inter-session tran
     // Freeze delivery evidence only after the admitted run settles and its
     // Gateway exits; the provider and Telegram endpoint remain available.
     await stopQaGatewayFixture(owner);
-    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls.slice(recoveryToolStart)).toHaveLength(1);
     expect(writeCalls).toHaveLength(1);
     expect(completedWrites).toHaveLength(1);
     expect(completedWrites[0]?.call_id).toBe(writeCalls[0]?.call_id);
