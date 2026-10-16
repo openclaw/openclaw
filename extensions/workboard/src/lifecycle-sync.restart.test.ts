@@ -88,6 +88,77 @@ async function cleanupInterruptedDispatch(
 }
 
 describe("Workboard prepared launch restart recovery", () => {
+  it.each([
+    { prepared: true, complete: true, exact: false },
+    { prepared: false, complete: true, exact: false },
+    { prepared: true, complete: false, exact: false },
+    { prepared: false, complete: false, exact: false },
+    { prepared: true, complete: false, exact: true },
+    { prepared: false, complete: false, exact: true },
+  ])(
+    "requires complete discovery for suffix recovery (prepared=$prepared complete=$complete exact=$exact)",
+    async ({ prepared, complete, exact }) => {
+      const { store } = createWorkboardSqliteTestHarness();
+      const suffix = "subagent:workboard-default-ambiguous";
+      const sessionKey = exact ? `agent:alpha:${suffix}` : suffix;
+      const card = await store.create({
+        title: "Ambiguous cross-agent recovery",
+        status: prepared ? "ready" : "running",
+        ...(prepared ? {} : { sessionKey }),
+      });
+      const inertCard = await store.create({ title: "Unclaimed ready work", status: "ready" });
+      if (prepared) {
+        const claimed = await store.claim(card.id, {
+          ownerId: "workboard-dispatcher",
+          token: "claim",
+        });
+        await store.prepareExecutionLaunch(card.id, {
+          requestedSessionKey: sessionKey,
+          now: claimed.card.updatedAt,
+          scope: { ownerId: "workboard-dispatcher", token: claimed.token },
+        });
+      }
+      const active = (agent: string) => ({
+        key: `agent:${agent}:${suffix}`,
+        status: "running" as const,
+        hasActiveRun: true,
+      });
+      const readSessions = vi.fn(async (options: { search?: string }) =>
+        options.search === undefined
+          ? { sessions: [active("alpha")], complete: false }
+          : {
+              sessions: complete ? [active("alpha"), active("beta")] : [active("alpha")],
+              complete,
+            },
+      );
+      const service = createWorkboardLifecycleService({ store, readSessions });
+      const context = { logger: { warn: vi.fn() } } as never;
+      const operation = vi.spyOn(store, "runOperation");
+      try {
+        await service.start(context);
+        service.onGatewayStart();
+        await operation.mock.results[0]?.value;
+        const retained = await store.get(card.id);
+        expect(await store.get(inertCard.id)).toEqual(inertCard);
+        expect(retained?.sessionKey).toBe(prepared && complete && !exact ? undefined : sessionKey);
+        if (exact) {
+          expect(readSessions).toHaveBeenCalledOnce();
+          expect(retained?.metadata?.automation?.launch?.phase).toBe(
+            prepared ? "accepted" : undefined,
+          );
+        } else {
+          expect(retained?.metadata?.automation?.launch?.phase).toBe(
+            prepared ? (complete ? "failed" : "prepared") : undefined,
+          );
+          expect(readSessions).toHaveBeenCalledWith({ includeUnknown: false, search: sessionKey });
+        }
+      } finally {
+        service.onGatewayStop();
+        await service.stop?.(context);
+      }
+    },
+  );
+
   it("fails a prepared launch when its persisted session has no active run", async () => {
     const interrupted = await beginPreparedDispatch();
     let lifecycle: Awaited<ReturnType<typeof startLifecycleSweep>> | undefined;

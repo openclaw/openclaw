@@ -319,9 +319,11 @@ async function syncWorkboardLifecycleSessions(params: {
             card.metadata?.claim?.ownerId === DEFAULT_WORKBOARD_DISPATCH_OWNER)));
     // Persisted links and explicit agent targets stay authoritative. The unique
     // suffix fallback recovers a run accepted before its link could be persisted.
+    const exactSession = sessionsByKey.get(lookupKey);
+    const canMatchSuffix = canUseAgentlessFallback && suffixIndex >= 0;
     const session =
-      sessionsByKey.get(lookupKey) ??
-      (canUseAgentlessFallback && suffixIndex >= 0
+      exactSession ??
+      (params.complete && canMatchSuffix
         ? sessionsByWorkboardSuffix.get(lookupKey.slice(suffixIndex))
         : undefined);
     const launch = card.metadata?.automation?.launch;
@@ -331,27 +333,29 @@ async function syncWorkboardLifecycleSessions(params: {
           ? Math.max(now, launch.preparedAt)
           : session.updatedAt
         : undefined;
-    if (
+    const preparedNeedsRecovery =
       launch?.phase === "prepared" &&
-      (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt)
+      (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt);
+    if (
+      !params.complete &&
+      params.readSessions &&
+      ((!exactSession && canMatchSuffix) || preparedNeedsRecovery)
     ) {
-      if (!params.complete && params.readSessions) {
-        // Offset pages can move as sessions update. Only a bounded search can
-        // establish absence for this prepared launch after an incomplete sweep.
-        const snapshot = await params.readSessions({
-          includeUnknown: linkedSessionKey === "unknown",
-          search:
-            canUseAgentlessFallback && suffixIndex >= 0 ? lookupKey.slice(suffixIndex) : lookupKey,
-        });
-        count += await syncWorkboardLifecycleSessions({
-          store: params.store,
-          cards: [card],
-          ...snapshot,
-          now,
-          onMatched: params.onMatched,
-        });
-        continue;
-      }
+      // Moving pages cannot establish absence or a unique cross-agent suffix.
+      const snapshot = await params.readSessions({
+        includeUnknown: linkedSessionKey === "unknown",
+        search: canMatchSuffix ? lookupKey.slice(suffixIndex) : lookupKey,
+      });
+      count += await syncWorkboardLifecycleSessions({
+        store: params.store,
+        cards: [card],
+        ...snapshot,
+        now,
+        onMatched: params.onMatched,
+      });
+      continue;
+    }
+    if (preparedNeedsRecovery) {
       if (
         params.complete &&
         (await params.store.failPreparedLaunch(card.id, {
@@ -591,20 +595,18 @@ export function createWorkboardLifecycleService(params: {
             if (generation !== owner) {
               return;
             }
-            if (cards.some((card) => needsWorkboardLifecycleReconciliation(card))) {
+            const lifecycleCards = cards.filter(needsWorkboardLifecycleReconciliation);
+            if (lifecycleCards.length > 0) {
               try {
                 const snapshot = await params.readSessions({
-                  includeUnknown: cards.some(
-                    (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
-                  ),
+                  includeUnknown: lifecycleCards.some((card) => cardSessionKey(card) === "unknown"),
                 });
                 // Incognito sessions are absent from discovery. Read only identities
                 // already linked to cards, without requesting private preview content.
                 let describedIncognitoKeys: Set<string> | undefined;
-                for (const card of cards) {
+                for (const card of lifecycleCards) {
                   const sessionKey = cardSessionKey(card);
                   if (
-                    card.metadata?.archivedAt ||
                     !sessionKey ||
                     !isIncognitoSessionKey(sessionKey) ||
                     describedIncognitoKeys?.has(sessionKey)
@@ -617,7 +619,7 @@ export function createWorkboardLifecycleService(params: {
                 }
                 await syncWorkboardLifecycleSessions({
                   store: params.store,
-                  cards,
+                  cards: lifecycleCards,
                   ...snapshot,
                   now: params.now?.() ?? Date.now(),
                   onMatched,

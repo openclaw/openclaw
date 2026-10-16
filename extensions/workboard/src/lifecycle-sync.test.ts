@@ -898,7 +898,7 @@ describe("Workboard gateway lifecycle sync", () => {
         if (params.search !== undefined) {
           expect(params.search).toBe(requestedSessionKey);
           return {
-            sessions: scenario === "moving-window" ? [accepted] : [],
+            sessions: ["moving-window", "later-page"].includes(scenario) ? [accepted] : [],
             hasMore: scenario === "truncated-search",
             ...(scenario === "truncated-search" ? { nextOffset: 200 } : {}),
           };
@@ -922,7 +922,7 @@ describe("Workboard gateway lifecycle sync", () => {
             : "accepted",
       );
       expect(request.mock.calls.filter(([, params]) => params.search !== undefined)).toHaveLength(
-        scenario === "later-page" ? 0 : 1,
+        1,
       );
     },
   );
