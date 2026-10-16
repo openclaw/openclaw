@@ -9,7 +9,8 @@ import { seedInstalledPluginIndex } from "../src/plugins/test-helpers/installed-
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../src/state/openclaw-state-db-contract.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
-const DEGRADED_PLUGIN_ID = "status-degraded-plugin";
+const PLUGIN_ID = "status-degraded-plugin";
+const MISSING_SECRET = "STATUS_E2E_MISSING_SECRET";
 async function createInstance(options: Parameters<typeof createOpenClawTestInstance>[0]) {
   const instance = await createOpenClawTestInstance(options);
   onTestFinished(() => instance.cleanup());
@@ -30,7 +31,7 @@ function createUnavailablePluginFixture(): string {
   const writeJson = (name: string, value: unknown) =>
     fs.writeFileSync(path.join(root, name), JSON.stringify(value));
   writeJson("package.json", {
-    name: DEGRADED_PLUGIN_ID,
+    name: PLUGIN_ID,
     version: "1.0.0",
     type: "module",
     main: "./missing-main.js",
@@ -38,7 +39,7 @@ function createUnavailablePluginFixture(): string {
     peerDependencies: { openclaw: ">=2026.1.1" },
   });
   writeJson("openclaw.plugin.json", {
-    id: DEGRADED_PLUGIN_ID,
+    id: PLUGIN_ID,
     configSchema: { type: "object", additionalProperties: false, properties: {} },
   });
   fs.writeFileSync(path.join(root, "index.js"), "export default { register() {} };\n");
@@ -48,15 +49,11 @@ function createUnavailablePluginFixture(): string {
 describe("status shared-state ownership", () => {
   it("projects Gateway-owned runtime degradation across status processes", async () => {
     const pluginRoot = createUnavailablePluginFixture();
-    const missingSecret = {
-      source: "env" as const,
-      provider: "default",
-      id: "STATUS_E2E_MISSING_SECRET",
-    };
+    const missingSecret = { source: "env" as const, provider: "default", id: MISSING_SECRET };
     const instance = await createInstance({
       name: "status-runtime-degradation",
       env: {
-        STATUS_E2E_MISSING_SECRET: undefined,
+        [MISSING_SECRET]: undefined,
         VITEST: undefined,
         VITEST_POOL_ID: undefined,
         VITEST_WORKER_ID: undefined,
@@ -65,22 +62,14 @@ describe("status shared-state ownership", () => {
         tts: { providers: { elevenlabs: { apiKey: missingSecret } } },
         plugins: {
           enabled: true,
-          allow: [DEGRADED_PLUGIN_ID],
+          allow: [PLUGIN_ID],
           load: { paths: [pluginRoot] },
-          entries: { [DEGRADED_PLUGIN_ID]: { enabled: true } },
+          entries: { [PLUGIN_ID]: { enabled: true } },
         },
       },
     });
-    await seedInstalledPluginIndex(
-      {
-        [DEGRADED_PLUGIN_ID]: {
-          source: "npm",
-          spec: DEGRADED_PLUGIN_ID,
-          installPath: pluginRoot,
-        },
-      },
-      { env: instance.env },
-    );
+    const install = { source: "npm" as const, spec: PLUGIN_ID, installPath: pluginRoot };
+    await seedInstalledPluginIndex({ [PLUGIN_ID]: install }, { env: instance.env });
     await instance.startGateway();
 
     const rpc = await instance.cli(["gateway", "call", "status", "--json"]);
@@ -99,7 +88,7 @@ describe("status shared-state ownership", () => {
     ]);
     expect(gatewayStatus.degradedPlugins).toEqual([
       expect.objectContaining({
-        pluginId: DEGRADED_PLUGIN_ID,
+        pluginId: PLUGIN_ID,
         state: "configured-unavailable",
         diagnostic: expect.objectContaining({ reason: "missing-openclaw-peer-link" }),
       }),
@@ -116,16 +105,16 @@ describe("status shared-state ownership", () => {
         expect(status.stdout).toContain("Degraded secrets");
         expect(status.stdout).toContain("capability:tts");
         expect(status.stdout).toContain("Degraded plugins");
-        expect(status.stdout).toContain(DEGRADED_PLUGIN_ID);
+        expect(status.stdout).toContain(PLUGIN_ID);
       }
-      expect(`${status.stdout}\n${status.stderr}`).not.toContain("STATUS_E2E_MISSING_SECRET");
+      expect(`${status.stdout}\n${status.stderr}`).not.toContain(MISSING_SECRET);
       expect(`${status.stdout}\n${status.stderr}`).not.toContain(pluginRoot);
     }
 
     const logs = instance.logs();
     expect(logs).toContain("Secret owner capability:tts is configured-unavailable");
-    expect(logs).toContain(`Plugin "${DEGRADED_PLUGIN_ID}"`);
-    expect(logs).not.toContain("STATUS_E2E_MISSING_SECRET");
+    expect(logs).toContain(`Plugin "${PLUGIN_ID}"`);
+    expect(logs).not.toContain(MISSING_SECRET);
   }, 120_000);
 
   it("keeps healthy and unreachable Gateway degradation summaries empty", async () => {

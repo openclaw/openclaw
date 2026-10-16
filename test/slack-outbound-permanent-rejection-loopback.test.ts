@@ -1,4 +1,5 @@
 // Root-owned integration may combine the public Slack plugin with the durable queue runtime.
+import { text as readBodyText } from "node:stream/consumers";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createEmptyPluginRegistry,
@@ -58,10 +59,7 @@ async function withSlackPermanentRejectionLoopback(
   const requests: SlackLoopbackRequest[] = [];
   await withServer(
     (request, response) => {
-      const chunks: Buffer[] = [];
-      request.on("data", (chunk: Buffer) => chunks.push(chunk));
-      request.on("end", () => {
-        const body = Buffer.concat(chunks).toString("utf8");
+      void readBodyText(request).then((body) => {
         const text = new URLSearchParams(body).get("text") ?? "";
         const code = CLASSIFIED_CODES.find((candidate) => text.includes(candidate));
         requests.push({
