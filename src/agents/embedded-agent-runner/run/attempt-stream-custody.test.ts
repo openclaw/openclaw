@@ -117,19 +117,23 @@ function observeSettlement<T>(promise: Promise<T>) {
   return () => settled;
 }
 
+async function expectPending(...promises: Promise<unknown>[]) {
+  const settled = promises.map(observeSettlement);
+  await nextTurn();
+  expect(settled.map((read) => read())).toEqual(promises.map(() => false));
+}
+
 function textAssistant(text: string, model = testModel) {
   return createAssistant(model, [{ type: "text", text }]);
 }
 
-function completedStream(text: string) {
+function completedStream(text: string, terminalEvent = false) {
   const stream = createAssistantMessageEventStream();
-  stream.end(textAssistant(text));
-  return stream;
-}
-
-function terminalStream(text: string) {
-  const stream = createAssistantMessageEventStream();
-  stream.push({ type: "done", reason: "stop", message: textAssistant(text) });
+  if (terminalEvent) {
+    stream.push({ type: "done", reason: "stop", message: textAssistant(text) });
+  } else {
+    stream.end(textAssistant(text));
+  }
   return stream;
 }
 
@@ -236,10 +240,8 @@ describe("installed replay repair ownership", () => {
       expect(closed()).toBe(true);
       expect(fixture.repaired).not.toHaveBeenCalled();
       draining = work.drain();
-      const drained = observeSettlement(draining);
-      await nextTurn();
       // Closing the consumer does not certify that the actual provider pump ended.
-      expect(drained()).toBe(false);
+      await expectPending(draining);
       source.end(textAssistant("Synthetic completion", fixture.attempt.model));
       await draining;
     } finally {
@@ -286,9 +288,7 @@ describe("installed replay repair ownership", () => {
               }
               return failureMode === "promised-stream-rejection" ? Promise.resolve(stream) : stream;
             }
-          : rejectingReplay(() =>
-              (boundary === "completion" ? completedStream : terminalStream)("Synthetic response"),
-            ),
+          : rejectingReplay(() => completedStream("Synthetic response", boundary !== "completion")),
         {
           thinkingRecovery: thinking,
           toolNames: !thinking && boundary === "return-before-next" ? ["read"] : [],
@@ -308,15 +308,13 @@ describe("installed replay repair ownership", () => {
         } else {
           pending.push(iterator.next());
         }
-        const settled = pending.map(observeSettlement);
-        await nextTurn();
+        await expectPending(...pending);
         if (thinking) {
           expect(requests).toBe(2);
         } else {
           expect(fixture.previousNotification).toHaveBeenCalledExactlyOnceWith(checkpoint);
         }
         expect(replayPresent()).toBe(true);
-        expect(settled.map((read) => read())).toEqual(pending.map(() => false));
         release();
         await Promise.all(pending);
         expect(replayPresent()).toBe(false);
@@ -390,9 +388,7 @@ describe("installed replay repair ownership", () => {
     await withHeldWriter(fixture, async (release, tracked) => {
       const pending = Promise.resolve(fixture.open());
       tracked.push(pending);
-      const settled = observeSettlement(pending);
-      await nextTurn();
-      expect(settled()).toBe(false);
+      await expectPending(pending);
       release();
       await expect(pending).rejects.toBe(setupError);
       expect(fixture.checkpointPresent()).toBe(false);
@@ -412,21 +408,16 @@ describe("installed replay repair ownership", () => {
       fixture.controller.abort(reason);
       await expect(pending).rejects.toMatchObject({ name: "AbortError", cause: reason });
       draining = work.drain();
-      const drained = observeSettlement(draining);
-      await nextTurn();
-      expect(drained()).toBe(false);
+      await expectPending(draining);
       source.resolve(completedStream("Late response"));
-      await nextTurn();
-      expect(drained()).toBe(false);
+      await expectPending(draining);
       held.release();
       await draining;
       expect(fixture.checkpointPresent()).toBe(true);
       expect(fixture.repaired).not.toHaveBeenCalled();
     } finally {
       held.release();
-      const late = createAssistantMessageEventStream();
-      late.end(createAssistant(testModel, []));
-      source.resolve(late);
+      source.resolve(completedStream(""));
       await Promise.allSettled([pending, held.work, draining]);
       await work.drain();
     }
@@ -438,7 +429,6 @@ describe("installed replay repair ownership", () => {
       const entered = createDeferred();
       const sourceNext = createDeferred<IteratorResult<AssistantMessageEvent>>();
       const sourceReturn = createDeferred<IteratorResult<AssistantMessageEvent>>();
-      const final = textAssistant("Late response");
       const returnSource = vi.fn(() => sourceReturn.promise);
       const fixture = await createFixture(() => ({
         [Symbol.asyncIterator]: () => ({
@@ -448,7 +438,7 @@ describe("installed replay repair ownership", () => {
           },
           return: returnSource,
         }),
-        result: async () => final,
+        result: async () => textAssistant("Late response"),
       }));
       const work = new AsyncWorkScope();
       const cleanup = createAgentCleanupScope();
@@ -466,17 +456,14 @@ describe("installed replay repair ownership", () => {
         returned = Promise.resolve(iterator.return?.());
         void returned.catch(() => {});
         draining = work.drain();
-        const drained = observeSettlement(draining);
-        await nextTurn();
+        await expectPending(draining);
         expect(returnSource).toHaveBeenCalledOnce();
-        expect(drained()).toBe(false);
         if (rejectReturn) {
           sourceReturn.reject(returnFailure);
         } else {
           sourceReturn.resolve({ done: true, value: undefined });
         }
-        await nextTurn();
-        expect(drained()).toBe(false);
+        await expectPending(draining);
         sourceNext.resolve({ done: true, value: undefined });
         await draining;
         await returned.catch(() => {});
@@ -558,9 +545,7 @@ describe("installed replay repair ownership", () => {
       await vi.advanceTimersByTimeAsync(2_000);
       await logical;
       release = parent.release();
-      const released = observeSettlement(release);
-      await nextTurn();
-      expect(released()).toBe(false);
+      await expectPending(release);
       expect(releaseRuntime).not.toHaveBeenCalled();
       expect(provider).not.toHaveBeenCalled();
       held.release();
@@ -576,7 +561,9 @@ describe("installed replay repair ownership", () => {
   });
 
   it("does not classify a completed native producer's queued repair as provider silence", async () => {
-    const fixture = await createFixture(rejectingReplay(() => terminalStream("Native terminal")));
+    const fixture = await createFixture(
+      rejectingReplay(() => completedStream("Native terminal", true)),
+    );
     await withHeldWriter(fixture, async (release, tracked, close) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const response = await fixture.open();
@@ -641,18 +628,14 @@ it.each(["caller cancellation", "reclamation"] as const)(
     if (!session) {
       throw new Error("real AgentSession was not constructed");
     }
+    const { attempt, manager, controller, streamGuards, diagnosticOwner } = fixture;
     const operation = createReplyOperation({
-      sessionKey: fixture.attempt.sessionKey!,
-      sessionId: fixture.attempt.sessionId,
+      sessionKey: attempt.sessionKey!,
+      sessionId: attempt.sessionId,
       resetTriggered: false,
     });
     operation.setPhase("running");
-    const admission = prepareSystemAgentRunAdmission(
-      {},
-      fixture.attempt.runId,
-      "main",
-      "watchdog-custody",
-    );
+    const admission = prepareSystemAgentRunAdmission({}, attempt.runId, "main", "watchdog-custody");
     let active: Promise<void> | undefined;
     let queued: Promise<void> | undefined;
     let recovery: ReturnType<typeof recoverStuckDiagnosticSession> | undefined;
@@ -662,24 +645,22 @@ it.each(["caller cancellation", "reclamation"] as const)(
     let prepared: ReturnType<typeof prepareCatalogExecutor> | undefined;
     const tracker = createEmbeddedAttemptSessionSettleTracker(session);
     const state: Pick<EmbeddedAttemptExecutionState, "terminal"> = { terminal: { kind: "ok" } };
-    const laneName = resolveEmbeddedSessionLane(fixture.attempt.sessionKey!);
+    const laneName = resolveEmbeddedSessionLane(attempt.sessionKey!);
     let generation = getAgentEventLifecycleGeneration();
-    let params: RunEmbeddedAgentParams & { sessionFile: string } = {
-      config: fixture.attempt.config,
-      runId: fixture.attempt.runId,
-      sessionId: fixture.attempt.sessionId,
-      sessionKey: fixture.attempt.sessionKey,
-      provider: fixture.attempt.provider,
-      model: fixture.attempt.modelId,
-      workspaceDir: path.dirname(fixture.manager.getSessionTarget()!.storePath!),
-      sessionFile: path.join(
-        path.dirname(fixture.manager.getSessionTarget()!.storePath!),
-        `${fixture.attempt.sessionId}.jsonl`,
-      ),
+    const workspaceDir = path.dirname(manager.getSessionTarget()!.storePath!);
+    const execution = {
+      ...attempt,
+      workspaceDir,
+      sessionFile: path.join(workspaceDir, `${attempt.sessionId}.jsonl`),
       prompt: "Wait for the model",
       timeoutMs: 3_600_000,
       abortSignal: operation.abortSignal,
       replyOperation: operation,
+      agentId: "main",
+    };
+    let params: RunEmbeddedAgentParams & { sessionFile: string } = {
+      ...execution,
+      model: attempt.modelId,
     };
     const lane = createEmbeddedRunLaneController({
       getLifecycleGeneration: () => generation,
@@ -696,8 +677,8 @@ it.each(["caller cancellation", "reclamation"] as const)(
     });
     const requestRecovery = () => {
       const pending = recoverStuckDiagnosticSession({
-        sessionId: fixture.attempt.sessionId,
-        sessionKey: fixture.attempt.sessionKey,
+        sessionId: attempt.sessionId,
+        sessionKey: attempt.sessionKey,
         ageMs: 5 * 60_000 + 1,
         queueDepth: 1,
         allowActiveAbort: true,
@@ -708,63 +689,50 @@ it.each(["caller cancellation", "reclamation"] as const)(
     const clearRun = () => {
       prepared?.subscription.unsubscribe();
       if (prepared) {
-        clearActiveEmbeddedRun(
-          fixture.attempt.sessionId,
-          prepared.queueHandle,
-          fixture.attempt.sessionKey,
-        );
+        clearActiveEmbeddedRun(attempt.sessionId, prepared.queueHandle, attempt.sessionKey);
       }
     };
     try {
       const admittedRunContext = await admission.admit("embedded", "watchdog-custody");
       await withPreparedEmbeddedRunToolAuthority(
         { admittedRunContext, replyOperation: operation },
-        {
-          ...fixture.attempt,
-          workspaceDir: params.workspaceDir,
-          sessionFile: params.sessionFile,
-          prompt: params.prompt,
-          timeoutMs: params.timeoutMs,
-          abortSignal: params.abortSignal,
-          replyOperation: operation,
-          agentId: "main",
-        },
+        execution,
         undefined,
         async (ownedAttempt) => {
           const controls = lane.createAttemptControls({ admittedRunContext });
           const nativeAbort = createEmbeddedAttemptRunAbort({
             abortActiveSession: tracker.abortActiveSession,
             activeSession: session,
-            attempt: { ...fixture.attempt, onAttemptTimeout: controls.onAttemptTimeout },
+            attempt: { ...attempt, onAttemptTimeout: controls.onAttemptTimeout },
             getQueueHandle: () => prepared?.queueHandle,
             isProbeSession: false,
             log: { warn: () => {} },
-            runAbortController: fixture.controller,
+            runAbortController: controller,
             state,
           });
           idleInterrupt = createEmbeddedAttemptIdleInterruption({
-            runAbortController: fixture.controller,
+            runAbortController: controller,
             activeSession: session,
             state,
             abortRun: nativeAbort,
           });
           prepared = prepareCatalogExecutor({
             activeSession: session,
-            sessionManager: fixture.manager,
-            diagnosticOwner: fixture.diagnosticOwner,
+            sessionManager: manager,
+            diagnosticOwner,
             attempt: {
               ...ownedAttempt,
               abortSignal: controls.abortSignal,
               replyOperation: operation,
               onAttemptAbort: controls.onAttemptAbort,
             },
-            sessionKey: fixture.attempt.sessionKey,
+            sessionKey: attempt.sessionKey,
             replyOperation: operation,
             streamReplies: false,
-            runAbortController: fixture.controller,
+            runAbortController: controller,
             abortRun: nativeAbort,
             recoverStalledModelCall: () =>
-              fixture.streamGuards.isModelCallActive() &&
+              streamGuards.isModelCallActive() &&
               idleInterrupt?.(
                 new Error("LLM idle timeout (diagnostic stuck recovery): no response from model"),
               ) === true,
@@ -781,10 +749,10 @@ it.each(["caller cancellation", "reclamation"] as const)(
           });
           active = lane.enqueueSession(async () => {
             try {
-              prompt = tracker.trackPromptSettlePromise(session.prompt("Wait for the model"));
+              prompt = tracker.trackPromptSettlePromise(session.prompt(execution.prompt));
               promptSettled = observeSettlement(prompt);
               void prompt.catch(() => {});
-              await abortable(fixture.controller.signal, prompt).catch(() => {});
+              await abortable(controller.signal, prompt).catch(() => {});
               await tracker.buildAbortSettlePromise();
               await releaseParent.promise;
             } finally {
@@ -797,28 +765,26 @@ it.each(["caller cancellation", "reclamation"] as const)(
           await enteredProvider.promise;
           await waitForDiagnosticEventsDrained();
           // Qualification comes from the production stream diagnostic wrapper.
-          expect(getDiagnosticSessionActivitySnapshot(fixture.attempt)).toMatchObject({
+          expect(getDiagnosticSessionActivitySnapshot(attempt)).toMatchObject({
             activeWorkKind: "model_call",
           });
           const queuedStarted = vi.fn(async () => {});
           queued = enqueueCommandInLane(laneName, queuedStarted);
-          const startedAt = Date.now();
-          vi.setSystemTime(startedAt + 5 * 60_000 + 1);
+          vi.setSystemTime(Date.now() + 5 * 60_000 + 1);
           logSessionStateChange({
-            sessionId: fixture.attempt.sessionId,
-            sessionKey: fixture.attempt.sessionKey,
+            sessionId: attempt.sessionId,
+            sessionKey: attempt.sessionKey,
             state: "processing",
           });
           recovery = requestRecovery();
-          const cancelled = await Promise.race([
-            providerAborted.promise.then(() => ({ kind: "cancelled" as const })),
-            recovery.then((outcome) => ({ kind: "returned" as const, outcome })),
+          await Promise.race([
+            providerAborted.promise,
+            recovery.then((outcome) => {
+              throw new Error(
+                `Watchdog did not interrupt the provider: ${JSON.stringify(outcome)}`,
+              );
+            }),
           ]);
-          if (cancelled.kind === "returned") {
-            throw new Error(
-              `Watchdog did not interrupt the provider: ${JSON.stringify(cancelled.outcome)}`,
-            );
-          }
           await nextTurn();
           const expectCustody = () =>
             expect

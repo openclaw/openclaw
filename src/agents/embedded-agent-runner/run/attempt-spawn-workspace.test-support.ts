@@ -9,7 +9,6 @@ import type {
   ContextEngine,
   ContextEngineMaintenanceResult,
 } from "../../../context-engine/types.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 // Shared harness and mocks for embedded attempt spawn-workspace tests.
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -74,6 +73,7 @@ const hoisted = vi.hoisted(() => {
   const mock = (implementation?: (...args: unknown[]) => unknown) => vi.fn(implementation);
   const asyncMock = (implementation?: (...args: unknown[]) => Promise<unknown>) =>
     vi.fn(implementation);
+  const spawnSubagentDirectMock = mock();
   const preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][] = [];
   const systemPromptTexts: string[] = [];
   const embeddedSystemPromptInputs: unknown[] = [];
@@ -84,10 +84,7 @@ const hoisted = vi.hoisted(() => {
   }));
   const resolveBootstrapFilesForRunMock = vi.fn<
     (...args: unknown[]) => Promise<WorkspaceBootstrapFile[]>
-  >(async () => {
-    const context = await resolveBootstrapContextForRunMock();
-    return context.bootstrapFiles;
-  });
+  >(async () => (await resolveBootstrapContextForRunMock()).bootstrapFiles);
   const getBranch = vi.fn(() => []);
   const sessionManager: SessionManagerMocks = {
     getSessionTarget: vi.fn(() => undefined),
@@ -118,17 +115,30 @@ const hoisted = vi.hoisted(() => {
     setNextUserMessagePersistence: vi.fn(),
     removeTrailingEntriesAsync: vi.fn(async () => 0),
   };
-  return {
-    spawnSubagentDirectMock: mock(),
+  const mocks = {
     createAgentSessionMock: vi.fn<(options: CreateAgentSessionOptions) => unknown>(),
     applyExtraParamsToAgentMock: mock(),
-    sessionManagerOpenMock: mock(),
+    sessionManagerOpenMock: mock(() => sessionManager),
     guardSessionManagerMock: vi.fn<GuardSessionManagerFn>((manager) => manager),
     defaultResourceLoaderInitMock: mock(),
     resolveSandboxContextMock: mock(),
     ensureGlobalUndiciEnvProxyDispatcherMock: mock(),
     ensureGlobalUndiciDispatcherStreamTimeoutsMock: mock(),
-    createOpenClawCodingToolsMock: vi.fn<CreateCodingToolsFn>(() => []),
+    createOpenClawCodingToolsMock: vi.fn<CreateCodingToolsFn>((rawOptions) => {
+      const options = rawOptions as
+        | { workspaceDir?: string; spawnWorkspaceDir?: string }
+        | undefined;
+      return [
+        {
+          name: "sessions_spawn",
+          execute: async (_callId: string, input: { task?: string }) =>
+            await spawnSubagentDirectMock(
+              { task: input.task ?? "" },
+              { workspaceDir: options?.spawnWorkspaceDir ?? options?.workspaceDir },
+            ),
+        },
+      ];
+    }),
     subscribeEmbeddedAgentSessionMock: vi.fn<SubscribeEmbeddedAgentSessionFn>(() =>
       createSubscriptionMock(),
     ),
@@ -144,10 +154,26 @@ const hoisted = vi.hoisted(() => {
     hasCompletedBootstrapTurnMock: vi.fn<() => Promise<boolean>>(async () => false),
     supportsModelToolsMock: vi.fn<(model?: unknown) => boolean>(() => true),
     getGlobalHookRunnerMock: vi.fn<typeof getGlobalHookRunner>(() => null),
-    initializeGlobalHookRunnerMock: mock(),
     runContextEngineMaintenanceMock: vi.fn<
       (...args: unknown[]) => Promise<ContextEngineMaintenanceResult | undefined>
     >(async () => undefined),
+    getHistoryLimitFromSessionKeyMock: vi.fn<
+      (sessionKey: string | undefined, config: unknown, route?: unknown) => number | undefined
+    >(() => undefined),
+    limitHistoryTurnsMock: vi.fn<<T>(messages: T, limit: number | undefined) => T>(
+      (messages) => messages,
+    ),
+  };
+  return {
+    ...mocks,
+    resetMocks() {
+      // Vitest restores constructor defaults; persistent mocks stay outside this set.
+      for (const entry of Object.values(mocks)) {
+        entry.mockReset();
+      }
+    },
+    spawnSubagentDirectMock,
+    initializeGlobalHookRunnerMock: mock(),
     detectAndLoadPromptImagesMock: asyncMock(async () => ({
       images: [],
       imageFactIndexes: [],
@@ -156,12 +182,6 @@ const hoisted = vi.hoisted(() => {
       loadedCount: 0,
       skippedCount: 0,
     })),
-    getHistoryLimitFromSessionKeyMock: vi.fn<
-      (sessionKey: string | undefined, config: unknown, route?: unknown) => number | undefined
-    >(() => undefined),
-    limitHistoryTurnsMock: vi.fn<<T>(messages: T, limit: number | undefined) => T>(
-      (messages) => messages,
-    ),
     preemptiveCompactionCalls,
     compactionReserveTokens: 0,
     systemPromptTexts,
@@ -184,19 +204,14 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
-vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
-  const { getModelProviderRuntimePluginHandle } =
-    await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>();
-  return {
-    getModelProviderRuntimePluginHandle,
-    ensureProviderRuntimePluginHandle: (params: Record<string, unknown>) =>
-      params.runtimeHandle ?? params,
-    prepareProviderExtraParams: () => undefined,
-    resolveProviderExtraParamsForTransport: () => undefined,
-    resolveProviderRuntimePluginHandle: (params: Record<string, unknown>) => params,
-    wrapProviderStreamFn: () => undefined,
-  };
-});
+vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
+  getModelProviderRuntimePluginHandle: (
+    await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()
+  ).getModelProviderRuntimePluginHandle,
+  ensureProviderRuntimePluginHandle: (params: Record<string, unknown>) =>
+    params.runtimeHandle ?? params,
+  resolveProviderRuntimePluginHandle: (params: Record<string, unknown>) => params,
+}));
 
 vi.mock("../../../trajectory/metadata.js", () => ({
   buildTrajectoryArtifacts: (params: Record<string, unknown>) => params,
@@ -313,28 +328,20 @@ vi.mock("../../../tts/tts-settings.js", () => ({
   setTtsMachinePrefsPathResolver: () => undefined,
 }));
 
-vi.mock("../../bootstrap-files.js", async () => {
-  const actual = await vi.importActual<typeof import("../../bootstrap-files.js")>(
-    "../../bootstrap-files.js",
-  );
-  return {
-    ...actual,
-    makeBootstrapWarn: () => () => {},
-    isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
-    resolveBootstrapFilesForRun: hoisted.resolveBootstrapFilesForRunMock,
-    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
-    resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
-    hasCompletedBootstrapTurn: hoisted.hasCompletedBootstrapTurnMock,
-  };
-});
+vi.mock("../../bootstrap-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../bootstrap-files.js")>()),
+  makeBootstrapWarn: () => () => {},
+  isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
+  resolveBootstrapFilesForRun: hoisted.resolveBootstrapFilesForRunMock,
+  resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
+  resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
+  hasCompletedBootstrapTurn: hoisted.hasCompletedBootstrapTurnMock,
+}));
 
-vi.mock("../../workspace.js", async () => {
-  const actual = await vi.importActual<typeof import("../../workspace.js")>("../../workspace.js");
-  return {
-    ...actual,
-    isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
-  };
-});
+vi.mock("../../workspace.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace.js")>()),
+  isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
+}));
 
 vi.mock("../context-engine-maintenance.js", () => ({
   runContextEngineMaintenance: hoisted.runContextEngineMaintenanceMock,
@@ -369,21 +376,11 @@ vi.mock("../tool-schema-runtime.js", () => ({
   normalizeProviderToolSchemas: ({ tools }: { tools: unknown[] }) => tools,
 }));
 
-vi.mock("../tool-result-context-guard.js", async () => {
-  const actual = await vi.importActual<typeof import("../tool-result-context-guard.js")>(
-    "../tool-result-context-guard.js",
-  );
-  return {
-    ...actual,
-    formatContextLimitTruncationNotice: (truncatedChars: number) =>
-      `[... ${Math.max(
-        1,
-        Math.floor(truncatedChars),
-      )} more characters truncated; rerun with narrower args if needed]`,
-    installToolResultContextGuard: hoisted.installToolResultContextGuardMock,
-    installContextEngineLoopHook: hoisted.installContextEngineLoopHookMock,
-  };
-});
+vi.mock("../tool-result-context-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tool-result-context-guard.js")>()),
+  installToolResultContextGuard: hoisted.installToolResultContextGuardMock,
+  installContextEngineLoopHook: hoisted.installContextEngineLoopHookMock,
+}));
 
 vi.mock("../wait-for-idle-before-flush.js", () => ({
   flushPendingToolResultsAfterIdle: hoisted.flushPendingToolResultsAfterIdleMock,
@@ -402,16 +399,13 @@ vi.mock("../../system-prompt-params.js", () => ({
   }),
 }));
 
-vi.mock("../../system-prompt-config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../system-prompt-config.js")>();
-  return {
-    ...actual,
-    buildConfiguredAgentSystemPrompt: (params: unknown) => {
-      hoisted.embeddedSystemPromptInputs.push(params);
-      return "system prompt";
-    },
-  };
-});
+vi.mock("../../system-prompt-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../system-prompt-config.js")>()),
+  buildConfiguredAgentSystemPrompt: (params: unknown) => {
+    hoisted.embeddedSystemPromptInputs.push(params);
+    return "system prompt";
+  },
+}));
 
 vi.mock("../extra-params.js", async () => {
   const actual = await vi.importActual<typeof import("../extra-params.js")>("../extra-params.js");
@@ -421,21 +415,10 @@ vi.mock("../extra-params.js", async () => {
       hoisted.applyExtraParamsToAgentMock(...args);
       return { effectiveExtraParams: {} };
     },
-    resolvePreparedExtraParams: (params: {
-      cfg?: unknown;
-      provider: string;
-      modelId: string;
-      agentId?: string;
-      extraParamsOverride?: Record<string, unknown>;
-      resolvedExtraParams?: Record<string, unknown>;
-    }) => ({
-      ...(params.resolvedExtraParams ??
-        actual.resolveExtraParams({
-          cfg: params.cfg as Parameters<typeof actual.resolveExtraParams>[0]["cfg"],
-          provider: params.provider,
-          modelId: params.modelId,
-          agentId: params.agentId,
-        })),
+    resolvePreparedExtraParams: (
+      params: Parameters<typeof actual.resolvePreparedExtraParams>[0],
+    ) => ({
+      ...(params.resolvedExtraParams ?? actual.resolveExtraParams(params)),
       ...(params.extraParamsOverride
         ? Object.fromEntries(
             Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
@@ -565,40 +548,21 @@ vi.mock("../logger.js", () => ({
   },
 }));
 
-vi.mock("../model.js", () => ({
-  buildModelAliasLines: () => [],
-}));
+vi.mock("../model.js", () => ({}));
 
 vi.mock("../sandbox-info.js", () => ({
   buildEmbeddedSandboxInfo: () => undefined,
   resolveEmbeddedSandboxInfoExecPolicy: () => ({}),
 }));
 
-vi.mock("../thinking.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../thinking.js")>();
-  return {
-    ...actual,
-    dropReasoningFromHistory: <T>(messages: T) => messages,
-    dropThinkingBlocks: <T>(messages: T) => messages,
-  };
-});
+vi.mock("../thinking.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../thinking.js")>()),
+  dropReasoningFromHistory: <T>(messages: T) => messages,
+  dropThinkingBlocks: <T>(messages: T) => messages,
+}));
 
-vi.mock("../utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
-  return {
-    ...actual,
-    describeUnknownError: (error: unknown) => formatErrorMessage(error),
-  };
-});
-
-vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
-  hasActiveCompactionRetryWork: ({
-    isCompactionInFlight,
-    isSessionStreaming,
-  }: {
-    isCompactionInFlight: boolean;
-    isSessionStreaming: boolean;
-  }) => isCompactionInFlight || isSessionStreaming,
+vi.mock("./compaction-retry-aggregate-timeout.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./compaction-retry-aggregate-timeout.js")>()),
   waitForCompactionRetryWithAggregateTimeout: async () => ({
     timedOut: false,
     aborted: false,
@@ -627,20 +591,9 @@ export type EmbeddedAttemptSession = Omit<MutableSession, "agent"> & {
 
 type SessionPromptOverride = (
   session: MutableSession,
-  prompt: string,
-  options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
+  ...args: Parameters<MutableSession["prompt"]>
 ) => Promise<void>;
 
-function createCompletedAssistantStream() {
-  return {
-    async result() {
-      return { role: "assistant", content: "done" };
-    },
-    [Symbol.asyncIterator]() {
-      return (async function* () {})();
-    },
-  };
-}
 const ATTEMPT_SPAWN_WORKSPACE_TEST_SPECIFIER = "./attempt.ts?spawn-workspace-test";
 
 const loadRunEmbeddedAttempt = createLazyPromise(
@@ -671,57 +624,11 @@ export function resetEmbeddedAttemptHarness(
       runId: "run-child",
     });
   }
-  hoisted.createAgentSessionMock.mockReset();
-  hoisted.applyExtraParamsToAgentMock.mockReset();
-  hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
-  hoisted.guardSessionManagerMock
-    .mockReset()
-    .mockImplementation((sessionManager) => sessionManager);
-  hoisted.defaultResourceLoaderInitMock.mockReset();
-  hoisted.resolveSandboxContextMock.mockReset();
-  hoisted.ensureGlobalUndiciEnvProxyDispatcherMock.mockReset();
-  hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock.mockReset();
-  hoisted.createOpenClawCodingToolsMock.mockReset().mockImplementation((rawOptions) => {
-    const options = rawOptions as
-      | {
-          workspaceDir?: string;
-          spawnWorkspaceDir?: string;
-        }
-      | undefined;
-    return [
-      {
-        name: "sessions_spawn",
-        execute: async (_callId: string, input: { task?: string }) =>
-          await hoisted.spawnSubagentDirectMock(
-            { task: input.task ?? "" },
-            { workspaceDir: options?.spawnWorkspaceDir ?? options?.workspaceDir },
-          ),
-      },
-    ];
-  });
-  hoisted.subscribeEmbeddedAgentSessionMock
-    .mockReset()
-    .mockImplementation(params.subscribeImpl ?? (() => createSubscriptionMock()));
-  hoisted.installToolResultContextGuardMock.mockReset().mockReturnValue(() => {});
-  hoisted.installContextEngineLoopHookMock.mockReset().mockReturnValue(() => {});
-  hoisted.flushPendingToolResultsAfterIdleMock.mockReset().mockResolvedValue(undefined);
-  hoisted.resolveBootstrapContextForRunMock.mockReset().mockResolvedValue({
-    bootstrapFiles: [],
-    contextFiles: [],
-  });
-  hoisted.resolveBootstrapFilesForRunMock.mockReset().mockImplementation(async () => {
-    const context = await hoisted.resolveBootstrapContextForRunMock();
-    return context.bootstrapFiles;
-  });
-  hoisted.isWorkspaceBootstrapPendingMock.mockReset().mockResolvedValue(false);
-  hoisted.resolveContextInjectionModeMock.mockReset().mockReturnValue("always");
-  hoisted.hasCompletedBootstrapTurnMock.mockReset().mockResolvedValue(false);
+  hoisted.resetMocks();
+  if (params.subscribeImpl) {
+    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
+  }
   resetSkillMocks();
-  hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
-  hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(null);
-  hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
-  hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
-  hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
   hoisted.preemptiveCompactionCalls.length = 0;
   hoisted.compactionReserveTokens = 0;
   hoisted.systemPromptTexts.length = 0;
@@ -752,12 +659,7 @@ export function createDefaultEmbeddedSession(params?: {
   const promptContextQueue = createTestPromptContextQueue(appendMessage);
   let promptPreparation: Parameters<AgentSession[typeof agentSessionSetPromptPreparation]>[0];
   let promptPreparationInstalled = false;
-  let pendingPrompt:
-    | {
-        prompt: string;
-        options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void };
-      }
-    | undefined;
+  let pendingPrompt: Parameters<MutableSession["prompt"]> | undefined;
   const session: MutableSession = {
     sessionId: "embedded-session",
     messages: [...(params?.initialMessages ?? [])],
@@ -767,10 +669,7 @@ export function createDefaultEmbeddedSession(params?: {
     agent: {
       convertToLlm,
       prompt: async (prompt, options) => {
-        pendingPrompt = {
-          prompt: String(prompt),
-          options: options as Parameters<MutableSession["prompt"]>[1],
-        };
+        pendingPrompt = [String(prompt), options as Parameters<MutableSession["prompt"]>[1]];
         await session.agent.streamFn?.(
           testModel,
           {
@@ -785,10 +684,13 @@ export function createDefaultEmbeddedSession(params?: {
         if (params?.prompt && pendingPrompt) {
           const currentPrompt = pendingPrompt;
           pendingPrompt = undefined;
-          currentPrompt.options?.preflightResult?.(true);
-          await params.prompt(session, currentPrompt.prompt, currentPrompt.options);
+          currentPrompt[1]?.preflightResult?.(true);
+          await params.prompt(session, ...currentPrompt);
         }
-        return createCompletedAssistantStream();
+        return {
+          result: async () => ({ role: "assistant", content: "done" }),
+          async *[Symbol.asyncIterator]() {},
+        };
       },
       reset: () => {
         session.messages = [];
@@ -885,10 +787,6 @@ const testModel = makeProviderModelFixture({
   contextWindow: 8192,
 });
 
-const testAuthStorage = {
-  getApiKey: async () => undefined,
-};
-
 export async function createContextEngineAttemptRunner(params: {
   contextEngine: Pick<ContextEngine, "assemble"> &
     Partial<
@@ -953,8 +851,10 @@ export async function createContextEngineAttemptRunner(params: {
     return { session };
   });
 
-  const previousTrajectoryEnv = process.env.OPENCLAW_TRAJECTORY;
-  const previousTrajectoryDirEnv = process.env.OPENCLAW_TRAJECTORY_DIR;
+  const previousEnv = {
+    OPENCLAW_TRAJECTORY: process.env.OPENCLAW_TRAJECTORY,
+    OPENCLAW_TRAJECTORY_DIR: process.env.OPENCLAW_TRAJECTORY_DIR,
+  };
   if (params.trajectory !== true) {
     process.env.OPENCLAW_TRAJECTORY = "0";
     delete process.env.OPENCLAW_TRAJECTORY_DIR;
@@ -982,7 +882,7 @@ export async function createContextEngineAttemptRunner(params: {
       provider: "openai",
       modelId: "gpt-test",
       model: testModel,
-      authStorage: testAuthStorage as never,
+      authStorage: { getApiKey: async () => undefined } as never,
       authProfileStore: { version: 1, profiles: {} },
       modelRegistry: modelRegistry as never,
       thinkLevel: "off",
@@ -1025,15 +925,12 @@ export async function createContextEngineAttemptRunner(params: {
       admission.close();
     }
   } finally {
-    if (previousTrajectoryEnv === undefined) {
-      delete process.env.OPENCLAW_TRAJECTORY;
-    } else {
-      process.env.OPENCLAW_TRAJECTORY = previousTrajectoryEnv;
-    }
-    if (previousTrajectoryDirEnv === undefined) {
-      delete process.env.OPENCLAW_TRAJECTORY_DIR;
-    } else {
-      process.env.OPENCLAW_TRAJECTORY_DIR = previousTrajectoryDirEnv;
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   }
 }

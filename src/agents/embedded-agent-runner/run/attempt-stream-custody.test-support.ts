@@ -11,7 +11,6 @@ import {
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
-import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import type { StreamFn } from "../../runtime/index.js";
 import {
@@ -27,9 +26,6 @@ import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 export const checkpoint: CompactionReplayRejection = {
   data: "synthetic-rejected-checkpoint",
   id: "synthetic-checkpoint",
-};
-type ReplayOptions = NonNullable<Parameters<StreamFn>[2]> & {
-  onCompactionRejected?: (rejected: CompactionReplayRejection) => void;
 };
 
 export async function createStreamCustodyFixture(
@@ -69,25 +65,23 @@ export async function createStreamCustodyFixture(
   const owner =
     options.anthropicCompaction?.owner ??
     createAssistant(model, [{ type: "text", text: "Synthetic checkpoint owner" }]);
-  if (!options.anthropicCompaction) {
-    if (options.thinkingRecovery) {
-      owner.content.unshift({
-        type: "thinking",
-        thinking: "Synthetic historical reasoning",
-        thinkingSignature: "c3ludGhldGljLXNpZ25hdHVyZQ==",
-      });
-    } else {
-      owner.providerReplay = {
-        v: 1,
-        type: "openai-responses-compaction",
-        ...checkpoint,
-        replayIndex: 0,
-        provider: model.provider,
-        api: model.api,
-        model: model.id,
-        baseUrlHash: "synthetic",
-      };
-    }
+  if (!options.anthropicCompaction && options.thinkingRecovery) {
+    owner.content.unshift({
+      type: "thinking",
+      thinking: "Synthetic historical reasoning",
+      thinkingSignature: "c3ludGhldGljLXNpZ25hdHVyZQ==",
+    });
+  } else if (!options.anthropicCompaction) {
+    owner.providerReplay = {
+      v: 1,
+      type: "openai-responses-compaction",
+      ...checkpoint,
+      replayIndex: 0,
+      provider: model.provider,
+      api: model.api,
+      model: model.id,
+      baseUrlHash: "synthetic",
+    };
   }
   manager.appendMessage(owner);
   const assistants = () =>
@@ -166,7 +160,7 @@ export async function createStreamCustodyFixture(
     diagnosticOwner,
   });
   expect(replayPresent(), "fixture preparation must retain replay").toBe(true);
-  const streamOptions: ReplayOptions = {
+  const streamOptions = {
     signal: controller.signal,
     onCompactionRejected: previousNotification,
   };
@@ -191,15 +185,11 @@ export async function createStreamCustodyFixture(
     async holdWriter() {
       const entered = createDeferred();
       const release = createDeferred();
-      const database = toDatabaseOptions(resolveSqliteReadScope(target));
       const managerTarget = manager.getSessionTarget();
       if (!managerTarget) {
         throw new Error("Fixture manager lost its durable target");
       }
-      const managerDatabase = toDatabaseOptions(resolveSqliteReadScope(managerTarget));
-      expect(resolveOpenClawAgentSqlitePath(database)).toBe(
-        resolveOpenClawAgentSqlitePath(managerDatabase),
-      );
+      const database = toDatabaseOptions(resolveSqliteReadScope(managerTarget));
       const work = runOpenClawAgentWorkerWrite(database, async () => {
         entered.resolve();
         await release.promise;
