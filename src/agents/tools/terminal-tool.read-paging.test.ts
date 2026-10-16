@@ -14,6 +14,7 @@ import {
 import { createTerminalTool } from "./terminal-tool.js";
 
 const getInProcessGatewayToolContext = vi.hoisted(() => vi.fn());
+// mock-isolation: paging tests inject their Gateway context, so the in-process resolver stays stubbed.
 vi.mock("./in-process-gateway.js", () => ({ getInProcessGatewayToolContext }));
 
 const agentOwner = agentTerminalOwner("agent:main:main", "main-session-id");
