@@ -5,11 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   childLineageDigest,
   type UpdateCommandChildGrant,
@@ -21,23 +21,37 @@ import {
   captureManagedUpdateLeaseDatabaseIdentity,
   createManagedHandoffLeaseDatabase,
 } from "./update-managed-service-handoff-database.js";
+import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const dirs = createTempDirTracker();
+const children = new Set<ReturnType<typeof spawn>>();
 const databaseUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.handoffDatabase);
 const databaseModule = databaseUrl.href;
 const repoRoot = process.cwd();
+const insertSql =
+  "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)";
 let root: string;
 let databasePath: string;
+let withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>;
+let store: ReturnType<typeof createManagedHandoffLeaseStore>;
 
 beforeEach(() => {
   root = fs.realpathSync(dirs.make("handoff-publication-"));
   fs.chmodSync(root, 0o700);
   databasePath = path.join(root, "managed-update-handoffs.sqlite");
+  withDatabase = createManagedHandoffLeaseDatabase(databasePath);
+  store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
+afterEach(async () => {
+  try {
+    await Promise.all([...children].map((child) => stopChildProcess(child, 5_000)));
+  } finally {
+    children.clear();
+    vi.restoreAllMocks();
+    dirs.cleanup();
+  }
 });
 
 function insertRow(
@@ -47,10 +61,7 @@ function insertRow(
   payload = "{}",
   updatedAt = 1,
 ): void {
-  db.prepare(
-    "INSERT INTO managed_update_handoffs " +
-      "(install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
-  ).run(key, owner, payload, updatedAt);
+  db.prepare(insertSql).run(key, owner, payload, updatedAt);
 }
 
 function withSqlite<T>(run: (db: DatabaseSync) => T, readOnly = false): T {
@@ -74,7 +85,7 @@ function readOwners(): string[] {
 }
 
 function publish(owner: string, key = root): void {
-  createManagedHandoffLeaseDatabase(databasePath)(true, (db) => insertRow(db, key, owner));
+  withDatabase(true, (db) => insertRow(db, key, owner));
 }
 
 function expectSingleLink(owners: string[]): void {
@@ -82,14 +93,9 @@ function expectSingleLink(owners: string[]): void {
   expect(fs.statSync(databasePath).nlink).toBe(1);
 }
 
-type RunningChild = {
-  child: ReturnType<typeof spawn>;
-  closed: Promise<unknown[]>;
-  output: () => { stdout: string; stderr: string };
-  waitForMarker: (marker: string) => Promise<void>;
-};
+type RunningChild = ReturnType<typeof spawnFixture>;
 
-function spawnFixture(script: string, args: string[] = []): RunningChild {
+function spawnFixture(script: string, args: string[] = []) {
   const child = spawn(
     process.execPath,
     [
@@ -97,11 +103,17 @@ function spawnFixture(script: string, args: string[] = []): RunningChild {
       ...resolveRuntimeWorkerArgv(databaseUrl).slice(0, -1),
       "--input-type=module",
       "--eval",
-      script,
+      `import fs from "node:fs";
+      import { DatabaseSync } from "node:sqlite";
+      const openDatabase = async () => (await import(${JSON.stringify(databaseModule)}))
+        .createManagedHandoffLeaseDatabase(process.argv[1]);
+      ${script}`,
+      databasePath,
       ...args,
     ],
     { cwd: repoRoot, env: {}, stdio: ["ignore", "pipe", "pipe"] },
   );
+  children.add(child);
   const closed = once(child, "close");
   void closed.catch(() => undefined);
   let stdout = "";
@@ -116,7 +128,7 @@ function spawnFixture(script: string, args: string[] = []): RunningChild {
     child,
     closed,
     output: () => ({ stdout, stderr }),
-    waitForMarker: async (marker) => {
+    waitForMarker: async (marker: string) => {
       const deadline = Date.now() + 10_000;
       while (!stdout.includes(marker)) {
         if (child.exitCode !== null || child.signalCode !== null) {
@@ -135,6 +147,14 @@ function spawnFixture(script: string, args: string[] = []): RunningChild {
   };
 }
 
+async function expectSuccessfulExit(fixture: RunningChild, stdout?: string): Promise<void> {
+  expect(await fixture.closed).toEqual([0, null]);
+  expect(fixture.output()).toMatchObject({
+    stderr: "",
+    ...(stdout === undefined ? {} : { stdout }),
+  });
+}
+
 async function killFixture(fixture: RunningChild): Promise<void> {
   if (fixture.child.exitCode === null && fixture.child.signalCode === null) {
     fixture.child.kill("SIGKILL");
@@ -147,216 +167,191 @@ async function killFixture(fixture: RunningChild): Promise<void> {
   ]);
 }
 
-describe("managed handoff database publication", () => {
-  it("does not create a database for an absent read", () => {
-    const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-    expect(() => withDatabase(false, () => undefined)).toThrow();
-    expect(fs.existsSync(databasePath)).toBe(false);
+it("does not create a database for an absent read", () => {
+  expect(() => withDatabase(false, () => undefined)).toThrow();
+  expect(fs.existsSync(databasePath)).toBe(false);
+});
+
+it("publishes a complete private single-link database", () => {
+  // Windows privacy comes from the DACL; masking owner-write makes the stage read-only.
+  const umask = process.umask(process.platform === "win32" ? 0o077 : 0o777);
+  try {
+    publish("first");
+  } finally {
+    process.umask(umask);
+  }
+
+  const stat = fs.statSync(databasePath);
+  if (process.platform !== "win32") {
+    expect(stat.mode & 0o777).toBe(0o600);
+  }
+  expectSingleLink(["first"]);
+  expect(fs.readdirSync(root)).toEqual([path.basename(databasePath)]);
+});
+
+it("uses synchronous directory spelling for synchronous durability receipts", () => {
+  // Windows native realpath expands short aliases that ordinary realpath may preserve.
+  // Model that spelling difference without replacing the directory or its identity.
+  const nativeRealpath = fs.realpathSync.native;
+  vi.spyOn(fs.realpathSync, "native").mockImplementation((...args) => {
+    const result = nativeRealpath(...args);
+    return args[0] === root && typeof result === "string" ? result + path.sep + "." : result;
   });
 
-  it("publishes a complete private single-link database", () => {
-    const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-    // Windows privacy comes from the DACL; masking owner-write makes the stage read-only.
-    const umask = process.umask(process.platform === "win32" ? 0o077 : 0o777);
-    try {
-      withDatabase(true, (db) => insertRow(db, root, "first"));
-    } finally {
-      process.umask(umask);
-    }
+  publish("alias-owner");
+  expectSingleLink(["alias-owner"]);
+});
 
-    const stat = fs.statSync(databasePath);
-    if (process.platform !== "win32") {
-      expect(stat.mode & 0o777).toBe(0o600);
-    }
-    expectSingleLink(["first"]);
-    expect(fs.readdirSync(root)).toEqual([path.basename(databasePath)]);
-  });
+it("publishes when the parent file ID exceeds Number's exact range", () => {
+  mockLargeDirectoryId(root);
 
-  it("uses synchronous directory spelling for synchronous durability receipts", () => {
-    // Windows native realpath expands short aliases that ordinary realpath may preserve.
-    // Model that spelling difference without replacing the directory or its identity.
-    const nativeRealpath = fs.realpathSync.native;
-    vi.spyOn(fs.realpathSync, "native").mockImplementation((...args) => {
-      const result = nativeRealpath(...args);
-      return args[0] === root && typeof result === "string" ? result + path.sep + "." : result;
+  publish("exact-owner");
+  expectSingleLink(["exact-owner"]);
+});
+
+it.skipIf(process.platform === "win32")(
+  "repairs an interrupted legacy initializer that wins exclusive creation",
+  () => {
+    const open = fs.openSync;
+    let winnerInode: number | undefined;
+    vi.spyOn(fs, "openSync").mockImplementationOnce((pathname, flags, mode) => {
+      fs.writeFileSync(databasePath, "", { mode: 0o600 });
+      fs.chmodSync(databasePath, 0o644);
+      winnerInode = fs.statSync(databasePath).ino;
+      return open(pathname, flags, mode);
     });
 
-    publish("alias-owner");
-    expectSingleLink(["alias-owner"]);
-  });
+    publish("winner");
 
-  it("publishes when the parent file ID exceeds Number's exact range", () => {
-    mockLargeDirectoryId(root);
+    expect(fs.statSync(databasePath).ino).toBe(winnerInode);
+    expect(fs.statSync(databasePath).mode & 0o777).toBe(0o600);
+    expectSingleLink(["winner"]);
+  },
+);
 
-    publish("exact-owner");
-    expectSingleLink(["exact-owner"]);
-  });
+it("preserves an existing malformed database", () => {
+  const malformed = Buffer.from("not a sqlite database");
+  fs.writeFileSync(databasePath, malformed, { mode: 0o600 });
 
-  it.skipIf(process.platform === "win32")(
-    "repairs an interrupted legacy initializer that wins exclusive creation",
-    () => {
-      const open = fs.openSync;
-      let winnerInode: number | undefined;
-      vi.spyOn(fs, "openSync").mockImplementationOnce((pathname, flags, mode) => {
-        fs.writeFileSync(databasePath, "", { mode: 0o600 });
-        fs.chmodSync(databasePath, 0o644);
-        winnerInode = fs.statSync(databasePath).ino;
-        return open(pathname, flags, mode);
-      });
+  expect(() => withDatabase(true, () => undefined)).toThrow();
+  expect(fs.readFileSync(databasePath)).toEqual(malformed);
+  expect(fs.statSync(databasePath).nlink).toBe(1);
+});
 
-      publish("winner");
-
-      expect(fs.statSync(databasePath).ino).toBe(winnerInode);
-      expect(fs.statSync(databasePath).mode & 0o777).toBe(0o600);
-      expectSingleLink(["winner"]);
-    },
-  );
-
-  it("preserves an existing malformed database", () => {
-    const malformed = Buffer.from("not a sqlite database");
-    fs.writeFileSync(databasePath, malformed, { mode: 0o600 });
-    const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-
-    expect(() => withDatabase(true, () => undefined)).toThrow();
-    expect(fs.readFileSync(databasePath)).toEqual(malformed);
-    expect(fs.statSync(databasePath).nlink).toBe(1);
-  });
-
-  it.each(["file", "parent"] as const)(
-    "preserves initialization ownership when %s replacement is attempted",
-    (target) => {
-      const sync = fs.fsyncSync;
-      const retained = dirs.make("retained-initialization-");
-      const originalParent = fs.statSync(root);
-      let originalFile: fs.Stats | undefined;
-      vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
-        if (
-          originalFile ||
-          !fs.existsSync(databasePath) ||
-          fs.fstatSync(descriptor, { bigint: true }).ino !==
-            fs.statSync(databasePath, { bigint: true }).ino
-        ) {
-          sync(descriptor);
-          return;
-        }
-        originalFile = fs.fstatSync(descriptor);
-        if (target === "file") {
-          fs.renameSync(databasePath, path.join(retained, "original.sqlite"));
-          fs.writeFileSync(databasePath, "replacement", { mode: 0o600 });
-        } else {
-          fs.renameSync(root, path.join(retained, "original-parent"));
-          fs.mkdirSync(root, { mode: 0o700 });
-          fs.renameSync(
-            path.join(retained, "original-parent", path.basename(databasePath)),
-            databasePath,
-          );
-        }
+it.each(["file", "parent"] as const)(
+  "preserves initialization ownership when %s replacement is attempted",
+  (target) => {
+    const sync = fs.fsyncSync;
+    const retained = dirs.make("retained-initialization-");
+    const originalParent = fs.statSync(root);
+    let originalFile: fs.Stats | undefined;
+    vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+      if (
+        originalFile ||
+        !fs.existsSync(databasePath) ||
+        fs.fstatSync(descriptor, { bigint: true }).ino !==
+          fs.statSync(databasePath, { bigint: true }).ino
+      ) {
         sync(descriptor);
-      });
-      const initialize = () =>
-        createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
-      if (process.platform === "win32" && target === "parent") {
-        expect(initialize).toThrow(expect.objectContaining({ code: "EPERM" }));
-        if (!originalFile) {
-          throw new Error("fixture did not capture the created descriptor");
-        }
-        expect(fs.statSync(root)).toMatchObject({
-          dev: originalParent.dev,
-          ino: originalParent.ino,
-        });
-        expect(fs.statSync(databasePath)).toMatchObject({
-          dev: originalFile.dev,
-          ino: originalFile.ino,
-          size: 0,
-          nlink: 1,
-        });
-        expect(fs.readFileSync(databasePath, "utf8")).toBe("");
-        vi.restoreAllMocks();
-        publish("recovered");
-        expect(fs.statSync(databasePath)).toMatchObject({
-          dev: originalFile.dev,
-          ino: originalFile.ino,
-          nlink: 1,
-        });
-        expect(readOwners()).toEqual(["recovered"]);
-      } else {
-        expect(initialize).toThrow(/changed during initialization/);
-        expect(fs.readFileSync(databasePath, "utf8")).toBe(target === "file" ? "replacement" : "");
-        expect(fs.statSync(databasePath).nlink).toBe(1);
+        return;
       }
-    },
-  );
-
-  it.each(["empty-file", "empty-schema", "foreign-schema", "wrong-table", "malformed"] as const)(
-    "ordinary observation preserves an existing %s",
-    (state) => {
-      fs.writeFileSync(databasePath, state === "malformed" ? "not SQLite" : "", { mode: 0o600 });
-      if (state !== "empty-file" && state !== "malformed") {
-        withSqlite((db) =>
-          db.exec(
-            state === "empty-schema"
-              ? "VACUUM"
-              : state === "foreign-schema"
-                ? "CREATE TABLE unrelated(value TEXT)"
-                : "CREATE TABLE managed_update_handoffs(wrong TEXT)",
-          ),
+      originalFile = fs.fstatSync(descriptor);
+      if (target === "file") {
+        fs.renameSync(databasePath, path.join(retained, "original.sqlite"));
+        fs.writeFileSync(databasePath, "replacement", { mode: 0o600 });
+      } else {
+        fs.renameSync(root, path.join(retained, "original-parent"));
+        fs.mkdirSync(root, { mode: 0o700 });
+        fs.renameSync(
+          path.join(retained, "original-parent", path.basename(databasePath)),
+          databasePath,
         );
       }
-      const bytes = fs.readFileSync(databasePath);
-      const before = fs.statSync(databasePath);
-      const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
-      expect(store.read(root)).toEqual(
-        state === "empty-file" || state === "empty-schema"
-          ? { kind: "absent" }
-          : { kind: "unreadable", error: expect.any(Error) },
-      );
-      expect(fs.readFileSync(databasePath)).toEqual(bytes);
-      expect(fs.statSync(databasePath).ino).toBe(before.ino);
-      expect(fs.readdirSync(root)).toEqual([path.basename(databasePath)]);
-    },
-  );
-
-  it("admits nested reads after first publication", () => {
-    const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-    withDatabase(true, (writer) => {
-      insertRow(writer, root, "writer");
-      expect(
-        withDatabase(false, (reader) =>
-          reader.prepare("SELECT owner FROM managed_update_handoffs").get(),
-        ),
-      ).toEqual({ owner: "writer" });
+      sync(descriptor);
     });
-  });
+    const initialize = () => withDatabase(true, () => undefined);
+    if (process.platform === "win32" && target === "parent") {
+      expect(initialize).toThrow(expect.objectContaining({ code: "EPERM" }));
+      assert(originalFile, "fixture did not capture the created descriptor");
+      expect(fs.statSync(root)).toMatchObject({
+        dev: originalParent.dev,
+        ino: originalParent.ino,
+      });
+      expect(fs.statSync(databasePath)).toMatchObject({
+        dev: originalFile.dev,
+        ino: originalFile.ino,
+        size: 0,
+        nlink: 1,
+      });
+      expect(fs.readFileSync(databasePath, "utf8")).toBe("");
+      vi.restoreAllMocks();
+      publish("recovered");
+      expect(fs.statSync(databasePath)).toMatchObject({
+        dev: originalFile.dev,
+        ino: originalFile.ino,
+        nlink: 1,
+      });
+      expect(readOwners()).toEqual(["recovered"]);
+    } else {
+      expect(initialize).toThrow(/changed during initialization/);
+      expect(fs.readFileSync(databasePath, "utf8")).toBe(target === "file" ? "replacement" : "");
+      expect(fs.statSync(databasePath).nlink).toBe(1);
+    }
+  },
+);
 
-  it("lets competing first writers converge on one complete database", async () => {
-    const script = `
-      const { createManagedHandoffLeaseDatabase } = await import(${JSON.stringify(databaseModule)});
-      const withDatabase = createManagedHandoffLeaseDatabase(process.argv[1]);
-      withDatabase(true, (db) => db.prepare(
-        "INSERT INTO managed_update_handoffs " +
-        "(install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)"
-      ).run(process.argv[2], process.argv[2], "{}", 1));
+it.each([
+  ["empty-file", null],
+  ["empty-schema", "VACUUM"],
+  ["foreign-schema", "CREATE TABLE unrelated(value TEXT)"],
+  ["wrong-table", "CREATE TABLE managed_update_handoffs(wrong TEXT)"],
+  ["malformed", null],
+] as const)("ordinary observation preserves an existing %s", (state, schema) => {
+  fs.writeFileSync(databasePath, state === "malformed" ? "not SQLite" : "", { mode: 0o600 });
+  if (schema) {
+    withSqlite((db) => db.exec(schema));
+  }
+  const bytes = fs.readFileSync(databasePath);
+  const before = fs.statSync(databasePath);
+  expect(store.read(root)).toEqual(
+    state === "empty-file" || state === "empty-schema"
+      ? { kind: "absent" }
+      : { kind: "unreadable", error: expect.any(Error) },
+  );
+  expect(fs.readFileSync(databasePath)).toEqual(bytes);
+  expect(fs.statSync(databasePath).ino).toBe(before.ino);
+  expect(fs.readdirSync(root)).toEqual([path.basename(databasePath)]);
+});
+
+it("admits nested reads after first publication", () => {
+  withDatabase(true, (writer) => {
+    insertRow(writer, root, "writer");
+    expect(
+      withDatabase(false, (reader) =>
+        reader.prepare("SELECT owner FROM managed_update_handoffs").get(),
+      ),
+    ).toEqual({ owner: "writer" });
+  });
+});
+
+it("lets competing first writers converge on one complete database", async () => {
+  const script = `
+      (await openDatabase())(true, db => db.prepare(${JSON.stringify(insertSql)})
+        .run(process.argv[2], process.argv[2], "{}", 1));
       process.stdout.write("done");
     `;
-    const first = spawnFixture(script, [databasePath, "first"]);
-    const second = spawnFixture(script, [databasePath, "second"]);
-    try {
-      expect(await first.closed).toEqual([0, null]);
-      expect(await second.closed).toEqual([0, null]);
-      expect(first.output()).toEqual({ stdout: "done", stderr: "" });
-      expect(second.output()).toEqual({ stdout: "done", stderr: "" });
-      expectSingleLink(["first", "second"]);
-    } finally {
-      await stopChildProcess(first.child, 5_000);
-      await stopChildProcess(second.child, 5_000);
-    }
-  });
+  const first = spawnFixture(script, ["first"]);
+  const second = spawnFixture(script, ["second"]);
+  await expectSuccessfulExit(first, "done");
+  await expectSuccessfulExit(second, "done");
+  expectSingleLink(["first", "second"]);
+});
 
-  it.skipIf(process.platform !== "win32")(
-    "waits for private publication before admitting a competing first writer",
-    async ({ signal }) => {
-      const gate = new Int32Array(new SharedArrayBuffer(4));
-      const source = `
+it.skipIf(process.platform !== "win32")(
+  "waits for private publication before admitting a competing first writer",
+  async ({ signal }) => {
+    const gate = new Int32Array(new SharedArrayBuffer(4));
+    const source = `
         const fs = require("node:fs");
         const { parentPort, workerData } = require("node:worker_threads");
         (async () => {
@@ -387,85 +382,72 @@ describe("managed handoff database publication", () => {
             };
           }
           const owner = workerData.first ? "first" : "second";
-          createManagedHandoffLeaseDatabase(target)(true, db => db.prepare(
-            "INSERT INTO managed_update_handoffs " +
-            "(install_root, owner, payload_json, updated_at) VALUES (?, ?, '{}', 1)"
-          ).run(owner, owner));
+          createManagedHandoffLeaseDatabase(target)(true, db =>
+            db.prepare(${JSON.stringify(insertSql)}).run(owner, owner, "{}", 1));
           parentPort.close();
         })().catch(error => { throw error; });
       `;
-      const launch = (first: boolean) => {
-        const worker = new Worker(source, {
-          eval: true,
-          execArgv: [],
-          workerData: {
-            first,
-            gate: gate.buffer,
-            databasePath,
-            module: databaseModule,
-            loader: import.meta.resolve("tsx/esm/api"),
-            tsconfig: path.resolve("tsconfig.json"),
-          },
-        });
-        const exited = once(worker, "exit");
-        void exited.catch(() => undefined);
-        const ready = withinTest(
-          awaitGateBeforeSettlement(once(worker, "message"), exited, "Publication worker exited"),
-          signal,
-        );
-        return { worker, exited, ready };
-      };
-      const first = launch(true);
-      let second: ReturnType<typeof launch> | undefined;
-      try {
-        expect(await first.ready).toEqual(["published"]);
-        expect(fs.statSync(databasePath).nlink).toBe(2);
-        second = launch(false);
-        expect(await second.ready).toEqual(["contended"]);
-        Atomics.store(gate, 0, 1);
-        Atomics.notify(gate, 0);
-        expect(await first.exited).toEqual([0]);
-        expect(await second.exited).toEqual([0]);
-        expectSingleLink(["first", "second"]);
-      } finally {
-        Atomics.store(gate, 0, 1);
-        Atomics.notify(gate, 0);
-        await Promise.all([first.worker.terminate(), second?.worker.terminate()]);
-      }
-    },
-  );
-
-  it("ordinary readers observe no lease while a real peer initializes the schema", async () => {
-    const script = `
-      const { createManagedHandoffLeaseDatabase } = await import(${JSON.stringify(databaseModule)});
-      createManagedHandoffLeaseDatabase(process.argv[1])(true, () => undefined);
-    `;
-    const writer = spawnFixture(script, [databasePath]);
-    const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
+    const launch = (first: boolean) => {
+      const worker = new Worker(source, {
+        eval: true,
+        execArgv: [],
+        workerData: {
+          first,
+          gate: gate.buffer,
+          databasePath,
+          module: databaseModule,
+          loader: import.meta.resolve("tsx/esm/api"),
+          tsconfig: path.resolve("tsconfig.json"),
+        },
+      });
+      const exited = once(worker, "exit");
+      void exited.catch(() => undefined);
+      const ready = withinTest(
+        awaitGateBeforeSettlement(once(worker, "message"), exited, "Publication worker exited"),
+        signal,
+      );
+      return { worker, exited, ready };
+    };
+    const first = launch(true);
+    let second: ReturnType<typeof launch> | undefined;
     try {
-      do {
-        expect(store.read(root)).toEqual({ kind: "absent" });
-        if (fs.existsSync(databasePath)) {
-          const stat = fs.statSync(databasePath);
-          if (process.platform !== "win32") {
-            expect(stat.mode & 0o777).toBe(0o600);
-          }
-        }
-        await new Promise((resolve) => {
-          setTimeout(resolve, 1);
-        });
-      } while (writer.child.exitCode === null && writer.child.signalCode === null);
-      expect(await writer.closed).toEqual([0, null]);
-      expect(writer.output().stderr).toBe("");
-      expectSingleLink([]);
+      expect(await first.ready).toEqual(["published"]);
+      expect(fs.statSync(databasePath).nlink).toBe(2);
+      second = launch(false);
+      expect(await second.ready).toEqual(["contended"]);
+      Atomics.store(gate, 0, 1);
+      Atomics.notify(gate, 0);
+      expect(await first.exited).toEqual([0]);
+      expect(await second.exited).toEqual([0]);
+      expectSingleLink(["first", "second"]);
     } finally {
-      await stopChildProcess(writer.child, 5_000);
+      Atomics.store(gate, 0, 1);
+      Atomics.notify(gate, 0);
+      await Promise.all([first.worker.terminate(), second?.worker.terminate()]);
     }
-  });
+  },
+);
 
-  it("recovers the same inode when its first writer crashes before schema initialization", async () => {
-    const script = `
-      import fs from "node:fs";
+it("ordinary readers observe no lease while a real peer initializes the schema", async () => {
+  const writer = spawnFixture("(await openDatabase())(true, () => undefined);");
+  do {
+    expect(store.read(root)).toEqual({ kind: "absent" });
+    if (fs.existsSync(databasePath)) {
+      const stat = fs.statSync(databasePath);
+      if (process.platform !== "win32") {
+        expect(stat.mode & 0o777).toBe(0o600);
+      }
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1);
+    });
+  } while (writer.child.exitCode === null && writer.child.signalCode === null);
+  await expectSuccessfulExit(writer);
+  expectSingleLink([]);
+});
+
+it("recovers the same inode when its first writer crashes before schema initialization", async () => {
+  const script = `
       const sync = fs.fsyncSync;
       fs.fsyncSync = (descriptor) => {
         if (!fs.existsSync(process.argv[1]) ||
@@ -477,79 +459,57 @@ describe("managed handoff database publication", () => {
         fs.writeSync(1, "before-schema\\n");
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
       };
-      const { createManagedHandoffLeaseDatabase } = await import(${JSON.stringify(databaseModule)});
-      createManagedHandoffLeaseDatabase(process.argv[1])(true, () => undefined);
+      (await openDatabase())(true, () => undefined);
     `;
-    const writer = spawnFixture(script, [databasePath]);
-    try {
-      await writer.waitForMarker("before-schema");
-      const before = fs.statSync(databasePath);
-      expect(before.size).toBe(0);
-      expect(before.nlink).toBe(1);
-      expect(
-        createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} }).read(root),
-      ).toEqual({
-        kind: "absent",
-      });
-      await killFixture(writer);
-      publish("recovered");
-      expect(fs.statSync(databasePath).ino).toBe(before.ino);
-      expect(readOwners()).toEqual(["recovered"]);
-    } finally {
-      await stopChildProcess(writer.child, 5_000);
-    }
-  });
+  const writer = spawnFixture(script);
+  await writer.waitForMarker("before-schema");
+  const before = fs.statSync(databasePath);
+  expect(before).toMatchObject({ size: 0, nlink: 1 });
+  expect(store.read(root)).toEqual({ kind: "absent" });
+  await killFixture(writer);
+  publish("recovered");
+  expect(fs.statSync(databasePath).ino).toBe(before.ino);
+  expect(readOwners()).toEqual(["recovered"]);
+});
 
-  it.each(["reader", "writer"] as const)(
-    "waits for a held SQLite %s before writing",
-    async (kind) => {
-      publish("original");
-      const script = `
-      import { DatabaseSync } from "node:sqlite";
-      import fs from "node:fs";
+it.each(["reader", "writer"] as const)(
+  "waits for a held SQLite %s before writing",
+  async (kind) => {
+    publish("original");
+    const script = `
       const db = new DatabaseSync(process.argv[1]);
       db.exec(process.argv[2] === "writer" ? "BEGIN IMMEDIATE" : "BEGIN");
       db.prepare("SELECT * FROM managed_update_handoffs").all();
       fs.writeSync(1, "held\\n");
       setTimeout(() => { db.exec("ROLLBACK"); db.close(); }, 300);
     `;
-      const holder = spawnFixture(script, [databasePath, kind]);
-      try {
-        await holder.waitForMarker("held");
-        publish("next", "next");
-        expect(await holder.closed).toEqual([0, null]);
-        expect(holder.output().stderr).toBe("");
-        expect(readOwners()).toEqual(["next", "original"]);
-      } finally {
-        await stopChildProcess(holder.child, 5_000);
-      }
-    },
-  );
-});
-
+    const holder = spawnFixture(script, [kind]);
+    await holder.waitForMarker("held");
+    publish("next", "next");
+    await expectSuccessfulExit(holder);
+    expect(readOwners()).toEqual(["next", "original"]);
+  },
+);
 it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const)(
   "admits a %s grant and fences parent replacement",
   async (version) => {
     const identityLess = version === "9.4 identity-less";
     const numeric = version === "9.6 numeric" || version === "9.6 bridge";
-    const directory = root;
-    const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
     const executor = store.processIdentity(process.ppid);
     const owner = randomUUID();
     const runId = randomUUID();
     const spawnerKey =
       version === "9.6 bridge" ? `${root}/.openclaw-update-child-${randomUUID()}` : root;
-    const payload = JSON.stringify({
-      version: 2,
-      helper: executor,
-      executor,
-      action: {
-        kind: "update",
-        ...(version === "9.7 exact" ? { mutationProtocol: "original-cancellation-v1" } : {}),
-      },
+    const payloadFor = (
+      childExecutor = executor,
+      action: ManagedHandoffLease["action"] = { kind: "update" },
+      helper = childExecutor,
+    ) => JSON.stringify({ version: 2, helper, executor: childExecutor, action });
+    const payload = payloadFor(executor, {
+      kind: "update",
+      ...(version === "9.7 exact" ? { mutationProtocol: "original-cancellation-v1" } : {}),
     });
-    const write = createManagedHandoffLeaseDatabase(databasePath);
-    write(true, (db) => {
+    withDatabase(true, (db) => {
       insertRow(db, root, owner, payload);
       if (spawnerKey !== root) {
         insertRow(db, spawnerKey, runId, payload);
@@ -561,32 +521,24 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     assert(spawner.kind === "current");
 
     // Model NTFS metadata only; the grant, live rows and candidate admission are real.
-    const lstat = fs.lstatSync;
     const initialInode = identityLess ? 9007199254740992n : 168040561096346671n;
     let parentInode = initialInode;
     let readError: Error | undefined;
-    vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
-      if (String(args[0]) === directory && readError) {
-        throw readError;
-      }
-      const stat = lstat(...args);
-      if (stat && String(args[0]) === directory) {
-        Object.defineProperty(stat, "ino", {
-          value: typeof stat.ino === "bigint" ? parentInode : Number(parentInode),
-        });
-      }
-      return stat;
-    });
-    const statSync = fs.statSync;
-    vi.spyOn(fs, "statSync").mockImplementation((...args) => {
-      const stat = statSync(...args);
-      if (stat && String(args[0]) === directory) {
-        Object.defineProperty(stat, "ino", {
-          value: typeof stat.ino === "bigint" ? parentInode : Number(parentInode),
-        });
-      }
-      return stat;
-    });
+    for (const method of ["lstatSync", "statSync"] as const) {
+      const original = fs[method];
+      vi.spyOn(fs, method).mockImplementation((...args) => {
+        if (method === "lstatSync" && String(args[0]) === root && readError) {
+          throw readError;
+        }
+        const stat = original(...args);
+        if (stat && String(args[0]) === root) {
+          Object.defineProperty(stat, "ino", {
+            value: typeof stat.ino === "bigint" ? parentInode : Number(parentInode),
+          });
+        }
+        return stat;
+      });
+    }
     // Published v2026.9.6 used numeric lstatSync for both transported identities.
     const numericIdentity = (pathname: string) => {
       const stat = fs.lstatSync(pathname);
@@ -596,7 +548,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
       ? {
           databasePath,
           databaseIdentity: numericIdentity(databasePath),
-          parentIdentity: numericIdentity(directory),
+          parentIdentity: numericIdentity(root),
         }
       : captureManagedUpdateLeaseDatabaseIdentity(databasePath);
     expect(databaseIdentity.parentIdentity).toMatch(
@@ -604,12 +556,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     );
     const childKey = `${spawnerKey}/.openclaw-update-child-${randomUUID()}${identityLess ? "" : `-lineage-${childLineageDigest(parent.lease, spawner.lease, parent.lease, databaseIdentity)}`}`;
     const childPayload = identityLess
-      ? JSON.stringify({
-          version: 2,
-          helper: executor,
-          executor: store.processIdentity(process.pid),
-          action: { kind: "update" },
-        })
+      ? payloadFor(store.processIdentity(process.pid), { kind: "update" }, executor)
       : payload;
     withSqlite((db) => insertRow(db, childKey, runId, childPayload, 2));
     const grant: UpdateCommandChildGrant = {
@@ -627,7 +574,8 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
             originalChildKey: childKey,
           }),
     };
-    const admitted = await resolveUpdateCommandChildBinding(grant, runId, root);
+    const resolve = () => resolveUpdateCommandChildBinding(grant, runId, root);
+    const admitted = await resolve();
     assert(admitted.databaseIdentity);
     expect(admitted.databaseIdentity.parentIdentity).toMatch(new RegExp(`^\\d+:${initialInode}$`));
     expect(admitted.store.read(root)).toMatchObject({ kind: "current" });
@@ -637,12 +585,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
         db,
         descendantKey,
         runId,
-        JSON.stringify({
-          version: 2,
-          helper: admitted.child.executor,
-          executor: admitted.child.executor,
-          action: admitted.child.action,
-        }),
+        payloadFor(admitted.child.executor, admitted.child.action),
         3,
       ),
     );
@@ -670,7 +613,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     };
     expect((await resolveDescendant()).child.key).toBe(descendantKey);
     parentInode += identityLess ? 1n : -1n;
-    expect(numericIdentity(directory)).toMatch(
+    expect(numericIdentity(root)).toMatch(
       identityLess ? /:9007199254740992$/ : /:168040561096346660$/,
     );
     expect(() => admitted.store.acquire(root, "replacement", { kind: "update" })).toThrow(
@@ -678,25 +621,17 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     );
     await expect(resolveDescendant()).rejects.toThrow("identity changed");
     if (version === "9.7 exact") {
-      await expect(resolveUpdateCommandChildBinding(grant, runId, root)).rejects.toThrow(
-        "identity changed",
-      );
+      await expect(resolve()).rejects.toThrow("identity changed");
     }
     parentInode += 4096n;
     if (!identityLess) {
-      await expect(resolveUpdateCommandChildBinding(grant, runId, root)).rejects.toThrow(
-        "identity changed",
-      );
+      await expect(resolve()).rejects.toThrow("identity changed");
     }
     readError = new Error("lease parent metadata unavailable");
-    await expect(resolveUpdateCommandChildBinding(grant, runId, root)).rejects.toThrow(
-      readError.message,
-    );
+    await expect(resolve()).rejects.toThrow(readError.message);
     readError = undefined;
     parentInode = initialInode;
     withSqlite((db) => db.exec("DROP TABLE managed_update_handoffs"));
-    await expect(resolveUpdateCommandChildBinding(grant, runId, root)).rejects.toThrow(
-      /lease is unreadable:.*no such table/i,
-    );
+    await expect(resolve()).rejects.toThrow(/lease is unreadable:.*no such table/i);
   },
 );

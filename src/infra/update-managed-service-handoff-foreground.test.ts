@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { updateExecutorEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -357,19 +358,16 @@ describe("foreground update through the prepared managed helper", () => {
     const parentJoined = once(parent, "close");
     let stdout = "",
       stderr = "";
-    let failedFixture!: (error: Error) => void;
-    const failed = new Promise<never>((_resolve, reject) => {
-      failedFixture = reject;
-    });
+    const failed = createDeferred<never>();
     parent.stdout.on("data", (bytes) => {
       stdout += bytes;
       if (stdout.includes("FOREGROUND_FIXTURE_FAILED")) {
-        failedFixture(new Error(stderr));
+        failed.reject(new Error(stderr));
       }
     });
     parent.stderr.on("data", (bytes) => (stderr += bytes));
     try {
-      expect(await Promise.race([parentJoined, failed]), stderr).toEqual([0, null]);
+      expect(await Promise.race([parentJoined, failed.promise]), stderr).toEqual([0, null]);
       const result = JSON.parse(stdout.trim().split("\n").at(-1)!) as {
         helperCode: number;
         helperSignal: string | null;

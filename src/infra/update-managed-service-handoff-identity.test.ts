@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import type { ProcessAncestry } from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as pidAlive from "../shared/pid-alive.js";
-import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { withMockedPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { nativeBoundaryTestEntrypoints } from "./native-boundary-runtime.test-support.js";
 import * as nodeSqlite from "./node-sqlite.js";
@@ -17,6 +16,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
+  type LeaseTable,
 } from "./update-managed-service-handoff-database.js";
 import type { ManagedHandoffLeaseStoreOptions } from "./update-managed-service-handoff-lease-types.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
@@ -49,25 +49,9 @@ function useHostSqlite() {
     existingUri(pathname, hostPlatform),
   );
 }
-function seedLease(
-  databasePath: string,
-  root: string,
-  owner: string,
-  payload: unknown,
-  updatedAt = Date.now(),
-) {
+function seedLease(databasePath: string, row: LeaseTable) {
   createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
-    executeSqliteQuerySync(
-      db,
-      leaseQueries(db)
-        .insertInto("managed_update_handoffs")
-        .values({
-          install_root: root,
-          owner,
-          payload_json: JSON.stringify(payload),
-          updated_at: updatedAt,
-        }),
-    ),
+    executeSqliteQuerySync(db, leaseQueries(db).insertInto("managed_update_handoffs").values(row)),
   );
 }
 const leasePayload = (identity: unknown) => ({
@@ -130,8 +114,7 @@ describe("managed handoff Windows process identities", () => {
       process.stdout.write("original launcher matched");
     `,
     );
-    const child = spawn(
-      process.execPath,
+    const result = await runNodeScript(
       [
         ...resolveRuntimeWorkerArgv(profileUrl).slice(0, -1),
         fixturePath,
@@ -140,20 +123,15 @@ describe("managed handoff Windows process identities", () => {
         "update",
         "--yes",
       ],
-      { stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 },
+      process.env,
+      10_000,
+      { executable: process.execPath },
     );
-    const closed = once(child, "close");
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    try {
-      expect(await closed, stderr).toEqual([0, null]);
-      expect(stdout).toBe("original launcher matched");
-    } finally {
-      child.kill("SIGKILL");
-      await closed;
-    }
+    expect(result, result.stderr).toMatchObject({
+      error: undefined,
+      status: 0,
+      stdout: "original launcher matched",
+    });
   });
 
   it("makes published strict readers refuse fallback leases without changing numeric identities", () => {
@@ -190,7 +168,12 @@ describe("managed handoff Windows process identities", () => {
     const databasePath = path.join(root, "handoff.sqlite");
     const store = windowsStore({ databasePath });
     const identity = withMockedPlatform("win32", () => store.processIdentity(42, windowsArgv));
-    seedLease(databasePath, root, "live-original", leasePayload(identity));
+    seedLease(databasePath, {
+      install_root: root,
+      owner: "live-original",
+      payload_json: JSON.stringify(leasePayload(identity)),
+      updated_at: Date.now(),
+    });
     withMockedPlatform("win32", () => {
       expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
       expect(store.acquire(root, "replacement", { kind: "update" })).toMatchObject({
@@ -319,13 +302,12 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
     const startIdentity = String(Date.parse(`${startedAt} UTC`) / 1000);
     const executor = { pid: executorPid, startIdentity };
     const database = createManagedHandoffLeaseDatabase(databasePath);
-    seedLease(
-      databasePath,
-      root,
-      "original-v1-helper",
-      { version: 1, pid: helperPid, startIdentity },
-      100,
-    );
+    seedLease(databasePath, {
+      install_root: root,
+      owner: "original-v1-helper",
+      payload_json: JSON.stringify({ version: 1, pid: helperPid, startIdentity }),
+      updated_at: 100,
+    });
     const parent = store.readLegacyParent(root, executor);
     assert(parent, "expected the seeded v1 parent");
     const identities = [process.pid, ...chain.filter((pid) => pid !== 1)].map((pid, index) => ({
@@ -335,43 +317,25 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
       startTimeResolutionMicros: 1,
       exited: false,
     }));
-    const probes: {
-      failure?: "access-denied" | "layout-mismatch";
-      complete?: boolean;
-      stoppedBy?: ProcessAncestry["stoppedBy"];
-      afterRead?: () => void;
-    } = {};
-    readProcessAncestry.mockImplementation(() => {
-      if (probes.failure) {
-        throw new ProcSafeError(probes.failure, "synthetic process inspection failure");
-      }
-      probes.afterRead?.();
-      return {
-        chain: identities,
-        complete: probes.complete ?? true,
-        stoppedBy: probes.stoppedBy ?? (helperIsInit ? "root" : "through-pid"),
-      };
-    });
+    const ancestry: { -readonly [Key in keyof ProcessAncestry]: ProcessAncestry[Key] } = {
+      chain: identities,
+      complete: true,
+      stoppedBy: helperIsInit ? "root" : "through-pid",
+    };
+    readProcessAncestry.mockReturnValue(ancestry);
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);
     useHostSqlite();
     return {
       identities,
-      probes,
+      ancestry,
       helperPid,
       executorPid,
       parent,
       kill,
-      current() {
-        const descriptor = Object.getOwnPropertyDescriptor(process, "ppid");
-        Object.defineProperty(process, "ppid", { configurable: true, value: executorPid });
-        try {
-          return withMockedPlatform("darwin", () => store.current(parent));
-        } finally {
-          if (descriptor) {
-            Object.defineProperty(process, "ppid", descriptor);
-          }
-        }
-      },
+      current: () =>
+        withRestoredMocks([vi.spyOn(process, "ppid", "get").mockReturnValue(executorPid)], () =>
+          withMockedPlatform("darwin", () => store.current(parent)),
+        ),
       storedParent: () => store.readLegacyParent(root, executor),
       replaceRow() {
         database(true, (db) =>
@@ -400,7 +364,7 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
     if (change === "parent") {
       test.identities.splice(2);
       identity.parentPid = 1;
-      test.probes.stoppedBy = "root";
+      test.ancestry.stoppedBy = "root";
     } else {
       identity.startTimeMicros += 1_000_000;
     }
@@ -409,42 +373,33 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
   });
 
   it.each([
-    "replaced row",
-    "denied inspection",
-    "malformed metadata",
-    "dead process",
-    "cycle",
-  ] as const)("refuses %s without clearing the retained legacy row", (failure) => {
+    ["replaced row", undefined],
+    ["denied inspection", "access-denied"],
+    ["malformed metadata", "layout-mismatch"],
+    ["dead process", undefined],
+    ["cycle", undefined],
+  ] as const)("refuses %s without clearing the retained legacy row", (failure, error) => {
     const test = fixture(failure === "cycle" ? 3 : 1);
-    switch (failure) {
-      case "replaced row":
-        test.probes.afterRead = () => {
-          test.probes.afterRead = undefined;
-          test.replaceRow();
-        };
-        break;
-      case "denied inspection":
-        test.probes.failure = "access-denied";
-        break;
-      case "malformed metadata":
-        test.probes.failure = "layout-mismatch";
-        break;
-      case "dead process":
-        test.kill.mockImplementation(() => {
-          throw Object.assign(new Error("process exited"), { code: "ESRCH" });
-        });
-        break;
-      case "cycle":
-        test.probes.complete = false;
-        test.probes.stoppedBy = "cycle";
-        break;
+    if (error) {
+      readProcessAncestry.mockImplementation(() => {
+        throw new ProcSafeError(error, "synthetic process inspection failure");
+      });
+    } else if (failure === "replaced row") {
+      readProcessAncestry.mockImplementationOnce(() => {
+        test.replaceRow();
+        return test.ancestry;
+      });
+    } else if (failure === "dead process") {
+      test.kill.mockImplementation(() => {
+        throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+      });
+    } else {
+      Object.assign(test.ancestry, { complete: false, stoppedBy: "cycle" });
     }
     expect(test.current()).toBe(false);
-    if (failure === "replaced row") {
-      expect(test.storedParent()?.owner).toBe("replacement");
-    } else {
-      expect(test.storedParent()).toEqual(test.parent);
-    }
+    expect(test.storedParent()).toEqual(
+      failure === "replaced row" ? { ...test.parent, owner: "replacement" } : test.parent,
+    );
   });
 
   it("does not authorize PID 1 as a borrowed helper", () => {
