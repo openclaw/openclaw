@@ -131,10 +131,14 @@ describe("transcript message reactions", () => {
     expect(onReact).toHaveBeenCalledWith("message-1", "🎉", false);
     const picker = pickers[0]!;
     await picker.updateComplete;
+    expect(picker.querySelector(".palette")).toBeNull();
+    picker.querySelector<HTMLButtonElement>(".trigger")!.click();
     const pressed = pickerButton(picker, "👍")!;
     expect(pressed.getAttribute("aria-pressed")).toBe("true");
     pressed.click();
     expect(onReact).toHaveBeenLastCalledWith("message-1", "👍", true);
+    expect(picker.querySelector(".palette")).toBeNull();
+    picker.querySelector<HTMLButtonElement>(".trigger")!.click();
     pickerButton(picker, "🚀")!.click();
     expect(onReact).toHaveBeenLastCalledWith("message-1", "🚀", false);
   });

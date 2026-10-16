@@ -152,6 +152,7 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
           </button>
         </openclaw-tooltip>
         <Popover
+          lazy="while-open"
           id={`${triggerId}-popover`}
           ref={(handle) => {
             popover = handle;

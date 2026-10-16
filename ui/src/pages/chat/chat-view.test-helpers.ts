@@ -313,6 +313,12 @@ export function getThinkingSelect(container: Element): HTMLElement {
 }
 
 export function getThinkingSlider(container: Element): HTMLInputElement | null {
+  const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker");
+  if (picker && !picker.open) {
+    picker.open = true;
+    picker.dispatchEvent(new Event("toggle"));
+    flush();
+  }
   return container.querySelector<HTMLInputElement>('[data-chat-thinking-slider="true"]');
 }
 

@@ -135,6 +135,12 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       status: running ? "running" : "done",
       model: "gpt-5-mini",
       modelProvider: "openai",
+      thinkingLevel: "medium",
+      thinkingLevels: [
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+      ],
       contextTokens: 200_000,
       totalTokens: 4_000 + index * 31,
       pinned,
@@ -229,6 +235,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   });
   const historyMessages = Array.from({ length: counts.transcriptMessages }, (_, index) => ({
     role: index % 2 ? "assistant" : "user",
+    __openclaw: { id: `team-message-${index + 1}`, seq: index + 1 },
     timestamp: now - (counts.transcriptMessages - index) * 60_000,
     content: [
       ...(options.duplicateBootReads && index === counts.transcriptMessages - 1
@@ -388,6 +395,14 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     sessions,
     presenceUsers: people,
     historyMessages,
+    sessionReactions: {
+      [selectedSessionKey]: Object.fromEntries(
+        historyMessages.map((message) => [
+          message.__openclaw.id,
+          [{ emoji: "👍", count: 1, identities: [{ id: people[1]!.id, label: people[1]!.name! }] }],
+        ]),
+      ),
+    },
     ...(options.liveRun
       ? {
           inFlightRun: {

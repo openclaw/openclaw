@@ -15,6 +15,8 @@ export interface PopoverHandle {
 }
 
 export interface PopoverProps {
+  /** Preserve drafts by default; transient bodies can live only while open. */
+  lazy?: boolean | "while-open";
   id: string;
   label: string;
   anchor?: HTMLElement;
@@ -37,6 +39,7 @@ export function Popover(props: PopoverProps): JSX.Element {
   let mounted = false;
   let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   const id = untrack(() => props.id);
+  const lazy = untrack(() => props.lazy);
   const overlay = createOverlay(id, undefined, {
     get dismissOutsidePointer() {
       return props.dismissOutsidePointer;
@@ -48,7 +51,7 @@ export function Popover(props: PopoverProps): JSX.Element {
     onRootChange: (root) =>
       root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
   });
-  const connectControl = useOverlayControl(overlay, props);
+  const control = useOverlayControl(overlay, props, () => props.children);
   createEffect(
     () => [props.anchor, props.placement] as const,
     ([anchor, placement]) => {
@@ -69,7 +72,7 @@ export function Popover(props: PopoverProps): JSX.Element {
     overlay.setParent(findOverlayParent(target));
     anchorBinding = createOverlayAnchor(overlay.surface);
     anchorBinding.update(target, props.placement);
-    const disconnectControl = connectControl(() =>
+    const disconnectControl = control.connect(() =>
       props.ref?.({
         overlay,
         show: () => overlay.request(true),
@@ -109,7 +112,7 @@ export function Popover(props: PopoverProps): JSX.Element {
         aria-label={props.label}
         tabindex={-1}
       >
-        {props.children}
+        {lazy ? undefined : props.children}
       </div>
     </>
   );

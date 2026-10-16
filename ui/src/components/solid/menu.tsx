@@ -1,17 +1,5 @@
-import { dynamic, insert, type JSX } from "@solidjs/web";
-import {
-  For,
-  Show,
-  createEffect,
-  createRoot,
-  createSignal,
-  getOwner,
-  onCleanup,
-  onSettled,
-  runWithOwner,
-  untrack,
-  merge,
-} from "solid-js";
+import { dynamic, type JSX } from "@solidjs/web";
+import { For, Show, createEffect, createSignal, onSettled, untrack, merge } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { createOverlayAnchor, type OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, findOverlayParent, type Overlay } from "../overlay-lifecycle.ts";
@@ -93,8 +81,8 @@ export type MenuProps = {
   id: string;
   label: string;
   items: readonly MenuEntry[];
-  /** Materialize content on first open, then retain it across closes. Stable for this mount. */
-  lazy?: boolean;
+  /** Defer until opened; "while-open" also releases transient content on close. */
+  lazy?: boolean | "while-open";
   trigger?: JSX.Element;
   children?: JSX.Element;
   class?: JSX.HTMLAttributes<HTMLDivElement>["class"];
@@ -170,14 +158,11 @@ export function Menu(props: BranchProps): JSX.Element {
     root: props.root,
   }));
   const direction = () => props.dir ?? (document.documentElement.dir === "rtl" ? "rtl" : "ltr");
-  const owner = getOwner();
   const lazy = untrack(() => props.lazy);
-  let disposeBody: (() => void) | undefined;
-  onCleanup(() => disposeBody?.());
   const overlay = createOverlay(identity.id, identity.parent, {
     exclusiveGroup: "menu",
     isValid: (panel) =>
-      (lazy && !disposeBody) ||
+      (lazy && !control.bodyMounted()) ||
       Boolean(
         panel.querySelector(
           '[role^="menuitem"], [data-form-control], [data-search], input, textarea, select, button, a[href]',
@@ -252,15 +237,7 @@ export function Menu(props: BranchProps): JSX.Element {
     pointerFocus: () => props.pointerFocus ?? "menu",
   });
   const [opened, setOpened] = createSignal(false);
-  const connectControl = useOverlayControl(
-    overlay,
-    merge(props, {
-      onBeforeShow(event: Event) {
-        materializeBody();
-        props.onBeforeShow?.(event);
-      },
-    }),
-  );
+  const control = useOverlayControl(overlay, props, () => body());
   createEffect(placement, (value) => {
     if (mounted) {
       anchorBinding?.update(trigger, value);
@@ -338,7 +315,7 @@ export function Menu(props: BranchProps): JSX.Element {
     }
     anchorBinding = createOverlayAnchor(overlay.surface);
     anchorBinding.update(trigger, placement());
-    const disconnectControl = connectControl(
+    const disconnectControl = control.connect(
       () =>
         props.ref?.({
           overlay,
@@ -497,16 +474,6 @@ export function Menu(props: BranchProps): JSX.Element {
       {renderEntries(() => props.items)}
     </>
   );
-  const materializeBody = () => {
-    if (lazy && !disposeBody) {
-      runWithOwner(owner, () => {
-        disposeBody = createRoot((dispose) => {
-          insert(surface, body());
-          return dispose;
-        });
-      });
-    }
-  };
   return (
     <div class={props.class} dir={direction()}>
       <button
