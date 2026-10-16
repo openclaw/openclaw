@@ -145,7 +145,12 @@ function createSnapshotRecord(
   try {
     let projected = pending.snapshot;
     const messages = projected.messages;
-    let start = Math.max(0, messages.length - CHAT_SNAPSHOT_MESSAGE_LIMIT);
+    // Imported history pages use Gateway index ordinals, not the rows' native
+    // sequences. Preserve their window until that pagination fact reaches the UI.
+    const imported = messages.some(
+      (message) => asOptionalRecord(asOptionalRecord(message)?.__openclaw)?.importedFrom,
+    );
+    let start = imported ? 0 : Math.max(0, messages.length - CHAT_SNAPSHOT_MESSAGE_LIMIT);
     // A history entry can project multiple rows; retain its whole sequence group.
     while (start > 0) {
       const seq = readSessionMessageSequence(messages[start]);

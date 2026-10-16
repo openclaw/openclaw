@@ -111,6 +111,28 @@ describe("snapshot write serialization and scheduling", () => {
     expect(restored?.pagination).toEqual({ hasMore: true, nextOffset: 28, totalMessages: 34 });
   });
 
+  it.each([false, true])(
+    "preserves the Gateway's imported history window (mixed=%s)",
+    async (mixed) => {
+      const messages = Array.from({ length: 120 }, (_, index) => ({
+        role: "assistant",
+        content: `Imported message ${index}`,
+        __openclaw:
+          mixed && index % 2
+            ? { id: `local-${index}`, seq: index + 1 }
+            : { id: `imported-${index}`, importedFrom: "claude-cli" },
+      }));
+      const value = {
+        ...snapshot(),
+        messages,
+        pagination: { hasMore: true as const, nextOffset: 120, totalMessages: 200 },
+      };
+      store.write(sessionKey, value);
+      await store.flush();
+      expect(await store.read(sessionKey)).toEqual(value);
+    },
+  );
+
   it("keeps pairing QR credentials in memory without writing them to the browser cache", async () => {
     const content = [
       { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
