@@ -7,7 +7,7 @@ import { recordUnwrittenWebhookCompletion } from "../commands/doctor/shared/lega
 import { createConfigIO } from "../config/io.factory.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { recordGatewayBootStart } from "../infra/gateway-boot-lifecycle.js";
+import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
@@ -261,7 +261,7 @@ it.each(["previous boot", "published updater"])(
     const original = JSON.stringify(channelConfig());
     await fs.writeFile(configPath, original);
     if (evidence === "previous boot") {
-      expect(recordGatewayBootStart(env, 1_800_000_000_000)).toBeDefined();
+      expect((await beginGatewayBootLifecycle(env, 1_800_000_000_000)).id).toBeDefined();
     }
     const io = createConfigIO({
       env,
@@ -317,7 +317,7 @@ it.each(["no database", "empty database"])(
     const fresh = migrate(config);
     expect(fresh.config.channels).toEqual(config.channels);
     expect(fresh.config.meta?.migrations?.webhookListeners).toBe(true);
-    expect(recordGatewayBootStart(env, 1_800_000_000_000)).toBeDefined();
+    expect((await beginGatewayBootLifecycle(env, 1_800_000_000_000)).id).toBeDefined();
     expectUnchanged(migrate(fresh.config), fresh.config);
   },
 );
@@ -336,7 +336,7 @@ it("keeps read-only completion when a managed config symlink selects a new gener
   expect(fresh.config.meta?.migrations?.webhookListeners).toBe(true);
   expect(recordUnwrittenWebhookCompletion({ sourceConfig: config }, fresh, readOnlyEnv)).toBe(true);
   expectUnchanged(migrate(config, readOnlyEnv), config);
-  expect(recordGatewayBootStart(env, 1_800_000_000_000)).toBeDefined();
+  expect((await beginGatewayBootLifecycle(env, 1_800_000_000_000)).id).toBeDefined();
 
   await fs.unlink(configPath);
   await fs.symlink(nextGeneration, configPath, "file");

@@ -132,7 +132,7 @@ export async function prepareCodexMcpAppSession(params: {
       });
       const client = await getLeasedSharedCodexAppServerClient({
         startOptions,
-        pluginConfig: params.pluginConfig,
+        pluginConfig,
         agentId: input.agentId,
         agentDir: input.agentDir,
         config: input.config,

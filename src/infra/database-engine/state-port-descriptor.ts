@@ -8,6 +8,7 @@ import {
   stateEngineSchema,
 } from "../../state/openclaw-state-db-engine.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
+import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
 import { listOpenClawStateFeatureSchemas } from "../../state/openclaw-state-feature-schema.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import manifest from "../../state/postgres-schema.generated/manifest.json" with { type: "json" };
@@ -27,12 +28,20 @@ export async function loadStatePortDescriptor(
     const backup = stateEngineSchema.postgresMigrations?.find(
       (step) => step.version === sourceVersion + 1,
     )?.backup;
-    if (!backup || backup.version !== sourceVersion || backup.id !== "state") {
+    if (backup?.version === sourceVersion && backup.id === "state") {
+      return backup;
+    }
+    // v24→25 changed only metadata; v25→26 changes only SQLite head storage.
+    // Pin this shared catalog to v26 so a future DDL change needs its own predecessor.
+    if (
+      backup ||
+      OPENCLAW_STATE_SCHEMA_VERSION !== 26 ||
+      (sourceVersion !== 24 && sourceVersion !== 25)
+    ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
       );
     }
-    return backup;
   }
   const catalog = statePostgresRuntime.expectedCatalog;
   // The generated catalog owns these tagged facts; project only the copy fields.
@@ -69,9 +78,9 @@ export async function loadStatePortDescriptor(
   for (const table of DOCTOR_OWNED_STATE_TABLES) {
     sqliteFragments.set(table, extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table));
   }
-  return {
+  const descriptor: PortDescriptor = {
     id: "state",
-    version: OPENCLAW_STATE_SCHEMA_VERSION,
+    version: sourceVersion,
     minimumPostgresVersion: manifest.minimumPostgresVersion,
     ...schema(
       metadata,
@@ -117,4 +126,12 @@ export async function loadStatePortDescriptor(
       });
     },
   };
+  return sourceVersion === OPENCLAW_STATE_SCHEMA_VERSION
+    ? descriptor
+    : {
+        ...descriptor,
+        sqlite: withLegacyStateHeadLayout(descriptor.sqlite),
+        inspectSqliteSource: undefined,
+        admit: undefined,
+      };
 }

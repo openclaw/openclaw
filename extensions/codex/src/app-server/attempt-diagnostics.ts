@@ -3,7 +3,6 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   type DiagnosticModelCallContent,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./config.js";
 import type { CodexUsageProjection } from "./event-projector-usage.js";
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
@@ -26,37 +25,6 @@ function fingerprintCodexLogValue(namespace: string, value: string): string {
   hash.update("\0");
   hash.update(value);
   return `sha256:${hash.digest("hex").slice(0, 16)}`;
-}
-
-export function buildCodexPluginThreadConfigEligibilityLogData(params: {
-  sessionId: string;
-  sessionKey: string;
-  pluginThreadConfigRequired: boolean;
-  resolvedPluginPolicy: ReturnType<typeof resolveCodexPluginsPolicy> | undefined;
-  enabledPluginConfigKeys: string[] | undefined;
-  pluginAppCacheKey: string;
-  startupAuthProfileId: string | undefined;
-  appServer: CodexAppServerRuntimeOptions;
-}): Record<string, unknown> {
-  return {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    enabled: params.pluginThreadConfigRequired,
-    policyConfigured: params.resolvedPluginPolicy?.configured === true,
-    policyEnabled: params.resolvedPluginPolicy?.enabled === true,
-    allowAllPlugins: params.resolvedPluginPolicy?.allowAllPlugins === true,
-    pluginConfigKeys: params.resolvedPluginPolicy?.pluginPolicies
-      .map((plugin) => plugin.configKey)
-      .toSorted(),
-    enabledPluginConfigKeys: params.enabledPluginConfigKeys,
-    appCacheKeyFingerprint: fingerprintCodexLogValue(
-      "openclaw:codex:plugin-app-cache-key:v1",
-      params.pluginAppCacheKey,
-    ),
-    authProfileId: params.startupAuthProfileId,
-    appServerTransport: params.appServer.start.transport,
-    appServerCommandSource: params.appServer.start.commandSource,
-  };
 }
 
 type CodexModelCallFailureKind = "aborted" | "timeout";

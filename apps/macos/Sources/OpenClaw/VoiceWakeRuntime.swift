@@ -597,7 +597,7 @@ actor VoiceWakeRuntime {
             let lease = UUID()
             self.pauseForPushToTalk(lease: lease)
             if config.triggerChime != .none {
-                await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime, reason: "voicewake.trigger") }
+                await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime) }
             }
             await self.state()?.setTalkEnabled(true)
             await self.resumeAfterPushToTalk(lease: lease)
@@ -615,7 +615,7 @@ actor VoiceWakeRuntime {
         SimpleTaskSupport.stop(task: &self.pauseCheckTask)
 
         if config.triggerChime != .none {
-            await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime, reason: "voicewake.trigger") }
+            await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime) }
         }
 
         let snapshot = self.committedTranscript + self.volatileTranscript
@@ -699,7 +699,7 @@ actor VoiceWakeRuntime {
             }
         } else if !finalTranscript.isEmpty {
             if sendChime != .none {
-                await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "voicewake.send") }
+                await MainActor.run { VoiceWakeChimePlayer.play(sendChime) }
             }
             Task.detached { [forward] in
                 await forward(finalTranscript, triggerWord)

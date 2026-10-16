@@ -1292,11 +1292,14 @@ export function createAgentEventHandler({
       }
     }
     const emitAssistantChatProjection = () => {
-      if (!(isControlUiVisible || hasSessionMessageSubscribers) || !chatDelivery) {
+      if (!chatDelivery) {
         return;
       }
       const assistantLiveChatInput = evt.assistantProjection
-        ? resolveAssistantTextInput({ ...evt.data, ...evt.assistantProjection })
+        ? resolveAssistantTextInput({
+            ...evt.assistantProjection,
+            managedMediaUrls: evt.data.managedMediaUrls,
+          })
         : evt.stream === "assistant"
           ? resolveAssistantTextInput(evt.data)
           : undefined;
@@ -1306,14 +1309,21 @@ export function createAgentEventHandler({
         assistantLiveChatInput &&
         (!suppressAssistant || assistantLiveChatInput.itemId)
       ) {
-        emitChatDelta(
-          { ...chatDelivery, isHeartbeat: heartbeatPolicy },
-          suppressAssistant
-            ? { ...assistantLiveChatInput, text: "", delta: "" }
-            : assistantLiveChatInput,
-          evt.assistantSource,
-          isCurrent,
-        );
+        const input = suppressAssistant
+          ? { ...assistantLiveChatInput, text: "", delta: "" }
+          : assistantLiveChatInput;
+        if (isControlUiVisible || hasSessionMessageSubscribers) {
+          emitChatDelta(
+            { ...chatDelivery, isHeartbeat: heartbeatPolicy },
+            input,
+            evt.assistantSource,
+            isCurrent,
+          );
+        } else {
+          // Joining a hidden run still needs the display prefix preceding its next delta.
+          chatRunState.updateBuffer(clientRunId, input, evt.assistantSource);
+          chatRunState.getOrCreate(clientRunId).bufferIsCurrent = isCurrent;
+        }
       }
     };
     if (isItemEvent) {

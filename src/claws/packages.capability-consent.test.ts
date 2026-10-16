@@ -7,7 +7,7 @@ import {
 import type { installPluginFromClawHub } from "../plugins/clawhub.js";
 import type { installManagedPlugin } from "../plugins/management-mutations.js";
 import type { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
-import { installClawPackages } from "./packages.js";
+import { installClawPackages } from "./packages.boundary.test-support.js";
 import { emptyPluginCapabilityEvidence, packageInstallPlan } from "./packages.test-support.js";
 import { projectClawPluginCapabilityReviews } from "./plugin-capability-review.js";
 import type { PersistedClawPackageRef } from "./provenance.js";

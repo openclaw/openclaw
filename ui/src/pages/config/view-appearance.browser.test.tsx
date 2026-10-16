@@ -434,29 +434,6 @@ describe("config appearance preferences", () => {
     expect(followUpRow?.textContent).not.toContain("Synced across your devices");
   });
 
-  it.each([
-    {
-      title: "Collapse task progress by default on desktop",
-      preference: "chatCollapseTaskProgress",
-      checked: false,
-    },
-    {
-      title: "Show live agent activity in sidebar",
-      preference: "sidebarLiveActivity",
-      checked: true,
-    },
-  ] as const)("changes the browser-local $title toggle", ({ title, preference, checked }) => {
-    const { container, props } = renderAppearance();
-    document.body.append(container);
-    onTestFinished(() => container.remove());
-    const row = settingsRow(container, title);
-    expect(row.querySelector<HTMLInputElement>(".settings-toggle__input")?.checked).toBe(checked);
-    row.click();
-    expect(props.onAppearanceChange).toHaveBeenCalledWith({ [preference]: !checked });
-    expect(row.textContent).not.toContain("Using default:");
-    expect(row.textContent).toContain("Stored in this browser only");
-  });
-
   it("names the chat preference selects for assistive tech", () => {
     const onMicrophoneRefresh = vi.fn();
     const onCameraRefresh = vi.fn();

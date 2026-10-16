@@ -8,7 +8,7 @@ import {
   normalizeOptionalString,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { mcpValueHasEnvReferences, resolveMcpEnvReferences } from "./config-env.js";
+import { resolveMcpEnvReferences } from "./config-env.js";
 import { sanitizeName } from "./helpers.js";
 
 const MCP_RESOURCE_UTILITY_TOOLS = ["resources_list", "resources_read"] as const;
@@ -90,13 +90,12 @@ export function planHermesMcpServer(params: {
     if (sourceValue === undefined) {
       continue;
     }
-    const requiresConsent =
-      key === "env" || key === "headers" || mcpValueHasEnvReferences(sourceValue);
+    const resolved = resolveMcpEnvReferences(sourceValue, env);
+    const requiresConsent = key === "env" || key === "headers" || resolved.referenced;
     sensitive ||= requiresConsent;
     if (requiresConsent && !includeSecrets) {
       continue;
     }
-    const resolved = resolveMcpEnvReferences(sourceValue, env);
     unresolved ||= resolved.unresolved;
     if (!resolved.unresolved) {
       resolvedFields[key] = resolved.value;

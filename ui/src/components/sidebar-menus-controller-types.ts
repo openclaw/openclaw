@@ -58,7 +58,8 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
     >;
   readonly sessionDataContext: ApplicationContext | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
-  readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
+  readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
+  readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
   readonly sessionOwnerFilterActive: boolean;
   readonly sessionOwnerFilterId: string | null;
   readonly sessionInvolvingMeFilterActive: boolean;

@@ -578,7 +578,6 @@ async function runQueuedUsageCostRefresh(
         }
       } catch (error) {
         if (signal?.aborted && !(error instanceof AggregateError) && isAbortError(error)) {
-          logger.debug("background refresh cancelled during shutdown");
           return;
         }
         logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });

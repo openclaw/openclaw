@@ -501,6 +501,11 @@ async function migrateLegacyMemorySidecarSource(params: {
 export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-legacy-sidecar-index-to-agent-sqlite",
   label: "Memory Core legacy memory index sidecar",
+  sqliteOnly: {
+    family: "agent",
+    postgresNote:
+      "The legacy memory sidecar is retained unchanged. Normal reindexing rebuilds the PostgreSQL memory index from authoritative memory sources and may re-embed them.",
+  },
   async collectBackupResources(params) {
     const sources = await collectLegacyMemorySidecarSources(params);
     const resources: Array<{ path: string; kind: "sqlite" | "file" }> = [];

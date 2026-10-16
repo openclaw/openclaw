@@ -117,7 +117,7 @@ export function createHarness(options?: {
   visible?: boolean;
   completeModel?: ReturnType<typeof vi.fn>;
   prepareModel?: ReturnType<typeof vi.fn>;
-  persistDigest?: ReturnType<typeof vi.fn>;
+  persistDigest?: ReturnType<typeof vi.fn<(params: PersistDigestParams) => Promise<unknown>>>;
   readSession?: ReturnType<typeof vi.fn>;
   config?: OpenClawConfig;
   utilityModelRef?: string | null;

@@ -166,34 +166,26 @@ describe("CodexAppServerClient", () => {
     await expect(request).resolves.toEqual({ threadId: "thread-1" });
   });
 
-  it("logs a redacted preview for malformed app-server messages", async () => {
+  it("logs only malformed frame sizes and still accepts the next response", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createHarness();
-
-    harness.process.stdout.write('{"token":"secret-value"} trailing\n');
-
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
-    const [message, rawMetadata] = warn.mock.calls[0] ?? [];
-    expect(message).toBe("failed to parse codex app-server message");
-    const metadata = rawMetadata as
-      | {
-          error?: unknown;
-          errorMessage?: string;
-          fragmentCount?: number;
-          linePreview?: string;
-          consoleMessage?: string;
-        }
-      | undefined;
-    expect(metadata?.error).toBeInstanceOf(SyntaxError);
-    expect(metadata?.errorMessage).toMatch(
-      /^(?:Unexpected non-whitespace character after JSON at position 25 \(line 1 column 26\)|JSON Parse error: Unable to parse JSON string)$/u,
+    const contentMarker = "synthetic-private-message-and-tool-content-猫";
+    const malformed = `{"token":"secret-value","message":"${contentMarker}"} trailing`;
+    const request = harness.client.request("model/list", {});
+    const outbound = JSON.parse(await harness.waitForWrite(0)) as { id: number };
+    harness.process.stdout.write(
+      `${malformed}\n${JSON.stringify({ id: outbound.id, result: { models: [] } })}\n`,
     );
-    expect(metadata?.fragmentCount).toBe(1);
-    expect(metadata?.linePreview).toBe('{"token":"<redacted>"} trailing');
-    expect(metadata?.consoleMessage).toBe(
-      'failed to parse codex app-server message: preview="{\\"token\\":\\"<redacted>\\"} trailing"',
-    );
+
+    await expect(request).resolves.toEqual({ models: [] });
+    expect(warn).toHaveBeenCalledExactlyOnceWith("failed to parse codex app-server message", {
+      byteCount: Buffer.byteLength(malformed),
+      charCount: malformed.length,
+      fragmentCount: 1,
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(contentMarker);
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-value");
+    expect(harness.client.getCloseError()).toBeUndefined();
   });
 
   it("aborts while waiting to retry an overloaded request", async () => {
@@ -336,12 +328,12 @@ describe("CodexAppServerClient", () => {
 
     const pending = harness.client.request("test/method");
     const firstRequest = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-    const stderrError = Object.assign(new Error("stderr pipe broke"), { code: "EIO" });
+    const contentMarker = "synthetic-private-stderr-error-content";
+    const stderrError = Object.assign(new Error(contentMarker), { code: "EIO" });
 
     expect(() => harness.process.stderr.emit("error", stderrError)).not.toThrow();
-    expect(warn).toHaveBeenCalledWith("codex app-server stderr stream failed", {
-      error: stderrError,
-    });
+    expect(warn).toHaveBeenCalledExactlyOnceWith("codex app-server stderr stream failed");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(contentMarker);
 
     harness.send({ id: firstRequest.id, result: { ok: true } });
     await expect(pending).resolves.toEqual({ ok: true });

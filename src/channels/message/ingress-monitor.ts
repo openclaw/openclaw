@@ -10,7 +10,11 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { sleep } from "../../utils/sleep.js";
-import { createChannelIngressDrain, type ChannelIngressDrain } from "./ingress-drain.js";
+import {
+  createChannelIngressDrain,
+  DEFAULT_INGRESS_START_LIMIT,
+  type ChannelIngressDrain,
+} from "./ingress-drain.js";
 import { createAdmissionClaimLock, waitForPending } from "./ingress-monitor-tasks.js";
 import type {
   ChannelIngressMonitorDeliveryResult,
@@ -66,10 +70,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     : shutdown.signal;
   const activeDeliveries = new Set<Promise<unknown>>();
   const activeInspections = new Set<Promise<unknown>>();
+  const startLimit = options.drain?.startLimit ?? DEFAULT_INGRESS_START_LIMIT;
   // Released deferrals lend start slots while stop still joins their callbacks.
   // Bound open callbacks to startLimit + this budget; held lanes cannot lend slots.
   const deferredStartCapacityLimit =
-    options.drain?.deferredLaneOccupancy === "release" ? (options.drain.startLimit ?? 0) : 0;
+    options.drain?.deferredLaneOccupancy === "release" ? startLimit : 0;
   let deferredStartCapacity = 0;
   const deferredClaims = new Set<Promise<void>>();
   type Queue = ChannelIngressQueue<TStoredPayload, TMetadata>;
@@ -420,9 +425,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
               !running ||
               isAborted() ||
               getGatewaySuspendAdmissionPhase() !== "accepting" ||
-              (options.drain?.startLimit !== undefined &&
-                activeDeliveries.size + activeInspections.size - deferredStartCapacity >=
-                  options.drain.startLimit),
+              activeDeliveries.size + activeInspections.size - deferredStartCapacity >= startLimit,
           }),
         );
         if (waitForDeliveryIdleBeforeRepump) {

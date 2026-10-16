@@ -829,7 +829,6 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           case "get_block":
             return json(await getBlock(client, p.doc_token, p.block_id));
           case "update_block": {
-            await getBlock(client, p.doc_token, p.block_id);
             const res = await client.docx.documentBlock.patch({
               path: { document_id: p.doc_token, block_id: p.block_id },
               data: {

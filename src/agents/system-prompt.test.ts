@@ -491,10 +491,9 @@ describe("buildAgentSystemPrompt", () => {
     }
   });
 
-  it("filters invalid paths and renders typed project context in canonical order", () => {
+  it("filters blank paths and renders typed project context in canonical order", () => {
     const prompt = renderPrompt({
       contextFiles: [
-        { path: undefined as unknown as string, content: "Missing path" },
         { path: "   ", content: "Blank path" },
         { path: "MEMORY.md", content: "Durable facts" },
         { path: "dir\\SOUL.md", content: "Windows persona" },
@@ -507,7 +506,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("SOUL.md: persona/tone.");
     expect(prompt).toContain("MEMORY.md: durable");
     expect(prompt).toContain("Durable facts");
-    expect(prompt).not.toContain("Missing path");
     expect(prompt).not.toContain("Blank path");
     expect(prompt.indexOf("## AGENTS.md")).toBeLessThan(prompt.indexOf("## ./SOUL.md"));
     expect(prompt.indexOf("## ./SOUL.md")).toBeLessThan(prompt.indexOf("## MEMORY.md"));

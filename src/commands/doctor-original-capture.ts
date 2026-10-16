@@ -95,19 +95,22 @@ export async function preserveDoctorOriginalState(params: {
       );
       return;
     }
-    const { captureUpdateRecoveryBaseline, retireExpiredStandaloneDoctorCaptures } =
+    const { captureUpdateRecoveryBaseline } =
       await import("../infra/update-recovery-baseline-capture.js");
+    const { retireExpiredStandaloneDoctorCaptures } =
+      await import("../infra/doctor-capture-retention.js");
     const stateDir = resolvePathViaExistingAncestorSync(resolveStateDir(params.env));
     const retireExpiredCaptures = async (keepRunId: string) => {
       try {
         const retirement = await retireExpiredStandaloneDoctorCaptures({
           stateDir,
+          env: params.env,
           keepRunId,
           assertCurrent,
         });
         for (const directory of retirement.retired) {
           params.runtime.log(
-            `Retired standalone Doctor capture older than 30 days: ${directory}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
+            `Retired superseded or expired standalone Doctor capture: ${directory}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
           );
         }
         for (const warning of retirement.warnings) {

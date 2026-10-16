@@ -80,8 +80,6 @@ it("reuses unchanged workspace facts and refreshes them after each owning write"
   );
   expect(unchanged).toEqual(initial);
   expect(execute).not.toHaveBeenCalled();
-  unchanged.setup.bootstrapSeededAt = "2026-07-17T01:00:00.000Z";
-  expect(await readWorkspaceStateSnapshot(state.workspaceDir)).toEqual(initial);
 
   await mergeWorkspaceSetupState(state.workspaceDir, {
     setupCompletedAt: "2026-07-16T02:00:00.000Z",

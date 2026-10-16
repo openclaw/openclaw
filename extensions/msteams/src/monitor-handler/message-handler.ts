@@ -190,7 +190,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       isChannel,
       senderId,
       conversationId,
-      conversationMessageId: conversationMessageId ?? undefined,
+      conversationMessageId,
       teamId,
       log,
     });
@@ -255,7 +255,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
               sender: senderName,
               body: historyBody,
               timestamp: timestamp?.getTime(),
-              messageId: activity.id ?? undefined,
+              messageId: activity.id,
             },
           });
         }
@@ -266,10 +266,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       entry: params,
       rawBody,
       advertisedMedia,
-      htmlSummary: htmlSummary ?? undefined,
+      htmlSummary,
       conversationType,
       conversationId,
-      conversationMessageId: conversationMessageId ?? undefined,
+      conversationMessageId,
       teamAadGroupId: threadRouting.getTeamAadGroupId(),
       resolveTeamAadGroupId: threadRouting.resolveTeamAadGroupId,
       mediaMaxBytes,

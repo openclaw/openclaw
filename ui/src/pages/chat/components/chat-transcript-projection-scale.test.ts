@@ -7,6 +7,7 @@ import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import { setExpansionState } from "../chat-thread.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import { getTranscriptState } from "./chat-thread-interactions.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
@@ -177,6 +178,10 @@ it("renders browser previews in their own row outside the work summary", () => {
     ],
   );
   props.showToolCalls = true;
+  saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+    scrollTop: 0,
+    anchorToEnd: false,
+  });
   const view = drawThread(props);
   try {
     view.draw();

@@ -330,9 +330,9 @@ describe("chat Details presentation", () => {
     expect(session.querySelector("[data-details-group]")).toBeNull();
     await toggle(progressSection);
     expect(progressSection.open).toBe(false);
-    expect(getComputedStyle(progress.querySelector(".chat-details-progress__menu")!).display).toBe(
-      "none",
-    );
+    expect(
+      getComputedStyle(progress.querySelector(".chat-details-progress__menu")!).display,
+    ).not.toBe("none");
     element.props = { ...element.props!, progressCard: { ...card, revision: 3 } };
     await element.updateComplete;
     flush();
@@ -431,12 +431,10 @@ describe("chat Details presentation", () => {
     expect(progress.querySelector<HTMLDetailsElement>(".session-progress-card")!.open).toBe(true);
     await select("settings");
     expect(settings).toHaveBeenCalledOnce();
-    progress.querySelector<HTMLButtonElement>(".session-progress-card__dismiss")!.click();
+    await select("dismiss");
     expect(dismiss).toHaveBeenCalledWith(card);
     expect(clear).not.toHaveBeenCalled();
-    progress
-      .querySelector<HTMLButtonElement>('.session-progress-card__refresh[data-state="idle"]')!
-      .click();
+    await select("refresh");
     expect(refresh).toHaveBeenCalledWith(card);
     await select("clear");
     expect(clear).toHaveBeenCalledWith(card);

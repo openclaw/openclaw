@@ -2146,6 +2146,7 @@ describe("openclaw state database", () => {
       { kind: "meeting-transcript-start-time", path: seeded.databasePath },
       { kind: "task-run-indexes-v24", path: seeded.databasePath },
       { kind: "subagent-operator-recovery-v25", path: seeded.databasePath },
+      { kind: "session-state-head-layout-v26", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({

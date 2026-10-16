@@ -24,6 +24,7 @@ import type { CommunicationEndpoint } from "../sessions/communication-admission.
 import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import {
   readSessionSendDelivery,
   withSessionSendDelivery,
@@ -46,6 +47,7 @@ class SessionSendEndpointChangedError extends Error {
     super(
       `${message}: ${JSON.stringify({
         endpoint,
+        reason: "endpoint-replaced",
         sessionKeyHash: sessionKeyHash(expected.sessionKey),
         previousSessionId: expected.sessionId,
         currentSessionId: current.entry?.sessionId ?? null,
@@ -70,6 +72,7 @@ function matches(endpoint: CommunicationEndpoint, expected: SessionSendDeliveryE
 export async function recoverSessionSendDeliveries(
   context: GatewayRequestContext,
   signal: AbortSignal,
+  startupTrace?: GatewayStartupTrace,
 ): Promise<void> {
   const runtime = context.recoveryRuntime;
   if (!runtime) {
@@ -86,18 +89,21 @@ export async function recoverSessionSendDeliveries(
     isTransientRestartRecoveryError(error) ||
     (error instanceof SessionStoreUnavailableError &&
       (error.reason === "schema-missing" || isSqliteLockError(error.readError)));
-  const retry = <T>(operation: () => Promise<T>) =>
+  const retry = <T>(operation: () => Promise<T>, phase?: string) =>
     retryAsync(
       async () => {
         assertCurrent();
-        return operation();
+        return phase ? measureStartup(startupTrace, phase, operation) : operation();
       },
       {
         attempts: 3,
         minDelayMs: 5_000,
         maxDelayMs: 10_000,
         shouldRetry: (error) => !signal.aborted && isTransient(error),
-        sleep: (ms) => sleepWithAbort(ms, signal, { ref: false }),
+        sleep: (ms) =>
+          measureStartup(startupTrace, "sidecars.delivery-retry-wait", () =>
+            sleepWithAbort(ms, signal, { ref: false }),
+          ),
         onRetry: ({ err, attempt, delayMs }) => {
           context.logGateway.warn(
             `Session delivery recovery retry after attempt ${attempt} in ${delayMs}ms: ${formatErrorMessageForDisplay(err, formatErrorMessageWithCode(err))}`,
@@ -105,17 +111,22 @@ export async function recoverSessionSendDeliveries(
         },
       },
     );
-  const targets = await retry(() =>
-    discoverRestartRecoveryStoreTargets({
-      cfg: config,
-      shouldContinue: () => !signal.aborted,
-    }),
+  const targets = await retry(
+    () =>
+      discoverRestartRecoveryStoreTargets({
+        cfg: config,
+        shouldContinue: () => !signal.aborted,
+      }),
+    "sidecars.delivery-discovery",
   );
   let blockedCount = 0;
   let cancelledCount = 0;
   for (const target of targets) {
     assertCurrent();
-    const entries = await retry(() => readPendingInputRecoveryEntriesInWorker(target));
+    const entries = await retry(
+      () => readPendingInputRecoveryEntriesInWorker(target),
+      "sidecars.delivery-entries",
+    );
     for (const { sessionKey, entry } of entries) {
       const scope = {
         ...target,
@@ -129,7 +140,10 @@ export async function recoverSessionSendDeliveries(
       let before: number | undefined;
       do {
         assertCurrent();
-        const page = await retry(() => readSessionSendRecoveryPage(scope, { before }));
+        const page = await retry(
+          () => readSessionSendRecoveryPage(scope, { before }),
+          "sidecars.delivery-history",
+        );
         pending.unshift(...page.items);
         before = page.nextBefore;
       } while (before !== undefined);
@@ -192,7 +206,7 @@ export async function recoverSessionSendDeliveries(
                   storePath: loaded.readSource?.path ?? loaded.storePath,
                   entry: loaded.store[loaded.canonicalKey],
                 };
-                if (!matches(result, endpoint) || result.entry?.archivedAt) {
+                if (!matches(result, endpoint)) {
                   throw new SessionSendEndpointChangedError(side, endpoint, result);
                 }
                 return result;
@@ -212,6 +226,16 @@ export async function recoverSessionSendDeliveries(
                   destination,
                   "Session delivery target does not own this input",
                 );
+              }
+              if (source.entry?.archivedAt || destination.entry?.archivedAt) {
+                // Archive stops work without replacing the transcript. Retain the
+                // cancelled receipt, but do not create a misleading failure notice.
+                if (await discardSessionPendingInput(scope, input.runId, assertCurrent)) {
+                  context.logGateway.debug(
+                    `Session delivery recovery cancelled: ${JSON.stringify({ reason: "endpoint-archived", endpoint: source.entry?.archivedAt ? "source" : "target", sessionKeyHash: sessionKeyHash(sessionKey), inputId: input.id })}`,
+                  );
+                }
+                return;
               }
               const callGateway: AgentToolGatewayRequestCaller = async () => {
                 // Exact endpoint lineage is already loaded above. Recovery cannot
@@ -261,7 +285,7 @@ export async function recoverSessionSendDeliveries(
             } finally {
               communication?.close();
             }
-          });
+          }, "sidecars.delivery-replay");
         } catch (error) {
           if (signal.aborted) {
             return;
@@ -303,8 +327,7 @@ export async function recoverSessionSendDeliveries(
           displayed
             .map(({ sourceSessionKey, reason, attempts }) => {
               const description = {
-                "endpoint-replaced":
-                  "the source or destination session was reset, archived, or replaced",
+                "endpoint-replaced": "the source or destination session was reset or replaced",
                 "permission-denied": "current session permissions do not allow automatic delivery",
                 "transient-admission": `the Gateway was still unavailable after ${attempts} automatic attempts`,
                 "store-unavailable": "session storage was unavailable",
@@ -320,23 +343,25 @@ export async function recoverSessionSendDeliveries(
           (undeliverableRunIds.length > 0
             ? " Updates with replaced endpoints will not be retried automatically."
             : "");
-        const result = await retry(() =>
-          withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
-            appendSessionTranscriptReport(scope, {
-              kind: "custom",
-              customTypes: [customType],
-              selectReport: (latest) =>
-                latest?.content === content &&
-                JSON.stringify(latest.details) === JSON.stringify(details)
-                  ? undefined
-                  : {
-                      customType,
-                      content,
-                      details,
-                      display: true,
-                      excludeFromContext: true,
-                    },
-            }),
+        const result = await measureStartup(startupTrace, "sidecars.delivery-notices", () =>
+          retry(() =>
+            withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
+              appendSessionTranscriptReport(scope, {
+                kind: "custom",
+                customTypes: [customType],
+                selectReport: (latest) =>
+                  latest?.content === content &&
+                  JSON.stringify(latest.details) === JSON.stringify(details)
+                    ? undefined
+                    : {
+                        customType,
+                        content,
+                        details,
+                        display: true,
+                        excludeFromContext: true,
+                      },
+              }),
+            ),
           ),
         );
         if (!result.ok) {

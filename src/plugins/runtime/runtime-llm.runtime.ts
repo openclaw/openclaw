@@ -1,23 +1,14 @@
-import { asFiniteNumber, asNonNegativeFiniteNumber } from "@openclaw/normalization-core";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asFiniteNumber } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { normalizeModelRef, type ModelRef } from "../../agents/model-ref-shared.js";
-import type { UsageLike } from "../../agents/usage.js";
-import { hasRecordedUsageCost, makeZeroUsageSnapshot, normalizeUsage } from "../../agents/usage.js";
+import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
-import { markHostPluginUsageDiagnosticEvent } from "../../infra/diagnostic-plugin-usage-provenance.js";
 import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { modelKey } from "../../shared/model-key.js";
-import {
-  estimateAggregateUsageCost,
-  estimateUsageCost,
-  resolveModelCostConfig,
-} from "../../utils/usage-format.js";
 import {
   createLlmCompleteError as completionError,
   isLlmOperatorAuthorizationError,
@@ -41,10 +32,10 @@ import {
   resolveTrustedCaller,
   type RuntimeLlmAuthority,
 } from "./runtime-model-policy.js";
+import { finalizePluginModelUsage } from "./runtime-model-usage.js";
 import type {
   LlmCompleteParams,
   LlmCompleteResult,
-  LlmCompleteUsage,
   PluginRuntimeCore,
   RuntimeLogger,
 } from "./types-core.js";
@@ -129,21 +120,6 @@ function buildMessages(params: {
     );
 }
 
-function readExplicitCostUsd(raw: unknown): number | undefined {
-  const cost = asOptionalRecord(raw)?.cost;
-  if (typeof cost === "number") {
-    return asNonNegativeFiniteNumber(cost);
-  }
-  const record = asOptionalRecord(cost);
-  if (!record) {
-    return undefined;
-  }
-  return (
-    asNonNegativeFiniteNumber(record.totalUsd) ??
-    (hasRecordedUsageCost(record) ? asNonNegativeFiniteNumber(record.total) : undefined)
-  );
-}
-
 export function finalizePluginLlmCompletion(params: {
   cfg: OpenClawConfig;
   hostPluginId?: string;
@@ -152,71 +128,32 @@ export function finalizePluginLlmCompletion(params: {
   logger?: RuntimeLogger;
   result: Omit<LlmCompleteResult, "usage">;
 }): LlmCompleteResult {
-  const normalized = normalizeUsage(params.rawUsage as UsageLike | undefined);
-  const costConfig = resolveModelCostConfig({
-    provider: params.result.provider,
-    model: params.result.model,
-    config: params.cfg,
-  });
-  // Isolated runtimes may report a whole run; only direct calls retain tier boundaries here.
-  const estimateCost =
-    params.result.execution.mode === "direct-provider"
-      ? estimateUsageCost
-      : estimateAggregateUsageCost;
-  const costUsd =
-    readExplicitCostUsd(params.rawUsage) ?? estimateCost({ usage: normalized, cost: costConfig });
-  const usage: LlmCompleteUsage = {
-    ...(normalized?.input !== undefined ? { inputTokens: normalized.input } : {}),
-    ...(normalized?.output !== undefined ? { outputTokens: normalized.output } : {}),
-    ...(normalized?.cacheRead !== undefined ? { cacheReadTokens: normalized.cacheRead } : {}),
-    ...(normalized?.cacheWrite !== undefined ? { cacheWriteTokens: normalized.cacheWrite } : {}),
-    ...(normalized?.total !== undefined ? { totalTokens: normalized.total } : {}),
-    ...(costUsd !== undefined ? { costUsd } : {}),
-  };
   const logger = params.logger ?? toRuntimeLogger(defaultLogger);
-  logger.info("plugin llm completion", {
-    caller: params.result.audit.caller,
-    purpose: params.result.audit.purpose,
-    sessionKey: params.result.audit.sessionKey,
-    agentId: params.result.agentId,
-    provider: params.result.provider,
-    model: params.result.model,
-    executionMode: params.result.execution.mode,
-    executionOwner: params.result.execution.owner,
-    usage,
+  const usage = finalizePluginModelUsage({
+    cfg: params.cfg,
+    hostPluginId: params.hostPluginId,
+    suppressUsage: params.suppressUsage,
+    rawUsage: params.rawUsage,
+    estimate: params.result.execution.mode === "direct-provider" ? "direct" : "aggregate",
+    target: {
+      provider: params.result.provider,
+      model: params.result.model,
+      agentId: params.result.agentId,
+      sessionKey: params.result.audit.sessionKey,
+    },
+    onUsage: (recordedUsage) =>
+      logger.info("plugin llm completion", {
+        caller: params.result.audit.caller,
+        purpose: params.result.audit.purpose,
+        sessionKey: params.result.audit.sessionKey,
+        agentId: params.result.agentId,
+        provider: params.result.provider,
+        model: params.result.model,
+        executionMode: params.result.execution.mode,
+        executionOwner: params.result.execution.owner,
+        usage: recordedUsage,
+      }),
   });
-  const input = normalized?.input ?? 0;
-  const output = normalized?.output ?? 0;
-  const cacheRead = normalized?.cacheRead ?? 0;
-  const cacheWrite = normalized?.cacheWrite ?? 0;
-  const promptTokens = input + cacheRead + cacheWrite;
-  const total = normalized?.total ?? promptTokens + output;
-  const hasPositiveUsage = [input, output, cacheRead, cacheWrite, total, usage.costUsd].some(
-    (value) => typeof value === "number" && Number.isFinite(value) && value > 0,
-  );
-  if (params.suppressUsage !== true && isDiagnosticsEnabled(params.cfg) && hasPositiveUsage) {
-    emitTrustedDiagnosticEvent(
-      markHostPluginUsageDiagnosticEvent(
-        {
-          type: "model.usage",
-          ...(params.result.audit.sessionKey ? { sessionKey: params.result.audit.sessionKey } : {}),
-          agentId: params.result.agentId,
-          provider: params.result.provider,
-          model: params.result.model,
-          usage: {
-            input,
-            output,
-            cacheRead,
-            cacheWrite,
-            promptTokens,
-            total,
-          },
-          ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
-        },
-        params.hostPluginId,
-      ),
-    );
-  }
   return { ...params.result, usage };
 }
 

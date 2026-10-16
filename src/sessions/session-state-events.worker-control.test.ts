@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { recordSessionCreated } from "./session-created.js";
@@ -100,9 +101,10 @@ vi.mock("./session-state-events.kernel.js", () => ({
 }));
 vi.mock("./session-state-notices.js", () => ({ enqueueSessionStateNotice: edge.notice }));
 
+const watcherStorePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
 const notice: SessionStateNotice = {
   watcherSessionKey: "agent:main:main",
-  watcherStorePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+  watcherStorePath,
   targetSessionKey: "agent:main:child",
   lastSeenSequence: 17,
   queueOnly: false,
@@ -121,7 +123,7 @@ const row: SessionStateEventRow = {
   summary: "human message",
   payload_json: null,
 };
-type Recorded = { row?: SessionStateEventRow; notices: SessionStateNotice[] };
+type Recorded = { rows: SessionStateEventRow[]; notices: SessionStateNotice[] };
 let now = 4_000_000;
 
 function goalChange() {
@@ -152,10 +154,12 @@ function recordSibling() {
 beforeEach(() => {
   vi.clearAllMocks();
   edge.phases.length = 0;
+  // Supply the accepted store without loading runtime config or native ownership metadata.
+  publishSystemEventStoreResolver(() => watcherStorePath);
   edge.capture.mockImplementation(() => edge.context);
   edge.execute.mockImplementation(async (command) => {
     edge.phases.push(command.type === "sessionState.prune" ? "prune" : "record");
-    return command.type === "sessionState.prune" ? undefined : { row, notices: [notice] };
+    return command.type === "sessionState.prune" ? undefined : { rows: [row], notices: [notice] };
   });
   edge.notice.mockImplementation(() => edge.phases.push("notice"));
   edge.warn.mockImplementation(() => undefined);
@@ -164,6 +168,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  publishSystemEventStoreResolver(undefined);
   expect(edge.forbidden).not.toHaveBeenCalled();
   vi.restoreAllMocks();
 });
@@ -221,7 +226,7 @@ describe("Session signal worker reconciliation", () => {
     expect(edge.nativeTransaction).not.toHaveBeenCalled();
     expect(settled).toBe(false);
     expect(edge.notice).not.toHaveBeenCalled();
-    recorded.resolve({ row, notices: [notice] });
+    recorded.resolve({ rows: [row], notices: [notice] });
     await pending;
     expect(edge.notice).toHaveBeenCalledWith(notice);
     expect(settled).toBe(true);
@@ -255,20 +260,22 @@ describe("Session signal worker reconciliation", () => {
         now,
         onlyIfWatched: undefined,
         expectedUpstream: undefined,
-        event: {
-          sessionKey: "global",
-          sessionId: "original-session",
-          agentId: "ops",
-          kind: "goal_changed",
-          actorType: "human",
-          actorId: "operator",
-          summary: "goal complete",
-          watcherSessionKeys: ["agent:main:main"],
-          watcherStorePaths: { "agent:main:main": notice.watcherStorePath },
-        },
+        events: [
+          {
+            sessionKey: "global",
+            sessionId: "original-session",
+            agentId: "ops",
+            kind: "goal_changed",
+            actorType: "human",
+            actorId: "operator",
+            summary: "goal complete",
+            watcherSessionKeys: ["agent:main:main"],
+            watcherStorePaths: { "agent:main:main": notice.watcherStorePath },
+          },
+        ],
       },
     });
-    recorded.resolve({ row, notices: [notice] });
+    recorded.resolve({ rows: [row], notices: [notice] });
     await pruneStarted.promise;
     expect(edge.phases).toEqual(["record", "notice", "prune"]);
     expect(returned).toBe(false);
@@ -299,7 +306,7 @@ describe("Session signal worker reconciliation", () => {
           if (command.type === "sessionState.prune") {
             throw error;
           }
-          return { row, notices: [notice] };
+          return { rows: [row], notices: [notice] };
         });
       }
       await expect(goalChange()).resolves.toBeUndefined();
@@ -325,7 +332,7 @@ describe("Session signal worker reconciliation", () => {
         pruneStarted.resolve();
         return pruning.promise;
       }
-      return { row, notices: [] };
+      return { rows: [row], notices: [] };
     });
     const pending = goalChange();
     await pruneStarted.promise;

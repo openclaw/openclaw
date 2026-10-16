@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { inspectScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db-schema.js";
 import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-preflight.js";
@@ -124,7 +125,7 @@ it("bounds the version phase and restores a committed member when a later migrat
       agentId: "main",
       path: pathname,
       foundVersion: 26,
-      supportedVersion: 27,
+      supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
     };
     const failedMigration = {
       ...migration,
@@ -183,7 +184,9 @@ it("bounds the version phase and restores a committed member when a later migrat
     } finally {
       await maintenance.close();
     }
-    expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(27);
+    expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+      OPENCLAW_AGENT_SCHEMA_VERSION,
+    );
     {
       using broken = new DatabaseSync(failedMigration.path, { readOnly: true });
       expect(broken.prepare("PRAGMA user_version").get()?.user_version).toBe(26);
@@ -251,7 +254,7 @@ it("preserves orphan history before admitting a group of scoped version migratio
       agentId,
       path: state.statePath("agents", agentId, "agent", "openclaw-agent.sqlite"),
       foundVersion: 26,
-      supportedVersion: 27,
+      supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
     }));
     const schema = fs.readFileSync(
       new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
@@ -324,7 +327,9 @@ it("preserves orphan history before admitting a group of scoped version migratio
     }
     for (const migration of migrations) {
       using database = new DatabaseSync(migration.path, { readOnly: true });
-      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(27);
+      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
       expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(fs.readdirSync(path.dirname(migration.path))).toEqual(
         expect.arrayContaining([expect.stringMatching(/\.scoped\.bak$/)]),

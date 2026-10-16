@@ -338,7 +338,7 @@ export async function captureGatewayServiceDefinitionBackup(
     hooks,
     finish: async () => {
       await hooks.beforeWrite();
-      return structuredClone(receipt);
+      return receipt;
     },
     compensate: async (): Promise<boolean> => {
       const prepared = await prepareGatewayServiceDefinitionRestore({ ...params, receipt });

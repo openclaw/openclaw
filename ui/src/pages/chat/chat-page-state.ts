@@ -3,7 +3,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { mergeChatPageChrome, mobileNavLayoutMediaQuery } from "../../app/mobile-nav-layout.ts";
 import { nativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { McpAppUnmountGate } from "../../components/mcp-app-unmount.ts";
+import { createMcpAppUnmountGate } from "../../components/mcp-app-unmount.ts";
 import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-toggle-contract.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import {
@@ -76,9 +76,7 @@ export function createChatPageState(
   const messageCache: ChatMessageCache = new Map();
   const snapshotStore = new SessionSnapshotStore(messageCache);
   const closeFocus = new ChatPageCloseFocus(host);
-  const mcpAppUnmountGate = new McpAppUnmountGate<ChatPageSnapshot | null>({
-    requestUpdate: invalidate,
-  });
+  const mcpAppUnmountGate = createMcpAppUnmountGate<ChatPageSnapshot | null>(invalidate);
   const viewerPresence = createChatViewerPresence();
   const retainedSessions = new ChatPageRetainedSessions(host, {
     context,

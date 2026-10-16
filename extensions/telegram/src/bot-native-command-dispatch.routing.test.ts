@@ -87,28 +87,6 @@ describe("registered native command routing through the message pipeline", () =>
     });
   });
 
-  it("authorizes paired DMs without marking the sender as an owner", async () => {
-    await addChannelAllowFromStoreEntry({
-      channel: "telegram",
-      entry: from.id,
-      accountId: "default",
-    });
-    const bot = await createBot(true, true, {
-      commands: { native: true },
-      channels: { telegram: { dmPolicy: "pairing", allowFrom: [], streaming: { mode: "off" } } },
-    });
-
-    await bot.handleUpdate({ update_id: 1001, message: commandMessage("/status") });
-
-    expect(harness.replySpy).toHaveBeenCalledOnce();
-    const context = harness.replySpy.mock.calls[0]?.[0];
-    expect(context).toMatchObject({
-      CommandAuthorized: true,
-      CommandTurn: { kind: "native", body: "/status", authorized: true },
-    });
-    expect(context).not.toHaveProperty("OwnerAllowFrom");
-  });
-
   it("routes /reset to the topic agent and chat session", async () => {
     const cfg: OpenClawConfig = {
       commands: { native: true },

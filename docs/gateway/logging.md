@@ -418,7 +418,7 @@ request behavior or diagnostic collection settings.
 - `--compact`: alias for `--ws-log compact`.
 
 ```bash
-# optimized (only errors/slow)
+# optimized (connections, errors, and slow responses)
 openclaw gateway
 
 # show all WS traffic (paired)
@@ -427,6 +427,23 @@ openclaw gateway --verbose --ws-log compact
 # show all WS traffic (full meta)
 openclaw gateway --verbose --ws-log full
 ```
+
+Normal logging emits one `client connected` record per admitted operator or node
+connection, including CLI and backend clients. It includes the connection ID, client ID and
+display name, mode, role, authentication method, version, platform, build, remote
+address, and authenticated user when present. This replaces the separate
+`authenticated user connected` and `webchat connected` records; those records
+overlapped and did not count ephemeral clients. Request content and credentials
+are not included.
+
+Compare these records with the `connect` RPC counter when investigating
+connection churn. The counter includes failed handshakes; `client connected`
+records admission before the hello response is sent. Client metadata is
+caller-declared, so it identifies the claimed client kind, not a verified process.
+For external pollers, reuse an authenticated Gateway connection for repeated
+requests. Gateway-hosted plugins should use `api.runtime.gateway.request` or
+`api.runtime.nodes`, which dispatch in-process; see
+[Gateway and node runtime](/plugins/sdk-runtime/gateway-and-nodes).
 
 ## Console formatting (subsystem logging)
 

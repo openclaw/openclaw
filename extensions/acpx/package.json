@@ -12,7 +12,7 @@
     "@agentclientprotocol/codex-acp": "2.1.1",
     "@openclaw/fs-safe": "0.26.6",
     "acpx": "0.19.4",
-    "smol-toml": "1.9.0",
+    "smol-toml": "1.9.1",
     "zod": "4.6.5"
   },
   "devDependencies": {

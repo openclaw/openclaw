@@ -5,10 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import type { ClawHubSkillUninstallPlan } from "../skills/lifecycle/workspace-types.js";
-import {
-  installClawPackages as installClawPackagesCore,
-  preflightClawPackage,
-} from "./packages.js";
+import { installClawPackages as installClawPackagesCore } from "./packages.boundary.test-support.js";
+import { preflightClawPackage } from "./packages.js";
 import {
   emptyPluginCapabilityEvidence,
   packageInstallPlan as plan,

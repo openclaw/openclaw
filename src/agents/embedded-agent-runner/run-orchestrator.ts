@@ -249,6 +249,7 @@ async function runEmbeddedAgentForSession(
       let assistantErrorTranscript: ReturnType<typeof createAssistantErrorTranscript> | undefined;
       const ownsAssistantErrorTranscript = params.assistantErrorTranscript === undefined;
       const onAttemptStart = params.onAttemptStart;
+      const onAttemptTerminalReplaced = params.onAttemptTerminalReplaced;
       const runGeneration = async (): Promise<EmbeddedAgentRunResult> => {
         throwIfAborted();
         assertInitialOperatorModelPolicy(params, sessionAdmission?.entry);
@@ -544,6 +545,10 @@ async function runEmbeddedAgentForSession(
                   onAttemptStart: () => {
                     runTerminal?.beginAttempt();
                     onAttemptStart?.();
+                  },
+                  onAttemptTerminalReplaced: () => {
+                    runTerminal?.replaceAttemptTerminal();
+                    onAttemptTerminalReplaced?.();
                   },
                   onAgentEvent: runTerminal
                     ? (event) => {

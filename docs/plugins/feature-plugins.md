@@ -357,6 +357,49 @@ Keep one renderer responsible for each container's children and dispose its root
 when the view ends. Solid 2 batches reactive writes; keep synchronous request
 authority and mutation guards with their existing owners.
 
+### Packaged Settings presentations
+
+A bundled presentation can render a host-owned Settings placement without
+activating the plugin's runtime UI. Memory Core uses this for the Memory overview,
+including when memory is off, another engine is selected, or the Gateway is offline.
+Declare the placement alongside the built entry:
+
+```json
+{
+  "controlUi": {
+    "entry": "dist/control-ui/<content-hash>/index.js",
+    "activation": "settings-only",
+    "settingsViews": [{ "section": "memory", "panel": "overview" }]
+  }
+}
+```
+
+The browser module exports `pluginId` and a `settingsViews` array of
+`ControlUiSettingsView` from `openclaw/plugin-sdk/control-ui`. Each view declares
+its `placement` and a `mount(container, context)` that returns `update(snapshot)`
+and `dispose()`. The current supported placement is the Memory overview; this
+contract does not register arbitrary Settings routes.
+
+The host supplies the selected Settings agent, engine availability, connection
+state, locale, shared Settings components, and bounded navigation. Authenticated
+operator RPC remains trusted native UI authority, bound to the mounted view's
+lifetime. Retained callbacks reject after that lifetime ends. The host keeps
+routing, agent selection, engine decisions, and config writes; the plugin owns
+its presentation and status requests. Only an explicit user action probes
+embedding readiness.
+
+The normal plugin builder preserves this declaration. The Control UI build
+loads it from the completed bundled distribution with the same package identity,
+asset revision, and immutable JavaScript/CSS generation. A Settings-only entry
+is excluded from runtime UI activation; existing `defineControlUiPlugin` entries
+keep their required `activate(host)` contract.
+
+Source-checkout `pnpm ui:build` and `pnpm ui:dev` prepare declared Settings
+presentations through the same plugin builder before reading that distribution.
+The dev server serves the validated generated JavaScript and CSS without runtime
+plugin activation. Restart the dev server after editing plugin presentation
+sources to rebuild their immutable generation.
+
 ### Bundle boundaries
 
 The build emits a JavaScript entry, optional CSS, and JavaScript chunks for lazy

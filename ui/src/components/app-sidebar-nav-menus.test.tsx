@@ -50,6 +50,34 @@ it("delivers an action selected through the shared sidebar menu", async () => {
   await waitForSolid(() => expect(select).toHaveBeenCalledExactlyOnceWith("customize"));
 });
 
+it("retires sidebar hover callbacks with the mounted menu", async () => {
+  const enter = vi.fn();
+  const leave = vi.fn();
+  const view = render(() => (
+    <SidebarDropdown
+      position={{ x: 12, y: 30 }}
+      class="sidebar-menu-test"
+      label="Sidebar actions"
+      onSelect={vi.fn()}
+      onClose={vi.fn()}
+      onPointerEnter={enter}
+      onPointerLeave={leave}
+      items={[{ id: "customize", label: "Customize" }]}
+    />
+  ));
+  const menu = view.getByRole("menu", { hidden: true });
+  menu.dispatchEvent(new Event("pointerenter"));
+  menu.dispatchEvent(new Event("pointerleave"));
+  expect(enter).toHaveBeenCalledOnce();
+  expect(leave).toHaveBeenCalledOnce();
+
+  view.unmount();
+  menu.dispatchEvent(new Event("pointerenter"));
+  menu.dispatchEvent(new Event("pointerleave"));
+  expect(enter).toHaveBeenCalledOnce();
+  expect(leave).toHaveBeenCalledOnce();
+});
+
 it("returns to the durable trigger without consuming native Tab", async () => {
   const anchor = document.createElement("button");
   document.body.append(anchor);

@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { CLI_PARENT_BOUND_PRELOAD, CLI_RESPAWN_PARENT_ENV } from "./cli-parent-lifetime.mjs";
 
 /** Packaging owns hashes; launch planning consumes only the artifact identity. */
 export function readStandaloneRuntimeManifest(executable = process.execPath) {
@@ -138,4 +139,19 @@ export function resolveOpenClawCliInvocation({
     throw new Error("Cannot invoke the loose OpenClaw CLI without an entry script.");
   }
   return { command: execPath, args: [...execArgv, entry, ...args] };
+}
+
+/** Bind only this CLI child to its launcher; runtime flags belong before a loose entry. */
+export function resolveOpenClawCliRespawn({ env = process.env, ...params } = {}) {
+  const execPath = params.execPath ?? process.execPath;
+  const invocation = resolveOpenClawCliInvocation({
+    ...params,
+    execArgv: ["--import", CLI_PARENT_BOUND_PRELOAD, ...(params.execArgv ?? process.execArgv)],
+  });
+  return {
+    ...invocation,
+    env: isStandaloneRuntimeExecutable(execPath)
+      ? { ...env, [CLI_RESPAWN_PARENT_ENV]: String(process.pid) }
+      : env,
+  };
 }

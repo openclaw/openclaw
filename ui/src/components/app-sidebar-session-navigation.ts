@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { serializeSidebarEntry } from "../app-navigation.ts";
+import { createQuestionPromptState } from "../app/question-prompt.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
@@ -83,11 +84,11 @@ import {
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import { SessionAttentionController } from "./session-attention-controller.ts";
+import type { SessionAttention } from "./session-attention.ts";
 import { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
-import { SidebarEmptyGroupsController } from "./sidebar-empty-groups-controller.ts";
+import { SessionOwnerFilter } from "./session-owner-filter.ts";
+import { SidebarEmptyGroupsPreference } from "./sidebar-empty-groups.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import {
@@ -151,13 +152,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   private readonly catalogsMemo = new SidebarProjectionMemo<SidebarSessionCatalog[]>();
   private readonly sectionsMemo = new SidebarProjectionMemo<SidebarVisibleSections>();
   private readonly homeMemos = new Map<string, SidebarProjectionMemo<SidebarHomeSession>>();
-  readonly sessionOwnerFilter = new SessionOwnerFilterController(
-    this,
-    () => this.context,
-    () =>
-      this.context?.sessions.listSnapshot(
-        this.sessionData.sessionListQuery(this.expandedAgentId()),
-      ),
+  readonly sessionOwnerFilter = new SessionOwnerFilter(
+    () => this.context?.gateway,
+    () => this.requestUpdate(),
   );
   readonly sessionData = new SessionDataController(this);
 
@@ -246,7 +243,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   sessionsShowCron: boolean = loadStoredSidebarSessionsShowCron();
   sessionsShowPreview: boolean = loadStoredSidebarSessionsShowPreview();
   sessionsShowSystem: boolean = loadStoredSidebarSessionsShowSystem();
-  private readonly emptyGroups = new SidebarEmptyGroupsController(this, () => this.context);
+  private readonly emptyGroups = new SidebarEmptyGroupsPreference(() => this.context);
 
   get sessionsEmptyGroupsMode(): SidebarEmptyGroupsMode {
     return this.emptyGroups.mode;
@@ -254,6 +251,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   setSessionsEmptyGroupsMode(mode: SidebarEmptyGroupsMode): void {
     this.emptyGroups.set(mode);
+    this.requestUpdate();
   }
   sessionsStatusFilter: SidebarSessionStatusFilter = loadStoredSidebarSessionStatusFilter();
   hiddenSessionCatalogIds: ReadonlySet<string> = loadStoredHiddenSessionCatalogIds();
@@ -279,17 +277,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   private sessionSelectionAnchor: string | null = null;
   private readonly runtimeSampledAtByRow = new WeakMap<GatewaySessionRow, number>();
-  private readonly attention = new SessionAttentionController(this);
+  readonly attentionQuestions = createQuestionPromptState(() => {});
+  declare attention: SessionAttention;
 
   declare readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   declare readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
   declare readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
   declare readonly sessionOrganizer: SessionOrganizerController;
   declare readonly sidebarMenus: SidebarMenusController;
-
-  get sessionAttentionContext() {
-    return this.context;
-  }
 
   get sessionDataContext() {
     return this.context;
@@ -723,7 +718,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   get resolveSessionAttention() {
-    return this.attention.createResolver();
+    return this.attention.resolve();
   }
 
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarHomeSession {

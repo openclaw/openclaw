@@ -33,7 +33,6 @@ import {
   archiveSessionCatalog as archiveSessionCatalogData,
   importSessionCatalog as importSessionCatalogData,
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
-  applySessionCatalogChanged as applySessionCatalogChangedToData,
   invalidateSessionCatalogs as invalidateSessionCatalogData,
   loadMoreSessionCatalog as loadMoreSessionCatalogData,
   refreshSessionCatalogs as refreshSessionCatalogData,
@@ -397,8 +396,6 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   }
 
   handleSessionCatalogHostEvent = applySessionCatalogHostEventToData.bind(null, this);
-
-  handleSessionCatalogChanged = applySessionCatalogChangedToData.bind(null, this);
 
   private readonly handleCatalogSessionContinued = (
     event: CustomEvent<CatalogSessionContinuedDetail>,

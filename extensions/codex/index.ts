@@ -267,7 +267,7 @@ export default definePluginEntry({
       nativeCompaction: createCodexAppServerNativeCompaction(agentHarnessOptions),
     });
     api.registerMediaUnderstandingProvider(
-      buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
+      buildCodexMediaUnderstandingProvider({ pluginConfig: registrationConfig }),
     );
     api.registerWebSearchProvider(
       createCodexWebSearchProvider({ resolvePluginConfig: resolveCurrentPluginConfig }),

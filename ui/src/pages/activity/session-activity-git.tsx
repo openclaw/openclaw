@@ -118,6 +118,7 @@ export function ActivitySessionGit(props: ActivitySessionGitProps) {
           prop:client={connection().phase === "connected" ? connection().client : null}
           prop:readers={availableLinkPreviewReaders(connection())}
           prop:agentId={props.agentId ?? ""}
+          prop:sessionKey={props.sessionKey}
           prop:previewSeeds={pullRequests().map(pullRequestPreview)}
         >
           <div class="activity-feed__git">

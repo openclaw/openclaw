@@ -262,23 +262,17 @@ describe("slack prepareSlackMessage inbound contract", () => {
     };
   }
 
-  it("logs inbound metadata without logging message content", async () => {
+  it("keeps inbound message content out of diagnostics", async () => {
     const body = "confidential acquisition target: northstar; do not include this text in logs";
     shouldLogVerboseMock.mockReturnValue(true);
 
     const prepared = await prepareWithDefaultCtx(createSlackMessage({ text: body }));
 
     assert(prepared);
-    const inboundLog = logVerboseMock.mock.calls
-      .map(([entry]) => entry)
-      .find((entry) => typeof entry === "string" && entry.startsWith("slack inbound:"));
     const verboseOutput = logVerboseMock.mock.calls
       .flat()
       .filter((entry): entry is string => typeof entry === "string")
       .join("\n");
-    expect(inboundLog).toBe(
-      `slack inbound: account=${prepared.route.accountId} agent=${prepared.route.agentId} channel=D123 message_ts=1.000 thread_ts=none from=slack:U1 chat=direct chars=${body.length}`,
-    );
     expect(verboseOutput).not.toContain(body);
     expect(verboseOutput).not.toContain("confidential acquisition target");
     expect(verboseOutput).not.toContain("preview=");

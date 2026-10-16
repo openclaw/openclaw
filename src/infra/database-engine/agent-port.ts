@@ -6,9 +6,9 @@ import type { DatabasePortProvider } from "./port-descriptor.js";
 export const agentPortProvider: DatabasePortProvider = {
   id: "agent",
   minimumPostgresVersion: 16,
-  async loadDescriptor() {
+  async loadDescriptor(_owner, version) {
     const { loadAgentPortDescriptor } = await import("./agent-port-descriptor.js");
-    return loadAgentPortDescriptor();
+    return loadAgentPortDescriptor(version);
   },
   matchesSqlite: (tables) =>
     ["schema_meta", "session_nodes", "transcript_events"].every((table) => tables.has(table)),

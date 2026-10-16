@@ -546,6 +546,7 @@ export class LinkReaderPanelOwner {
       this.readers.includes(target.reader);
     const requestParams: ControlUiLinkReaderDetailParams = {
       url: target.href,
+      ...(target.reader.linkReader.sessionScoped ? { sessionKey } : {}),
       ...(agentId ? { agentId } : {}),
       ...(this.refreshRequested ? { refresh: true } : {}),
     };

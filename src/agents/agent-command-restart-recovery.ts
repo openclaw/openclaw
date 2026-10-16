@@ -142,9 +142,12 @@ export function constrainRestartRecoveryDeliveryPayloads(
   return constrained;
 }
 
+type RestartRecoveryTerminalDeliveryInput = Omit<AgentDeliveryEvidence, "deliveryStatus"> &
+  Pick<RestartRecoveryTerminalDeliveryEvidenceResult, "deliveryStatus">;
+
 /** Reduce a terminal result to bounded, route-checkable delivery evidence. */
 export function buildRestartRecoveryTerminalDeliveryEvidence(
-  result: AgentDeliveryEvidence,
+  result: RestartRecoveryTerminalDeliveryInput,
 ): RestartRecoveryTerminalDeliveryEvidenceResult {
   const terminalReply = normalizeAgentRunTerminalReplySnapshot(result.meta?.terminalReply);
   const silent = terminalReply?.disposition === "silent";
@@ -176,23 +179,12 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
     });
   const payloadsTruncated = rawPayloads && rawPayloads.length > 64 ? (true as const) : undefined;
   const rawDeliveryStatus = result.deliveryStatus;
-  const status =
-    rawDeliveryStatus?.status === "failed" ||
-    rawDeliveryStatus?.status === "partial_failed" ||
-    rawDeliveryStatus?.status === "sent" ||
-    rawDeliveryStatus?.status === "suppressed"
-      ? rawDeliveryStatus.status
-      : undefined;
-  const rawPayloadOutcomes =
-    rawDeliveryStatus && typeof rawDeliveryStatus === "object"
-      ? (rawDeliveryStatus as { payloadOutcomes?: unknown }).payloadOutcomes
-      : undefined;
-  const retainedPayloadOutcomes = Array.isArray(rawPayloadOutcomes)
-    ? rawPayloadOutcomes.slice(0, 64)
-    : undefined;
+  const status = rawDeliveryStatus?.status;
+  const rawPayloadOutcomes = rawDeliveryStatus?.payloadOutcomes;
+  const retainedPayloadOutcomes = rawPayloadOutcomes?.slice(0, 64);
   if (
     retainedPayloadOutcomes &&
-    Array.isArray(rawPayloadOutcomes) &&
+    rawPayloadOutcomes &&
     rawPayloadOutcomes.length > 64 &&
     !getAutomaticDeliveryEvidence({
       deliveryStatus: { payloadOutcomes: retainedPayloadOutcomes },
@@ -209,33 +201,20 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
       retainedPayloadOutcomes[63] = sendEvidence;
     }
   }
-  const payloadOutcomes: NonNullable<
-    RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"]
-  >["payloadOutcomes"] = retainedPayloadOutcomes
-    ? retainedPayloadOutcomes.flatMap((record) => {
-        if (!isRecord(record)) {
-          return [];
-        }
-        const outcomeStatus =
-          record.status === "failed" || record.status === "sent" || record.status === "suppressed"
-            ? record.status
-            : undefined;
-        if (!outcomeStatus || typeof record.index !== "number" || !Number.isInteger(record.index)) {
-          return [];
-        }
-        const reason = normalizeOptionalString(record.reason)?.slice(0, 256);
-        return [
-          {
-            index: record.index,
-            status: outcomeStatus,
-            ...(reason ? { reason } : {}),
-            ...(typeof record.sentBeforeError === "boolean"
-              ? { sentBeforeError: record.sentBeforeError }
-              : {}),
-          },
-        ];
-      })
-    : undefined;
+  const payloadOutcomes = retainedPayloadOutcomes?.map((record) => {
+    const reason = normalizeOptionalString(record.reason)?.slice(0, 256);
+    const evidence: NonNullable<typeof retainedPayloadOutcomes>[number] = {
+      index: record.index,
+      status: record.status,
+    };
+    if (reason) {
+      evidence.reason = reason;
+    }
+    if (record.sentBeforeError !== undefined) {
+      evidence.sentBeforeError = record.sentBeforeError;
+    }
+    return evidence;
+  });
   const errorMessage = normalizeOptionalString(rawDeliveryStatus?.errorMessage);
   const reason = normalizeOptionalString(
     getAutomaticDeliveryEvidence(result).suppressionReason ?? rawDeliveryStatus?.reason,
@@ -243,9 +222,7 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
   const deliveryStatus: RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"] = status
     ? {
         status,
-        ...(typeof rawDeliveryStatus?.resultCount === "number" &&
-        Number.isSafeInteger(rawDeliveryStatus.resultCount) &&
-        rawDeliveryStatus.resultCount >= 0
+        ...(rawDeliveryStatus?.resultCount !== undefined
           ? { resultCount: rawDeliveryStatus.resultCount }
           : {}),
         ...(errorMessage ? { errorMessage } : {}),

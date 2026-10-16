@@ -284,8 +284,9 @@ the preference in the browser.
 **Session sources…** opens the same Gateway's Dashboard Appearance settings, where
 you can manage session sources. The native handoff opens the page without scrolling
 to the Session sources settings block. **Open in Terminal** is not offered because
-the native sidebar has no catalog terminal action. Catalogs refresh while the
-sidebar is visible and connected; **Load more** and **Retry** operate independently
+the native sidebar has no catalog terminal action. Catalogs refresh every two
+minutes while the sidebar is visible and connected, and immediately when it
+becomes visible or reconnects. **Load more** and **Retry** operate independently
 for each catalog. Source failures stay visible with **Retry**, including before
 the source returns its first session.
 

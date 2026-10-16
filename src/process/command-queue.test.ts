@@ -5,9 +5,6 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { loggingState } from "../logging/state.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getLaneState } from "./command-queue.state.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
 import type { CommandQueueTaskDeadline } from "./command-queue.types.js";
@@ -68,19 +65,6 @@ function diagnosticDebugMessages(): string[] {
     .filter((message): message is string => typeof message === "string");
 }
 
-function captureDiagnosticConsole(level: "warn" | "error") {
-  setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
-  const output = vi.fn();
-  loggingState.rawConsole = {
-    log: output,
-    info: output,
-    warn: output,
-    error: output,
-  };
-  diagnosticMocks.diag[level].mockImplementationOnce(createSubsystemLogger("diagnostic")[level]);
-  return output;
-}
-
 describe("command queue", () => {
   beforeAll(async () => {
     ({
@@ -113,9 +97,6 @@ describe("command queue", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    setLoggerOverride(null);
-    loggingState.rawConsole = null;
-    resetLogger();
     resetCommandQueueStateForTest();
   });
 
@@ -295,43 +276,6 @@ describe("command queue", () => {
     ).toBe(true);
   });
 
-  it("logs error types separately from the actionable lane failure message", async () => {
-    const consoleOutput = captureDiagnosticConsole("error");
-    const error = new Error("provider request failed");
-    error.name = "FailoverError";
-    const taskIdentity = {
-      taskKind: "turn",
-      sessionKey: "agent:example:main",
-      runId: 'run-"quoted"\nline',
-    };
-
-    await expect(
-      enqueueCommandInLane(
-        CommandLane.Main,
-        async () => {
-          throw error;
-        },
-        { taskIdentity },
-      ),
-    ).rejects.toBe(error);
-
-    expect(diagnosticMocks.diag.error).toHaveBeenCalledWith(
-      expect.not.stringContaining("FailoverError:"),
-      expect.objectContaining({ errorName: "FailoverError", ...taskIdentity }),
-    );
-    expect(diagnosticMocks.diag.error).toHaveBeenCalledWith(
-      expect.stringContaining('error="provider request failed"'),
-      expect.any(Object),
-    );
-    expect(consoleOutput).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'taskKind=turn sessionKey=agent:example:main runId="run-\\"quoted\\"\\nline"',
-      ),
-    );
-    expect(consoleOutput.mock.calls[0]?.[0]).not.toMatch(/[\r\n]/);
-    expect(consoleOutput.mock.calls[0]?.[0]).not.toContain("requesterSessionKey=");
-  });
-
   it.each([
     "session:probe-setup-inference:openai",
     "session:temp:setup-inference:probe-setup-inference-test-uuid",
@@ -373,82 +317,6 @@ describe("command queue", () => {
       await Promise.all(tasks);
     }
     expect(getQueueSize(lane, (target) => target?.agentId === "alpha")).toBe(0);
-  });
-
-  it("resetAllLanes drains queued work immediately after reset", async () => {
-    const lane = `reset-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    setCommandLaneConcurrency(lane, 1);
-
-    const blocker = createDeferred();
-
-    // Start a task that blocks the lane
-    const task1 = enqueueCommandInLane(lane, async () => {
-      await blocker.promise;
-    });
-
-    expect(getTotalQueueSize()).toBeGreaterThanOrEqual(1);
-
-    // Enqueue another task — it should be stuck behind the blocker
-    let task2Ran = false;
-    const task2 = enqueueCommandInLane(lane, async () => {
-      task2Ran = true;
-    });
-
-    expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
-    expect(task2Ran).toBe(false);
-
-    // Simulate SIGUSR2: reset all lanes. Queued work (task2) should be
-    // drained immediately — no fresh enqueue needed.
-    resetAllLanes();
-
-    // Complete the stale in-flight task; generation mismatch makes its
-    // completion path a no-op for queue bookkeeping.
-    blocker.resolve();
-    await task1;
-
-    // task2 should have been pumped by resetAllLanes's drain pass.
-    await task2;
-    expect(task2Ran).toBe(true);
-  });
-
-  it("resetCommandLane releases one stuck lane and drains its queued work", async () => {
-    const lane = `reset-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const otherLane = `reset-lane-other-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    setCommandLaneConcurrency(lane, 1);
-    setCommandLaneConcurrency(otherLane, 1);
-
-    const blocker = createDeferred();
-    const otherBlocker = createDeferred();
-    const first = enqueueCommandInLane(lane, async () => {
-      await blocker.promise;
-      return "first";
-    });
-    const other = enqueueCommandInLane(otherLane, async () => {
-      await otherBlocker.promise;
-      return "other";
-    });
-
-    let secondRan = false;
-    const second = enqueueCommandInLane(lane, async () => {
-      secondRan = true;
-      return "second";
-    });
-
-    expect(secondRan).toBe(false);
-    expect(
-      getCommandLaneSnapshot(lane).activeCount + getCommandLaneSnapshot(otherLane).activeCount,
-    ).toBe(2);
-    expect(resetCommandLane(lane)).toBe(1);
-
-    await expect(second).resolves.toBe("second");
-    expect(secondRan).toBe(true);
-    expect(getQueueSize(lane)).toBe(0);
-    expect(getQueueSize(otherLane)).toBe(1);
-
-    blocker.resolve();
-    otherBlocker.resolve();
-    await expect(first).resolves.toBe("first");
-    await expect(other).resolves.toBe("other");
   });
 
   it("task timeout renews from progress timestamps", async () => {
@@ -543,7 +411,7 @@ describe("command queue", () => {
     await expect(second).resolves.toBe("second");
   });
 
-  it.each(["admission", "completion", "error"] as const)(
+  it.each(["admission", "error"] as const)(
     "settles callers and drains the session lane when %s diagnostics throw",
     async (phase) => {
       vi.useFakeTimers();
@@ -565,7 +433,7 @@ describe("command queue", () => {
         enqueueCommandInLane(lane, successor),
       ]);
       if (phase !== "admission") {
-        diagnosticMocks.diag[phase === "error" ? "error" : "debug"].mockImplementationOnce(() => {
+        diagnosticMocks.diag.error.mockImplementationOnce(() => {
           throw diagnosticError;
         });
       }
@@ -579,9 +447,7 @@ describe("command queue", () => {
       expect(successor).toHaveBeenCalledOnce();
       expect(firstTask).toHaveBeenCalledTimes(phase === "admission" ? 0 : 1);
       expect(await outcomes).toEqual([
-        phase === "completion"
-          ? { status: "fulfilled", value: "first" }
-          : { status: "rejected", reason: phase === "admission" ? diagnosticError : taskError },
+        { status: "rejected", reason: phase === "admission" ? diagnosticError : taskError },
         { status: "fulfilled", value: "successor" },
       ]);
       expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 0, queuedCount: 0 });

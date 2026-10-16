@@ -188,9 +188,7 @@ export function getProviderMonitorTestMocks(): typeof providerMonitorTestMocks {
   return providerMonitorTestMocks;
 }
 
-export function resetDiscordProviderMonitorMocks(params?: {
-  nativeCommands?: NativeCommandSpecMock[];
-}) {
+export function resetDiscordProviderMonitorMocks() {
   clientDeployCommandsMock.mockClear().mockResolvedValue(undefined);
   clientFetchUserMock.mockClear().mockResolvedValue({ id: "bot-1" });
   clientGetPluginMock.mockClear().mockReturnValue(undefined);
@@ -228,9 +226,7 @@ export function resetDiscordProviderMonitorMocks(params?: {
   getAcpSessionStatusMock.mockClear().mockResolvedValue({ state: "idle" });
   listNativeCommandSpecsForConfigMock
     .mockClear()
-    .mockReturnValue(
-      params?.nativeCommands ?? [{ name: "cmd", description: "built-in", acceptsArgs: false }],
-    );
+    .mockReturnValue([{ name: "cmd", description: "built-in", acceptsArgs: false }]);
   prepareSkillCommandsForAgentsMock.mockClear().mockResolvedValue([]);
   monitorLifecycleMock.mockClear().mockImplementation(async (monitorParams) => {
     monitorParams.threadBindings.stop();

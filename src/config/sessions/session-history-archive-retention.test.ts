@@ -7,6 +7,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -29,6 +30,19 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
 import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
+
+const deletionFault = useSqliteWorkerFault([
+  {
+    name: "refuse_late_archive_retention",
+    match: /^delete from session_transcript_archives\b/u,
+    sql: `CREATE TEMP TRIGGER refuse_late_archive_retention
+      BEFORE DELETE ON main.session_transcript_archives
+      WHEN OLD.session_id LIKE 'rollback-%' AND
+        (SELECT count(*) FROM main.session_transcript_archives
+         WHERE session_id LIKE 'rollback-%') = 1
+      BEGIN SELECT RAISE(ABORT, 'synthetic late archive retention failure'); END;`,
+  },
+]);
 
 let state: OpenClawTestState;
 let database: OpenClawAgentDatabase;
@@ -130,6 +144,35 @@ it("selects at most 256 published rows in stable order before applying retention
   }
   expect(await prune()).toBe(256);
   expect(retainedIds()).toEqual(["bounded-256", "bounded-257"]);
+});
+
+it("rolls back the entire retention batch on a late delete failure and permits retry", async () => {
+  seed("prime-retention-owner");
+  expect(await prune()).toBe(1);
+  for (let index = 0; index < 16; index++) {
+    seed(`rollback-${String(index).padStart(3, "0")}`);
+  }
+  seed("retained-reset", { reason: "reset" });
+  const readRows = () =>
+    executeSqliteQuerySync(
+      database.db,
+      getSessionKysely(database.db)
+        .selectFrom("session_transcript_archives")
+        .selectAll()
+        .orderBy("session_id"),
+    ).rows;
+  const before = readRows();
+  deletionFault.enable();
+  try {
+    await expect(prune()).rejects.toThrow("synthetic late archive retention failure");
+    database = openOpenClawAgentDatabase(options());
+    expect(readRows()).toEqual(before);
+  } finally {
+    deletionFault.disable();
+  }
+
+  expect(await prune()).toBe(16);
+  expect(readRows()).toEqual(before.filter((row) => row.session_id === "retained-reset"));
 });
 
 it("admits foreground writes during retention selection and between deletion batches", async ({

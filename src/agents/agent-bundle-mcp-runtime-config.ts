@@ -118,7 +118,7 @@ export function loadSessionMcpConfig(params: {
   const fingerprintServers = params.redactConnectionServerNames?.size
     ? redactMcpServersForFingerprint(mcpServers, params.redactConnectionServerNames)
     : mcpServers;
-  const result = {
+  return {
     safeServerNamesByServer,
     loaded: {
       ...loaded,
@@ -134,8 +134,6 @@ export function loadSessionMcpConfig(params: {
       mcpToolsDeny,
     }),
   };
-  // Launch normalization is session-owned; never expose cached package facts or user config.
-  return structuredClone(result);
 }
 
 /**

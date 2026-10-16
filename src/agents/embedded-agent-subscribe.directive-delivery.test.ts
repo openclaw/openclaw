@@ -23,7 +23,7 @@ import {
   emitAssistantTextEnd,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { resolveManagedStreamMediaUrls } from "./embedded-agent-subscribe.handlers.messages.replies.js";
-import { resolveStreamingReply } from "./embedded-agent-subscribe.handlers.messages.stream.js";
+import { createStreamingReplyResolver } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 
 const googleModel: Model<"google-generative-ai"> = {
   id: "gemini-2.5-flash",
@@ -579,7 +579,7 @@ it("appends visible text across long blank runs without stalling the media scan"
   const delta = `before${"\n".repeat(60_000)}after`;
   const started = performance.now();
   expect(
-    resolveStreamingReply({
+    createStreamingReplyResolver()({
       evtType: "text_delta",
       next: delta,
       previousText: "",
@@ -615,6 +615,7 @@ it("streams a long reply-tagged answer without a quadratic slowdown", () => {
   for (let end = 40; end - 40 < text.length; end += 40) {
     emitText(emit, "text_delta", text.slice(0, end), { delta: text.slice(end - 40, end) });
   }
+  emitText(emit, "text_end", text);
   expect(performance.now() - started).toBeLessThan(1_000);
   expect(partials.at(-1)?.text).toBe(`Intro.\n\n${body}`);
 });

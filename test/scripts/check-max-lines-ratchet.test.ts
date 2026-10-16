@@ -108,7 +108,7 @@ describe("check-max-lines-ratchet", () => {
     expect(isGovernedSourcePath("src/schema.generated.ts")).toBe(false);
   });
 
-  it.each([true])("reports baseline growth even when listed (CI=%s)", (advisory) => {
+  it("reports baseline growth as an advisory in GitHub Actions even when listed", () => {
     const root = tempDirs.make("openclaw-max-lines-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
@@ -126,15 +126,13 @@ describe("check-max-lines-ratchet", () => {
     );
     git(root, ["add", "."]);
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.stubEnv("GITHUB_ACTIONS", advisory ? "true" : "");
+    vi.stubEnv("GITHUB_ACTIONS", "true");
     vi.stubEnv("GITHUB_STEP_SUMMARY", path.join(root, "summary.md"));
-    expect(main(root, ["--base", "HEAD"])).toBe(advisory ? 0 : 1);
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
     expect(error).toHaveBeenCalledWith(
       expect.stringContaining("The max-lines baseline may only shrink"),
     );
-    if (advisory) {
-      expect(fs.readFileSync(path.join(root, "summary.md"), "utf8")).toContain("src/b.ts");
-    }
+    expect(fs.readFileSync(path.join(root, "summary.md"), "utf8")).toContain("src/b.ts");
   });
 
   it("transfers grandfathered debt across a verified rename", () => {
@@ -175,7 +173,7 @@ describe("check-max-lines-ratchet", () => {
     expect(main(root, ["--base", "origin/main"])).toBe(0);
   });
 
-  it("falls back to main when no merge base is available", () => {
+  it("rejects unavailable ancestry with an explicit prepared-base recovery", () => {
     const root = tempDirs.make("openclaw-max-lines-disconnected-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
@@ -191,7 +189,11 @@ describe("check-max-lines-ratchet", () => {
     git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     git(root, ["checkout", "release"]);
 
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(main(root)).toBe(1);
+    expect(errors).toHaveBeenCalledWith(
+      "Could not resolve ratchet merge base for origin/main; provide reachable history or --base <prepared-ref> --no-merge-base.",
+    );
   });
 
   it("checks staged content instead of unstaged worktree edits", () => {

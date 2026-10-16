@@ -55,6 +55,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   /** Accepted interaction on this exact connection, never copied from another client. */
   connectionLastActivityAt?: number;
   authenticatedUserId?: string;
+  /** Configured Enterprise account verified by trusted-proxy handshake admission. */
+  authenticatedFactoryGitHubAccountId?: number;
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;

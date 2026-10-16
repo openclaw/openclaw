@@ -16,6 +16,7 @@ import * as artworkLoader from "../../plugins/icon-loader.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
+import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
@@ -96,7 +97,11 @@ describe("chat transcript rendering", () => {
       props.streamStartedAt = 5_000;
       props.runActive = true;
       const container = document.body.appendChild(document.createElement("div"));
-      const transcript = createTestTranscript();
+      saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+        scrollTop: 0,
+        anchorToEnd: false,
+      });
+      const transcript = createTestTranscript(props.paneId);
       const thread = createChatThreadHarness(container, transcript);
       onTestFinished(() => thread.unmount());
       try {

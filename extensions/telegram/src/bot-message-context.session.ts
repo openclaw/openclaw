@@ -11,7 +11,7 @@ import {
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
@@ -730,14 +730,6 @@ export async function buildTelegramInboundContextPayload(
               : undefined,
         }
       : undefined;
-
-  if (shouldLogVerbose()) {
-    const mediaInfo = allMedia.length > 1 ? ` mediaCount=${allMedia.length}` : "";
-    const topicInfo = resolvedThreadId != null ? ` topic=${resolvedThreadId}` : "";
-    logVerbose(
-      `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length}${mediaInfo}${topicInfo}`,
-    );
-  }
 
   return {
     ctxPayload,

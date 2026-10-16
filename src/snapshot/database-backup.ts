@@ -207,24 +207,21 @@ async function preparePostgresRestoreInWorker(params: {
         throw new Error("PostgreSQL update rollback requires its captured source identity.");
       }
       const source = params.expectedSource.namespace;
-      const admitted = await admitDatabasePortDescriptor(
-        { engine: "postgres", db: client, namespace: source },
-        descriptor,
+      const historySchema = [descriptor, ...(descriptor.fragments ?? [])].find((schema) =>
+        schema.tables.some((entry) => entry.name === "update_runs"),
       );
-      const table = admitted.tables.find((entry) => entry.name === "update_runs");
-      if (!table) {
+      const table = historySchema?.tables.find((entry) => entry.name === "update_runs");
+      if (!historySchema || !table) {
         throw new Error("PostgreSQL rollback cannot preserve the current update history contract.");
       }
-      const expected = admitted.expectedCatalog.filter((fact) => fact.table === table.name);
-      for (const current of [source, namespace]) {
-        const catalog = readPostgresCatalog(
-          (await client.query(postgresCatalogQuery(current))).rows[0].catalog,
-        );
-        assertPostgresCatalog(
-          catalog.filter((fact) => fact.table === table.name),
-          expected,
-        );
-      }
+      const expected = historySchema.expectedCatalog.filter((fact) => fact.table === table.name);
+      const catalog = readPostgresCatalog(
+        (await client.query(postgresCatalogQuery(source))).rows[0].catalog,
+      );
+      assertPostgresCatalog(
+        catalog.filter((fact) => fact.table === table.name),
+        expected,
+      );
       const columns = table.columns.map(({ name }) => quote(name)).join(", ");
       await client.query("BEGIN; SET LOCAL synchronous_commit = on");
       try {
@@ -367,13 +364,15 @@ if (parentPort && workerData?.openclawDatabaseBackup === true) {
       if (anchor.engine !== "postgres") {
         throw new Error("PostgreSQL anchor disappeared.");
       }
+      if (task.operation === "fingerprint") {
+        return withDatabasePortConnection(task.params.config, (client) =>
+          fingerprintPostgresDatabase({ client, anchor }),
+        );
+      }
       return withDatabasePortPostgres(
         task.params.config,
         anchor,
-        (client, descriptor) =>
-          task.operation === "family"
-            ? Promise.resolve(descriptor.id)
-            : fingerprintPostgresDatabase({ client, descriptor, anchor }),
+        (_client, descriptor) => Promise.resolve(descriptor.id),
         task.params.pluginOwners,
       );
     }

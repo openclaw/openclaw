@@ -162,9 +162,10 @@ type PublishedAdmission = {
 function snapshotWriteScopes(
   current: Admission["writeScopes"],
   previous: WriteScopeBuckets = EMPTY_WRITE_SCOPE_BUCKETS,
+  keys?: readonly string[],
 ): WriteScopeBuckets {
   let buckets = previous;
-  current.forEach((value, key) => {
+  const visit = (value: ScopedWriteRevision, key: string) => {
     let hash = 0;
     for (let index = 0; index < key.length; index++) {
       hash = (hash * 31 + key.charCodeAt(index)) | 0;
@@ -188,7 +189,17 @@ function snapshotWriteScopes(
     } else {
       buckets[index]!.set(key, value);
     }
-  });
+  };
+  if (keys) {
+    for (const key of keys) {
+      const value = current.get(key);
+      if (value) {
+        visit(value, key);
+      }
+    }
+  } else {
+    current.forEach(visit);
+  }
   return buckets;
 }
 
@@ -367,7 +378,7 @@ export class SqliteDatabaseAdmissionRegistry {
     return true;
   }
 
-  publish(selected?: Admission | Set<Admission>): void {
+  publish(selected?: Admission | Set<Admission>, scopeKeys?: readonly string[]): void {
     if (
       selected &&
       !(selected instanceof Set) &&
@@ -395,7 +406,12 @@ export class SqliteDatabaseAdmissionRegistry {
         }
       }
       const previous = this.published.get(current.identity);
-      const writeScopes = snapshotWriteScopes(current.writeScopes, previous?.writeScopes);
+      // Discovery already knows its keys; general publication also sweeps remote retirements.
+      const writeScopes = snapshotWriteScopes(
+        current.writeScopes,
+        previous?.writeScopes,
+        previous && selected === current ? scopeKeys : undefined,
+      );
       changed ||= writeScopes !== previous?.writeScopes;
       if (!changed) {
         continue;

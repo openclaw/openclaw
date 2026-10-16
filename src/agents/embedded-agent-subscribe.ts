@@ -458,25 +458,25 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
       providerStarted?: boolean;
       aborted?: boolean;
     }) => {
-      if (typeof meta.replayInvalid === "boolean") {
+      if (meta.replayInvalid !== undefined) {
         state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
       }
       if (meta.livenessState) {
         state.livenessState = meta.livenessState;
       }
-      if (typeof meta.stopReason === "string") {
+      if (meta.stopReason !== undefined) {
         state.terminalStopReason = meta.stopReason;
       }
-      if (typeof meta.yielded === "boolean") {
+      if (meta.yielded !== undefined) {
         state.yielded = meta.yielded;
       }
       if (meta.timeoutPhase) {
         state.timeoutPhase = meta.timeoutPhase;
       }
-      if (typeof meta.providerStarted === "boolean") {
+      if (meta.providerStarted !== undefined) {
         state.providerStarted = meta.providerStarted;
       }
-      if (typeof meta.aborted === "boolean") {
+      if (meta.aborted !== undefined) {
         state.terminalAborted = meta.aborted;
       }
     },

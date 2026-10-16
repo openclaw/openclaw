@@ -15,7 +15,7 @@ import {
 import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
-import { ComposerDictationController } from "./composer-dictation.ts";
+import { ComposerDictationOwner } from "./composer-dictation.ts";
 
 afterEach(() => resetComposerFixture());
 
@@ -223,14 +223,13 @@ it("keeps the open permission picker through parent updates", async () => {
 });
 
 it("keeps a pending dictation send bound to the action that started it", async () => {
-  const controller = new ComposerDictationController({
+  const controller = new ComposerDictationOwner({
     client: null,
     connected: false,
     enabled: false,
     realtimeTalkActive: false,
     onCommit: () => {},
     onError: () => {},
-    onStateChange: () => {},
   });
   vi.spyOn(controller, "active", "get").mockReturnValue(true);
   let finish!: (value: boolean) => void;
