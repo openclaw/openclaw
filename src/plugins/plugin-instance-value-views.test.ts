@@ -1,20 +1,14 @@
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { describe, expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { PluginInstance } from "./plugin-instance.js";
+import {
+  createOwnedTestInstance,
+  expectLiveObjects,
+  readRegistryLabel,
+  selectRegistry,
+} from "./plugin-instance.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { adoptPluginRegistryRecords } from "./registry-lifecycle.js";
-import type { PluginRecord } from "./registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import { createPluginRecord } from "./status.test-helpers.js";
-
-function createOwnedInstance(origin: PluginRecord["origin"] = "bundled") {
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id: "direct-values", origin });
-  registry.plugins.push(record);
-  return new PluginInstance(record.id, { record, registry });
-}
 
 describe("admitted plugin values", () => {
   it.each(["ordinary", "consumer"] as const)(
@@ -23,7 +17,7 @@ describe("admitted plugin values", () => {
       class StreamRegistry {
         readonly fixtureLabel = "StreamRegistry";
       }
-      const instance = createOwnedInstance();
+      const instance = createOwnedTestInstance("direct-values", "bundled");
       const record = instance.owner!.record;
       const consumer = custody === "consumer" ? instance.retainConsumer() : undefined;
       const resume = createDeferredCore();
@@ -31,11 +25,7 @@ describe("admitted plugin values", () => {
       const first = Object.freeze({ done: false, value: "first" });
       const second = Object.freeze({ done: false, value: "second" });
       const terminal = Object.freeze({ done: true, value: "closed" });
-      const observe = () => {
-        observed.push(
-          getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0],
-        );
-      };
+      const observe = () => observed.push(readRegistryLabel());
       class Stream {
         calls = 0;
         [Symbol.asyncIterator]() {
@@ -59,10 +49,7 @@ describe("admitted plugin values", () => {
       successor.plugins.push(record);
       successor.coreGatewayMethodNames.push("successor");
       const iterator = (() => {
-        const selected = Object.assign(new StreamRegistry(), createEmptyPluginRegistry());
-        selected.plugins.push(record);
-        selected.coreGatewayMethodNames.push("selected");
-        adoptPluginRegistryRecords(selected);
+        selectRegistry(record, "selected", new StreamRegistry());
         const wrapped = (consumer ?? instance).wrap(new Stream());
         const admitted = wrapped[Symbol.asyncIterator]();
         adoptPluginRegistryRecords(successor);
@@ -70,26 +57,18 @@ describe("admitted plugin values", () => {
       })();
       let pending: ReturnType<typeof iterator.next> | undefined;
       try {
-        await setImmediate();
-        expect(queryObjects(StreamRegistry)).toBe(1);
+        await expectLiveObjects(StreamRegistry, 1);
         expect(instance.ordinaryCallCount).toBe(custody === "consumer" ? 0 : 1);
         expect(await iterator.next()).toBe(first);
         pending = iterator.next();
-        await setImmediate();
-        expect(queryObjects(StreamRegistry)).toBe(1);
+        await expectLiveObjects(StreamRegistry, 1);
         resume.resolve();
         expect(await pending).toBe(second);
-        await setImmediate();
-        expect(queryObjects(StreamRegistry)).toBe(1);
+        await expectLiveObjects(StreamRegistry, 1);
         expect(await iterator.return()).toBe(terminal);
-        await setImmediate();
-        expect(queryObjects(StreamRegistry)).toBe(0);
+        await expectLiveObjects(StreamRegistry, 0);
         expect(observed).toEqual(["selected", "selected", "selected", "selected"]);
-        expect(
-          (consumer ?? instance).run(
-            () => getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0],
-          ),
-        ).toBe("successor");
+        expect((consumer ?? instance).run(readRegistryLabel)).toBe("successor");
       } finally {
         resume.resolve();
         await pending?.catch(() => {});
@@ -107,7 +86,7 @@ describe("admitted plugin values", () => {
   )(
     "passes $origin $kind data by reference without inspecting nested values",
     async ({ origin, kind }) => {
-      const instance = createOwnedInstance(origin);
+      const instance = createOwnedTestInstance("direct-values", origin);
       const opaque = new Proxy(
         {},
         {
@@ -135,40 +114,32 @@ describe("admitted plugin values", () => {
         expect(argument.handle).toBe(handle);
         return kind === "async tool" ? Promise.resolve(payload) : payload;
       });
-      try {
-        const result = await operation(input);
-        expect(result).toBe(payload);
-        expect(result.opaque).toBe(opaque);
-        await instance.dispose();
-        expect(result.read()).toBe("payload");
-        expect(result.content[0]?.text).toBe("chunk");
-      } finally {
-        await instance.dispose();
-      }
+      const result = await operation(input);
+      expect(result).toBe(payload);
+      expect(result.opaque).toBe(opaque);
+      await instance.dispose();
+      expect(result.read()).toBe("payload");
+      expect(result.content[0]?.text).toBe("chunk");
     },
   );
 
   it("passes callback payloads by reference while the callback keeps invocation admission", async () => {
-    const instance = createOwnedInstance();
+    const instance = createOwnedTestInstance("direct-values", "bundled");
     const payload = Object.freeze({ read: () => "callback payload" });
     const invoke = instance.wrap((callback: (value: typeof payload) => void) => callback(payload));
     let received: typeof payload | undefined;
-    try {
-      invoke((value) => {
-        expect(instance.hasActiveCall).toBe(true);
-        expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(instance.pluginId);
-        received = value;
-      });
-      expect(received).toBe(payload);
-      await instance.dispose();
-      expect(received?.read()).toBe("callback payload");
-    } finally {
-      await instance.dispose();
-    }
+    invoke((value) => {
+      expect(instance.hasActiveCall).toBe(true);
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(instance.pluginId);
+      received = value;
+    });
+    expect(received).toBe(payload);
+    await instance.dispose();
+    expect(received?.read()).toBe("callback payload");
   });
 
   it("keeps exact nested stream results and one scoped private-field receiver across protocol calls", async () => {
-    const instance = createOwnedInstance();
+    const instance = createOwnedTestInstance("direct-values", "bundled");
     const inner = instance.retainConsumer();
     const outer = instance.retainConsumer();
     const scopes: Array<ReturnType<typeof getPluginRuntimeGatewayRequestScope>> = [];
@@ -192,26 +163,24 @@ describe("admitted plugin values", () => {
         return this;
       }
 
-      async next() {
+      async step() {
         observeScope();
         await Promise.resolve();
         observeScope();
         return results[this.#index++]!;
       }
 
-      async throw(error: unknown) {
+      next() {
+        return this.step();
+      }
+
+      throw(error: unknown) {
         expect(error).toBe(failure);
-        observeScope();
-        await Promise.resolve();
-        observeScope();
-        return results[this.#index++]!;
+        return this.step();
       }
 
-      async return() {
-        observeScope();
-        await Promise.resolve();
-        observeScope();
-        return results[this.#index++]!;
+      return() {
+        return this.step();
       }
     }
     const source = instance.wrap(() => new Stream())();

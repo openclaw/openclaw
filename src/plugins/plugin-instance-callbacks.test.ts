@@ -4,14 +4,14 @@ import { describe, expect, it } from "vitest";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
-import { PluginInstance } from "./plugin-instance.js";
+import { createTestInstance } from "./plugin-instance.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
 describe("plugin value invocation ownership", () => {
   it("preserves a custom then receiver and its exact owned continuation", async () => {
-    const instance = new PluginInstance("custom-continuation");
+    const instance = createTestInstance("custom-continuation");
     const source = Promise.resolve("finished");
     let continuation: Promise<unknown> | undefined;
     const calls: Array<{ receiver: unknown; arguments: number }> = [];
@@ -27,15 +27,11 @@ describe("plugin value invocation ownership", () => {
     });
     // oxlint-disable-next-line unicorn/no-thenable -- Exercise a plugin-defined continuation without changing native assimilation.
     void Object.defineProperty(source, "then", { value: then });
-    try {
-      const result = instance.run(() => source);
-      expect(result).toBe(continuation);
-      expect(getPluginValueInstance(result)).toBe(instance);
-      expect(calls).toEqual([{ receiver: source, arguments: 2 }]);
-      expect(await result).toBe("finished");
-    } finally {
-      await instance.dispose();
-    }
+    const result = instance.run(() => source);
+    expect(result).toBe(continuation);
+    expect(getPluginValueInstance(result)).toBe(instance);
+    expect(calls).toEqual([{ receiver: source, arguments: 2 }]);
+    expect(await result).toBe("finished");
   });
 
   it.each(["function", "active iterator getter"] as const)(
@@ -44,7 +40,7 @@ describe("plugin value invocation ownership", () => {
       const registry = createEmptyPluginRegistry();
       const record = createPluginRecord({ id: "promise-export" });
       registry.plugins.push(record);
-      const instance = new PluginInstance(record.id, { record, registry });
+      const instance = createTestInstance(record.id, { record, registry });
       const store = createPluginRuntimeStore<string>("unset fixture runtime");
       instance.run(() => store.setRuntime("owned runtime"));
       const pending = createDeferredCore();
@@ -111,7 +107,7 @@ describe("plugin values delivered through caller callbacks", () => {
   it.each(["caller", "returned", "plugin-created"] as const)(
     "returns %s callable handles to their owning registry",
     async (acquisition) => {
-      const instance = new PluginInstance("callable-registry");
+      const instance = createTestInstance("callable-registry");
       const registrations = new Map<() => string, string>();
       const registry = instance.wrap({
         create(label: string, callback?: () => string) {
@@ -136,23 +132,19 @@ describe("plugin values delivered through caller callbacks", () => {
         calls += 1;
         return "first";
       };
-      try {
-        const first = registry.create(
-          "first",
-          acquisition === "plugin-created" ? undefined : callback,
-        );
-        const second = registry.create("second");
-        registry.emit();
-        expect(registry.lookup(first)).toBe("first");
-        expect(registry.remove(acquisition === "caller" ? callback : first)).toBe(true);
-        registry.emit();
-        expect(calls).toBe(acquisition === "plugin-created" ? 0 : 1);
-        expect(registry.lookup(first)).toBeUndefined();
-        expect(registry.lookup(second)).toBe("second");
-        expect(registrations.size).toBe(1);
-      } finally {
-        await instance.dispose();
-      }
+      const first = registry.create(
+        "first",
+        acquisition === "plugin-created" ? undefined : callback,
+      );
+      const second = registry.create("second");
+      registry.emit();
+      expect(registry.lookup(first)).toBe("first");
+      expect(registry.remove(acquisition === "caller" ? callback : first)).toBe(true);
+      registry.emit();
+      expect(calls).toBe(acquisition === "plugin-created" ? 0 : 1);
+      expect(registry.lookup(first)).toBeUndefined();
+      expect(registry.lookup(second)).toBe("second");
+      expect(registrations.size).toBe(1);
     },
   );
 });
@@ -165,7 +157,7 @@ describe("native collection data argument identity", () => {
         return value.#value;
       }
     }
-    const instance = new PluginInstance("layered-handle");
+    const instance = createTestInstance("layered-handle");
     const consumer = instance.retainConsumer();
     const handle = new Handle();
     const view = consumer.wrap(instance.wrap(handle));
@@ -191,74 +183,68 @@ describe("native collection data argument identity", () => {
   it.each(["map", "set", "array", "weak-map", "weak-set"] as const)(
     "preserves native %s callable data identity",
     async (collection) => {
-      const instance = new PluginInstance(`data-${collection}`);
+      const instance = createTestInstance(`data-${collection}`);
       const original = () => "original";
       const replacement = () => "replacement";
-      try {
-        if (collection === "map") {
-          const source: Map<() => string, () => string> = runInNewContext(
-            'new Map([[original, () => "value"]])',
-            { original },
-          );
-          const view = instance.wrap(source);
-          let key = original;
-          class Receiver {
-            #label = "caller receiver";
-            read() {
-              return this.#label;
-            }
+      if (collection === "map") {
+        const source: Map<() => string, () => string> = runInNewContext(
+          'new Map([[original, () => "value"]])',
+          { original },
+        );
+        const view = instance.wrap(source);
+        let key = original;
+        class Receiver {
+          #label = "caller receiver";
+          read() {
+            return this.#label;
           }
-          const receiver = new Receiver();
-          view.forEach(function (this: Receiver, value, candidate) {
-            expect(this).toBe(receiver);
-            expect(this.read()).toBe("caller receiver");
-            expect(value).toBe(source.get(original));
-            expect(candidate).toBe(original);
-            key = candidate;
-          }, receiver);
-          expect(view.has(key)).toBe(true);
-          expect(view.get(key)!()).toBe("value");
-          expect(view.set(key, replacement)).toBe(source);
-          expect(source.size).toBe(1);
-          expect(source.get(original)).toBe(replacement);
-          expect(view.get(key)!()).toBe("replacement");
-          expect(view.delete(key)).toBe(true);
-          expect(source.size).toBe(0);
-        } else if (collection === "set") {
-          const source = new Set([original]);
-          const view = instance.wrap(source);
-          expect(view.has(original)).toBe(true);
-          expect(view.add(original)).toBe(source);
-          expect(source.size).toBe(1);
-          view.add(replacement);
-          expect(source.has(replacement)).toBe(true);
-          expect(view.delete(original)).toBe(true);
-          expect(source.has(original)).toBe(false);
-          expect(view.delete(replacement)).toBe(true);
-        } else if (collection === "array") {
-          const source = [original];
-          const view = instance.wrap(source);
-          const key = view[0]!;
-          expect(view.includes(key)).toBe(true);
-          expect(view.indexOf(key)).toBe(0);
-          view.push(replacement);
-          expect(source[1]).toBe(replacement);
-          expect(view.includes(view[1]!)).toBe(true);
-          view.splice(0, 1, replacement);
-          expect(source[0]).toBe(replacement);
-        } else {
-          const source =
-            collection === "weak-map"
-              ? new WeakMap([[original, "value"]])
-              : new WeakSet([original]);
-          const view = instance.wrap(source);
-          expect(view.has(original)).toBe(true);
-          expect(view.has(instance.wrap(original))).toBe(true);
-          expect(view.delete(instance.wrap(original))).toBe(true);
-          expect(source.has(original)).toBe(false);
         }
-      } finally {
-        await instance.dispose();
+        const receiver = new Receiver();
+        view.forEach(function (this: Receiver, value, candidate) {
+          expect(this).toBe(receiver);
+          expect(this.read()).toBe("caller receiver");
+          expect(value).toBe(source.get(original));
+          expect(candidate).toBe(original);
+          key = candidate;
+        }, receiver);
+        expect(view.has(key)).toBe(true);
+        expect(view.get(key)!()).toBe("value");
+        expect(view.set(key, replacement)).toBe(source);
+        expect(source.size).toBe(1);
+        expect(source.get(original)).toBe(replacement);
+        expect(view.get(key)!()).toBe("replacement");
+        expect(view.delete(key)).toBe(true);
+        expect(source.size).toBe(0);
+      } else if (collection === "set") {
+        const source = new Set([original]);
+        const view = instance.wrap(source);
+        expect(view.has(original)).toBe(true);
+        expect(view.add(original)).toBe(source);
+        expect(source.size).toBe(1);
+        view.add(replacement);
+        expect(source.has(replacement)).toBe(true);
+        expect(view.delete(original)).toBe(true);
+        expect(source.has(original)).toBe(false);
+        expect(view.delete(replacement)).toBe(true);
+      } else if (collection === "array") {
+        const source = [original];
+        const view = instance.wrap(source);
+        const key = view[0]!;
+        expect(view.includes(key)).toBe(true);
+        expect(view.indexOf(key)).toBe(0);
+        view.push(replacement);
+        expect(source[1]).toBe(replacement);
+        expect(view.includes(view[1]!)).toBe(true);
+        view.splice(0, 1, replacement);
+        expect(source[0]).toBe(replacement);
+      } else {
+        const source =
+          collection === "weak-map" ? new WeakMap([[original, "value"]]) : new WeakSet([original]);
+        const view = instance.wrap(source);
+        expect(view.has(original)).toBe(true);
+        expect(view.has(instance.wrap(original))).toBe(true);
+        expect(view.delete(instance.wrap(original))).toBe(true);
+        expect(source.has(original)).toBe(false);
       }
     },
   );
@@ -268,7 +254,7 @@ describe("native collection data argument identity", () => {
     { method: "reduceRight", shape: "object" },
   ] as const)("preserves native $method $shape accumulator identity", async ({ method, shape }) => {
     type Accumulator = (() => string) | { read: () => string };
-    const instance = new PluginInstance("reduce-data");
+    const instance = createTestInstance("reduce-data");
     const initial = () => "initial";
     const returned: Accumulator[] = ["first", "final"].map((label) =>
       shape === "function" ? () => label : { read: () => label },
@@ -285,20 +271,16 @@ describe("native collection data argument identity", () => {
       }, initial);
       return { result, accumulators };
     };
-    try {
-      const native = run(source);
-      const managed = run(view);
-      expect(managed.accumulators).toHaveLength(2);
-      managed.accumulators.forEach((value, index) =>
-        expect.soft(value).toBe(native.accumulators[index]),
-      );
-      expect(managed.result).toBe(native.result);
-      // Without an initial value or callback invocation, the result is still a plugin element.
-      const single = instance.wrap([source[0]!]);
-      expect(single[method](() => initial)).toBe(instance.wrap(source[0]));
-    } finally {
-      await instance.dispose();
-    }
+    const native = run(source);
+    const managed = run(view);
+    expect(managed.accumulators).toHaveLength(2);
+    managed.accumulators.forEach((value, index) =>
+      expect.soft(value).toBe(native.accumulators[index]),
+    );
+    expect(managed.result).toBe(native.result);
+    // Without an initial value or callback invocation, the result is still a plugin element.
+    const single = instance.wrap([source[0]!]);
+    expect(single[method](() => initial)).toBe(instance.wrap(source[0]));
   });
 });
 
@@ -310,7 +292,7 @@ describe("async iterable helper callbacks", () => {
   ] as const)(
     "owns $lifetime callback values from a $target helper",
     async ({ target, lifetime }) => {
-      const instance = new PluginInstance(`iterable-${target}-${lifetime}`);
+      const instance = createTestInstance(`iterable-${target}-${lifetime}`);
       const release = createDeferredCore();
       const finished = createDeferredCore();
       class Visitor {

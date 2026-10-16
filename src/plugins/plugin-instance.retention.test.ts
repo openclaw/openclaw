@@ -1,12 +1,15 @@
 import { AsyncResource } from "node:async_hooks";
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
-import { PluginInstance } from "./plugin-instance.js";
+import {
+  createOwnedInstance,
+  expectLiveObjects,
+  readRegistryLabel,
+  selectRegistry,
+} from "./plugin-instance.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   adoptPluginRegistryRecords,
@@ -15,15 +18,6 @@ import {
   markPluginRegistryActive,
 } from "./registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import { createPluginRecord } from "./status.test-helpers.js";
-
-function createOwnedInstance() {
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id: "retention" });
-  registry.plugins.push(record);
-  const instance = new PluginInstance(record.id, { record, registry });
-  return { registry, record, instance };
-}
 
 it.each([
   { kind: "run", reject: false },
@@ -36,7 +30,7 @@ it.each([
     class PendingRegistry {
       readonly fixtureLabel = "PendingRegistry";
     }
-    const { record, instance } = createOwnedInstance();
+    const { record, instance } = createOwnedInstance("retention");
     const consumer = kind === "consumer" ? instance.retainConsumer() : undefined;
     const resume = createDeferredCore();
     const failure = new Error("callback failed");
@@ -45,13 +39,10 @@ it.each([
     successor.plugins.push(record);
     successor.coreGatewayMethodNames.push("successor");
     const pending = (() => {
-      const selected = Object.assign(new PendingRegistry(), createEmptyPluginRegistry());
-      selected.plugins.push(record);
-      selected.coreGatewayMethodNames.push("intermediate");
-      adoptPluginRegistryRecords(selected);
+      selectRegistry(record, "intermediate", new PendingRegistry());
       const run = async () => {
         await resume.promise;
-        observed = getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0];
+        observed = readRegistryLabel();
         if (reject) {
           throw failure;
         }
@@ -66,21 +57,17 @@ it.each([
       (error: unknown) => ({ error }),
     );
     try {
-      await setImmediate();
-      expect(queryObjects(PendingRegistry)).toBe(1);
+      await expectLiveObjects(PendingRegistry, 1);
       resume.resolve();
       expect(await outcome).toEqual(reject ? { error: failure } : { value: "intermediate" });
       expect(observed).toBe("intermediate");
-      await setImmediate();
-      expect(queryObjects(PendingRegistry)).toBe(0);
+      await expectLiveObjects(PendingRegistry, 0);
       if (reject) {
         await expect(pending).rejects.toBe(failure);
       } else {
         await expect(pending).resolves.toBe("intermediate");
       }
-      const read = () =>
-        getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0];
-      expect(consumer ? consumer.run(read) : instance.run(read)).toBe("successor");
+      expect((consumer ?? instance).run(readRegistryLabel)).toBe("successor");
     } finally {
       resume.resolve();
       await outcome;
@@ -94,48 +81,37 @@ it("keeps resolved value identity and independent registry custody for concurren
   class PendingRegistry {
     readonly fixtureLabel = "PendingRegistry";
   }
-  const { record, instance } = createOwnedInstance();
+  const { record, instance } = createOwnedInstance("retention");
   const consumer = instance.retainConsumer();
   const nestedResume = createDeferredCore();
   const concurrentResume = createDeferredCore();
   const nestedValue = Object.freeze({ selection: "nested" });
   const concurrentValue = Object.freeze({ selection: "concurrent" });
-  const readSelection = () =>
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0];
   const startNested = () => {
-    const selected = Object.assign(new PendingRegistry(), createEmptyPluginRegistry());
-    selected.plugins.push(record);
-    selected.coreGatewayMethodNames.push("nested");
-    adoptPluginRegistryRecords(selected);
+    selectRegistry(record, "nested", new PendingRegistry());
     const nested = instance.run(async () => {
       await nestedResume.promise;
-      expect(readSelection()).toBe("nested");
+      expect(readRegistryLabel()).toBe("nested");
       return nestedValue;
     });
-    const concurrent = Object.assign(new PendingRegistry(), createEmptyPluginRegistry());
-    concurrent.plugins.push(record);
-    concurrent.coreGatewayMethodNames.push("concurrent");
-    adoptPluginRegistryRecords(concurrent);
+    selectRegistry(record, "concurrent", new PendingRegistry());
     return nested;
   };
   const first = consumer.run(async () => await startNested());
   const second = consumer.run(async () => {
     await concurrentResume.promise;
-    expect(readSelection()).toBe("concurrent");
+    expect(readRegistryLabel()).toBe("concurrent");
     return concurrentValue;
   });
   adoptPluginRegistryRecords({ ...createEmptyPluginRegistry(), plugins: [record] });
   try {
-    await setImmediate();
-    expect(queryObjects(PendingRegistry)).toBe(2);
+    await expectLiveObjects(PendingRegistry, 2);
     nestedResume.resolve();
     await expect(first).resolves.toBe(nestedValue);
-    await setImmediate();
-    expect(queryObjects(PendingRegistry)).toBe(1);
+    await expectLiveObjects(PendingRegistry, 1);
     concurrentResume.resolve();
     await expect(second).resolves.toBe(concurrentValue);
-    await setImmediate();
-    expect(queryObjects(PendingRegistry)).toBe(0);
+    await expectLiveObjects(PendingRegistry, 0);
     await expect(first).resolves.toBe(nestedValue);
     await expect(second).resolves.toBe(concurrentValue);
   } finally {
@@ -153,7 +129,7 @@ it.each(["sync", "promise", "thenable"] as const)(
     class NestedRegistry {
       readonly fixtureLabel = "NestedRegistry";
     }
-    const { record, instance } = createOwnedInstance();
+    const { record, instance } = createOwnedInstance("retention");
     const consumer = instance.retainConsumer();
     const outerFinish = createDeferredCore();
     const nestedFinish = createDeferredCore();
@@ -173,13 +149,10 @@ it.each(["sync", "promise", "thenable"] as const)(
     const readSelection = () => {
       expect(pluginInstanceInvocation.getStore()).toBe(outerInvocation);
       expect(instance.hasActiveCall).toBe(true);
-      observed = getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0];
+      observed = readRegistryLabel();
     };
     const nested = (() => {
-      const selected = Object.assign(new NestedRegistry(), createEmptyPluginRegistry());
-      selected.plugins.push(record);
-      selected.coreGatewayMethodNames.push("nested");
-      adoptPluginRegistryRecords(selected);
+      selectRegistry(record, "nested", new NestedRegistry());
       const result = resource.runInAsyncScope(() =>
         instance.run(() => {
           if (kind === "sync") {
@@ -219,8 +192,7 @@ it.each(["sync", "promise", "thenable"] as const)(
       if (kind === "sync") {
         expect(nested).toBe(payload);
       }
-      await setImmediate();
-      expect(queryObjects(NestedRegistry)).toBe(kind === "sync" ? 0 : 1);
+      await expectLiveObjects(NestedRegistry, kind === "sync" ? 0 : 1);
       expect(outerSettled).toBe(false);
       expect(instance.ordinaryCallCount).toBe(0);
       nestedFinish.resolve();
@@ -228,8 +200,7 @@ it.each(["sync", "promise", "thenable"] as const)(
       expect(observed).toBe("nested");
       expect(thenReads).toBe(kind === "thenable" ? 1 : 0);
       expect(thenCalls).toBe(kind === "thenable" ? 1 : 0);
-      await setImmediate();
-      expect(queryObjects(NestedRegistry)).toBe(0);
+      await expectLiveObjects(NestedRegistry, 0);
       expect(outerSettled).toBe(false);
       expect(await outcome).toBe(payload);
     } finally {
@@ -248,31 +219,26 @@ it("gives a completed consumer context fresh finite custody when it re-enters", 
   class PendingRegistry {
     readonly fixtureLabel = "PendingRegistry";
   }
-  const { record, instance } = createOwnedInstance();
+  const { record, instance } = createOwnedInstance("retention");
   const consumer = instance.retainConsumer();
   const resource = consumer.run(() => new AsyncResource("completed-consumer-scope"));
   const resume = createDeferredCore();
   const pending = (() => {
-    const selected = Object.assign(new PendingRegistry(), createEmptyPluginRegistry());
-    selected.plugins.push(record);
-    selected.coreGatewayMethodNames.push("late");
-    adoptPluginRegistryRecords(selected);
+    selectRegistry(record, "late", new PendingRegistry());
     const result = resource.runInAsyncScope(() =>
       instance.run(async () => {
         await resume.promise;
-        return getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0];
+        return readRegistryLabel();
       }),
     );
     adoptPluginRegistryRecords({ ...createEmptyPluginRegistry(), plugins: [record] });
     return result;
   })();
   try {
-    await setImmediate();
-    expect(queryObjects(PendingRegistry)).toBe(1);
+    await expectLiveObjects(PendingRegistry, 1);
     resume.resolve();
     await expect(pending).resolves.toBe("late");
-    await setImmediate();
-    expect(queryObjects(PendingRegistry)).toBe(0);
+    await expectLiveObjects(PendingRegistry, 0);
     await expect(pending).resolves.toBe("late");
     expect(resource.runInAsyncScope(() => instance.run(() => "still admitted"))).toBe(
       "still admitted",
@@ -287,7 +253,7 @@ it("gives a completed consumer context fresh finite custody when it re-enters", 
 });
 
 it("releases the adopted registry only after consumer and module cleanup settle", async () => {
-  const { registry, record, instance } = createOwnedInstance();
+  const { registry, record, instance } = createOwnedInstance("retention");
   const replacement = createEmptyPluginRegistry();
   replacement.plugins.push(record);
   adoptPluginRegistryRecords(replacement);
@@ -329,7 +295,7 @@ it("releases the adopted registry only after consumer and module cleanup settle"
 });
 
 it("does not reacquire borrowed authority after its lender releases registry custody", async () => {
-  const { registry, record, instance } = createOwnedInstance();
+  const { registry, record, instance } = createOwnedInstance("retention");
   markPluginRegistryActive(registry);
   const borrower = createEmptyPluginRegistry();
   borrower.plugins.push(record);
@@ -347,7 +313,7 @@ it("does not reacquire borrowed authority after its lender releases registry cus
 it.each(["host", "module"] as const)(
   "retains registry custody after %s cleanup fails",
   async (kind) => {
-    const { registry, instance } = createOwnedInstance();
+    const { registry, instance } = createOwnedInstance("retention");
     const failure = new Error("cleanup prerequisite failed");
     const fail = () => {
       throw failure;
