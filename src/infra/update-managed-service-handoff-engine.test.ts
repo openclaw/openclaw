@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
@@ -17,6 +18,7 @@ import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { readManagedHandoffArtifacts } from "./update-managed-service-handoff-artifacts.test-support.js";
 // Register the real-process fixture before importing its consumers.
 import { useManagedServiceHandoffLifecycleFixture } from "./update-managed-service-handoff-fixture.test-support.js";
+import { resolveManagedHandoffStateEngine } from "./update-managed-service-handoff-sentinel.js";
 import { readRestartSentinelPayload } from "./update-managed-service-handoff-state.test-support.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -30,12 +32,44 @@ const sentinelRuntimeUrl = resolveRuntimeWorkerUrl({
   distWorkerPath: "infra/update-managed-service-handoff-sentinel.js",
 });
 const postgresClientPath = createRequire(import.meta.url).resolve("pg");
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
 
 afterEach(() => {
   resetDatabaseEngineSelectionForTest();
 });
 
 const itUnix = it.runIf(process.platform !== "win32");
+
+it.each(["sqlite", "postgres"] as const)(
+  "uses the admitted %s selection without inspecting the state file",
+  async (engine) => {
+    const root = tempDirs.make("handoff-engine-selection-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    await fs.mkdir(path.dirname(pathname), { recursive: true });
+    await fs.writeFile(pathname, "must not be opened as SQLite");
+    installDatabaseEngineSelection({
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine } }),
+    });
+    await expect(resolveManagedHandoffStateEngine(env)).resolves.toBe(engine);
+  },
+);
+
+it("recognizes an offline PostgreSQL anchor through its inspection worker", async () => {
+  const root = tempDirs.make("handoff-engine-anchor-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  const pathname = resolveOpenClawStateSqlitePath(env);
+  await fs.mkdir(path.dirname(pathname), { recursive: true });
+  const db = new DatabaseSync(pathname);
+  db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
+  db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, ?, ?)").run(
+    "handoff-fixture",
+    "postgres",
+    "handoff_fixture",
+  );
+  db.close();
+  await expect(resolveManagedHandoffStateEngine(env)).resolves.toBe("postgres");
+});
 
 itUnix("restores a SQLite runtime that has no engine-aware sentinel method", async () => {
   // The installed recovery fixture intentionally has no new operation export.

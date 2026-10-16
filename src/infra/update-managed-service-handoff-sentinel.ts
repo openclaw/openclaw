@@ -1,8 +1,7 @@
-import fs from "node:fs";
+import { parentPort, workerData } from "node:worker_threads";
 import { createConfigIO } from "../config/io.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { callGateway } from "../gateway/call.js";
-import { readBackupEngine } from "../snapshot/database-backup.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveDatabaseEngineSelection } from "./database-engine/config.js";
@@ -36,13 +35,26 @@ export type ManagedHandoffSentinelRequest = {
 
 /** Classify without credentials; only a fresh TS runtime resolves the PostgreSQL connection. */
 export async function resolveManagedHandoffStateEngine(env: NodeJS.ProcessEnv) {
-  const pathname = resolveOpenClawStateSqlitePath(env);
-  if (fs.existsSync(pathname) && readBackupEngine(pathname).engine === "postgres") {
-    return "postgres";
-  }
   const selected = getDatabaseEngineSelection();
   if (selected) {
     return selected.effectiveEngines.state;
+  }
+  const [{ WorkerTaskPool }, { captureRuntimeWorkerSource }] = await Promise.all([
+    import("./worker-task-pool.js"),
+    import("./runtime-worker-generation.js"),
+  ]);
+  const source = captureRuntimeWorkerSource(new URL(import.meta.url));
+  const pool = new WorkerTaskPool<string, "sqlite" | "postgres" | undefined>({
+    workerUrl: source.moduleUrl,
+    maxWorkers: 1,
+    workerOptions: { workerData: { managedHandoffEngine: true } },
+  });
+  try {
+    if ((await pool.run(resolveOpenClawStateSqlitePath(env), {})) === "postgres") {
+      return "postgres";
+    }
+  } finally {
+    await pool.close();
   }
   const snapshot = await createConfigIO({
     env,
@@ -50,6 +62,21 @@ export async function resolveManagedHandoffStateEngine(env: NodeJS.ProcessEnv) {
     pluginValidation: "core-only",
   }).readConfigFileSnapshot({ observe: false, isolateEnv: true });
   return resolveDatabaseFamilyEngines(snapshot.config).state;
+}
+
+if (parentPort && workerData?.managedHandoffEngine === true) {
+  const [{ existsSync }, { readBackupEngine }, { serveWorkerTasks }] = await Promise.all([
+    import("node:fs"),
+    import("../snapshot/database-backup.js"),
+    import("./worker-task-server.js"),
+  ]);
+  // Snapshot inspection may copy a large SQLite file; keep it off the calling thread.
+  serveWorkerTasks((pathname) => {
+    if (typeof pathname !== "string") {
+      throw new Error("Invalid managed handoff state path");
+    }
+    return existsSync(pathname) ? readBackupEngine(pathname).engine : undefined;
+  });
 }
 
 function prepareAuthority(input: ManagedHandoffSentinelRequest, child = false) {
