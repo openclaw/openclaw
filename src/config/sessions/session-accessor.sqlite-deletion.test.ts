@@ -43,6 +43,7 @@ import {
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -408,10 +409,13 @@ describe("session deletion and native owner state", () => {
           artifactDeletionFault.enable();
         }
         const owner = nativeOwner();
-        const counter = trackSqliteStatementExecutions(database.db, ["inventory"], (sql) =>
-          /^select "name" from "sqlite_schema" where "type" = \? and "name" in \(/i.test(sql)
-            ? "inventory"
-            : null,
+        const counter = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(database.db),
+          ["inventory"],
+          (sql) =>
+            /^select "name" from "sqlite_schema" where "type" = \? and "name" in \(/i.test(sql)
+              ? "inventory"
+              : null,
         );
         try {
           const deletion = deleteWindows

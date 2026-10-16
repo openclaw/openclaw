@@ -20,6 +20,7 @@ import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-d
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -175,7 +176,7 @@ describe("session metadata writer admission", () => {
           const retired = { ...scope, storePath: state.path("retired-store.sqlite") };
           const originalEntry = loadSessionEntry(scope)!;
           // A future store exists on disk, but joins discovery only after the config switch.
-          await backup(database.db, replacement.storePath);
+          await backup(requireNativeSqliteDatabase(database.db), replacement.storePath);
           let cfg: OpenClawConfig = { session: { store: options.path } };
           const context = sessionSharingTestContext(vi.fn());
           context.getRuntimeConfig = () => cfg;

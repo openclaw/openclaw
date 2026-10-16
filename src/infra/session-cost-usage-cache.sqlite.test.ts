@@ -17,6 +17,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { migrateSessionCostUsageRollupStorage } from "./session-cost-usage-cache-migration.js";
@@ -355,10 +356,13 @@ describe("session cost usage SQLite cache", () => {
       const newer = encodeUsageCostRollup({ ...entry, scannedAt: 999 });
       insert.run("session-cost-usage-rollup-v3", "newer", newer.valueJson, newer.blob, 999);
       insert.run("other", "valid\0雪", "unchanged", null, 1);
-      runOpenClawAgentWriteTransaction(
-        ({ db: current }) => migrateSessionCostUsageRollupStorage(current),
-        { agentId },
-      );
+      const migrate = () =>
+        runOpenClawAgentWriteTransaction(
+          ({ db: current }) =>
+            migrateSessionCostUsageRollupStorage(requireNativeSqliteDatabase(current)),
+          { agentId },
+        );
+      migrate();
       const rows = db
         .prepare(
           "SELECT * FROM cache_entries WHERE scope IN ('session-cost-usage-rollup-v2', 'session-cost-usage-rollup-v3', 'other') ORDER BY scope, key",
@@ -382,10 +386,7 @@ describe("session cost usage SQLite cache", () => {
           migrated.blob as Uint8Array,
         ),
       ).toBeUndefined();
-      runOpenClawAgentWriteTransaction(
-        ({ db: current }) => migrateSessionCostUsageRollupStorage(current),
-        { agentId },
-      );
+      migrate();
       expect(
         db
           .prepare(
@@ -409,7 +410,8 @@ describe("session cost usage SQLite cache", () => {
           updatedAt: 1,
         }),
       ).toBe(true);
-      const executions = trackSqliteStatementExecutions(db, ["cache"], (sql) =>
+      const native = requireNativeSqliteDatabase(db);
+      const executions = trackSqliteStatementExecutions(native, ["cache"], (sql) =>
         /\bcache_entries\b/i.test(sql) ? "cache" : null,
       );
       try {
@@ -641,8 +643,10 @@ describe("session cost usage SQLite cache", () => {
         "stale-49",
       );
       const before = db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all();
-      const executions = trackSqliteStatementExecutions(db, ["delete"], (sql) =>
-        /^delete from "cache_entries"/i.test(sql) ? "delete" : null,
+      const executions = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(db),
+        ["delete"],
+        (sql) => (/^delete from "cache_entries"/i.test(sql) ? "delete" : null),
       );
 
       await pruneUsageCostRollupsForTest({

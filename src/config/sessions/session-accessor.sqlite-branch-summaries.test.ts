@@ -9,6 +9,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
@@ -414,12 +415,15 @@ it("reads only the newest usable appended headline while retaining cached histor
     });
     parentId = eventId;
   }
-  const tracked = trackSqliteStatementExecutions(database.db, ["headlines"], (sqlText) =>
-    sqlText.includes('from "transcript_events"') &&
-    sqlText.includes('as "event_json"') &&
-    sqlText.includes('"seq" = ?')
-      ? "headlines"
-      : null,
+  const tracked = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["headlines"],
+    (sqlText) =>
+      sqlText.includes('from "transcript_events"') &&
+      sqlText.includes('as "event_json"') &&
+      sqlText.includes('"seq" = ?')
+        ? "headlines"
+        : null,
   );
   try {
     expect(readSessionBranchSnapshot(database, { ...expected, previous })).toMatchObject({
