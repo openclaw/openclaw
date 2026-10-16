@@ -175,6 +175,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   canvas: () => import("./canvas.js").then((module) => module.canvasHandlers),
   tts: () => import("./tts.js").then((module) => module.ttsHandlers),
   update: () => import("./update.js").then((module) => module.updateHandlers),
+  "update-handoff-sentinel": () =>
+    import("./update-handoff-sentinel.js").then((module) => module.updateHandoffSentinelHandlers),
   usage: () => import("./usage.js").then((module) => module.usageHandlers),
   "voicewake-routing": () =>
     import("./voicewake-routing.js").then((module) => module.voicewakeRoutingHandlers),

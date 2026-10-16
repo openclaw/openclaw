@@ -19,6 +19,14 @@ intent to the macOS app without requiring a running Gateway or PostgreSQL
 connection. Shared-state engine selection does not move this store.
 No release stored runtime pins in PostgreSQL shared state, so PostgreSQL installs have no legacy pin source to migrate.
 
+Managed-update notifications use the selected shared-state engine. PostgreSQL
+handoffs report through the running Gateway, or through an admitted offline owner
+while it is stopped; the anchor never stores restart notifications. The local
+handoff lease still owns service recovery when PostgreSQL is unavailable. A missed
+notification is reported in the handoff log without suppressing recovery.
+SQLite handoffs retain their direct-file notification path, including recovery
+through an older installed runtime.
+
 ## Configure PostgreSQL
 
 Use a PostgreSQL database and a role that can create schemas
