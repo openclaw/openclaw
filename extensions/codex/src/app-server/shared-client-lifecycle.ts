@@ -10,6 +10,7 @@ export type SharedCodexAppServerClientEntry = {
   key: string;
   client?: CodexAppServerClient;
   startup?: SharedCodexAppServerClientStartup;
+  ready: boolean;
   activeLeases: number;
   // Anonymous releases cannot consume explicit native-subagent retains.
   anonymousLeases: number;
@@ -34,6 +35,7 @@ export function getOrCreateSharedClientEntry(
   if (!entry) {
     entry = {
       key,
+      ready: false,
       activeLeases: 0,
       anonymousLeases: 0,
       pendingAcquires: 0,
@@ -339,7 +341,7 @@ export function refreshSharedClientIdleRetirement(client: CodexAppServerClient):
 function scheduleSharedClientIdleRetirement(entry: SharedCodexAppServerClientEntry): void {
   cancelSharedClientIdleRetirement(entry);
   if (
-    entry.acquireBoundary !== "ready" ||
+    !entry.ready ||
     entry.activeLeases > 0 ||
     entry.pendingAcquires > 0 ||
     !entry.client ||
