@@ -596,7 +596,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.161.0` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.162.0` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned
