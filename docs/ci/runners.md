@@ -114,6 +114,10 @@ admission, SKU restrictions, and a hard spending stop require provider controls.
 
 ### CI runner routing
 
+The CI preflight manifest resolves runner placement once and exposes named JSON
+selectors for downstream jobs and matrix rows. Runner policy lives in
+`scripts/lib/ci-runner-routing.mjs`; YAML anchors only reuse identical selectors.
+
 Current extension package boundary checks use the 16-class. Frozen targets keep
 their historical 32-class runner and compiler policy.
 

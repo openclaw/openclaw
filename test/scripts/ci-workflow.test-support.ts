@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { parse } from "yaml";
+import { createCiRunnerMap } from "../../scripts/lib/ci-runner-routing.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 
@@ -70,6 +71,7 @@ export function evaluateWorkflowExpression(
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
+    runnerMaps?: { runners: string; runners_retry: string };
     additionalNeeds?: Record<
       string,
       {
@@ -138,6 +140,34 @@ export function evaluateWorkflowExpression(
     (token: string, property: string | undefined) =>
       property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
   );
+  const preflightOutputs = {
+    frozen_target: String(context.frozenTarget ?? false),
+    hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
+    run_check: String(context.runCheck ?? true),
+    runner_profile: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
+    node_runner_backend: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
+    ...context.preflightOutputs,
+  };
+  const runnerContext = {
+    eventName: context.eventName,
+    repository: context.repository,
+    headRepository: context.headRepository ?? context.repository,
+    runAttempt: context.runAttempt,
+    runnerBackend: context.runnerBackend ?? "",
+    dispatchId: context.dispatchId ?? "",
+    releaseRunnerGroup: context.releaseRunnerGroup ?? "",
+    preflightOutputs,
+    ref: context.ref ?? "refs/heads/main",
+    releaseGate: context.releaseGate ?? false,
+    runId: String(context.runId ?? ""),
+  };
+  const runnerMatrices = {
+    checks_node_core_nondist_matrix: { include: [context.matrix ?? {}] },
+    check_matrix: { include: [context.matrix ?? {}] },
+    check_additional_matrix: { include: [context.matrix ?? {}] },
+  };
+  const runners = createCiRunnerMap(runnerContext, runnerMatrices);
+  const retryRunners = createCiRunnerMap({ ...runnerContext, runAttempt: 2 }, runnerMatrices);
   return runInNewContext(evaluableSource, {
     always: () => true,
     success: () => !context.failed && !context.cancelled,
@@ -236,13 +266,14 @@ export function evaluateWorkflowExpression(
       preflight: {
         result: context.preflightResult ?? context.jobResults?.preflight ?? "success",
         outputs: {
-          frozen_target: String(context.frozenTarget ?? false),
-          hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
-          run_check: String(context.runCheck ?? true),
-          runner_profile: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
-          // Preflight defaults the Node planner backend to the logical profile.
-          node_runner_backend: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
-          ...context.preflightOutputs,
+          ...preflightOutputs,
+          // Tables reuse manifest fixtures while varying the workflow context.
+          // Replan placement for that context; an explicit empty map models a
+          // preflight failure before the routing output is published.
+          runners: context.preflightOutputs?.runners === "" ? "" : JSON.stringify(runners),
+          runners_retry:
+            context.preflightOutputs?.runners === "" ? "" : JSON.stringify(retryRunners),
+          ...context.runnerMaps,
         },
       },
       "pr-failure-report": {

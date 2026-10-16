@@ -6,6 +6,7 @@ import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
 } from "./lib/ci-ios-smoke-plan.mjs";
+import { createCiRunnerMap } from "./lib/ci-runner-routing.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -1931,6 +1932,32 @@ if (hybridHostedEligible) {
     `Hybrid hosted rows: ${manifest.hybrid_hosted_base_rows} base, ${manifest.hybrid_hosted_total_rows} total; optional offload ${hybridHostedOffload ? "admitted" : "retained on Blacksmith"}; measured checks ${hybridHostedChecks ? "admitted" : "retained on Blacksmith"}; main checks ${hybridHostedMainChecks ? "admitted" : "retained on Blacksmith"}`,
   );
 }
+
+const runnerContext = {
+  eventName: workflowEventName,
+  repository: process.env.OPENCLAW_CI_REPOSITORY,
+  headRepository: process.env.OPENCLAW_CI_HEAD_REPOSITORY,
+  runAttempt: Number(process.env.OPENCLAW_CI_RUNNER_ATTEMPT || process.env.GITHUB_RUN_ATTEMPT || 1),
+  runId: process.env.GITHUB_RUN_ID,
+  runnerBackend:
+    process.env.OPENCLAW_CI_RAW_RUNNER_BACKEND ?? process.env.OPENCLAW_CI_RUNNER_BACKEND,
+  dispatchId: process.env.OPENCLAW_CI_RUNNER_DISPATCH_ID || "",
+  releaseRunnerGroup: process.env.OPENCLAW_CI_RELEASE_RUNNER_GROUP || "",
+  ref: process.env.GITHUB_REF,
+  releaseGate: process.env.OPENCLAW_CI_RELEASE_GATE === "true",
+  preflightOutputs: Object.fromEntries(
+    Object.entries({
+      ...manifest,
+      ci_qualification: process.env.OPENCLAW_CI_QUALIFICATION || "",
+      qualification_runner_backend: process.env.OPENCLAW_CI_QUALIFICATION_RUNNER_BACKEND || "",
+      node_runner_backend: process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND || "",
+      runner_profile: process.env.OPENCLAW_CI_RUNNER_PROFILE || "",
+    }).map(([key, value]) => [key, String(value)]),
+  ),
+};
+manifest.runners = createCiRunnerMap(runnerContext, manifest);
+// Successful preflight outputs survive partial reruns; retry placement is selected by each job.
+manifest.runners_retry = createCiRunnerMap({ ...runnerContext, runAttempt: 2 }, manifest);
 
 for (const [key, value] of Object.entries(manifest)) {
   appendFileSync(

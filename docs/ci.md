@@ -35,6 +35,9 @@ Agent auth-store admission and configured model-owner changes explicitly select
 the Gateway agent-config readiness suite. Its lazy startup path is not fully
 visible to the bounded import graph; the owner watch preserves overlap coverage.
 
+Runner placement is resolved by the preflight manifest rather than repeated
+inside job expressions; see [runner routing](/ci/runners#ci-runner-routing).
+
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 

@@ -2404,6 +2404,38 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(actionCheckoutIndex).toBeLessThan(setupIndex);
   });
 
+  it("retains release runner reservations when preflight cannot publish its runner map", () => {
+    const workflow = readCiWorkflow();
+    for (const jobName of ["security-fast", "ci-gate"]) {
+      for (const preflightResult of ["failure", "skipped"]) {
+        const context = {
+          eventName: "workflow_dispatch" as const,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerBackend: "hybrid" as const,
+          dispatchId: "full-release-validation-123-1",
+          preflightResult,
+          preflightOutputs: { runners: "" },
+        };
+        for (const reservation of [
+          {
+            releaseRunnerGroup: "Release reserved",
+            expected: { group: "Release reserved", labels: "ubuntu-24.04" },
+          },
+          { releaseRunnerGroup: "", expected: "ubuntu-24.04" },
+        ]) {
+          expect(
+            evaluateWorkflowExpression(workflow.jobs[jobName]["runs-on"], {
+              ...context,
+              ...reservation,
+            }),
+            `${jobName}/${preflightResult}`,
+          ).toEqual(reservation.expected);
+        }
+      }
+    }
+  });
+
   it("keeps tiny hybrid controls hosted without moving security or fork first attempts", () => {
     const workflow = readCiWorkflow();
     const context = {

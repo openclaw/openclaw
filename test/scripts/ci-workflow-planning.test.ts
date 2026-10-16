@@ -5696,7 +5696,10 @@ describe("ci workflow guards", () => {
       const coverage = (outputs: Record<string, string>) =>
         Object.fromEntries(
           Object.entries(outputs).filter(
-            ([key]) => !key.startsWith("hybrid_hosted_") && key !== "check_additional_matrix",
+            ([key]) =>
+              !key.startsWith("hybrid_hosted_") &&
+              key !== "check_additional_matrix" &&
+              key !== "runners",
           ),
         );
       expect(coverage(qualification.outputs)).toEqual(coverage(ordinaryPush.outputs));
@@ -5807,7 +5810,6 @@ describe("ci workflow guards", () => {
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
     const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
-    const source = readFileSync(".github/workflows/ci.yml", "utf8");
     const plannerRunner = workflow.jobs["check-plan"]["runs-on"];
     const plannerContext = {
       eventName: "pull_request" as const,
@@ -5987,9 +5989,13 @@ describe("ci workflow guards", () => {
     ).toBe(
       "${{ github.event_name == 'pull_request' && '--max-old-space-size=8192' || '--max-old-space-size=16384' }}",
     );
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(
-      "blacksmith-4vcpu-ubuntu-2404",
-    );
+    expect(
+      evaluateWorkflowExpression(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"], {
+        ...plannerContext,
+        runnerBackend: "blacksmith",
+        matrix: { runner: "blacksmith-4vcpu-ubuntu-2404" },
+      }),
+    ).toBe("blacksmith-4vcpu-ubuntu-2404");
     for (const task of ["dependencies", "test-types"]) {
       expect(
         evaluateWorkflowExpression(workflow.jobs["check-shard"].strategy.matrix, {
@@ -6027,7 +6033,12 @@ describe("ci workflow guards", () => {
     });
     // The Windows matrix carries no per-row runner: both parts share one class.
     expect(workflow.jobs["checks-windows"]["runs-on"]).not.toContain("matrix.runner");
-    expect(source).toContain("blacksmith-16vcpu-windows-2025");
+    expect(
+      evaluateWorkflowExpression(workflow.jobs["checks-windows"]["runs-on"], {
+        ...plannerContext,
+        runnerBackend: "blacksmith",
+      }),
+    ).toBe("blacksmith-16vcpu-windows-2025");
   });
 
   it("moves the existing boundary row into the SDK producer without widening the PR job graph", () => {
@@ -13092,4 +13103,43 @@ describe("extension lint PR admission", () => {
       );
     },
   );
+});
+
+it("uses retry placement when successful preflight outputs are reused", () => {
+  const workflow = readCiWorkflow();
+  const { outputs, status, output } = runCiManifestFixture({
+    bundledPlanner: true,
+    eventName: "push",
+    runnerBackend: "hybrid",
+    nodeRunnerBackend: "runson",
+    nodeTestShards: [
+      { shard_name: "core-tooling", check_name: "retry-probe", runner: "runson-c8i-8xlarge" },
+    ],
+  });
+  expect(status, output).toBe(0);
+  const runnerMaps = {
+    runners: expectDefined(outputs.runners, "initial runner map"),
+    runners_retry: expectDefined(outputs.runners_retry, "retry runner map"),
+  };
+  const matrix = expectDefined(
+    (JSON.parse(outputs.checks_node_core_nondist_matrix!) as { include: Record<string, unknown>[] })
+      .include[0],
+    "planned Node row",
+  );
+  for (const runAttempt of [2, 3]) {
+    for (const jobName of ["build-artifacts", "checks-node-core-test-nondist-shard"]) {
+      expect(
+        evaluateWorkflowExpression(workflow.jobs[jobName]["runs-on"], {
+          eventName: "push",
+          repository: "openclaw/openclaw",
+          runnerBackend: "hybrid",
+          runAttempt,
+          preflightOutputs: outputs,
+          runnerMaps,
+          matrix,
+        }),
+        `${jobName}/${runAttempt}`,
+      ).toBe("ubuntu-24.04");
+    }
+  }
 });
