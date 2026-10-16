@@ -215,7 +215,10 @@ it("preserves class receivers and fences callable re-exports, including frozen g
     static get reader() {
       return () => this.#label;
     }
-    #value = 2;
+    #value: number;
+    constructor(value: number) {
+      this.#value = value;
+    }
     get read() {
       return () => this.#value;
     }
@@ -227,7 +230,7 @@ it("preserves class receivers and fences callable re-exports, including frozen g
   const label: () => string = Reflect.get(WrappedCounter, "label");
   const readLabel = WrappedCounter.reader;
   expect([label(), readLabel()]).toEqual(["counter", "counter"]);
-  const counter = new WrappedCounter();
+  const counter = new WrappedCounter(2);
   const readExport = vi.fn(() => counter.read);
   const exports = instance.wrap(
     Object.freeze({
@@ -247,7 +250,7 @@ it("preserves class receivers and fences callable re-exports, including frozen g
   expectUnavailable(
     read,
     () => exports.read,
-    () => new WrappedCounter(),
+    () => new WrappedCounter(2),
     label,
     readLabel,
     () => WrappedCounter.reader,

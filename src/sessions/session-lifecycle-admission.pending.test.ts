@@ -23,7 +23,7 @@ import {
 
 const admit = (params: Parameters<typeof beginAdmission>[0]) =>
   beginAdmission({ assertAllowed: () => {}, ...params });
-function makeTarget(scope: string, ...identities: string[]) {
+function makeTarget<T extends string[]>(scope: string, ...identities: T) {
   return { scope, identities };
 }
 function ownedTarget(scope: string, ...identities: string[]) {
