@@ -12,6 +12,57 @@ import {
   resetAgentEventsForTest,
 } from "./agent-events.js";
 
+type HistoryMessage = { messageId: string; message: unknown };
+const text = (value: string) => ({ content: [{ type: "text", text: value }] });
+
+function nestedEntry(
+  messageId: string,
+  overrides: Partial<Parameters<typeof createNestedToolActivity>[0]>,
+) {
+  return {
+    messageId,
+    message: createNestedToolActivity({
+      runId: "run",
+      scopeId: "scope",
+      afterEntryId: "wrapper",
+      startOrder: 1,
+      toolCallId: messageId,
+      toolName: "read",
+      input: {},
+      result: text("Finished"),
+      isError: false,
+      startedAt: 1,
+      timestamp: 2,
+      ...overrides,
+    }),
+  };
+}
+
+function call(messageId: string, id: string | undefined, name = "exec", args = {}, metadata = {}) {
+  return {
+    messageId,
+    message: {
+      role: "assistant",
+      ...metadata,
+      content: [{ type: "toolCall", id, name, arguments: args }],
+    },
+  };
+}
+
+function resultEntry(messageId: string, toolCallId: string | undefined, metadata = {}) {
+  return {
+    messageId,
+    message: {
+      role: "toolResult",
+      toolCallId,
+      toolName: "exec",
+      isError: false,
+      ...text("Finished"),
+      ...metadata,
+    },
+  };
+}
+
 describe("agent activity events", () => {
   test("emits every activity stream with shared sequencing and context", () => {
     type ItemData = Extract<
@@ -111,13 +162,7 @@ describe("agent activity events", () => {
       isError: true,
     };
     const history = projectAgentHistoryActivity([
-      {
-        messageId: "call",
-        message: {
-          role: "assistant",
-          content: [{ type: "toolCall", id: tool.toolCallId, name: tool.name, arguments: args }],
-        },
-      },
+      call("call", tool.toolCallId, tool.name, args),
       { messageId: "result", message: skipped },
     ]);
     for (const entry of history) {
@@ -138,22 +183,12 @@ describe("agent activity events", () => {
 
   test("derives historical Tool Search metadata from the executed inner input", () => {
     const projected = projectAgentHistoryActivity([
-      {
-        messageId: "child",
-        message: createNestedToolActivity({
-          runId: "run",
-          scopeId: "scope",
-          afterEntryId: "wrapper",
-          startOrder: 1,
-          toolCallId: "search-read",
-          toolName: "tool_call",
-          input: { id: "read", args: { path: "notes/release.md" } },
-          result: { content: [{ type: "text", text: "Release notes" }] },
-          isError: false,
-          startedAt: 1,
-          timestamp: 2,
-        }),
-      },
+      nestedEntry("child", {
+        toolCallId: "search-read",
+        toolName: "tool_call",
+        input: { id: "read", args: { path: "notes/release.md" } },
+        result: text("Release notes"),
+      }),
     ]);
     expect(projected[0]?.items).toEqual([
       expect.objectContaining({ name: "read", toolCallId: "search-read" }),
@@ -203,57 +238,34 @@ describe("agent activity events", () => {
     { outcome: "no-call-id", hidden: false },
   ])("keeps recorded child failures with a $outcome wrapper", ({ outcome, hidden }) => {
     const runId = outcome === "other-run" ? "other" : outcome === "no-run" ? undefined : "run";
-    const wrapper = {
-      messageId: "wrapper",
-      message: {
-        role: "assistant",
-        __openclaw: { runId },
-        content: [
-          {
-            type: "toolCall",
-            id: outcome === "no-call-id" ? undefined : "outer",
-            name: "exec",
-            arguments: {},
-          },
-        ],
-      },
-    };
-    const messages: Array<{ messageId: string; message: unknown }> =
-      outcome === "result-only" ? [] : [wrapper];
+    const wrapper = call(
+      "wrapper",
+      outcome === "no-call-id" ? undefined : "outer",
+      "exec",
+      {},
+      { __openclaw: { runId } },
+    );
+    const messages: HistoryMessage[] = outcome === "result-only" ? [] : [wrapper];
     if (outcome === "duplicate") {
       messages.push({ ...wrapper, messageId: "duplicate-wrapper" });
     }
-    messages.push({
-      messageId: "child",
-      message: createNestedToolActivity({
-        runId: "run",
-        scopeId: "scope",
-        afterEntryId: "wrapper",
-        startOrder: 1,
+    messages.push(
+      nestedEntry("child", {
         ...(outcome === "unlinked" ? {} : { parentToolCallId: "outer" }),
-        toolCallId: "child",
-        toolName: "read",
         input: { path: "missing.txt" },
-        result: { content: [{ type: "text", text: "Missing file" }] },
+        result: text("Missing file"),
         isError: true,
-        startedAt: 1,
-        timestamp: 2,
       }),
-    });
+    );
     if (outcome !== "missing") {
-      messages.push({
-        messageId: "wrapper-result",
-        message: {
-          role: "toolResult",
+      messages.push(
+        resultEntry("wrapper-result", outcome === "no-call-id" ? undefined : "outer", {
           __openclaw: { runId },
-          toolCallId: outcome === "no-call-id" ? undefined : "outer",
-          toolName: "exec",
           isError: outcome === "failed",
-          content: [{ type: "text", text: "Finished" }],
           ...(outcome === "blocked" ? { details: { status: "approval-pending" } } : {}),
           ...(outcome === "execution-failed" ? { details: { status: "failed" } } : {}),
-        },
-      });
+        }),
+      );
     }
     const projected = projectAgentHistoryActivity(messages);
     expect(projected.find((entry) => entry.messageId === "child")?.items).toEqual([
@@ -270,52 +282,24 @@ describe("agent activity events", () => {
 
   test("keeps a completed step countable when its only child is routine progress", () => {
     const projected = projectAgentHistoryActivity([
-      {
-        messageId: "step",
-        message: {
-          role: "assistant",
-          runId: "run",
-          content: [
-            {
-              type: "toolCall",
-              id: "step",
-              name: "exec",
-              arguments: {
-                title: "Check the release checklist",
-                code: "await tools.progress_card({});",
-              },
-            },
-          ],
+      call(
+        "step",
+        "step",
+        "exec",
+        {
+          title: "Check the release checklist",
+          code: "await tools.progress_card({});",
         },
-      },
-      {
-        messageId: "progress",
-        message: createNestedToolActivity({
-          runId: "run",
-          scopeId: "scope",
-          afterEntryId: "step",
-          startOrder: 1,
-          parentToolCallId: "step",
-          toolCallId: "progress",
-          toolName: "progress_card",
-          input: { action: "update", title: "Release checklist" },
-          result: { content: [{ type: "text", text: "Updated" }] },
-          isError: false,
-          startedAt: 1,
-          timestamp: 2,
-        }),
-      },
-      {
-        messageId: "result",
-        message: {
-          role: "toolResult",
-          runId: "run",
-          toolCallId: "step",
-          toolName: "exec",
-          isError: false,
-          content: [{ type: "text", text: "Finished" }],
-        },
-      },
+        { runId: "run" },
+      ),
+      nestedEntry("progress", {
+        afterEntryId: "step",
+        parentToolCallId: "step",
+        toolName: "progress_card",
+        input: { action: "update", title: "Release checklist" },
+        result: text("Updated"),
+      }),
+      resultEntry("result", "step", { runId: "run" }),
     ]);
     expect(projected.find((entry) => entry.messageId === "step")?.items).toEqual([
       expect.objectContaining({ toolCallId: "step", name: "exec", status: "completed" }),
@@ -343,42 +327,16 @@ describe("agent activity events", () => {
     },
   ])("counts one operation for a completed step when $shape", ({ nested, counted }) => {
     const projected = projectAgentHistoryActivity([
-      {
-        messageId: "outer",
-        message: {
-          role: "assistant",
-          __openclaw: { runId: "run" },
-          content: [{ type: "toolCall", id: "outer", name: "exec", arguments: {} }],
-        },
-      },
-      ...nested.map(({ id, name, parent }, index) => ({
-        messageId: id,
-        message: createNestedToolActivity({
-          runId: "run",
-          scopeId: "scope",
+      call("outer", "outer", "exec", {}, { __openclaw: { runId: "run" } }),
+      ...nested.map(({ id, name, parent }, index) =>
+        nestedEntry(id, {
           afterEntryId: "outer-call",
           startOrder: index + 1,
           parentToolCallId: parent,
-          toolCallId: id,
           toolName: name,
-          input: {},
-          result: { content: [{ type: "text", text: "Finished" }] },
-          isError: false,
-          startedAt: 1,
-          timestamp: 2,
         }),
-      })),
-      {
-        messageId: "outer-result",
-        message: {
-          role: "toolResult",
-          __openclaw: { runId: "run" },
-          toolCallId: "outer",
-          toolName: "exec",
-          isError: false,
-          content: [{ type: "text", text: "Finished" }],
-        },
-      },
+      ),
+      resultEntry("outer-result", "outer", { __openclaw: { runId: "run" } }),
     ]);
     // The step is never counted alongside a call beneath it that stays visible.
     expect(
@@ -407,14 +365,8 @@ describe("agent activity events", () => {
 });
 
 test("marks only unpaired history calls as provisional, including terminal unknown outcomes", () => {
-  const call = {
-    messageId: "call",
-    message: {
-      role: "assistant",
-      content: [{ type: "toolCall", id: "command", name: "exec", arguments: {} }],
-    },
-  };
-  const missing = projectAgentHistoryActivity([call])[0]?.items[0];
+  const unpaired = call("call", "command");
+  const missing = projectAgentHistoryActivity([unpaired])[0]?.items[0];
   expect(missing).toMatchObject({ phase: "end", unpairedCall: true, summary: "Outcome unknown" });
   expect(missing?.status).toBeUndefined();
   const result = {
@@ -432,7 +384,7 @@ test("marks only unpaired history calls as provisional, including terminal unkno
       },
     },
   };
-  for (const entry of projectAgentHistoryActivity([call, result])) {
+  for (const entry of projectAgentHistoryActivity([unpaired, result])) {
     expect(entry.items[0]).toMatchObject({ phase: "end", summary: "Outcome unknown" });
     expect(entry.items[0]?.status).toBeUndefined();
     expect(entry.items[0]).not.toHaveProperty("unpairedCall");

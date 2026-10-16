@@ -1,4 +1,3 @@
-// Covers approval handler runtime adapter creation and lazy wiring.
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "./approval-handler-adapter-runtime.js";
@@ -88,15 +87,58 @@ function makeNativeApprovalCapability(
 async function createTestApprovalHandler(
   params: Parameters<typeof makeNativeApprovalCapability>[0],
 ) {
-  const runtime = await createChannelApprovalHandlerFromCapability({
+  return requireHandler({
     capability: makeNativeApprovalCapability(params),
     ...TEST_HANDLER_PARAMS,
   });
+}
+
+async function requireHandler(
+  params: Parameters<typeof createChannelApprovalHandlerFromCapability>[0],
+) {
+  const runtime = await createChannelApprovalHandlerFromCapability(params);
   if (runtime === null) {
     throw new Error("Expected approval handler runtime");
   }
   expect(typeof runtime.handleRequested).toBe("function");
   return runtime;
+}
+
+function makeLazyFixture(onDelivered?: ReturnType<typeof vi.fn>) {
+  return {
+    availability: { isConfigured: vi.fn(), shouldHandle: vi.fn() },
+    presentation: {
+      buildPendingPayload: vi.fn(async () => ({ text: "pending" })),
+      buildResolvedResult: vi.fn(),
+      buildExpiredResult: vi.fn(),
+    },
+    transport: { prepareTarget: vi.fn(), deliverPending: vi.fn() },
+    ...(onDelivered ? { observe: { onDelivered } } : {}),
+  } satisfies ChannelApprovalNativeRuntimeAdapter<{ text: string }>;
+}
+
+function gatedResult<T>(result: T) {
+  const entered = createDeferred();
+  const gate = createDeferred();
+  const callback = vi.fn(async () => {
+    entered.resolve();
+    await gate.promise;
+    return result;
+  });
+  return { entered, gate, callback };
+}
+
+async function stopDuring(
+  runtime: Awaited<ReturnType<typeof requireHandler>>,
+  request: NormalizedApprovalRequest<ExecApprovalRequest>,
+  pending: ReturnType<typeof gatedResult>,
+  label: string,
+) {
+  const inflight = runtime.handleRequested(request);
+  await withTestTimeout(pending.entered.promise, 1_000, label);
+  await runtime.stop();
+  pending.gate.resolve();
+  await inflight;
 }
 
 function firstCallArg(mock: ReturnType<typeof vi.fn>): unknown {
@@ -118,13 +160,10 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       isConfigured: async () => true,
       shouldHandle: () => eligibility.promise,
     });
-    const runtime = await createChannelApprovalHandlerFromCapability({
+    const runtime = await requireHandler({
       capability: { native: capability.native, nativeRuntimeAsync },
       ...TEST_HANDLER_PARAMS,
     });
-    if (!runtime) {
-      throw new Error("Expected async approval handler");
-    }
     const requested = runtime.handleRequested(makeExecApprovalRequest("async-declined"));
     eligibility.resolve(false);
     await requested;
@@ -212,7 +251,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       unbindPending,
       onFinalized,
     });
-    const approvalRuntime = await createChannelApprovalHandlerFromCapability({
+    const approvalRuntime = await requireHandler({
       ...TEST_HANDLER_PARAMS,
       capability: {
         ...makeNativeApprovalCapability(),
@@ -223,9 +262,6 @@ describe("createChannelApprovalHandlerFromCapability", () => {
         }),
       },
     });
-    if (!approvalRuntime) {
-      throw new Error("Expected approval handler runtime");
-    }
     const request = {
       id: "system-agent:1",
       request: {
@@ -379,24 +415,9 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
     const explicitIsConfigured = vi.fn().mockReturnValue(true);
     const explicitShouldHandle = vi.fn().mockReturnValue(false);
     const resolveApprovalKind = vi.fn().mockReturnValue("exec");
-    const buildPendingPayload = vi.fn(async () => ({ text: "pending" }));
-    const load = vi.fn(
-      async (): Promise<ChannelApprovalNativeRuntimeAdapter<{ text: string }>> => ({
-        availability: {
-          isConfigured: vi.fn(),
-          shouldHandle: vi.fn(),
-        },
-        presentation: {
-          buildPendingPayload,
-          buildResolvedResult: vi.fn(),
-          buildExpiredResult: vi.fn(),
-        },
-        transport: {
-          prepareTarget: vi.fn(),
-          deliverPending: vi.fn(),
-        },
-      }),
-    );
+    const fixture = makeLazyFixture();
+    const { buildPendingPayload } = fixture.presentation;
+    const load = vi.fn(async () => fixture);
     const adapter = createLazyChannelApprovalNativeRuntimeAdapter({
       eventKinds: ["exec"],
       resolveApprovalKind,
@@ -416,15 +437,10 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
     expect(resolveApprovalKind).toHaveBeenCalledWith(request);
     expect(adapter.availability.isConfigured({ cfg })).toBe(true);
     expect(adapter.availability.shouldHandle({ cfg, request, approvalKind: "exec" })).toBe(false);
-    await expect(
-      adapter.presentation.buildPendingPayload({
-        cfg,
-        request,
-        approvalKind: "exec",
-        nowMs: 1,
-        view,
-      }),
-    ).resolves.toEqual({ text: "pending" });
+    const payload = { cfg, request, approvalKind: "exec" as const, nowMs: 1, view };
+    await expect(adapter.presentation.buildPendingPayload(payload)).resolves.toEqual({
+      text: "pending",
+    });
     expect(load).toHaveBeenCalledTimes(1);
     expect(explicitIsConfigured).toHaveBeenCalledWith({ cfg });
     expect(explicitShouldHandle).toHaveBeenCalledWith({ cfg, request, approvalKind: "exec" });
@@ -439,24 +455,7 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
 
   it("keeps observe hooks synchronous and only uses the already-loaded runtime", async () => {
     const onDelivered = vi.fn();
-    const load = vi.fn().mockResolvedValue({
-      availability: {
-        isConfigured: vi.fn(),
-        shouldHandle: vi.fn(),
-      },
-      presentation: {
-        buildPendingPayload: vi.fn().mockResolvedValue({ text: "pending" }),
-        buildResolvedResult: vi.fn(),
-        buildExpiredResult: vi.fn(),
-      },
-      transport: {
-        prepareTarget: vi.fn(),
-        deliverPending: vi.fn(),
-      },
-      observe: {
-        onDelivered,
-      },
-    });
+    const load = vi.fn().mockResolvedValue(makeLazyFixture(onDelivered));
     const adapter = createLazyChannelApprovalNativeRuntimeAdapter({
       isConfigured: vi.fn().mockReturnValue(true),
       shouldHandle: vi.fn().mockReturnValue(true),
@@ -482,30 +481,18 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
   });
 
   it("unbinds in-flight wrapped entry when stop() fires between bindPending and activeEntries.set", async () => {
-    const bindEntered = createDeferred();
-    const bindGate = createDeferred();
+    const binding = gatedResult({ bindingId: "bound-in-flight" });
     const deliverPending = vi.fn().mockResolvedValue({ messageId: "in-flight" });
-    const bindPending = vi.fn(async () => {
-      bindEntered.resolve();
-      await bindGate.promise;
-      return { bindingId: "bound-in-flight" };
-    });
     const unbindPending = vi.fn();
 
     const approvalRuntime = await createTestApprovalHandler({
       deliverPending,
-      bindPending,
+      bindPending: binding.callback,
       unbindPending,
     });
     const request = makeExecApprovalRequest("exec:in-flight");
 
-    const inflight = approvalRuntime.handleRequested(request);
-    await withTestTimeout(bindEntered.promise, 1_000, "in-flight approval binding did not start");
-
-    // stop() flips the stopped flag while bindPending is parked.
-    await approvalRuntime.stop();
-    bindGate.resolve();
-    await inflight;
+    await stopDuring(approvalRuntime, request, binding, "in-flight approval binding did not start");
 
     expect(unbindPending).toHaveBeenCalledTimes(1);
     const unbind = firstCallArg(unbindPending) as
@@ -517,37 +504,26 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
   });
 
   it("invokes cancelDelivered when stop() fires between deliverPending and bindPending", async () => {
-    const deliverEntered = createDeferred();
-    const deliverGate = createDeferred();
     const deliveredEntry = { messageId: "pre-bind" };
-    const deliverPending = vi.fn(async () => {
-      deliverEntered.resolve();
-      await deliverGate.promise;
-      return deliveredEntry;
-    });
+    const delivery = gatedResult(deliveredEntry);
     const bindPending = vi.fn().mockResolvedValue({ bindingId: "should-not-bind" });
     const unbindPending = vi.fn();
     const cancelDelivered = vi.fn();
 
     const approvalRuntime = await createTestApprovalHandler({
-      deliverPending,
+      deliverPending: delivery.callback,
       bindPending,
       unbindPending,
       cancelDelivered,
     });
     const request = makeExecApprovalRequest("exec:pre-bind");
 
-    const inflight = approvalRuntime.handleRequested(request);
-    await withTestTimeout(
-      deliverEntered.promise,
-      1_000,
+    await stopDuring(
+      approvalRuntime,
+      request,
+      delivery,
       "pre-bind approval delivery did not start",
     );
-
-    // stop() flips the stopped flag while deliverPending is still pending.
-    await approvalRuntime.stop();
-    deliverGate.resolve();
-    await inflight;
 
     expect(bindPending).not.toHaveBeenCalled();
     expect(unbindPending).not.toHaveBeenCalled();
@@ -561,33 +537,21 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
   });
 
   it("invokes cancelDelivered when stop() fires after bindPending returned null", async () => {
-    const bindEntered = createDeferred();
-    const bindGate = createDeferred();
+    const binding = gatedResult(null);
     const deliveredEntry = { messageId: "post-bind-null" };
     const deliverPending = vi.fn().mockResolvedValue(deliveredEntry);
-    const bindPending = vi.fn(async () => {
-      bindEntered.resolve();
-      await bindGate.promise;
-      return null;
-    });
     const unbindPending = vi.fn();
     const cancelDelivered = vi.fn();
 
     const approvalRuntime = await createTestApprovalHandler({
       deliverPending,
-      bindPending,
+      bindPending: binding.callback,
       unbindPending,
       cancelDelivered,
     });
     const request = makeExecApprovalRequest("exec:post-bind-null");
 
-    const inflight = approvalRuntime.handleRequested(request);
-    await withTestTimeout(bindEntered.promise, 1_000, "null approval binding did not start");
-
-    // stop() flips the stopped flag while bindPending is parked; it then resolves to null.
-    await approvalRuntime.stop();
-    bindGate.resolve();
-    await inflight;
+    await stopDuring(approvalRuntime, request, binding, "null approval binding did not start");
 
     expect(unbindPending).not.toHaveBeenCalled();
     expect(cancelDelivered).toHaveBeenCalledTimes(1);
