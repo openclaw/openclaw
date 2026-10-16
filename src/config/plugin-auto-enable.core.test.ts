@@ -82,6 +82,16 @@ vi.mock("../plugins/setup-registry.js", () => ({
 }));
 
 const env = makeIsolatedEnv();
+function autoEnable(config: OpenClawConfig, plugins?: Parameters<typeof makeRegistry>[0]) {
+  return applyPluginAutoEnable({
+    config,
+    env,
+    ...(plugins ? { manifestRegistry: makeRegistry(plugins) } : {}),
+  });
+}
+function slackConfig(plugins: OpenClawConfig["plugins"]): OpenClawConfig {
+  return { channels: { slack: { botToken: "x" } }, plugins };
+}
 const emptyDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
 const codexManifestResult = loadPluginManifest(path.join(process.cwd(), "extensions", "codex"));
 if (!codexManifestResult.ok) {
@@ -248,13 +258,7 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("auto-enables built-in channels and preserves them in restrictive plugins.allow", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        channels: { slack: { botToken: "x" } },
-        plugins: { allow: ["telegram"] },
-      },
-      env,
-    });
+    const result = autoEnable(slackConfig({ allow: ["telegram"] }));
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.slack).toBeUndefined();
@@ -267,13 +271,7 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("preserves an empty plugins.allow as nonrestrictive during auto-enable", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        channels: { slack: { botToken: "x" } },
-        plugins: { allow: [] },
-      },
-      env,
-    });
+    const result = autoEnable(slackConfig({ allow: [] }));
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual([]);
@@ -303,20 +301,19 @@ describe("applyPluginAutoEnable core", () => {
   );
 
   it("does not auto-enable or allowlist non-bundled web fetch providers from config", () => {
-    const result = applyPluginAutoEnable({
-      config: {
+    const result = autoEnable(
+      {
         tools: { web: { fetch: { provider: "evilfetch" } } },
         plugins: { allow: ["telegram"] },
       },
-      env,
-      manifestRegistry: makeRegistry([
+      [
         {
           id: "evil-plugin",
           channels: [],
           contracts: { webFetchProviders: ["evilfetch"] },
         },
-      ]),
-    });
+      ],
+    );
 
     expect(result.config.plugins?.entries?.["evil-plugin"]).toBeUndefined();
     expect(result.config.plugins?.allow).toEqual(["telegram"]);
@@ -324,14 +321,11 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("auto-enables bundled firecrawl when plugin-owned webFetch config exists", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        plugins: {
-          allow: ["telegram"],
-          entries: { firecrawl: { config: { webFetch: { apiKey: "firecrawl-key" } } } },
-        },
+    const result = autoEnable({
+      plugins: {
+        allow: ["telegram"],
+        entries: { firecrawl: { config: { webFetch: { apiKey: "firecrawl-key" } } } },
       },
-      env,
     });
 
     expect(result.config.plugins?.entries?.firecrawl?.enabled).toBe(true);
@@ -451,8 +445,8 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("auto-enables a CLI backend owner when a provider runtime is configured", () => {
-    const result = applyPluginAutoEnable({
-      config: {
+    const result = autoEnable(
+      {
         models: {
           providers: {
             anthropic: {
@@ -464,16 +458,15 @@ describe("applyPluginAutoEnable core", () => {
         },
         plugins: { allow: ["telegram"] },
       },
-      env,
-      manifestRegistry: makeRegistry([
+      [
         {
           id: "anthropic",
           channels: [],
           providers: ["anthropic"],
           cliBackends: ["claude-cli"],
         },
-      ]),
-    });
+      ],
+    );
 
     expect(result.config.plugins?.entries?.anthropic?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "anthropic"]);
@@ -481,9 +474,8 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("ignores channels.modelByChannel for plugin auto-enable", () => {
-    const result = applyPluginAutoEnable({
-      config: { channels: { modelByChannel: { openai: { whatsapp: "openai/gpt-5.4" } } } },
-      env,
+    const result = autoEnable({
+      channels: { modelByChannel: { openai: { whatsapp: "openai/gpt-5.4" } } },
     });
 
     expect(result.config.plugins?.entries?.modelByChannel).toBeUndefined();
@@ -551,18 +543,12 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("does not re-emit built-in auto-enable changes when rerun with plugins.allow set", () => {
-    const first = applyPluginAutoEnable({
-      config: {
-        channels: { whatsapp: { allowFrom: ["+15555550123"] } },
-        plugins: { allow: ["telegram"] },
-      },
-      env,
+    const first = autoEnable({
+      channels: { whatsapp: { allowFrom: ["+15555550123"] } },
+      plugins: { allow: ["telegram"] },
     });
 
-    const second = applyPluginAutoEnable({
-      config: first.config,
-      env,
-    });
+    const second = autoEnable(first.config);
 
     expect(first.config.channels?.whatsapp?.enabled).toBe(true);
     expect(first.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
@@ -579,18 +565,9 @@ describe("applyPluginAutoEnable core", () => {
       plugins: { entries: { browser: { config: {} } } },
     };
 
-    const first = applyPluginAutoEnable({
-      config,
-      discovery: emptyDiscovery,
-      env,
-      manifestRegistry,
-    });
-    const second = applyPluginAutoEnable({
-      config,
-      discovery: emptyDiscovery,
-      env,
-      manifestRegistry,
-    });
+    const params = { config, discovery: emptyDiscovery, env, manifestRegistry };
+    const first = applyPluginAutoEnable(params);
+    const second = applyPluginAutoEnable(params);
 
     expect(second).toBe(first);
     expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalledTimes(1);
@@ -598,12 +575,7 @@ describe("applyPluginAutoEnable core", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    const third = applyPluginAutoEnable({
-      config,
-      discovery: emptyDiscovery,
-      env,
-      manifestRegistry,
-    });
+    const third = applyPluginAutoEnable(params);
 
     expect(third).not.toBe(first);
     expect(third).toEqual(first);
@@ -671,12 +643,8 @@ describe("applyPluginAutoEnable core", () => {
       CACHE_CHANNEL_TOKEN: "configured",
     });
 
-    const first = applyPluginAutoEnable({
-      config,
-      discovery: mutableDiscovery,
-      env: configuredEnv,
-      manifestRegistry,
-    });
+    const params = { config, discovery: mutableDiscovery, env: configuredEnv, manifestRegistry };
+    const first = applyPluginAutoEnable(params);
     mutableDiscovery.candidates.push(
       makeBundledChannelCandidate({
         pluginId: "cache-channel-plugin",
@@ -684,12 +652,7 @@ describe("applyPluginAutoEnable core", () => {
       }),
     );
     clearPluginMetadataLifecycleCaches();
-    const second = applyPluginAutoEnable({
-      config,
-      discovery: mutableDiscovery,
-      env: configuredEnv,
-      manifestRegistry,
-    });
+    const second = applyPluginAutoEnable(params);
 
     expect(first.config.plugins?.entries?.["cache-channel-plugin"]).toBeUndefined();
     expect(second.config.plugins?.entries?.["cache-channel-plugin"]?.enabled).toBe(true);
@@ -697,23 +660,14 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("respects explicit disable", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        channels: { slack: { botToken: "x" } },
-        plugins: { entries: { slack: { enabled: false, config: {} } } },
-      },
-      env,
-    });
+    const result = autoEnable(slackConfig({ entries: { slack: { enabled: false, config: {} } } }));
 
     expect(result.config.plugins?.entries?.slack?.enabled).toBe(false);
     expect(result.changes).toStrictEqual([]);
   });
 
   it("respects built-in channel explicit disable via channels.<id>.enabled", () => {
-    const result = applyPluginAutoEnable({
-      config: { channels: { slack: { botToken: "x", enabled: false } } },
-      env,
-    });
+    const result = autoEnable({ channels: { slack: { botToken: "x", enabled: false } } });
 
     expect(result.config.channels?.slack?.enabled).toBe(false);
     expect(result.config.plugins?.entries?.slack).toBeUndefined();
@@ -721,11 +675,9 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("does not auto-enable plugin channels when only enabled=false is set", () => {
-    const result = applyPluginAutoEnable({
-      config: { channels: { matrix: { enabled: false } } },
-      env,
-      manifestRegistry: makeRegistry([{ id: "matrix", channels: ["matrix"] }]),
-    });
+    const result = autoEnable({ channels: { matrix: { enabled: false } } }, [
+      { id: "matrix", channels: ["matrix"] },
+    ]);
 
     expect(result.config.plugins?.entries?.matrix).toBeUndefined();
     expect(result.changes).toStrictEqual([]);
@@ -747,13 +699,7 @@ describe("applyPluginAutoEnable core", () => {
       }),
     ).toStrictEqual([]);
 
-    const result = applyPluginAutoEnable({
-      config: {
-        channels: { slack: { botToken: "x" } },
-        plugins: { enabled: false },
-      },
-      env,
-    });
+    const result = autoEnable(slackConfig({ enabled: false }));
 
     expect(result.config.plugins?.entries?.slack?.enabled).toBeUndefined();
     expect(result.changes).toStrictEqual([]);

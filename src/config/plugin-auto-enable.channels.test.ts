@@ -5,20 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 
-const envSecondaryCatalogEntry = {
-  name: "@openclaw/env-secondary",
-  openclaw: {
-    channel: {
-      id: "env-secondary",
-      label: "Env Secondary",
-      selectionLabel: "Env Secondary",
-      docsPath: "/channels/env-secondary",
-      blurb: "Env secondary entry",
-      preferOver: ["env-primary"],
-    },
-    install: { npmSpec: "@openclaw/env-secondary" },
-  },
-};
+const envSecondaryCatalogEntry = catalogEntry("env-secondary", "Env Secondary", ["env-primary"]);
 
 const logWarnSpy = vi.hoisted(() => vi.fn());
 
@@ -37,6 +24,48 @@ import {
   makeTempDir,
   resetPluginAutoEnableTestState,
 } from "./plugin-auto-enable.test-helpers.js";
+
+type ManifestPlugin = Parameters<typeof makeRegistry>[0][number];
+function preferredChannel(
+  id: string,
+  channel: string,
+  preferOver: string[],
+  options: { label?: string; origin?: ManifestPlugin["origin"] } = {},
+): ManifestPlugin {
+  return {
+    id,
+    channels: [channel],
+    origin: options.origin,
+    channelConfigs: {
+      [channel]: {
+        schema: { type: "object" },
+        preferOver,
+        ...(options.label ? { label: options.label } : {}),
+      },
+    },
+  };
+}
+function catalogFile(stateDir: string) {
+  const file = path.join(stateDir, "plugins", "catalog.json");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  return file;
+}
+function catalogEntry(id: string, label: string, preferOver?: string[]) {
+  return {
+    name: `@openclaw/${id}`,
+    openclaw: {
+      channel: {
+        id,
+        label,
+        selectionLabel: label,
+        docsPath: `/channels/${id}`,
+        blurb: `Env ${id === "env-primary" ? "primary" : "secondary"} entry`,
+        ...(preferOver ? { preferOver } : {}),
+      },
+      install: { npmSpec: `@openclaw/${id}` },
+    },
+  };
+}
 
 function materializeEnvCatalogCandidates(
   stateDir: string,
@@ -69,23 +98,12 @@ function makePreferredChannelRegistry() {
       channels: ["legacy-bundled-chat"],
       origin: "bundled",
       channelConfigs: {
-        "legacy-bundled-chat": {
-          schema: { type: "object" },
-          label: "Legacy Bundled Chat",
-        },
+        "legacy-bundled-chat": { schema: { type: "object" }, label: "Legacy Bundled Chat" },
       },
     },
-    {
-      id: "openclaw-modern-chat",
-      channels: ["legacy-bundled-chat"],
-      channelConfigs: {
-        "legacy-bundled-chat": {
-          schema: { type: "object" },
-          label: "Modern Chat",
-          preferOver: ["legacy-bundled-chat"],
-        },
-      },
-    },
+    preferredChannel("openclaw-modern-chat", "legacy-bundled-chat", ["legacy-bundled-chat"], {
+      label: "Modern Chat",
+    }),
   ]);
 }
 
@@ -101,27 +119,11 @@ afterEach(() => {
 describe("applyPluginAutoEnable channels", () => {
   it("shares external catalog preferences with UI reads across auto-enable passes", () => {
     const stateDir = makeTempDir();
-    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
-    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    const catalogPath = catalogFile(stateDir);
     fs.writeFileSync(
       catalogPath,
       JSON.stringify({
-        entries: [
-          {
-            name: "@openclaw/env-primary",
-            openclaw: {
-              channel: {
-                id: "env-primary",
-                label: "Env Primary",
-                selectionLabel: "Env Primary",
-                docsPath: "/channels/env-primary",
-                blurb: "Env primary entry",
-              },
-              install: { npmSpec: "@openclaw/env-primary" },
-            },
-          },
-          envSecondaryCatalogEntry,
-        ],
+        entries: [catalogEntry("env-primary", "Env Primary"), envSecondaryCatalogEntry],
       }),
       "utf-8",
     );
@@ -149,11 +151,8 @@ describe("applyPluginAutoEnable channels", () => {
 
   it("warns when an oversized catalog is skipped and continues selection", () => {
     const stateDir = makeTempDir();
-    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
-    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
-    // Create a sparse file whose stat.size exceeds the 16 MiB cap without
-    // allocating actual disk blocks — the bounded read rejects it by size
-    // before loading content into memory.
+    const catalogPath = catalogFile(stateDir);
+    // Sparse file: exceed the read cap without allocating 17 MiB.
     const fd = fs.openSync(catalogPath, "w");
     try {
       fs.writeSync(fd, "{}\n");
@@ -172,8 +171,7 @@ describe("applyPluginAutoEnable channels", () => {
 
   it("keeps an invalid catalog stable until a new metadata owner reads it", () => {
     const stateDir = makeTempDir();
-    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
-    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    const catalogPath = catalogFile(stateDir);
     fs.writeFileSync(catalogPath, "{invalid JSON", "utf8");
     expect(
       materializeEnvCatalogCandidates(stateDir).config.plugins?.entries?.["env-primary"]?.enabled,
@@ -204,18 +202,10 @@ describe("applyPluginAutoEnable channels", () => {
         config: { channels: { telegram: { botToken: "token" } } },
         env: makeIsolatedEnv(),
         manifestRegistry: makeRegistry([
-          {
-            id: "workspace-telegram",
-            channels: ["telegram"],
+          preferredChannel("workspace-telegram", "telegram", ["telegram"], {
             origin: "workspace",
-            channelConfigs: {
-              telegram: {
-                schema: { type: "object" },
-                label: "Workspace Telegram",
-                preferOver: ["telegram"],
-              },
-            },
-          },
+            label: "Workspace Telegram",
+          }),
         ]),
       });
 
@@ -273,17 +263,7 @@ describe("applyPluginAutoEnable channels", () => {
             channels: ["telegram"],
             origin: "bundled",
           },
-          {
-            id: "workspace-telegram",
-            channels: ["telegram"],
-            origin: "workspace",
-            channelConfigs: {
-              telegram: {
-                schema: { type: "object" },
-                preferOver: ["telegram"],
-              },
-            },
-          },
+          preferredChannel("workspace-telegram", "telegram", ["telegram"], { origin: "workspace" }),
         ]),
       });
 
@@ -344,18 +324,7 @@ describe("applyPluginAutoEnable channels", () => {
           plugins: { entries: { "openclaw-qqbot": { enabled: true } } },
         },
         env: makeIsolatedEnv(),
-        manifestRegistry: makeRegistry([
-          {
-            id: "openclaw-qqbot",
-            channels: ["qqbot"],
-            channelConfigs: {
-              qqbot: {
-                schema: { type: "object" },
-                preferOver: ["qqbot"],
-              },
-            },
-          },
-        ]),
+        manifestRegistry: makeRegistry([preferredChannel("openclaw-qqbot", "qqbot", ["qqbot"])]),
       });
 
       expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(true);
@@ -389,16 +358,7 @@ describe("applyPluginAutoEnable channels", () => {
         env: makeIsolatedEnv(),
         manifestRegistry: makeRegistry([
           { id: "qqbot", channels: ["qqbot"] },
-          {
-            id: "openclaw-qqbot",
-            channels: ["qqbot"],
-            channelConfigs: {
-              qqbot: {
-                schema: { type: "object" },
-                preferOver: ["qqbot"],
-              },
-            },
-          },
+          preferredChannel("openclaw-qqbot", "qqbot", ["qqbot"]),
         ]),
       });
 

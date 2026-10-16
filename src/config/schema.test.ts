@@ -6,6 +6,18 @@ import { validateConfigObjectRaw } from "./validation.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
+const mcpConfig = (server: Record<string, unknown>) => ({ mcp: { servers: { docs: server } } });
+const mcpUrl = "https://mcp.example.com/mcp";
+const tupleSchema = {
+  schema: {
+    type: "object",
+    properties: { pair: { type: "array", items: [{ type: "string" }, { type: "number" }] } },
+  },
+  uiHints: {},
+  version: "test",
+  generatedAt: "test",
+} as unknown as Parameters<typeof lookupConfigSchema>[0];
+
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchemaCore>[0]>;
   let baseSchema: ReturnType<typeof buildConfigSchemaCore>;
@@ -132,60 +144,27 @@ describe("config schema", () => {
   });
 
   it("rejects empty Codex MCP agent scopes", () => {
-    expect(() =>
-      OpenClawSchema.parse({
-        mcp: {
-          servers: {
-            scoped: {
-              url: "https://mcp.example.com/mcp",
-              transport: "streamable-http",
-              codex: { agents: [] },
-            },
-          },
-        },
-      }),
-    ).toThrow();
-    expect(() =>
-      OpenClawSchema.parse({
-        mcp: {
-          servers: {
-            scoped: {
-              url: "https://mcp.example.com/mcp",
-              transport: "streamable-http",
-              codex: { agents: ["  "] },
-            },
-          },
-        },
-      }),
-    ).toThrow();
-    expect(() =>
-      OpenClawSchema.parse({
-        mcp: {
-          servers: {
-            scoped: {
-              url: "https://mcp.example.com/mcp",
-              transport: "streamable-http",
-              codex: { agents: ["!!!"] },
-            },
-          },
-        },
-      }),
-    ).toThrow();
+    for (const agents of [[], ["  "], ["!!!"]]) {
+      expect(() =>
+        OpenClawSchema.parse(
+          mcpConfig({
+            url: mcpUrl,
+            transport: "streamable-http",
+            codex: { agents },
+          }),
+        ),
+      ).toThrow();
+    }
   });
 
   it("validates MCP OAuth client metadata URLs against the SDK contract", () => {
-    const configWithMetadataUrl = (clientMetadataUrl: string) => ({
-      mcp: {
-        servers: {
-          docs: {
-            url: "https://mcp.example.com/mcp",
-            transport: "streamable-http",
-            auth: "oauth",
-            oauth: { clientMetadataUrl },
-          },
-        },
-      },
-    });
+    const configWithMetadataUrl = (clientMetadataUrl: string) =>
+      mcpConfig({
+        url: mcpUrl,
+        transport: "streamable-http",
+        auth: "oauth",
+        oauth: { clientMetadataUrl },
+      });
     expect(() =>
       OpenClawSchema.parse(configWithMetadataUrl("https://client.example.com/openclaw-mcp.json")),
     ).not.toThrow();
@@ -211,30 +190,13 @@ describe("config schema", () => {
   it("validates MCP OAuth credential identity", () => {
     for (const identity of ["shared", "per-requester"] as const) {
       expect(
-        OpenClawSchema.safeParse({
-          mcp: {
-            servers: {
-              docs: {
-                url: "https://mcp.example.com/mcp",
-                auth: "oauth",
-                oauth: { identity },
-              },
-            },
-          },
-        }).success,
+        OpenClawSchema.safeParse(mcpConfig({ url: mcpUrl, auth: "oauth", oauth: { identity } }))
+          .success,
       ).toBe(true);
     }
 
-    const missingAuth = OpenClawSchema.safeParse({
-      mcp: {
-        servers: {
-          docs: {
-            url: "https://mcp.example.com/mcp",
-            oauth: { identity: "per-requester" },
-          },
-        },
-      },
-    });
+    const oauth = { identity: "per-requester" };
+    const missingAuth = OpenClawSchema.safeParse(mcpConfig({ url: mcpUrl, oauth }));
     expect(missingAuth.success).toBe(false);
     if (missingAuth.success) {
       throw new Error("Expected per-requester OAuth without auth mode to fail validation");
@@ -246,61 +208,15 @@ describe("config schema", () => {
       }),
     );
 
-    expect(
-      OpenClawSchema.safeParse({
-        mcp: {
-          servers: {
-            docs: {
-              url: "https://mcp.example.com/mcp",
-              auth: "oauth",
-              oauth: { identity: "per-requester", authProfileId: "docs:mcp" },
-            },
-          },
-        },
-      }).success,
-    ).toBe(false);
-    expect(
-      OpenClawSchema.safeParse({
-        mcp: {
-          servers: {
-            docs: {
-              command: "docs-mcp",
-              auth: "oauth",
-              oauth: { identity: "per-requester" },
-            },
-          },
-        },
-      }).success,
-    ).toBe(false);
-    // URL plus command resolves stdio and would strand the server silently.
-    expect(
-      OpenClawSchema.safeParse({
-        mcp: {
-          servers: {
-            docs: {
-              url: "https://mcp.example.com/mcp",
-              command: "docs-mcp",
-              auth: "oauth",
-              oauth: { identity: "per-requester" },
-            },
-          },
-        },
-      }).success,
-    ).toBe(false);
-    expect(
-      OpenClawSchema.safeParse({
-        mcp: {
-          servers: {
-            docs: {
-              url: "https://mcp.example.com/mcp",
-              transport: "stdio",
-              auth: "oauth",
-              oauth: { identity: "per-requester" },
-            },
-          },
-        },
-      }).success,
-    ).toBe(false);
+    for (const server of [
+      { url: mcpUrl, oauth: { ...oauth, authProfileId: "docs:mcp" } },
+      { command: "docs-mcp", oauth },
+      // URL plus command resolves stdio and would strand the server silently.
+      { url: mcpUrl, command: "docs-mcp", oauth },
+      { url: mcpUrl, transport: "stdio", oauth },
+    ]) {
+      expect(OpenClawSchema.safeParse(mcpConfig({ auth: "oauth", ...server })).success).toBe(false);
+    }
   });
 
   it("requires a bare HTTPS Gateway public origin except on loopback", () => {
@@ -330,16 +246,7 @@ describe("config schema", () => {
   });
 
   it("rejects stdio transport with whitespace-only command", () => {
-    const result = OpenClawSchema.safeParse({
-      mcp: {
-        servers: {
-          bad: {
-            command: "   ",
-            transport: "stdio",
-          },
-        },
-      },
-    });
+    const result = OpenClawSchema.safeParse(mcpConfig({ command: "   ", transport: "stdio" }));
     expect(result.success).toBe(false);
   });
 
@@ -588,21 +495,6 @@ describe("config schema", () => {
   });
 
   it("uses the indexed tuple item schema for positional array lookups", () => {
-    const tupleSchema = {
-      schema: {
-        type: "object",
-        properties: {
-          pair: {
-            type: "array",
-            items: [{ type: "string" }, { type: "number" }],
-          },
-        },
-      },
-      uiHints: {},
-      version: "test",
-      generatedAt: "test",
-    } as unknown as Parameters<typeof lookupConfigSchema>[0];
-
     const lookup = lookupConfigSchema(tupleSchema, "pair.1");
     expect(lookup?.path).toBe("pair.1");
     expect(lookup?.schema?.type).toBe("number");
@@ -610,21 +502,6 @@ describe("config schema", () => {
   });
 
   it("rejects impractical numeric tuple lookup indexes", () => {
-    const tupleSchema = {
-      schema: {
-        type: "object",
-        properties: {
-          pair: {
-            type: "array",
-            items: [{ type: "string" }, { type: "number" }],
-          },
-        },
-      },
-      uiHints: {},
-      version: "test",
-      generatedAt: "test",
-    } as unknown as Parameters<typeof lookupConfigSchema>[0];
-
     expect(lookupConfigSchema(tupleSchema, "pair.4294967294")).toBeNull();
   });
 
