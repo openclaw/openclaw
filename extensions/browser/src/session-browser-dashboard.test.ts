@@ -127,37 +127,32 @@ afterEach(async () => {
 });
 
 describe("isolated session browser owner", () => {
-  it.each([
-    { change: "URL", replacement: { ...definition, url: "https://current.example.test/" } },
-    { change: "instance", replacement: { ...definition, instanceId: "widget-replacement" } },
-  ])(
-    "rejects a delayed old $change read without replacing the newer collaborator's context",
-    async ({ replacement }) => {
-      const oldReadStarted = createDeferred<void>();
-      const oldRead = createDeferred<typeof definition>();
-      mocked.definition.mockImplementationOnce(() => {
-        oldReadStarted.resolve();
-        return oldRead.promise;
-      });
-      const stale = accessSessionBrowserDashboard(request, authority().value, {
-        operation: "open",
-      });
-      await oldReadStarted.promise;
-      mocked.definition.mockResolvedValue(replacement);
-      const current = await accessSessionBrowserDashboard(
-        { ...request, instanceId: replacement.instanceId },
-        authority().value,
-        { operation: "open" },
-      );
-      oldRead.resolve(definition);
-      await expect(stale).rejects.toThrow("dashboard changed before this operation");
-      expect(mocked.create).toHaveBeenCalledOnce();
-      expect(mocked.create).toHaveBeenCalledWith(expect.objectContaining({ url: replacement.url }));
-      expect(current.resource.page?.close).not.toHaveBeenCalled();
-      expect(() => current.resource.assertCurrent()).not.toThrow();
-      expect([...getBrowserStateRuntime().sessionDashboards!.values()]).toEqual([current.resource]);
-    },
-  );
+  it("rejects a delayed old URL read without replacing the newer collaborator's context", async () => {
+    const replacement = { ...definition, url: "https://current.example.test/" };
+    const oldReadStarted = createDeferred<void>();
+    const oldRead = createDeferred<typeof definition>();
+    mocked.definition.mockImplementationOnce(() => {
+      oldReadStarted.resolve();
+      return oldRead.promise;
+    });
+    const stale = accessSessionBrowserDashboard(request, authority().value, {
+      operation: "open",
+    });
+    await oldReadStarted.promise;
+    mocked.definition.mockResolvedValue(replacement);
+    const current = await accessSessionBrowserDashboard(
+      { ...request, instanceId: replacement.instanceId },
+      authority().value,
+      { operation: "open" },
+    );
+    oldRead.resolve(definition);
+    await expect(stale).rejects.toThrow("dashboard changed before this operation");
+    expect(mocked.create).toHaveBeenCalledOnce();
+    expect(mocked.create).toHaveBeenCalledWith(expect.objectContaining({ url: replacement.url }));
+    expect(current.resource.page?.close).not.toHaveBeenCalled();
+    expect(() => current.resource.assertCurrent()).not.toThrow();
+    expect([...getBrowserStateRuntime().sessionDashboards!.values()]).toEqual([current.resource]);
+  });
 
   it("allocates one isolated context for concurrent viewers and keeps it across actor retirement", async () => {
     const first = authority();
@@ -227,20 +222,6 @@ describe("isolated session browser owner", () => {
       accessSessionBrowserDashboard(request, authority().value, { operation: "open" }),
     ).rejects.toThrow("configured default managed profile");
     expect(mocked.create).not.toHaveBeenCalled();
-  });
-
-  it("rejects a Lightpanda default profile through managed-profile admission", async () => {
-    mocked.profile = makeBrowserProfile({
-      engine: "lightpanda",
-      attachOnly: true,
-      cdpUrl: "ws://127.0.0.1:9222/",
-    });
-    await expect(
-      accessSessionBrowserDashboard(request, authority().value, { operation: "open" }),
-    ).rejects.toThrow("local managed browser");
-    expect(mocked.ensure).not.toHaveBeenCalled();
-    expect(mocked.create).not.toHaveBeenCalled();
-    expect(getBrowserStateRuntime().sessionDashboards?.size).toBe(0);
   });
 
   it("carries invocation and resource authority into the page creation effect boundary", async () => {

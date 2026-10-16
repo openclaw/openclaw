@@ -17,6 +17,7 @@ import {
   createRuntimeWithExitSignal,
   createSignaledStart,
   originalPlatformDescriptor,
+  runGatewayLoop,
   type UpdateRespawnResultFixture,
   setPlatform,
   waitForStart,
@@ -128,8 +129,6 @@ const writeGatewayRestartHandoff = vi.fn<
   restartKind: "full-process",
   supervisorMode: "external",
 }));
-const prepareGatewayRestartHandoffRuntime =
-  vi.fn<typeof import("../../infra/restart-handoff.js").prepareGatewayRestartHandoffRuntime>();
 const scheduleGatewayRestart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
   ok: true,
   pid: process.pid,
@@ -301,7 +300,6 @@ vi.mock("../../infra/restart-handoff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/restart-handoff.js")>()),
   writeGatewayRestartHandoff: (...args: Parameters<typeof writeGatewayRestartHandoff>) =>
     writeGatewayRestartHandoff(...args),
-  prepareGatewayRestartHandoffRuntime: () => prepareGatewayRestartHandoffRuntime(),
 }));
 
 vi.mock("../../infra/gateway-active-work.js", () => ({
@@ -374,8 +372,6 @@ async function runLoopWithStart(params: {
   beginBoot?: (startedAtMs: number) => void | Promise<void>;
   completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
 }) {
-  vi.resetModules();
-  const { runGatewayLoop } = await import("./run-loop.test-support.js");
   const loopPromise = runGatewayLoop({
     start: params.start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
     runtime: params.runtime,
@@ -464,8 +460,6 @@ beforeEach(async () => {
   consumeGatewayRestartIntent.mockReturnValue(null);
   peekGatewayRestartReason.mockReset();
   peekGatewayRestartReason.mockReturnValue(undefined);
-  prepareGatewayRestartHandoffRuntime.mockReset();
-  prepareGatewayRestartHandoffRuntime.mockReturnValue(undefined);
   restartGatewayProcessWithFreshPid.mockReset();
   restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "disabled" });
   respawnGatewayProcessForUpdate.mockReset();
@@ -550,7 +544,6 @@ export const runLoopFixture = {
   markGatewayRestartHandled,
   markUpdateRestartSentinelFailure,
   peekGatewayRestartReason,
-  prepareGatewayRestartHandoffRuntime,
   readCgroup,
   readLaunchdStopTimeout,
   readRestartSentinelReadOnly,

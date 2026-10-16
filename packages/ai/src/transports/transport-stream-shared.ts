@@ -23,6 +23,40 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createZeroUsage } from "../utils/usage.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
+/** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
+export async function* iterateSseFrames(
+  read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
+  assertWithinLimit?: (pending: string) => void,
+): AsyncGenerator<{ frame: string; terminated: boolean }> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  // CRLF remains one line ending even when the delimiter expression backtracks.
+  const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
+  let scanOffset = 0;
+  for (;;) {
+    const { done, value } = await read();
+    buffer += decoder.decode(value, { stream: !done });
+    delimiter.lastIndex = scanOffset;
+    for (;;) {
+      const boundary = delimiter.exec(buffer);
+      if (!boundary && (!done || !buffer)) {
+        break;
+      }
+      const frameEnd = boundary?.index ?? buffer.length;
+      const frame = buffer.slice(0, frameEnd);
+      assertWithinLimit?.(frame);
+      buffer = boundary ? buffer.slice(frameEnd + boundary[0].length) : "";
+      delimiter.lastIndex = 0;
+      yield { frame, terminated: boundary !== null };
+    }
+    assertWithinLimit?.(buffer);
+    if (done) {
+      return;
+    }
+    scanOffset = Math.max(0, buffer.length - 3);
+  }
+}
+
 type TransportUsage = Pick<
   Usage,
   "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "totalTokens"
@@ -499,8 +533,40 @@ export function assignTransportErrorDetails(
   error: unknown,
   signal?: AbortSignal,
 ): ProviderErrorProjection {
+  if (!signal?.aborted) {
+    // File diagnostics retain the cause before transcript-safe projection clips it.
+    // Select error fields only: responses can also contain generated message content.
+    try {
+      const record = asOptionalRecord(error);
+      const response = asOptionalRecord(record?.response);
+      const detail =
+        asOptionalRecord(record?.error) ??
+        asOptionalRecord(response?.error) ??
+        asOptionalRecord(asOptionalRecord(record?.payload)?.error);
+      getAiTransportHost().logWarn("provider-error", "Model request failed", {
+        provider: output.provider,
+        model: output.model,
+        status: record?.status ?? record?.statusCode ?? response?.status,
+        code: record?.errorCode ?? record?.code ?? detail?.code,
+        type: record?.errorType ?? detail?.type ?? record?.type,
+        message:
+          record?.message ?? detail?.message ?? (typeof error === "string" ? error : undefined),
+        body: record?.errorBody ?? record?.body ?? response?.body ?? response?.data ?? detail,
+        requestId: record?.request_id ?? record?.requestId,
+        responseId: record?.responseId ?? response?.id ?? output.responseId,
+      });
+    } catch {
+      // Diagnostic accessors and log sinks cannot replace the original failure.
+    }
+  }
   const projection = projectProviderError(error, signal);
   Object.assign(output, projection);
+  // A failure after terminal accounting cannot erase it. Earlier cumulative
+  // snapshots and initial zeros never establish a complete response total.
+  if (output.usage.usageReport?.state !== "available") {
+    output.usage.usageReport = { state: "unavailable" };
+    output.usage.contextUsage = { state: "unavailable" };
+  }
   if (
     projection.stopReason === "error" &&
     output.content.length === 0 &&

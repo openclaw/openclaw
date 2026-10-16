@@ -7,6 +7,7 @@ import {
 } from "../../state/openclaw-agent-db-registry-listing.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { SessionStoreRegistryRead } from "./session-sqlite-target.js";
+import { isPerAgentSessionStoreConfig } from "./session-store-config.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import type {
   SessionStoreTargetInventoryRequest,
@@ -111,17 +112,20 @@ export function prepareSessionStoreTargetInventoryRead(
     : registry.assertAdmissionCurrent;
   return {
     assertRegistryCurrent,
+    followRegistration: registry.followRegistration,
     withRead<T>(
       operation: (
         inventory: Extract<SessionStoreTargetInventoryResult, { kind: "session-target-inventory" }>,
         assertCurrent: () => void,
       ) => Promise<T>,
       assertCallerCurrent?: () => void,
+      signal?: AbortSignal,
     ) {
       return withSessionHistoryWorkerReadCandidates(
         candidates,
         async (discovery) => {
           const assertCurrent = () => {
+            signal?.throwIfAborted();
             assertCallerCurrent?.();
             discovery.assertCurrent();
             assertRegistryCurrent();
@@ -139,7 +143,9 @@ export function prepareSessionStoreTargetInventoryRead(
               [...request.paths],
               request.registryDiscovery,
             ],
-            true,
+            // Only fixed-store visibility depends on the session rows. Per-agent
+            // topology changes with physical files or registry ownership, not activity.
+            !isPerAgentSessionStoreConfig(request.config.session?.store),
           );
           let inventory =
             memo.read() ??
@@ -148,7 +154,7 @@ export function prepareSessionStoreTargetInventoryRead(
               registeredDatabases: registeredDatabases ?? { status: "deferred" },
             }));
           if (inventory.kind === "session-target-registry-required") {
-            const { result } = await registry.read();
+            const { result } = await registry.read(signal);
             inventory = await discovery.readTargetInventory({
               ...prepared,
               registeredDatabases:
@@ -165,6 +171,7 @@ export function prepareSessionStoreTargetInventoryRead(
           return operation(inventory, assertCurrent);
         },
         targetDiscoveryLane,
+        signal,
       );
     },
   };

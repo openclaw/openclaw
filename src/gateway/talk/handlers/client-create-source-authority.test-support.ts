@@ -21,6 +21,7 @@ import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js
 import { cleanupTalkConnection } from "../session-registry.js";
 import {
   browserSession,
+  observeTalkVoiceChangeRequest,
   type BrowserRequest,
   type createDelegatedBrowserProviderFixture,
 } from "./client-fixtures.test-support.js";
@@ -199,6 +200,7 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
           }
         }
       };
+      const waitForVoiceChange = observeTalkVoiceChangeRequest(fixture.context.broadcastToConnIds);
       const change = Promise.resolve(
         talkVoiceHandlers["talk.voice.set"]!({
           req: { type: "req", id: "sdk-change", method: "talk.voice.set", params: {} },
@@ -225,6 +227,7 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
               }),
         } as never),
       );
+      await waitForVoiceChange(change);
       const changeId = fixture.context.broadcastToConnIds.mock.calls.find(
         ([event]) => event === "talk.voice.change",
       )?.[1]?.changeId;

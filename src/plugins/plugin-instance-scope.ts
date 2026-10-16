@@ -9,7 +9,7 @@ import type {
   PluginInstanceDisposalResult,
   PluginInstanceExecution,
 } from "./plugin-instance.types.js";
-import type { PluginRecord, PluginRegistry, PluginRegistryGatewayOwner } from "./registry-types.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
 export interface PluginInstanceHandle extends PluginInvocationInstance, PluginInstanceExecution {
@@ -23,7 +23,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   adopt<T>(value: T): T;
   admitFactory(
     factory: (...args: never[]) => unknown,
-    resultCallbacks?: readonly PropertyKey[],
+    resultCallbacks?: "tool" | readonly PropertyKey[],
   ): void;
   retainWork(): () => void;
   readonly retainedWorkCount: number;
@@ -64,8 +64,6 @@ export type PluginInvocationContext = {
 
 export type PluginInstanceOwner = {
   record: PluginRecord;
-  /** Recovery follows the live Gateway without retaining a disposed registry. */
-  retiredGatewayOwner?: WeakRef<PluginRegistryGatewayOwner>;
   instance?: PluginInstanceHandle;
 } & (
   | { revoked: false; registry: PluginRegistry }

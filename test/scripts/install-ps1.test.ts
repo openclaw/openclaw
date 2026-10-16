@@ -1,6 +1,9 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { extractFunctionBody } from "./install-ps1.test-support.js";
+import { createScriptTestHarness } from "./test-helpers.js";
 
 const SCRIPT_PATH = "scripts/install.ps1";
 
@@ -15,18 +18,38 @@ describe("install.ps1 source contracts", () => {
     expect(checkNodeBody).not.toContain("& $nodePath -e");
   });
 
-  it("rejects a git checkout without a commit before updating it", () => {
-    const guardBody = extractFunctionBody(source, "Assert-GitCheckoutHasCommit");
-    const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
+  const harness = createScriptTestHarness();
+  const powershell = process.platform === "win32" ? "powershell" : "pwsh";
+  const available =
+    spawnSync(powershell, ["-NoLogo", "-NoProfile", "-Command", "exit 0"]).status === 0;
+  const runWithPowerShell = available ? it : it.skip;
 
-    expect(guardBody).toContain('"--git-dir=$gitDir"');
-    expect(guardBody).toContain('"--work-tree=$RepoDir"');
-    expect(guardBody).toContain('rev-parse --verify --quiet "HEAD^{commit}"');
-    expect(guardBody).toContain("Git checkout has no commit");
-    expect(guardBody).not.toContain("Remove-Item");
-    expect(guardBody).not.toContain("Move-Item");
-    expect(gitInstallBody).toContain("Assert-GitCheckoutHasCommit -RepoDir $RepoDir");
-  });
+  runWithPowerShell.each(["valid", "missing-head", "broken-gitfile", "subdirectory"])(
+    "preserves real Git checkout boundaries before package setup: %s",
+    (scenario) => {
+      const root = join(harness.createTempDir("openclaw-install-worktree-"), "fixture");
+      const result = spawnSync(
+        powershell,
+        [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "test/scripts/install-git-worktree.ps1",
+          "-InstallerPath",
+          join(process.cwd(), SCRIPT_PATH),
+          "-FixtureRoot",
+          root,
+          "-Scenario",
+          scenario,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    },
+  );
 
   it("runs Windows command shims from a Windows-local cwd", () => {
     const commandSafeBody = extractFunctionBody(source, "Invoke-CommandFromWindowsSafeDirectory");

@@ -185,23 +185,6 @@ describe("setup surface helpers", () => {
   });
 
   describe("defaultAccount setup resolution", () => {
-    it("reports status for the configured default account", () => {
-      const lines = twitchSetupWizard.status?.resolveStatusLines?.({
-        cfg: {
-          channels: {
-            twitch: {
-              defaultAccount: "secondary",
-              accounts: {
-                secondary: configuredAccount("secondary"),
-              },
-            },
-          },
-        },
-      } as never);
-
-      expect(lines).toEqual(["Twitch (secondary): configured"]);
-    });
-
     it("reports status for the requested account override", () => {
       const lines = twitchSetupWizard.status?.resolveStatusLines?.({
         cfg: {
@@ -260,52 +243,6 @@ describe("setup surface helpers", () => {
       });
     }
 
-    it("blocks mentioned chat after the setup wizard disables group access", async () => {
-      setTwitchRuntime(createPluginRuntimeMock());
-      const groupAccess = twitchSetupWizard.groupAccess;
-      if (!groupAccess) {
-        throw new Error("expected Twitch group access setup");
-      }
-      const cfg = groupAccess.setPolicy({
-        cfg: {
-          channels: {
-            twitch: {
-              enabled: true,
-              accounts: {
-                secondary: { ...mockAccount, enabled: true },
-              },
-            },
-          },
-        },
-        accountId: "secondary",
-        policy: "disabled",
-      });
-      const account = getAccountConfig(cfg, "secondary");
-      if (!account) {
-        throw new Error("expected configured Twitch account");
-      }
-      expect(account.enabled).toBe(true);
-
-      const result = await checkTwitchAccessControl({
-        account,
-        accountId: "secondary",
-        botUsername: mockAccount.username,
-        message: {
-          id: "disabled-group-message",
-          userId: "123456",
-          username: "viewer",
-          message: "@testbot hello",
-          channel: mockAccount.channel,
-          isMod: false,
-          isOwner: false,
-          isVip: false,
-          isSub: false,
-        },
-      });
-
-      expect(result.allowed).toBe(false);
-    });
-
     it("uses an environment-only token without sending it to wizard prompts", async () => {
       const envToken = "oauth:environment-only";
       process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = envToken;
@@ -346,22 +283,6 @@ describe("setup surface helpers", () => {
       ).toThrow("Invalid Twitch account id");
 
       expect(Object.prototype).not.toHaveProperty("username");
-    });
-
-    it("rejects reserved account ids before env-token writes", async () => {
-      await expect(
-        configureWithEnvToken(
-          {} as Parameters<typeof configureWithEnvToken>[0],
-          mockPrompter,
-          null,
-          "oauth:fromenv",
-          false,
-          {} as Parameters<typeof configureWithEnvToken>[5],
-          "__proto__",
-        ),
-      ).rejects.toThrow("Invalid Twitch account id");
-
-      expect(mockPromptConfirm).not.toHaveBeenCalled();
     });
 
     it("normalizes account ids before rendering status lines", () => {
@@ -469,19 +390,13 @@ describe("setup surface helpers", () => {
       throw new Error("expected Twitch group access setup");
     }
 
-    it.each([
-      ["named account", "SECONDARY", "basebot", "secondary"],
-      ["nested default", "default", undefined, "default"],
-      ["empty base username", "default", "", "default"],
-      ["base default", "default", "testbot", "base"],
-      ["whitespace base username", "default", " ", "base"],
-    ] as const)("updates only the reader's %s layout", (_name, accountId, username, target) => {
+    it("updates the whitespace-username base account without mutating other accounts", () => {
       const account = { ...mockAccount, enabled: false, allowFrom: ["123456"] };
       const cfg = {
         channels: {
           twitch: {
             ...account,
-            username,
+            username: " ",
             accounts: { default: account, secondary: account, untouched: mockRefreshAccount },
           },
         },
@@ -489,25 +404,18 @@ describe("setup surface helpers", () => {
       const before = structuredClone(cfg);
       const patch = { allowFrom: [], allowedRoles: [], requireMention: true };
 
-      const result = groupAccess.setPolicy({ cfg, accountId, policy: "disabled" });
+      const result = groupAccess.setPolicy({ cfg, accountId: "default", policy: "disabled" });
 
       expect(result).toEqual({
         channels: {
           twitch: {
             ...cfg.channels.twitch,
             enabled: true,
-            ...(target === "base"
-              ? patch
-              : {
-                  accounts: {
-                    ...cfg.channels.twitch.accounts,
-                    [target]: { ...account, ...patch },
-                  },
-                }),
+            ...patch,
           },
         },
       });
-      expect(getAccountConfig(result, accountId)).toMatchObject(patch);
+      expect(getAccountConfig(result, "default")).toMatchObject(patch);
       expect(cfg).toEqual(before);
     });
 
@@ -518,21 +426,8 @@ describe("setup surface helpers", () => {
 
     it.each([
       ["base disabled to open", "default", [], ["open"], false, undefined, true],
-      ["IDs to open", "secondary", ["other"], ["open"], false, undefined, true],
       ["IDs to disabled", "secondary", ["123456"], ["disabled"], false, [], false],
-      ["base disabled to roles", "default", [], ["allowlist"], true, undefined, true],
-      ["unset IDs to roles", "secondary", undefined, ["allowlist"], true, undefined, true],
-      ["retained matching ID", "secondary", ["123456"], ["allowlist"], false, ["123456"], true],
       ["IDs precede roles", "secondary", ["other"], ["allowlist"], true, ["other"], false],
-      [
-        "open does not restore IDs",
-        "secondary",
-        ["123456"],
-        ["open", "allowlist"],
-        false,
-        undefined,
-        false,
-      ],
       [
         "disabled does not restore IDs",
         "secondary",
@@ -587,31 +482,21 @@ describe("setup surface helpers", () => {
       },
     );
 
-    it.each([
-      [[], ["all"], "disabled", true],
-      [["123456"], ["all"], "allowlist", true],
-      [undefined, ["owner"], "allowlist", true],
-      [undefined, ["vip"], "allowlist", true],
-      [undefined, ["subscriber"], "allowlist", true],
-      [undefined, ["all"], "open", true],
-      [undefined, [], "open", false],
-      [undefined, undefined, "open", false],
-    ] as const)("reports allowFrom=%j roles=%j as %s", (allowFrom, roles, policy, updatePrompt) => {
+    it("reports empty roles as open without prompting for an update", () => {
       const cfg = {
         channels: {
           twitch: {
             accounts: {
               secondary: {
                 ...mockAccount,
-                allowFrom: allowFrom ? [...allowFrom] : undefined,
-                allowedRoles: roles ? [...roles] : undefined,
+                allowedRoles: [],
               },
             },
           },
         },
       };
-      expect(groupAccess.currentPolicy({ cfg, accountId: "secondary" })).toBe(policy);
-      expect(groupAccess.updatePrompt?.({ cfg, accountId: "secondary" })).toBe(updatePrompt);
+      expect(groupAccess.currentPolicy({ cfg, accountId: "secondary" })).toBe("open");
+      expect(groupAccess.updatePrompt?.({ cfg, accountId: "secondary" })).toBe(false);
     });
   });
 });

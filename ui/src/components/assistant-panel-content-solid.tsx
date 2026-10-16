@@ -1,9 +1,9 @@
 import { createEffect, createMemo, onSettled, untrack } from "solid-js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { useSolidControllerHost } from "../lit/solid-controller-host.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
   buildHomeWorkContext,
   subscribeChatWorkContext,
@@ -14,7 +14,7 @@ import {
   type CustodianSessionStore,
 } from "../pages/custodian/custodian-session-store.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
-import "../pages/custodian/custodian-surface.ts";
+import "../pages/custodian/custodian-surface.tsx";
 import "./home-session.runtime.ts";
 import "../styles/assistant-panel-content.css";
 

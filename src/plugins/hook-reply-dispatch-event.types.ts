@@ -21,9 +21,9 @@ export type PluginHookReplyDispatchEvent = {
   originatingAccountId?: string;
   originatingThreadId?: string | number;
   originatingChatType?: ChatType;
-  /** @deprecated Await shouldSendToolSummariesAsync; retained until the next Plugin SDK major. */
+  /** @deprecated Await shouldSendToolSummariesAsync. Final compatibility day: 2026-12-31. */
   shouldSendToolSummaries: boolean;
-  /** @deprecated Await shouldSendFullToolDetailsAsync; retained until the next Plugin SDK major. */
+  /** @deprecated Await shouldSendFullToolDetailsAsync. Final compatibility day: 2026-12-31. */
   shouldSendFullToolDetails: boolean;
   /** Fresh worker-backed visibility; supplied by current hosts. */
   shouldSendToolSummariesAsync?: () => Promise<boolean>;

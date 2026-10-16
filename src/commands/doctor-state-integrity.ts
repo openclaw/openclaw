@@ -14,9 +14,9 @@ import {
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import {
-  resolveSharedAuthStoreOwnership,
-  resolveSharedAuthStorePath,
-} from "../agents/auth-profiles/path-resolve.js";
+  prepareSharedAuthStoreOwnershipForNative as resolveSharedAuthStoreOwnership,
+  resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.native.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import {
   clearWedgedSubagentRecoveryAbort,
@@ -539,7 +539,7 @@ export function stateIntegrityIssueToHealthFinding(
         "error",
       );
   }
-  return assertNeverStateIntegrityIssue(issue);
+  return issue satisfies never;
 }
 
 export function stateIntegrityIssueToRepairEffect(
@@ -568,13 +568,7 @@ export function stateIntegrityIssueToRepairEffect(
     case "runtime-dir-not-writable":
       return effect("would-repair-runtime-state-dir-permissions");
   }
-  return assertNeverStateIntegrityIssue(issue);
-}
-
-function assertNeverStateIntegrityIssue(issue: never): never {
-  throw new Error(
-    `Unhandled state integrity issue kind: ${String((issue as { kind?: unknown }).kind)}`,
-  );
+  return issue satisfies never;
 }
 
 /** Emits state integrity warnings and applies selected runtime repairs. */
@@ -590,7 +584,6 @@ export async function noteStateIntegrity(
   const env = process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
-  const defaultStateDir = path.join(homedir(), ".openclaw");
   const oauthDir = resolveOAuthDir(env, stateDir);
   const dirCandidates = resolveSessionRuntimeDirectories(cfg, env, homedir);
   const displayStateDir = shortenHomePath(stateDir);
@@ -761,17 +754,6 @@ export async function noteStateIntegrity(
       }
       await repairWritableDirectory(dir, displayDir, label);
     }
-  }
-
-  // Compare only the effective home's default; other accounts do not share this history.
-  if (path.resolve(stateDir) !== path.resolve(defaultStateDir) && existsDir(defaultStateDir)) {
-    warnings.push(
-      [
-        "- Multiple state directories detected. This can split session history.",
-        `  - ${shortenHomePath(defaultStateDir)}`,
-        `  Active state dir: ${displayStateDir}`,
-      ].join("\n"),
-    );
   }
 
   const orphanAgentDirs = listOrphanAgentDirs(cfg, stateDir);
@@ -955,14 +937,14 @@ export async function noteStateIntegrity(
       }
 
       await runPluginSessionStateDoctorRepairs({
-        scan: sqlitePluginStateScanner.result(),
+        scan: await sqlitePluginStateScanner.result(),
         store: { kind: "sqlite", agentId, path: sqliteStorePath },
         prompter,
         warnings,
         changes,
       });
       await runPluginSessionStateDoctorRepairs({
-        scan: legacyPluginStateScanner.result(),
+        scan: await legacyPluginStateScanner.result(),
         store: { kind: "legacy", path: absoluteStorePath },
         prompter,
         warnings,

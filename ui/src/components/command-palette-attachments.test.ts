@@ -1,20 +1,20 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import {
-  CommandPaletteLoadingState,
-  renderCommandPaletteLoading,
-} from "../app/app-shell-command-palette-loading.ts";
+import { CommandPaletteLoading } from "../app/app-shell-command-palette-loading-view.tsx";
+import { CommandPaletteLoadingState } from "../app/app-shell-command-palette-loading.ts";
 import { createWebPushCapability } from "../app/web-push.ts";
 import * as toast from "../lib/toast.ts";
 import * as payloads from "../pages/chat/attachment-payload-store.ts";
 import { createDraftFixture } from "../pages/new-session/draft-submission-flow.test-support.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { mountPalette } from "./command-palette.test-support.ts";
-import "./command-palette.ts";
+import "./command-palette.tsx";
 
 let restoreDialog: () => void;
 let readers: FileReader[];
@@ -282,10 +282,16 @@ describe("command palette paste-only images", () => {
     const state = new CommandPaletteLoadingState({ requestUpdate: () => {} });
     const loader = document.body.appendChild(document.createElement("div"));
     state.begin();
-    render(
-      renderCommandPaletteLoading(state, () => state.clear()),
-      loader,
+    const loadingView = mountSolid(
+      () =>
+        createComponent(CommandPaletteLoading, {
+          state,
+          revision: 0,
+          onClose: () => state.clear(),
+        }),
+      { container: loader },
     );
+    flush();
     const coldInput = loader.querySelector("textarea")!;
     if (outcome !== "ready" && outcome !== "policy-delayed") {
       coldInput.value = "Keep every image";
@@ -338,7 +344,10 @@ describe("command palette paste-only images", () => {
         ),
       );
       expect(palette.querySelectorAll(".chat-attachment-thumb")).toHaveLength(
-        outcome === "partial" ? 1 : 0,
+        outcome === "partial" ? 2 : 1,
+      );
+      expect(palette.querySelector(".chat-attachment-failures")?.textContent).toContain(
+        "oversized.gif",
       );
     }
     if (outcome === "ready" || delayedPolicy) {
@@ -364,6 +373,6 @@ describe("command palette paste-only images", () => {
     } else {
       expect(context.sessions.createResult).not.toHaveBeenCalled();
     }
-    render(nothing, loader);
+    loadingView.unmount();
   });
 });

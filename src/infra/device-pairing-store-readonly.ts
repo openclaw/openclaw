@@ -2,7 +2,11 @@ import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  captureOpenClawStateWorkerContext,
+  captureOpenClawStateReadContext,
+} from "../state/openclaw-state-worker-context.js";
 import type { DeviceBootstrapBoundContextInput } from "./device-bootstrap.worker-types.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { captureDevicePairingPublication } from "./device-pairing-publication.js";
@@ -11,8 +15,8 @@ import type {
   DevicePairingReadCommand,
 } from "./device-pairing-read.types.js";
 
-async function readPairing(
-  command: DevicePairingReadCommand,
+async function readPairing<Command extends DevicePairingReadCommand>(
+  command: Command,
   baseDir?: string,
   current = false,
   prepareNodes = false,
@@ -30,13 +34,11 @@ async function readPairing(
     }
     let reply;
     try {
-      reply = await executeExistingOpenClawStateRead(
-        selected,
+      const selectedCommand: Command =
         command.type === "devicePairing.list" && !snapshot
           ? { ...command, publishedRevision: publication.completeRevision() }
-          : command,
-        { current },
-      );
+          : command;
+      reply = await executeExistingOpenClawStateRead(selected, selectedCommand, { current });
     } catch (error) {
       if (!snapshot) {
         publication.fail();
@@ -50,13 +52,13 @@ async function readPairing(
     if (!publication.isCurrent()) {
       return undefined;
     }
-    if (reply?.ok && "bindings" in reply) {
+    if (reply && "bindings" in reply) {
       publication.publish(reply.revision, reply.bindings, reply.type === "devicePairing.list");
     } else if (!reply) {
       publication.publish("missing", [], true);
     }
     const preparedNodes =
-      prepareNodes && (!reply || (reply.ok && reply.type === "devicePairing.list"))
+      prepareNodes && (!reply || "list" in reply)
         ? publication.prepareNodes(reply?.revision ?? "missing", reply?.list.paired ?? [])
         : undefined;
     return { reply, nodes: preparedNodes };
@@ -101,9 +103,6 @@ export async function listDevicePairingStoreRecordsReadOnly(baseDir?: string, cu
   if (!reply) {
     return { pending: [], paired: [] };
   }
-  if (!reply.ok || reply.type !== "devicePairing.list") {
-    throw new Error("Unexpected pairing list reply");
-  }
   return reply.list;
 }
 
@@ -111,6 +110,16 @@ export async function loadPairedDevicePairingStoreRecordReadOnly(
   deviceId: string,
   baseDir?: string,
 ) {
+  const context = captureOpenClawStateReadContext(
+    resolveOpenClawStateSqlitePath(
+      baseDir ? { ...process.env, OPENCLAW_STATE_DIR: baseDir } : process.env,
+    ),
+  );
+  const device = captureDevicePairingPublication(context.admission).readDevice(deviceId.trim());
+  if (device !== undefined) {
+    context.admission.assertCurrent();
+    return device;
+  }
   const { reply } = await readPairing(
     { type: "devicePairing.lookup", deviceId: deviceId.trim() },
     baseDir,
@@ -118,9 +127,6 @@ export async function loadPairedDevicePairingStoreRecordReadOnly(
   );
   if (!reply) {
     return null;
-  }
-  if (!reply.ok || reply.type !== "devicePairing.lookup") {
-    throw new Error("Unexpected pairing lookup reply");
   }
   return reply.device;
 }
@@ -137,9 +143,6 @@ export async function loadPendingDevicePairingStoreRecordReadOnly(
   if (!reply) {
     return null;
   }
-  if (!reply.ok || reply.type !== "devicePairing.pending") {
-    throw new Error("Unexpected pending pairing reply");
-  }
   return reply.pending;
 }
 
@@ -154,9 +157,6 @@ export async function loadBoundDeviceBootstrapContextReadOnly(
   );
   if (!reply) {
     return null;
-  }
-  if (!reply.ok || reply.type !== "devicePairing.bootstrapContext") {
-    throw new Error("Unexpected bootstrap context reply");
   }
   return reply.context;
 }

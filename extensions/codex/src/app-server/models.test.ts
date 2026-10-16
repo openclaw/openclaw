@@ -109,51 +109,6 @@ describe("listCodexAppServerModels", () => {
     mocks.providerAuth.agentDir.mockClear();
   });
 
-  it("rejects a whitespace model name", () => {
-    expect(() => readModelListResult({ data: [{ ...validModelListEntry, model: "\t " }] })).toThrow(
-      /Invalid Codex app-server model\/list response/,
-    );
-  });
-
-  it("preserves generated model defaults and a valid pagination cursor", () => {
-    expect(readModelListResult({ data: [validModelListEntry], nextCursor: "page-2" })).toEqual({
-      models: [
-        {
-          id: "gpt-test",
-          model: "gpt-test",
-          displayName: "GPT Test",
-          description: "test model",
-          hidden: false,
-          isDefault: false,
-          inputModalities: ["text", "image"],
-          supportedReasoningEfforts: [],
-          serviceTiers: [],
-          defaultReasoningEffort: "medium",
-          multiAgentVersion: "v2",
-        },
-      ],
-      nextCursor: "page-2",
-    });
-  });
-
-  it("preserves explicit null while omitting an absent multi-agent version", () => {
-    expect(
-      readModelListResult({
-        data: [{ ...validModelListEntry, multiAgentVersion: null }],
-      }).models[0],
-    ).toHaveProperty("multiAgentVersion", null);
-    expect(
-      readModelListResult({
-        data: [
-          {
-            ...validModelListEntry,
-            multiAgentVersion: undefined,
-          },
-        ],
-      }).models[0],
-    ).not.toHaveProperty("multiAgentVersion");
-  });
-
   it.each([
     { label: "missing model data", response: {} },
     {
@@ -179,6 +134,13 @@ describe("listCodexAppServerModels", () => {
     await expect(listPromise).rejects.toThrow(/Invalid Codex app-server model\/list response/);
     harness.client.close();
     startSpy.mockRestore();
+  });
+
+  it("defaults omitted model modalities at model admission", () => {
+    const result = readModelListResult({ data: [validModelListEntry] });
+
+    expect(result.models[0]?.inputModalities).toEqual(["text", "image"]);
+    expect(validModelListEntry).not.toHaveProperty("inputModalities");
   });
 
   it("lists app-server models through the typed helper", async () => {

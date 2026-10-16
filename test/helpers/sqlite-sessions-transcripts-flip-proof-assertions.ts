@@ -101,7 +101,10 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
     expect(forcedExit.signal).toBe("SIGKILL");
   }
   expect(before.selected.sessionKey).toBe(report.fullTurnSessionKey);
-  expect(before.selected.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+  expect(
+    before.selected.messages.map((message) => message.role),
+    JSON.stringify({ events: before.selected.events, history: before.selected.history.messages }),
+  ).toEqual(["user", "assistant"]);
   expect(before.selected.history.sessionId).toBe(before.selected.sessionId);
   expect(afterRestart).toEqual(before);
   expect(afterAppend.sibling).toEqual(before.sibling);

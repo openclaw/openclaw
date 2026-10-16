@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
@@ -10,11 +11,11 @@ import {
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { projectCronRunHistoryPage } from "../run-history.js";
 import { saveCronStore } from "../store.js";
-import type { CronJob, CronStoreFile } from "../types.js";
+import type { CronJob, CronJobPatch } from "../types.js";
 import { readCronRunRecords } from "./read-only.js";
 import type { CronRunQueueOperations, CronRunRequestContext } from "./run-queue.types.js";
+import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 import { createCronScheduledRunId } from "./run-request-id.js";
-import { prepareCronStoreChanges } from "./save.kernel.js";
 
 const now = 1_800_000_000_000;
 let fixture: OpenClawTestState;
@@ -64,6 +65,22 @@ async function store(label: string, jobs: CronJob[]) {
   return {
     storeKey,
     read,
+    readReceipt: async (handle: CronRunReceiptHandle) => {
+      const result = await executeExistingOpenClawStateRead(
+        { path: context.admission.databasePath, env: context.environment },
+        {
+          type: "cron.currentReceipt",
+          handle,
+          includeJob: false,
+          includeAvailability: false,
+        },
+        { context },
+      );
+      if (!result?.ok || result.type !== "cron.currentReceipt") {
+        throw new Error("Cron receipt read failed");
+      }
+      return result.facts.receipt;
+    },
     request: (requests: CronRunQueueOperations["cron.requestRuns"]["input"]["requests"]) =>
       executeOpenClawStateWorker(context, {
         type: "cron.requestRuns",
@@ -83,19 +100,24 @@ async function store(label: string, jobs: CronJob[]) {
         type: "cron.cancelRequests",
         input: { storeKey, receiptIds, nowMs: now + 2, reason: "synthetic cancellation", status },
       }),
-    edit: async (mutate: (next: CronStoreFile) => void) => {
-      const previous = await read();
-      const next = structuredClone(previous);
-      mutate(next);
-      return executeOpenClawStateWorker(context, {
+    update: (id: string, patch: CronJobPatch) =>
+      executeOpenClawStateWorker(context, {
         type: "cron.mutateJobs",
         input: {
           storeKey,
-          changes: prepareCronStoreChanges(previous, next),
+          jobMutation: { kind: "update", id, patch, options: { captured: false } },
           snapshot: { nowMs: now + 1 },
         },
-      });
-    },
+      }),
+    remove: (id: string) =>
+      executeOpenClawStateWorker(context, {
+        type: "cron.mutateJobs",
+        input: {
+          storeKey,
+          jobMutation: { kind: "remove", ids: [id] },
+          snapshot: { nowMs: now + 1 },
+        },
+      }),
   };
 }
 
@@ -108,6 +130,26 @@ function scheduled(storeKey: string, current: CronJob) {
     mode: "scheduled" as const,
   };
 }
+
+it("keeps the first execution link across binding retries without changing the run claim", async () => {
+  const current = job("execution-link");
+  const queue = await store("execution-link", [current]);
+  await queue.request([scheduled(queue.storeKey, current)]);
+  const activated = await queue.drain();
+  expect(activated.launches).toHaveLength(1);
+  const receipt = activated.launches[0]!.runReceipt;
+  const bind = (contextId: string, executionId: string) =>
+    executeOpenClawStateWorker(context, {
+      type: "cron.bindReceiptExecution",
+      input: { receiptId: receipt.receiptId, binding: { contextId, executionId } },
+    });
+
+  expect(await bind("original-context", "original-execution")).toBe(true);
+  expect(await bind("replacement-context", "replacement-execution")).toBe(false);
+  expect(await bind("original-context", "original-execution")).toBe(true);
+  expect(await queue.readReceipt(receipt)).toEqual(receipt);
+  await queue.cancel([receipt.receiptId], "superseded");
+});
 
 it("deduplicates committed slots and drains persisted job order within worker capacity", async () => {
   const jobs = [
@@ -142,18 +184,62 @@ it("deduplicates committed slots and drains persisted job order within worker ca
   expect((await queue.drain()).launches.map((entry) => entry.job.id)).toEqual(["a-second"]);
 });
 
-it("uses edited payloads while queued and records a disabled request under its public acknowledgement ID", async () => {
+it("advances a consumed scheduled slot without reclaiming its terminal receipt", async () => {
+  const current = job("consumed");
+  const queue = await store("consumed", [current]);
+  const request = scheduled(queue.storeKey, current);
+  await queue.request([request]);
+  await queue.cancel([request.receiptId], "superseded");
+  expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBe(now);
+  const retry = await queue.request([request]);
+  expect(retry.accepted).toEqual([]);
+  expect(retry.rejected).toEqual([
+    { jobId: current.id, receiptId: request.receiptId, reason: "already-requested" },
+  ]);
+  expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBeGreaterThan(now);
+  expect((await queue.drain()).launches).toEqual([]);
+});
+
+it("returns durable receipt handles across queued edits and records disabled requests under their public ID", async () => {
   const original = job("edited");
   const queue = await store("edit", [original]);
   const request = scheduled(queue.storeKey, original);
-  await queue.request([request]);
-  await queue.edit((next) => {
-    next.jobs[0]!.payload = { kind: "command", argv: ["echo", "new payload"] };
+  const claimed = (await queue.request([request])).accepted[0]!;
+  expect(await queue.readReceipt(claimed.runReceipt)).toEqual(claimed.runReceipt);
+  const edited = await queue.update(original.id, {
+    payload: { kind: "command", argv: ["echo", "new payload"] },
+    agentId: "edited-agent",
   });
-  expect((await queue.drain()).launches[0]?.job.payload).toEqual({
+  expect(edited).toMatchObject({
+    outcome: {
+      store: {
+        jobs: [
+          {
+            id: original.id,
+            agentId: "edited-agent",
+            payload: { kind: "command", argv: ["echo", "new payload"] },
+            state: { queuedAtMs: now },
+          },
+        ],
+      },
+    },
+  });
+  expect(edited).toMatchObject({ outcome: { store: await queue.read() } });
+  const activated = (await queue.drain()).launches[0]!;
+  expect(activated.job.payload).toEqual({
     kind: "command",
     argv: ["echo", "new payload"],
   });
+  expect(activated.runReceipt).toEqual({
+    ...claimed.runReceipt,
+    agentId: "edited-agent",
+    configRevision: resolveCronJobConfigRevision(activated.job),
+    startedAtMs: now + 1,
+  });
+  expect(await queue.readReceipt(activated.runReceipt)).toEqual(activated.runReceipt);
+  expect((await queue.request([request])).rejected).toEqual([
+    { jobId: original.id, receiptId: request.receiptId, reason: "already-requested" },
+  ]);
 
   const cancelJob = job("disabled");
   const cancelled = await store("disable", [cancelJob]);
@@ -165,9 +251,13 @@ it("uses edited payloads while queued and records a disabled request under its p
     configRevision: resolveCronJobConfigRevision(cancelJob),
   };
   await cancelled.request([manual]);
-  await cancelled.edit((next) => {
-    next.jobs[0]!.enabled = false;
-  });
+  const disabled = await cancelled.update(cancelJob.id, { enabled: false });
+  expect(disabled).toMatchObject({ outcome: { store: await cancelled.read() } });
+  if (!("outcome" in disabled)) {
+    throw new Error("Expected the queued disable to commit");
+  }
+  expect(disabled.outcome.store.jobs[0]?.enabled).toBe(false);
+  expect(disabled.outcome.store.jobs[0]?.state.queuedAtMs).toBeUndefined();
   const drained = await cancelled.drain([manual]);
   expect(drained.launches).toEqual([]);
   expect(drained.skipped.map((entry) => entry.runReceipt.receiptId)).toEqual([manual.receiptId]);
@@ -230,9 +320,7 @@ it("launches explicit force on a disabled job and retains a consumed exit event 
     configRevision: resolveCronJobConfigRevision(onExit),
   };
   expect((await exit.request([event])).accepted[0]?.job.enabled).toBe(false);
-  await exit.edit((next) => {
-    next.jobs[0]!.enabled = true;
-  });
+  await exit.update(onExit.id, { enabled: true });
   const result = await exit.drain([event]);
   expect(result.skipped).toEqual([]);
   expect(result.launches.map((entry) => entry.job.id)).toEqual(["exit"]);
@@ -242,28 +330,15 @@ it("recovers a timed request without replaying active work or reconstructing a l
   const timedJob = job("recover", { schedule: { kind: "at", at: new Date(now).toISOString() } });
   const queue = await store("recover", [timedJob]);
   const requested = (await queue.request([scheduled(queue.storeKey, timedJob)])).accepted[0]!;
-  const repair = (entry: typeof requested, queuedAtMs?: number, runningAtMs?: number) =>
+  const recover = () =>
     executeOpenClawStateWorker(context, {
-      type: "cron.repairRun",
-      input: {
-        storeKey: queue.storeKey,
-        mode: "startup",
-        proposal: {
-          jobId: entry.job.id,
-          queuedAtMs,
-          runningAtMs,
-          runningReceiptId: runningAtMs === undefined ? undefined : entry.runReceipt.receiptId,
-          receipt: entry.runReceipt,
-        },
-        snapshot: { nowMs: now + 2, proposedReceiptIsStale: true },
-      },
+      type: "cron.recoverRuns",
+      input: { storeKey: queue.storeKey, nowMs: now + 2 },
     });
-  expect(await repair(requested, now)).toMatchObject({ outcome: { result: { kind: "repaired" } } });
+  expect((await recover()).jobs[0]?.state.queuedAtMs).toBe(now);
   const active = (await queue.drain()).launches[0]!;
   expect(active.runReceipt.receiptId).toBe(requested.runReceipt.receiptId);
-  expect(await repair(active, undefined, now + 1)).toMatchObject({
-    outcome: { result: { kind: "repaired" } },
-  });
+  expect((await recover()).interruptedRuns).toHaveLength(1);
   expect((await queue.drain()).launches).toEqual([]);
   const interrupted = (await queue.read()).jobs[0]!;
   expect(interrupted.state.lastRunStatus).toBe("error");
@@ -279,15 +354,15 @@ it("recovers a timed request without replaying active work or reconstructing a l
     configRevision: resolveCronJobConfigRevision(manualJob),
   };
   await legacy.request([manual]);
-  const lost = await legacy.drain();
-  expect(lost.launches).toEqual([]);
-  expect(lost.skipped).toMatchObject([
-    {
-      error: "cron: queued request lost its launch context",
-      runReceipt: { receiptId: manual.receiptId },
-    },
-  ]);
+  const held = await legacy.drain();
+  expect(held).toEqual({ launches: [], skipped: [] });
+  expect((await legacy.read()).jobs[0]?.state.queuedAtMs).toBe(now);
+  await executeOpenClawStateWorker(context, {
+    type: "cron.recoverRuns",
+    input: { storeKey: legacy.storeKey, nowMs: now + 2 },
+  });
   expect((await legacy.read()).jobs[0]?.state.queuedAtMs).toBeUndefined();
+  expect((await legacy.drain()).launches).toEqual([]);
   const history = projectCronRunHistoryPage(await readCronRunRecords(legacy.storeKey), {
     storeKey: legacy.storeKey,
   });
@@ -345,16 +420,12 @@ it("cancels a removed queued job and rejects a plan made before its definition c
   const queue = await store("removed", [current]);
   const request = scheduled(queue.storeKey, current);
   await queue.request([request]);
-  await queue.edit((next) => {
-    next.jobs = [];
-  });
+  await queue.remove(current.id);
   expect((await queue.drain([request])).skipped[0]?.runReceipt.receiptId).toBe(request.receiptId);
   expect((await queue.drain()).launches).toEqual([]);
   const changed = job("changed");
   const stale = await store("stale-plan", [changed]);
-  await stale.edit((next) => {
-    next.jobs[0]!.enabled = false;
-  });
+  await stale.update(changed.id, { enabled: false });
   expect((await stale.request([scheduled(stale.storeKey, changed)])).rejected).toEqual([
     {
       jobId: changed.id,

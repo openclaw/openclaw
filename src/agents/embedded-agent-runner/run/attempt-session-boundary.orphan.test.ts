@@ -1,6 +1,7 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
@@ -73,6 +74,7 @@ async function withPersistedOrphanBoundary(
       sessionKey: "agent:main:orphan-projection",
       storePath: path.join(state.sessionsDir(), "sessions.json"),
     };
+    setRuntimeConfigSnapshot({});
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const seed = SessionManager.open(target, state.workspaceDir);
     if (options.parent) {

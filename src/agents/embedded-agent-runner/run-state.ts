@@ -182,6 +182,8 @@ export type EmbeddedRunRegistration = {
   agentId?: string;
   delegatedAuthority?: AgentRunDelegatedAuthority;
   humanInputWaits?: Set<() => boolean>;
+  /** Exact-run keyed inputs retain accepted outcomes, never rejected reservations. */
+  messageAdmissions?: Map<string, Promise<EmbeddedAgentQueueMessageOutcome>>;
   onHumanInputResolved?: () => void;
 };
 
@@ -459,9 +461,6 @@ function evictPriorLifecycleEmbeddedRuns(): void {
     }
     EMBEDDED_RUN_WAITERS.delete(sessionId);
     for (const waiter of waiters) {
-      if (waiter.timer) {
-        clearTimeout(waiter.timer);
-      }
       waiter.resolve(true);
     }
   }

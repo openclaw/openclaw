@@ -284,11 +284,7 @@ export class DiscordAudioTransport extends EventEmitter<{
       case "capture-frame": {
         const capture = this.captures.get(event.id);
         if (capture && !capture.destroyed) {
-          capture.push({
-            ...event.frame,
-            pcm: Buffer.from(event.frame.pcm),
-            packet: Buffer.from(event.frame.packet),
-          });
+          capture.push(event.frame);
         }
         break;
       }

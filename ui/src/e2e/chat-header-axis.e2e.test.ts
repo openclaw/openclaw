@@ -16,6 +16,7 @@ suite.define(() => {
     for (const viewport of [
       { label: "desktop", width: 800 },
       { label: "mobile", width: 760 },
+      { label: "phone", width: 390 },
     ] as const) {
       it(`lays out and navigates the ${viewport.label} project-parent-child trail in ${colorScheme} mode`, async () => {
         const context = await suite.newBrowserContext({
@@ -85,7 +86,7 @@ suite.define(() => {
             return {
               nav: centerY(".chat-pane__nav-toggle svg"),
               projectIcon: centerY(".workspace-icon"),
-              projectText: centerY(".chat-pane__workspace-chip span"),
+              projectText: centerY(".chat-pane__workspace-chip > .oc-menu-item__label > span"),
               menu: centerY(".chat-header-session-menu__trigger svg"),
               parentText: centerY(".chat-pane__parent-session-text"),
               sessionText: centerY(".chat-pane__session-title-text"),
@@ -95,6 +96,8 @@ suite.define(() => {
                 ...root.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep"),
               ].map((node) => getComputedStyle(node).display),
               headerBottom: root.getBoundingClientRect().bottom,
+              headerOverflow: root.scrollWidth - root.clientWidth,
+              titleWidth: rect(".chat-pane__session-title-text").width,
               contentTop: main.getBoundingClientRect().top,
             };
           });
@@ -104,6 +107,8 @@ suite.define(() => {
             JSON.stringify(geometry),
           ).toBeLessThanOrEqual(0.1);
           expect(geometry.contentTop).toBeGreaterThanOrEqual(geometry.headerBottom - 0.1);
+          expect(geometry.headerOverflow).toBeLessThanOrEqual(1);
+          expect(geometry.titleWidth).toBeGreaterThan(0);
           if (viewport.label === "desktop") {
             for (const center of [
               geometry.projectIcon,

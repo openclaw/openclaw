@@ -257,9 +257,9 @@ async function createCompletionFixture(
         // A retained terminal receipt uses only columns shipped in v2026.9.9.
         db.prepare(
           `INSERT INTO cron_run_receipts (
-            receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
+            cursor_id, receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
             status, owner_pid, owner_start_time, started_at_ms, finished_at_ms, error_text
-          ) VALUES (?, ?, ?, ?, 'main', 'released-request', 'ok', 123, NULL, 10, 20, NULL)`,
+          ) VALUES ((SELECT coalesce(max(cursor_id), 0) + 1 FROM cron_run_receipts), ?, ?, ?, ?, 'main', 'released-request', 'ok', 123, NULL, 10, 20, NULL)`,
         ).run("released-receipt", receipt.storeKey, job.id, receipt.configRevision);
       });
       const loaded = (await loadCronStore(cronStorePath)).jobs[0]!;
@@ -607,18 +607,22 @@ describe("completion announcement", () => {
   });
 
   it.each(["NO_REPLY", "Scheduled report\nNO_REPLY"])(
-    "suppresses script control text before committing or adding an inspection link: %s",
+    "delivers prepared script text literally without a second control parser: %s",
     async (text) => {
       await withCompletionFixture("script", async (fixture) => {
         await expect(fixture.finalize({ text })).resolves.toMatchObject({
-          delivered: false,
-          deliveryAttempted: false,
+          delivered: true,
+          deliveryAttempted: true,
           deliveryError: undefined,
-          deliverySuppressionReason: "silent",
         });
-        expect(fixture.sendText).not.toHaveBeenCalled();
+        const deliveredText = `${text}\nInspect: https://automation.example.test/automations?job=script-job&run=cron%3Ascript-job%3A1000`;
+        expect(fixture.sendText).toHaveBeenCalledWith(
+          expect.objectContaining({ text: deliveredText }),
+        );
         expect(fixture.warn).not.toHaveBeenCalled();
-        expect(await fixture.messages(fixture.destination)).toEqual([]);
+        expect(await fixture.messages(fixture.destination)).toEqual([
+          expect.objectContaining({ content: [{ type: "text", text: deliveredText }] }),
+        ]);
         await fixture.assertNoOtherResults();
       });
     },

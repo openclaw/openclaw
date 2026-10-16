@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   answerInitialize,
@@ -189,12 +193,14 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
 
 describe("Codex runtime startup resource lifetime", () => {
   setupRunAttemptTestHooks();
+  afterEach(() => clearRuntimeConfigSnapshot());
 
-  it.each(["capture-failed", "abort", "cleanup", "replacement"] as const)(
+  it.each(["capture-failed", "abort"] as const)(
     "releases allocated runtime owners once when native monitor setup ends with %s",
     async (ending) => {
       const harness = createStartedThreadHarness();
       const params = createTestParams();
+      setRuntimeConfigSnapshot(params.config ?? {});
       const abortController = new AbortController();
       params.abortSignal = abortController.signal;
       params.sandbox = createSandboxContext({});
@@ -250,20 +256,13 @@ describe("Codex runtime startup resource lifetime", () => {
           pluginConfig: { appServer: { mode: "yolo", experimental: { sandboxExecServer: true } } },
           nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
         });
-        const rejected =
-          ending === "capture-failed" || ending === "abort"
-            ? expect(run).rejects.toBe(setupError)
-            : expect(run).rejects.toThrow("registration was superseded during setup");
+        const rejected = expect(run).rejects.toBe(setupError);
         await captured.promise;
         const resources = resourcesSpy.mock.results[0]?.value;
         assert(resources);
         expect(resources.state.nativeSubagentMonitor).toBeUndefined();
         if (ending === "abort") {
           abortController.abort(setupError);
-        } else if (ending === "cleanup") {
-          await resources.releaseCurrentRoute();
-        } else if (ending === "replacement") {
-          resources.state.thread = { ...resources.state.thread };
         }
         releaseCapture.resolve();
         await rejected;

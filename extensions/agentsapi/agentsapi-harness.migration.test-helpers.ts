@@ -118,6 +118,20 @@ export function registerMigrationTests(
           },
         },
         { name: "native search", params: { toolOverrides: { webSearch: false } } },
+        {
+          name: "Gateway forwarding",
+          config: {
+            plugins: {
+              entries: { agentsapi: { config: { forwarding: { gatewayTools: false } } } },
+            },
+          },
+        },
+        {
+          name: "MCP forwarding",
+          config: {
+            plugins: { entries: { agentsapi: { config: { forwarding: { mcpServers: false } } } } },
+          },
+        },
       ];
       try {
         for (const entry of cases) {

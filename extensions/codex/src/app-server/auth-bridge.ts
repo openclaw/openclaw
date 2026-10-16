@@ -47,6 +47,7 @@ import {
   resolveCodexAppServerLocalHomeDir,
   withClearedEnvironmentVariables,
   withEphemeralCodexAuthStore,
+  withManagedCodexThreadUnloading,
 } from "./auth-start-options.js";
 import type {
   CodexAppServerAuthRequirement,
@@ -56,22 +57,14 @@ import type {
   CodexAppServerResolvedPreparedAuth,
 } from "./auth-types.js";
 import type { CodexAppServerClient } from "./client.js";
-import {
-  ensureCodexManagedBundledMarketplace,
-  resolveCodexManagedBundledMarketplaceSource,
-} from "./computer-use-marketplace.js";
+import { resolveCompleteComputerUseArtifactCandidate } from "./computer-use-artifact-candidate.js";
+import { ensureCodexManagedBundledMarketplace } from "./computer-use-marketplace.js";
 import { ensureOwnedCodexHome } from "./computer-use-service-path.js";
-import {
-  ensureCodexComputerUseServiceApp,
-  resolveCodexComputerUseServiceAppSourcePath,
-} from "./computer-use-service.js";
+import { ensureCodexComputerUseServiceApp } from "./computer-use-service.js";
 import { reconcileManagedCodexComputerUseCache } from "./computer-use-unified.js";
 import type { CodexAppServerHomeScope, CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexComputerUseConfig } from "./config-runtime.js";
-import {
-  resolveMacOSDesktopCodexAppPathCandidates,
-  type MacOSDesktopCodexAppPathCandidate,
-} from "./desktop-app-paths.js";
+import { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
 import type { CodexDesktopGeneration } from "./desktop-generation-owner.js";
 import type {
   CodexChatgptAuthTokensRefreshResponse,
@@ -118,7 +111,10 @@ export async function bridgeCodexAppServerStartOptions(
     return params.startOptions;
   }
   const scopeStartOptions = () =>
-    withCodexHomeEnvironment(withEphemeralCodexAuthStore(params), params.agentDir);
+    withCodexHomeEnvironment(
+      withManagedCodexThreadUnloading(withEphemeralCodexAuthStore(params)),
+      params.agentDir,
+    );
 
   if (params.preparedAuth) {
     const scopedStartOptions = await scopeStartOptions();
@@ -530,6 +526,8 @@ async function reconcileCodexComputerUseStartArtifactsOnce(
             ownershipRoot: provisioningAgentDir,
             computerUsePluginName: computerUseConfig.pluginName,
             computerUseMcpServerName: computerUseConfig.mcpServerName,
+            desktopFingerprint: params.desktopGeneration?.fingerprint,
+            forceRefresh: params.forceCacheRefresh,
             ...(artifactCandidate
               ? {
                   appServerCommand: artifactCandidate.appServerCommandPath,
@@ -584,28 +582,6 @@ async function reconcileCodexComputerUseStartArtifactsOnce(
   });
 }
 
-async function resolveCompleteComputerUseArtifactCandidate(params: {
-  candidates: readonly MacOSDesktopCodexAppPathCandidate[];
-  needsBundledMarketplace: boolean;
-}): Promise<MacOSDesktopCodexAppPathCandidate | undefined> {
-  for (const candidate of params.candidates) {
-    if (
-      params.needsBundledMarketplace &&
-      !(await resolveCodexManagedBundledMarketplaceSource({ candidates: [candidate] }))
-    ) {
-      continue;
-    }
-    if (
-      await resolveCodexComputerUseServiceAppSourcePath({
-        sourceAppCandidates: candidate.computerUseServiceAppPaths,
-      })
-    ) {
-      return candidate;
-    }
-  }
-  return undefined;
-}
-
 function pruneComputerUseArtifactOwners(): void {
   while (activeComputerUseArtifactReconciliations.size > MAX_COMPUTER_USE_ARTIFACT_OWNERS) {
     const inactive = [...activeComputerUseArtifactReconciliations].find(
@@ -637,13 +613,20 @@ export async function applyCodexAppServerAuthProfile(params: {
   startOptions?: CodexAppServerStartOptions;
   config?: AuthProfileOrderConfig;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
 }): Promise<CodexAppServerAuthHandoff | undefined> {
+  const withCurrent = async (write: () => void) => {
+    await params.assertCurrentAsync?.();
+    params.assertCurrent?.();
+    write();
+  };
   params.assertCurrent?.();
   if (!params.preparedAuth && params.authProfileId === null) {
     await assertNativeCodexAccountMatchesRoute(
       params.client,
       params.authRequirement,
       params.assertCurrent,
+      withCurrent,
     );
     return undefined;
   }
@@ -679,6 +662,7 @@ export async function applyCodexAppServerAuthProfile(params: {
       env,
       ...(params.authRequirement === "api-key" ? { codexCliAuthEnv: process.env } : {}),
       assertCurrent: params.assertCurrent,
+      withCurrent,
     });
   }
   if (loginParams) {
@@ -686,6 +670,7 @@ export async function applyCodexAppServerAuthProfile(params: {
     try {
       await params.client.request("account/login/start", loginParams, {
         assertCurrent: params.assertCurrent,
+        withCurrent,
       });
     } catch (error) {
       throw codexPrewriteRejectionCause(error);
@@ -712,6 +697,7 @@ async function assertNativeCodexAccountMatchesRoute(
   client: CodexAppServerClient,
   authRequirement: CodexAppServerAuthRequirement | undefined,
   assertCurrent?: () => void,
+  withCurrent?: (write: () => void) => Promise<void>,
 ): Promise<void> {
   if (!authRequirement) {
     return;
@@ -719,7 +705,7 @@ async function assertNativeCodexAccountMatchesRoute(
   const response = await client.request<CodexGetAccountResponse>(
     "account/read",
     { refreshToken: false },
-    { assertCurrent },
+    { assertCurrent, withCurrent },
   );
   const accountType = response.account?.type;
   if (authRequirement === "subscription") {
@@ -810,7 +796,7 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(
   }
   if (!isCodexAppServerAuthProvider(credential.provider)) {
     throw new CodexAppServerAuthProfileUnavailableError(
-      `Codex app-server auth profile "${profileId}" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.`,
+      `Codex app-server auth profile "${profileId}" must use the OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.`,
     );
   }
   const preferStoreCredential = Boolean(params.authProfileStore?.profiles[profileId]);
@@ -857,6 +843,7 @@ async function resolveCodexAppServerFallbackApiKeyLoginParams(params: {
   env: NodeJS.ProcessEnv;
   codexCliAuthEnv?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
+  withCurrent?: (write: () => void) => Promise<void>;
 }): Promise<CodexLoginAccountParams | undefined> {
   const apiKey =
     readFirstNonEmptyEnv(params.env, CODEX_APP_SERVER_API_KEY_ENV_VARS) ??
@@ -867,7 +854,7 @@ async function resolveCodexAppServerFallbackApiKeyLoginParams(params: {
   const response = await params.client.request<CodexGetAccountResponse>(
     "account/read",
     { refreshToken: false },
-    { assertCurrent: params.assertCurrent },
+    { assertCurrent: params.assertCurrent, withCurrent: params.withCurrent },
   );
   if (response.account) {
     return undefined;
@@ -948,7 +935,7 @@ async function resolveOAuthCredentialForCodexAppServer(
     ? resolveOpenAICodexAuthIdentity(currentCredential).accountId?.trim()
     : undefined;
   const callbackAccountId =
-    params.authHandoff?.chatgptAccountId.trim() ?? params.previousAccountId?.trim() ?? undefined;
+    params.authHandoff?.chatgptAccountId.trim() ?? params.previousAccountId?.trim();
   if (callbackAccountId && selectedAccountId && callbackAccountId !== selectedAccountId) {
     throw codexWorkspaceChangedError("before");
   }

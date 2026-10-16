@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
+import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { writeConfigMachineState } from "./config-machine-state-write.js";
 import {
   createOnboardingRecommendationsStore,
   type OnboardingRecommendationMatch,
@@ -9,6 +11,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "./openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "./openclaw-state-worker-store.js";
 
 const matches: OnboardingRecommendationMatch[] = [
   {
@@ -30,6 +34,44 @@ afterEach(() => {
 });
 
 describe("onboarding recommendations store", () => {
+  it("confines worker writes and deletion to the onboarding namespace", async () => {
+    await withOpenClawTestState({ label: "onboarding-worker-key" }, async (state) => {
+      const options = { env: state.env };
+      const credentials = {
+        version: 1,
+        profiles: { synthetic: { type: "api_key", provider: "synthetic", key: "synthetic-key" } },
+      };
+      writeConfigMachineState("authProfiles.store", credentials, options);
+      const context = captureOpenClawStateWorkerContext(options);
+      // A raw key from a retained caller must not override the worker's namespace.
+      const input = {
+        workspaceKey: "authProfiles.store",
+        configKey: "authProfiles.store",
+        params: { inventoryHash: "synthetic", matches: [], answered: false, nowMs: 1 },
+      };
+      await executeOpenClawStateWorker(context, {
+        type: "onboardingRecommendations.writeOffer",
+        input,
+      });
+      expect(readConfigMachineStateWithMetadata("authProfiles.store", options)?.value).toEqual(
+        credentials,
+      );
+      expect(
+        readConfigMachineStateWithMetadata("onboarding.recommendations.authProfiles.store", options)
+          ?.value,
+      ).toMatchObject({ inventoryHash: "synthetic", offeredAt: 1 });
+      expect(
+        await executeOpenClawStateWorker(context, {
+          type: "onboardingRecommendations.clear",
+          input,
+        }),
+      ).toBe(true);
+      expect(readConfigMachineStateWithMetadata("authProfiles.store", options)?.value).toEqual(
+        credentials,
+      );
+    });
+  });
+
   it("captures the database and offer before asynchronous admission", async () => {
     await withOpenClawTestState({ label: "onboarding-recommendations-capture" }, async (state) => {
       const originalPath = state.statePath("state", "openclaw.sqlite");
@@ -121,29 +163,6 @@ describe("onboarding recommendations store", () => {
         nowMs: 2_000,
       });
       expect(staleCompletion).toEqual(written);
-    });
-  });
-
-  it("keeps acceptedAt null when the offer was shown without an answer", async () => {
-    await withOpenClawTestState({ label: "onboarding-recommendations-open" }, async (state) => {
-      const store = createOnboardingRecommendationsStore({
-        workspaceDir: state.workspaceDir,
-        database: { env: state.env },
-      });
-      const record = await store.writeOffer({
-        inventory: [{ label: "Chat" }],
-        matches,
-        answered: false,
-        nowMs: 2_345,
-      });
-
-      expect(record.acceptedAt).toBeNull();
-
-      const acknowledged = await store.acknowledge({
-        nowMs: 3_456,
-      });
-      expect(acknowledged).toEqual({ ...record, acceptedAt: 3_456, updatedAt: 3_456 });
-      expect(await store.read()).toEqual(acknowledged);
     });
   });
 

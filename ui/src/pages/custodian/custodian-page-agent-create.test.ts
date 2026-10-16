@@ -7,7 +7,7 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext as createCustodianContext } from "./custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
-import "./custodian-page.ts";
+import "./custodian-page.tsx";
 
 type TestCustodianPage = HTMLElement & {
   onboarding: boolean;
@@ -81,7 +81,7 @@ describe("custodian new-agent flow", () => {
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "new-agent" });
   });
 
-  it("does not misreport limited access as an outdated Gateway", async () => {
+  it("explains the missing capability and scope before sending an agent creation request", async () => {
     const request = vi.fn();
     const { context } = createContext(request);
     context.gateway.snapshot.hello = {
@@ -93,7 +93,12 @@ describe("custodian new-agent flow", () => {
     await Promise.resolve();
 
     expect(request).not.toHaveBeenCalled();
-    expect(page.querySelector('[role="alert"]')).toBeNull();
+    const error = page.querySelector('[role="alert"]')?.textContent;
+    expect(error).toContain("openclaw.chat");
+    expect(error).toContain("operator.admin");
+    expect(error).toContain("Pair");
+    expect(error).toContain("reconnect");
+    expect(error).not.toContain("Update the Gateway");
   });
 
   it("refreshes the roster and opens the created agent hatch session", async () => {

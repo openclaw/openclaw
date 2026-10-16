@@ -1,4 +1,4 @@
-import { render } from "lit";
+import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SkillsLibraryListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
@@ -13,7 +13,11 @@ import {
   gatewayHelloForMethods,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
-import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  ChatComposerCapabilityHost,
+  ChatComposerCapabilityDialogs,
+} from "./chat-composer-capability-host.tsx";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 function createContext(configSnapshot: ConfigSnapshot | null): ApplicationContext {
@@ -120,8 +124,10 @@ function createAddServerHarness(
   });
   const settled = deferred();
   let submitted = false;
+  const [revision, setRevision] = createSignal(0);
+  let paint = () => {};
   const host = new ChatComposerCapabilityHost(() => {
-    render(host.renderAddServerDialog(context, state, session), container);
+    paint();
     if (
       submitted &&
       !container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled
@@ -129,6 +135,20 @@ function createAddServerHarness(
       settled.resolve();
     }
   });
+  mountSolid(
+    () =>
+      createComponent(ChatComposerCapabilityDialogs, {
+        read: () => host.dialogView(context, state, session),
+        get revision() {
+          return { value: revision() };
+        },
+      }),
+    { container },
+  );
+  paint = () => {
+    setRevision((value) => value + 1);
+    flush();
+  };
   host.props(context, state, session, "main").onAddServer?.();
   return {
     container,
@@ -143,9 +163,11 @@ function createAddServerHarness(
         target: "docs-mcp",
       },
     ) {
+      const form = container.querySelector("form");
       container
         .querySelector<HTMLInputElement>(`input.settings-segmented__input[value="${scope}"]`)!
         .click();
+      expect(container.querySelector("form")).toBe(form);
       container.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "docs";
       container.querySelector<HTMLSelectElement>('[name="mcp-transport"]')!.value =
         server.transport;
@@ -252,6 +274,13 @@ describe("ChatComposerCapabilityHost", () => {
     );
     expect(harness.events).toEqual(["global", "load"]);
     expect(harness.patch).not.toHaveBeenCalled();
+    const form = harness.container.querySelector("form")!;
+    const failure = harness.container.querySelector('[role="alert"]')!;
+    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(form.contains(failure)).toBe(true);
+    expect(submit.form).toBe(form);
+    expect(form.lastElementChild?.contains(submit)).toBe(true);
+    expect(failure.compareDocumentPosition(submit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("blocks tool override patches without exact sessions.patch access", async () => {
@@ -288,7 +317,14 @@ describe("ChatComposerCapabilityHost", () => {
     const state = createState();
     host.props(context, state, undefined, "main").onAddServer?.();
     const container = document.createElement("div");
-    render(host.renderAddServerDialog(context, state, undefined), container);
+    mountSolid(
+      () =>
+        createComponent(ChatComposerCapabilityDialogs, {
+          read: () => host.dialogView(context, state, undefined),
+          revision: {},
+        }),
+      { container },
+    );
     await Promise.resolve();
 
     const scope = container.querySelector<HTMLInputElement>(
@@ -558,24 +594,16 @@ describe("ChatComposerCapabilityHost", () => {
     });
   });
 
-  it("records an unexpected effective-tools loader rejection", async () => {
+  it("shows effective-tools request failures and allows an explicit retry", async () => {
     const notify = vi.fn();
     const host = new ChatComposerCapabilityHost(notify);
     const context = createContext({ runtimeConfig: {} });
     context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.patch", "tools.effective"]);
-    let stateReads = 0;
-    Object.defineProperty(context.sessions, "state", {
-      configurable: true,
-      get: () => {
-        stateReads += 1;
-        if (stateReads === 3) {
-          throw new Error("unexpected loader failure");
-        }
-        return { modelOverrides: {} };
-      },
-    });
     const state = createState();
-    const request = vi.fn().mockResolvedValue({ agentId: "main", groups: [], profile: "full" });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("tools unavailable"))
+      .mockResolvedValue({ agentId: "main", groups: [], profile: "full" });
     state.client = { request } as unknown as GatewayBrowserClient;
     const session = { key: "main" } as GatewaySessionRow;
 
@@ -592,6 +620,9 @@ describe("ChatComposerCapabilityHost", () => {
     await vi.waitFor(() => {
       expect(host.props(context, state, session, "main").toolsEffectiveResult).not.toBeNull();
     });
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      ["tools.effective", { agentId: "main", sessionKey: "main" }],
+      ["tools.effective", { agentId: "main", sessionKey: "main" }],
+    ]);
   });
 });

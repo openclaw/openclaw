@@ -6,7 +6,6 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.read.js
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
-import type { CronRunReceiptSettlementDisposition } from "../store/run-receipt-store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type {
   CronAgentExecutionPhaseUpdate,
@@ -49,10 +48,10 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   activeJobMarker?: CronActiveJobMarker;
   runReceipt?: CronRunReceiptHandle;
   runReceiptContext?: OpenClawStateWorkerContext;
-  receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
   request?: {
     executionJob: CronJob;
     preserveCadence: boolean;
+    onExitWatcherCompletion?: boolean;
     scheduleOwnershipAtMs: number;
     runId?: string;
     terminalTracker?: { emitted: boolean };
@@ -96,7 +95,7 @@ export type ExecuteJobCoreOptions = {
       }
     | undefined;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
-  /** Revalidates the durable run fence after awaited planning and before effects. */
+  /** Revalidates live Gateway admission after awaited planning and before effects. */
   assertRunCurrent?: () => Promise<void>;
   streamBatch?: string;
   // Source definition and logical identity are an inseparable admission claim.

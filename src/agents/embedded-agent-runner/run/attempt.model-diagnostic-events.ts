@@ -65,23 +65,25 @@ function observeModelCallIterator<T>(
         return returning.then(() => ({ done: true as const, value: undefined }));
       }
       started = true;
-      return observed.next();
+      return lifecycle.runInTransportContext(() => observed.next());
     },
     return(value) {
-      returning ??= started
-        ? observed.return(value)
-        : Promise.resolve().then(async () => {
-            // An unopened async generator skips its finally block. Forward closure
-            // explicitly so inner stream owners can settle their admitted repairs.
-            await safeReturnIterator(iterator, trackCleanup);
-            lifecycle.emitCompleted();
-            return { done: true as const, value };
-          });
+      returning ??= lifecycle.runInTransportContext(() =>
+        started
+          ? observed.return(value)
+          : Promise.resolve().then(async () => {
+              // An unopened async generator skips its finally block. Forward closure
+              // explicitly so inner stream owners can settle their admitted repairs.
+              await safeReturnIterator(iterator, trackCleanup);
+              lifecycle.emitCompleted();
+              return { done: true as const, value };
+            }),
+      );
       return returning;
     },
     throw(error) {
       started = true;
-      return observed.throw(error);
+      return lifecycle.runInTransportContext(() => observed.throw(error));
     },
   };
 
@@ -139,7 +141,7 @@ function createSharedResultObserver(
   return () => {
     if (!cached) {
       cached = Promise.resolve()
-        .then(() => resultFn.call(stream))
+        .then(() => lifecycle.runInTransportContext(() => resultFn.call(stream)))
         .then(
           (resolved) => {
             try {
@@ -172,37 +174,21 @@ function observeModelCallStream(
   const observedResult = createSharedResultObserver(stream, lifecycle);
   const observedIterator = () => {
     try {
-      return observeModelCallIterator(createIterator(), lifecycle, observedResult);
+      return observeModelCallIterator(
+        lifecycle.runInTransportContext(createIterator),
+        lifecycle,
+        observedResult,
+      );
     } catch (error) {
       lifecycle.emitError(error);
       throw error;
     }
   };
-  let hasNonConfigurableIterator;
-  try {
-    hasNonConfigurableIterator =
-      Object.getOwnPropertyDescriptor(stream, Symbol.asyncIterator)?.configurable === false;
-  } catch {
-    hasNonConfigurableIterator = true;
-  }
-  if (hasNonConfigurableIterator) {
-    return {
-      [Symbol.asyncIterator]: observedIterator,
-      ...(observedResult ? { result: observedResult } : {}),
-    };
-  }
-  return new Proxy(stream, {
-    get(target, property, receiver) {
-      if (property === Symbol.asyncIterator) {
-        return observedIterator;
-      }
-      if (property === "result" && observedResult) {
-        return observedResult;
-      }
-      const value = Reflect.get(target, property, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
+  // StreamFn exposes iteration and its final result, not provider implementation methods.
+  return {
+    [Symbol.asyncIterator]: observedIterator,
+    ...(observedResult ? { result: observedResult } : {}),
+  };
 }
 
 function observeModelCallResult(result: unknown, lifecycle: ModelCallLifecycle): unknown {
@@ -244,7 +230,9 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     });
 
     try {
-      const result = streamFn(model, streamContext, lifecycle.propagatedOptions);
+      const result = lifecycle.runInTransportContext(() =>
+        streamFn(model, streamContext, lifecycle.propagatedOptions),
+      );
       if (isPromiseLike(result)) {
         return result.then(
           (resolved) => observeModelCallResult(resolved, lifecycle),

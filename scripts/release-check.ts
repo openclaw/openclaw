@@ -33,7 +33,7 @@ import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
 import { collectPackUnpackedSizeFindings } from "./lib/npm-pack-budget.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { isLegacyPluginDependencyInstallStagePath } from "./lib/package-dist-inventory.ts";
-import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
+import { collectBundledPluginPackageDependencyErrors } from "./lib/plugin-package-dependencies.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
 import {
@@ -259,20 +259,9 @@ function collectBundledExtensions(): BundledExtension[] {
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
-  const bundledPackageDependencySpecs = collectBundledPluginPackageDependencySpecs(
-    resolve("extensions"),
-  );
-  const dependencyConflictErrors = [...bundledPackageDependencySpecs.entries()]
-    .flatMap(([dependencyName, record]) =>
-      record.conflicts.map(
-        (conflict) =>
-          `bundled plugin package dependency '${dependencyName}' has conflicting specs: ${record.pluginIds.join(", ")} use '${record.spec}', ${conflict.pluginId} uses '${conflict.spec}'.`,
-      ),
-    )
-    .toSorted((left, right) => left.localeCompare(right));
   checkValidationErrors("bundled extension manifest", [
     ...manifestErrors,
-    ...dependencyConflictErrors,
+    ...collectBundledPluginPackageDependencyErrors(resolve("extensions")),
   ]);
 }
 

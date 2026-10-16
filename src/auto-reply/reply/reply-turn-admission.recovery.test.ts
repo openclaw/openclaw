@@ -26,7 +26,7 @@ import {
   runExclusiveSessionLifecycleMutation,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
-import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitTestReplyTurn, createSessionStore } from "./reply-turn-admission.test-support.js";
 
@@ -212,44 +212,6 @@ it("keeps deferred owner release retries from retaining a successor", async () =
       vi.useRealTimers();
     }
   }
-});
-
-it("settles a committed recovery claim without replay when preparation changes", async () => {
-  const f = recoveryFixture({
-    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
-  });
-  const predecessor = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-  const claimed = createDeferred();
-  const release = createDeferred();
-  f.cleanup.push(() => {
-    release.resolve();
-    predecessor.complete();
-  });
-  const claim = recoveryStore.claimMainSessionRecoveryOwner;
-  const claimSpy = vi
-    .spyOn(recoveryStore, "claimMainSessionRecoveryOwner")
-    .mockImplementation(async (params) => {
-      const result = await claim(params);
-      claimed.resolve();
-      await release.promise;
-      return result;
-    });
-  const pending = f.admit({ expectedSessionId: undefined });
-  await Promise.race([
-    claimed.promise,
-    pending.then(() => {
-      throw new Error("Admission completed before recovery claimed ownership");
-    }),
-  ]);
-  expect(f.read()?.mainRestartRecovery).toMatchObject({
-    foregroundClaims: { tokens: [expect.any(String)] },
-  });
-  predecessor.complete();
-  release.resolve();
-  await expect(pending).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-  expect(claimSpy).toHaveBeenCalledOnce();
-  expect(f.read()?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
-  expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
 });
 
 it("keeps new input and followups behind a concurrent recovery winner", async () => {

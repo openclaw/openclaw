@@ -1,6 +1,10 @@
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import { installPopoverPolyfill } from "./popover.ts";
+import { cleanupSolid } from "./solid-cleanup.ts";
 import { installSafeLocalStorageForTesting } from "./storage.ts";
+
+// Setup files run for every test file; ordinary helpers stay cached with isolate:false.
+afterEach(cleanupSolid);
 
 installPopoverPolyfill();
 
@@ -16,31 +20,7 @@ const issuedWarnings = ((globalThis as { litIssuedWarnings?: Set<string> }).litI
 
 issuedWarnings.add("dev-mode");
 
-// Web Awesome resolves `for` targets while Lit content is still in a detached
-// render root. The app renders into a connected root; JSDOM unit helpers do not.
-const findElementById = (root: ParentNode, id: string) =>
-  [...root.querySelectorAll<HTMLElement>("[id]")].find((element) => element.id === id) ?? null;
-
-if (typeof DocumentFragment !== "undefined" && !("getElementById" in DocumentFragment.prototype)) {
-  Object.defineProperty(DocumentFragment.prototype, "getElementById", {
-    configurable: true,
-    value(this: DocumentFragment, id: string) {
-      return findElementById(this, id);
-    },
-  });
-}
-
-if (typeof Element !== "undefined" && !("getElementById" in Element.prototype)) {
-  Object.defineProperty(Element.prototype, "getElementById", {
-    configurable: true,
-    value(this: Element, id: string) {
-      return findElementById(this, id);
-    },
-  });
-}
-
-// JSDOM has no Web Animations API. Web Awesome uses this probe to skip
-// animations when none are active.
+// JSDOM has no Web Animations API; native overlay tests use an empty animation list.
 if (typeof Element !== "undefined" && !("getAnimations" in Element.prototype)) {
   Object.defineProperty(Element.prototype, "getAnimations", {
     configurable: true,
@@ -48,27 +28,12 @@ if (typeof Element !== "undefined" && !("getAnimations" in Element.prototype)) {
   });
 }
 
-// JSDOM exposes partial ElementInternals. Web Awesome form controls require
-// the form-associated methods even when tests do not mount them in a form.
-// Browser tests need native CustomStateSet so CSS :state() observes real state.
-if (typeof HTMLElement !== "undefined" && !("__vitest_browser__" in globalThis)) {
-  Object.defineProperty(HTMLElement.prototype, "attachInternals", {
+// JSDOM has no layout or scrolling; browser tests retain the native method.
+if (typeof Element !== "undefined" && !("scrollIntoView" in Element.prototype)) {
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
     configurable: true,
-    value() {
-      const validity = { valid: true } as ValidityState;
-      return {
-        checkValidity: () => true,
-        form: null,
-        labels: null,
-        reportValidity: () => true,
-        setFormValue: () => {},
-        setValidity: () => {},
-        states: new Set<string>(),
-        validationMessage: "",
-        validity,
-        willValidate: true,
-      };
-    },
+    writable: true,
+    value: () => {},
   });
 }
 

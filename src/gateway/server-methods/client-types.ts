@@ -34,6 +34,7 @@ export type GatewayClient = Pick<
   | "authPolicy"
   | "invalidated"
   | "connectionSignal"
+  | "remoteControlUiIngress"
   | "browserOrigin"
   | "presenceKey"
   | "clientIp"
@@ -68,6 +69,9 @@ export type GatewayClient = Pick<
     /** Trusted built-in agent tool caller; never accepted from Gateway wire params. */
     agentToolCaller?: TrustedAgentToolCaller;
     allowModelOverride?: boolean;
+    approvalRuntime?: boolean;
+    /** Host-bound owner for one plugin approval request, without reviewer authority. */
+    pluginApprovalRequestOwnerId?: string;
     cronRunContinuation?: boolean;
     pluginRuntimeOwnerId?: string;
     /** Host-attested session provenance for a trusted official plugin node invocation. */

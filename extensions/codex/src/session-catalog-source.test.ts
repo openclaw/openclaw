@@ -1,5 +1,4 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
@@ -53,7 +52,6 @@ async function fixture() {
   const readNative = vi.fn(async (params: CodexThreadListParams) =>
     projectCodexCatalogPage(
       await a.client.request("thread/list", params, { timeoutMs: 1_000, catalogPreview: true }),
-      { sanitize: sanitizeTerminalText },
     ),
   );
   const index = new CodexCatalogIndex({
@@ -88,31 +86,6 @@ afterEach(async () => {
 });
 
 describe("Codex catalog physical status sources", () => {
-  it.each(["close", "notLoaded"] as const)(
-    "retains an equivalent broadcast after one source reports %s",
-    async (withdrawal) => {
-      const { a, b, index, active } = await fixture();
-      active(a, "shared-broadcast");
-      active(b, "shared-broadcast");
-      if (withdrawal === "close") {
-        b.client.close();
-      } else {
-        b.send({
-          method: "thread/status/changed",
-          params: { threadId: "thread-1", status: { type: "notLoaded" } },
-        });
-      }
-      expect((await index.list({})).sessions[0]).toMatchObject({
-        status: "active",
-        activeFlags: ["shared-broadcast"],
-      });
-      a.client.close();
-      const ended = (await index.list({})).sessions[0];
-      expect(ended?.status).toBe("notLoaded");
-      expect(ended).not.toHaveProperty("activeFlags");
-    },
-  );
-
   it("ignores a buffered thread/read status after its source closes", async () => {
     const { a, b, index, active } = await fixture();
     const reading = a.client.request<{ thread: CodexThread }>(

@@ -1,14 +1,16 @@
-import { assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
 import { mountSolid as mountConnected } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid } from "../../test-helpers/solid-cleanup.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createBaseParams } from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 installBrowserHistoryIsolation();
+afterEach(cleanupSolid);
 
 async function settleGitHubIdentity(container: HTMLElement) {
   if (!container.isConnected) {
@@ -437,23 +439,6 @@ describe("agents tools panel (browser)", () => {
     expect(cancel?.disabled).toBe(true);
   });
 
-  it("shows fallback warning when runtime catalog fails", async () => {
-    const container = document.createElement("div");
-    mountSolid(
-      AgentTools,
-      createBaseParams({
-        toolsCatalogError: "unavailable",
-        toolsCatalogResult: null,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
-      "Could not load runtime tool catalog. Showing built-in fallback list instead.",
-    );
-  });
-
   it("enables the fallback setup helper without selecting Full", async () => {
     const container = document.createElement("div");
     const onOverridesChange = vi.fn();
@@ -462,6 +447,7 @@ describe("agents tools panel (browser)", () => {
       AgentTools,
       createBaseParams({
         configForm: { agents: { entries: { main: { tools: { profile: "coding" } } } } },
+        toolsCatalogError: "unavailable",
         toolsCatalogResult: null,
         onOverridesChange,
         onProfileChange,
@@ -470,6 +456,9 @@ describe("agents tools panel (browser)", () => {
     );
     await Promise.resolve();
 
+    expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
+      "Could not load runtime tool catalog. Showing built-in fallback list instead.",
+    );
     expect(container.textContent).toContain(
       "Full selects tools; it does not grant Full Access execution permissions.",
     );

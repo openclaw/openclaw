@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -182,7 +186,12 @@ describe("sessionTranscriptHasContent", () => {
       sessionKey: "agent:audit:main",
       storePath: path.join(tmpDir, "openclaw-agent.sqlite"),
     };
+    setRuntimeConfigSnapshot({ session: { store: target.storePath } });
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   const assistantMessage = () =>
@@ -415,37 +424,37 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
 });
 
 describe("createAcpVisibleTextAccumulator", () => {
-  it("preserves cumulative raw snapshots after stripping a glued NO_REPLY prefix", () => {
+  it("preserves cumulative raw snapshots containing an attached sentinel", () => {
     const acc = createAcpVisibleTextAccumulator();
 
     expect(acc.consume("NO_REPLYThe user")).toEqual({
-      text: "The user",
-      delta: "The user",
+      text: "NO_REPLYThe user",
+      delta: "NO_REPLYThe user",
     });
 
     expect(acc.consume("NO_REPLYThe user is saying")).toEqual({
-      text: "The user is saying",
+      text: "NO_REPLYThe user is saying",
       delta: " is saying",
     });
 
-    expect(acc.finalize()).toBe("The user is saying");
-    expect(acc.finalizeRaw()).toBe("The user is saying");
+    expect(acc.finalize()).toBe("NO_REPLYThe user is saying");
+    expect(acc.finalizeRaw()).toBe("NO_REPLYThe user is saying");
     expect(acc.finalizeReplySnapshot()).toEqual({
       disposition: "visible",
-      text: "The user is saying",
+      text: "NO_REPLYThe user is saying",
     });
   });
 
-  it("keeps append-only deltas working after stripping a glued NO_REPLY prefix", () => {
+  it("keeps append-only deltas containing an attached sentinel", () => {
     const acc = createAcpVisibleTextAccumulator();
 
     expect(acc.consume("NO_REPLYThe user")).toEqual({
-      text: "The user",
-      delta: "The user",
+      text: "NO_REPLYThe user",
+      delta: "NO_REPLYThe user",
     });
 
     expect(acc.consume(" is saying")).toEqual({
-      text: "The user is saying",
+      text: "NO_REPLYThe user is saying",
       delta: " is saying",
     });
   });
@@ -457,7 +466,7 @@ describe("createAcpVisibleTextAccumulator", () => {
     expect(acc.consume("NO_")).toBeNull();
     expect(acc.consume("NO_RE")).toBeNull();
     expect(acc.consume("NO_REPLY")).toBeNull();
-    expect(acc.consume("Actual answer")).toEqual({
+    expect(acc.consume("\nActual answer")).toEqual({
       text: "Actual answer",
       delta: "Actual answer",
     });
@@ -465,7 +474,24 @@ describe("createAcpVisibleTextAccumulator", () => {
 
   it.each([
     { name: "exact silence", chunks: ["NO_REPLY"], expected: { disposition: "silent" } },
-    { name: "partial control prefix", chunks: ["NO_RE"], expected: { disposition: "empty" } },
+    { name: "padded silence", chunks: [" \tNO_REPLY\r\n"], expected: { disposition: "silent" } },
+    ...["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "no_reply", "No response needed."].map(
+      (text) => ({
+        name: `ordinary text ${text}`,
+        chunks: [text],
+        expected: { disposition: "visible", text },
+      }),
+    ),
+    {
+      name: "literal suffix",
+      chunks: ["NO_REPLY\nNO_REPLY"],
+      expected: { disposition: "visible", text: "NO_REPLY" },
+    },
+    {
+      name: "partial control prefix",
+      chunks: ["NO_RE"],
+      expected: { disposition: "visible", text: "NO_RE" },
+    },
   ])("classifies $name at ACP finalization", ({ chunks, expected }) => {
     const acc = createAcpVisibleTextAccumulator();
     for (const chunk of chunks) {

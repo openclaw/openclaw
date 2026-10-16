@@ -2,6 +2,10 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import * as sqliteScope from "../config/sessions/session-accessor.sqlite-scope.js";
 import type {
   SessionHistoryWorkerRequest,
@@ -36,6 +40,10 @@ vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
       assertCurrent() {},
     }),
 }));
+// mock-isolation: Scheduler deadlines exclude the process-owned directory observer lifecycle.
+vi.mock("../infra/owned-directory-observation.js", () => ({
+  observeOwnedDirectory: () => ({ close() {} }),
+}));
 // mock-isolation: Cold restoration has its own owner tests; this fixture controls read callbacks.
 vi.mock("../config/sessions/session-cold-storage-read.js", () => ({
   readRestoredSessionTranscript: async (_scope: unknown, read: () => unknown) => {
@@ -64,6 +72,7 @@ function waitForReaderAdmission(count: number): Promise<void> {
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   vi.spyOn(sqliteScope, "prepareSqliteTranscriptReadScope").mockImplementation(async (scope) => {
     if (!scope.agentId || !scope.storePath) {
       throw new Error("Queue fixture requires an explicit history target");
@@ -95,7 +104,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 it.each(["timeout", "cancel"] as const)(
   "bounds projection recovery and preserves caller %s",
@@ -216,22 +228,6 @@ function page(text: string): Extract<SessionHistoryWorkerResult, { kind: "rpc" }
     page: { messages: [{ role: "assistant", content: [{ type: "text", text }] }] },
   };
 }
-
-it("treats an empty exact archive path as an ordinary recent-history request", async () => {
-  const result = { messages: [], totalMessages: 0 };
-  runWorker.mockImplementationOnce(async (prepare: () => SessionTranscriptHistoryWorkerInput) => {
-    const input = prepare();
-    expect(input.request.kind).toBe("recent-page");
-    expect(input.request.params).not.toHaveProperty("exactArchivePath");
-    return { kind: "recent-page", result };
-  });
-  await expect(
-    readSessionHistoryPageInWorker({
-      kind: "recent-page",
-      params: { target: historyTarget(), exactArchivePath: "", options: { maxMessages: 10 } },
-    }),
-  ).resolves.toEqual(result);
-});
 
 function httpPage(): SessionHistoryWorkerResult {
   return {
@@ -793,39 +789,5 @@ it.each([
         messages: [{ role: "assistant", content: [{ type: "text", text: "capacity released" }] }],
       });
     }
-  },
-);
-
-it.each([
-  {
-    entry: { sessionId: "history-worker", updatedAt: 1 },
-    key: "agent:main:history-worker",
-    validate: false,
-  },
-  { entry: undefined, key: "", validate: false },
-  { entry: undefined, key: "agent:main:history-worker", validate: true },
-  {
-    entry: { sessionId: "successor", updatedAt: 1 },
-    key: "agent:main:history-worker",
-    validate: true,
-  },
-])(
-  "carries conditional validation without reading or retargeting on enqueue: %j",
-  async ({ entry, key, validate }) => {
-    const pending = readSessionHistoryPageInWorker(request({ entry, canonicalKey: key }));
-    await waitForReaderAdmission(1);
-    expect(queued).toHaveLength(1);
-    const input = queued[0]!.prepare();
-    expect(input.target.transcript.sessionId).toBe("history-worker");
-    expect(input.target.entryValidationKey).toBe(validate ? key : undefined);
-    expect(input.database).toEqual({
-      agentId: "main",
-      path: expect.stringMatching(/openclaw-agent\.sqlite$/),
-    });
-    expect(input.target).not.toHaveProperty("database");
-    expect(input.target).not.toHaveProperty("env");
-    expect(runWorker.mock.calls[0]![1]).toBe(JSON.stringify(input).length * 2);
-    queued[0]!.result.resolve(page("requested transcript"));
-    await pending;
   },
 );

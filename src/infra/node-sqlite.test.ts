@@ -15,6 +15,7 @@ import {
   resolveImmutableSqliteFileUri,
   resolveNodeSqliteLocation,
 } from "./node-sqlite.js";
+import { resolveSqliteDatabaseFilePath } from "./sqlite-database-admission.js";
 
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
 
@@ -206,6 +207,9 @@ describe("node SQLite locations", () => {
 
     expect(resolveImmutableSqliteFileUri(pathname, "win32")).toBe(
       `file:${encodeURIComponent(namespacedPath)}?mode=ro&immutable=1`,
+    );
+    expect(resolveSqliteDatabaseFilePath(resolveImmutableSqliteFileUri(pathname, "win32"))).toBe(
+      namespacedPath,
     );
   });
 });
@@ -405,10 +409,78 @@ describe("Bun SQLite library selection", () => {
     { explicitPath: undefined, expected: "/env/sqlite.dylib" },
     { explicitPath: "/parent/sqlite.dylib", expected: "/parent/sqlite.dylib" },
   ])("honors explicit then environment priority ($expected)", ({ explicitPath, expected }) => {
-    const f = fixture({ env: { OPENCLAW_SQLITE_LIBRARY: "  /env/sqlite.dylib  " } });
+    const f = fixture({
+      env: { OPENCLAW_SQLITE_LIBRARY: "  /env/sqlite.dylib  " },
+      standaloneRootUrl: "file:///standalone/runtime/",
+    });
     expect(f.ensure({ explicitPath })).toEqual({ source: "env", path: expected, ...safeProbe });
     expect(f.probe).toHaveBeenCalledExactlyOnceWith(expected);
     expect(f.select).toHaveBeenCalledExactlyOnceWith(expected);
+  });
+
+  it("uses the standalone SQLite library before host discovery and publishes its source", () => {
+    const bundled = "/standalone/runtime/lib/libsqlite3.dylib";
+    const f = fixture({
+      standaloneRootUrl: "file:///standalone/runtime/",
+      env: { HOMEBREW_PREFIX: "/host/brew" },
+    });
+    const selected = f.ensure();
+    expect(selected).toEqual({ source: "bundled", path: bundled, ...safeProbe });
+    expect(f.probe).toHaveBeenCalledExactlyOnceWith(bundled);
+    expect(f.select).toHaveBeenCalledExactlyOnceWith(bundled);
+    expect(f.publish).toHaveBeenCalledExactlyOnceWith(
+      "openclaw.bunSqliteLibrarySelection",
+      selected,
+    );
+  });
+
+  it.each(["missing", "invalid"] as const)(
+    "falls back to host discovery when standalone SQLite is %s",
+    (failure) => {
+      const bundled = "/standalone/runtime/lib/libsqlite3.dylib";
+      const f = fixture({
+        standaloneRootUrl: "file:///standalone/runtime/",
+        exists: () => failure !== "missing",
+        probe: (candidate) => {
+          if (candidate !== bundled) {
+            return safeProbe;
+          }
+          if (failure === "missing") {
+            throw new Error("dlopen failed");
+          }
+          return { ...safeProbe, version: "3.51.2" };
+        },
+      });
+      expect(f.ensure()).toEqual({ source: "discovered", path: homebrew, ...safeProbe });
+      expect(f.probe.mock.calls.map(([candidate]) => candidate)).toEqual([bundled, homebrew]);
+      expect(f.select).toHaveBeenCalledExactlyOnceWith(homebrew);
+    },
+  );
+
+  it("inherits a bundled SQLite selection without probing again", () => {
+    const selected = {
+      source: "bundled",
+      path: "/standalone/runtime/lib/libsqlite3.dylib",
+      ...safeProbe,
+    };
+    const f = fixture({ isMainThread: false });
+    f.environment.set("openclaw.bunSqliteLibrarySelection", selected);
+    expect(f.ensure()).toEqual(selected);
+    expect(f.probe).not.toHaveBeenCalled();
+    expect(f.select).not.toHaveBeenCalled();
+  });
+
+  it("explains how to restore standalone SQLite when no candidate is usable", () => {
+    const f = fixture({
+      standaloneRootUrl: "file:///standalone/runtime/",
+      exists: () => false,
+      probe: () => {
+        throw new Error("dlopen failed");
+      },
+    });
+    expect(() => f.ensure()).toThrow("Rebuild or replace the complete standalone artifact");
+    expect(() => f.ensure()).toThrow("/standalone/runtime/lib/libsqlite3.dylib (missing file)");
+    expect(f.select).not.toHaveBeenCalled();
   });
 
   it.each(["explicit", "env"])(

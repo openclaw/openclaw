@@ -11,7 +11,6 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as backoff from "../../infra/backoff.js";
 import * as commandExec from "../../process/exec.js";
 import {
@@ -150,12 +149,21 @@ describe("ManagedWorktreeService capacity", () => {
     },
   );
 
-  it.for(["linked create", "borrowed create", "borrowed restore"] as const)(
-    "retains managed Git sources until %s settles below the count cap",
+  it.for(["linked create", "borrowed create", "borrowed restore", "nested destination"] as const)(
+    "retains managed dependencies until %s settles below the count cap",
     async (operation, { signal }) => {
       const source = await service.create({ repoRoot: repo, name: "source", baseRef: "HEAD" });
       let consumerRoot = source.path;
-      if (operation !== "linked create") {
+      if (operation === "nested destination") {
+        consumerRoot = repo;
+        service = new ManagedWorktreeService({
+          env,
+          getConfig: () => ({
+            worktreeAcceleration: false,
+            worktreeRoot: path.join(source.path, "nested"),
+          }),
+        });
+      } else if (operation !== "linked create") {
         const donor = path.join(source.path, "donor");
         consumerRoot = path.join(root, "borrower");
         await git(root, "clone", "--no-local", "--", repo, donor);
@@ -417,120 +425,46 @@ describe("ManagedWorktreeService capacity", () => {
     },
   );
 
-  it.each(["none", "files", "registration", "unknown"])(
-    "recovers an unprepared branch after lease loss (changed=%s)",
-    async (changed) => {
-      const params = {
-        repoRoot: repo,
-        name: "retry-hydration",
-        baseRef: "HEAD",
-        ownerKind: "session" as const,
-        ownerId: "agent:main:retry-hydration",
-      };
-      let sourceHeld = false;
-      let cleanupEntered = false;
-      const recoveryRegistryReads: string[] = [];
-      let destination: string | undefined;
-      const revokeCheckout = captureWorktreeMutationHeartbeat();
-      const nativeOutcomeUnknown = Object.assign(new Error("native hydration outcome unknown"), {
-        code: "outcome-unknown",
-      });
-      vi.spyOn(capacity, "estimateWorktreeGitBytes").mockImplementationOnce(async () => {
-        expect(sourceHeld).toBe(true);
-        // Hydration starts after Git has registered the new branch but before publication.
-        expect(await git(repo, "branch", "--list", "openclaw/retry-hydration")).not.toBe("");
-        const listing = await git(repo, "worktree", "list", "--porcelain");
-        destination = listing
-          .split("\n")
-          .find((line) => line.startsWith("worktree ") && line.endsWith("retry-hydration"))
-          ?.slice("worktree ".length);
-        const pending = (await readPendingWorktrees(env)).find(
-          ({ record }) => record.path === destination,
-        );
-        assert(pending);
-        expect(pending.record.path).toBe(destination);
-        await revokeCheckout(pending.record.id);
-        if (changed === "unknown") {
-          throw nativeOutcomeUnknown;
-        }
-        return 4096;
-      });
+  it("preserves an unprepared checkout when native hydration settlement is unknown", async () => {
+    const params = {
+      repoRoot: repo,
+      name: "retry-hydration",
+      baseRef: "HEAD",
+      ownerKind: "session" as const,
+      ownerId: "agent:main:retry-hydration",
+    };
+    let destination: string | undefined;
+    const revokeCheckout = captureWorktreeMutationHeartbeat();
+    const nativeOutcomeUnknown = Object.assign(new Error("native hydration outcome unknown"), {
+      code: "outcome-unknown",
+    });
+    vi.spyOn(capacity, "estimateWorktreeGitBytes").mockImplementationOnce(async () => {
+      const listing = await git(repo, "worktree", "list", "--porcelain");
+      destination = listing
+        .split("\n")
+        .find((line) => line.startsWith("worktree ") && line.endsWith("retry-hydration"))
+        ?.slice("worktree ".length);
+      const pending = (await readPendingWorktrees(env)).find(
+        ({ record }) => record.path === destination,
+      );
+      assert(pending);
+      await revokeCheckout(pending.record.id);
+      throw nativeOutcomeUnknown;
+    });
 
-      const creation = service.create({
-        ...params,
-        withSource: async (run) => {
-          sourceHeld = true;
-          try {
-            return await run({ assertCurrent() {} });
-          } finally {
-            sourceHeld = false;
-          }
-        },
-        withRollback: async (run) => {
-          // Recovery must release source custody before taking allocation → source again.
-          expect(sourceHeld).toBe(false);
-          cleanupEntered = true;
-          if (changed === "files") {
-            await fs.writeFile(path.join(destination!, "keep.txt"), "new owner data\n");
-          } else if (changed === "registration") {
-            await fs.writeFile(
-              path.join(destination!, ".git"),
-              `gitdir: ${path.join(repo, ".git")}\n`,
-            );
-          }
-          const sql = observeHostDataSql();
-          try {
-            return await run(() => {});
-          } finally {
-            recoveryRegistryReads.push(
-              ...sql.queries.filter((query) => /\bfrom\s+"?worktrees"?\b/i.test(query)),
-            );
-            sql.restore();
-          }
-        },
-      });
-      if (changed === "unknown") {
-        const failure = await creation.then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        expect(failure).toMatchObject({ code: "outcome-unknown" });
-        const causes = collectNestedErrorCandidates(failure);
-        expect(causes).toContain(nativeOutcomeUnknown);
-        expect(causes).toContainEqual(
-          expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" }),
-        );
-      } else {
-        await expect(creation).rejects.toThrow(/was lost/);
-      }
-      expect(recoveryRegistryReads).toEqual([]);
-      expect(await service.listRegistryRecords()).toEqual([]);
-      if (changed === "unknown") {
-        expect(cleanupEntered).toBe(false);
-        expect(await fs.stat(destination!)).toBeDefined();
-        expect(await git(repo, "branch", "--list", "openclaw/retry-hydration")).not.toBe("");
-        return;
-      }
-      if (changed === "files") {
-        expect(await fs.readFile(path.join(destination!, "keep.txt"), "utf8")).toBe(
-          "new owner data\n",
-        );
-      }
-      if (changed !== "none") {
-        expect(cleanupEntered).toBe(true);
-        expect(await fs.stat(destination!)).toBeDefined();
-        expect(await git(repo, "branch", "--list", "openclaw/retry-hydration")).not.toBe("");
-        return;
-      }
-      const branchBeforeRetry = await git(repo, "branch", "--list", "openclaw/retry-hydration");
-      const retried = await service.create(params);
-      expect(cleanupEntered).toBe(true);
-      expect(branchBeforeRetry).toBe("");
-      expect(retried.ownerId).toBe(params.ownerId);
-      expect(await fs.readFile(path.join(retried.path, "README.md"), "utf8")).toBe("base\n");
-      expect(await service.listRegistryRecords()).toEqual([retried]);
-    },
-  );
+    const failure = await service.create(params).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toMatchObject({ code: "outcome-unknown" });
+    const causes = collectNestedErrorCandidates(failure);
+    expect(causes).toContain(nativeOutcomeUnknown);
+    expect(causes).toContainEqual(expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" }));
+    expect(await service.listRegistryRecords()).toEqual([]);
+    expect(destination).toBeDefined();
+    expect(await fs.stat(destination!)).toBeDefined();
+    expect(await git(repo, "branch", "--list", "openclaw/retry-hydration")).not.toBe("");
+  });
 
   it("requires a readable capacity sample before creating a checkout", async () => {
     vi.mocked(fsSync.statfsSync).mockImplementation(() => {

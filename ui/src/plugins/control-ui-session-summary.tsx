@@ -13,7 +13,7 @@ import {
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { toSanitizedMarkdownHtml } from "../components/markdown.ts";
-import { renderSessionProgressCard } from "../components/session-progress-card.ts";
+import { SessionProgressCard } from "../components/session-progress-card-solid.tsx";
 import { AgentAvatar } from "../components/solid/agent-avatar.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { SanitizedHtml } from "../components/solid/sanitized-html.tsx";
@@ -28,9 +28,9 @@ import { projectSource } from "../lib/reactive/projection.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
 import { readSessionChangedEvent } from "../lib/sessions/reconcile.ts";
 import { uiSessionEventMatches, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
-import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
+import { ChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
 import "../styles/chat/progress-card.css";
 import "../styles/sidebar-markdown.css";
 import "../styles/plugin-session-summary.css";
@@ -212,18 +212,13 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
           ) : progress.read().card === undefined ? (
             <p>{t("sessionProgressCard.widgetLoading")}</p>
           ) : (
-            <LitContent
-              render={() =>
-                renderSessionProgressCard(
-                  progress.read().card,
-                  "board",
-                  undefined,
-                  history()?.sessionInfo?.status,
-                  history()?.sessionInfo?.startedAt,
-                  history()?.sessionInfo?.endedAt,
-                  history()?.sessionInfo?.hasActiveRun === true,
-                )
-              }
+            <SessionProgressCard
+              card={progress.read().card}
+              placement="board"
+              sessionStatus={history()?.sessionInfo?.status}
+              startedAt={history()?.sessionInfo?.startedAt}
+              endedAt={history()?.sessionInfo?.endedAt}
+              hasActiveRun={history()?.sessionInfo?.hasActiveRun === true}
             />
           )}
         </section>
@@ -248,7 +243,7 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
                 <header class="plugin-session-summary__message-header">
                   <span class="plugin-session-summary__avatar">
                     {message().sender ? (
-                      <LitContent render={() => renderChatAuthorAvatar(message().sender)} />
+                      <ChatAuthorAvatar sender={message().sender} />
                     ) : message().agentId ? (
                       <AgentAvatar
                         option={{

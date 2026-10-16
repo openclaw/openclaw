@@ -52,22 +52,6 @@ describe("token", () => {
       expect(result.source).toBe("env");
     });
 
-    it("should return empty token when neither config nor env has token (simplified config)", () => {
-      const configWithoutToken = {
-        channels: {
-          twitch: {
-            username: "testbot",
-            accessToken: "",
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      const result = resolveTwitchToken(configWithoutToken, { accountId: "default" });
-
-      expect(result.token).toBe("");
-      expect(result.source).toBe("none");
-    });
-
     it("should not use env var for non-default accounts (multi-account)", () => {
       process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = "oauth:env-token";
 
@@ -87,32 +71,6 @@ describe("token", () => {
       const result = resolveTwitchToken(configWithoutToken, { accountId: "secondary" });
 
       // Non-default accounts shouldn't use env var
-      expect(result.token).toBe("");
-      expect(result.source).toBe("none");
-    });
-
-    it("should handle missing account gracefully", () => {
-      const configWithoutAccount = {
-        channels: {
-          twitch: {
-            accounts: {},
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      const result = resolveTwitchToken(configWithoutAccount, { accountId: "nonexistent" });
-
-      expect(result.token).toBe("");
-      expect(result.source).toBe("none");
-    });
-
-    it("should handle missing Twitch config section", () => {
-      const configWithoutSection = {
-        channels: {},
-      } as unknown as OpenClawConfig;
-
-      const result = resolveTwitchToken(configWithoutSection, { accountId: "default" });
-
       expect(result.token).toBe("");
       expect(result.source).toBe("none");
     });

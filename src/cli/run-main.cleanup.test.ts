@@ -34,7 +34,6 @@ vi.mock("./route.js", () => ({
   },
 }));
 vi.mock("../infra/is-main.js", () => ({ isMainModule: () => true }));
-vi.mock("../entry.esm-resolve-fast-path.js", () => ({ installDistEsmResolveFastPath() {} }));
 vi.mock("../entry.version-fast-path.js", () => ({ tryHandleRootVersionFastPath: () => false }));
 vi.mock("../entry.compile-cache.js", () => ({
   resolveEntryInstallRoot: () => process.cwd(),
@@ -176,6 +175,8 @@ let originalTitle: string;
 let originalListeners: ReturnType<typeof process.listeners>;
 
 beforeEach(async () => {
+  // Keep both executable entrypoints in this process; cache respawn has separate coverage.
+  vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", "1");
   vi.resetModules();
   registryApi = await import("../agents/harness/registry.js");
   runtime = await import("../plugins/runtime.js");
@@ -195,6 +196,7 @@ beforeEach(async () => {
   installUnhandledRejectionHandlerMock.mockClear();
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   process.argv = originalArgv;
   process.title = originalTitle;
   runtime.restoreActivePluginRegistrySnapshot(originalRegistrySnapshot);
@@ -339,28 +341,19 @@ describe("CLI process harness cleanup", () => {
     },
   );
 
-  it("installs the rejection handler before the direct Gateway fast path", async () => {
-    dispatch.run = async () => {
-      expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
-    };
-
-    const { runCli } = await import("./run-main.js");
-    await runCli(["node", "openclaw", "gateway"]);
-
-    expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
-  });
-
   it.each([undefined, "drained", "retained"] as const)(
     "uses the actual Gateway cleanup receipt (%s), not its command name",
     async (receipt) => {
       const { getGatewayRunRuntimeHooks } = await import("./gateway-cli/runtime-hooks.js");
       const { runCli } = await import("./run-main.js");
       dispatch.run = async () => {
+        expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
         if (receipt) {
           getGatewayRunRuntimeHooks().onProcessResourcesSettled?.(receipt);
         }
       };
       await runCli(["node", "openclaw", "gateway"]);
+      expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
       expect(dispatch.memoryClosed).toHaveBeenCalledTimes(receipt ? 0 : 1);
     },
   );

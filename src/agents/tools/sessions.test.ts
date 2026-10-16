@@ -2,8 +2,15 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Sessions tool tests cover list/send helpers and session delivery target resolution.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
+  persistSessionTranscriptTurn,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   withOwnedSessionTranscriptWrites,
@@ -12,7 +19,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
-import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import {
+  drainSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../../test-utils/session-state-cleanup.js";
 import { createSessionsChannelTestRegistry } from "./sessions-channel-fixture.test-support.js";
 import {
   registerSessionsSendFixedOwnerTests,
@@ -50,32 +60,6 @@ vi.mock("./in-process-gateway.js", () => ({
   runWithGatewayToolContinuationContext: async <T>(run: () => Promise<T>): Promise<T> => run(),
 }));
 
-type SessionsToolTestConfig = {
-  agents?: OpenClawConfig["agents"];
-  session: {
-    scope: "per-sender";
-    mainKey: string;
-    store?: string;
-  };
-  tools: {
-    agentToAgent: { enabled: boolean };
-    sessions?: { visibility: "self" | "tree" | "agent" | "all" };
-  };
-};
-
-const loadConfigMock = vi.fn<() => SessionsToolTestConfig>(() => ({
-  session: { scope: "per-sender", mainKey: "main" },
-  tools: { agentToAgent: { enabled: false } },
-}));
-
-vi.mock("../../config/config.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
-  return {
-    ...actual,
-    getRuntimeConfig: () => loadConfigMock() as never,
-  };
-});
 vi.mock("./sessions-send-tool.a2a.js", () => ({
   runSessionsSendA2AFlow: vi.fn(),
 }));
@@ -134,7 +118,13 @@ function requireGatewayRequest(index = 0) {
 
 beforeAll(async () => {
   ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
-  ({ createSessionsSendTool } = await import("./sessions-send-tool.js"));
+  const { createSessionsSendTool: createTool } = await import("./sessions-send-tool.js");
+  createSessionsSendTool = (options) => {
+    if (options?.config) {
+      setRuntimeConfigSnapshot(options.config);
+    }
+    return createTool(options);
+  };
   ({ resolveSessionsSendReplyTarget } = await import("./sessions-delivery-target.js"));
   ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
 });
@@ -192,7 +182,7 @@ async function executeFireAndForgetA2AFrom(
   const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
   vi.mocked(runSessionsSendA2AFlow).mockClear();
   const targetSessionKey = "agent:other:discord:group:ops";
-  loadConfigMock.mockReturnValue({
+  setRuntimeConfigSnapshot({
     session: { scope: "per-sender", mainKey: "main" },
     tools: {
       agentToAgent: { enabled: true },
@@ -241,6 +231,10 @@ async function executeFireAndForgetA2AFrom(
 }
 
 beforeEach(async () => {
+  setRuntimeConfigSnapshot({
+    session: { scope: "per-sender", mainKey: "main" },
+    tools: { agentToAgent: { enabled: false } },
+  });
   for (const [agentId, sessionKey] of [
     ["main", MAIN_AGENT_SESSION_KEY],
     ["main", "agent:main:other"],
@@ -249,12 +243,12 @@ beforeEach(async () => {
     await upsertSessionEntryCore({ agentId, sessionKey }, { sessionId: sessionKey, updatedAt: 1 });
   }
   recordParticipantMock.mockClear();
-  loadConfigMock.mockReset();
-  loadConfigMock.mockReturnValue({
-    session: { scope: "per-sender", mainKey: "main" },
-    tools: { agentToAgent: { enabled: false } },
-  });
   setActivePluginRegistry(createTestRegistry([]));
+});
+
+afterEach(async () => {
+  await drainSessionStateForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 it("fails closed for cross-agent and resolution-derived bare keys", async () => {
@@ -399,7 +393,7 @@ describe("sessions_list gating", () => {
   });
 
   it("keeps requester-owned cross-agent rows with tree visibility without a spawned lookup", async () => {
-    loadConfigMock.mockReturnValue({
+    setRuntimeConfigSnapshot({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {
         agentToAgent: { enabled: false },
@@ -448,7 +442,7 @@ describe("sessions_list gating", () => {
 describe("sessions_list channel derivation", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
-    loadConfigMock.mockReturnValue({
+    setRuntimeConfigSnapshot({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {
         agentToAgent: { enabled: true },
@@ -753,7 +747,7 @@ describe("sessions_send gating", () => {
   });
 
   it("classifies a failed spawned-lookup as lookup-failed for sandboxed sends", async () => {
-    loadConfigMock.mockReturnValue({
+    setRuntimeConfigSnapshot({
       session: { scope: "per-sender", mainKey: "main" },
       agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
       tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" } },
@@ -795,7 +789,7 @@ describe("sessions_send gating", () => {
 
   it("rejects label targets that resolve to canonical thread sessions", async () => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    loadConfigMock.mockReturnValue({
+    setRuntimeConfigSnapshot({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {
         agentToAgent: { enabled: false },
@@ -823,9 +817,52 @@ describe("sessions_send gating", () => {
     expect(requireGatewayRequest(1).method).toBe("sessions.resolve");
   });
 
+  it("allows thread session targets when tools.sessions.allowThreadTargets is set", async () => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
+    setRuntimeConfigSnapshot({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all", allowThreadTargets: true },
+      },
+    });
+    const threadSessionKey = "agent:main:telegram:group:-100123:topic:42";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: threadSessionKey },
+      { sessionId: threadSessionKey, updatedAt: 1 },
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.resolve") {
+        return { key: threadSessionKey };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-thread-opt-in", acceptedAt: 123 };
+      }
+      return {};
+    });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-thread-opt-in", {
+      label: "topic",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(tool.description).not.toContain("Thread chats rejected");
+    expect(requireDetails(result)).toMatchObject({ status: "accepted" });
+    expect(
+      callGatewayMock.mock.calls.some(
+        ([request]) =>
+          (request as { method?: string; params?: { sessionKey?: string } }).method === "agent" &&
+          (request as { params?: { sessionKey?: string } }).params?.sessionKey === threadSessionKey,
+      ),
+    ).toBe(true);
+  });
+
   it("does not disclose a resolved thread session key from a sessionId target", async () => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    loadConfigMock.mockReturnValue({
+    setRuntimeConfigSnapshot({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {
         agentToAgent: { enabled: false },
@@ -939,7 +976,7 @@ describe("sessions_send gating", () => {
   });
 
   it.each([true, false])(
-    "uses source delivery without reading history (visible text: %s)",
+    "uses source delivery without resending (visible text: %s)",
     async (hasText) => {
       const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
       vi.mocked(runSessionsSendA2AFlow).mockClear();
@@ -968,6 +1005,27 @@ describe("sessions_send gating", () => {
           return { runId: "run-source-reply", acceptedAt: 123 };
         }
         if (request.method === "agent.wait") {
+          if (hasText) {
+            await persistSessionTranscriptTurn(
+              { agentId: "main", sessionKey: targetSessionKey, sessionId: targetSessionKey },
+              {
+                runId: "run-source-reply",
+                expectedSessionId: targetSessionKey,
+                touchSessionEntry: false,
+                updateMode: "none",
+                messages: [
+                  {
+                    message: {
+                      role: "assistant",
+                      phase: "final_answer",
+                      stopReason: "stop",
+                      content: [{ type: "text", text: "Already delivered to the source" }],
+                    },
+                  },
+                ],
+              },
+            );
+          }
           return {
             runId: "run-source-reply",
             status: "ok",
@@ -976,7 +1034,7 @@ describe("sessions_send gating", () => {
               : { disposition: "empty" },
             terminalReceipt: {
               runId: "run-source-reply",
-              sessionId: "target-session",
+              sessionId: targetSessionKey,
               turnId: "target-turn",
               requested: { provider: "provider", model: "model" },
               effective: { provider: "provider", model: "model", responseModel: "model" },
@@ -1182,7 +1240,7 @@ registerSessionsSendMaterializationTests({
       );
       return {};
     });
-    loadConfigMock.mockReturnValue({
+    setRuntimeConfigSnapshot({
       session: { scope: "per-sender", mainKey: "main", store },
       tools: {
         agentToAgent: { enabled: false },

@@ -1,4 +1,5 @@
 import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   asFiniteNumber,
   isRecord,
@@ -9,6 +10,7 @@ import {
   discardResponse,
   fetchGitHubApi,
   GITHUB_API_ORIGIN,
+  githubApiCredentialCacheScope,
   githubRestApiPath,
   readBoundedResponse,
   readGitHubJsonResponse,
@@ -32,8 +34,11 @@ const CO_AUTHOR_FACE_LIMIT = 3;
 const CO_AUTHOR_TRAILER =
   /^co-authored-by:[^<\r\n\u2028\u2029]*<(?<id>\d{1,12})\+(?<login>[a-z\d](?:[a-z\d-]{0,38}))@users\.noreply\.github\.com>[^\S\r\n\u2028\u2029]*$/gimu;
 const SUCCESS_CACHE_MS = 60_000;
+// Avatars can change without changing the item or commit ETag.
+const DECORATION_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 200;
+const log = createSubsystemLogger("github/preview");
 
 export type ControlUiGitHubPreviewTarget = GitHubItemTarget;
 
@@ -44,15 +49,24 @@ export type ControlUiGitHubPreviewIdentity = {
   /** Host service/env credentials may retry a stale HTTP 401 anonymously. */
   optionalAuth?: true;
   stale?: true;
+  signal?: AbortSignal;
   revalidate: () => Promise<void>;
   assertSelected: () => void;
 };
 
-const previewCache = createStaleWhileRevalidateCache<ControlUiGitHubPreview>({
-  maxEntries: CACHE_LIMIT,
-  ttlMs: SUCCESS_CACHE_MS,
-  errorTtlMs: (error) => (error instanceof ControlUiGitHubError ? FAILURE_CACHE_MS : 0),
-});
+type ConditionalPage = { etag?: string; value: unknown };
+type CachedPreview = {
+  preview: ControlUiGitHubPreview;
+  credentialScope: string;
+  pages: Map<string, ConditionalPage>;
+  authorDecoratedAt: number;
+  coAuthorsDecoratedAt: number;
+};
+
+const previewCaches = new WeakMap<
+  typeof fetch,
+  ReturnType<typeof createStaleWhileRevalidateCache<CachedPreview>>
+>();
 
 export const parseControlUiGitHubPreviewTarget = parseGitHubItemTarget;
 
@@ -66,7 +80,7 @@ export async function assertPublicGitHubRepository(
   token?: string,
   identity?: ControlUiGitHubPreviewIdentity,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<Record<string, unknown>> {
   // Stop before item reads so shared credentials cannot probe private item numbers.
   const repository = await readGitHubJsonResponse(
     await fetchGitHubApi(
@@ -84,6 +98,7 @@ export async function assertPublicGitHubRepository(
   if (!isPublicGitHubRepository(repository)) {
     throw new ControlUiGitHubError(404, "GitHub repository is not public");
   }
+  return repository;
 }
 
 function redirectedRepositoryApiUrl(target: ControlUiGitHubPreviewTarget, url: URL): string | null {
@@ -258,15 +273,17 @@ async function fetchPreview(
   signal: AbortSignal,
   token?: string,
   identity?: ControlUiGitHubPreviewIdentity,
-): Promise<ControlUiGitHubPreview> {
-  const request = (url: string, beforeRedirect?: (url: URL) => Promise<void>) =>
+  previous?: CachedPreview,
+): Promise<CachedPreview> {
+  const startedAt = performance.now();
+  const request = (url: string, beforeRedirect?: (url: URL) => Promise<void>, etag?: string) =>
     fetchGitHubApi(
       url,
       fetchImpl,
       token,
       beforeRedirect,
       identity,
-      undefined,
+      etag,
       signal,
       undefined,
       GITHUB_API_ORIGIN,
@@ -289,8 +306,26 @@ async function fetchPreview(
         await assertPublicRepository(redirectedRepositoryUrl);
       }
     : undefined;
-  const readItem = async (url: string, maxBytes?: number) =>
-    readGitHubJsonResponse(await request(url, beforeRedirect), maxBytes);
+  // Validators live with the preview, so eviction, failed refresh, and credential
+  // rotation retire both together. Never reuse public-visibility admission.
+  const credentialScope = githubApiCredentialCacheScope(token);
+  const pages = new Map<string, ConditionalPage>();
+  const readItem = async (url: string, maxBytes?: number) => {
+    const cached =
+      previous?.credentialScope === credentialScope ? previous.pages.get(url) : undefined;
+    const response = await request(url, beforeRedirect, cached?.etag);
+    if (response.status === 304 && cached?.etag) {
+      await discardResponse(response);
+      pages.set(url, cached);
+      return { value: cached.value, unchanged: true };
+    }
+    const value = await readGitHubJsonResponse(response, maxBytes);
+    const etag = response.headers.get("etag");
+    if (etag) {
+      pages.set(url, { value, etag });
+    }
+    return { value, unchanged: false };
+  };
   // Both item reads use the same public admission and redirect guard. Commits
   // are optional decoration; their failure must not discard useful metadata.
   const item = readItem(itemUrl);
@@ -301,23 +336,60 @@ async function fetchPreview(
           GITHUB_COMMITS_MAX_BYTES,
         ).catch(() => undefined)
       : Promise.resolve(undefined);
-  const parsed = await item;
+  const { value: parsed, unchanged: itemUnchanged } = await item;
   if (!isRecord(parsed)) {
     throw new ControlUiGitHubError(502, "GitHub response was not an object");
   }
+  const metadataAt = performance.now();
   const { preview, avatarUrl } = parseControlUiGitHubPreviewResponse(target, parsed);
+  const renderedAt = performance.now();
+  const now = Date.now();
+  const reuseAuthor =
+    itemUnchanged &&
+    previous !== undefined &&
+    now - previous.authorDecoratedAt < DECORATION_CACHE_MS;
+  let coAuthorsDecoratedAt = now;
   // Anonymous decoration can overlap visibility validation; delivery still awaits both.
   const [avatarDataUrl, coAuthorFacts] = await Promise.all([
-    fetchAvatarDataUrl(avatarUrl, fetchImpl, signal),
-    commits.then((value) => fetchCoAuthors(preview.login, value, fetchImpl, signal)),
+    reuseAuthor ? previous.preview.avatarDataUrl : fetchAvatarDataUrl(avatarUrl, fetchImpl, signal),
+    commits.then((page) => {
+      // The coauthor projection also depends on which login it excludes.
+      if (
+        page?.unchanged &&
+        previous &&
+        previous.preview.login.toLowerCase() === preview.login.toLowerCase() &&
+        now - previous.coAuthorsDecoratedAt < DECORATION_CACHE_MS
+      ) {
+        coAuthorsDecoratedAt = previous.coAuthorsDecoratedAt;
+        return {
+          coAuthors: previous.preview.coAuthors ?? [],
+          coAuthorCount: previous.preview.coAuthorCount ?? 0,
+        };
+      }
+      return fetchCoAuthors(preview.login, page?.value, fetchImpl, signal);
+    }),
     token && assertPublicRepository(previewRepositoryApiUrl(target, parsed)),
   ]);
+  const finishedAt = performance.now();
+  if (finishedAt - startedAt >= 500) {
+    log.info("Slow GitHub preview load", {
+      metadataMs: Math.round(metadataAt - startedAt),
+      renderMs: Math.round(renderedAt - metadataAt),
+      decorationMs: Math.round(finishedAt - renderedAt),
+    });
+  }
   return {
-    ...preview,
-    ...(avatarDataUrl ? { avatarDataUrl } : {}),
-    ...(coAuthorFacts.coAuthorCount > 0
-      ? { coAuthors: coAuthorFacts.coAuthors, coAuthorCount: coAuthorFacts.coAuthorCount }
-      : {}),
+    pages,
+    credentialScope,
+    authorDecoratedAt: reuseAuthor ? previous.authorDecoratedAt : now,
+    coAuthorsDecoratedAt,
+    preview: {
+      ...preview,
+      ...(avatarDataUrl ? { avatarDataUrl } : {}),
+      ...(coAuthorFacts.coAuthorCount > 0
+        ? { coAuthors: coAuthorFacts.coAuthors, coAuthorCount: coAuthorFacts.coAuthorCount }
+        : {}),
+    },
   };
 }
 
@@ -331,21 +403,30 @@ export async function loadControlUiGitHubPreview(
   fetchImpl: typeof fetch = fetch,
   refresh = false,
 ): Promise<ControlUiGitHubPreview> {
-  await identity?.revalidate();
+  const startedAt = performance.now();
+  // Cache lookup has no external effect. Dispatch and delivery revalidate live credentials.
   identity?.assertSelected();
   const { token, cacheScope } = identity ?? { token: undefined, cacheScope: "anonymous" };
-  const key = cacheKey(target, cacheScope);
+  const key = cacheKey(target, `${cacheScope}\0${githubApiCredentialCacheScope(token)}`);
+  const previewCache =
+    previewCaches.get(fetchImpl) ??
+    createStaleWhileRevalidateCache<CachedPreview>({
+      maxEntries: CACHE_LIMIT,
+      ttlMs: SUCCESS_CACHE_MS,
+      errorTtlMs: (error) => (error instanceof ControlUiGitHubError ? FAILURE_CACHE_MS : 0),
+    });
+  previewCaches.set(fetchImpl, previewCache);
   const read = () =>
     previewCache.read(
       key,
-      () => {
+      (previous) => {
         // Refreshes retain credential checks before every dispatch, including
         // redirects. A retired initiating identity fails this refresh; a current reader retries.
         const signal = AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS);
         return identity && !identity.optionalAuth
-          ? fetchPreview(target, fetchImpl, signal, token, identity)
+          ? fetchPreview(target, fetchImpl, signal, token, identity, previous)
           : withOptionalGitHubAuth(token, (requestToken) =>
-              fetchPreview(target, fetchImpl, signal, requestToken, identity),
+              fetchPreview(target, fetchImpl, signal, requestToken, identity, previous),
             );
       },
       { refresh },
@@ -363,9 +444,21 @@ export async function loadControlUiGitHubPreview(
     identity.assertSelected();
     result = await read();
   }
+  const loadedAt = performance.now();
   // Transport is credential-scoped, but every reader must still hold its
   // current identity before cached or newly fetched metadata is delivered.
   await identity?.revalidate();
   identity?.assertSelected();
-  return result.stale || identity?.stale ? { ...result.value, stale: true } : result.value;
+  const deliveredAt = performance.now();
+  if (deliveredAt - startedAt >= 500) {
+    log.info("Slow GitHub preview read", {
+      cacheWaitMs: Math.round(loadedAt - startedAt),
+      deliveryAuthMs: Math.round(deliveredAt - loadedAt),
+      stale: result.stale,
+      refresh,
+    });
+  }
+  return result.stale || identity?.stale
+    ? { ...result.value.preview, stale: true }
+    : result.value.preview;
 }

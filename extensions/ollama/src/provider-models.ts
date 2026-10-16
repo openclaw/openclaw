@@ -169,7 +169,7 @@ function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelSho
 
 function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
   return (
-    typeof info.contextWindow === "number" ||
+    info.contextWindow !== undefined ||
     (info.capabilities?.length ?? 0) > 0 ||
     info.thinkingLevelMap !== undefined
   );
@@ -604,13 +604,21 @@ export async function fetchLoadedOllamaModelNames(
 
 export async function buildOllamaProvider(
   configuredBaseUrl?: string,
-  opts?: { apiKey?: string; quiet?: boolean; discoveryMode?: "strict" },
+  opts?: {
+    apiKey?: string;
+    quiet?: boolean;
+    discoveryMode?: "strict";
+    onListedModels?: (names: string[]) => void;
+  },
 ): Promise<ModelProviderConfig> {
   const apiBase = resolveOllamaApiBase(configuredBaseUrl);
   const auth = opts?.apiKey ? { apiKey: opts.apiKey } : undefined;
   const { reachable, models } = await fetchOllamaModels(apiBase, opts);
   if (!reachable && !opts?.quiet) {
     console.warn(`Ollama could not be reached at ${apiBase}.`);
+  }
+  if (reachable) {
+    opts?.onListedModels?.(models.map((model) => model.name));
   }
   const discovered = await enrichOllamaCompletionModels(apiBase, models, auth);
   return {

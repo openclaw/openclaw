@@ -26,6 +26,10 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
+// mock-isolation: Process lifecycle tests use synthetic destinations; durable notification behavior has its own owner suite.
+vi.mock("../config/sessions/session-accessor.sqlite-entry.js", () => ({
+  patchSessionEntryCore: async () => null,
+}));
 const enqueueSessionEventMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({ spawn: vi.fn() }));
@@ -305,6 +309,7 @@ it.each([
     const entered = createDeferred();
     const cleanupScope = createAgentCleanupScope();
     const scopeKey = "scope:sandbox-artifact-cleanup";
+    const cleanupFailure = "sandbox artifact cleanup failed";
     supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput): Promise<ManagedRun> => ({
       activity: { resultSettled: true, lastOutputAtMs: Date.now() },
       runId: input.runId ?? "test-run",
@@ -319,7 +324,7 @@ it.each([
       entered.resolve();
       await finalization.promise;
       if (fails) {
-        throw new Error("sandbox artifact cleanup failed");
+        throw new Error(cleanupFailure);
       }
     });
     try {
@@ -357,6 +362,10 @@ it.each([
         await join;
         const outcome = await run.promise;
         expect(outcome.status).toBe(fails || commandCode !== 0 ? "failed" : "completed");
+        if (fails) {
+          expect(outcome.aggregated).toContain(cleanupFailure);
+          expect(run.session.aggregated).toContain(cleanupFailure);
+        }
         expect(finalizeExec).toHaveBeenCalledOnce();
       });
       expect(cleanupScope.outcome).toBe(fails ? "uncertain" : "closed");

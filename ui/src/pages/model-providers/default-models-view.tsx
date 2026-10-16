@@ -172,7 +172,7 @@ function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): Fas
 // Discovery progress does not change the saved selection or disable known models.
 function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
   return (
-    <>
+    <div class="model-providers__catalog-feedback">
       {props.catalogDiscovering ? (
         <div class="model-providers__catalog-progress" role="status" aria-live="polite">
           <span class="btn__spinner" aria-hidden="true" />
@@ -187,7 +187,7 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
           </button>
         </div>
       ) : undefined}
-    </>
+    </div>
   );
 }
 
@@ -328,12 +328,30 @@ export function DefaultModels(props: DefaultModelsViewProps) {
         />
         <SettingsRow
           title={t("modelProviders.defaults.fallback")}
+          description={
+            props.selection.fallbacks.length > 1
+              ? t(
+                  props.selection.fallbacks.length === 2
+                    ? "modelProviders.defaults.moreFallbackOne"
+                    : "modelProviders.defaults.moreFallbacks",
+                  { count: String(props.selection.fallbacks.length - 1) },
+                )
+              : undefined
+          }
           control={
             <ModelPicker
               label={t("modelProviders.defaults.fallback")}
               value={fallback()}
               options={[
-                { value: "", label: t("modelProviders.defaults.noFallback") },
+                {
+                  value: "",
+                  label:
+                    props.selection.fallbacks.length > 1
+                      ? t("modelProviders.defaults.clearFallbacks", {
+                          count: String(props.selection.fallbacks.length),
+                        })
+                      : t("modelProviders.defaults.noFallback"),
+                },
                 ...options().filter((option) => option.value !== props.selection.primary),
               ]}
               disabled={modelControlsDisabled() || saving() || !props.selection.primary}

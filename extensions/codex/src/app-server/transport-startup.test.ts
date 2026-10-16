@@ -39,7 +39,7 @@ async function waitForNativeExit(
   try {
     for (;;) {
       signal.throwIfAborted();
-      const snapshot = await withinTest(readSnapshot(Date.now() + 2_000), signal);
+      const snapshot = await withinTest(readSnapshot(performance.now() + 2_000), signal);
       expect(snapshot.some((row) => row.pid === process.pid)).toBe(true);
       const native = snapshot.find((row) => row.pid === pid);
       if (!native || native.state.startsWith("Z")) {

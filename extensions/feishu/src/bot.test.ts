@@ -99,12 +99,10 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => false),
-        resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
       },
       pairing: {
         readAllowFromStore: vi.fn().mockResolvedValue(["ou_sender_1"]),
         upsertPairingRequest: vi.fn(),
-        buildPairingReply: vi.fn(),
       },
       inbound: {
         ingress: createPluginRuntimeMock().channel.inbound.ingress,
@@ -293,13 +291,6 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
       return context;
     },
   };
-});
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
-    "openclaw/plugin-sdk/reply-runtime",
-  );
-  return { ...actual, dispatchInboundMessage: mockDispatchInboundMessage };
 });
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
@@ -579,50 +570,41 @@ describe("handleFeishuMessage ACP routing", () => {
     );
   });
 
-  it.each<
-    [
-      policy: "pairing" | "allowlist",
-      sender: string,
-      userId: string | undefined,
-      allowed: string,
-      ownerRecipient: string,
-      senderRecipient: string,
-    ]
-  >([["pairing", "ou_sender_2", undefined, "ou_owner", "user:ou_owner", "user:ou_sender_2"]])(
-    "pins shared Feishu DM last-route updates for %s identities",
-    async (dmPolicy, senderOpenId, senderUserId, allowFrom, ownerRecipient, senderRecipient) => {
-      const runtime = createFeishuBotRuntime();
-      const recordInboundSession = vi.fn(async (_params: RecordedSession) => undefined);
-      runtime.channel.session.recordInboundSession = recordInboundSession;
-      if (dmPolicy === "pairing") {
-        runtime.channel.pairing.readAllowFromStore = vi.fn().mockResolvedValue([senderOpenId]);
-      }
-      mockResolveAgentRoute.mockReturnValue(
-        createFeishuTestRoute({ sessionKey: "agent:main:main", lastRoutePolicy: "main" }),
-      );
-      setFeishuRuntime(runtime);
-      await receiveAcp(
-        { messageId: `msg-dm-last-route-${dmPolicy}`, senderOpenId, senderUserId, chatId: "oc_dm" },
-        { enabled: true, allowFrom: [allowFrom], dmPolicy },
-      );
-      const pin = recordInboundSession.mock.calls.at(-1)?.[0].updateLastRoute?.mainDmOwnerPin;
-      expect(pin).toMatchObject({ ownerRecipient, senderRecipient });
-      expect(typeof pin?.onSkip).toBe("function");
-    },
-  );
+  it("pins shared Feishu DM last-route updates for pairing identities", async () => {
+    const runtime = createFeishuBotRuntime();
+    const recordInboundSession = vi.fn(async (_params: RecordedSession) => undefined);
+    runtime.channel.session.recordInboundSession = recordInboundSession;
+    runtime.channel.pairing.readAllowFromStore = vi.fn().mockResolvedValue(["ou_sender_2"]);
+    mockResolveAgentRoute.mockReturnValue(
+      createFeishuTestRoute({ sessionKey: "agent:main:main", lastRoutePolicy: "main" }),
+    );
+    setFeishuRuntime(runtime);
+    await receiveAcp(
+      {
+        messageId: "msg-dm-last-route-pairing",
+        senderOpenId: "ou_sender_2",
+        chatId: "oc_dm",
+      },
+      { enabled: true, allowFrom: ["ou_owner"], dmPolicy: "pairing" },
+    );
+    const pin = recordInboundSession.mock.calls.at(-1)?.[0].updateLastRoute?.mainDmOwnerPin;
+    expect(pin).toMatchObject({
+      ownerRecipient: "user:ou_owner",
+      senderRecipient: "user:ou_sender_2",
+    });
+    expect(typeof pin?.onSkip).toBe("function");
+  });
 });
 
 describe("handleFeishuMessage command authorization", () => {
   let botRuntime: PluginRuntime;
   const mockFinalizeInboundContext = mockBuildChannelInboundEventContext;
   const mockDispatchReplyFromConfig = mockDispatchInboundMessage;
-  const mockResolveCommandAuthorizedFromAuthorizers = vi.fn(() => false);
   const mockShouldComputeCommandAuthorized = vi.fn<
     PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"]
   >(() => true);
   const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
   const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false });
-  const mockBuildPairingReply = vi.fn(() => "Pairing response");
   const mockEnqueueSystemEvent = vi.fn();
   beforeEach(() => {
     vi.clearAllMocks();
@@ -658,12 +640,10 @@ describe("handleFeishuMessage command authorization", () => {
       channel: {
         commands: {
           shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
-          resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
         },
         pairing: {
           readAllowFromStore: mockReadAllowFromStore,
           upsertPairingRequest: mockUpsertPairingRequest,
-          buildPairingReply: mockBuildPairingReply,
         },
       },
     });
@@ -907,7 +887,7 @@ describe("handleFeishuMessage command authorization", () => {
       { commands: { useAccessGroups: true } },
     );
 
-    expect(mockResolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
     expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
   });
 
@@ -935,7 +915,6 @@ describe("handleFeishuMessage command authorization", () => {
       : [{ key: "@_user_1", id: { open_id: "ou-bot" }, name: "Bot" }];
     const text = authorized ? "/status" : "@_user_1/status";
     mockShouldComputeCommandAuthorized.mockReturnValue(true);
-    mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(authorized);
     await receiveGroup(
       {
         messageId: `msg-group-command-${senderOpenId}`,
@@ -947,7 +926,6 @@ describe("handleFeishuMessage command authorization", () => {
       { allowFrom },
       { commands: { useAccessGroups: true } },
     );
-    expect(mockResolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
     const context = inboundContext();
     expect(context.ChatType).toBe("group");
     expect(mockShouldComputeCommandAuthorized).toHaveBeenCalledWith(
@@ -1148,39 +1126,35 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "drops quoted group context from senders outside the group sender allowlist in allowlist mode",
-      parentId: "om_parent_blocked",
-      messageId: "msg-group-quoted-filter",
-      quotedBody: "blocked quoted content",
-      contextVisibility: "allowlist" as const,
-      expectedBody: undefined,
-    },
-  ])("$name", async ({ parentId, messageId, quotedBody, contextVisibility, expectedBody }) => {
+  it("drops quoted group context from senders outside the group sender allowlist in allowlist mode", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    const parentId = "om_parent_blocked";
     mockGetMessageFeishu.mockResolvedValueOnce({
       messageId: parentId,
       chatId: "oc-group",
       senderId: "ou-blocked",
       senderType: "user",
-      content: quotedBody,
+      content: "blocked quoted content",
       contentType: "text",
     });
 
     await receiveGroup(
-      { messageId, senderOpenId: "ou-allowed", message: { parent_id: parentId } },
+      {
+        messageId: "msg-group-quoted-filter",
+        senderOpenId: "ou-allowed",
+        message: { parent_id: parentId },
+      },
       {},
       {
         groupPolicy: "open",
         groupSenderAllowFrom: ["ou-allowed"],
-        ...(contextVisibility ? { contextVisibility } : {}),
+        contextVisibility: "allowlist",
       },
     );
 
     const context = inboundContext();
     expect(context.ReplyToId).toBe(parentId);
-    expect(context.SupplementalContext?.quote?.body).toBe(expectedBody);
+    expect(context.SupplementalContext?.quote?.body).toBeUndefined();
   });
 
   it.each([
@@ -1333,44 +1307,41 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
-  it.each([{ caption: "Compare the attached report", files: ["report.csv", "notes.csv"] }])(
-    "delivers post files with caption '$caption' to agent context",
-    async ({ caption, files }) => {
-      mockShouldComputeCommandAuthorized.mockReturnValue(false);
-      mockDownloadMessageResourceFeishu.mockImplementation(
-        async (params: { fileKey: string; originalFilename?: string }) => ({
-          saved: {
-            id: params.fileKey,
-            path: `/tmp/${params.originalFilename}`,
-            size: 20,
-            contentType: "text/csv",
-          },
+  it("delivers post files with caption 'Compare the attached report' to agent context", async () => {
+    const caption = "Compare the attached report";
+    const files = ["report.csv", "notes.csv"];
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockImplementation(
+      async (params: { fileKey: string; originalFilename?: string }) => ({
+        saved: {
+          id: params.fileKey,
+          path: `/tmp/${params.originalFilename}`,
+          size: 20,
+          contentType: "text/csv",
+        },
+      }),
+    );
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
+      event: createFeishuTestEvent({
+        messageId: `msg-post-files-${files.length}`,
+        senderOpenId: "ou-sender",
+        messageType: "post",
+        content: JSON.stringify({
+          content: [[{ tag: "text", text: caption }]],
+          files: files.map((fileName, index) => ({
+            file_key: `file_report_${index}`,
+            file_name: fileName,
+          })),
         }),
-      );
-      await dispatchMessage({
-        cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-        event: createFeishuTestEvent({
-          messageId: `msg-post-files-${files.length}`,
-          senderOpenId: "ou-sender",
-          messageType: "post",
-          content: JSON.stringify({
-            content: [[{ tag: "text", text: caption }]],
-            files: files.map((fileName, index) => ({
-              file_key: `file_report_${index}`,
-              file_name: fileName,
-            })),
-          }),
-        }),
-      });
+      }),
+    });
 
-      const context = inboundContext();
-      if (caption) {
-        expect(context.BodyForAgent).toContain(caption);
-      }
-      expect(context.MediaPaths).toEqual(files.map((fileName) => `/tmp/${fileName}`));
-      expect(context.MediaTypes).toEqual(files.map(() => "text/csv"));
-    },
-  );
+    const context = inboundContext();
+    expect(context.BodyForAgent).toContain(caption);
+    expect(context.MediaPaths).toEqual(files.map((fileName) => `/tmp/${fileName}`));
+    expect(context.MediaTypes).toEqual(files.map(() => "text/csv"));
+  });
 
   it("delivers unique rich-post attachments in their original mixed-media order", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
@@ -1491,7 +1462,7 @@ describe("handleFeishuMessage command authorization", () => {
     },
   );
 
-  it("does not partially parse malformed merge_forward create_time values", () => {
+  it("does not partially parse malformed merge_forward create_time values", async () => {
     const items = [
       {
         message_id: "container",
@@ -1512,14 +1483,21 @@ describe("handleFeishuMessage command authorization", () => {
         body: { content: JSON.stringify({ text: "valid" }) },
         create_time: "1000",
       },
+      {
+        upper_message_id: "container",
+        msg_type: "text",
+        body: { content: JSON.stringify({ text: "out of range" }) },
+        create_time: "8640000000000001",
+        sender: { id: "ou_original" },
+      },
     ];
 
-    expect(parseMergeForwardContent(items)).toBe(
-      "[Merged and Forwarded Messages]\n- partial\n- valid",
+    expect(await parseMergeForwardContent(items)).toBe(
+      "[Merged and Forwarded Messages]\n- partial\n- [1970-01-01T00:00:01.000Z] valid\n- ou_original: out of range",
     );
   });
 
-  it("bounds merged-forward prompt content and marks truncation", () => {
+  it("bounds merged-forward prompt content and marks truncation", async () => {
     const items = [
       {
         message_id: "container",
@@ -1534,7 +1512,7 @@ describe("handleFeishuMessage command authorization", () => {
       },
     ];
 
-    const parsed = parseMergeForwardContent(items);
+    const parsed = await parseMergeForwardContent(items);
 
     expect(parsed.length).toBeLessThanOrEqual(20_000);
     expect(parsed.endsWith("\n... [Merged-forward content truncated]")).toBe(true);
@@ -1738,42 +1716,35 @@ describe("handleFeishuMessage command authorization", () => {
     },
   );
 
-  it.each([
-    {
-      name: "replies to triggering message in normal group even when root_id is present (#32980)",
+  it("replies to triggering message in normal group even when root_id is present (#32980)", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    await dispatchMessage({
       cfg: createFeishuTestConfig({
         groups: {
           "oc-group": { requireMention: false, groupSessionScope: "group" },
         },
       }),
-      messageId: "om_quote_reply",
-      senderOpenId: "ou-normal-user",
-      rootId: "om_original_msg",
-      text: "hello in normal group",
-      expected: { replyToMessageId: "om_quote_reply", rootId: "om_original_msg" },
-    },
-  ])("$name", async ({ cfg, messageId, senderOpenId, rootId, text, expected }) => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    await dispatchMessage({
-      cfg,
       event: createFeishuTestEvent({
-        messageId,
-        senderOpenId,
+        messageId: "om_quote_reply",
+        senderOpenId: "ou-normal-user",
         chatId: "oc-group",
         chatType: "group",
-        text,
-        message: { root_id: rootId },
+        text: "hello in normal group",
+        message: { root_id: "om_original_msg" },
       }),
     });
 
     const dispatcherOptions = mockCreateFeishuReplyDispatcher.mock.calls[0]![0];
-    expect(dispatcherOptions).toMatchObject(expected);
+    expect(dispatcherOptions).toMatchObject({
+      replyToMessageId: "om_quote_reply",
+      rootId: "om_original_msg",
+    });
     expect(
       vi.mocked(botRuntime.channel.session.recordInboundSession).mock.calls.at(-1)?.[0]
         .updateLastRoute,
     ).toMatchObject({
       to: "chat:oc-group",
-      threadId: expected.replyToMessageId,
+      threadId: "om_quote_reply",
     });
   });
 
@@ -1839,7 +1810,7 @@ describe("handleFeishuMessage command authorization", () => {
     },
   ])("$name", async ({ messageId, senderOpenId, chatId, rootId, threadId, text, expected }) => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    await receive({
+    const runtime = await receive({
       messageId,
       senderOpenId,
       chatId,
@@ -1852,6 +1823,8 @@ describe("handleFeishuMessage command authorization", () => {
     });
 
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(expect.objectContaining(expected));
+    expect(inboundContext().BodyForAgent).toContain(text);
+    expect(JSON.stringify(vi.mocked(runtime.log).mock.calls)).not.toContain(text);
     expect(inboundContext().Timestamp).toBe(1700000000000);
     expect(mockFormatAgentEnvelope).toHaveBeenCalledWith(
       expect.objectContaining({ timestamp: 1700000000000 }),
@@ -2071,7 +2044,7 @@ describe("handleFeishuMessage command authorization", () => {
           contentType: "text",
         });
       }
-      await dispatchMessage({
+      const runtime = await dispatchMessage({
         cfg: createFeishuTestConfig({
           groupPolicy: "open",
           groups: { "oc-group-90177": { requireMention: true } },
@@ -2095,6 +2068,9 @@ describe("handleFeishuMessage command authorization", () => {
         expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
         expect(inboundContext().Body).toContain("[Replying to:");
         expect(inboundContext().Body).toContain("parent message with context");
+        expect(JSON.stringify(vi.mocked(runtime.log).mock.calls)).not.toContain(
+          "parent message with context",
+        );
       } else {
         expect(mockGetMessageFeishu).not.toHaveBeenCalled();
         expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
@@ -2143,9 +2119,6 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
             },
           ),
         },
-        ...(batchSize === 2
-          ? { commands: { isControlCommandMessage: vi.fn(() => false) } }
-          : { text: { hasControlCommand: vi.fn(() => false) } }),
       },
     } as unknown as PluginRuntime;
     return {

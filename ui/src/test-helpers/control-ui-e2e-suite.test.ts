@@ -112,10 +112,11 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             return { failureSummary: { available: true } };
           },
         });
-        context = {
+        context = Object.assign(new EventEmitter(), {
           setDefaultTimeout() {},
+          addInitScript: async () => {},
           pages: () => pageClosed ? [] : [page],
-          newPage: async () => page,
+          newPage: async () => { context.emit("page", page); return page; },
           browser: () => ({ isConnected: () => true }),
           unrouteAll: async () => { state.events.push("drain"); record(); },
           close: async () => {
@@ -126,7 +127,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             state.pendingPageReject?.(new Error("synthetic page closed"));
             record();
           },
-        };
+        });
         return context;
       }
       if (${JSON.stringify(mode)} === "held-route-drain") {
@@ -156,6 +157,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             if (!registration) throw new Error("missing held-module route: " + name);
             const route = {
               request: () => ({ url: () => url }),
+              fallback: async () => { state.events.push("fell through " + label); },
               fetch: async () => {
                 if (pageClosed) throw state.disposalFault;
                 if (label === "later" || scope === "context") {
@@ -186,10 +188,11 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             return settled;
           },
         });
-        context = {
+        context = Object.assign(new EventEmitter(), {
           setDefaultTimeout() {},
+          addInitScript: async () => {},
           pages: () => [page],
-          newPage: async () => page,
+          newPage: async () => { context.emit("page", page); return page; },
           route: async (pattern, handler) => { contextHandlers.push({ pattern, handler }); },
           unrouteAll: async (options) => {
             expect(options).toEqual({ behavior: "wait" });
@@ -206,13 +209,14 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             state.contextCleanupStarted.resolve("close");
             record();
           },
-        };
+        });
         return context;
       }
-      return {
+      const context = Object.assign(new EventEmitter(), {
         setDefaultTimeout() {},
+        addInitScript: async () => {},
         pages: () => [],
-        newPage: async () => closedPage,
+        newPage: async () => { context.emit("page", closedPage); return closedPage; },
         unrouteAll: async () => {},
         close: () => {
           state.closeCalls++;
@@ -221,7 +225,8 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
           return ${JSON.stringify(mode)} === "concurrent-close" && state.closeCalls === 1
             ? state.gate : Promise.resolve();
         }
-      };
+      });
+      return context;
     },
     close: async () => { state.browserClosed = true; record(); },
   };
@@ -315,9 +320,32 @@ suite.define(() => {
     });
   } else if (${JSON.stringify(mode)}.startsWith("diagnostic-")) {
     it("retains the native page timeout", async (context) => {
-      const run = () => suite.withPage({}, async () => {
+      const awaitTimeout = async (page) => {
+        expect(page.listenerCount("websocket"), "one RPC observer owns each page").toBe(1);
+        const socket = new EventEmitter();
+        page.emit("websocket", socket);
+        const frame = (direction, value) => socket.emit(direction, { payload: JSON.stringify(value) });
+        for (const method of ["agents.files.get",
+          "chat.history", "chat.startup", "sessions.list", "sessions.subscribe",
+          "sessions.unsubscribe", "sessions.messages.subscribe", "sessions.messages.unsubscribe",
+          "connect", "private-unknown-method"]) {
+          for (const ok of [true, false]) {
+            frame("framesent", { type: "req", id: "private-request-id", method,
+              params: { token: "private-token", sessionKey: "private-session", text: "private-content" } });
+            frame("framereceived", { type: "res", id: "private-request-id", ok,
+              payload: { text: "private-content" }, error: { message: "private-error" } });
+          }
+        }
         await new Promise((resolve, reject) => { state.pendingPageReject = reject; });
-      });
+      };
+      const run = async () => {
+        if (${JSON.stringify(mode)} === "diagnostic-page-timeout") {
+          await suite.withPage({}, ({ page }) => awaitTimeout(page));
+        } else {
+          const browserContext = await suite.newBrowserContext({});
+          await awaitTimeout(await browserContext.newPage());
+        }
+      };
       if (${JSON.stringify(mode)} === "diagnostic-scenario-timeout") {
         await suite.runScenario(context, { run });
       } else {
@@ -349,7 +377,9 @@ suite.define(() => {
       const callbacks = [];
       let firstHold;
       let otherHold;
+      let heldPage;
       const outcome = suite.withPage({}, async ({ context, page }) => {
+        heldPage = page;
         firstHold = await holdModuleResponse(page, /module-a/u);
         otherHold = await holdModuleResponse(page, /module-b/u);
         callbacks.push(page.dispatchModule("module-a", "first"));
@@ -370,12 +400,17 @@ suite.define(() => {
       let failure;
       let callbackOutcomes;
       try {
-        // The old helper closes immediately; waiting only for drain would turn red into a timeout.
-        state.firstCleanupEvent = await state.cleanupStarted.promise;
+        await state.contextFetchStarted.promise;
+        await Promise.all(callbacks.slice(0, 2));
+        await nextTurn();
         state.pendingCloseCalls = state.closeCalls;
         state.fulfilledBeforeFetchRelease = state.events.filter(event => event.startsWith("fulfilled "));
+        expect(state.events).not.toContain("drain");
+        callbacks.push(heldPage.dispatchModule("module-a", "late"));
+        await callbacks.at(-1);
         record();
         state.laterFetch.resolve();
+        state.firstCleanupEvent = await state.cleanupStarted.promise;
         state.contextCleanupEvent = await state.contextCleanupStarted.promise;
       } finally {
         firstHold?.release();
@@ -520,11 +555,14 @@ beforeAll(async () => {
     path.join(fixtureRoot, "vitest.config.ts"),
     `
 import { defineConfig } from "vitest/config";
-import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.shared.config.ts"))};
+import { createVitestResolveConfig } from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.resolve.ts"))};
+if (process.versions.bun) {
+  await import(${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.sqlite-preload.mts"))});
+}
 const hookTimeout = Number(process.env.UI_LIFETIME_HOOK_TIMEOUT_MS);
 export default defineConfig({
   cacheDir: ${JSON.stringify(path.join(fixtureRoot, ".vite"))},
-  resolve: sharedVitestConfig.resolve,
+  resolve: createVitestResolveConfig(${JSON.stringify(repoRoot)}),
   test: { pool: "forks", isolate: true, maxWorkers: 1, fileParallelism: false,
     fsModuleCache: true,
     fsModuleCachePath: ${JSON.stringify(path.join(fixtureRoot, "transforms"))},
@@ -630,7 +668,11 @@ async function runFixture(mode: FixtureMode, signal: AbortSignal) {
       );
     }
     const captures: Array<{
-      public: { hostBeforeRead: { pageClosed: boolean }; rendererRead: string };
+      public: {
+        hostBeforeRead: { pageClosed: boolean };
+        rendererRead: string;
+        gatewayRpc: Array<{ method: string; outcome: string }>;
+      };
       private: { failure: { message: string } };
     }> = [];
     if (mode.startsWith("diagnostic-")) {
@@ -719,6 +761,24 @@ it.for([
       hostBeforeRead: { pageClosed: false },
       rendererRead: "completed",
     });
+    expect(result.captures[0]?.public.gatewayRpc).toEqual(
+      [
+        "agents.files.get",
+        "chat.history",
+        "chat.startup",
+        "sessions.list",
+        "sessions.subscribe",
+        "sessions.unsubscribe",
+        "sessions.messages.subscribe",
+        "sessions.messages.unsubscribe",
+      ].flatMap((method) => [
+        { method, outcome: "sent" },
+        { method, outcome: "ok" },
+        { method, outcome: "sent" },
+        { method, outcome: "error" },
+      ]),
+    );
+    expect(JSON.stringify(result.captures[0]?.public)).not.toContain("private-");
     expect(result.captures[0]?.private.failure.message).toContain("Test timed out in 50ms");
     expect(result.journal).toMatchObject({
       closeCalls: 1,
@@ -744,6 +804,7 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
       { label: "other", status: "fulfilled", disposed: false },
       { label: "later", status: "fulfilled", disposed: false },
       { label: "context", status: "fulfilled", disposed: false },
+      { label: "late", status: "fulfilled", disposed: false },
     ]);
     expect(result.journal.pendingCloseCalls).toBe(0);
     expect(result.journal.fulfilledBeforeFetchRelease).toEqual([
@@ -751,6 +812,11 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
       "fulfilled other",
     ]);
     expect(result.journal.events).toContain("fulfilled later");
+    expect(result.journal.events).toContain("fell through late");
+    expect(result.journal.events).not.toContain("fetched late");
+    expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
+      result.journal.events.indexOf("drain"),
+    );
     expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
       result.journal.events.indexOf("close"),
     );

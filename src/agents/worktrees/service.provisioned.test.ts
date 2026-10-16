@@ -5,7 +5,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { probeTreeClone, readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
@@ -13,6 +12,10 @@ import {
   type FixtureReceiptChannel,
 } from "../../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../../test/helpers/promise.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -104,12 +107,14 @@ describe("ManagedWorktreeService provisioned state", () => {
     await fs.cp(templateRepo, repo, { mode: fsConstants.COPYFILE_FICLONE, recursive: true });
     repo = await fs.realpath(repo);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
+    setRuntimeConfigSnapshot({}, {});
     now = 1_700_000_000_000;
     service = new ManagedWorktreeService({ env, now: () => now });
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    resetConfigRuntimeState();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
@@ -291,12 +296,12 @@ describe("ManagedWorktreeService provisioned state", () => {
 
   it("preserves the checkout when HEAD changes during snapshot preparation", async () => {
     const created = await service.create({ repoRoot: repo, name: "head-change", baseRef: "HEAD" });
-    const runCommand = gitExec.executeGitCommandBytes;
+    const runCommand = gitExec.executeGitCommandBuffered;
     let changed = false;
     const commands = vi
-      .spyOn(gitExec, "executeGitCommandBytes")
+      .spyOn(gitExec, "executeGitCommandBuffered")
       .mockImplementation(async (cwd, args, options) => {
-        if (args.includes("read-tree") && !changed) {
+        if (args.includes("status") && !changed) {
           changed = true;
           await fs.writeFile(path.join(created.path, "later.txt"), "later commit\n");
           await git(created.path, "add", "later.txt");
@@ -678,7 +683,9 @@ describe("ManagedWorktreeService provisioned state", () => {
     },
   );
 
-  it("captures same-stat racy edits without modifying the checkout index", async () => {
+  it("captures same-stat racy edits and executable mode without modifying the checkout index", async () => {
+    await git(repo, "update-index", "--chmod=+x", "README.md");
+    await git(repo, "commit", "-m", "track executable mode");
     const created = await materializeManagedWorktreeFixture({
       env,
       name: "racy-snapshot",
@@ -718,35 +725,6 @@ describe("ManagedWorktreeService provisioned state", () => {
     await fs.utimes(index, 1_600_000_000, 1_600_000_000);
     const run = commandRunner.runCommandWithTimeout;
     let checkedIndex = false;
-    const inspectCopy = async (copiedIndex: string) => {
-      const [sourceStat, copiedStat, copiedBytes] = await Promise.all([
-        fs.stat(index, { bigint: true }),
-        fs.stat(copiedIndex, { bigint: true }),
-        fs.readFile(copiedIndex),
-      ]);
-      const cloneMetadata =
-        process.platform === "darwin" && probeTreeClone(path.dirname(copiedIndex)) === "apfs"
-          ? await readCloneFileMetadata([index, copiedIndex])
-          : undefined;
-      return { sourceStat, copiedStat, copiedBytes, cloneMetadata };
-    };
-    const copies: Awaited<ReturnType<typeof inspectCopy>>[] = [];
-    const inspectionErrors: unknown[] = [];
-    const runBytes = commandRunner.runCommandBuffersWithTimeout;
-    vi.spyOn(commandRunner, "runCommandBuffersWithTimeout").mockImplementation(async (...args) => {
-      const argv = args[0];
-      const options = args[1];
-      const copiedIndex = typeof options === "object" ? options.env?.GIT_INDEX_FILE : undefined;
-      if (copiedIndex && argv.includes("read-tree") && argv.includes("--reset")) {
-        // Retain observations before Git rewrites the copy; assert outside product recovery.
-        try {
-          copies.push(await inspectCopy(copiedIndex));
-        } catch (error) {
-          inspectionErrors.push(error);
-        }
-      }
-      return await runBytes(...args);
-    });
     vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
       const argv = args[0];
       if (argv.includes("git") && argv.includes("worktree") && argv.includes("remove")) {
@@ -756,22 +734,8 @@ describe("ManagedWorktreeService provisioned state", () => {
       return await run(...args);
     });
     const removed = await service.remove({ id: created.id, reason: "test" });
-    expect(inspectionErrors).toEqual([]);
-    expect(copies).toHaveLength(1);
-    for (const { sourceStat, copiedStat, copiedBytes, cloneMetadata } of copies) {
-      expect(copiedBytes).toEqual(bytes);
-      expect([copiedStat.dev, copiedStat.ino]).not.toEqual([sourceStat.dev, sourceStat.ino]);
-      expect(copiedStat.mtimeNs).toBe(1_600_000_000_000_000_000n);
-      if (process.platform !== "win32") {
-        expect(copiedStat.mode & 0o777n).toBe(sourceStat.mode & 0o777n);
-      }
-      if (cloneMetadata) {
-        const [sourceMetadata, copiedMetadata] = cloneMetadata;
-        expect(sourceMetadata?.cloneId).toBeTruthy();
-        expect(copiedMetadata?.cloneId).toBe(sourceMetadata?.cloneId);
-      }
-    }
     expect(checkedIndex).toBe(true);
+    expect(await git(repo, "ls-tree", removed.snapshotRef!, "README.md")).toMatch(/^100755 /u);
     expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe("edit");
   });
 

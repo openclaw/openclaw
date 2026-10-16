@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { recordModelFallbackStop } from "../failover-error.js";
 import { resetFallbackSkipCacheForTest } from "../fallback-skip-cache.test-support.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
@@ -84,9 +88,11 @@ function searchedModels() {
 
 describe("runEmbeddedAgentEntry cyber failover", () => {
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     resetFallbackSkipCacheForTest();
     state.runWithModelFallback.mockReset().mockImplementation(runFallback);
   });
+  afterEach(clearRuntimeConfigSnapshot);
 
   it("retries a replay-safe OpenAI cyber refusal once on Daybreak without changing selection", async () => {
     const candidateCalls: Array<{

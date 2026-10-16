@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import {
   preparePublishedModelCatalogOwnerIdentity,
@@ -6,6 +6,10 @@ import {
 } from "../agents/prepared-model-catalog-owner.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { bindPreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as currentPluginMetadata from "../plugins/current-plugin-metadata-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -451,6 +455,8 @@ describe("gateway prepared model catalog", () => {
   });
 
   it("does not hide lifecycle publication failures behind stale data", async () => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(clearRuntimeConfigSnapshot);
     const error = new Error("generation failed");
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => {
       throw error;

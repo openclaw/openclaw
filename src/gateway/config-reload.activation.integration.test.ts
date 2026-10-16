@@ -4,9 +4,9 @@ import { cleanupPreparedModelRuntimeHarness, getPreparedModelRuntimeMocks, reset
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
-import { runtimeAuthProfileRowsCache } from "../agents/auth-profiles/runtime-snapshots.js";
+import { runtimeAuthProfileRowsCache } from "../agents/auth-profiles/runtime-persisted-rows.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
-import * as authProfileStore from "../agents/auth-profiles/store.js";
+import * as authProfileStoreUpdate from "../agents/auth-profiles/store-update.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   prepareModelRuntimeSnapshot,
@@ -111,8 +111,8 @@ it("the real reloader restores the working connection after failed credential ac
       const adapter = watcher.attach(options);
       return {
         ...adapter,
-        start() {
-          adapter.start();
+        async start() {
+          await adapter.start();
           watcher.emit("ready");
         },
       };
@@ -194,12 +194,15 @@ it("the real reloader restores the working connection after failed credential ac
       },
     };
   });
-  const restoreAuth = authProfileStore.restoreAuthProfileStorePersistenceSnapshot;
+  const updateAuth = authProfileStoreUpdate.runAuthProfileStoreUpdate;
   const rollback = vi
-    .spyOn(authProfileStore, "restoreAuthProfileStorePersistenceSnapshot")
-    .mockImplementation((...args) => {
-      restoreAuth(...args);
-      releaseCapture.resolve();
+    .spyOn(authProfileStoreUpdate, "runAuthProfileStoreUpdate")
+    .mockImplementation(async (...args) => {
+      const result = await updateAuth(...args);
+      if (recoveryApplication?.claimed) {
+        releaseCapture.resolve();
+      }
+      return result;
     });
   try {
     await reloader.ready;

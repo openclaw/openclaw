@@ -146,6 +146,30 @@ describe("capability-aware provider auth", () => {
     expect(authStore.ensureAuthProfileStoreAsync).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "keeps persisted profile fallback and ordering (async: %s)",
+    async (useAsync) => {
+      const empty: AuthProfileStore = { version: 1, profiles: {} };
+      const params = {
+        provider: "openai",
+        agentDir: "/synthetic/agent",
+        cfg: { auth: { order: { openai: ["openai:key", "openai:codex"] } } },
+      };
+      const fallbackAuth = createProviderAuthAvailability({
+        ...authStore,
+        loadAuthProfileStoreForSecretsRuntime: () => empty,
+        loadAuthProfileStoreForRuntimeAsync: async () => empty,
+      });
+      const result = useAsync
+        ? await fallbackAuth.listUsableProviderAuthProfileIdsAsync(params)
+        : fallbackAuth.listUsableProviderAuthProfileIds(params);
+      expect(result).toEqual({
+        agentDir: "/synthetic/agent",
+        profileIds: ["openai:key", "openai:codex"],
+      });
+    },
+  );
+
   it("rejects a selected local profile even when the environment key is acceptable", async () => {
     vi.stubEnv("OPENAI_API_KEY", "acceptable-env-key");
     authStore.ensureAuthProfileStore.mockClear();

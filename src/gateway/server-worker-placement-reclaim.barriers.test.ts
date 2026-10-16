@@ -1,14 +1,27 @@
-import { expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   getRuntimeConfig: () => ({}),
 }));
 
-function fixture(name: string, state: "active" | "failed" | "local" | "reclaimed" = "active") {
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawAgentDatabasesForTest());
+
+async function fixture(
+  name: string,
+  state: "active" | "failed" | "local" | "reclaimed" = "active",
+) {
   const request = {
     sessionId: `session-${name}`,
     sessionKey: `agent:main:${name}`,
@@ -16,12 +29,13 @@ function fixture(name: string, state: "active" | "failed" | "local" | "reclaimed
   };
   const entry = { sessionId: request.sessionId, lifecycleRevision: "original", updatedAt: 1 };
   const target = {
-    storePath: `/fixture/reclaim-preparation-${name}.sqlite`,
+    storePath: path.join(tempDirs.make(`reclaim-preparation-${name}-`), "sessions.sqlite"),
     canonicalKey: request.sessionKey,
     storeKeys: [request.sessionKey],
     agentId: request.agentId,
     store: { [request.sessionKey]: entry },
   };
+  await replaceSessionEntry({ ...request, storePath: target.storePath }, entry);
   const placement = {
     ...request,
     state,
@@ -38,8 +52,12 @@ function fixture(name: string, state: "active" | "failed" | "local" | "reclaimed
     },
     loadSessionRuntime: async () => ({
       managedWorktrees: { findLiveByOwner: async () => undefined },
-      resolveGatewaySessionStoreTargetWithStore: () => target,
-      resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+      resolveGatewaySessionStoreTargetInWorker: (params) =>
+        resolveGatewaySessionStoreTargetInWorker({
+          ...params,
+          cfg: { ...params.cfg, session: { ...params.cfg.session, store: target.storePath } },
+        }),
+      resolveCanonicalSessionEntryFromStoreKeys,
     }),
     cancelSessionWork: cancel,
     revokeSessionAuthority: vi.fn(),
@@ -59,13 +77,17 @@ function fixture(name: string, state: "active" | "failed" | "local" | "reclaimed
     cancel,
     run,
     admit,
+    replaceEntry: async (lifecycleRevision: string) => {
+      entry.lifecycleRevision = lifecycleRevision;
+      await replaceSessionEntry({ ...request, storePath: target.storePath }, entry);
+    },
     prepare: (options: Partial<Parameters<typeof barriers.runReclaimPreparation>[0]> = {}) =>
       barriers.runReclaimPreparation({ ...request, run, ...options }),
   };
 }
 
 it("one failed Stop cannot reopen ingress while another Stop still owns its closure", async () => {
-  const f = fixture("overlap");
+  const f = await fixture("overlap");
   const entered = createDeferredCore();
   const release = createDeferredCore();
   let calls = 0;
@@ -94,7 +116,7 @@ it("one failed Stop cannot reopen ingress while another Stop still owns its clos
 it.each(["authorization", "incarnation"] as const)(
   "rejects changed %s after cancellation and reopens admission on failure",
   async (change) => {
-    const f = fixture(`changed-${change}`);
+    const f = await fixture(`changed-${change}`);
     const entered = createDeferredCore();
     const release = createDeferredCore();
     let authorized = true;
@@ -123,7 +145,7 @@ it.each(["authorization", "incarnation"] as const)(
       if (change === "authorization") {
         authorized = false;
       } else {
-        f.entry.lifecycleRevision = "replacement-with-same-session-id";
+        await f.replaceEntry("replacement-with-same-session-id");
       }
       release.resolve();
       await rejected;
@@ -138,7 +160,7 @@ it.each(["authorization", "incarnation"] as const)(
 );
 
 it("rechecks the exact worker owner after asynchronous cancellation setup", async () => {
-  const f = fixture("changed-worker");
+  const f = await fixture("changed-worker");
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const signalled = vi.fn();
@@ -161,7 +183,7 @@ it("rechecks the exact worker owner after asynchronous cancellation setup", asyn
 });
 
 it("auto-suspend eligibility rejects before closing admission or signalling cancellation", async () => {
-  const f = fixture("auto-suspend");
+  const f = await fixture("auto-suspend");
   await expect(
     f.prepare({
       beforeDrain: () => {
@@ -175,7 +197,8 @@ it("auto-suspend eligibility rejects before closing admission or signalling canc
 });
 
 it("keeps admissions closed while serialized teardown is queued, then revalidates the incarnation", async () => {
-  const f = fixture("queued-teardown");
+  const f = await fixture("queued-teardown");
+  const sql = observeHostDataSql();
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const teardown = vi.fn();
@@ -189,10 +212,16 @@ it("keeps admissions closed while serialized teardown is queued, then revalidate
     },
   });
   const rejected = expect(stop).rejects.toThrow("Session");
-  await entered.promise;
-  await expect(f.admit()).rejects.toThrow();
-  f.entry.lifecycleRevision = "new-incarnation";
-  release.resolve();
-  await rejected;
-  expect(teardown).not.toHaveBeenCalled();
+  try {
+    await entered.promise;
+    await expect(f.admit()).rejects.toThrow();
+    await f.replaceEntry("new-incarnation");
+    release.resolve();
+    await rejected;
+    expect(teardown).not.toHaveBeenCalled();
+  } finally {
+    release.resolve();
+    sql.restore();
+  }
+  expect(sql.queries).toEqual([]);
 });

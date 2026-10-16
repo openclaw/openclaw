@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { icons } from "../icons.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT, readPanelHostedTabs } from "../panel-hosted-tabs.ts";
 import type { BrowserPanelTab } from "./browser-client.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
@@ -69,10 +68,12 @@ describe("Browser panel hosted tabs", () => {
     async ({ embedded, tabsInHeader, ownsStrip }) => {
       const { panel } = await mount(embedded, tabsInHeader);
       expect(Boolean(panel.renderRoot?.querySelector(".bp-header"))).toBe(ownsStrip);
-      expect(Boolean(panel.renderRoot?.querySelector("wa-tab-group"))).toBe(ownsStrip);
+      expect(Boolean(panel.renderRoot?.querySelector(".tabstrip"))).toBe(ownsStrip);
       expect(panel.renderRoot?.querySelector(".bp-toolbar")).not.toBeNull();
       const viewport = panel.renderRoot.querySelector<HTMLElement>(".bp-viewport")!;
-      const activeTab = panel.renderRoot.querySelector<HTMLElement>('[panel="remote:a"]');
+      const activeTab = panel.renderRoot.querySelector<HTMLElement>(
+        '.tabstrip-tab[aria-selected="true"]',
+      );
       expect(viewport.getAttribute("aria-labelledby")).toBe(ownsStrip ? activeTab?.id : null);
       if (ownsStrip) {
         expect(activeTab).not.toBeNull();
@@ -88,24 +89,33 @@ describe("Browser panel hosted tabs", () => {
   it("projects controller tabs and keeps simultaneous panels' DOM associations separate", async () => {
     const { panel } = await mount(true, false);
     expect(readPanelHostedTabs(panel)).toBe(panel);
-    expect(panel.hostedTabs).toEqual([
-      { id: "remote:a", label: "Example", url: "https://example.test/a", icon: icons.globe },
+    const hostedTabs = panel.hostedTabs;
+    expect(hostedTabs).toEqual([
+      {
+        id: "remote:a",
+        label: "Example",
+        url: "https://example.test/a",
+        icon: expect.any(SVGSVGElement),
+      },
       {
         id: "native:b",
         label: "second.test",
         url: "https://second.test/b",
-        icon: icons.monitor,
+        icon: expect.any(SVGSVGElement),
         favicon,
       },
-      { id: "remote:c", label: "New tab", url: "about:blank", icon: icons.globe },
+      { id: "remote:c", label: "New tab", url: "about:blank", icon: expect.any(SVGSVGElement) },
     ]);
+    expect(hostedTabs[0]!.icon).not.toBe(panel.hostedTabs[0]!.icon);
     expect(panel.activeHostedTabId).toBe("remote:a");
     expect(
       [...panel.renderRoot!.querySelectorAll(".tabstrip-tab__label")].map(
         (label) => label.textContent,
       ),
     ).toEqual(["Example", "second.test", "New tab"]);
-    const nativeIcon = panel.renderRoot.querySelector('[panel="native:b"] .tabstrip-tab__icon');
+    const nativeIcon = panel.renderRoot
+      .querySelectorAll(".tabstrip-tab")[1]
+      ?.querySelector(".tabstrip-tab__icon");
     expect(nativeIcon?.querySelector("img")?.getAttribute("src")).toBe(favicon);
     expect(nativeIcon?.querySelector("svg")).toBeNull();
 
@@ -113,11 +123,13 @@ describe("Browser panel hosted tabs", () => {
     for (const browser of [panel, second.panel]) {
       const viewport = browser.renderRoot.querySelector<HTMLElement>(".bp-viewport")!;
       expect(document.getElementById(viewport.id)).toBe(viewport);
-      for (const tab of browser.renderRoot.querySelectorAll<HTMLElement>("wa-tab")) {
+      for (const tab of browser.renderRoot.querySelectorAll<HTMLElement>(".tabstrip-tab")) {
         expect(document.getElementById(tab.id)).toBe(tab);
         expect(tab.getAttribute("aria-controls")).toBe(viewport.id);
       }
-      const activeTab = browser.renderRoot.querySelector<HTMLElement>('[panel="remote:a"]')!;
+      const activeTab = browser.renderRoot.querySelector<HTMLElement>(
+        '.tabstrip-tab[aria-selected="true"]',
+      )!;
       expect(viewport.getAttribute("aria-labelledby")).toBe(activeTab.id);
     }
   });

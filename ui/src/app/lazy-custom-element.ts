@@ -1,6 +1,7 @@
 import { t } from "../i18n/index.ts";
 import {
   isStaleChunkImportError,
+  cancelStaleChunkRecovery,
   retryStaleChunkReloadWhenReachable,
 } from "./stale-chunk-reload.ts";
 
@@ -69,12 +70,14 @@ export class LazyCustomElementRequestController {
   private readonly preloads = new Set<string>();
   private active: OptionalCustomElement | undefined;
   private activeDismissed = false;
+  private staleRetry: LazyCustomElementRequest | undefined;
 
   constructor(
     private readonly host: UpdatingHost,
     private readonly onClose?: () => void,
     private readonly retryStale = (canReload: () => boolean) =>
       retryStaleChunkReloadWhenReachable({ canReload }),
+    private readonly cancelStale = () => cancelStaleChunkRecovery(),
   ) {}
 
   get visibleState(): LazyCustomElementRequestState | undefined {
@@ -143,6 +146,7 @@ export class LazyCustomElementRequestController {
       status: "loading",
     } satisfies LazyCustomElementRequest;
     this.current = retryRequest;
+    this.staleRetry = request.stale ? retryRequest : undefined;
     this.host.requestUpdate();
     const canReload = () => this.current === retryRequest;
     void (request.stale ? this.retryStale(canReload) : Promise.resolve(false)).then((reloading) => {
@@ -164,6 +168,14 @@ export class LazyCustomElementRequestController {
 
   abandon(): void {
     if (this.current) {
+      // A retired stale-chunk failure must not reload the page later (#130988);
+      // surfaces that still show a failure re-arm recovery when they render.
+      if (
+        (this.current.status === "error" && this.current.stale) ||
+        this.current === this.staleRetry
+      ) {
+        this.cancelStale();
+      }
       this.current = undefined;
       this.host.requestUpdate();
       this.pumpActive();
@@ -229,7 +241,7 @@ export class LazyCustomElementRequestController {
 export const COMMAND_PALETTE_ELEMENT = {
   tagName: "openclaw-command-palette",
   label: "command palette",
-  loadModule: () => import("../components/command-palette.ts"),
+  loadModule: () => import("../components/command-palette.tsx"),
 } satisfies OptionalCustomElement;
 
 export const DEBUG_OVERLAY_ELEMENT = {
@@ -253,7 +265,7 @@ const APP_SIDEBAR_TAG = "openclaw-app-sidebar";
 export const APP_SIDEBAR_ELEMENT = {
   tagName: APP_SIDEBAR_TAG,
   label: APP_SIDEBAR_TAG,
-  loadModule: () => import("../components/app-sidebar.ts"),
+  loadModule: () => import("../components/app-sidebar.tsx"),
 } satisfies OptionalCustomElement;
 
 const MACOS_TITLEBAR_TAG = "openclaw-macos-titlebar-controls";
@@ -261,13 +273,13 @@ const MACOS_TITLEBAR_TAG = "openclaw-macos-titlebar-controls";
 export const MACOS_TITLEBAR_ELEMENT = {
   tagName: MACOS_TITLEBAR_TAG,
   label: MACOS_TITLEBAR_TAG,
-  loadModule: () => import("../components/macos-titlebar-controls.runtime.ts"),
+  loadModule: () => import("../components/macos-titlebar-controls.runtime-solid.tsx"),
 } satisfies OptionalCustomElement;
 
 export const SIDEBAR_ATTENTION_ELEMENT = {
   tagName: "openclaw-sidebar-attention",
   label: t("attention.issues"),
-  loadModule: () => import("../components/sidebar-attention.ts"),
+  loadModule: () => import("../components/sidebar-attention.tsx"),
 } satisfies OptionalCustomElement;
 
 export const TERMINAL_PANEL_ELEMENT = {

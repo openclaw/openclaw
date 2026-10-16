@@ -10,6 +10,7 @@ import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-eng
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -425,8 +426,8 @@ export function createManagerIndexFixture(deps: {
     (manager as unknown as { sessionsDirtyFiles: Set<string> }).sessionsDirtyFiles.clear();
   };
 
-  const createConfig = (params: ManagerIndexFixtureConfig): ManagerConfig =>
-    isolateMemoryManagerTestConfig({
+  const createConfig = (params: ManagerIndexFixtureConfig): ManagerConfig => {
+    const cfg = isolateMemoryManagerTestConfig({
       memory: {
         search: {
           ...(params.provider !== undefined ? { provider: params.provider } : {}),
@@ -453,6 +454,9 @@ export function createManagerIndexFixture(deps: {
       },
       models: params.providerAliases ? { providers: params.providerAliases } : undefined,
     } as OpenClawConfig);
+    setRuntimeConfigSnapshot(cfg);
+    return cfg;
+  };
 
   const requireManager = (
     result: ManagerResult,
@@ -469,6 +473,7 @@ export function createManagerIndexFixture(deps: {
   };
 
   const getPersistentManager = async (cfg: ManagerConfig): Promise<MemoryIndexManager> => {
+    setRuntimeConfigSnapshot(cfg);
     const manager = requireManager(
       await deps.getMemorySearchManager({
         runInBackgroundContext: runInMemoryTestBackgroundContext,
@@ -486,6 +491,7 @@ export function createManagerIndexFixture(deps: {
     purpose?: "default" | "status" | "cli",
     inspectSources?: boolean,
   ): Promise<MemoryIndexManager> => {
+    setRuntimeConfigSnapshot(cfg);
     const manager = requireManager(
       await deps.getMemorySearchManager({
         runInBackgroundContext: runInMemoryTestBackgroundContext,
@@ -610,6 +616,7 @@ export function createManagerIndexFixture(deps: {
     });
     root = state.root;
     workspace = state.workspaceDir;
+    createConfig({});
     memory = path.join(workspace, "memory");
     await fs.mkdir(memory, { recursive: true });
     await configureMemoryCoreDreamingStateForTests();

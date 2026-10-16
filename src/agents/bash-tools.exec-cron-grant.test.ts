@@ -13,7 +13,6 @@ import {
   loadedCronStoreFromRows,
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
-import { releaseLocalCronRunReceiptOwnership } from "../cron/store/run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
   finishCronRunReceiptAsync,
@@ -299,7 +298,6 @@ describe("cron standing grants", () => {
     const job = seedCronJobRow();
     const revision = resolveCronJobConfigRevision(job);
     const receipt = claimCronRunReceiptForTest(CRON_STORE_KEY, job, Date.now());
-    releases.push(() => releaseLocalCronRunReceiptOwnership(receipt));
     const marker = markServiceCronJobActive(
       createCronServiceState({
         scheduler: createTestGatewayScheduler(),
@@ -445,7 +443,6 @@ describe("cron standing grants", () => {
         });
         if (invalidation === "replacement receipt") {
           const successor = claimCronRunReceiptForTest(CRON_STORE_KEY, job, Date.now());
-          releases.push(() => releaseLocalCronRunReceiptOwnership(successor));
           expect(successor.receiptId).not.toBe(receipt.receiptId);
         }
       }

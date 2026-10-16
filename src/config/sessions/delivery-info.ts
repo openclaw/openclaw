@@ -11,13 +11,13 @@ import { hasDeliveryTargetFields } from "../../utils/delivery-context.shared.js"
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
+import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import {
   readSessionEntryReadOnlyInWorker,
   readSessionEntriesFromStoreInWorker,
   readSessionEntrySummariesInWorker,
 } from "./session-entry-read-runtime.js";
-import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import {
   foldedSessionKeyAliasCandidates,
   hasMismatchedCaseSensitiveDeliveryProof,
@@ -122,10 +122,10 @@ export async function extractDeliveryInfoBatch(
     });
     const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey, storeAgentId: agentId });
     const incognito = isIncognitoSessionKey(sessionKey)
-      ? captureIncognitoSessionBinding({ agentId, sessionKey })
+      ? captureMemoryExactSessionReader({ agentId, sessionKey })
       : undefined;
     const storePaths = new Set([
-      incognito?.actor.path ?? resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+      incognito?.path ?? resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     ]);
     for (const target of incognito ? [] : storeTargets) {
       if (target.agentId === agentId) {

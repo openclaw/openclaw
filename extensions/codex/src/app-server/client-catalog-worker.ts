@@ -11,6 +11,7 @@ import type { CodexCatalogDecodeRoute } from "./client-message-frames.js";
 import { isJsonObject } from "./protocol.js";
 
 const INLINE_CATALOG_MAX_BYTES = 64 * 1024;
+const CATALOG_MAX_BYTES = 8 * 1024 * 1024;
 const CATALOG_WORKER_IDLE_MS = 60_000;
 const runInCatalogWorkerContext = AsyncLocalStorage.snapshot();
 
@@ -32,38 +33,37 @@ export function codexCatalogRequestId(
     : sequence;
 }
 
-/** Each physical client owns one decoder, including incomplete-line recovery state. */
+/** Each physical client owns one catalog projection worker. */
 export class CodexCatalogWorker {
   private pool: WorkerTaskPool<CodexCatalogDecodeInput, CodexCatalogDecodeResult> | undefined;
-  private continuationRoute: CodexCatalogDecodeRoute | undefined;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   private retirement: Promise<void> | undefined;
   private readonly setTimeoutFn = setTimeout;
   private readonly clearTimeoutFn = clearTimeout;
   private closed = false;
 
-  get continuation(): CodexCatalogDecodeRoute | undefined {
-    return this.continuationRoute;
-  }
-
   async decode(
     line: Buffer,
     route: CodexCatalogDecodeRoute,
     attempts: ReadonlyMap<number | string, CodexClientRequestAttempt>,
-  ) {
+  ): Promise<CodexCatalogDecodeResult | undefined> {
     if (this.closed) {
       return undefined;
     }
-    if (
-      !this.continuationRoute &&
-      route !== "unresolved" &&
-      line.byteLength <= INLINE_CATALOG_MAX_BYTES
-    ) {
+    if (line.byteLength > CATALOG_MAX_BYTES) {
+      const error = new Error(
+        "Codex catalog response exceeds 8 MiB; reduce oversized thread previews and retry.",
+      );
+      return route === "unresolved"
+        ? { failures: [{ value: "<oversized catalog response>", error, fragmentCount: 1 }] }
+        : { failures: [], projectionError: { id: route.id, error } };
+    }
+    if (route !== "unresolved" && line.byteLength <= INLINE_CATALOG_MAX_BYTES) {
       let parsed: unknown;
       try {
         parsed = JSON.parse(line.toString("utf8"));
       } catch {
-        // Incomplete or malformed frames retain the worker's recovery state.
+        // Keep malformed-payload diagnostics off the main thread.
       }
       if (parsed !== undefined) {
         // Cache callbacks observe closure and cancellation before asynchronous delivery.
@@ -96,28 +96,14 @@ export class CodexCatalogWorker {
       this.pool = new WorkerTaskPool<CodexCatalogDecodeInput, CodexCatalogDecodeResult>({
         workerUrl: resolveRuntimeWorkerUrl(codexCatalogPageWorkerEntrypoint),
         workerClass: "singleton",
-        // Retain decoder affinity on the published plugin's older supported hosts.
-        maxWorkers: 1,
         maxPendingTasks: 1,
-        // Framing admits one line at a time. Completed native messages have no size cap;
-        // only incomplete recovery is subject to the decoder's PARSE_BUFFER_MAX.
-        maxPendingBytes: Number.MAX_SAFE_INTEGER,
+        maxPendingBytes: CATALOG_MAX_BYTES,
         idleTimeoutMs: 0,
         restartOnError: false,
       });
     }
     const attempt = route === "unresolved" ? undefined : attempts.get(route.id);
     const remainingRows = attempt ? attempt.catalogProjection?.remainingRows : 0;
-    let catalogRows: Map<number, number | undefined> | undefined;
-    if (route === "unresolved") {
-      catalogRows = new Map();
-      for (const [id, pending] of attempts) {
-        const projection = pending.catalogProjection;
-        if (typeof id === "number" && projection) {
-          catalogRows.set(id, projection.remainingRows);
-        }
-      }
-    }
     // Transfer an exclusively owned backing store; never detach a pooled Buffer or
     // the unread suffix of a transport chunk shared with notifications.
     const bytes =
@@ -125,7 +111,7 @@ export class CodexCatalogWorker {
         ? new Uint8Array(line.buffer)
         : Uint8Array.from(line);
     const decoded = await this.pool.run(
-      { bytes, route, remainingRows, catalogRows },
+      { bytes, route, remainingRows },
       {
         inputBytes: bytes.byteLength,
         transferList: (input) => [input.bytes.buffer],
@@ -134,10 +120,7 @@ export class CodexCatalogWorker {
     if (this.closed) {
       return undefined;
     }
-    this.continuationRoute = decoded.pending ? route : undefined;
-    if (!decoded.pending) {
-      this.armIdleRetirement();
-    }
+    this.armIdleRetirement();
     return decoded;
   }
 
@@ -158,7 +141,6 @@ export class CodexCatalogWorker {
     this.closed = true;
     this.clearTimeoutFn(this.idleTimer);
     this.idleTimer = undefined;
-    this.continuationRoute = undefined;
     // A failed rotation must release its stop attempt before close retries custody.
     await this.retirement?.catch(() => undefined);
     await this.pool?.close(error);

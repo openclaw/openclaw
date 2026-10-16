@@ -63,6 +63,8 @@ const unavailableCron: GatewayCronServiceContract = {
   quiesceJobs: cronUnavailable,
   run: cronUnavailable,
   enqueueRun: cronUnavailable,
+  readEventSources: cronUnavailable,
+  runEvent: cronUnavailable,
   waitForManualRun: cronUnavailable,
   getJob: () => undefined,
   readJob: async () => undefined,
@@ -73,9 +75,9 @@ const unavailableCron: GatewayCronServiceContract = {
 };
 
 /** Creates the minimal gateway context used by embedded local agent execution. */
-function createLocalGatewayRequestContext(
+async function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
-): GatewayRequestContext {
+): Promise<GatewayRequestContext> {
   const logGateway = createSubsystemLogger("gateway/local");
   const resourceHost = getLegacyPluginSdkResourceHost();
   const cron: GatewayCronServiceContract = {
@@ -104,7 +106,7 @@ function createLocalGatewayRequestContext(
     localEmbedded: true,
     trackExecution: trackAsyncWork,
     deps: params.deps,
-    configRevisionProjector: loadGatewayConfigRevisionProjector({ env: process.env }),
+    configRevisionProjector: await loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
@@ -229,20 +231,20 @@ function createLocalGatewayRequestContext(
 }
 
 /** Runs code inside a local gateway request scope unless an outer scope already exists. */
-export function withLocalGatewayRequestScope<T>(
+export async function withLocalGatewayRequestScope<T>(
   params: LocalGatewayRequestContextParams,
   run: () => T,
-): T {
+): Promise<Awaited<T>> {
   const existing = getPluginRuntimeGatewayRequestScope();
   if (existing?.context || existing?.resolveGatewayContext) {
-    return run();
+    return await run();
   }
-  const context = createLocalGatewayRequestContext(params);
+  const context = await createLocalGatewayRequestContext(params);
   // Session admission retains the instance binding after dropping request context.
   const resolveGatewayContext = () => context;
   context.resolveGatewayContext = resolveGatewayContext;
   bindLegacyPluginSdkResourceHost(resolveGatewayContext, getLegacyPluginSdkResourceHost());
-  return withPluginRuntimeGatewayRequestScope(
+  return await withPluginRuntimeGatewayRequestScope(
     {
       ...existing,
       context,

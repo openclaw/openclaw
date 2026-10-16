@@ -63,6 +63,7 @@ type ChatMetadataBinding = {
   scope: { agentId?: string; sessionKey: string };
   version: number;
   sessionFactsInvalidated: boolean;
+  catalogResult?: ModelCatalogResult;
   // Only a reply received by this pane binding can suppress the informational hint.
   requiredWorkerInferenceProfileId?: string;
   sessionRefreshPending?: boolean;
@@ -268,23 +269,12 @@ export async function refreshChatMetadata(
     host.requestUpdate?.();
     const ownsRefresh = () =>
       binding.isCurrent() && refresh.isCurrent() && binding.refreshPending?.refresh === refresh;
-    let retryRetiredCatalog = false;
     const catalog = refresh.catalog
       .then(
         async (result) => {
-          // Applying a current cooldown response may expire it; that must not create a retry loop.
-          retryRetiredCatalog = !refresh.isCurrent();
           if (!result || !binding.isCurrent() || binding.refreshPending?.refresh !== refresh) {
             return;
           }
-          // Another pane can discover expiry after this snapshot was canonically accepted.
-          if (
-            retryRetiredCatalog &&
-            peekModelCatalog(binding.client, binding.scope, { allowStale: true }) !== result
-          ) {
-            return;
-          }
-          retryRetiredCatalog = false;
           // The receipt signals completion; the model owner supplies current or stale display data.
           applyCachedChatModelCatalog(host, binding);
           if (!ownsRefresh()) {
@@ -297,7 +287,6 @@ export async function refreshChatMetadata(
           }
         },
         (error: unknown) => {
-          retryRetiredCatalog = !refresh.isCurrent();
           if (ownsRefresh() && !applyChatModelCatalogSnapshot(host) && ownsRefresh()) {
             host.chatModelCatalogError = formatUiError(error);
             host.chatModelsLoading = false;
@@ -314,11 +303,7 @@ export async function refreshChatMetadata(
     const promise = Promise.allSettled([refresh.completed, catalog]).then(() => {
       if (binding.refreshPending?.refresh === refresh) {
         binding.refreshPending = undefined;
-        if (retryRetiredCatalog && binding.isCurrent()) {
-          return refreshChatMetadata(host, { automatic: true });
-        }
       }
-      return undefined;
     });
     binding.refreshPending = { refresh, promise };
     return promise;
@@ -451,14 +436,10 @@ async function loadChatModelCatalog(
         const fresh = peekModelCatalog(binding.client, binding.scope);
         if (fresh || ownsRequest()) {
           applyCachedChatModelCatalog(host, binding);
-          const accepted =
+          return (
             Boolean(fresh) ||
-            peekModelCatalog(binding.client, binding.scope, { allowStale: true }) === result;
-          if (!accepted && ownsRequest()) {
-            binding.catalogRequest = undefined;
-            return loadChatModelCatalog(host, binding);
-          }
-          return accepted;
+            peekModelCatalog(binding.client, binding.scope, { allowStale: true }) === result
+          );
         }
         return false;
       },
@@ -496,6 +477,7 @@ function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBi
   const fresh = peekModelCatalog(binding.client, binding.scope);
   const result = fresh ?? peekModelCatalog(binding.client, binding.scope, { allowStale: true });
   if (!result && binding.isCurrent() && isModelCatalogRetired(binding.client, binding.scope)) {
+    binding.catalogResult = undefined;
     applyChatModelCatalog(host);
     host.chatModelCatalogRetired = true;
     host.requestUpdate?.();
@@ -507,6 +489,10 @@ function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBi
     binding.catalogRequest?.controller.abort();
     binding.catalogRequest = undefined;
   }
+  if (binding.catalogResult === result && !host.chatModelsLoading && !host.chatModelCatalogError) {
+    return Boolean(fresh);
+  }
+  binding.catalogResult = result;
   const previousError = host.chatModelCatalogError;
   const previousLoading = host.chatModelsLoading;
   applyChatModelCatalog(host, result);

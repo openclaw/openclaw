@@ -12,6 +12,10 @@ const {
   runMessageReceivedMock,
   shouldComputeCommandAuthorizedMock,
   trackBackgroundTaskMock,
+  buildInboundLineMock,
+  shouldLogVerboseMock,
+  inboundInfoMock,
+  inboundDebugMock,
 } = vi.hoisted(() => ({
   resolvePolicyMock: vi.fn(),
   buildContextMock: vi.fn(),
@@ -25,6 +29,10 @@ const {
   runMessageReceivedMock: vi.fn(async () => undefined),
   shouldComputeCommandAuthorizedMock: vi.fn(() => false),
   trackBackgroundTaskMock: vi.fn(),
+  buildInboundLineMock: vi.fn(() => "hi"),
+  shouldLogVerboseMock: vi.fn(() => false),
+  inboundInfoMock: vi.fn(),
+  inboundDebugMock: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
@@ -114,7 +122,7 @@ vi.mock("../loggers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../loggers.js")>();
   return {
     ...actual,
-    whatsappInboundLog: { info: () => {}, debug: () => {} },
+    whatsappInboundLog: { info: inboundInfoMock, debug: inboundDebugMock },
   };
 });
 
@@ -143,7 +151,7 @@ vi.mock("./last-route.js", async (importOriginal) => {
 
 vi.mock("./message-line.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./message-line.js")>();
-  return { ...actual, buildInboundLine: () => "hi" };
+  return { ...actual, buildInboundLine: buildInboundLineMock };
 });
 
 vi.mock("./runtime-api.js", async (importOriginal) => {
@@ -168,7 +176,7 @@ vi.mock("./runtime-api.js", async (importOriginal) => {
     resolvePinnedMainDmOwnerFromAllowlist: () => null,
     isControlCommandMessage: isControlCommandMessageMock,
     shouldComputeCommandAuthorized: shouldComputeCommandAuthorizedMock,
-    shouldLogVerbose: () => false,
+    shouldLogVerbose: shouldLogVerboseMock,
   };
 });
 
@@ -258,6 +266,7 @@ function callProcessMessage(
     dispatchReplyFromConfig?: Parameters<typeof processMessage>[0]["dispatchReplyFromConfig"];
     groupHistories?: Map<string, unknown[]>;
     msg?: unknown;
+    replyLoggerInfo?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   return processMessage({
@@ -273,7 +282,12 @@ function callProcessMessage(
     maxMediaBytes: 1024,
     dispatchReplyFromConfig: overrides.dispatchReplyFromConfig,
     replyResolver: (async () => undefined) as never,
-    replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
+    replyLogger: {
+      info: overrides.replyLoggerInfo ?? (() => {}),
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+    } as never,
     backgroundTasks: new Set(),
   });
 }
@@ -303,6 +317,10 @@ describe("processMessage group system prompt wiring", () => {
     shouldComputeCommandAuthorizedMock.mockReset();
     shouldComputeCommandAuthorizedMock.mockReturnValue(false);
     trackBackgroundTaskMock.mockClear();
+    buildInboundLineMock.mockReset().mockReturnValue("hi");
+    shouldLogVerboseMock.mockReset().mockReturnValue(false);
+    inboundInfoMock.mockClear();
+    inboundDebugMock.mockClear();
     clearInternalHooks();
     buildContextMock.mockImplementation(
       (params: { groupSystemPrompt?: string; combinedBody?: string }) => ({
@@ -350,6 +368,32 @@ describe("processMessage group system prompt wiring", () => {
       command: { kind: "text-slash", authorized: true, body: "/reset" },
       rawBody: "/reset",
     });
+  });
+
+  it("keeps inbound message content in agent context, not diagnostics", async () => {
+    const body = "private WhatsApp message with a confidential quotation";
+    buildInboundLineMock.mockReturnValueOnce(body);
+    shouldLogVerboseMock.mockReturnValue(true);
+    const info = vi.fn();
+    await callProcessMessage({ msg: makeBaseMsg({ body }), replyLoggerInfo: info });
+
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      bodyForAgent: body,
+      combinedBody: body,
+      rawBody: body,
+    });
+    for (const calls of [
+      info.mock.calls,
+      inboundInfoMock.mock.calls,
+      inboundDebugMock.mock.calls,
+    ]) {
+      expect(JSON.stringify(calls)).not.toContain(body);
+    }
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({ correlationId: "msg1", bodyLength: body.length }),
+      "inbound web message",
+    );
+    expect(inboundInfoMock).toHaveBeenCalledWith(expect.stringContaining(`${body.length} chars`));
   });
 
   it("passes pending history to context and clears it after dispatch", async () => {

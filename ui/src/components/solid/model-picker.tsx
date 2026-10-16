@@ -1,22 +1,12 @@
 import { createMemo } from "solid-js";
 import { modelPickerOptions, type ModelPickerParams } from "../model-picker-options.ts";
-import { providerDisplayLabel, renderProviderBrandIcon } from "../provider-icon.ts";
-import type { PickerOption, PickerParams, SelectPicker } from "../select-picker.ts";
-import "../select-picker.ts";
+import { providerDisplayLabel } from "../provider-icon-data.ts";
+import { Picker, type PickerParams } from "../select-picker.ts";
+import { ProviderBrandIcon } from "./provider-icon.tsx";
 
 export type { ModelPickerOption, ModelPickerParams } from "../model-picker-options.ts";
 
 type ModelSelectOption = ReturnType<typeof modelPickerOptions>["options"][number];
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-select-picker": HTMLAttributes<SelectPicker> & {
-        "prop:params": PickerParams<PickerOption>;
-      };
-    }
-  }
-}
 
 export function ModelPicker(props: ModelPickerParams) {
   const choices = createMemo(() => modelPickerOptions(props));
@@ -26,8 +16,9 @@ export function ModelPicker(props: ModelPickerParams) {
       props.onChange((event.currentTarget as HTMLInputElement).value);
     }
   };
-  const providerIcon = (provider: string) =>
-    renderProviderBrandIcon(provider, { className: "model-picker__provider-icon" });
+  const providerIcon = (provider: string) => (
+    <ProviderBrandIcon provider={provider} class="model-picker__provider-icon" />
+  );
   const pickerParams = createMemo<PickerParams<ModelSelectOption>>(() => ({
     id: props.id,
     label: props.label,
@@ -44,7 +35,9 @@ export function ModelPicker(props: ModelPickerParams) {
             ? {
                 id: option.provider,
                 label: providerDisplayLabel(option.provider),
-                leading: providerIcon(option.provider),
+                get leading() {
+                  return providerIcon(this.id);
+                },
               }
             : undefined
       : undefined,
@@ -71,11 +64,7 @@ export function ModelPicker(props: ModelPickerParams) {
   }));
   return (
     <div class="model-picker">
-      <openclaw-select-picker
-        class="settings-select picker-select model-picker__select "
-        style={{ width: "100%", "min-width": "min(138px,100%)" }}
-        prop:params={pickerParams()}
-      />
+      <Picker params={pickerParams()} />
       {props.custom ? (
         <input
           id={props.custom.id}

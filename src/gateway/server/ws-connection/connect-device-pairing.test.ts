@@ -11,6 +11,7 @@ import type {
   UsersListResult,
   UsersSelfResult,
 } from "../../../../packages/gateway-protocol/src/schema/users.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { replaceConfigFile } from "../../../config/config.js";
 import {
   getRuntimeConfigSnapshot,
@@ -31,16 +32,20 @@ import {
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
 } from "../../../shared/device-bootstrap-profile.js";
-import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
-import { readUserGitHubConnection } from "../../../state/user-github-connections.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../../state/openclaw-state-db.js";
+import { readUserGitHubConnectionAsync } from "../../../state/user-github-connections.js";
 import { disconnectedUserGitHubConnection } from "../../../state/user-github-connections.kernel.js";
 import { updateUserGitHubConnection } from "../../../state/user-github-connections.test-support.js";
+import {
+  hasMultipleResidentSessionSharingIdentities,
+  publishUserProfilesChange,
+} from "../../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
 import { repairMergedGatewayOwnerProfile } from "../../../state/user-profiles-owner-migration.js";
-import {
-  ensureProfileForEmail,
-  hasMultipleSessionSharingIdentities,
-} from "../../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import {
   GatewayClient,
   type GatewayClientOptions,
@@ -94,7 +99,7 @@ const TUI_CLIENT = {
 } as const;
 
 describe("gateway connect pairing exemptions", () => {
-  test("reconciles concurrent pairing decisions against current device authority", async () => {
+  test("keeps approved connects off recovery reads and checks current authority", async () => {
     const origin = "https://pairing.example.test";
     const auth = { mode: "token", token: "concurrent-pairing-secret" } as const;
     testState.gatewayAuth = auth;
@@ -111,6 +116,7 @@ describe("gateway connect pairing exemptions", () => {
     });
     const started = await startServerWithClient(undefined, { auth });
     const readPairing = devicePairing.listDevicePairing;
+    const readPaired = devicePairing.getPairedDevice;
     const scopes = ["operator.read", "operator.write"];
     try {
       expect(
@@ -123,8 +129,7 @@ describe("gateway connect pairing exemptions", () => {
         ).ok,
       ).toBe(true);
       for (const decision of [
-        "approved before reread",
-        "approved after reread",
+        "approved",
         "rejected",
         "revoked",
         "different key",
@@ -159,14 +164,16 @@ describe("gateway connect pairing exemptions", () => {
           });
         }
         const ws = await openTrackedWs(started.port, { origin });
-        const reread = vi
-          .spyOn(devicePairing, "listDevicePairing")
-          .mockImplementationOnce(async () => {
+        const recoveryRead = vi.spyOn(devicePairing, "listDevicePairing");
+        const authorityRead = vi
+          .spyOn(devicePairing, "getPairedDevice")
+          .mockImplementationOnce(readPaired)
+          .mockImplementationOnce(async (deviceId, baseDir) => {
             const pendingSnapshot = await readPairing();
             if (decision === "inline approval revoked") {
-              expect(await getPairedDevice(loaded.identity.deviceId)).not.toBeNull();
+              expect(await readPaired(loaded.identity.deviceId)).not.toBeNull();
               await devicePairing.removePairedDevice(loaded.identity.deviceId);
-              return pendingSnapshot;
+              return readPaired(deviceId, baseDir);
             }
             const pending = pendingSnapshot.pending.find(
               (entry) => entry.deviceId === loaded.identity.deviceId,
@@ -179,7 +186,7 @@ describe("gateway connect pairing exemptions", () => {
               expect(response.ok, JSON.stringify(response)).toBe(true);
             };
             if (decision === "unapproved metadata") {
-              return pendingSnapshot;
+              return readPaired(deviceId, baseDir);
             }
             if (decision === "rejected") {
               await decide("device.pair.reject", { requestId: pending.requestId });
@@ -220,9 +227,7 @@ describe("gateway connect pairing exemptions", () => {
                 await decide("device.pair.remove", { deviceId: loaded.identity.deviceId });
               }
             }
-            // Approval can commit either before the recovery read or after its
-            // snapshot, but before the awaiting handshake resumes.
-            return decision === "approved after reread" ? pendingSnapshot : await readPairing();
+            return readPaired(deviceId, baseDir);
           });
         try {
           const response = await connectReq(ws, {
@@ -232,8 +237,8 @@ describe("gateway connect pairing exemptions", () => {
             deviceIdentityPath: loaded.identityPath,
             prePairDevice: false,
           });
-          expect(reread).toHaveBeenCalled();
-          if (decision.startsWith("approved")) {
+          if (decision === "approved") {
+            expect(recoveryRead).not.toHaveBeenCalled();
             expect.soft(response, decision).toMatchObject({
               ok: true,
               payload: { type: "hello-ok", auth: { role: "operator", scopes } },
@@ -250,7 +255,8 @@ describe("gateway connect pairing exemptions", () => {
             });
           }
         } finally {
-          reread.mockRestore();
+          authorityRead.mockRestore();
+          recoveryRead.mockRestore();
           ws.close();
         }
       }
@@ -329,12 +335,16 @@ describe("gateway connect pairing exemptions", () => {
       const stateDb = openOpenClawStateDatabase();
       const db = stateDb.db;
       // The old merge writer moved identities to the person and left the owner tombstone.
-      db.prepare(
-        "UPDATE user_profiles SET merged_into = ?, updated_at = 1 WHERE id = 'gateway-owner'",
-      ).run(person.id);
-      db.prepare(
-        "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local' AND subject = 'owner'",
-      ).run(person.id);
+      runOpenClawStateWriteTransaction(() => {
+        db.prepare(
+          "UPDATE user_profiles SET merged_into = ?, updated_at = 1 WHERE id = 'gateway-owner'",
+        ).run(person.id);
+        db.prepare(
+          "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local' AND subject = 'owner'",
+        ).run(person.id);
+        publishUserProfilesChange(db, "gateway-owner", person.id);
+      });
+
       started.ws.close();
       const logPath = path.join(path.dirname(stateDb.path), "owner-repair.log");
       setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logPath });
@@ -368,7 +378,7 @@ describe("gateway connect pairing exemptions", () => {
       }
       expect(personalStatus).not.toHaveBeenCalled();
       expect(personalAuthorize).not.toHaveBeenCalled();
-      expect(readUserGitHubConnection(person.id)).toEqual(personalConnection);
+      expect(await readUserGitHubConnectionAsync(person.id)).toEqual(personalConnection);
       const sessions = await rpcReq<SessionsListResult>(reconnect, "sessions.list", {});
       expect(sessions.ok).toBe(true);
       expect(
@@ -464,7 +474,7 @@ describe("gateway connect pairing exemptions", () => {
       expect(self.ok).toBe(true);
       expect(profileId).toBe("gateway-owner");
       expect(resolveOperatorRolePolicyForProfile(profileId, config)).toBeUndefined();
-      expect(hasMultipleSessionSharingIdentities()).toBe(false);
+      expect(hasMultipleResidentSessionSharingIdentities()).toBe(false);
       expect(await rpcReq(reconnect, "users.github.status", {})).toMatchObject({
         ok: true,
         payload: { personal: { state: "disconnected", account: null } },
@@ -483,7 +493,7 @@ describe("gateway connect pairing exemptions", () => {
         emails: ["person@example.test"],
         role: "guest",
       });
-      expect(readUserGitHubConnection(person.id)).toEqual(personalConnection);
+      expect(await readUserGitHubConnectionAsync(person.id)).toEqual(personalConnection);
     } finally {
       for (const spy of personalSpies) {
         spy.mockRestore();
@@ -792,13 +802,6 @@ describe("gateway connect pairing exemptions", () => {
 
   test.each([
     {
-      name: "local backend self-call",
-      client: BACKEND_CLIENT,
-      approvedScopes: ["operator.pairing"],
-      pairingClientId: GATEWAY_CLIENT_NAMES.CLI,
-      pairingClientMode: GATEWAY_CLIENT_MODES.CLI,
-    },
-    {
       name: "TUI operator client",
       client: TUI_CLIENT,
       approvedScopes: ["operator.read"],
@@ -812,6 +815,13 @@ describe("gateway connect pairing exemptions", () => {
       const identityName = `auth-none-${name.replaceAll(" ", "-")}`;
       const loaded = loadDeviceIdentity(identityName);
       let pairedWs: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
+      const metadataWritten = createDeferred();
+      const recordAccess = devicePairing.recordPairedDeviceAccess;
+      const metadata = vi
+        .spyOn(devicePairing, "recordPairedDeviceAccess")
+        .mockImplementation((...args) =>
+          recordAccess(...args).finally(() => metadataWritten.resolve()),
+        );
 
       try {
         const unpaired = await connectReq(started.ws, {
@@ -849,6 +859,7 @@ describe("gateway connect pairing exemptions", () => {
           prePairDevice: false,
         });
         expect(pairedConnect.ok, JSON.stringify(pairedConnect)).toBe(true);
+        await metadataWritten.promise;
 
         const paired = await getPairedDevice(loaded.identity.deviceId);
         expect(paired?.approvedScopes).toEqual(approvedScopes);
@@ -858,6 +869,7 @@ describe("gateway connect pairing exemptions", () => {
         });
         expect(paired?.lastSeenReason).toBe("connect");
       } finally {
+        metadata.mockRestore();
         pairedWs?.close();
         started.ws.close();
         await started.server.close();

@@ -245,7 +245,7 @@ describe("schema preflight source artifacts", () => {
       opened.db.exec("BEGIN IMMEDIATE; PRAGMA user_version = 999;");
     }
     try {
-      const allowReadMarks = [fixture.main.path, fixture.worker.path];
+      const allowReadMarks = fixture.paths;
       const before = sourceArtifacts(fixture.paths, allowReadMarks);
       const locks =
         process.platform === "linux" ? fixture.paths.map(readMainDatabasePosixLocks) : [];

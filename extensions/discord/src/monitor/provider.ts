@@ -7,7 +7,7 @@ import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry"
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
   createRuntimeConfigReader,
-  getRuntimeConfig,
+  captureRuntimeConfigAsyncReader,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   logVerbose,
@@ -95,7 +95,7 @@ function isDiscordDisallowedIntentsError(err: unknown): boolean {
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
   const { scheduler } = opts;
   const startupStartedAt = Date.now();
-  const cfg = opts.config ?? getRuntimeConfig();
+  const cfg = opts.config ?? (await captureRuntimeConfigAsyncReader()());
   const readConfig = opts.readConfig ?? createRuntimeConfigReader(cfg);
   const account = discordProviderRuntime.resolveDiscordAccount({
     cfg,
@@ -199,6 +199,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
   }
 
   const allowlistResolved = await resolveDiscordAllowlistConfig({
+    accountId: account.accountId,
     token,
     guildEntries,
     allowFrom,
@@ -282,9 +283,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
   let gatewaySupervisor: ReturnType<typeof createDiscordGatewaySupervisor> | undefined;
   let deactivateMessageHandler: (() => Promise<void>) | undefined;
   let stopMonitorListeners: (() => Promise<void>) | undefined;
-  let autoPresenceController: Awaited<
-    ReturnType<typeof createDiscordMonitorClient>
-  >["autoPresenceController"] = null;
+  let autoPresenceController:
+    | Awaited<ReturnType<typeof createDiscordMonitorClient>>["autoPresenceController"]
+    | null = null;
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
   try {
@@ -493,7 +494,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
     runtime.log?.(
       formatDiscordStartupStatusMessage({
-        gatewayReady: lifecycleGateway?.isConnected === true,
+        gatewayReady: lifecycleGateway.isConnected,
         botIdentity: botIdentity || undefined,
       }),
     );

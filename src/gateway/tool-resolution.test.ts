@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
@@ -11,6 +11,7 @@ import {
   wrapToolWithGatewayCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import * as gatewayTools from "../agents/tools/gateway.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   claimAgentRunApprovalAuthority,
@@ -41,6 +42,8 @@ async function resolveTools(
 }
 
 describe("resolveGatewayScopedTools", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+
   it("retains a computer execution across MCP catalog rebuilds and releases it with its run", async () => {
     const cfg = { plugins: { enabled: false }, tools: { allow: ["computer"] } };
     const admissions = ["computer-first", "computer-next"].map((runId) =>

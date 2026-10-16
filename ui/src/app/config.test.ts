@@ -126,17 +126,6 @@ describe("createApplicationConfigCapability", () => {
     },
   );
 
-  it("stays fail closed before bootstrap and accepts the Gateway favicon setting", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async () => bootstrapResponse("test", true));
-    vi.stubGlobal("fetch", fetchMock);
-    const config = createApplicationConfigCapability({ resourceBasePath: "/openclaw" });
-
-    expect(config.current.automaticallyFetchFavicons).toBe(false);
-    await expect(config.refresh()).resolves.toMatchObject({ automaticallyFetchFavicons: true });
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/openclaw/control-ui-config.json");
-    expect(config.current.automaticallyFetchFavicons).toBe(true);
-  });
-
   it.each([{ pluginFrameGrants: {} }])(
     "returns an unavailable result for invalid bootstrap data: %j",
     async (payload) => {
@@ -158,6 +147,7 @@ describe("createApplicationConfigCapability", () => {
       assistantAvatar: "🔭",
       assistantAgentId: "main",
       terminalEnabled: false,
+      preferences: { profileId: "synthetic-viewer", entries: { "ui.themeMode": "light" } },
       pluginFrameGrants: [{ pluginId: "fixture", path: "/panel", match: "exact" }],
     };
     document.documentElement.setAttribute(
@@ -169,6 +159,7 @@ describe("createApplicationConfigCapability", () => {
     const config = createApplicationConfigCapability({ resourceBasePath: "" });
     expect(config.current.assistantIdentity).toMatchObject({ name: "Observatory", avatar: "🔭" });
     expect(config.current.pluginFrameGrants).toEqual(payload.pluginFrameGrants);
+    expect(config.preferences).toEqual(payload.preferences);
     await config.refresh({ ifNeeded: true });
     expect(fetchMock).not.toHaveBeenCalled();
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 24 * 60 * 60 * 1_000);
@@ -184,6 +175,7 @@ describe("createApplicationConfigCapability", () => {
       CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
       JSON.stringify({
         basePath: "",
+        preferences: { profileId: "browser-profile", entries: { "ui.themeMode": "light" } },
         assistantName: "Browser identity",
         assistantAvatar: "B",
         pluginFrameGrants: [{ pluginId: "browser-only", path: "/browser", match: "prefix" }],
@@ -196,6 +188,7 @@ describe("createApplicationConfigCapability", () => {
       getAuth: () => ({ settings: { token: "test-other-identity" } }),
     });
     expect(config.current.assistantIdentity.name).toBe("Browser identity");
+    expect(config.preferences).toBeUndefined();
     const result = await config.refresh({ ifNeeded: true });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ serverVersion: "bearer", pluginFrameGrants: [] });

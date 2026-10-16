@@ -10,16 +10,9 @@ function waitForTelegramMenu(assertion: () => void) {
   return vi.waitFor(assertion, { interval: 1 });
 }
 
-function waitForTelegramMenuTurn() {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
-}
-
 const ledgerRows = new Map<string, unknown>();
 const ledgerRegisterCalls: Array<{ key: string; value: unknown }> = [];
 const ledgerDeleteCalls: string[] = [];
-let nextLedgerRegisterError: Error | undefined;
 let nextBotId = 1_000_000;
 const testBotIds = new Map<string, number>();
 
@@ -27,11 +20,6 @@ function createLedgerStore<T>(): PluginStateKeyedStore<T> {
   return {
     register: async (key, value) => {
       ledgerRegisterCalls.push({ key, value });
-      if (nextLedgerRegisterError) {
-        const error = nextLedgerRegisterError;
-        nextLedgerRegisterError = undefined;
-        throw error;
-      }
       ledgerRows.set(key, value);
     },
     registerIfAbsent: async (key, value) => {
@@ -130,7 +118,6 @@ beforeEach(() => {
   ledgerRows.clear();
   ledgerRegisterCalls.length = 0;
   ledgerDeleteCalls.length = 0;
-  nextLedgerRegisterError = undefined;
   const openKeyedStore = (<T>() =>
     createLedgerStore<T>()) as TelegramRuntime["state"]["openKeyedStore"];
   setTelegramRuntime({ state: { openKeyedStore }, channel: {} } as TelegramRuntime);
@@ -508,18 +495,20 @@ describe("bot-native-command-menu sync lifecycle", () => {
     expect(runtimeError).toHaveBeenCalled();
   });
 
-  it("resets an unsalvageable malformed current ledger once and still completes reconciliation", async () => {
+  it("uses valid cached locales without a separate repair write", async () => {
     const botId = "876543211";
     ledgerRows.set(botId, {
       version: 1,
-      languageCodes: ["zz", "en-GB", 42],
+      languageCodes: [" FR ", "zz", "en-GB", 42],
       unexpected: true,
     });
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);
     const runtimeError = vi.fn();
-    const accountId = `test-reset-ledger-${Date.now()}`;
-    const commandsToRegister = [{ command: "cmd", description: "Default" }];
+    const accountId = `test-cached-ledger-${Date.now()}`;
+    const commandsToRegister = [
+      { command: "cmd", description: "Default", descriptionLocalizations: { ko: "한국어" } },
+    ];
     const sync = () =>
       syncMenuCommandsWithMocks({
         deleteMyCommands,
@@ -531,21 +520,14 @@ describe("bot-native-command-menu sync lifecycle", () => {
       });
 
     await sync();
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-    expect(ledgerRows.has(botId)).toBe(false);
-    expect(ledgerDeleteCalls).toEqual([botId]);
-    expect(runtimeError).toHaveBeenCalledWith(
-      `Telegram command menu locale ledger for bot ${botId} was reset; the unshipped ledger contained non-canonical data (discarded unsupported language codes: en-GB, zz; discarded 2 malformed ledger field(s) or entry(ies)).`,
-    );
-
-    await waitForTelegramMenuTurn();
-    await sync();
-    await waitForTelegramMenuTurn();
-
-    expect(deleteMyCommands).toHaveBeenCalledTimes(2);
-    expect(setMyCommands).toHaveBeenCalledTimes(2);
-    expect(ledgerDeleteCalls).toEqual([botId]);
-    expect(runtimeError).toHaveBeenCalledTimes(1);
+    expect(setMyCommands).toHaveBeenCalledTimes(4);
+    expect(deleteMyCommands).toHaveBeenCalledWith({ language_code: "fr" });
+    expect(deleteMyCommands).toHaveBeenCalledTimes(4);
+    expect(ledgerRows.get(botId)).toEqual({ version: 1, languageCodes: ["ko"] });
+    expect(ledgerRegisterCalls).toEqual([
+      { key: botId, value: { version: 1, languageCodes: ["ko"] } },
+    ]);
+    expect(runtimeError).not.toHaveBeenCalled();
   });
 
   it("preserves future locale-ledger versions and fails closed before Telegram API calls", async () => {
@@ -581,61 +563,5 @@ describe("bot-native-command-menu sync lifecycle", () => {
       expect(message).toContain("unsupported future version 2");
       expect(message.length).toBeLessThanOrEqual(180);
     }
-  });
-
-  it("retries after a locale-ledger repair write fails", async () => {
-    const botId = "876543212";
-    const rawLedger = { version: 1, languageCodes: ["fr", "zz"] };
-    ledgerRows.set(botId, rawLedger);
-    nextLedgerRegisterError = new Error("injected repair failure");
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const runtimeError = vi.fn();
-    const accountId = `test-retry-ledger-repair-${Date.now()}`;
-    const commandsToRegister = [
-      {
-        command: "cmd",
-        description: "Default",
-        descriptionLocalizations: { ko: "한국어" },
-      },
-    ];
-    const sync = () =>
-      syncMenuCommandsWithMocks({
-        deleteMyCommands,
-        setMyCommands,
-        runtimeError,
-        accountId,
-        botToken: `${botId}:test-token`,
-        commandsToRegister,
-      });
-
-    await sync();
-    await waitForTelegramMenu(() => expect(runtimeError).toHaveBeenCalledTimes(1));
-    expect(ledgerRows.get(botId)).toBe(rawLedger);
-    expect(deleteMyCommands).not.toHaveBeenCalled();
-    expect(setMyCommands).not.toHaveBeenCalled();
-    expect(runtimeError).toHaveBeenCalledWith(
-      `Telegram command menu locale ledger repair failed for bot ${botId}: Error: injected repair failure`,
-    );
-
-    await sync();
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
-    expect(deleteMyCommands).toHaveBeenCalledWith({ language_code: "fr" });
-    expect(setMyCommands).toHaveBeenCalledWith([{ command: "cmd", description: "한국어" }], {
-      language_code: "ko",
-    });
-    expect(ledgerRows.get(botId)).toEqual({ version: 1, languageCodes: ["ko"] });
-    expect(runtimeError).toHaveBeenCalledWith(
-      `Telegram command menu locale ledger for bot ${botId} was repaired; the unshipped ledger contained non-canonical data (discarded unsupported language codes: zz).`,
-    );
-
-    await waitForTelegramMenuTurn();
-    await sync();
-    await waitForTelegramMenuTurn();
-
-    expect(deleteMyCommands).toHaveBeenCalledTimes(4);
-    expect(setMyCommands).toHaveBeenCalledTimes(4);
-    expect(ledgerRegisterCalls).toHaveLength(3);
-    expect(runtimeError).toHaveBeenCalledTimes(2);
   });
 });

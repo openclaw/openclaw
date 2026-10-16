@@ -12,7 +12,7 @@ import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { defineSolidBridge, LitContent } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
 import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
 import { AttachmentDownloadController } from "./chat-attachment-download-controller.ts";
 import { FileCopyController } from "./chat-file-copy-controller.ts";
@@ -30,13 +30,14 @@ import {
   buildRawContent,
   handleSidebarClick,
   handleSidebarKeydown,
-  renderSidebarPanel,
-} from "./chat-sidebar-content.ts";
+  SidebarPanel,
+  type SidebarPanelProps,
+} from "./chat-sidebar-content.tsx";
 import {
   computeFileMatches,
   loadFileWrapPreference,
   saveFileWrapPreference,
-} from "./chat-sidebar-file-view.ts";
+} from "./chat-sidebar-file-view.tsx";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
@@ -212,23 +213,18 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     invalidate();
     fileEditorLoad = import("./file-editor-view.ts")
       .then(async ({ createFileEditorView }) => {
-        const current = visibleContent;
-        if (version !== fileOperationVersion || current?.kind !== "file") {
+        if (version !== fileOperationVersion) {
           return;
         }
         const editor = await createFileEditorView({
           parent,
-          content: fileDraftContent ?? current.content,
-          name: current.name,
+          content: fileDraftContent ?? content.content,
+          name: content.name,
           editable: fileEditing,
           wrap: fileWrap,
           onSave: saveFile,
         });
-        if (
-          version !== fileOperationVersion ||
-          !updatingHost.isConnected ||
-          visibleContent?.kind !== "file"
-        ) {
+        if (version !== fileOperationVersion || !updatingHost.isConnected) {
           editor.destroy();
           return;
         }
@@ -237,7 +233,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
         fileEditor = editor;
         fileDraftContent = null;
         editor.onDocChanged((nextContent) => {
-          const draft = captureFileEditorDraft(current, {
+          const draft = captureFileEditorDraft(content, {
             // Reload synchronization may normalize display text without a user edit.
             editing: fileEditing && !fileReloading,
             content: nextContent,
@@ -471,11 +467,11 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       return;
     }
     const outcome = await content.edit.save({ content: nextContent, expectedHash });
-    if (version !== fileOperationVersion || visibleContent?.kind !== "file") {
+    if (version !== fileOperationVersion) {
       return;
     }
     if (outcome.ok) {
-      updateSavedFile(visibleContent, nextContent, outcome.hash);
+      updateSavedFile(content, nextContent, outcome.hash);
     } else if (outcome.code === "conflict") {
       fileSaveNotice = { kind: "conflict" };
     } else {
@@ -505,60 +501,51 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       return;
     }
     const version = fileOperationVersion;
-    let onLatest: (
-      latest: Awaited<ReturnType<NonNullable<FileSidebarContent["edit"]>["fetchLatest"]>>,
-    ) => void | Promise<void>;
-    if (action === "reload") {
-      fileSaving = true;
-      fileReloading = true;
+    const localContent = currentFileText();
+    fileSaving = true;
+    fileReloading = action === "reload";
+    if (fileReloading) {
       fileEditor?.setEditable(false);
-      onLatest = (latest) => {
-        if (version !== fileOperationVersion || visibleContent?.kind !== "file") {
-          return;
-        }
-        if (!latest) {
-          fileSaveNotice = {
-            kind: "error",
-            message: t("chat.detailPanel.reloadFailed"),
-          };
-          return;
-        }
-        fileEditor?.setContent(latest.content);
-        fileDraftContent = fileEditor ? null : latest.content;
-        htmlPreview.discard(latest.content);
-        updateSavedFile(visibleContent, latest.content, latest.hash);
-        // A reload can bring back content that no longer qualifies for edit
-        // mode (e.g. the agent rewrote the file with mixed line endings);
-        // drop the edit capability instead of letting a save corrupt it.
-        if (!latest.editable && visibleContent?.kind === "file") {
-          setFileDraft(visibleContent, null);
-          fileEditing = false;
-          fileDirty = false;
-          const { edit: _removed, ...readOnly } = visibleContent;
-          visibleContent = readOnly;
-        }
-      };
-    } else {
-      // Overwrite deliberately replaces whatever is on disk (even content that
-      // would fail the edit gates) with the local editor text the user chose.
-      const localContent = currentFileText();
-      fileSaving = true;
-      onLatest = async (latest) => {
+    }
+    invalidate();
+    trackFileOperation(
+      content.edit.fetchLatest().then(async (latest) => {
         if (version !== fileOperationVersion) {
           return;
         }
         if (!latest) {
           fileSaveNotice = {
             kind: "error",
-            message: t("chat.detailPanel.overwriteLoadFailed"),
+            message: t(
+              action === "reload"
+                ? "chat.detailPanel.reloadFailed"
+                : "chat.detailPanel.overwriteLoadFailed",
+            ),
           };
           return;
         }
-        await saveFileContent(content, localContent, latest.hash, version);
-      };
-    }
-    invalidate();
-    trackFileOperation(content.edit.fetchLatest().then(onLatest), version);
+        if (action === "overwrite") {
+          // Overwrite uses the local text captured at the user's click, not the fetched text.
+          await saveFileContent(content, localContent, latest.hash, version);
+          return;
+        }
+        fileEditor?.setContent(latest.content);
+        fileDraftContent = fileEditor ? null : latest.content;
+        htmlPreview.discard(latest.content);
+        updateSavedFile(content, latest.content, latest.hash);
+        // A reload can bring back content that no longer qualifies for edit
+        // mode (e.g. the agent rewrote the file with mixed line endings);
+        // drop the edit capability instead of letting a save corrupt it.
+        if (!latest.editable) {
+          setFileDraft(content, null);
+          fileEditing = false;
+          fileDirty = false;
+          const { edit: _removed, ...readOnly } = content;
+          visibleContent = readOnly;
+        }
+      }),
+      version,
+    );
   }
 
   function trackFileOperation(operation: Promise<unknown>, version: number) {
@@ -608,7 +595,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   let previousNavigation: FileSidebarNavigation | null | undefined;
   let previousRuntime: AttachmentSidebarRuntime | undefined;
   let navigate = false;
-  function renderPanel() {
+  function renderPanel(): SidebarPanelProps {
     const content = props.content;
     const navigation = props.fileNavigation;
     const runtime = props.attachmentRuntime;
@@ -629,14 +616,13 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       previousRuntime = runtime;
     }
 
-    // The retained Lit render helpers do not subscribe to Solid's locale projection yet.
     t("common.loading");
     const file = htmlPreview.file;
     const matches = fileSearchMatches();
     const currentMatchIndex = matches.length
       ? Math.min(fileSearchMatchIndex, matches.length - 1)
       : 0;
-    return renderSidebarPanel({
+    return {
       content: visibleContent,
       showingRawText: Boolean(rawView),
       error: file ? null : error,
@@ -695,7 +681,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       onAttachmentUpdate: invalidate,
       attachmentRuntime: props.attachmentRuntime,
       attachmentDownload,
-    });
+    };
   }
 
   const lifecycle = createSolidRenderLifecycle({
@@ -709,7 +695,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     () => {
       const scrollToNavigation = navigate;
       navigate = false;
-      // LitContent commits in its own effect; mount CodeMirror after that effect finishes.
+      // Mount CodeMirror after the sidebar has committed its editor host.
       queueMicrotask(() => {
         if (!disposed) {
           updateEditor(scrollToNavigation);
@@ -732,7 +718,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     destroyFileEditor();
     releaseChatMediaResourceSubscriber(invalidate);
   });
-  return <LitContent render={() => lifecycle.snapshot()} />;
+  return <SidebarPanel {...lifecycle.snapshot()} />;
 }
 
 export const ChatDetailPanel = defineSolidBridge("openclaw-chat-detail-panel", DetailPanel, {
@@ -757,5 +743,15 @@ export const ChatDetailPanel = defineSolidBridge("openclaw-chat-detail-panel", D
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-chat-detail-panel": ChatDetailPanel;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-detail-panel": HTMLAttributes<ChatDetailPanel> & {
+        [Key in keyof ChatDetailPanelProps as `prop:${Key}`]?: ChatDetailPanelProps[Key];
+      };
+    }
   }
 }

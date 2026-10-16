@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
-import {
-  loadAuthProfileStoreWithoutExternalProfiles,
-  resolveAuthStorePathForDisplay,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "openclaw/plugin-sdk/agent-runtime";
+import { AuthStorage } from "openclaw/plugin-sdk/agent-sessions";
 import {
   createMigrationItem,
   markMigrationItemConflict,
@@ -65,10 +63,6 @@ type HermesCodexAuthProfile = {
   result: ProviderAuthResult;
   sourceProfileId: string;
 };
-
-function authProfileTarget(agentDir: string, profileId: string): string {
-  return `${resolveAuthStorePathForDisplay(agentDir)}#${profileId}`;
-}
 
 function sourceCredentialFingerprint(candidate: HermesCodexAuthCandidate): string {
   const hash = createHash("sha256");
@@ -310,7 +304,10 @@ export async function buildAuthItems(params: {
   if (profiles.length === 0) {
     return items;
   }
-  const store = loadAuthProfileStoreWithoutExternalProfiles(params.targets.agentDir);
+  const [store, authStorePath] = await Promise.all([
+    loadAuthProfileStoreWithoutExternalProfilesAsync(params.targets.agentDir),
+    AuthStorage.resolvePathForDisplayAsync(params.targets.agentDir),
+  ]);
   items.push(
     ...profiles.map((profile) => {
       const matchedProfileId = findMatchingProfile(store, profile.credential);
@@ -334,7 +331,7 @@ export async function buildAuthItems(params: {
         kind: "auth",
         action: skipped ? "skip" : "create",
         source: profile.candidate.sourcePath,
-        target: authProfileTarget(params.targets.agentDir, profileId),
+        target: `${authStorePath}#${profileId}`,
         status: skipped ? "skipped" : conflict ? "conflict" : "planned",
         sensitive: true,
         reason: skipped

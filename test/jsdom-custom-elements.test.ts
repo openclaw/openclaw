@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 import { customElement } from "lit/decorators.js";
 import { describe, expect, it, vi } from "vitest";
+import { isRepoOwnedRegistrationStack } from "./jsdom-compat.mts";
 import {
   dropRepoOwnedCustomElements,
-  isRepoOwnedDefineStack,
   jsdomCustomElementDefinitions,
   trackCustomElementRegistry,
 } from "./jsdom-custom-elements.ts";
@@ -62,16 +62,16 @@ describe("jsdom custom element tracking", () => {
         `Error\n    at define (/repo/test/jsdom-custom-elements.ts:58:9)\n${forwarder}${caller}`;
 
       expect(
-        isRepoOwnedDefineStack(stack("    at /repo/ui/src/components/tooltip.ts:576:18")),
+        isRepoOwnedRegistrationStack(stack("    at /repo/ui/src/components/tooltip.ts:576:18")),
       ).toBe(true);
       expect(
-        isRepoOwnedDefineStack(
+        isRepoOwnedRegistrationStack(
           stack(
             "    at file:///repo/node_modules/@lit/reactive-element/decorators/custom-element.js:27:24",
           ),
         ),
       ).toBe(false);
-      expect(isRepoOwnedDefineStack(undefined)).toBe(false);
+      expect(isRepoOwnedRegistrationStack(undefined)).toBe(false);
     },
   );
 });

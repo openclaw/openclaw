@@ -322,7 +322,7 @@ describe("codex doctor contract", () => {
       expect(result.warnings).toEqual([
         expect.stringContaining("session ownership is indeterminate"),
       ]);
-      await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
+      await fs.access(fixture.sidecarPath);
       await expect(fs.access(`${fixture.sidecarPath}.migrated`)).rejects.toThrow();
       await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
 
@@ -470,7 +470,7 @@ describe("codex doctor contract", () => {
     expect(result.changes).toEqual([]);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("invalid locator");
-    await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
+    await fs.access(fixture.sidecarPath);
     await expect(fs.access(`${fixture.sidecarPath}.migrated`)).rejects.toThrow();
     expect(fixture.readSession(sessionKey)).toBeUndefined();
     await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
@@ -505,7 +505,7 @@ describe("codex doctor contract", () => {
     });
 
     expect(result.warnings).toEqual([]);
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
     const configuredIndex = JSON.parse(await fs.readFile(storeAlias, "utf8")) as Record<
       string,
       Record<string, unknown>
@@ -560,7 +560,7 @@ describe("codex doctor contract", () => {
     });
 
     expect(result.warnings).toEqual([]);
-    await expect(fs.access(`${configuredSidecar}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${configuredSidecar}.migrated`);
     expect(
       getSessionEntry({
         agentId: "main",
@@ -646,7 +646,7 @@ describe("codex doctor contract", () => {
           expect.stringContaining("session owner changed before Codex ownership could be recorded"),
         ]);
       }
-      await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
+      await fs.access(fixture.sidecarPath);
       await expect(fs.access(`${fixture.sidecarPath}.migrated`)).rejects.toThrow();
       await expect(
         fs.readFile(path.join(fixture.sessionsDir, "sessions.json"), "utf8").then(JSON.parse),
@@ -661,52 +661,6 @@ describe("codex doctor contract", () => {
       await removeCodexDoctorFixture(fixture.stateDir);
     },
   );
-
-  it("retires an imported row when its locator escapes during owner revalidation", async () => {
-    const sessionKey = "agent:main:locator-race";
-    const fixture = await createBindingMigrationFixture({
-      name: "locator-race",
-      sessionIndex: {
-        [sessionKey]: legacySession("locator-race"),
-      },
-      threadId: "thread-locator-race",
-    });
-    let rebound = false;
-    const context = createDoctorContext(fixture.env, async () => {
-      if (rebound) {
-        return;
-      }
-      rebound = true;
-      await fs.writeFile(
-        fixture.storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "locator-race",
-            sessionFile: "../outside.jsonl",
-          },
-        }),
-      );
-    });
-
-    const result = await fixture.migration.migrateLegacyState({ ...fixture.params, context });
-
-    expect(result.warnings).toEqual([]);
-    expect(result.notices).toEqual([
-      expect.stringContaining("session owner changed before Codex ownership could be recorded"),
-    ]);
-    await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).rejects.toThrow();
-    await expect(
-      openBindingStore(fixture.env).lookup(sessionBindingKey("locator-race", sessionKey)),
-    ).resolves.toMatchObject({
-      version: 1,
-      state: "cleared",
-      sessionId: "locator-race",
-      retired: true,
-    });
-
-    await removeCodexDoctorFixture(fixture.stateDir);
-  });
 
   it("does not resurrect a retired session generation from its legacy sidecar", async () => {
     const sessionKey = "agent:main:retired";
@@ -744,7 +698,7 @@ describe("codex doctor contract", () => {
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
-      expect.stringContaining(`canonical plugin state changed at ${sessionStateKey}`),
+      expect.stringContaining(`current plugin state changed at ${sessionStateKey}`),
     ]);
     await fs.access(fixture.sidecarPath);
     await expect(store.lookup(sessionStateKey)).resolves.toEqual(retired);
@@ -775,7 +729,7 @@ describe("codex doctor contract", () => {
       warnings: [],
     });
     await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
     await expect(store.lookup(bindingKey)).resolves.toEqual(existing);
     await expect(fixture.migration.detectLegacyState(fixture.params)).resolves.toBeNull();
     await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
@@ -805,7 +759,7 @@ describe("codex doctor contract", () => {
       warnings: [],
     });
     await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
 
     await removeCodexDoctorFixture(fixture.stateDir);
   });
@@ -831,9 +785,9 @@ describe("codex doctor contract", () => {
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
-      expect.stringContaining(`canonical plugin state is invalid at ${bindingKey}`),
+      expect.stringContaining(`current plugin state is invalid at ${bindingKey}`),
     ]);
-    await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
+    await fs.access(fixture.sidecarPath);
     await expect(store.lookup(bindingKey)).resolves.toEqual(malformed);
 
     await removeCodexDoctorFixture(fixture.stateDir);
@@ -862,7 +816,7 @@ describe("codex doctor contract", () => {
     expect(result.changes).toEqual([]);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("2 matching session owners make ownership ambiguous");
-    await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
+    await fs.access(fixture.sidecarPath);
     await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
 
     await removeCodexDoctorFixture(fixture.stateDir);
@@ -882,7 +836,7 @@ describe("codex doctor contract", () => {
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([]);
     expect(result.notices).toEqual([expect.stringContaining("owned by agent harness pi")]);
-    await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
+    await fs.access(fixture.sidecarPath);
     await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
 
     await removeCodexDoctorFixture(fixture.stateDir);

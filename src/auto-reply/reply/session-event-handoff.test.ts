@@ -10,10 +10,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import {
-  getRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   commitReplySessionInitialization,
@@ -23,7 +20,6 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionReplacement from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   enqueueRequiredSystemEventEntry,
@@ -40,29 +36,19 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import type { TurnAdoptionLifecycle } from "../get-reply-options.types.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
-import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import {
   assertSessionEventTargetCurrent,
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
-  type SessionEventTarget,
 } from "./session-event-handoff.js";
 import { prepareSessionEventTargetForHost } from "./session-event-target.js";
 // These cases stop before turn admission. Unexpected dispatch is a failure,
 // never a synthetic adoption/settlement supplied by the fixture.
 const dispatch = vi.hoisted(() =>
-  vi.fn<typeof import("../dispatch.js").dispatchInboundMessageWithRoutedChannelDispatcher>(() => {
+  vi.fn(() => {
     throw new Error("Unexpected reply dispatch for a retired event target");
   }),
 );
-type DispatchResult = Awaited<ReturnType<typeof dispatch>>;
-const dispatchResult = (overrides: Partial<DispatchResult> = {}): DispatchResult => ({
-  queuedFinal: false,
-  counts: { tool: 0, block: 0, final: 0 },
-  ...overrides,
-});
 const eventLogError = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
@@ -131,10 +117,6 @@ beforeEach(() => {
   eventLogError.mockClear();
   continuation.mockClear();
   dispatch.mockClear();
-  // mockClear keeps persistent implementations; restore the throwing default.
-  dispatch.mockImplementation(() => {
-    throw new Error("Unexpected reply dispatch for a retired event target");
-  });
   resetSystemEventsForTest();
   gatewayWork.resetGatewayWorkAdmission();
 });
@@ -144,6 +126,52 @@ afterAll(() => {
 });
 
 describe("session event target custody", () => {
+  it("preserves cold event capture across an empty usage refresh", async () => {
+    const { refreshCostUsageCacheForAgent } =
+      await import("../../infra/session-cost-usage-aggregation.js");
+    await withTargetFixture(
+      async ({ env }) => {
+        const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+        await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+        const originalRead = sessionEntryRead.withSessionEntryReadOnlyInWorker;
+        const reader = vi
+          .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
+          .mockImplementation((input, assertCurrent, consume, prepare) =>
+            originalRead(
+              input,
+              assertCurrent,
+              async (read, owner) => {
+                expect(owner.source).toBeUndefined();
+                await expect(refreshCostUsageCacheForAgent({ agentId: "main", env })).resolves.toBe(
+                  "refreshed",
+                );
+                return consume(read, owner);
+              },
+              prepare,
+            ),
+          );
+        try {
+          const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+          expect(target.sessionId).toBe("");
+          reader.mockRestore();
+          await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+          const prepared = await prepareSessionEventTargetForHost(target, {
+            createIfMissing: true,
+          });
+          try {
+            prepared.assertCurrent();
+            expect((await fs.stat(databasePath)).isFile()).toBe(true);
+          } finally {
+            prepared.release();
+          }
+        } finally {
+          reader.mockRestore();
+        }
+      },
+      { empty: true, native: true },
+    );
+  });
+
   it("retains fresh event custody from a captured Windows short-path spelling", async () => {
     await withTargetFixture(
       async (state) => {
@@ -228,69 +256,6 @@ describe("session event target custody", () => {
     );
   });
 
-  it.each(["before", "after"] as const)(
-    "binds cold event capture to storage created %s the worker read",
-    async (creation) => {
-      await withTargetFixture(
-        async ({ env }) => {
-          const create = () => {
-            const database = openOpenClawAgentDatabase({ agentId: "main", env });
-            writeSessionEntry(database, sessionKey, {
-              sessionId: "created-during-capture",
-              lifecycleRevision: "created-during-capture",
-              updatedAt: 1,
-            });
-          };
-          const originalRead = sessionEntryRead.withSessionEntryReadOnlyInWorker;
-          const reader = vi
-            .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
-            .mockImplementation((input, assertCurrent, consume, prepare) =>
-              originalRead(
-                input,
-                assertCurrent,
-                async (read, owner) => {
-                  if (creation === "after") {
-                    create();
-                  }
-                  return consume(read, owner);
-                },
-                (database, identity) => {
-                  prepare?.(database, identity);
-                  expect(identity.key).toMatch(/^path:/);
-                  if (creation === "before") {
-                    create();
-                  }
-                },
-              ),
-            );
-          try {
-            const capture = captureSessionEventTargetForHost("main", sessionKey, { env });
-            if (creation === "after") {
-              await expect(capture).rejects.toThrow("storage changed after capture");
-              return;
-            }
-            const target = await capture;
-            expect(target).toMatchObject({
-              sessionId: "created-during-capture",
-              lifecycleRevision: "created-during-capture",
-            });
-            reader.mockRestore();
-            const prepared = await prepareSessionEventTargetForHost(target);
-            try {
-              prepared.assertCurrent();
-            } finally {
-              prepared.release();
-            }
-            expect(dispatch).not.toHaveBeenCalled();
-          } finally {
-            reader.mockRestore();
-          }
-        },
-        { empty: true, native: true },
-      );
-    },
-  );
-
   it.for([false, true])(
     "joins cold native preparation before settling cancellation (retained occurrence: %s)",
     async (preserve, { signal }) => {
@@ -368,7 +333,7 @@ describe("session event target custody", () => {
     },
   );
 
-  it.each(["fresh", "retained", "revoked", "already-revoked", "foreign"] as const)(
+  it.each(["fresh", "retained", "revoked", "already-revoked"] as const)(
     "keeps cold capture read-only and prepares storage only for authorized fresh work: %s",
     async (kind) => {
       await withTargetFixture(
@@ -394,9 +359,6 @@ describe("session event target custody", () => {
             }
             return;
           }
-          if (kind === "foreign") {
-            openOpenClawAgentDatabase({ agentId: "main", env });
-          }
           let current = kind !== "already-revoked";
           const enqueue = () =>
             enqueueSessionEventForHost("Fresh ingress", {
@@ -419,12 +381,7 @@ describe("session event target custody", () => {
           }
           const receipt = enqueue();
           current &&= kind !== "revoked";
-          const error =
-            kind === "retained"
-              ? /origin is missing/
-              : kind === "revoked"
-                ? /ingress was revoked/
-                : /storage changed/;
+          const error = kind === "retained" ? /origin is missing/ : /ingress was revoked/;
           await expect(receipt.accepted).resolves.toMatchObject({
             ok: false,
             error: expect.stringMatching(error),
@@ -434,9 +391,7 @@ describe("session event target custody", () => {
             executionStarted: false,
           });
           expect(dispatch).not.toHaveBeenCalled();
-          if (kind !== "foreign") {
-            await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-          }
+          await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
         },
         { empty: true, native: kind === "fresh" },
       );
@@ -562,347 +517,46 @@ describe("session event target custody", () => {
     },
   );
 
-  it.each(["store replacement", "Gateway restart"] as const)(
-    "rejects retained target reuse after %s without creating another occurrence",
-    async (change) => {
-      await withTargetFixture(async ({ env, path: fixturePath }) => {
-        const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-        if (change === "store replacement") {
-          setRuntimeConfigSnapshot({
-            agents: { entries: { main: {} } },
-            session: { store: fixturePath("replacement.sqlite") },
-          });
-        } else {
-          rotateAgentEventLifecycleGeneration();
-        }
-        expect(() =>
-          enqueueSessionEventForHost("Process completed", {
-            agentId: "main",
-            sessionKey,
-            source: "exec",
-            expectedTarget: target,
-          }),
-        ).toThrow(change === "store replacement" ? "reset or replaced" : "stale gateway lifecycle");
-        expect(dispatch).not.toHaveBeenCalled();
-        expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-      });
-    },
-  );
-
-  it("re-admits a pending occurrence when a policy publication races admission", async () => {
+  it("reports a queued event's policy failure once", async () => {
     await withTargetFixture(async ({ env }) => {
       const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-      // The publication lands after enqueue but before admission starts.
-      const receipt = enqueueCompletion(target);
-      publishDeny(["write", "message"]);
-      dispatch.mockImplementationOnce(async (params) => {
-        expect(params.cfg?.tools?.deny).toEqual(["write", "message"]);
-        params.replyOptions?.internalEventExecution?.onStarted?.("run-test");
-        return dispatchResult();
-      });
-
-      await expect(receipt.settled).resolves.toMatchObject({
-        status: "completed",
-        executionStarted: true,
-        delivered: false,
-      });
-      await joinContinuations();
-      expect(receipt.cancel()).toBe(false);
-      // No failure is reported for a rejected-then-readmitted occurrence.
-      expect(eventLogError).not.toHaveBeenCalled();
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-    });
-  });
-
-  it("re-admits an accepted deferred occurrence under the current policy after a config publication", async () => {
-    const adoptions: TurnAdoptionLifecycle[] = [];
-    await withDeferredFixture(adoptions, async (target) => {
-      let readmissionDeny: string[] | undefined;
-      const operation = beginReplyOwner();
-      const receipt = enqueueCompletion(target);
-      await expect(receipt.accepted).resolves.toMatchObject({ ok: true });
-      if (!adoptions[0]) {
-        throw new Error("Expected a deferred turn adoption lifecycle for the accepted occurrence");
-      }
-      dispatch.mockImplementationOnce(async (params) => {
-        readmissionDeny = params.cfg?.tools?.deny;
-        params.replyOptions?.internalEventExecution?.onStarted?.("run-test");
-        return dispatchResult();
-      });
-      // The publication lands after acceptance; the queued run still holds the old
-      // config, so adoption under the stale policy rejects.
-      await rejectLatestAdoption(adoptions, ["write", "message"], operation);
-
-      // The occurrence is re-admitted from scratch and executes under the published policy.
-      await expect(receipt.settled).resolves.toMatchObject({
-        status: "completed",
-        executionStarted: true,
-        delivered: false,
-      });
-      expect(dispatch).toHaveBeenCalledTimes(2);
-      expect(readmissionDeny).toEqual(["write", "message"]);
-      // The completed re-admission consumed the occurrence; nothing waits for a later turn.
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-      await joinContinuations();
-    });
-  });
-
-  it("consumes a deferred occurrence the queue owner abandons, even after a config publication", async () => {
-    await withTargetFixture(async ({ env }) => {
-      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-      let adoption: TurnAdoptionLifecycle | undefined;
-      dispatch.mockImplementationOnce(async (params) => {
-        adoption = params.replyOptions?.turnAdoptionLifecycle;
-        adoption?.onDeferred?.();
-        return dispatchResult({ deferredToActiveRun: "followup" });
-      });
+      let current = true;
       const receipt = enqueueSessionEventForHost("Process completed", {
         agentId: "main",
         sessionKey,
         source: "exec",
         expectedTarget: target,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Background producer retired");
+          }
+        },
       });
-      await expect(receipt.accepted).resolves.toMatchObject({ ok: true });
-      if (!adoption) {
-        throw new Error("Expected a deferred turn adoption lifecycle for the accepted occurrence");
-      }
-      setRuntimeConfigSnapshot({
-        ...getRuntimeConfigSnapshot(),
-        tools: { deny: ["write", "message"] },
-      });
-
-      // Stop removes the queued followup before adoption; abandonment is terminal.
-      adoption.onAbandoned?.();
-      adoption.onSettled?.();
+      current = false;
 
       await expect(receipt.settled).resolves.toMatchObject({
         status: "failed",
         executionStarted: false,
         delivered: false,
-        error: expect.stringContaining("abandoned"),
+        error: expect.stringContaining("Background producer retired"),
       });
-      // No policy re-admission and no passive leak into the next ordinary turn.
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-    });
-  });
-
-  // Shared drivers: collect each attempt's deferred adoption lifecycle, and reject
-  // the latest adoption under a fresh publication exactly as the real queue reports
-  // it (a rejected adoption surfaces as abandonment before settlement).
-  const collectDeferredAdoptions = (adoptions: TurnAdoptionLifecycle[]) => {
-    // Owned retry signal: dispatch resolves the gate awaiting the Nth call, so
-    // tests await the retry itself (root AGENTS.md prohibits new polling).
-    const gates: { count: number; resolve: () => void }[] = [];
-    dispatch.mockImplementation(async (params) => {
-      const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
-      if (lifecycle) {
-        adoptions.push(lifecycle);
-        lifecycle.onDeferred?.();
-      }
-      const called = dispatch.mock.calls.length;
-      const all = gates.splice(0);
-      all.filter((g) => g.count <= called).forEach((g) => g.resolve());
-      gates.push(...all.filter((g) => g.count > called));
-      return dispatchResult({ deferredToActiveRun: "followup" });
-    });
-    return (count: number) =>
-      dispatch.mock.calls.length >= count
-        ? Promise.resolve()
-        : new Promise<void>((resolve) => {
-            gates.push({ count, resolve });
-          });
-  };
-  const beginReplyOwner = () =>
-    replyRunRegistry.begin({ sessionKey, sessionId: "original-session", resetTriggered: false });
-  const publishDeny = (deny: string[]) =>
-    setRuntimeConfigSnapshot({ ...getRuntimeConfigSnapshot(), tools: { deny } });
-  const rejectLatestAdoption = async (
-    adoptions: TurnAdoptionLifecycle[],
-    deny: string[],
-    operation: { complete: () => void },
-  ) => {
-    const lifecycle = adoptions[adoptions.length - 1];
-    if (!lifecycle) {
-      throw new Error("Expected a deferred turn adoption lifecycle for the attempt");
-    }
-    publishDeny(deny);
-    await expect(lifecycle.onAdopted?.()).rejects.toThrow("configuration changed");
-    lifecycle.onAbandoned?.();
-    lifecycle.onSettled?.();
-    operation.complete();
-  };
-  const joinContinuations = () =>
-    Promise.allSettled(
-      continuation.mock.results.flatMap((r) => (r.type === "return" ? [r.value] : [])),
-    );
-  type EnqueueExtras = Partial<
-    Omit<
-      Parameters<typeof enqueueSessionEventForHost>[1],
-      "agentId" | "sessionKey" | "expectedTarget"
-    >
-  >;
-  // One deferred-adoption fixture per case: captured target, collecting dispatch
-  // mock, retry gate, and a reply-owner registry reset on exit.
-  const withDeferredFixture = (
-    adoptions: TurnAdoptionLifecycle[],
-    fn: (
-      target: SessionEventTarget,
-      whenDispatchCalled: (count: number) => Promise<void>,
-    ) => Promise<void>,
-  ) =>
-    withTargetFixture(async ({ env }) => {
-      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-      const whenDispatchCalled = collectDeferredAdoptions(adoptions);
-      try {
-        await fn(target, whenDispatchCalled);
-      } finally {
-        replyRunTesting.resetReplyRunRegistry();
-      }
-    });
-  const enqueueCompletion = (target: SessionEventTarget, extras?: EnqueueExtras) =>
-    enqueueSessionEventForHost("Process completed", {
-      agentId: "main",
-      sessionKey,
-      source: "exec",
-      expectedTarget: target,
-      ...extras,
-    });
-
-  it("consumes a canceled re-admission instead of preserving it for a later turn", async () => {
-    const adoptions: TurnAdoptionLifecycle[] = [];
-    await withDeferredFixture(adoptions, async (target, whenDispatchCalled) => {
-      const operation = beginReplyOwner();
-      const receipt = enqueueCompletion(target);
-      await expect(receipt.accepted).resolves.toMatchObject({ ok: true });
-      await rejectLatestAdoption(adoptions, ["write", "message"], operation);
-      await whenDispatchCalled(2);
-
-      // The producer cancels the still-deferred re-admission.
-      expect(receipt.cancel()).toBe(true);
-      adoptions[1]?.onAbandoned?.();
-      adoptions[1]?.onSettled?.();
-
-      await expect(receipt.settled).resolves.toMatchObject({
-        status: "cancelled",
-        executionStarted: false,
-      });
-      // Terminal cancellation consumes the retried occurrence: no passive leak.
-      expect(dispatch).toHaveBeenCalledTimes(2);
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-      await joinContinuations();
-    });
-  });
-
-  it("settles terminally after the bounded re-admission budget is exhausted", async () => {
-    const adoptions: TurnAdoptionLifecycle[] = [];
-    await withDeferredFixture(adoptions, async (target, whenDispatchCalled) => {
-      let operation = beginReplyOwner();
-      const receipt = enqueueCompletion(target);
-      await expect(receipt.accepted).resolves.toMatchObject({ ok: true });
-      // Three consecutive publications reject the occurrence and both retries.
-      for (const deny of [["write"], ["write", "message"], ["write", "message", "exec"]]) {
-        await rejectLatestAdoption(adoptions, deny, operation);
-        if (adoptions.length < 3) {
-          await whenDispatchCalled(adoptions.length + 1);
-          // A completed owner leaves the registry; the next attempt adopts a fresh one.
-          operation = beginReplyOwner();
-        }
-      }
-
-      await expect(receipt.settled).resolves.toMatchObject({
-        status: "failed",
-        executionStarted: false,
-      });
-      expect(dispatch).toHaveBeenCalledTimes(3);
-      // The exhausted occurrence is consumed with a loud error; no passive leak.
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-      expect(eventLogError).toHaveBeenCalledWith(
-        "session event policy readmission attempts exhausted; occurrence settled",
-        expect.objectContaining({ source: "exec", eventId: receipt.id }),
+      // Join the independent owner without requiring a producer to consume its receipt.
+      await Promise.allSettled(
+        continuation.mock.results.flatMap((result) =>
+          result.type === "return" ? [result.value] : [],
+        ),
       );
-      await joinContinuations();
-    });
-  });
-
-  it("settles terminally when the producer retires before re-admission", async () => {
-    const adoptions: TurnAdoptionLifecycle[] = [];
-    await withDeferredFixture(adoptions, async (target) => {
-      let retired = false;
-      const operation = beginReplyOwner();
-      const receipt = enqueueCompletion(target, {
-        assertCurrent: () => {
-          if (retired) {
-            throw new Error("producer retired");
-          }
-        },
-      });
-      await expect(receipt.accepted).resolves.toMatchObject({ ok: true });
-      publishDeny(["write", "message"]);
-      const lifecycle = adoptions[0];
-      await expect(lifecycle?.onAdopted?.()).rejects.toThrow("configuration changed");
-      lifecycle?.onAbandoned?.();
-      // The retired producer makes settlement's re-dispatch reject synchronously.
-      retired = true;
-      lifecycle?.onSettled?.();
-      operation.complete();
-
-      await expect(receipt.settled).resolves.toMatchObject({
-        status: "failed",
-        executionStarted: false,
-      });
-      // The rejected re-admission consumes the occurrence; no passive leak.
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-      expect(eventLogError).toHaveBeenCalledWith(
-        "session event policy readmission rejected; occurrence settled",
-        expect.objectContaining({ source: "exec", eventId: receipt.id }),
-      );
-      await joinContinuations();
-    });
-  });
-
-  it("carries submitting authority into a pre-acceptance re-admission and settles on revocation", async () => {
-    await withTargetFixture(async ({ env }) => {
-      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-      // The first post-publication check runs inside the rejected admission; the
-      // second is the re-dispatch, which revoked ingress must reject.
-      let publicationObserved = false;
-      let postPublicationChecks = 0;
-      const ingressAssertion = vi.fn(() => {
-        if (publicationObserved) {
-          postPublicationChecks += 1;
-          if (postPublicationChecks >= 2) {
-            throw new Error("submitting ingress revoked");
-          }
-        }
-      });
-      const receipt = enqueueSessionEventForHost("Process completed", {
+      expect(receipt.cancel()).toBe(false);
+      resetSystemEventsForTest();
+      expect(eventLogError).toHaveBeenCalledExactlyOnceWith("session event execution failed", {
+        source: "exec",
         agentId: "main",
         sessionKey,
-        source: "hook",
-        expectedTarget: target,
-        assertAcceptanceCurrent: ingressAssertion,
+        eventId: receipt.id,
+        error: expect.stringContaining("Background producer retired"),
       });
-      // A publication races admission: the first attempt rejects pre-acceptance.
-      publishDeny(["write", "message"]);
-      publicationObserved = true;
-
-      await expect(receipt.settled).resolves.toMatchObject({
-        status: "failed",
-        executionStarted: false,
-      });
-      await expect(receipt.accepted).resolves.toMatchObject({ ok: false });
-      // Revoked ingress rejected the re-dispatch before any new turn admission;
-      // the occurrence was consumed rather than parked as passive text.
       expect(dispatch).not.toHaveBeenCalled();
       expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-      expect(eventLogError).toHaveBeenCalledWith(
-        "session event policy readmission rejected; occurrence settled",
-        expect.objectContaining({ source: "hook", eventId: receipt.id }),
-      );
-      await joinContinuations();
     });
   });
 
@@ -977,26 +631,4 @@ describe("session event target custody", () => {
       });
     },
   );
-
-  it("releases an occurrence when Gateway restart admission refuses the producer", async () => {
-    await withTargetFixture(async ({ env }) => {
-      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-      gatewayWork.markGatewayRestartDraining();
-      const receipt = enqueueSessionEventForHost("Process completed", {
-        agentId: "main",
-        sessionKey,
-        source: "restart",
-        expectedTarget: target,
-      });
-
-      await expect(receipt.settled).resolves.toMatchObject({
-        status: "failed",
-        executionStarted: false,
-        delivered: false,
-        error: expect.stringContaining("GatewayDrainingError"),
-      });
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-      expect(dispatch).not.toHaveBeenCalled();
-    });
-  });
 });

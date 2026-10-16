@@ -22,6 +22,7 @@ import * as pricing from "../model-catalog/pricing.js";
 import {
   captureRemoteModelCatalogSnapshot,
   captureRemoteModelCatalogStartupSnapshot,
+  prepareRemoteModelCatalogStartupSnapshot,
 } from "../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
@@ -36,8 +37,10 @@ import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model
 import {
   acquireAgentRunPreparedModelRuntime,
   acquirePublishedPreparedModelRuntime,
+  advancePreparedModelRuntimeConfig,
   applyRemoteModelCatalogUpdate,
   getPreparedModelRuntimeSnapshot,
+  loadPublishedGatewayReplyDispatchRuntime,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
@@ -97,6 +100,7 @@ async function setup(options: { allowGatewaySubagentBinding?: true } = {}) {
     bundledGeneratedAt: () => 100,
     readStoredCatalog: stored,
   });
+  await prepareRemoteModelCatalogStartupSnapshot();
   mocks.configuredAgentIds = ["default", "other"];
   mocks.buildPreparedModelCatalogSnapshot.mockImplementation(async () => {
     const entries = Object.values(captureRemoteModelCatalogSnapshot()?.providers ?? {}).flatMap(
@@ -141,6 +145,46 @@ async function listModels(refresh: boolean) {
   return respond.mock.calls[0]?.[1];
 }
 afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
+
+it("preserves prospective tool and sandbox policy across catalog adoption", async () => {
+  await setup();
+  const preparing = createDeferred();
+  const commit = createDeferred();
+  const preparePricing = pricing.prepareModelPricingContext;
+  const pricingSpy = vi
+    .spyOn(pricing, "prepareModelPricingContext")
+    .mockImplementationOnce(async (...args) => {
+      preparing.resolve();
+      await commit.promise;
+      return await preparePricing(...args);
+    });
+  const adoption = applyRemoteModelCatalogUpdate(() => config);
+  try {
+    await preparing.promise;
+    advancePreparedModelRuntimeConfig({
+      ...config,
+      tools: { deny: ["exec"] },
+      agents: {
+        ...config.agents,
+        defaults: { ...config.agents?.defaults, sandbox: { mode: "all" } },
+      },
+    });
+    commit.resolve();
+    expect(await adoption).toBe("published");
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+    ).resolves.toMatchObject({
+      config: {
+        tools: { deny: ["exec"] },
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+    });
+  } finally {
+    commit.resolve();
+    await Promise.allSettled([adoption]);
+    pricingSpy.mockRestore();
+  }
+});
 
 it("delivers the first reply when catalog adoption retires its captured dispatch publication", async () => {
   await setup({ allowGatewaySubagentBinding: true });

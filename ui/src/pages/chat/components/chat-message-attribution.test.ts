@@ -1,9 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
 import { afterEach, expect, it } from "vitest";
 import { groupMessages } from "../chat-thread-grouping.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createReplyPreviewResolver, type LoadedReplySource } from "./chat-reply-preview.ts";
 import { projectTranscriptChain, projectTranscriptIndex } from "./chat-transcript-message-index.ts";
 
@@ -18,6 +17,7 @@ const viewers = [
   { userId: null, userName: null, userAvatar: null },
 ];
 const container = document.createElement("div");
+const view = createMessageGroupHarness(container);
 
 function groupFor(input: unknown) {
   const [group] = groupMessages([{ kind: "message", key: "saved-input", message: input }]);
@@ -27,7 +27,7 @@ function groupFor(input: unknown) {
   return group;
 }
 
-afterEach(() => render(nothing, container));
+afterEach(() => view.unmount());
 
 it.each([
   { name: "owner-only gutter", avatarPlacement: "gutter", sender: undefined },
@@ -56,16 +56,13 @@ it.each([
   const input = sender ? { ...message, __openclaw: sender } : message;
   const original = structuredClone(input);
   for (const viewer of sender ? [viewers[0]] : viewers) {
-    render(
-      renderMessageGroup(groupFor(input), {
-        showReasoning: false,
-        showToolCalls: true,
-        showOwnSenderName: false,
-        avatarPlacement,
-        ...viewer,
-      }),
-      container,
-    );
+    view.render(groupFor(input), {
+      showReasoning: false,
+      showToolCalls: true,
+      showOwnSenderName: false,
+      avatarPlacement,
+      ...viewer,
+    });
     expect(container.querySelector(".chat-sender-name")?.textContent).toBe(
       sender ? "Recorded author" : "Message",
     );

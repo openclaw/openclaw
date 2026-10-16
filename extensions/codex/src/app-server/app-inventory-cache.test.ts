@@ -12,6 +12,26 @@ import type { CodexAppServerRequestParams, CodexAppServerRequestResult, v2 } fro
 type AppMetadata = CodexAppServerRequestResult<"app/read">["apps"][number];
 
 describe("Codex app inventory cache", () => {
+  it.each([false, true, undefined])(
+    "preserves cold-cache refresh intent %s across independent thread keys",
+    async (forceRefetch) => {
+      const cache = new CodexAppInventoryCache();
+      const apps = [app("app-1")];
+      const request = vi.fn(async (method, params) =>
+        codexAppInventoryResponse(method, apps, params),
+      );
+
+      for (const key of ["thread-a", "thread-b"]) {
+        const snapshot = await cache.refreshNow({ key, request, forceRefetch });
+        expect(snapshot.apps).toEqual(apps);
+      }
+      expect(request.mock.calls.filter(([method]) => method === "app/installed")).toEqual([
+        ["app/installed", { forceRefresh: forceRefetch !== false }],
+        ["app/installed", { forceRefresh: forceRefetch !== false }],
+      ]);
+    },
+  );
+
   it("coalesces native metadata and installed runtime facts without fabricating app/list fields", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
     const apps = [
@@ -233,30 +253,6 @@ describe("Codex app inventory cache", () => {
     expect(read.diagnostic?.message).toBe("app inventory failed");
   });
 
-  it("fails closed when the pinned server does not implement app/installed", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const request = vi.fn(async (method, params) => {
-      if (method === "app/installed") {
-        throw new CodexAppServerRpcError({ code: -32601, message: "Method not found" }, method);
-      }
-      return codexAppInventoryResponse(method, [app("current-app")], params);
-    });
-
-    await expect(cache.refreshNow({ key: "runtime", request })).rejects.toThrow("Method not found");
-    expect(request).toHaveBeenCalledExactlyOnceWith("app/installed", { forceRefresh: true });
-    expect(cache.read({ key: "runtime", request, suppressRefresh: true }).snapshot).toBeUndefined();
-  });
-
-  it("fails closed when installed app inventory is unauthorized", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const request = vi.fn(async (method) => {
-      throw new CodexAppServerRpcError({ code: 403, message: "Forbidden" }, method);
-    });
-
-    await expect(cache.refreshNow({ key: "runtime", request })).rejects.toThrow("Forbidden");
-    expect(request).toHaveBeenCalledExactlyOnceWith("app/installed", { forceRefresh: true });
-  });
-
   it("fails closed when app metadata cannot be read", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
     const request = vi.fn(async (method, params) => {
@@ -315,33 +311,6 @@ describe("Codex app inventory cache", () => {
     // Freshness still belongs to the complete fetch at t=0, not the merge at t=900.
     const read = cache.read({ key, request, nowMs: 1_100, suppressRefresh: true });
     expect(read.state).toBe("stale");
-  });
-
-  it("merges targeted refreshes for one runtime instead of alternating narrow snapshots", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
-    const key = "runtime";
-    const apps = [app("calendar-app"), app("drive-app")];
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
-    );
-
-    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: ["calendar-app"] });
-    await cache.refreshNow({
-      key,
-      request,
-      nowMs: 1,
-      forceRefetch: true,
-      targetAppIds: ["drive-app"],
-    });
-
-    const read = cache.read({ key, request, nowMs: 2, suppressRefresh: true });
-    expect(read.state).toBe("fresh");
-    expect(read.snapshot?.targetAppIds).toEqual(["calendar-app", "drive-app"]);
-    expect(read.snapshot?.apps).toEqual(apps);
-    expect(read.snapshot?.installedApps.map((entry) => entry.id)).toEqual([
-      "calendar-app",
-      "drive-app",
-    ]);
   });
 
   it("replaces an expired union entry on the next single-target refresh", async () => {

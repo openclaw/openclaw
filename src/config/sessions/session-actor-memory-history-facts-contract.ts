@@ -30,6 +30,18 @@ import type {
 } from "./session-transcript-hydration.types.js";
 
 type Reads = {
+  "visibility-inputs": {
+    input: { runIds: string[] };
+    output: Array<{
+      seq: number;
+      message: {
+        role: "user";
+        idempotencyKey: unknown;
+        provenance: unknown;
+        __openclaw: { runId: unknown; steerTargetRunId: unknown; idempotencyKey: unknown };
+      };
+    }>;
+  };
   title: {
     input: { includeInterSession?: boolean };
     output: { kind: "session-title-fields"; fields: SessionTitleFields };
@@ -38,7 +50,7 @@ type Reads = {
     input: { maxItems: number; maxChars: number };
     output: { kind: "session-preview"; items: SessionPreviewItem[] };
   };
-  branches: { input: Record<never, never>; output: SessionBranchSummaryReadResult };
+  branches: { input: object; output: SessionBranchSummaryReadResult };
   "current-turn-entry": {
     input: SessionTranscriptCurrentTurnEntryRequest;
     output: SessionTranscriptCurrentTurnEntryRead;
@@ -47,24 +59,24 @@ type Reads = {
     input: { request: SessionTranscriptMaintenanceRead };
     output: SessionTranscriptMaintenanceFacts;
   };
-  stats: { input: Record<never, never>; output: SessionTranscriptStats };
+  stats: { input: object; output: SessionTranscriptStats };
   match: {
     input: { match: SessionTranscriptEventMatch };
     output: { kind: "transcript-match"; result: { event: TranscriptEvent } | undefined };
   };
   watermark: {
-    input: Record<never, never>;
+    input: object;
     output: { kind: "transcript-watermark"; watermark: SessionTranscriptWatermark };
   };
   "latest-assistant": {
-    input: Record<never, never>;
+    input: object;
     output: LatestTranscriptAssistantText | undefined;
   };
   "latest-active-message": {
-    input: Record<never, never>;
+    input: object;
     output: SessionTranscriptMessageEvent | undefined;
   };
-  "message-presence": { input: Record<never, never>; output: boolean };
+  "message-presence": { input: object; output: boolean };
   "recent-active-events": { input: { maxEvents: number }; output: TranscriptEvent[] };
   accounting: {
     input: { options: SessionTranscriptAccountingOptions };
@@ -94,7 +106,7 @@ export type SessionActorMemoryHistoryFactsReads = {
         | "bounded-tail"
         | "visitor-source"
         ? { admission?: UserTurnTranscriptAdmissionReceipt }
-        : Record<never, never>);
+        : object);
     output: Reads[Key]["output"];
   };
 };

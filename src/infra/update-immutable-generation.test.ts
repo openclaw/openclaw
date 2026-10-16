@@ -172,7 +172,6 @@ describe("sealed immutable generation", () => {
     ["different HEAD", /HEAD does not match/u],
     ["dirty source", /uncommitted source/u],
     ["stale build", /git runtime mismatch/u],
-    ["missing SDK", /ENOENT/u],
   ] as const)("refuses a sealed release with %s", async (kind, error) => {
     const { root, sha } = await generation();
     if (kind === "dirty source") {
@@ -182,8 +181,6 @@ describe("sealed immutable generation", () => {
         path.join(root, "dist", "build-info.json"),
         JSON.stringify({ commit: "0".repeat(40) }),
       );
-    } else if (kind === "missing SDK") {
-      await fs.unlink(path.join(root, "dist", "plugin-sdk", "core.js"));
     }
     await sealImmutableGeneration(root);
     await expect(

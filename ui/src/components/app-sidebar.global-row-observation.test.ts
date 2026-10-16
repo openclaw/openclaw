@@ -20,8 +20,9 @@ import {
 } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -347,7 +348,7 @@ describe("sidebar global row observation", () => {
           return;
         }
         publishWorkPatch();
-        await sidebar.updateComplete;
+        await settleLitElement(sidebar);
         assertAlias(updated);
         assertMainUnchanged();
         currentWork = completed;
@@ -361,7 +362,7 @@ describe("sidebar global row observation", () => {
           ts: 500,
           session: completed,
         });
-        await sidebar.updateComplete;
+        await settleLitElement(sidebar);
         assertAlias(completed);
         assertMainUnchanged();
 

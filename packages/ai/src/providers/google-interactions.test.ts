@@ -384,6 +384,78 @@ describe("google-interactions provider", () => {
     expect(serialized).toContain('"message":"request"');
   });
 
+  it.each([
+    { name: "LF", newline: "\n", blankLine: "\n" },
+    { name: "CRLF", newline: "\r\n", blankLine: "\r\n" },
+    { name: "CR", newline: "\r", blankLine: "\r" },
+    { name: "mixed", newline: "\r\n", blankLine: "\n" },
+  ])("parses fragmented multiline $name events", async ({ newline, blankLine }) => {
+    const data = JSON.stringify(
+      { event_type: "step.delta", delta: { type: "text", text: "Hello" } },
+      null,
+      2,
+    )
+      .split("\n")
+      .map((line) => `data: ${line}`)
+      .join(newline);
+    const body =
+      `: heartbeat${newline}${blankLine}data:${newline}${blankLine}` +
+      `event: step.delta${newline}${data}${newline}${blankLine}` +
+      completedSse().replaceAll("\n", newline);
+    mockSse(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          const encoder = new TextEncoder();
+          for (const character of body) {
+            controller.enqueue(encoder.encode(character));
+          }
+          controller.close();
+        },
+      }),
+    );
+
+    const result = await streamGoogleInteractions(makeInteractionsModel(), basicContext, {
+      apiKey: "test-api-key",
+    }).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([{ type: "text", text: "Hello" }]);
+  });
+
+  it("keeps a newline-terminated final event at EOF", async () => {
+    mockSse(completedSse().trimEnd() + "\n");
+
+    const result = await streamGoogleInteractions(makeInteractionsModel(), basicContext, {
+      apiKey: "test-api-key",
+    }).result();
+
+    expect(result.stopReason).toBe("stop");
+  });
+
+  it("surfaces malformed complete data without exposing payloads in output or diagnostics", async () => {
+    const diagnostics: unknown[] = [];
+    configureAiTransportHost({ logWarn: (...args) => diagnostics.push(args) });
+    mockSse(
+      'data: {"event_type":"step.delta","delta":{"text":"private-broken-payload"\n\n' +
+        completedSse(),
+    );
+
+    const result = await streamGoogleInteractions(makeInteractionsModel(), basicContext, {
+      apiKey: "test-api-key",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("OpenClaw transport error: malformed_streaming_fragment");
+    expect(result).not.toHaveProperty("cause");
+    expect(result).not.toHaveProperty("errorBody");
+    expect(diagnostics).toContainEqual([
+      "provider-error",
+      "Model request failed",
+      expect.objectContaining({ message: result.errorMessage }),
+    ]);
+    expect(JSON.stringify({ result, diagnostics })).not.toContain("private-broken-payload");
+  });
+
   it("surfaces a streamed provider error instead of completing successfully", async () => {
     mockSse(
       new TextEncoder().encode(
@@ -448,6 +520,16 @@ describe("google-interactions provider", () => {
       expected: { thinking_level: "low", thinking_summaries: "auto" },
     },
     {
+      modelId: "gemini-2.5-flash",
+      reasoning: "xhigh" as const,
+      expected: { thinking_level: "high", thinking_summaries: "auto" },
+    },
+    {
+      modelId: "gemini-2.5-flash",
+      reasoning: "max" as const,
+      expected: { thinking_level: "high", thinking_summaries: "auto" },
+    },
+    {
       modelId: "gemini-3-flash-preview",
       reasoning: "off" as const,
       expected: { thinking_level: "minimal", thinking_summaries: "none" },
@@ -473,7 +555,12 @@ describe("google-interactions provider", () => {
       );
 
       await streamSimpleGoogleInteractions(
-        { ...makeInteractionsModel(), id: modelId, reasoning: true },
+        {
+          ...makeInteractionsModel(),
+          id: modelId,
+          reasoning: true,
+          thinkingLevelMap: { xhigh: "high", max: "high" },
+        },
         basicContext,
         { apiKey: "test-api-key", reasoning },
       ).result();

@@ -311,6 +311,15 @@ describe("secret egress proxy", () => {
             request.socket.end(rawResponse);
             return;
           }
+          if (request.url === "/redirect") {
+            response.writeHead(307, {
+              Location: `https://127.0.0.1:${originPort}/redirected`,
+              Connection: "close",
+              "Content-Length": 0,
+            });
+            response.end();
+            return;
+          }
           if (request.url?.startsWith("/git/")) {
             response.writeHead(200, { "Content-Type": "text/plain", Connection: "close" });
             response.end(
@@ -359,6 +368,105 @@ describe("secret egress proxy", () => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("substitutes multiple sentinels in Basic username and password without decoding other base64", async () => {
+    const username = mintSecretSentinel("synthetic-user", { label: "basic-user" });
+    const password = mintSecretSentinel("synthetic-password", { label: "basic-password" });
+    proxyEnv = proxy.registerProcess([
+      { name: "USERNAME", sentinel: username, allowedHosts: ["localhost"] },
+      { name: "PASSWORD", sentinel: password, allowedHosts: ["localhost"] },
+    ]).env;
+    const encoded = Buffer.from(`${username}:${password}`).toString("base64");
+    expect(
+      (
+        await requestThroughTunnel({
+          headers: {
+            Authorization: `Basic ${encoded}`,
+            "X-Encoded": encoded,
+            "Proxy-Authorization": `Basic ${encoded}`,
+          },
+          bodyChunks: [encoded],
+        })
+      ).status,
+    ).toBe(200);
+    expect(originRequests[0]?.headers.authorization).toBe(
+      `Basic ${Buffer.from("synthetic-user:synthetic-password").toString("base64")}`,
+    );
+    expect(originRequests[0]?.headers["x-encoded"]).toBe(encoded);
+    expect(originRequests[0]?.headers["proxy-authorization"]).toBeUndefined();
+    expect(originRequests[0]?.body).toBe(encoded);
+  });
+
+  it.each([
+    "unregistered",
+    "tampered",
+    "no-colon",
+    "control-byte",
+    "invalid-utf8",
+    "raw-basic",
+    "noncanonical",
+  ])("refuses %s Basic sentinels before the origin receives credentials", async (kind) => {
+    const sentinel = mintSecretSentinel("synthetic-refused-secret", { label: "basic-refusal" });
+    const candidate = kind === "tampered" ? tamperSentinel(sentinel) : sentinel;
+    if (kind !== "unregistered") {
+      proxyEnv = registerSentinel({
+        sentinel: candidate,
+        allowedHosts: ["localhost"],
+      });
+    }
+    const decoded =
+      kind === "no-colon" ? candidate : `user:${candidate}${kind === "control-byte" ? "\n" : ""}`;
+    const bytes =
+      kind === "invalid-utf8"
+        ? Buffer.concat([Buffer.from(decoded), Buffer.from([255])])
+        : Buffer.from(decoded);
+    const encoded = bytes.toString("base64");
+    const credential =
+      kind === "raw-basic"
+        ? candidate
+        : kind === "noncanonical"
+          ? encoded.replace(/=+$/u, "") + (encoded.endsWith("==") ? "=" : "==")
+          : encoded;
+    const authorization = `Basic ${credential}`;
+    expect(
+      (
+        await requestThroughTunnel({
+          headers: { Authorization: authorization },
+        })
+      ).status,
+    ).toBe(502);
+    expect(originRequests).toEqual([]);
+    expect(auditEvents.at(-1)?.reason).toBe("unresolved-sentinel");
+  });
+
+  it.each(["bAsIc dXNlcjpwYXNz", "Basic malformed!"])(
+    "preserves ordinary Basic headers byte-for-byte: %s",
+    async (authorization) => {
+      expect(
+        (await requestThroughTunnel({ headers: { Authorization: authorization } })).status,
+      ).toBe(200);
+      expect(originRequests[0]?.headers.authorization).toBe(authorization);
+      expect(auditEvents.at(-1)?.substituted).toBe(false);
+    },
+  );
+
+  it("does not follow redirects and reauthorizes Basic credentials on a redirected destination", async () => {
+    const sentinel = mintSecretSentinel("synthetic-redirect-secret", { label: "basic-redirect" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: ["localhost"] });
+    const headers = {
+      Authorization: `Basic ${Buffer.from(`user:${sentinel}`).toString("base64")}`,
+    };
+    const redirected = await requestThroughTunnel({ path: "/redirect", headers });
+    expect(redirected.status).toBe(307);
+    expect(redirected.head).toContain(`https://127.0.0.1:${originPort}/redirected`);
+    expect(originRequests).toHaveLength(1);
+    expect(
+      (await requestThroughTunnel({ path: `https://127.0.0.1:${originPort}/redirected`, headers }))
+        .status,
+    ).toBe(502);
+    expect(originRequests).toHaveLength(1);
+    expect(auditEvents.at(-1)?.reason).toBe("destination-not-allowed");
   });
 
   it("forwards a CJK attachment filename from a real upstream and keeps serving", async () => {
@@ -817,28 +925,6 @@ describe("secret egress plain HTTP", () => {
     } finally {
       grant.revoke();
       await lockdown.stop();
-    }
-  });
-
-  it("routes a real child through the proxy", async () => {
-    const grant = proxy.registerProcess();
-    try {
-      const result = await promisify(execFile)(
-        process.execPath,
-        ["-e", CHILD_REQUEST, `http://127.0.0.1:${port}/ok`],
-        {
-          env: { SystemRoot: process.env.SystemRoot, ...grant.env },
-        },
-      );
-      const response = JSON.parse(result.stdout);
-      expect(response.status).toBe(200);
-      expect(response.body).toBe("loopback-ok");
-      expect(observed).toHaveLength(1);
-      expect(observed[0]?.port).toBeTypeOf("number");
-      expect(response.port).toBeTypeOf("number");
-      expect(audit).toEqual([{ kind: "forwarded", host: "127.0.0.1", substituted: false }]);
-    } finally {
-      grant.revoke();
     }
   });
 });

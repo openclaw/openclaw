@@ -4,10 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as gitExec from "../../infra/git-exec.js";
 import * as commands from "../../process/exec.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -19,6 +24,7 @@ const exec = promisify(execFile);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "source-only-filters-");
 afterEach(() => {
   vi.restoreAllMocks();
+  resetConfigRuntimeState();
   vi.unstubAllEnvs();
 });
 const initialize = useManagedWorktreeTestRepository();
@@ -40,6 +46,7 @@ beforeEach(async () => {
   vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
   vi.stubEnv("GIT_CONFIG_PARAMETERS", "");
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  setRuntimeConfigSnapshot({}, {});
   repo = await initialize(root);
   marker = path.join(root, "host-marker");
   script = path.join(root, "filter.cjs");
@@ -100,6 +107,22 @@ async function configure(scope: string, kind: string, cwd: string) {
   }
 }
 
+it.each(["sha1", "sha256"])(
+  "keeps source-only object writes in %s storage without requiring a HEAD commit",
+  async (format) => {
+    const empty = path.join(root, `empty-${format}`);
+    await git(root, "init", "--template=", `--object-format=${format}`, empty);
+    await fs.writeFile(path.join(empty, "source.txt"), "source-only object\n");
+    const expected = await git(empty, "hash-object", "source.txt");
+    const oid = await withWorktreeGitConfig(empty, true, {}, (policy) =>
+      policy.require(empty, ["hash-object", "-w", "source.txt"]),
+    );
+    expect(oid).toBe(expected);
+    expect(await git(empty, "cat-file", "blob", oid)).toBe("source-only object");
+    await expect(git(empty, "rev-parse", "--verify", "HEAD")).rejects.toThrow();
+  },
+);
+
 it("keeps source-only clones away from an inherited external Git index", async () => {
   const externalIndex = path.join(root, "external-index");
   vi.stubEnv("GIT_INDEX_FILE", externalIndex);
@@ -115,6 +138,8 @@ it("keeps source-only clones away from an inherited external Git index", async (
 });
 
 it("reuses and refreshes source-only templates without running host filters", async () => {
+  // Cache invalidation does not depend on Btrfs checkout timing selection.
+  vi.spyOn(performance, "now").mockReturnValue(0);
   await configure("repository", "smudge", repo);
   const first = await createSourceOnly("template-first");
   const [original] = await listTemplatesAsync(process.env);

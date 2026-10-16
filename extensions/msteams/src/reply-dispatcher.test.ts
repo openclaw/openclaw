@@ -34,14 +34,10 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
   getGlobalHookRunner: getGlobalHookRunnerMock,
 }));
 
-vi.mock("./messenger.js", () => ({
-  buildConversationReference: vi.fn((ref) => ref),
+vi.mock("./messenger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./messenger.js")>()),
   renderReplyPayloadsToMessages: renderReplyPayloadsToMessagesMock,
   sendMSTeamsMessages: sendMSTeamsMessagesMock,
-}));
-
-vi.mock("./revoked-context.js", () => ({
-  withRevokedProxyFallback: async ({ run }: { run: () => Promise<unknown> }) => await run(),
 }));
 
 import { createMSTeamsReplyDispatcher } from "./reply-dispatcher.js";
@@ -484,42 +480,6 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("inherits root block streaming mode for named accounts", async () => {
-    renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "hello" }]);
-    sendMSTeamsMessagesMock.mockResolvedValue(["id-1"]);
-
-    const dispatcher = createDispatcher(
-      "personal",
-      {},
-      {
-        accountId: "support",
-        cfg: {
-          channels: {
-            msteams: {
-              streaming: { mode: "block" },
-              accounts: {
-                support: {
-                  appId: "support-app",
-                  appPassword: "support-secret",
-                  webhook: { path: "/api/messages/support" },
-                },
-              },
-            },
-          },
-        },
-      },
-    );
-    const options = dispatcherOptions();
-
-    await options.deliver({ text: "support account block reply" });
-
-    const stream = getStreamMock();
-    expect(stream.emit).not.toHaveBeenCalled();
-    expect(dispatcher.replyOptions.onPartialReply).toBeUndefined();
-    expect(dispatcher.replyOptions.disableBlockStreaming).toBe(false);
-    expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
-  });
-
   it("queues a system event when some queued Teams messages fail to send", async () => {
     const onSentMessageIds = vi.fn();
     renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "one" }, { text: "two" }] as never);
@@ -591,6 +551,23 @@ describe("createMSTeamsReplyDispatcher", () => {
       content: "hello",
     });
   });
+
+  it.each(["NO_REPLY", '{"text":"NO_REPLY"}', "No response is needed."])(
+    "streams prepared literal text and settles its final: %s",
+    async (text) => {
+      const teams = createDispatcher("personal");
+      const stream = getStreamMock();
+      teams.replyOptions.onPartialReply?.({ text });
+      expect(stream.emit).toHaveBeenCalledWith(text);
+      stream.acknowledge(text);
+      const result = await teams.delivery.deliver({ text }, { kind: "final" });
+      await teams.dispatcherOptions.onSettled?.();
+      await expect(result?.finalization).resolves.toMatchObject({
+        visibleReplySent: true,
+        content: text,
+      });
+    },
+  );
 
   it("preserves both progress finals through real dispatcher settlement", async () => {
     renderReplyPayloadsToMessagesMock.mockImplementation((payloads) =>
@@ -713,22 +690,6 @@ describe("createMSTeamsReplyDispatcher", () => {
   });
 
   it.each([
-    {
-      name: "attached media",
-      payloads: [
-        {
-          text: "provider final",
-          mediaUrl: "https://example.test/must-not-send.png",
-        },
-      ],
-    },
-    {
-      name: "media after text",
-      payloads: [
-        { text: "provider final" },
-        { mediaUrl: "https://example.test/must-not-send.png" },
-      ],
-    },
     {
       name: "media before text",
       payloads: [

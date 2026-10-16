@@ -211,16 +211,23 @@ export function buildAnthropicAuthDoctorHint(params: {
 }
 
 export async function runAnthropicCliMigration(
-  ctx: ProviderAuthContext,
+  ctx: Pick<ProviderAuthContext, "config" | "env">,
 ): Promise<ProviderAuthResult> {
   const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus({ env: ctx.env ?? process.env });
   if (authStatus.status !== "available") {
-    throw new Error(
-      [
-        "Claude CLI is not authenticated on this host.",
-        `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
-      ].join("\n"),
-    );
+    const error =
+      authStatus.status === "missing"
+        ? [
+            "Claude CLI is not authenticated on this host.",
+            `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
+          ]
+        : [
+            authStatus.status === "timeout"
+              ? `Could not verify the installed Claude CLI login within ${authStatus.timeoutMs / 1000} s.`
+              : "Could not verify the installed Claude CLI login.",
+            `Run ${formatCliCommand("claude auth status --json")}, then retry this setup.`,
+          ];
+    throw new Error(error.join("\n"));
   }
   return buildAnthropicCliMigrationResult(ctx.config);
 }
@@ -230,34 +237,14 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
   runtime: ProviderAuthContext["runtime"];
   agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
-  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus();
-  if (authStatus.status !== "available") {
-    const error =
-      authStatus.status === "unreadable"
-        ? [
-            'Auth choice "anthropic-cli" could not verify the installed Claude CLI login.',
-            `Run ${formatCliCommand("claude auth status")}, then retry.`,
-          ]
-        : [
-            'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
-            `Run ${formatCliCommand("claude auth login")} first.`,
-          ];
-    throw new Error(error.join("\n"));
-  }
-
-  const result = buildAnthropicCliMigrationResult(ctx.config);
+  const result = await runAnthropicCliMigration(ctx);
   const currentDefaults = ctx.config.agents?.defaults;
   const currentModel = currentDefaults?.model;
-  const currentFallbacks =
-    currentModel && typeof currentModel === "object" && "fallbacks" in currentModel
-      ? currentModel.fallbacks
-      : undefined;
+  const currentFallbacks = typeof currentModel === "string" ? undefined : currentModel?.fallbacks;
   const migratedModel = result.configPatch?.agents?.defaults?.model;
   const migratedFallbacks =
-    migratedModel && typeof migratedModel === "object" && "fallbacks" in migratedModel
-      ? migratedModel.fallbacks
-      : undefined;
-  const nextFallbacks = Array.isArray(migratedFallbacks) ? migratedFallbacks : currentFallbacks;
+    typeof migratedModel === "string" ? undefined : migratedModel?.fallbacks;
+  const nextFallbacks = migratedFallbacks ?? currentFallbacks;
 
   return {
     ...ctx.config,
@@ -269,7 +256,7 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
         ...currentDefaults,
         ...result.configPatch?.agents?.defaults,
         model: {
-          ...(Array.isArray(nextFallbacks) ? { fallbacks: nextFallbacks } : {}),
+          ...(nextFallbacks ? { fallbacks: nextFallbacks } : {}),
           primary: result.defaultModel,
         },
       },

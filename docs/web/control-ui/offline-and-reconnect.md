@@ -145,11 +145,25 @@ or is restored from browser history. If an update finished while the tab was sus
 can recover without receiving the original update notification or opening a new tab.
 
 Automatic build-recovery reloads spread their first page check over up to two seconds
-and reload only once per target build. Reloads wait for the page to be reachable
+and reload at most once per target build every 30 seconds. Reloads wait for the page to be reachable
 and respect unsaved-work protection.
 The current route and stored drafts survive the reload. If browser storage is unavailable
 or reload protection blocks recovery, reload the tab after saving your work;
 do not clear site data while drafts or queued messages still need recovery.
+
+If a view or stylesheet download fails during a network interruption, the open
+page keeps checking reachability with a backoff capped at 15 seconds. Coming
+back online or returning to the tab wakes that check early. Once the document
+is reachable, the UI reloads to recover failed browser module downloads; it
+does not retry those imports inside the same document. Unsaved-work protection
+still applies, and the manual **Reload** action remains available.
+
+During startup, slow app downloads keep the **Control UI is still loading**
+notice without interrupting the download. After the document finishes loading,
+the app gets another 12 seconds to render before recovery starts. If the
+Gateway is unreachable, startup recovery keeps probing with a backoff capped
+at 15 seconds. It allows up to three automatic recovery navigations; if fresh
+pages still cannot start, use **Try again** or the troubleshooting guide.
 
 Unsaved file edits block automatic and in-app reloads, even after you close their
 previews or switch conversations. Reopen each edited file and save or discard its
@@ -192,12 +206,16 @@ embedded dashboard. Connection status does not replace the Gateway name in the a
 The client retries ordinary connection loss automatically with randomized backoff: the first
 retry waits 800–960 ms, and sustained failures spread retries across 12.5–15 seconds.
 Server retry hints remain minimum waits and can extend beyond that normal cap, with up to
-20% additional spread. The connection watchdog allows two advertised heartbeat
-intervals of silence before reconnecting. An individual request timeout does not
-reset a socket that is still receiving traffic. Reconnecting does not replay
+20% additional spread. The Gateway's WebSocket ping/pong keepalive detects dead
+transports. Delayed application heartbeats on a busy Gateway do not by themselves
+reconnect an open tab. Returning to a suspended tab still recovers a connection
+after two advertised heartbeat intervals of silence. An individual request
+timeout does not reset the socket. Reconnecting does not replay
 arbitrary requests; read owners retry their reads, and write owners reconcile
 uncertain outcomes. Gateway startup hints keep their separate bounded timing
 (100–2000 ms), with up to 20% additional spread across reconnecting tabs.
+If a dropped connection interrupts a Usage export, the export shows an error. Once
+the connection returns, choose **Export** again; exports are not replayed automatically.
 If the browser provides no reason for the disconnect, the connection tooltip explains that
 the connection was interrupted and whether automatic reconnection is underway. It retains
 the WebSocket close code for troubleshooting; specific Gateway errors keep their explanation.
@@ -279,7 +297,8 @@ actions to open Main or browse sessions. A connection failure or a conversation
 missing from the current sidebar page does not count as deletion.
 
 Opening a view for the first time can fail if its interface files cannot be downloaded.
-Check the connection, then use **Reload**. The same error can occur after an update;
+The UI waits for reachability and reloads automatically, subject to reload protection
+and the 30-second loop guard. You can also use **Reload**. The same error can occur after an update;
 it does not by itself mean a new version was installed. If unsaved work blocks the
 reload, follow the displayed save or cancel guidance, then try again.
 
@@ -352,7 +371,9 @@ instead report missing attachments. Independent tabs do not share newly authored
 After connecting, chat waits for account-scoped recovery before accepting or sending ordinary
 messages. During this brief check, submitted text and attachments stay in the composer. Offline
 queues resume once recovery is ready, unless the session still owns an unresolved initial turn;
-resolve that turn with its **Retry** or **Check delivery** action first.
+resolve that turn with its **Retry** or **Check delivery** action first. While disconnected, a
+notice above the composer says the initial message is unresolved; the composer still accepts
+queued messages.
 If the initial message is waiting for recovery, its chat shows a loading placeholder
 until the message can be restored, rather than the empty new-chat welcome screen.
 Recovery notices appear below the composer and clear when the blocking condition resolves.

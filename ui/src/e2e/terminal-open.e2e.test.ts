@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -98,7 +99,7 @@ suite.define(() => {
             const frame = await takeControlUiScreenshotFrame(
               page,
               region,
-              [page.locator(".chat-side-panel-toggle")],
+              [page.getByRole("button", { name: "Layout", exact: true })],
               { animations: "disabled" },
             );
             await writeFile(
@@ -181,9 +182,9 @@ suite.define(() => {
           .toBe("light");
         expect(await canvas.getAttribute("data-theme-sync-identity")).toBe("original");
 
-        await page.locator(".chat-side-panel-toggle").click();
+        await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         await expect.poll(() => canvas.isVisible()).toBe(false);
-        await page.locator(".chat-side-panel-toggle").click();
+        await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         await canvas.waitFor({ state: "visible" });
         await expect
           .poll(() => panel.evaluate((element) => Reflect.get(element, "themeMode")))

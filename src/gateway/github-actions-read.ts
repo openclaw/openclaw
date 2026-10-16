@@ -134,7 +134,7 @@ export async function readBoardGitHubActions(
   });
   try {
     const identity = await prepareBoardGitHubIdentity(context, authority);
-    const key = JSON.stringify([authority.boardSession, identity.cacheScope, request.url]);
+    const key = JSON.stringify([identity.cacheScope, request.url]);
     const result = await identity.start(() => {
       // Creation is synchronous, so the checked caller admits the fetch. Shared transport
       // must not inherit that widget's lifetime; every caller gates delivery below.

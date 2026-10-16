@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runInteractiveUpdateFailureAction } from "../../cli/update-cli/update-command-report.js";
@@ -25,6 +25,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -220,10 +221,10 @@ beforeEach(async () => {
   }));
 });
 afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
   await home.restore();
+  closeOpenClawStateDatabaseForTest();
 });
+afterAll(closeStateDatabaseForTest);
 
 describe("Report action from the authoritative update ledger", () => {
   it.each(["identity", "attempt", "digest"] as const)(

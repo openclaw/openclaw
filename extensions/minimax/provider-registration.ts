@@ -37,7 +37,6 @@ import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import {
   buildMinimaxModelDiscovery,
-  buildMinimaxPortalProvider,
   buildMinimaxProvider,
   resolveMinimaxCatalogBaseUrl,
 } from "./provider-catalog.js";
@@ -164,8 +163,8 @@ async function resolvePortalCatalog(ctx: ProviderCatalogContext): Promise<Provid
   const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl);
 
   const providerConfig = {
-    ...buildMinimaxPortalProvider(),
-    baseUrl: explicitBaseUrl || buildMinimaxPortalProvider(ctx.env).baseUrl,
+    ...buildMinimaxProvider(ctx.env),
+    ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
     apiKey,
   };
   return await buildOpenAICompatibleLiveProviderCatalog({
@@ -214,7 +213,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
         access: result.access,
         refresh: result.refresh,
         expires: result.expires,
-        credentialExtra: { authFlow: "device-code" },
+        credentialExtra: { authFlow: "device-code", tokenEndpoint: result.tokenEndpoint },
         configPatch: {
           models: {
             providers: {
@@ -320,7 +319,7 @@ function buildMinimaxApiProviderPlugin(): ProviderPlugin {
   };
 }
 
-function buildMinimaxPortalProviderPlugin(): ProviderPlugin {
+function buildMinimaxPortalProviderPlugin(readBaseUrl: () => string | undefined): ProviderPlugin {
   return {
     ...createMinimaxPortalProvider(),
     catalog: {
@@ -328,10 +327,17 @@ function buildMinimaxPortalProviderPlugin(): ProviderPlugin {
     },
     staticCatalog: {
       run: async (ctx) => ({
-        providers: { [PORTAL_PROVIDER_ID]: buildMinimaxPortalProvider(ctx.env) },
+        providers: { [PORTAL_PROVIDER_ID]: buildMinimaxProvider(ctx.env) },
       }),
     },
     auth: [createMinimaxOAuthMethod("global"), createMinimaxOAuthMethod("cn")],
+    refreshOAuth: async (credential, config) => {
+      const { refreshMiniMaxPortalOAuthCredential } = await import("./oauth.runtime.js");
+      return await refreshMiniMaxPortalOAuthCredential(
+        credential,
+        config === undefined ? readBaseUrl() : getProviderBaseUrl(config, PORTAL_PROVIDER_ID),
+      );
+    },
     ...MINIMAX_PROVIDER_HOOKS,
     resolveDynamicModel: (ctx) =>
       resolveMinimaxDynamicModel({ providerId: PORTAL_PROVIDER_ID, ctx }),
@@ -340,5 +346,11 @@ function buildMinimaxPortalProviderPlugin(): ProviderPlugin {
 
 export function registerMinimaxProviders(api: OpenClawPluginApi) {
   api.registerProvider(buildMinimaxApiProviderPlugin());
-  api.registerProvider(buildMinimaxPortalProviderPlugin());
+  api.registerProvider(
+    buildMinimaxPortalProviderPlugin(() =>
+      normalizeOptionalString(
+        api.runtime.config.current().models?.providers?.[PORTAL_PROVIDER_ID]?.baseUrl,
+      ),
+    ),
+  );
 }

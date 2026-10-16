@@ -18,6 +18,7 @@ import type {
   CronFormState,
   CronJobsLastStatusFilter,
 } from "../../lib/cron/types.ts";
+import type { CronEventSourceView } from "./event-source.ts";
 
 export type CronListTab = "tasks" | "activity";
 export type CronDetailTab = "settings" | "history";
@@ -43,6 +44,7 @@ export type CronProps = {
   error: string | null;
   busy: boolean;
   form: CronFormState;
+  eventSource?: CronEventSourceView;
   heartbeatScratch: string;
   fieldErrors: CronFieldErrors;
   canSubmit: boolean;

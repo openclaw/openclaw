@@ -78,6 +78,11 @@ combined.
 
 ## Schedule types
 
+For positional interval schedules, use `every <duration>`, such as `"every 10m"`.
+Natural-language schedules such as `"every day at 9am sharp"` are not supported;
+use `"0 9 * * *"` instead. Invalid cron expressions are rejected by the CLI with
+the supplied expression and examples of valid syntax.
+
 As an alternative to positional creation syntax, `automations add|create`
 accepts one of these schedule flags. `automations edit` uses the same flags
 to replace a job's schedule:
@@ -132,7 +137,7 @@ An isolated agent-turn job created from a conversation also captures that conver
   </Accordion>
 </AccordionGroup>
 
-When an operator removes an automation with an active run, OpenClaw requests cancellation of that run. An admitted automation can remove its own job without cancelling the active run. The JSON removal response includes `activeRunCancellationRequested: true` when cancellation was requested. For an isolated automation, reusable-session cleanup then waits for the active run to stop and reports `sessionCleanup: "pending"` while cleanup is deferred. Run history is retained.
+When an operator removes an automation with an active run, OpenClaw requests cancellation of that run. An admitted automation can remove its own job without cancelling the active run. If the caller cannot be confirmed as the job's exact live run, self-removal fails without deleting the job or cancelling the active run. The JSON removal response includes `activeRunCancellationRequested: true` when cancellation was requested. For an isolated automation, reusable-session cleanup then waits for the active run to stop and reports `sessionCleanup: "pending"` while cleanup is deferred. Run history is retained.
 
 If session cleanup fails, the error is logged. A removal with no active run also returns the cleanup error to the caller. Use `openclaw sessions list --json` to find the remaining session, then `openclaw sessions delete <key> --yes` to retry cleanup after the Gateway or worker recovers.
 
@@ -175,7 +180,7 @@ Failure notifications resolve in this order:
 2. `delivery.failureDestination` on the job, layered over the global destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The `cron.failureDestination` block, retired in 2026.8.1, is merged into them by `openclaw doctor --fix`.
 3. The job's primary announce target (when neither of the above resolves to a concrete destination).
 
-Jobs with one of those routes default to an execution-failure alert after 2 consecutive failures and a 1-hour cooldown. A per-job or global `failureAlert` object explicitly activates/tunes the policy even without an existing route. `failureAlert: false` disables execution and required-delivery failure alerts for the job, but not the auto-disable safety notification. Global `enabled: false` disables inheritance unless the job has its own `failureAlert` object. `delivery.bestEffort: true` suppresses inherited/default execution alerts, but not an explicit per-job policy.
+Jobs with one of those routes default to an execution-failure alert after 2 consecutive failures and a 1-hour cooldown. A per-job or global `failureAlert` object explicitly activates/tunes the policy even without an existing route. `failureAlert: false` disables execution and required-delivery failure alerts for the job, but not the auto-disable safety notification. Global `enabled: false` disables inheritance unless the job has its own `failureAlert` object. `delivery.bestEffort: true` suppresses inherited/default execution alerts, but not an explicit per-job policy. Terminal one-shot failures bypass `after`: eligible owned jobs receive a repair turn in their owner conversation, other jobs use an enabled failure-alert route, and jobs without one receive the auto-disable safety notice. Operator cancellations and runs retired by a Gateway restart stay quiet.
 
 Repeated failures with the same cause stay grouped into one incident across Gateway restarts. A changed cause or destination can notify after the cooldown. Successful completion clears the incident silently; the recovery stays in automation history. Skipped runs and unknown delivery outcomes do not count as recovery. If script setup cannot refresh tools after a plugin reload, the alert explains that automatic recovery failed before the script ran.
 
@@ -208,6 +213,8 @@ daylight-saving transition are reported separately as `--at` errors.
 <Note>
 One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delivery failure or unknown completion keeps the job disabled, with no next run, so restarts do not replay payload side effects. Intentional silence and successful executions with explicit `delivery.bestEffort: true` complete and delete normally. Use `--keep-after-run` to preserve successful jobs too.
 </Note>
+
+An `at` job records a terminal execution failure after a permanent error or exhausted retries. An `on-exit` job fired by its watcher is terminal on any execution error, including a transient one, because retrying would rerun the watched command. These failures record `state.autoDisabled`, which `openclaw doctor` reports. Manually force-running a paused `on-exit` job preserves its pause without recording an auto-disable.
 
 ### Recurring jobs
 
@@ -289,21 +296,19 @@ If an isolated run throws `LiveSessionModelSwitchError`, the scheduler persists 
 
 ### Stale acknowledgement suppression
 
-Isolated automation turns suppress stale acknowledgement-only replies. If the first result is only an interim status update, the scheduler re-prompts once for the real result before delivery. It does not re-prompt when a descendant subagent run is responsible for the eventual answer.
+Isolated automation turns require a final deliverable rather than an interim status update. Recorded pending-descendant work retains ownership of the eventual answer; the scheduler does not infer completion or pending work from acknowledgment prose.
 
 ### Silent token suppression
 
-For text-only isolated automation announcements, a reply that contains only the silent token (`NO_REPLY` or `no_reply`), or ends with a trailing silent token, suppresses direct outbound delivery and the fallback queued summary path. The preceding text is not delivered.
+For text-only isolated automation announcements, only a completed final whose entire text trims to uppercase `NO_REPLY` suppresses direct outbound delivery and the fallback queued summary path. The terminal producer records this decision; delivery does not reparse the reply.
 
 For example, this final reply sends no chat message:
 
 ```text
-Nothing actionable found today.
-
 NO_REPLY
 ```
 
-Do not append `NO_REPLY` to a report that should reach the user. Mentioning the token within a sentence, such as `Use NO_REPLY when nothing actionable changed.`, does not trigger this rule. For media payloads, a silent caption can be removed while the media is still delivered.
+A literal leading `NO_REPLY\n` strips that one control line and delivers the rest unchanged. Lowercase `no_reply`, `NO_REPLY.`, quoted or JSON forms, and a trailing `NO_REPLY` after a report are visible text. For media payloads, silent model text can be removed while tool-owned media is still delivered.
 
 Human-readable `automations list` and `automations show` label successful intentional suppression as `ok (suppressed)`, not a delivery warning. `automations show` includes `last delivery suppression` with the recorded reason (`empty`, `silent`, `heartbeat`, or `channel_transform`). JSON keeps `deliveryStatus: "not-delivered"` and the separate `deliverySuppressionReason`. Genuine delivery failures without an intentional reason still show `ok (not delivered)` when execution succeeded.
 

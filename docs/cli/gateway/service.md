@@ -28,6 +28,14 @@ not rewrite configuration. Restart preserves the installed service definition wh
 config needs repair; its health check still reports whether the Gateway came back.
 `gateway start` continues to validate configuration before starting the Gateway.
 
+If a Gateway holds state ownership for more than five minutes without recording
+that its listener bound, `openclaw gateway stop` can recover the stalled startup,
+including one frozen before publishing its owner identity. Recovery verifies the
+recorded PID and process start time before termination, then confirms process exit
+and state ownership release. A fresh worker heartbeat does not extend this startup
+budget. Ownership contention names the stalled PID, startup age, and stop command;
+you do not need to delete lock files manually.
+
 `gateway status` reports service process state separately from Gateway readiness.
 When its connection check fails, inspect the service logs even if the process is
 running. Recent log errors are matching evidence from the bounded log tail, may
@@ -247,7 +255,7 @@ openclaw gateway restart
   <Accordion title="Service runtime">
     - Node is the primary and recommended managed Gateway runtime and the default for fresh installations; with no explicit runtime, pin, or wrapper, an install running under supported Bun uses that executable without creating a pin if no supported Node is found. Implicit reinstalls retain a supported recorded Node or Bun runtime as described above.
     - For unpinned services, `gateway install` checks the Node executable recorded in the managed service. If it is missing, non-executable, or unsupported, installation refreshes the service without requiring `--force` and reports the replacement path. This also applies when an installer or update refreshes the service. Repair prefers the current CLI's supported Node, retaining stable Homebrew paths, then checks supported system installations. Custom wrappers keep control of their runtime; protected service definitions still require their deployment owner to repair them.
-    - Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `gateway install --runtime bun`.
+    - Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `gateway install --runtime bun`.
 
   </Accordion>
   <Accordion title="Lifecycle behavior">

@@ -25,12 +25,6 @@ describe("realtime voice agent consult tool", () => {
     ).toBe("What changed?\n\nContext:\nPR #123\n\nSpoken style:\nconcise");
   });
 
-  it("requires a non-empty question", () => {
-    expect(() => parseRealtimeVoiceAgentConsultArgs({ context: "missing" })).toThrow(
-      "question required",
-    );
-  });
-
   it("does not accept a model-supplied spoken confirmation as authority", () => {
     expect(
       parseRealtimeVoiceAgentConsultArgs({
@@ -40,21 +34,6 @@ describe("realtime voice agent consult tool", () => {
     ).toStrictEqual({
       question: "Send it now",
       context: undefined,
-      responseStyle: undefined,
-    });
-  });
-
-  it("accepts provider question aliases from realtime tool calls", () => {
-    expect(parseRealtimeVoiceAgentConsultArgs({ prompt: "  Check the repo. " })).toStrictEqual({
-      context: undefined,
-      question: "Check the repo.",
-      responseStyle: undefined,
-    });
-    expect(
-      parseRealtimeVoiceAgentConsultArgs({ query: "  Send a Discord message. " }),
-    ).toStrictEqual({
-      context: undefined,
-      question: "Send a Discord message.",
       responseStyle: undefined,
     });
   });

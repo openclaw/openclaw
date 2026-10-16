@@ -7,6 +7,7 @@
 // marks the session dirty for its write or maintenance owner to rebuild from
 // the canonical visible-path resolver.
 import type { DatabaseSync } from "node:sqlite";
+import type { Expression } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -19,7 +20,10 @@ import {
   withoutSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import {
+  readSessionActorTransactionState,
+  writableSessionActorMap,
+} from "./session-actor-transaction.js";
 import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
@@ -116,7 +120,10 @@ export function shouldRebuildSessionTranscriptIndexSynchronously(
   return true;
 }
 
-function selectSessionTranscriptProjectionState(db: DatabaseSync, sessionId: string) {
+function selectSessionTranscriptProjectionState(
+  db: DatabaseSync,
+  sessionId: string | Expression<string>,
+) {
   return getIndexKysely(db)
     .selectFrom("session_transcript_index_state")
     .select([
@@ -167,7 +174,10 @@ function readSessionTranscriptProjectionState(
 }
 
 /** The projection owner supplies the same readiness predicate to compound readers. */
-export function selectSessionTranscriptIndexStatus(db: DatabaseSync, sessionId: string) {
+export function selectSessionTranscriptIndexStatus(
+  db: DatabaseSync,
+  sessionId: string | Expression<string>,
+) {
   const kysely = getIndexKysely(db);
   return kysely
     .selectFrom(
@@ -319,6 +329,9 @@ export function createTranscriptIndexAppenderInTransaction(
     if (append.activeRow) {
       insertActiveEvent ??= createActiveEventInserter(db, sessionId);
       insertActiveEvent(append.activeRow);
+      if (actor) {
+        actor.transcript.active = writableSessionActorMap(actor.transcript.active);
+      }
       actor?.transcript.active.set(params.seq, {
         session_id: sessionId,
         active_position: append.activeRow.activePosition,

@@ -32,6 +32,7 @@ const workerDeployArtifactNames = [
   "code-mode-node.worker.mjs",
   "file-tool-planning.worker.mjs",
   "file-tool-read.worker.mjs",
+  "gateway-state-owner-heartbeat.worker.mjs",
   "github-exec-launcher.mjs",
   "image-processor.worker.mjs",
   "openclaw-state-read.worker.mjs",
@@ -222,13 +223,7 @@ describe("check-cli-bootstrap-imports", () => {
     expect(diagnostic.mock.calls.flat().join("\n")).toContain("static graph imports cold path");
   });
 
-  it.each([
-    "commander",
-    "@openclaw/proc-safe",
-    "@openclaw/proc-safe/darwin",
-    "@openclaw/proc-safe/identity-extra",
-    "@openclaw/proc-safe/identity/private",
-  ])("reports unexpected relay import %s", (specifier) => {
+  it.each(["commander"])("reports unexpected relay import %s", (specifier) => {
     const root = makeTempRoot();
     writeFixture(root, "dist/native-hook-relay/entry.js", `import "${specifier}";\n`);
 

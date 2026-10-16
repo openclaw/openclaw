@@ -1,5 +1,6 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
 import { resolveVisibleHistoryEventCount } from "../config/sessions/session-accessor.sqlite-history-projection.js";
 import {
   readTranscriptDisplayDeltaFromProjection,
@@ -19,18 +20,20 @@ import {
   resolveVisibleMessagePositions,
 } from "../config/sessions/session-accessor.sqlite-reset-window.js";
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { readRecentTranscriptConversationText } from "../config/sessions/transcript-recent-text.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import type { TranscriptAnchorPageOptions } from "../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindowOptions } from "../sessions/transcript-read-window.js";
 import {
   createChatHistoryRecoveryProjection,
   isPendingAssistantError,
+  projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
   isPreSessionStartAssistantMessage,
 } from "./chat-display-projection.history.js";
-import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
 import {
   readChatHistoryMessageId,
   readChatHistoryRecoveryContext,
@@ -88,6 +91,7 @@ function projectSqliteHistoryEvents(entries: readonly SessionTranscriptMessageEv
   return messages;
 }
 
+// Raw admission bounds decoding; this cap also accounts for projected event metadata.
 function capAnchorEventsByBytes(
   events: SessionTranscriptMessageEvent[],
   maxBytes: number | undefined,
@@ -140,19 +144,22 @@ function filterSessionMessagesMatchingId(messages: unknown[], messageId: string)
 }
 
 /** Select and format one admitted projection; acquisition and archive fallback stay outside. */
-export function selectSessionTranscriptProjection<
-  Selection extends SessionTranscriptProjectionSelection,
->(
+function selectSessionTranscriptProjection<Selection extends SessionTranscriptProjectionSelection>(
   projection: CurrentTranscriptProjection,
   selection: Selection,
   sessionFile?: string,
 ): SessionTranscriptProjectionSelectionResults[Selection["kind"]];
-export function selectSessionTranscriptProjection(
+function selectSessionTranscriptProjection(
   projection: CurrentTranscriptProjection,
   selection: SessionTranscriptProjectionSelection,
   sessionFile?: string,
 ): SessionTranscriptProjectionSelectionResults[SessionTranscriptProjectionSelection["kind"]] {
   switch (selection.kind) {
+    case "recent-text":
+      return readRecentTranscriptConversationText(
+        (page) => readSessionTranscriptBoundedMessageTailPageFromProjection(projection, page),
+        selection.options,
+      );
     case "delta":
       return readTranscriptDisplayDeltaFromProjection(projection, selection.options);
     case "count":
@@ -353,15 +360,30 @@ export async function filterSessionMessageHistoryVisibility(
       sessionStartedAt: visibility.sessionStartedAt,
     });
     // The scanner may stop at a user boundary before appending its final chunk.
-    const projected = createRecovery();
-    projected.append([result.message, ...context]);
-    if (
-      !projected
-        .result()
-        .messages.some((message) => readChatHistoryMessageId(message) === messageId)
-    ) {
+    const projected = projectChatDisplayMessagesWithState([result.message, ...context], {
+      maxChars: MAX_PAYLOAD_BYTES,
+      subagentCoordination: readers.subagentCoordination,
+    });
+    const projectedMessage = projected.messages.find(
+      (message) => readChatHistoryMessageId(message) === messageId,
+    );
+    if (!projectedMessage) {
       return { found: false, oversized: false, historyHidden: true };
     }
+    return { ...result, message: projectedMessage };
+  }
+  if (visibility.requireVisible) {
+    const projected = projectChatDisplayMessagesWithState([result.message], {
+      maxChars: MAX_PAYLOAD_BYTES,
+      includeCommentaryFallbacks: true,
+      subagentCoordination: readers.subagentCoordination,
+    });
+    const message = projected.messages.find(
+      (entry) => readChatHistoryMessageId(entry) === messageId,
+    );
+    return message
+      ? { ...result, message }
+      : { found: false, oversized: false, historyHidden: true };
   }
   return result;
 }

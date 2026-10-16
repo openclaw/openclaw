@@ -11,6 +11,7 @@ import { testing as viewTesting } from "../../agents/mcp-ui-resource.test-suppor
 import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
+  getRawExecuteAgentTurnForTest,
   initialFallbackAttemptOptions,
   setupAgentRunnerExecutionTestState,
   type EmbeddedAgentParams,
@@ -48,7 +49,7 @@ async function prepareView(runtime: SessionMcpRuntime, requesterId?: string, age
   });
   return getMcpAppViewLease(descriptor!.viewId, runtime)!;
 }
-const { executeAgentTurn } = await import("./agent-runner-execution.js");
+const executeAgentTurn = await getRawExecuteAgentTurnForTest();
 
 describe("executeAgentTurn MCP App context", () => {
   it.each([

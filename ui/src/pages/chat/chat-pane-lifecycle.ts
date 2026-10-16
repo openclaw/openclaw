@@ -42,7 +42,6 @@ import { ChatPaneSessionObservation } from "./chat-pane-session-observation.ts";
 import { ChatPaneSessionPanelToggleController } from "./chat-pane-session-panel-toggle.ts";
 import {
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
-  closeChatPaneDetails,
   focusChatComposerFromPrintableKeydown,
 } from "./chat-pane-shared.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
@@ -95,7 +94,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   });
 
   private readonly mcpApps = new ChatPaneMcpAppController({
-    element: this,
+    element: this.element,
     current: () => {
       const state = this.state;
       return state
@@ -234,25 +233,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       return;
     }
 
-    focusChatComposerFromPrintableKeydown(this, event);
-
-    if (
-      event.defaultPrevented ||
-      event.isComposing ||
-      event.keyCode === 229 ||
-      event.key !== "Escape"
-    ) {
-      return;
-    }
-    if (closeChatPaneDetails(this)) {
-      event.preventDefault();
-    }
-  };
-
-  protected readonly handleDocumentPointerdown = (event: PointerEvent) => {
-    if (this.state && closeChatPaneDetails(this, event.composedPath())) {
-      this.state.requestUpdate();
-    }
+    focusChatComposerFromPrintableKeydown(this.element, event);
   };
 
   override connectedCallback() {
@@ -274,18 +255,16 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           this.paneWidth = width;
         }
       });
-      this.paneResizeObserver.observe(this);
+      this.paneResizeObserver.observe(this.element);
     }
     this.addEventListener("pointerdown", this.handlePaneFocus);
     this.addEventListener("focusin", this.handlePaneFocus);
     this.addEventListener("input", this.handlePaneInput);
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
-    document.addEventListener("pointerdown", this.handleDocumentPointerdown, true);
     const chatState = this.chatState;
     chatState.addCleanup(() => publishChatWorkContext(this.context, this));
     chatState.addCleanup(() => {
       document.removeEventListener("keydown", this.handleDocumentKeydown, true);
-      document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
       this.removeEventListener("pointerdown", this.handlePaneFocus);
       this.removeEventListener("focusin", this.handlePaneFocus);
       this.removeEventListener("input", this.handlePaneInput);
@@ -724,7 +703,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.headerBranches.clear();
     this.presencePayload = undefined;
     this.announceCommandPaletteTarget(null);
-    dismissConfirmedActionPopovers(this);
+    dismissConfirmedActionPopovers(this.element);
     resetChatViewState(this.presentationId);
     this.state = undefined;
     this.connectedClient = null;

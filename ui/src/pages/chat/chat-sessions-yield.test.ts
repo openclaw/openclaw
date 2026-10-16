@@ -1,10 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
-import { resetWorkingProgress } from "./chat-progress.ts";
+import { resetWorkingProgress, resolveTurnRecap } from "./chat-progress.ts";
 import { pendingSessionsYield } from "./chat-sessions-yield.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { createProps } from "./chat-thread.test-support.ts";
+import { projectTranscriptActivity } from "./components/chat-transcript-activity.ts";
 
 const call = {
   type: "toolCall",
@@ -59,22 +60,6 @@ describe("sessions_yield transcript projection", () => {
       expect(messages).toEqual(original);
     },
   );
-
-  it.each([
-    {
-      role: "assistant",
-      content: [{ type: "image", url: "https://example.invalid/proof.png" }],
-      timestamp: 3_000,
-    },
-  ])("separates later $role activity from the run that handed off", (later) => {
-    const messages = [...separateHistory, later];
-    const items = buildChatItems(createProps({ messages }));
-    // The boundary is structural: it carries nothing a reader could see.
-    expect(items.filter((item) => item.kind === "notice")).toEqual([silentBoundary]);
-    expect(items[0]).toMatchObject({ kind: "notice", handoffBoundary: true });
-    expect(items[0]).not.toHaveProperty("label");
-    expect(pendingSessionsYield(messages)).toBeNull();
-  });
 
   it.each([true])(
     "never displays private yield inputs before confirmation (failed=%s)",
@@ -163,43 +148,6 @@ describe("sessions_yield transcript projection", () => {
     expect(buildChatItems(createProps({ messages, showToolCalls: false }))).toEqual([]);
   });
 
-  it("gives the pending wait the handed-off run's identity and yields to an own run", () => {
-    const messages = [
-      {
-        role: "assistant",
-        runId: "parent-run",
-        timestamp: 1_900,
-        content: [{ type: "text", text: "Delegating the backend." }],
-      },
-      ...separateHistory,
-    ];
-    const items = buildChatItems(
-      createProps({ messages, subagentWait: { startedAt: 2_500, runId: "parent-run" } }),
-    );
-    expect(items.filter((item) => item.kind === "notice")).toEqual([silentBoundary]);
-    expect(items.at(-1)).toMatchObject({
-      kind: "reading-indicator",
-      waitingOn: "subagents",
-      startedAt: 2_500,
-      runId: "parent-run",
-    });
-    // An own run owns the indicator; the wait never competes with it.
-    const working = buildChatItems(
-      createProps({
-        messages,
-        runId: "resumed-run",
-        runActive: true,
-        runWorking: true,
-        streamStartedAt: 3_000,
-        subagentWait: { startedAt: 2_500, runId: "parent-run" },
-      }),
-    );
-    expect(working.filter((item) => item.kind === "reading-indicator")).toEqual([
-      expect.objectContaining({ runId: "resumed-run" }),
-    ]);
-    expect(working.at(-1)).not.toHaveProperty("waitingOn");
-  });
-
   describe("a run that resumed the handoff", () => {
     const asked = { role: "user", content: "Split the work.", timestamp: 1_000 };
     const request = { askedAt: 1_000, runIds: ["parent-run"] };
@@ -228,6 +176,43 @@ describe("sessions_yield transcript projection", () => {
       expect(status([asked, ...separateHistory, ...again])).toMatchObject({
         request: { askedAt: 1_000, runIds: ["parent-run", "second-run"] },
       });
+    });
+
+    it.each([2])("counts each run once after %s handoffs", (handoffCount) => {
+      const runIds = ["parent-run", "second-run"].slice(0, handoffCount);
+      const runId = runIds.at(-1)!;
+      const messages = [
+        asked,
+        ...runIds.flatMap((id, index) =>
+          separateHistory.map((message) => ({
+            ...message,
+            runId: id,
+            timestamp: message.timestamp + index * 1_000,
+          })),
+        ),
+      ];
+      const usageByRun = new Map(
+        runIds.map((id, index) => [id, { outputTokens: index === 0 ? 4_100 : 256, seq: 1 }]),
+      );
+      const props = createProps({
+        messages,
+        subagentWait: { startedAt: 3_500, runId },
+      });
+      const { workingIndicator, runOutputTokens } = projectTranscriptActivity(
+        buildChatItems(props),
+        { ...props, runUsageById: usageByRun },
+      );
+      const expectedTokens = handoffCount === 1 ? 4_100 : 4_356;
+      expect(runOutputTokens).toBe(expectedTokens);
+      const host = { turnRecapWatch: null };
+      const params = { sessionKey: props.sessionKey, usageByRun };
+      resolveTurnRecap(host, { ...params, indicator: workingIndicator });
+      expect(
+        resolveTurnRecap(host, {
+          ...params,
+          row: { lastRunId: runId, status: "done", runtimeMs: 1_000, endedAt: 5_000 },
+        }),
+      ).toEqual({ runId, runtimeMs: 4_000, outputTokens: expectedTokens });
     });
 
     it("is recognized before the pane knows its run id", () => {

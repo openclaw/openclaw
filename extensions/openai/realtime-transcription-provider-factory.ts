@@ -69,18 +69,18 @@ function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   return {
     apiKey:
       normalizeResolvedSecretInputString({
-        value: raw?.apiKey,
+        value: raw.apiKey,
         path: "plugins.entries.voice-call.config.streaming.providers.openai.apiKey",
       }) ??
       normalizeResolvedSecretInputString({
-        value: raw?.openaiApiKey,
+        value: raw.openaiApiKey,
         path: "plugins.entries.voice-call.config.streaming.openaiApiKey",
       }),
-    language: normalizeOptionalString(raw?.language),
-    model: normalizeOptionalString(raw?.model) ?? normalizeOptionalString(raw?.sttModel),
-    prompt: normalizeOptionalString(raw?.prompt),
-    silenceDurationMs: asSafeIntegerInRange(raw?.silenceDurationMs, { min: 0 }),
-    vadThreshold: asFiniteNumberInRange(raw?.vadThreshold, { min: 0, max: 1 }),
+    language: normalizeOptionalString(raw.language),
+    model: normalizeOptionalString(raw.model) ?? normalizeOptionalString(raw.sttModel),
+    prompt: normalizeOptionalString(raw.prompt),
+    silenceDurationMs: asSafeIntegerInRange(raw.silenceDurationMs, { min: 0 }),
+    vadThreshold: asFiniteNumberInRange(raw.vadThreshold, { min: 0, max: 1 }),
   };
 }
 
@@ -94,6 +94,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(
     defaultModel: OPENAI_REALTIME_TRANSCRIPTION_DEFAULT_MODEL,
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
+    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(
         normalizeProviderConfig(providerConfig).apiKey ||

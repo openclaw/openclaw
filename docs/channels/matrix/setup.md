@@ -95,6 +95,10 @@ Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invite
 }
 ```
 
+When an account stops or reloads, Matrix stops waiting for background tasks after
+30 seconds without task progress. A delayed task from the retired monitor cannot
+start a join or send through a client that is still serving another monitor.
+
 ### Group join introductions
 
 When the bot joins an allowed group room, it posts one introduction grounded in

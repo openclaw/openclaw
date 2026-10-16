@@ -186,7 +186,11 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
     }
 
     try {
-      const response = await getUpdates(token, { timeout: pollTimeout }, fetcher);
+      const response = await getUpdates(
+        token,
+        { timeout: pollTimeout, signal: abortSignal },
+        fetcher,
+      );
       if (isStopped() || abortSignal.aborted) {
         return undefined;
       }
@@ -285,8 +289,8 @@ async function handleImageMessage(
       });
       mediaPath = saved.path;
       mediaType = saved.contentType;
-    } catch (err) {
-      runtime.error?.(`[${account.accountId}] Failed to download Zalo image: ${String(err)}`);
+    } catch {
+      runtime.error?.(`[${account.accountId}] Failed to download Zalo image`);
     }
   }
 

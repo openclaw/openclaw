@@ -5,7 +5,6 @@ import { buildOpenAIResponsesReasoningReplayMetadata } from "../../packages/ai/s
 import {
   normalizeResponsesFailedEvent,
   summarizeResponsesPayload,
-  stringifyRedactedEvent,
 } from "../../packages/ai/src/transports/openai-responses-debug.js";
 import {
   buildOpenAIResponsesParams,
@@ -42,5 +41,4 @@ export const testing = {
   createResponsesStreamWithRecovery,
   resolveAzureOpenAIApiVersion,
   summarizeResponsesPayload,
-  stringifyRedactedEvent,
 };

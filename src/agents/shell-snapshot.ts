@@ -9,6 +9,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import { spawnProcess } from "../process/spawn-utils.js";
 
 const SNAPSHOT_VERSION = 1;
@@ -199,11 +200,8 @@ async function createShellSnapshot(
   void cleanupPromise;
 
   const snapshotPath = path.join(snapshotDir, `${key}.sh`);
-  if (
-    !forceRefresh &&
-    (await isFreshSnapshot(snapshotPath)) &&
-    (await validateSnapshot(opts, snapshotPath))
-  ) {
+  // Only validated captures are atomically published at this path.
+  if (!forceRefresh && (await isFreshSnapshot(snapshotPath))) {
     return snapshotPath;
   }
 
@@ -237,11 +235,6 @@ async function validateSnapshot(
   opts: ShellSnapshotWrapOptions,
   snapshotPath: string,
 ): Promise<boolean> {
-  try {
-    await fs.access(snapshotPath);
-  } catch {
-    return false;
-  }
   const exitCode = await runShell({
     shell: opts.shell,
     shellArgs: opts.shellArgs,
@@ -414,13 +407,15 @@ async function runShell(opts: {
   timeoutMs: number;
 }): Promise<number | null> {
   return await new Promise((resolve) => {
-    const child = spawnProcess(opts.shell, [...opts.shellArgs, opts.command], {
-      cwd: opts.cwd,
-      detached: process.platform !== "win32",
-      env: opts.env,
-      stdio: "ignore",
-      windowsHide: true,
-    });
+    const child = withChildProcessOperation("shell.snapshot", () =>
+      spawnProcess(opts.shell, [...opts.shellArgs, opts.command], {
+        cwd: opts.cwd,
+        detached: process.platform !== "win32",
+        env: opts.env,
+        stdio: "ignore",
+        windowsHide: true,
+      }),
+    );
     let settled = false;
     const finish = (status: number | null) => {
       if (settled) {

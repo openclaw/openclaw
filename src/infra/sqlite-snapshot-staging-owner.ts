@@ -8,6 +8,7 @@ import {
 } from "@openclaw/worker-runtime/lifecycle";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
@@ -27,6 +28,7 @@ import type {
   SqliteSnapshotStagingRequest,
   SqliteSnapshotStagingReply,
 } from "./sqlite-snapshot-staging.types.js";
+import { recordWorkerMessage } from "./worker-message-metrics.js";
 import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
@@ -66,7 +68,10 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       retainedTransport: true,
       nativeSource,
       nativeResource,
-      decodeResourceError: decodeSqliteSnapshotStagingError,
+      databaseAccess: "read-only",
+      decodeResourceError: (payload) =>
+        // SAFETY: The paired staging worker emits the SQLite codec in this opaque envelope.
+        decodeSqliteSnapshotStagingError(payload as OpenClawStateWorkerErrorPayload | undefined),
     },
   );
   const directories = new Map<string, SqliteSnapshotStagingDirectory>();
@@ -195,11 +200,12 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     const preparationId = ++preparationSequence;
     const inputBytes = Buffer.byteLength(JSON.stringify({ ...command, preparationId }));
     const cancellation = command.type === "prepare" ? new MessageChannel() : undefined;
-    const abort = () => cancellation?.port1.postMessage({ type: "abort" });
-    signal?.addEventListener("abort", abort, { once: true });
-    if (signal?.aborted) {
-      abort();
-    }
+    const abort = () => {
+      if (cancellation) {
+        cancellation.port1.postMessage({ type: "abort" });
+        recordWorkerMessage("resource", "to_worker");
+      }
+    };
     const input: SqliteSnapshotStagingCommand =
       command.type === "prepare" && cancellation
         ? { ...command, preparationId, abortPort: cancellation.port2 }
@@ -225,6 +231,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
             throw unavailable.error;
           }
           signal?.throwIfAborted();
+          signal?.addEventListener("abort", abort, { once: true });
           return input;
         },
         { inputBytes, transferList: () => (cancellation ? [cancellation.port2] : []) },

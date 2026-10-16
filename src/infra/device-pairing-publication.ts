@@ -20,9 +20,10 @@ type Publication = {
   epoch: number;
   revision?: string;
   blocked: boolean;
-  mutation?: { invalidatesAuthority: boolean };
+  mutation?: object;
   complete: boolean;
   rows: Map<string, DevicePairingBinding | null>;
+  devices: Map<string, PairedDevice | null>;
   nodes?: DevicePairingNodeSnapshot;
   pending: Set<() => void>;
 };
@@ -65,6 +66,8 @@ export function invalidateDevicePairingNodeSnapshot(path: string): void {
   if (publication) {
     publication.epoch++;
     publication.nodes = undefined;
+    publication.devices.clear();
+    publication.complete = false;
   }
 }
 
@@ -88,6 +91,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       blocked: false,
       complete: false,
       rows: new Map(),
+      devices: new Map(),
       pending: new Set(),
     };
   }
@@ -99,9 +103,23 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
   const install = (rows: readonly DevicePairingBindingFact[]) => {
     for (const row of rows) {
       captured.rows.set(row.deviceId, row.binding ? { ...row.binding } : null);
+      captured.devices.set(row.deviceId, structuredClone(row.device));
     }
   };
   return {
+    readDevice(deviceId: string) {
+      for (const service of captured.pending) {
+        service();
+      }
+      if (publications.get(path) !== captured || captured.blocked) {
+        return undefined;
+      }
+      const device = captured.devices.get(deviceId);
+      // Public callers own mutable rows; never lend them the authorization publication.
+      return device === undefined && !captured.complete
+        ? undefined
+        : structuredClone(device ?? null);
+    },
     isCurrent: () =>
       publications.get(path) === captured && captured.epoch === epoch && !captured.mutation,
     completeRevision: () =>
@@ -138,13 +156,16 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
         captured.blocked = false;
         return true;
       }
+      // Rows are per-device facts: receipts and each device's own lookup refresh them, so a
+      // revision this cache missed leaves unrelated nodes known; only a full list replaces all.
       if (captured.revision !== revision) {
         captured.epoch++;
         captured.nodes = undefined;
-      }
-      if (complete || captured.revision !== revision) {
-        captured.rows.clear();
         captured.complete = false;
+      }
+      if (complete) {
+        captured.rows.clear();
+        captured.devices.clear();
       }
       captured.revision = revision;
       install(rows);
@@ -176,19 +197,16 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       }
       return captured.nodes;
     },
-    beginMutation(invalidatesAuthority: boolean) {
+    beginMutation() {
       captured.epoch++;
-      const mutation: NonNullable<Publication["mutation"]> = { invalidatesAuthority };
+      const mutation = {};
       captured.mutation = mutation;
       return {
         publish(receipt: DevicePairingCommitReceipt) {
           if (publications.get(path) !== captured || captured.mutation !== mutation) {
             return;
           }
-          if (receipt.beforeRevision !== captured.revision) {
-            captured.complete = false;
-            captured.rows.clear();
-          }
+          captured.complete &&= receipt.beforeRevision === captured.revision;
           if (receipt.revision !== captured.revision) {
             captured.nodes = undefined;
           }
@@ -216,7 +234,12 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
   };
 }
 
-/** Unknown facts suppress use without declaring an otherwise live node revoked. */
+/**
+ * Unknown facts suppress use without declaring an otherwise live node revoked.
+ * In-flight writes are not unknown: rows stay authoritative until COMMIT, and the pending
+ * services below install a committed receipt before this read. Gateway revocations also
+ * retire live clients directly.
+ */
 export function getPublishedPairedDeviceBinding(
   deviceId: string,
   baseDir?: string,
@@ -231,7 +254,6 @@ export function getPublishedPairedDeviceBinding(
   if (
     !publication ||
     publication.blocked ||
-    publication.mutation?.invalidatesAuthority ||
     (!publication.complete && !publication.rows.has(deviceId))
   ) {
     throw new Error("Device pairing authority requires a current worker publication");

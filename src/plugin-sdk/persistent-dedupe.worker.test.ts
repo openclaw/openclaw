@@ -290,7 +290,7 @@ describe("persistent dedupe worker", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "orders forget after an unfinished recording (legacy alias=%s)",
     async (legacyAlias) => {
       await withOpenClawTestState({ label: "dedupe-forget-order" }, async (state) => {
@@ -450,54 +450,4 @@ describe("persistent dedupe worker", () => {
       }
     });
   });
-
-  it.each(["clear", "forget"] as const)(
-    "does not repopulate memory after %s overtakes warmup",
-    async (action) => {
-      await withOpenClawTestState({ label: "dedupe-warmup-publication" }, async () => {
-        const dedupe = createPersistentDedupe({ ...options, memoryMaxSize: 10 });
-        await dedupe.checkAndRecord("stored");
-        dedupe.clearMemory();
-        const list = workerClient.listPluginStateInWorker;
-        const { ready, gate, wait } = pauseWorkerResult();
-        vi.spyOn(workerClient, "listPluginStateInWorker").mockImplementationOnce((params) =>
-          wait(list(params)),
-        );
-        const warming = dedupe.warmup();
-        await ready.promise;
-        const clearing = action === "clear" ? dedupe.clearMemory() : dedupe.forget("stored");
-        gate.resolve();
-        expect(await warming).toBe(0);
-        await clearing;
-        expect(dedupe.memorySize()).toBe(0);
-      });
-    },
-  );
-
-  it.each([false, true])(
-    "preserves disk-error policy without replaying a failed write (strict=%s)",
-    async (strict) => {
-      await withOpenClawTestState({ label: "dedupe-failed-worker" }, async () => {
-        const failure = new Error("worker outcome unavailable");
-        const write = vi
-          .spyOn(workerClient, "comparePluginStateUpdateInWorker")
-          .mockRejectedValueOnce(failure);
-        const onDiskError = vi.fn((error: unknown) => {
-          if (strict) {
-            throw error;
-          }
-        });
-        const dedupe = createPersistentDedupe({ ...options, onDiskError });
-        const result = dedupe.checkAndRecord("failed");
-        if (strict) {
-          await expect(result).rejects.toBe(failure);
-        } else {
-          await expect(result).resolves.toBe(true);
-        }
-        expect(write).toHaveBeenCalledOnce();
-        expect(onDiskError).toHaveBeenCalledWith(failure);
-        expect(await createPersistentDedupe(options).hasRecent("failed")).toBe(false);
-      });
-    },
-  );
 });

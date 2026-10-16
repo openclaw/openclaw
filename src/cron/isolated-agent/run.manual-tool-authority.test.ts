@@ -3,8 +3,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
+import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -37,10 +39,12 @@ import {
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronDeliveryPlanMock,
+  resolveConfiguredModelRefMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const { resolveAgentDir } = await import("./run.runtime.js");
 installRequesterCronAuthorityTestHooks();
 
 beforeEach(() => {
@@ -56,8 +60,18 @@ afterEach(() => {
 });
 
 describe("manual run tool authority after the initiating invocation closes", () => {
-  it.each<{ name: string; toolsAllow: string[]; withdraw?: "disable" | "remove" }>([
+  it.each<{
+    name: string;
+    toolsAllow: string[];
+    withdraw?: "disable" | "remove";
+    senderIsOwner?: boolean;
+  }>([
     { name: "allowed tool reaches its handler", toolsAllow: [AUTOMATIONS_TOOL_NAME] },
+    {
+      name: "senderless scheduled run can inspect its own job",
+      toolsAllow: [AUTOMATIONS_TOOL_NAME],
+      senderIsOwner: false,
+    },
     { name: "tool outside the stored allowlist is absent", toolsAllow: ["read"] },
     {
       name: "disabling the job rejects the pending tool call",
@@ -69,16 +83,34 @@ describe("manual run tool authority after the initiating invocation closes", () 
       toolsAllow: [AUTOMATIONS_TOOL_NAME],
       withdraw: "remove",
     },
-  ])("$name", async ({ toolsAllow, withdraw }) => {
+  ])("$name", async ({ toolsAllow, withdraw, senderIsOwner }) => {
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
     const config: OpenClawConfig = {
       ...cfg,
+      models: createEmbeddedAgentRunnerOpenAiConfig(["gpt-4.1"]).models,
       agents: {
-        defaults: { skipBootstrap: true, workspace: stateDir },
-        entries: { main: { workspace: stateDir } },
+        defaults: { skipBootstrap: true, workspace: stateDir, model: "openai/gpt-4.1" },
+        entries: { main: { agentDir, workspace: stateDir } },
+      },
+      auth: {
+        profiles: { "openai:cron-fixture": { provider: "openai", mode: "api_key" } },
+        order: { openai: ["openai:cron-fixture"] },
       },
       tools: { allow: [AUTOMATIONS_TOOL_NAME, "read"] },
     };
     setRuntimeConfigSnapshot(config);
+    // Capture and execution must address the same canonical credential owner.
+    vi.mocked(resolveAgentDir).mockReturnValue(agentDir);
+    resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
+    await persistAuthProfileBatch({
+      stateDir,
+      profiles: [
+        {
+          profileId: "openai:cron-fixture",
+          credential: { type: "api_key", provider: "openai", key: "gpt-4.1-key" },
+        },
+      ],
+    });
     const fixture = createCronFixture(undefined, config);
     const { context } = fixture;
     context.resolveGatewayContext = () => context;
@@ -136,6 +168,9 @@ describe("manual run tool authority after the initiating invocation closes", () 
           cwd: params.cwd,
           abortSignal: params.abortSignal,
           runtimeToolAllowlist: params.toolsAllow,
+          ...(senderIsOwner === false
+            ? { senderIsOwner, trigger: params.trigger, jobId: params.jobId }
+            : {}),
           scheduledToolPolicy: params.scheduledToolPolicy,
           toolConstructionPlan: {
             includeBaseCodingTools: true,
@@ -242,7 +277,10 @@ describe("manual run tool authority after the initiating invocation closes", () 
         expect(toolError).toBeUndefined();
         expect(listHandler).toHaveBeenCalledOnce();
         // The run gets the job's restricted inventory, not the admin caller's.
-        expect(toolResult).toMatchObject({ details: { scope: "caller", jobs: [] } });
+        expect(toolResult).toMatchObject({
+          details:
+            senderIsOwner === false ? { jobs: [{ id: jobId }] } : { scope: "caller", jobs: [] },
+        });
         expect(finishedEvent.status).toBe("ok");
       }
     } finally {

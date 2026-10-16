@@ -65,6 +65,7 @@ export function createPackageUpdateDoctorCompletion(params: DoctorCompletionOpti
         markPackagePostInstallDoctorAdvisory(
           {
             ...doctorStep,
+            deferredInspectionCheckIds: doctorResult?.deferredInspectionCheckIds ?? null,
             ...(doctorResult?.configChanges?.length
               ? { configChanges: doctorResult.configChanges }
               : {}),
@@ -199,6 +200,7 @@ export function createPackageUpdateDoctorCompletion(params: DoctorCompletionOpti
       diagnostics: doctorStep.diagnostics,
       failureFacts: doctorStep.failureFacts,
       doctorLintFindings: doctorStep.doctorLintFindings,
+      deferredInspectionCheckIds: doctorStep.deferredInspectionCheckIds,
       configChanges: doctorStep.configChanges,
       configWriteRefusal: doctorStep.configWriteRefusal,
     });

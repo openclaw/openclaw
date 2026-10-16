@@ -1,15 +1,17 @@
-import { randomInt } from "node:crypto";
 // Inference backend detection shared by onboarding bootstrap and OpenClaw setup.
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import {
-  readCodexCliCredentialsCached,
+  hasCodexCliAuthFile,
   readGeminiCliCredentialsCached,
   resolveCodexCliHomePath,
 } from "../agents/cli-credentials.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import {
+  resolveConfiguredRouteModelLabel,
+  resolveDefaultModelForAgent,
+} from "../agents/model-selection.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -40,9 +42,8 @@ export {
 
 type DetectInferenceBackendsDeps = {
   probeLocalCommand?: typeof probeLocalCommand;
-  readCodexCliCredentials?: () => { type: string } | null;
+  hasCodexCliAuthFile?: () => boolean;
   readGeminiCliCredentials?: () => { type: string } | null;
-  randomInt?: (maxExclusive: number) => number;
 };
 
 type DetectInferenceBackendsOptions = {
@@ -52,21 +53,6 @@ type DetectInferenceBackendsOptions = {
   platform?: NodeJS.Platform;
   deps?: DetectInferenceBackendsDeps;
 };
-
-function randomizeClaudeCodexTie(
-  candidates: InferenceBackendCandidate[],
-  pickRandomInt: (maxExclusive: number) => number,
-): void {
-  const claudeIndex = candidates.findIndex((candidate) => candidate.kind === "claude-cli");
-  const codexIndex = candidates.findIndex((candidate) => candidate.kind === "codex-cli");
-  if (claudeIndex === -1 || codexIndex === -1 || pickRandomInt(2) === 0) {
-    return;
-  }
-  const claudeCandidate = candidates[claudeIndex];
-  const codexCandidate = candidates[codexIndex];
-  candidates[claudeIndex] = expectDefined(codexCandidate, "Codex onboarding candidate");
-  candidates[codexIndex] = expectDefined(claudeCandidate, "Claude onboarding candidate");
-}
 
 // ChatGPT.app is the current desktop owner; keep Codex stable/beta as fallbacks.
 const CODEX_MACOS_APP_NAMES = ["ChatGPT.app", "Codex.app", "Codex Beta.app"] as const;
@@ -112,19 +98,14 @@ export async function detectInferenceBackends(
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const probe = options.deps?.probeLocalCommand ?? probeLocalCommand;
-  const readCodex =
-    options.deps?.readCodexCliCredentials ??
+  const hasCodexLogin =
+    options.deps?.hasCodexCliAuthFile ??
     (() => {
       const home = resolveOsHomeDir(env, env === process.env ? os.homedir : () => "");
       if (!home && !env.CODEX_HOME?.trim()) {
-        return null;
+        return false;
       }
-      return readCodexCliCredentialsCached({
-        codexHome: resolveCodexCliHomePath(undefined, env),
-        platform,
-        allowKeychainPrompt: false,
-        ttlMs: 60_000,
-      });
+      return hasCodexCliAuthFile(resolveCodexCliHomePath(undefined, env));
     });
   const readGemini =
     options.deps?.readGeminiCliCredentials ??
@@ -146,7 +127,12 @@ export async function detectInferenceBackends(
       cfg: options.config ?? {},
       ...(defaultAgentId ? { agentId: defaultAgentId } : {}),
     });
-    const modelRef = `${resolved.provider}/${resolved.model}`;
+    const profileId = splitTrailingAuthProfile(existingModel).profile;
+    const modelRef = resolveConfiguredRouteModelLabel({
+      configuredRef: existingModel,
+      resolved,
+      ...(profileId ? { profileId } : {}),
+    });
     candidates.push({
       kind: "existing-model",
       // Approval and activation bind to the executable target, not a mutable
@@ -173,17 +159,20 @@ export async function detectInferenceBackends(
       detail: "installed; login status unverified",
     });
   }
-  if (codexProbe.found && !codexProbe.timedOut) {
-    const storedCredentials = readCodex() !== null;
+  const storedCodexCredentials = hasCodexLogin();
+  if ((codexProbe.found && !codexProbe.timedOut) || storedCodexCredentials) {
     // Native status starts provider initialization (including migrations and
     // token refresh). A saved record proves neither the active store nor login.
     cliCandidates.push({
       kind: "codex-cli",
       modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
       label: "Codex",
-      detail: storedCredentials
-        ? "installed; stored credentials found; login status unverified"
+      detail: storedCodexCredentials
+        ? codexProbe.found && !codexProbe.timedOut
+          ? "installed; stored credentials found; login status unverified"
+          : "stored credentials found; runtime installation required"
         : "installed; login status unverified",
+      credentials: storedCodexCredentials,
     });
   }
   if (geminiProbe.found && !geminiProbe.timedOut) {
@@ -200,7 +189,5 @@ export async function detectInferenceBackends(
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
-  // Stored CLI credentials do not establish a verified subscription.
-  randomizeClaudeCodexTie(cliCandidates, options.deps?.randomInt ?? randomInt);
   return [...candidates, ...envCandidates, ...cliCandidates];
 }

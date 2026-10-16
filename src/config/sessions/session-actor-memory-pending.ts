@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { classifyAgentRunTerminalOutcome } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
@@ -150,7 +150,8 @@ export function createSessionActorMemoryPending(
           row.session_id === query.sessionId &&
           row.consumed_event_id === null,
       );
-      const total = query.id === undefined ? rows.length : undefined;
+      const total =
+        query.id === undefined && query.includeTotal !== false ? rows.length : undefined;
       if (total === 0) {
         return { rows: [], total };
       }

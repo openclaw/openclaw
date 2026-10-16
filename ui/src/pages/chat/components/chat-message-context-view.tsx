@@ -8,10 +8,6 @@ registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 const fields = ["title", "page", "agentId", "workspace", "file", "selection"] as const;
 
-export function renderSolidMessageWorkContext(message: unknown) {
-  return <MessageWorkContext message={message} />;
-}
-
 export function MessageWorkContext(props: { message: unknown }) {
   const attached = createMemo(() => readMessageWorkContext(props.message));
   const snapshot = () => attached()!.snapshot;

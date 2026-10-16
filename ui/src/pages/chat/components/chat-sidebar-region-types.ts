@@ -1,19 +1,26 @@
-import { nothing, type TemplateResult } from "lit";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
-import type { SidebarSlotId } from "../sidebar-layout.ts";
+import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import {
+  emptyLegacyContent,
+  type LegacyTemplateResult,
+  type LegacyDirectiveResult,
+} from "../../../lit/solid-content.tsx";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
+import type { SidebarLayout, SidebarSlotId } from "../sidebar-layout.ts";
 
 export type SidebarPanelDefinition = {
   slot: SidebarSlotId;
   label: string;
-  icon: TemplateResult;
+  icon: LegacyTemplateResult;
   shortcut?: KeyboardShortcutCombo;
   available: boolean;
-  content: TemplateResult | typeof nothing | null;
-  loading: TemplateResult;
-  headerAction?: TemplateResult;
+  content: LegacyTemplateResult | LegacyDirectiveResult | typeof emptyLegacyContent | null;
+  loading: LegacyTemplateResult | LegacyDirectiveResult;
+  headerAction?: LegacyTemplateResult | LegacyDirectiveResult;
+  headerLink?: { href: string; label: string };
   empty: {
     description: string;
-    action?: TemplateResult;
+    action?: LegacyTemplateResult;
   };
 };
 
@@ -26,3 +33,21 @@ export type SidebarRegionCallbacks = {
   resizePanel: (columnId: string, size: number) => void;
   setOpen: (open: boolean) => void;
 };
+
+export type RegionProps = {
+  panelIdPrefix: string;
+  conversationTab?: Pick<SidebarPanelDefinition, "label"> & {
+    icon: LegacyTemplateResult | LegacyDirectiveResult;
+  };
+  layout: SidebarLayout;
+  panelDefinitions: SidebarPanelDefinition[];
+  fetchFavicon?: LinkFaviconFetcher;
+  callbacks: SidebarRegionCallbacks | null;
+  narrow: boolean;
+  sideFocusLocked: boolean;
+  sideFocusManaged?: boolean;
+  sideFocusOrigin?: () => HTMLElement | null;
+  availableWidth: number;
+};
+export type RegionMethods = { deliverPanelEvent: (slot: SidebarSlotId, event: Event) => boolean };
+export type RegionElement = SolidBridgeElement<RegionProps, RegionMethods>;

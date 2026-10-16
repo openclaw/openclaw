@@ -4,11 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
-import type {
-  GatewayScheduler,
-  GatewayScheduledJob,
-  GatewaySchedulerScope,
-} from "../../infra/gateway-scheduler.js";
+import type { GatewayScheduler, GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
@@ -114,6 +110,8 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
+  /** Host-owned, read-only diagnostics before startup recovery can dispatch loaded jobs. */
+  describeJobLoadWarning?: (job: CronStoredJob) => string | undefined;
   /** List enabled, configured channel ids without exposing channel machinery to cron core. */
   listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
   evaluateCronTrigger?: (params: {
@@ -131,7 +129,7 @@ export type CronServiceDeps = {
   resolveDefaultAgentId?: () => string | undefined;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[] | Promise<string[]>;
-  /** Revalidate resident policy using the supplied transaction or worker deletion facts. */
+  /** Revalidate resident policy using the worker's deletion facts. */
   isAgentAvailable?: CronAgentAvailability;
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
@@ -257,9 +255,11 @@ export type CronServiceDeps = {
     /** Persists the transport-owned terminal fact before Gateway work admission releases. */
     onDeliverySettled: (outcome: CronFailureNotificationDelivery) => Promise<void>;
   }) => Promise<void>;
+  /** Uses the same resolved timeout as the owner-conversation agent turn. */
+  failureRepairTimeoutMs?: number;
   /**
-   * Starts one ordinary turn in the conversation that owns a failing job, as if that
-   * conversation had received `message`; its reply goes to the conversation's own route.
+   * Runs one ordinary turn in the conversation that owns a failing job, resolving
+   * only after settlement; its authored reply goes to the conversation's own route.
    */
   runCronFailureRepair?: (request: CronFailureRepairRequest) => Promise<void>;
   onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
@@ -269,6 +269,7 @@ export type CronServiceDeps = {
 export type CronFailureRepairRequest = {
   jobId: string;
   repairId: string;
+  timeoutMs: number;
   agentId?: string;
   sessionKey: string;
   message: string;
@@ -278,7 +279,6 @@ export type CronExecutionIdentityAdmission = {
   ingress: ExecutionIdentityAdmissionFacts["ingress"];
   invoker?: ExecutionIdentityAdmissionFacts["invoker"];
   onPostAdmission?: (context: AdmittedRunContext) => void | Promise<void>;
-  onExecutionStarted?: () => void | Promise<void>;
 };
 
 type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
@@ -287,7 +287,7 @@ type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
 
 /** Dependencies consumed by job policy before its mutation is committed. */
 export type CronJobPolicyContext = {
-  deps: Pick<CronServiceDepsInternal, "cronConfig" | "nowMs" | "log">;
+  deps: Pick<CronServiceDepsInternal, "cronConfig" | "nowMs" | "log" | "failureRepairTimeoutMs">;
   /** Resolved by the host for this exact job while its recovery transaction holds the row. */
   preparedFailureAlert?: { jobId: string; value: ResolvedFailureAlert | null };
 };
@@ -313,20 +313,14 @@ export type CronServiceState = {
   /** Last known durable wake for each persisted job. Map presence distinguishes
    * a durably unscheduled job from one that is not part of durable topology. */
   durableNextRunAtMsByJobId: Map<string, number | undefined>;
-  timer: GatewayScheduledJob | null;
   schedulerScope: GatewaySchedulerScope;
   /** Retains stopped generations while an immediate restart admits new work. */
   schedulerDrain: Promise<void>;
-  running: boolean;
-  /** Number of timer batches currently executing admitted scheduled work. */
-  activeTimerTicks: number;
   stopped: boolean;
   /** Rotates synchronously on stop so an immediate restart cannot revive old work. */
   lifecycleGeneration: number;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
-  /** Owns scheduled-tick exclusion until startup catch-up publishes deferred slots. */
-  startupCatchup?: object;
   activeManualRunJobIds: Set<string>;
   /** Accepted manual runs until their terminal history row is written, keyed by runId. */
   queuedManualRuns: Map<string, Promise<unknown>>;
@@ -353,11 +347,8 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     deps: { ...deps, defaultAgentId, nowMs: deps.nowMs ?? (() => deps.scheduler.now()) },
     store: null,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
-    timer: null,
     schedulerScope: deps.scheduler.scope(),
     schedulerDrain: Promise.resolve(),
-    running: false,
-    activeTimerTicks: 0,
     stopped: false,
     lifecycleGeneration: 0,
     schedulingPaused: false,
@@ -443,6 +434,7 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  inferenceBinding?: CronStoredJob["inferenceBinding"];
   sourceConversation?: CronStoredJob["sourceConversation"];
   /** Selected revisions captured from a validated caller session, never public input. */
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
@@ -467,7 +459,11 @@ export type CronUpdateInput = CronJobPatch;
 /** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
 export type CronUpdateOptions = Pick<
   CronAddOptions,
-  "toolsAllowProvenance" | "toolsAllowExecTarget" | "commitGuard" | "captureRuntimeAuthority"
+  | "toolsAllowProvenance"
+  | "toolsAllowExecTarget"
+  | "commitGuard"
+  | "captureRuntimeAuthority"
+  | "inferenceBinding"
 > & {
   /** Null forbids policy adoption; undefined retains in-process operator defaults. */
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
@@ -476,6 +472,11 @@ export type CronUpdateOptions = Pick<
 export type CronCommitGuardOptions = {
   /** Synchronous Gateway-owned liveness check repeated at mutation admission and commit. */
   commitGuard?: () => void;
+};
+export type CronRemoveOptions = CronCommitGuardOptions & {
+  systemOwned?: boolean;
+  /** The reviewed definition must still match at the store lock and durable commit. */
+  expectedConfigRevision?: string;
 };
 /** Cron-store-locked guard evaluated against the current job before an update applies. */
 export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

@@ -79,6 +79,8 @@ async function createStartupFailureFixture(
       '          : message.method === "skills/list"',
       "            ? { data: [] }",
       `            : ${JSON.stringify(threadStartResult("thread-recovered", "/repo"))};`,
+      // Managed resume requires an unloaded thread before it can reach the overload rejection.
+      '    if (message.method === "thread/read") result.thread.status = { type: "notLoaded" };',
       "    process.stdout.write(`${JSON.stringify({ id: message.id, result })}\\n`);",
       "  });",
       "}",
@@ -185,7 +187,9 @@ describe("Codex app-server startup retry", () => {
             await ready;
             expect(child.exitCode).toBeNull();
             expect(child.signalCode).toBeNull();
-            return failure === "snapshot" ? readSnapshot(Date.now() - 1) : readSnapshot(...args);
+            return failure === "snapshot"
+              ? readSnapshot(performance.now() - 1)
+              : readSnapshot(...args);
           });
         const commandSpy = vi
           .spyOn(processSnapshot, "readCodexAppServerProcessCommand")
@@ -198,7 +202,7 @@ describe("Codex app-server startup retry", () => {
                 store.register(`capacity-${index}`, {});
               }
             }
-            return failure === "command" ? readCommand(args[0], Date.now() - 1) : command;
+            return failure === "command" ? readCommand(args[0], performance.now() - 1) : command;
           });
         try {
           const error = await startFixtureAttempt(

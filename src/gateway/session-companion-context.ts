@@ -4,11 +4,9 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { collectTextContentBlocks } from "../agents/content-blocks.js";
 import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
 import { getRuntimeConfig } from "../config/io.js";
-import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../config/sessions/session-incognito-binding.js";
-import { redactToolPayloadText } from "../logging/redact.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   selectSessionCompanionReferenceItems,
   type SessionCompanionContextMessage,
@@ -38,10 +36,7 @@ export type SessionCompanionContextReader = {
 };
 
 function normalizeContextText(value: string): string {
-  return truncateUtf16Safe(
-    redactToolPayloadText(value).replace(/\s+/gu, " ").trim(),
-    CONTEXT_MESSAGE_MAX_CHARS,
-  );
+  return truncateUtf16Safe(value.replace(/\s+/gu, " ").trim(), CONTEXT_MESSAGE_MAX_CHARS);
 }
 
 function extractUserText(message: unknown): string | undefined {
@@ -79,21 +74,25 @@ async function readSessionCompanionContext(params: {
   sessionKey: string;
   signal?: AbortSignal;
 }): Promise<SessionCompanionContextReadResult> {
-  const binding = captureIncognitoSessionSource(params);
-  if (binding) {
-    return withIncognitoSessionEntry(
-      binding,
-      params.sessionKey,
-      () => params.signal?.throwIfAborted(),
-      (entry, assertCurrent) =>
-        readSessionCompanionContextFromEntry(
-          params,
-          {
-            entry,
-            storePath: "kind" in binding ? binding.path : binding.actor.path,
-          },
-          assertCurrent,
-        ),
+  if (isIncognitoSessionKey(params.sessionKey)) {
+    const assertCurrent = () => params.signal?.throwIfAborted();
+    return (
+      (await withSessionActorStorage(
+        params,
+        {
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
+          authority: { assertCurrent, authorize: assertCurrent },
+        },
+        ({ actor, authority, path }) =>
+          readSessionCompanionContextFromEntry(
+            params,
+            { entry: actor.snapshot(authority)?.entry, storePath: path },
+            () => {
+              assertCurrent();
+              actor.assertReadable();
+            },
+          ),
+      )) ?? { kind: "missing" }
     );
   }
   return readSessionCompanionContextFromEntry(
@@ -193,11 +192,9 @@ async function readSessionCompanionContextFromEntry(
 
 export const defaultSessionCompanionContextReader: SessionCompanionContextReader = {
   currentSessionId: async ({ agentId, sessionKey }) => {
-    const binding = captureIncognitoSessionSource({ agentId, sessionKey });
-    if (binding) {
-      return "kind" in binding
-        ? undefined
-        : binding.actor.sessions.readSharing(sessionKey)?.entry?.sessionId?.trim();
+    const memory = captureSessionEntryMetadataRead({ agentId, sessionKey }, () => {});
+    if (memory) {
+      return memory.readCurrent()?.sessionId?.trim();
     }
     const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
       cfg: getRuntimeConfig(),

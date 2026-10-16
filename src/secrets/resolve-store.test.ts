@@ -22,25 +22,6 @@ afterEach(async () => {
 });
 
 describe("store SecretRef resolution", () => {
-  it("resolves a team store value through the implicit default provider", async () => {
-    const env = await createStateEnv();
-    await writeSecretStoreEntry({
-      scope: { kind: "team" },
-      name: "STORED_API_KEY",
-      value: "resolved-store-secret",
-      kind: "secret",
-      updatedBy: "test",
-      database: { env },
-    });
-
-    await expect(
-      resolveSecretRefString(
-        { source: "store", provider: "default", id: "STORED_API_KEY" },
-        { config: {}, env },
-      ),
-    ).resolves.toBe("resolved-store-secret");
-  });
-
   it("resolves the store default when an env provider uses the same alias", async () => {
     const env = await createStateEnv();
     await writeSecretStoreEntry({

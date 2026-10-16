@@ -49,10 +49,13 @@ export function prepareCommandSessionRecoveryEntry(
       ...params,
       hasDeliveryContext: Boolean(params.deliveryContext),
     });
-  const directOperatorSource =
-    !sourceOptions.sourceRunId &&
+  const operatorSource =
     entry.restartRecoveryDeliveryRunId !== runId &&
-    (!opts.inputProvenance || opts.inputProvenance.kind === "external_user")
+    ((!sourceOptions.sourceRunId &&
+      (!opts.inputProvenance || opts.inputProvenance.kind === "external_user")) ||
+      (sourceOptions.sourceRunId === runId &&
+        opts.inputProvenance?.kind === "inter_session" &&
+        opts.inputProvenance.sourceTool === "subagent_settle"))
       ? createRestartRecoveryOperatorSource({
           authority: opts.operatorAuthority,
           entry: { ...entry, sessionId },
@@ -90,11 +93,11 @@ export function prepareCommandSessionRecoveryEntry(
         runId,
         harnessCompletion,
         ...sourceOptions,
-        ...(directOperatorSource
+        ...(operatorSource
           ? {
-              operatorSource: directOperatorSource,
+              operatorSource,
               sourceRunId: runId,
-              sourceIngress: directOperatorSource.snapshot.sourceIngress,
+              sourceIngress: sourceOptions.sourceIngress ?? operatorSource.snapshot.sourceIngress,
             }
           : {}),
         suppressTextDelivery: opts.internalDeliverySuppressText,
@@ -174,11 +177,11 @@ export async function prepareEmbeddedSessionState(params: {
   const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
   const [
     { getRemoteSkillEligibility, resolveReusableWorkspaceSkillSnapshot },
-    { resolveNodeExecEligibility },
+    { resolveNodeExecEligibilityAsync },
   ] = await Promise.all([loadSkillsRuntime(), loadExecDefaultsRuntime()]);
-  const nodeSkillsEligibility = resolveNodeExecEligibility({
+  const nodeSkillsEligibility = await resolveNodeExecEligibilityAsync({
     cfg: params.cfg,
-    sessionEntry,
+    sessionEntry: sessionEntry ?? null,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
   });
@@ -212,47 +215,44 @@ export async function prepareEmbeddedSessionState(params: {
   const skillsSnapshot = skillSnapshotState.snapshot;
 
   const { sessionStore, sessionKey } = params;
-  if (sessionStore && sessionKey && !params.suppressVisibleSessionEffects) {
-    const persistUpdate = (
-      initialEntry: SessionEntry | undefined,
-      update: (entry: SessionEntry, now: number) => void,
-    ) => {
-      const now = Date.now();
-      const entry = initialEntry ?? {
-        sessionId: params.sessionId,
-        updatedAt: now,
-        sessionStartedAt: now,
-      };
-      const next: SessionEntry = {
-        ...entry,
-        sessionId: params.sessionId,
-        updatedAt: now,
-        sessionStartedAt: entry.sessionStartedAt ?? now,
-      };
-      update(next, now);
-      return persistAgentSession({
-        agentId: params.sessionAgentId,
-        sessionStore,
-        sessionKey,
-        storePath: params.storePath,
-        initialEntry: entry,
-        entry: next,
-      });
+  const updateSkills = skillsSnapshot !== undefined && needsSkillsSnapshot;
+  const touchSession =
+    params.opts.skipInitialSessionTouch !== true || Boolean(params.verboseOverride);
+  if (
+    sessionStore &&
+    sessionKey &&
+    !params.suppressVisibleSessionEffects &&
+    (updateSkills || touchSession)
+  ) {
+    const now = Date.now();
+    const entry = (updateSkills ? sessionEntry : (sessionStore[sessionKey] ?? sessionEntry)) ?? {
+      sessionId: params.sessionId,
+      updatedAt: now,
+      sessionStartedAt: now,
     };
-    if (skillsSnapshot && needsSkillsSnapshot) {
-      sessionEntry = await persistUpdate(sessionEntry, (next) => {
-        next.skillsSnapshot = skillsSnapshot;
-      });
+    const next: SessionEntry = {
+      ...entry,
+      sessionId: params.sessionId,
+      updatedAt: now,
+      sessionStartedAt: entry.sessionStartedAt ?? now,
+    };
+    if (updateSkills) {
+      next.skillsSnapshot = skillsSnapshot;
     }
-
     // Persist non-model-dependent state first; thinking waits for runtime validation.
-    if (params.opts.skipInitialSessionTouch !== true || Boolean(params.verboseOverride)) {
-      sessionEntry = await persistUpdate(sessionStore[sessionKey] ?? sessionEntry, (next, now) => {
-        next.lastInteractionAt = now;
-        next.agentStatus = undefined;
-        applyVerboseOverride(next, params.verboseOverride);
-      });
+    if (touchSession) {
+      next.lastInteractionAt = now;
+      next.agentStatus = undefined;
+      applyVerboseOverride(next, params.verboseOverride);
     }
+    sessionEntry = await persistAgentSession({
+      agentId: params.sessionAgentId,
+      sessionStore,
+      sessionKey,
+      storePath: params.storePath,
+      initialEntry: entry,
+      entry: next,
+    });
   }
   if (params.sessionKey && !params.isSubagentLaneTurn) {
     const assertSignalCurrent = () => {

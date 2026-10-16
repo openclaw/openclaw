@@ -1,6 +1,10 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import * as terminalState from "../../sessions/subagent-terminal-state.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -17,8 +21,10 @@ import {
 
 describe("ACP terminal state signals", () => {
   installAcpSessionManagerTestLifecycle();
+  afterEach(() => clearRuntimeConfigSnapshot());
 
   function setupParentedTurn(childSessionKey: string) {
+    setRuntimeConfigSnapshot(baseCfg);
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",

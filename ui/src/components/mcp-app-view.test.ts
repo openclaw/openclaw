@@ -1,8 +1,7 @@
 import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol";
-import { createComponent } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createComponent, flush } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
-import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
@@ -10,6 +9,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
+import { createMcpBridgeFixture } from "../test-helpers/mcp-app-view-bridge.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -21,7 +21,7 @@ import {
   type McpAppContextState,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
-import type { McpAppViewElement } from "./mcp-app-view-controller.ts";
+import { mountView } from "./mcp-app-view.test-support.ts";
 import { McpAppPanel, type McpAppPanelElement } from "./solid/mcp-app-panel.tsx";
 
 const bridgeMocks = vi.hoisted(() => ({
@@ -94,158 +94,9 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
   return { ...actual, AppBridge, PostMessageTransport };
 });
 
-const { McpAppView } = await import("./mcp-app-view.tsx");
-function mountView(props: Parameters<typeof McpAppView>[0], context: object = {}) {
-  const supplied = context as Partial<ApplicationContext>;
-  const provider = createSolidApplicationContextProvider({
-    ...supplied,
-    gateway: {
-      subscribe: () => () => {},
-      snapshot: { client: null, phase: "stopped" },
-      ...supplied.gateway,
-    },
-  } as ApplicationContext);
-  const mounted = mountSolid(() => createComponent(McpAppView, props), {
-    wrapper: provider.wrapper,
-  });
-  return { ...mounted, view: mounted.container.querySelector<McpAppViewElement>("mcp-app-view")! };
-}
+const mountBridge = createMcpBridgeFixture(bridgeMocks);
 
 describe("mcp-app-view localization", () => {
-  afterEach(async () => {
-    bridgeMocks.instances.length = 0;
-    bridgeMocks.transports.length = 0;
-    bridgeMocks.appModes = undefined;
-    document.body.replaceChildren();
-    delete (document as unknown as Record<string, unknown>).activeElement;
-    delete document.documentElement.dataset.themeMode;
-    document.documentElement.style.removeProperty("--card");
-    document.documentElement.style.removeProperty("--text");
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    await i18n.setLocale("en");
-  });
-
-  async function mountBridge(
-    viewId: string,
-    messageSupported = true,
-    updateModelContextSupported = messageSupported,
-    payload: Record<string, unknown> = {},
-  ) {
-    vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
-    const frameReady = deferred<HTMLIFrameElement>();
-    const frameSource = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "src")!;
-    vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(function (
-      this: HTMLIFrameElement,
-      value,
-    ) {
-      frameSource.set!.call(this, value);
-      frameReady.resolve(this);
-    });
-    const messageListeners: EventListenerOrEventListenerObject[] = [];
-    const addEventListener = window.addEventListener.bind(window);
-    vi.spyOn(window, "addEventListener").mockImplementation((type, listener, options) => {
-      if (type === "message") {
-        messageListeners.push(listener);
-      }
-      addEventListener(type, listener, options);
-    });
-    const themeListeners = new Set<() => void>();
-    const gatewayListeners = new Set<(event: GatewayEventFrame) => void>();
-    const gatewayEventsReady = deferred();
-    const gatewayEventsStopped = deferred();
-    const unsubscribe = vi.fn();
-    const request = vi.fn(
-      async (_method: string, _params: Record<string, unknown>): Promise<unknown> => ({
-        sandboxUrl: "/mcp-app-sandbox?ticket=test",
-        sandboxPort: 8444,
-        html: "<!doctype html><button>Send</button>",
-        toolInput: {},
-        toolResult: { content: [{ type: "text", text: "ready" }] },
-        messageSupported,
-        updateModelContextSupported,
-        state: null,
-        ...payload,
-      }),
-    );
-    const { view, unmount } = mountView(
-      { sessionKey: "agent:main:main", viewId, title: "Parts library" },
-      {
-        gateway: {
-          snapshot: { client: { request }, phase: "connected" },
-          connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
-          subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-            gatewayListeners.add(listener);
-            gatewayEventsReady.resolve();
-            return () => {
-              gatewayListeners.delete(listener);
-              if (gatewayListeners.size === 0) {
-                gatewayEventsStopped.resolve();
-              }
-            };
-          },
-        },
-        theme: {
-          subscribe(listener: () => void) {
-            themeListeners.add(listener);
-            return () => {
-              themeListeners.delete(listener);
-              unsubscribe();
-            };
-          },
-        },
-      },
-    );
-
-    const frame = await frameReady.promise;
-    expect(frame.getAttribute("src")).toContain("/mcp-app-sandbox?ticket=test");
-    const readyEvent = {
-      data: { method: "ui/notifications/sandbox-proxy-ready" },
-      source: frame.contentWindow,
-    } as MessageEvent;
-    expect(messageListeners.length).toBeGreaterThan(0);
-    expect(readyEvent.source).toBe(frame.contentWindow);
-    for (const readyListener of messageListeners) {
-      if (typeof readyListener === "function") {
-        readyListener.call(window, readyEvent);
-      } else {
-        readyListener.handleEvent(readyEvent);
-      }
-    }
-    await gatewayEventsReady.promise;
-    expect(bridgeMocks.instances).toHaveLength(1);
-    return {
-      bridge: bridgeMocks.instances[0] as {
-        capabilities: Record<string, unknown>;
-        options: { hostContext?: Record<string, unknown> };
-        messageHandler?: (params: {
-          role: "user";
-          content: Array<{ type: string; text?: string }>;
-        }) => Promise<{ isError?: boolean }>;
-        updateModelContextHandler?: (params: {
-          content?: Array<{ type: string; text?: string }>;
-          structuredContent?: Record<string, unknown>;
-        }) => Promise<Record<string, never>>;
-        onsizechange?: (params: { height?: number }) => void;
-        onrequestdisplaymode?: (params: {
-          mode: "inline" | "fullscreen";
-        }) => Promise<{ mode: string }>;
-        setHostContext: ReturnType<typeof vi.fn>;
-        teardownResource: ReturnType<typeof vi.fn>;
-        emit(type: string): void;
-      },
-      frame,
-      request,
-      themeListeners,
-      gatewayListeners,
-      gatewayEventsStopped: gatewayEventsStopped.promise,
-      unsubscribe,
-      transport: bridgeMocks.transports[0] as { close: ReturnType<typeof vi.fn> },
-      view,
-      unmount,
-    };
-  }
-
   it("keeps resource display hints within the initialized App capabilities", async () => {
     bridgeMocks.appModes = ["inline"];
     const { view, bridge } = await mountBridge("view-modes", true, true, {
@@ -261,6 +112,27 @@ describe("mcp-app-view localization", () => {
     expect(bridge.setHostContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ availableDisplayModes: ["inline"], displayMode: "inline" }),
     );
+  });
+
+  it("opens external links only from the live, visible, focused App frame", async () => {
+    const { view, bridge, frame } = await mountBridge("view-external-link");
+    const open = vi.spyOn(window, "open").mockReturnValue(window);
+    const openLink = bridge.onopenlink!;
+    const url = "https://example.com/parts";
+    frame.checkVisibility = () => true;
+    expect(await openLink({ url })).toEqual({ isError: true });
+    expect(open).not.toHaveBeenCalled();
+
+    frame.focus();
+    expect(await openLink({ url })).toEqual({});
+    expect(open).toHaveBeenCalledExactlyOnceWith(url, "_blank", "noopener,noreferrer");
+
+    frame.checkVisibility = () => false;
+    expect(await openLink({ url })).toEqual({ isError: true });
+    frame.checkVisibility = () => true;
+    await view.teardown();
+    expect(await openLink({ url })).toEqual({ isError: true });
+    expect(open).toHaveBeenCalledOnce();
   });
 
   it("reveals questions and approvals only for its conversation without replacing the App frame", async () => {
@@ -654,12 +526,13 @@ describe("mcp-app-view localization", () => {
       { installTranscriptDomMocks },
       { installOutboxBrowserStorage },
       { createStorageMock },
+      { AppsPage },
     ] = await Promise.all([
       import("../pages/chat/chat-pane-mounted.test-support.ts"),
       import("../pages/chat/components/chat-transcript.test-support.ts"),
       import("../pages/chat/outbox-browser.test-support.ts"),
       import("../test-helpers/storage.ts"),
-      import("../pages/apps/apps-page.ts"),
+      import("../pages/apps/apps-page.tsx"),
     ]);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     installOutboxBrowserStorage();
@@ -768,20 +641,21 @@ describe("mcp-app-view localization", () => {
     });
     const appClient = createTestGatewayClient(request);
     client.request = appClient.request.bind(appClient);
-    // SAFETY: the registered Apps page exposes these properties to its rendering callers.
-    const apps = document.createElement("openclaw-apps-page") as HTMLElement & {
-      readonly updateComplete: Promise<boolean>;
-    };
-    Object.assign(apps, { appSearch: "?server=parts&tool=library" });
     const provider = createApplicationContextProvider(fixture.context);
     const initialized = deferred();
     provider.addEventListener(MCP_APP_CONTEXT_EVENT, () => initialized.resolve(), { once: true });
-    provider.append(apps);
     document.body.append(provider);
+    const { container: apps, unmount } = mountSolid(
+      () => createComponent(AppsPage, { appSearch: "?server=parts&tool=library" }),
+      {
+        container: provider,
+        wrapper: createSolidApplicationContextProvider(fixture.context).wrapper,
+      },
+    );
     try {
-      await apps.updateComplete;
+      flush();
       await vi.dynamicImportSettled();
-      await apps.updateComplete;
+      flush();
       expect(
         apps.querySelector('[role="alert"]')?.textContent,
         JSON.stringify(request.mock.calls.map(([method]) => method)),
@@ -816,6 +690,7 @@ describe("mcp-app-view localization", () => {
         expect.objectContaining({ "openai/modelContext": null }),
       );
     } finally {
+      unmount();
       provider.remove();
       await vi.dynamicImportSettled();
       vi.useRealTimers();
@@ -907,8 +782,15 @@ describe("mcp-app-view localization", () => {
       expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
     );
 
+    const onHeightChange = vi.fn();
+    view.onHeightChange = onHeightChange;
     bridge.onsizechange?.({ height: 900 });
     expect(frame.style.height).toBe("900px");
+    expect(view.querySelector<HTMLElement>(".mount")?.style.minHeight).toBe("900px");
+    expect(onHeightChange).toHaveBeenLastCalledWith(900);
+    bridge.onsizechange?.({ height: Number.NaN });
+    expect(frame.style.height).toBe("900px");
+    expect(onHeightChange).toHaveBeenCalledTimes(1);
     for (const change of [
       { title: "Updated library" },
       { surface: "board" },
@@ -925,6 +807,7 @@ describe("mcp-app-view localization", () => {
     expect(view.querySelector("iframe")?.style.height).toBe("100%");
     bridge.onsizechange?.({ height: 900 });
     expect(view.querySelector("iframe")?.style.height).toBe("100%");
+    expect(onHeightChange).toHaveBeenCalledTimes(1);
     expect(bridge.setHostContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
     );

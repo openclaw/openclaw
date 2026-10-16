@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -15,17 +15,13 @@ import {
 } from "../../agents/mcp-ui-resource.js";
 import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../../config/io.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  withIncognitoSessionActor,
-  withIncognitoSessionBinding,
-} from "../../config/sessions/session-incognito-binding.js";
+import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
-import { openIncognitoTestActor } from "../../state/openclaw-agent-execution-incognito.test-support.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createMcpAppWorkspaceUploadProvider } from "../mcp-app-form-resources.js";
@@ -40,6 +36,8 @@ import { loadSessionDiff } from "./sessions-diff.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   createSessionFilesHandlerInvoker,
+  createSessionFileDownloadClient,
+  fetchSessionFileDownload,
   expectOkPayload,
   expectError,
 } from "./sessions-files.test-support.js";
@@ -47,10 +45,9 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 import * as workspaceFs from "./workspace-fs.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
-const authority = { assertCurrent() {} };
 const key = "agent:main:dashboard:incognito-files";
 const sid = "private-files";
-let actor: IncognitoAgentDatabaseExecution;
+let storePath: string;
 let env: NodeJS.ProcessEnv;
 let workspace: string;
 let cfg: OpenClawConfig;
@@ -66,7 +63,8 @@ beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: dirs.make("incognito-files-actor-") };
   cfg = { agents: { entries: { main: { workspace } } }, mcp: { apps: { enabled: true } } };
   setRuntimeConfigSnapshot(cfg);
-  actor = await openIncognitoTestActor(env, authority);
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
   execFileSync("git", ["init", "-q", "-b", "main", workspace]);
   await writeFile(path.join(workspace, "example.txt"), "before session\n");
   const baseline = await captureSessionDiffBaseline({ cwd: workspace, sessionId: sid });
@@ -78,13 +76,10 @@ beforeAll(async () => {
     spawnedCwd: workspace,
     sessionDiffBaseline: baseline,
   };
-  await actor.sessions.create(authority, { sessionKey: key, entry });
-  const appended = await actor.sessions.transcript(authority, {
-    type: "session.message.append",
-    input: {
-      sessionKey: key,
-      sessionId: sid,
-      fence: {},
+  await replaceSessionEntry({ sessionKey: key, storePath }, entry);
+  await appendTranscriptMessage(
+    { sessionKey: key, sessionId: sid, storePath },
+    {
       message: {
         role: "assistant",
         content: [
@@ -92,75 +87,87 @@ beforeAll(async () => {
         ],
       },
     },
-  });
-  assert(appended.ok);
+  );
 });
 
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+});
 afterEach(() => vi.restoreAllMocks());
 afterAll(async () => {
-  await actor?.close();
+  memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
+  vi.unstubAllEnvs();
   await closeOpenClawStateDatabaseAsync();
   clearRuntimeConfigSnapshot();
 });
 
-it("serves bound files and the complete diff baseline without opening host SQLite", async () => {
+it("serves unbound memory files and the complete diff baseline without opening host SQLite", async () => {
   await writeFile(path.join(workspace, "example.txt"), "after session\n");
   const sql = observeHostDataSql();
   try {
-    await withIncognitoSessionActor(actor, async () => {
-      const list = expectOkPayload(
-        await invoke("sessions.files.list", { sessionKey: key }, context),
-      );
-      expect(list.browser.entries).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: "example.txt", sessionKind: "modified" }),
-        ]),
-      );
-      const file = expectOkPayload(
-        await invoke("sessions.files.get", { sessionKey: key, path: "example.txt" }, context),
-      );
-      expect(file.file.content).toBe("after session\n");
-      expect(
-        expectError(
-          await invoke("sessions.files.get", { sessionKey: key, path: "../outside.txt" }, context),
-        ),
-      ).toMatchObject({ details: { reason: "outside_session_boundary" } });
-      expect(
-        expectOkPayload(
-          await invoke(
-            "sessions.files.assets",
-            { sessionKey: key, path: "example.txt", refs: [] },
-            context,
-          ),
-        ),
-      ).toEqual({ assets: [] });
-      expect(
-        await loadSessionDiff(
-          { sessionKey: key },
-          context as GatewayRequestHandlerOptions["context"],
-        ),
-      ).toMatchObject({ files: [expect.objectContaining({ path: "example.txt" })] });
-      const saved = expectOkPayload(
+    const list = expectOkPayload(await invoke("sessions.files.list", { sessionKey: key }, context));
+    expect(list.browser.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "example.txt", sessionKind: "modified" }),
+      ]),
+    );
+    const file = expectOkPayload(
+      await invoke("sessions.files.get", { sessionKey: key, path: "example.txt" }, context),
+    );
+    expect(file.file.content).toBe("after session\n");
+    using connection = createSessionFileDownloadClient();
+    const download = expectOkPayload(
+      await invoke(
+        "sessions.files.download",
+        { sessionKey: key, path: "example.txt" },
+        context,
+        connection,
+      ),
+    );
+    const fetched = await fetchSessionFileDownload(connection.client, download.url);
+    expect(fetched.response.statusCode).toBe(200);
+    expect(Buffer.from(fetched.body as Uint8Array).toString()).toBe("after session\n");
+    expect(
+      expectError(
+        await invoke("sessions.files.get", { sessionKey: key, path: "../outside.txt" }, context),
+      ),
+    ).toMatchObject({ details: { reason: "outside_session_boundary" } });
+    expect(
+      expectOkPayload(
         await invoke(
-          "sessions.files.set",
-          {
-            sessionKey: key,
-            path: "example.txt",
-            content: "saved\n",
-            expectedHash: file.file.hash,
-          },
+          "sessions.files.assets",
+          { sessionKey: key, path: "example.txt", refs: [] },
           context,
         ),
-      );
-      expect(saved.file).toMatchObject({ path: "example.txt", size: 6 });
-      expect(saved.file.hash).not.toBe(file.file.hash);
-      expect(await readFile(path.join(workspace, "example.txt"), "utf8")).toBe("saved\n");
-      const opened = vi.spyOn(openPath, "execOpenPath").mockResolvedValue(undefined);
-      expect(
-        expectOkPayload(await invoke("sessions.files.reveal", { key }, context)),
-      ).toMatchObject({ ok: true, path: workspace });
-      expect(opened).toHaveBeenCalledOnce();
+      ),
+    ).toEqual({ assets: [] });
+    expect(
+      await loadSessionDiff(
+        { sessionKey: key },
+        context as GatewayRequestHandlerOptions["context"],
+      ),
+    ).toMatchObject({ files: [expect.objectContaining({ path: "example.txt" })] });
+    const saved = expectOkPayload(
+      await invoke(
+        "sessions.files.set",
+        {
+          sessionKey: key,
+          path: "example.txt",
+          content: "saved\n",
+          expectedHash: file.file.hash,
+        },
+        context,
+      ),
+    );
+    expect(saved.file).toMatchObject({ path: "example.txt", size: 6 });
+    expect(saved.file.hash).not.toBe(file.file.hash);
+    expect(await readFile(path.join(workspace, "example.txt"), "utf8")).toBe("saved\n");
+    const opened = vi.spyOn(openPath, "execOpenPath").mockResolvedValue(undefined);
+    expect(expectOkPayload(await invoke("sessions.files.reveal", { key }, context))).toMatchObject({
+      ok: true,
+      path: workspace,
     });
+    expect(opened).toHaveBeenCalledOnce();
     expect(sql.queries).toEqual([]);
   } finally {
     sql.restore();
@@ -200,17 +207,17 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
   let viewId: string | undefined;
   const sql = observeHostDataSql();
   try {
-    const file = await withIncognitoSessionBinding({ actor }, () =>
-      prepareMcpAppHostFile(options, { sessionKey: key, agentId: "main", path: "example.txt" }),
-    );
-    const upload = withIncognitoSessionBinding({ actor }, () =>
-      createMcpAppWorkspaceUploadProvider({
-        workspaceDir: workspace,
-        sessionKey: key,
-        agentId: "main",
-        assertCurrent() {},
-      }),
-    );
+    const file = await prepareMcpAppHostFile(options, {
+      sessionKey: key,
+      agentId: "main",
+      path: "example.txt",
+    });
+    const upload = createMcpAppWorkspaceUploadProvider({
+      workspaceDir: workspace,
+      sessionKey: key,
+      agentId: "main",
+      assertCurrent() {},
+    });
     const descriptor = await fetchMcpAppView({
       runtime,
       agentId: "main",
@@ -227,7 +234,7 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
     viewId = descriptor.viewId;
     const view = getMcpAppViewLease(viewId, runtime);
     assert(view);
-    // The view and upload callback outlive the initiating actor-binding frame.
+    // The view and upload callback retain the owner selected at preparation.
     await readMcpAppHostFile(options, view, { uri: file.resourceUri });
     expect(
       await writeMcpAppHostFile(options, view, { uri: file.resourceUri, text: "MCP saved\n" }),
@@ -241,6 +248,15 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
     expect(uploaded).toHaveLength(1);
     expect(await readFile(new URL(uploaded[0]!.uri), "utf8")).toBe("uploaded");
     await subscribeMcpAppHostFile(options, view, file.resourceUri, true);
+    using connection = createSessionFileDownloadClient();
+    const download = expectOkPayload(
+      await invoke(
+        "sessions.files.download",
+        { sessionKey: key, path: "example.txt" },
+        context,
+        connection,
+      ),
+    );
     const entered = createDeferred();
     const release = createDeferred();
     const original = workspaceFs.readWorkspaceFile;
@@ -251,22 +267,22 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
     });
     const reading = readMcpAppHostFile(options, view, { uri: file.resourceUri });
     const rejected = expect(reading).rejects.toThrow(/Incognito|incognito/);
-    let closing: Promise<void> | undefined;
     try {
       await awaitGateBeforeSettlement(
         entered.promise,
         reading,
         "MCP read skipped its file boundary",
       );
-      closing = actor.close();
+      memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
     } finally {
       release.resolve();
-      await Promise.allSettled([reading, rejected, closing]);
+      await Promise.allSettled([reading, rejected]);
     }
     await rejected;
-    await closing;
-    actor = await openIncognitoTestActor(env, authority);
-    await actor.sessions.create(authority, { sessionKey: key, entry });
+    await replaceSessionEntry({ sessionKey: key, storePath }, entry);
+    expect(
+      (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
+    ).toBe(404);
     await expect(readMcpAppHostFile(options, view, { uri: file.resourceUri })).rejects.toThrow(
       /Incognito|incognito/,
     );
@@ -287,9 +303,9 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
   }
 });
 
-it("preserves unbound native and durable files while explicit actor absence stays absent", async () => {
+it("preserves unbound memory and durable files while an absent memory namespace stays absent", async () => {
   const nativeEnv = { OPENCLAW_STATE_DIR: dirs.make("files-native-control-") };
-  const storePath = path.join(
+  const controlStorePath = path.join(
     nativeEnv.OPENCLAW_STATE_DIR,
     "agents",
     "main",
@@ -298,7 +314,7 @@ it("preserves unbound native and durable files while explicit actor absence stay
   );
   const originalCfg = cfg;
   await writeFile(path.join(workspace, "control.txt"), "native control\n");
-  cfg = { ...cfg, session: { store: storePath } };
+  cfg = { ...cfg, session: { store: controlStorePath } };
   setRuntimeConfigSnapshot(cfg);
   try {
     for (const sessionKey of [
@@ -306,7 +322,7 @@ it("preserves unbound native and durable files while explicit actor absence stay
       "agent:main:durable-files",
     ]) {
       await replaceSessionEntry(
-        { sessionKey, storePath, env: nativeEnv },
+        { sessionKey, storePath: controlStorePath, env: nativeEnv },
         {
           ...entry,
           sessionId: sessionKey,
@@ -314,32 +330,40 @@ it("preserves unbound native and durable files while explicit actor absence stay
         },
       );
       await withEnvAsync(nativeEnv, async () => {
-        expect(captureOpenClawAgentDatabaseExecution.listIncognito(nativeEnv)).toEqual([]);
+        const ownersBefore = memorySessionActorOwners.list();
         const file = expectOkPayload(
           await invoke("sessions.files.get", { sessionKey, path: "control.txt" }, context),
         );
         expect(file.file.content).toBe("native control\n");
-        expect(captureOpenClawAgentDatabaseExecution.listIncognito(nativeEnv)).toEqual([]);
+        expect(memorySessionActorOwners.list()).toEqual(ownersBefore);
       });
     }
     const absentEnv = { OPENCLAW_STATE_DIR: dirs.make("files-absent-control-") };
     const sql = observeHostDataSql();
     try {
-      await withIncognitoSessionBinding(
-        { kind: "absent", agentId: "main", env: absentEnv, authority },
-        async () => {
-          const missing = expectError(
-            await invoke("sessions.files.get", { sessionKey: key, path: "example.txt" }, context),
-          );
-          expect(missing).toMatchObject({ details: { type: "session_file_not_found" } });
-        },
-      );
+      cfg = { ...originalCfg };
+      setRuntimeConfigSnapshot(cfg);
+      await withEnvAsync(absentEnv, async () => {
+        const missing = expectError(
+          await invoke("sessions.files.get", { sessionKey: key, path: "example.txt" }, context),
+        );
+        expect(missing).toMatchObject({ details: { type: "session_file_not_found" } });
+      });
       expect(sql.queries).toEqual([]);
-      expect(captureOpenClawAgentDatabaseExecution.listIncognito(absentEnv)).toEqual([]);
+      expect(
+        memorySessionActorOwners.read({
+          agentId: "main",
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: absentEnv }),
+        }),
+      ).toBeUndefined();
     } finally {
       sql.restore();
     }
   } finally {
+    memorySessionActorOwners.closeDatabase({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: nativeEnv }),
+    });
     cfg = originalCfg;
     setRuntimeConfigSnapshot(cfg);
   }

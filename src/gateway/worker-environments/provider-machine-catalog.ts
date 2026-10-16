@@ -17,13 +17,16 @@ import type { WorkerEnvironmentRecord } from "./store.js";
 export function createWorkerMachineCatalog(
   options: Pick<WorkerProviderLifecycleOptions, "getConfig" | "resolveProvider" | "warn">,
 ) {
+  type CatalogValues = {
+    machines: readonly WorkerMachineOption[] | undefined;
+    systems: readonly WorkerOperatingSystem[] | undefined;
+  };
   type MachineCatalog = {
     providerId: string;
     settings: WorkerProfile;
-    machines?: readonly WorkerMachineOption[];
-    systems?: readonly WorkerOperatingSystem[];
+    requests: Partial<Record<keyof CatalogValues, Promise<CatalogValues[keyof CatalogValues]>>>;
     warmup?: Promise<void>;
-  };
+  } & Partial<CatalogValues>;
   const machineCatalogs = new Map<string, MachineCatalog>();
   const machineShapeListeners = new Set<(profileId: string) => void>();
   let machineShapeVersion = 0;
@@ -47,42 +50,48 @@ export function createWorkerMachineCatalog(
       catalog.providerId !== profile.provider ||
       !isDeepStrictEqual(catalog.settings, settings)
     ) {
-      catalog = { providerId: profile.provider, settings: structuredClone(settings) };
+      catalog = {
+        providerId: profile.provider,
+        settings: structuredClone(settings),
+        requests: {},
+      };
       machineCatalogs.set(profileId, catalog);
       machineCatalogChanged(profileId);
     }
     return catalog;
   };
 
-  const listMachineOptions = async (profileId: string) => {
+  const listCatalog = async (profileId: string, section: keyof CatalogValues) => {
     const catalog = machineCatalogFor(profileId);
-    if (!catalog) {
-      return undefined;
+    const pending = catalog?.requests[section];
+    if (!catalog || pending) {
+      return pending;
     }
-    const machines = normalizeWorkerMachineOptions(
-      await options.resolveProvider(catalog.providerId)?.listMachineOptions?.(catalog.settings),
-    );
-    if (!isDeepStrictEqual(catalog.machines, machines)) {
-      catalog.machines = machines;
-      machineCatalogChanged(profileId);
+    const request = (async () => {
+      const provider = options.resolveProvider(catalog.providerId);
+      const choices =
+        section === "machines"
+          ? normalizeWorkerMachineOptions(await provider?.listMachineOptions?.(catalog.settings))
+          : normalizeWorkerOperatingSystems(
+              await provider?.listOperatingSystems?.(catalog.settings),
+            );
+      if (!isDeepStrictEqual(catalog[section], choices)) {
+        catalog[section] = choices;
+        machineCatalogChanged(profileId);
+      }
+      return choices;
+    })();
+    catalog.requests[section] = request;
+    try {
+      return await request;
+    } finally {
+      delete catalog.requests[section];
     }
-    return machines;
   };
-
-  const listOperatingSystems = async (profileId: string) => {
-    const catalog = machineCatalogFor(profileId);
-    if (!catalog) {
-      return undefined;
-    }
-    const systems = normalizeWorkerOperatingSystems(
-      await options.resolveProvider(catalog.providerId)?.listOperatingSystems?.(catalog.settings),
-    );
-    if (!isDeepStrictEqual(catalog.systems, systems)) {
-      catalog.systems = systems;
-      machineCatalogChanged(profileId);
-    }
-    return systems;
-  };
+  const listMachineOptions = (profileId: string): Promise<CatalogValues["machines"]> =>
+    listCatalog(profileId, "machines");
+  const listOperatingSystems = (profileId: string): Promise<CatalogValues["systems"]> =>
+    listCatalog(profileId, "systems");
 
   const loadMachineShape = async (profileId: string): Promise<void> => {
     const catalog = machineCatalogFor(profileId);
@@ -149,9 +158,7 @@ export function createWorkerMachineCatalog(
         const catalog = machineCatalogFor(profileId);
         const displayId =
           catalog &&
-          options
-            .resolveProvider(catalog.providerId)
-            ?.resolveDisplayId?.(structuredClone(catalog.settings));
+          options.resolveProvider(catalog.providerId)?.resolveDisplayId?.(catalog.settings);
         return typeof displayId === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(displayId)
           ? displayId
           : undefined;

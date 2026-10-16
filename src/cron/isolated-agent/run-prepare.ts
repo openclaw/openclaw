@@ -54,7 +54,7 @@ import {
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
   setCronSessionRuntimeModel,
-  persistCronSkillsSnapshotIfChanged,
+  setCronSessionAgentHarnessId,
   type CronSessionRowWriter,
 } from "./run-session-state.js";
 import { resolveCronRunTimeoutOverrideMs } from "./run-timeout.js";
@@ -220,6 +220,7 @@ export async function prepareCronRunContext(params: {
       cronSession,
       agentSessionKey,
       runSessionKey,
+      usesDetachedRunSession,
       signal: input.abortSignal ?? input.signal,
       onInterrupt: params.onLifecycleInterrupt,
     });
@@ -246,6 +247,7 @@ export async function prepareCronRunContext(params: {
       });
       workspaceLease = selectedWorkspace.lease;
       const workspaceDir = selectedWorkspace.workspaceDir;
+      let baseSessionMaintenanceStarted = false;
       const persistCronSessionRow: CronSessionRowWriter = async ({
         storePath,
         sessionKey,
@@ -279,9 +281,14 @@ export async function prepareCronRunContext(params: {
           {
             fallbackEntry,
             replaceEntry: true,
+            // The maintenance owner follows later writes through its receipt subscription.
+            skipMaintenance: baseSessionMaintenanceStarted || sessionKey !== agentSessionKey,
             workerGuard: { assertCurrent: assertCommitAllowed },
           },
         );
+        if (sessionKey === agentSessionKey) {
+          baseSessionMaintenanceStarted = true;
+        }
       };
       const persistSessionEntry = createPersistCronSessionEntry({
         cronSession,
@@ -539,18 +546,24 @@ export async function prepareCronRunContext(params: {
         librarySelections: cronSession.sessionEntry.skillLibrarySelections,
         isFastTestEnv: params.isFastTestEnv,
       });
-      await persistCronSkillsSnapshotIfChanged({
-        isFastTestEnv: params.isFastTestEnv,
-        cronSession,
-        skillsSnapshot,
-        nowMs: Date.now(),
-        persistSessionEntry,
-      });
+      if (!params.isFastTestEnv && skillsSnapshot !== cronSession.sessionEntry.skillsSnapshot) {
+        cronSession.sessionEntry = {
+          ...cronSession.sessionEntry,
+          updatedAt: Date.now(),
+          skillsSnapshot,
+        };
+      }
 
       setCronSessionRuntimeModel({ entry: cronSession.sessionEntry, provider, model });
+      setCronSessionAgentHarnessId({
+        entry: cronSession.sessionEntry,
+        agentHarnessId: effectiveAgentRuntime,
+      });
       cronSession.sessionEntry.systemSent = true;
+      let preRunSessionPersisted = false;
       try {
         await persistSessionEntry();
+        preRunSessionPersisted = true;
       } catch (err) {
         if (err instanceof CronSessionLifecycleClaimError) {
           throw err;
@@ -564,21 +577,28 @@ export async function prepareCronRunContext(params: {
         job: input.job,
         cronSession,
       });
-      const authSelection = await resolveCronAuthSelection({
-        agentId,
-        cfg: admittedConfig,
-        provider,
-        modelId: model,
-        ...(provider === resolvedModelSelection.provider &&
-        resolvedModelSelection.configuredProfileId
-          ? { configuredProfileId: resolvedModelSelection.configuredProfileId }
-          : {}),
-        harnessRuntime: effectiveAgentRuntime,
-        agentDir,
-        cronSession,
-        sessionKey: agentSessionKey,
-        isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
-      });
+      const authSelection = input.job.runtimeAuthority
+        ? undefined
+        : input.job.inferenceBinding
+          ? {
+              profileId: input.job.inferenceBinding.profileId,
+              source: input.job.inferenceBinding.source,
+            }
+          : await resolveCronAuthSelection({
+              agentId,
+              cfg: admittedConfig,
+              provider,
+              modelId: model,
+              ...(provider === resolvedModelSelection.provider &&
+              resolvedModelSelection.configuredProfileId
+                ? { configuredProfileId: resolvedModelSelection.configuredProfileId }
+                : {}),
+              harnessRuntime: effectiveAgentRuntime,
+              agentDir,
+              cronSession,
+              sessionKey: agentSessionKey,
+              isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
+            });
       const authProfileId = authSelection?.profileId;
       const liveSelection: LiveSessionModelSelection = {
         provider,
@@ -653,6 +673,7 @@ export async function prepareCronRunContext(params: {
           cronSession,
           sessionWorkAdmission,
           persistSessionEntry,
+          preRunSessionPersisted,
           runContinuationSession,
           withRunSession,
           agentPayload,

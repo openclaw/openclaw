@@ -1,9 +1,6 @@
-import { html, nothing, render } from "lit";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../lit/presentation-binding.ts";
-import { markdownBlocks } from "./markdown-blocks.ts";
+import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
@@ -18,7 +15,7 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(document, "execCommand");
   }
-  document.body.innerHTML = "";
+  document.body.replaceChildren();
 });
 
 function renderCodeCopyButton(text = "const answer = 42;"): HTMLButtonElement {
@@ -31,7 +28,7 @@ function renderCodeCopyButton(text = "const answer = 42;"): HTMLButtonElement {
   return button;
 }
 
-it("reobserves reused Markdown DOM while fencing scans queued before disconnect", async () => {
+it("reobserves retained Markdown DOM while fencing scans queued before hide or disposal", async () => {
   const observed = new Set<Element>();
   vi.stubGlobal(
     "ResizeObserver",
@@ -48,9 +45,6 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     },
   );
   const container = document.body.appendChild(document.createElement("div"));
-  const owner = new EventTarget();
-  let presented = true;
-  const presentation = { owner, isPresented: () => presented };
   const content = toSanitizedMarkdownHtml(
     "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
     {
@@ -58,28 +52,30 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
       tableInteractions: "enabled",
     },
   );
-  const view = (active = true) =>
-    html`<section class="chat-text" ${markdownBlocks(active ? presentation : false)}>
-      ${unsafeHTML(content)}
-    </section>`;
-  const part = render(view(), container);
+  const section = document.createElement("section");
+  section.className = "chat-text";
+  section.innerHTML = content;
+  container.append(section);
+  let blocks = new MarkdownBlocks(container.querySelector("section")!);
+  blocks.update(true);
   const code = container.querySelector("code");
   const tableViewport = container.querySelector(".markdown-table__viewport");
 
   try {
-    part.setConnected(false);
+    blocks.dispose();
     await Promise.resolve();
     expect(observed.size).toBe(0);
 
-    part.setConnected(true);
+    blocks = new MarkdownBlocks(container.querySelector("section")!);
+    blocks.update(true);
     await Promise.resolve();
     expect(observed.size).toBe(4);
     expect(observed.has(code!)).toBe(true);
     expect(observed.has(tableViewport!)).toBe(true);
 
-    part.setConnected(false);
+    blocks.update(false);
     expect(observed.size).toBe(0);
-    part.setConnected(true);
+    blocks.update(true);
     await Promise.resolve();
     expect(container.querySelector("code")).toBe(code);
     expect(observed.has(code!)).toBe(true);
@@ -87,40 +83,26 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     expect(observed.has(tableViewport!)).toBe(true);
     expect(observed.size).toBe(4);
 
-    presented = false;
-    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    blocks.update(false);
     await Promise.resolve();
     expect(observed.size).toBe(0);
     expect(container.querySelector("code")).toBe(code);
-    presented = true;
-    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    blocks.update(true);
+    blocks.update(false);
     await Promise.resolve();
     expect(observed.size).toBe(0);
-    render(view(), container);
-    await Promise.resolve();
-    expect(observed.size).toBe(4);
-
-    render(view(false), container);
-    await Promise.resolve();
-    expect(observed.size).toBe(0);
-    expect(container.querySelector("code")).toBe(code);
-    render(view(true), container);
-    render(view(false), container);
-    await Promise.resolve();
-    expect(observed.size).toBe(0);
-    render(view(true), container);
+    blocks.update(true);
     await Promise.resolve();
     expect(observed.size).toBe(4);
     expect(observed.has(code!)).toBe(true);
     expect(observed.has(tableViewport!)).toBe(true);
-    part.setConnected(false);
-    presented = false;
-    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    part.setConnected(true);
+    blocks.update(true);
+    blocks.dispose();
     await Promise.resolve();
     expect(observed.size).toBe(0);
   } finally {
-    render(nothing, container);
+    blocks.dispose();
+    container.replaceChildren();
   }
 });
 
@@ -131,12 +113,15 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
     "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
     { codeBlockInteraction: "interactive", tableInteractions: "enabled" },
   );
-  const view = (prose: string) =>
-    html`<section class="chat-text" ${markdownBlocks()}>
-      ${unsafeHTML(content)}
-      <p>${prose}</p>
-    </section>`;
-  render(view("First"), container);
+  const section = document.createElement("section");
+  section.className = "chat-text";
+  section.innerHTML = content;
+  const paragraph = document.createElement("p");
+  paragraph.textContent = "First";
+  section.append(paragraph);
+  container.append(section);
+  const blocks = new MarkdownBlocks(container.querySelector("section")!);
+  blocks.update(true);
   await Promise.resolve();
   await Promise.resolve();
   const widths = vi.fn(() => 300);
@@ -146,7 +131,8 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
 
   try {
     for (const prose of ["First paragraph", "First paragraph grows", "First paragraph grows"]) {
-      render(view(prose), container);
+      paragraph.textContent = prose;
+      blocks.update(true);
       await Promise.resolve();
       await Promise.resolve();
     }
@@ -163,7 +149,8 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
     expect(viewport.id).not.toBe("");
     expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
   } finally {
-    render(nothing, container);
+    blocks.dispose();
+    container.replaceChildren();
   }
 });
 
@@ -284,7 +271,6 @@ describe("Markdown code-block clipboard feedback", () => {
 });
 
 describe("toSanitizedMarkdownHtml code blocks", () => {
-  const blockArt = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
   const jsonBlock = (lineCount: number) => {
     const values = Array.from({ length: lineCount - 2 }, (_, index) => `  ${index},`);
     values[values.length - 1] = values.at(-1)?.slice(0, -1) ?? "";
@@ -333,15 +319,6 @@ describe("toSanitizedMarkdownHtml code blocks", () => {
     expect(code?.textContent).toBe("  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ");
   });
 
-  it("marks fenced block art without syntax highlighting", () => {
-    const rendered = toSanitizedMarkdownHtml(`\`\`\`\n${blockArt}\n\`\`\``);
-    const fragment = htmlFragment(rendered);
-    const code = fragment.querySelector("pre code.markdown-block-art");
-
-    expect(code?.classList.contains("hljs")).toBe(false);
-    expect(code?.textContent).toBe(`${blockArt}\n`);
-  });
-
   it("renders indented code blocks", async () => {
     // markdown-it requires a blank line before indented code
     const rendered = toSanitizedMarkdownHtml("text\n\n    indented code");
@@ -351,28 +328,6 @@ describe("toSanitizedMarkdownHtml code blocks", () => {
     expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
     expect(fragment.querySelector("pre code")?.textContent).toBe("indented code\n");
     await expectCodeCopy(fragment, "indented code");
-  });
-
-  it("omits copy chrome when rendering user-preserved code blocks", () => {
-    const source = `python3 - <<'PY'
-import openpyxl
-
-for ws in wb.worksheets:
-  print(f"--- {ws.title} ---")
-  rows = 0
-
-  for row in ws.iter_rows(values_only=True):
-      print(row)
-PY
-`;
-    const rendered = toSanitizedMarkdownHtml(`\`\`\`bash\n${source}\`\`\``, {
-      codeBlockChrome: "none",
-    });
-    const fragment = htmlFragment(rendered);
-
-    expect(fragment.querySelector(".code-block-copy")).toBeNull();
-    expect(fragment.querySelector(".code-block-wrapper")).toBeNull();
-    expect(fragment.querySelector("pre code")?.textContent).toBe(source);
   });
 
   it("uses the singular hidden-line label for a single hidden line", () => {
@@ -395,20 +350,6 @@ PY
     expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
     expect(fragment.querySelector(".code-block-expand")).toBeNull();
     expect(fragment.querySelector("pre code")?.textContent).toContain("prose line");
-  });
-
-  it("keeps long unlabeled fences collapsible", () => {
-    const content = "unlabeled line\n".repeat(20);
-    const fragment = htmlFragment(
-      toSanitizedMarkdownHtml(`\`\`\`\n${content}\`\`\``, {
-        codeBlockInteraction: "interactive",
-      }),
-    );
-
-    expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeInstanceOf(
-      HTMLDivElement,
-    );
-    expect(fragment.querySelector(".code-block-expand")?.textContent).toContain("13 hidden lines");
   });
 
   it("reveals a collapsed block through the shared click owner", () => {

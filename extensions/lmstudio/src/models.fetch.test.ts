@@ -105,7 +105,7 @@ describe("LM Studio catalog acquisition", () => {
     });
   });
 
-  it("distinguishes configured keyless empty inventory from quiet optional discovery", async () => {
+  it("retains configured and optional empty listings while the public helper stays quiet", async () => {
     const fetchMock = vi.fn(async () => Response.json({ models: [] }));
     vi.stubGlobal("fetch", fetchMock);
     const ctx = context();
@@ -119,7 +119,16 @@ describe("LM Studio catalog acquisition", () => {
     });
     await expect(discoverLmstudioProvider(ctx)).resolves.toBeNull();
     ctx.config = {};
-    await expect(catalog()(ctx)).resolves.toBeNull();
+    await expect(catalog()(ctx)).resolves.toEqual({
+      providers: {},
+      outcomes: [
+        {
+          provider: "lmstudio",
+          status: "ready",
+          modelIdCatalog: { baseUrl: "http://localhost:1234/v1", modelIds: [], aliases: [] },
+        },
+      ],
+    });
     fetchMock.mockRejectedValueOnce(new Error("optional server offline"));
     await expect(catalog()(ctx)).resolves.toBeNull();
     fetchMock.mockClear();

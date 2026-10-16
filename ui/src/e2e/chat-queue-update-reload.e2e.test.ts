@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   installMockGateway,
   createControlUiMockSameOriginGatewayScript,
@@ -70,8 +72,9 @@ suite.define(() => {
           reloads += 1;
         });
         await gateway.setOnline(true);
+        await waitForControlUiGatewayReady(page);
         if (cachedSplit) {
-          await page.getByRole("button", { name: "Open split view", exact: true }).click();
+          await selectChatLayoutAction(page, "Open split view");
           await page
             .locator(".chat-split-view__cell")
             .first()
@@ -97,7 +100,7 @@ suite.define(() => {
           .toBe(0);
         if (split) {
           if (!cachedSplit) {
-            await page.getByRole("button", { name: "Open split view", exact: true }).click();
+            await selectChatLayoutAction(page, "Open split view");
           }
           await page
             .locator(".chat-split-view__cell")
@@ -368,7 +371,7 @@ suite.define(() => {
       );
       const composer = ".agent-chat__composer-combobox textarea";
       await privatePane.locator(composer).waitFor();
-      await page.getByRole("button", { name: "Open split view", exact: true }).click();
+      await selectChatLayoutAction(page, "Open split view");
       await page.locator(".chat-split-view__cell").first().locator(composer).click();
       await page
         .locator(`[data-session-key="${ordinaryKey}"] a.sidebar-recent-session__link`)
@@ -483,7 +486,7 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         await sidebar.locator(".sidebar-identity-card").click();
         await sidebar
-          .locator("wa-dropdown.sidebar-identity-menu")
+          .locator(".sidebar-identity-menu")
           .getByRole("menuitem", { name: "Settings", exact: true })
           .click();
         await page

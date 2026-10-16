@@ -219,6 +219,7 @@ describe("explicit auth state ownership", () => {
       const revision = getActiveSecretsRuntimeSnapshotRevisionState();
       const expected = mode === "rollback" ? first : third;
       if (mode === "rollback") {
+        await closeOpenClawAgentDatabaseByPathAsync(resolveAuthProfileDatabasePath(agentDir));
         await updateAuthProfileStoreWithLock({
           stateDir: second.stateDir,
           agentDir,
@@ -509,14 +510,14 @@ describe("explicit auth state ownership", () => {
     if (!firstReceipt || !secondReceipt) {
       throw new Error("missing batch compensation receipts");
     }
-    firstReceipt.rollback();
+    await firstReceipt.rollback();
     expect(loadPersistedSharedAuthProfileStore(roots[0].env)?.profiles.attempt).toBeUndefined();
     expect(loadPersistedSharedAuthProfileStore(roots[1].env)?.profiles.attempt).toEqual(
       apiKey(roots[1].stateDir),
     );
     expect(snapshotAt(roots[1].agentPath)?.profiles.attempt).toEqual(apiKey(roots[1].stateDir));
-    secondReceipt.rollback();
-    secondReceipt.rollback();
+    await secondReceipt.rollback();
+    await secondReceipt.rollback();
     for (const root of roots) {
       expect(loadPersistedSharedAuthProfileStore(root.env)?.profiles.attempt).toBeUndefined();
       expect(snapshotAt(root.agentPath)?.profiles.attempt).toBeUndefined();

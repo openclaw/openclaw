@@ -24,7 +24,6 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import "../../components/native-chrome-setup.ts";
 import "./device.css";
 
@@ -71,7 +70,7 @@ function settleCookieSyncEdit(
   }
 }
 
-function DevicePageContent() {
+export function DevicePage() {
   const capability = useApplication().nativeDeviceSettings;
   const projection = capability ? projectNativeDeviceSettings(capability) : null;
   const snapshot = () => projection?.read();
@@ -192,13 +191,13 @@ function DevicePageContent() {
             onChange={(event) => capability?.set(props.setting, event.currentTarget.value)}
           >
             <For each={props.options} keyed={(option) => option.id}>
-              {(_option, index) => (
+              {(option) => (
                 <option
-                  value={props.options[index()]!.id}
-                  selected={props.options[index()]!.id === props.value}
-                  disabled={props.options[index()]!.disabled}
+                  value={option().id}
+                  selected={option().id === props.value}
+                  disabled={option().disabled}
                 >
-                  {props.options[index()]!.name}
+                  {option().name}
                 </option>
               )}
             </For>
@@ -259,7 +258,7 @@ function DevicePageContent() {
             stacked
             control={
               <div class="device-extension-setup">
-                <openclaw-native-chrome-setup auto-inspect />
+                <openclaw-native-chrome-setup />
                 <div class="device-extension-setup__actions">
                   <a
                     href="https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig"
@@ -660,7 +659,7 @@ function DevicePageContent() {
     );
   }
   return (
-    <>
+    <openclaw-device-page>
       <SettingsPageHeader
         title={t(deviceSettingsGroupLabelKey(snapshot()))}
         subtitle={
@@ -691,10 +690,6 @@ function DevicePageContent() {
           </Show>
         </SettingsPage>
       </SettingsWorkspace>
-    </>
+    </openclaw-device-page>
   );
 }
-
-export const DevicePage = defineSolidBridge("openclaw-device-page", DevicePageContent, {
-  properties: {},
-});

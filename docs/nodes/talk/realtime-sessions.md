@@ -8,6 +8,32 @@ title: "Talk realtime sessions and delegation"
 sidebarTitle: "Realtime sessions"
 ---
 
+## Split speech in the browser
+
+With `talk.realtime.mode: "stt-tts"`, browser Talk uses separate transcription,
+agent, and speech steps instead of a realtime speech-to-speech provider. Every
+utterance goes through the current chat session, so its configured model and
+tool permissions apply. Set `talk.provider` and `talk.providers.<provider>` for
+Talk output, or leave the provider unset to use the global `tts` configuration.
+
+For local transcription, configure an audio entry in `tools.media.models` as
+described in [Audio and voice notes](/nodes/audio). The browser uses the existing
+Gateway transcription session; the Gateway passes the completed recording to
+the file-transcription owner. Its provider selection, input limits, timeout, and
+fallback policy also apply here. Explicit streaming-provider selections and a
+matching `agents.defaults.voiceModel` take precedence. File transcription produces
+a final transcript after the utterance ends. The catalog marks file transcription
+ready only when a configured provider or CLI command is available.
+
+Capture pauses during the agent response and speech playback, then resumes for
+the next utterance. Stop cancels the call's own chat run and playback. A Talk
+failure, including the two-minute answer timeout, ends capture and playback but
+leaves the accepted chat run to finish in the conversation. The timeout message
+explains that the answer will appear in chat. Leaving the chat, disconnecting, or
+switching away from Talk also detaches without cancelling accepted work. Split Talk
+does not offer realtime voice switching or camera input. Leaving the mode unset
+preserves realtime Talk.
+
 ## Choose a Talk voice from chat
 
 During an active browser, iOS, or Android realtime Talk call, ask the assistant
@@ -124,9 +150,10 @@ places it beside the correct reply. Stopping a call drains finalized speech,
 skips unfinished transcriptions, and records a browser console warning for
 missing transcriptions or unresolved conversation links.
 
-Google Live saves complete utterances during the call, including Gemini 3.1
-transcriptions that omit an explicit transcription-finished flag. Partial text
-stays provisional until the provider's completion boundary.
+Google Live saves complete utterances during the call, including Gemini 3.1 and
+3.8 transcriptions that omit an explicit transcription-finished flag. This also
+applies to Gemini 3.8 Extended Thinking. Partial text from older models stays
+provisional until the provider's completion boundary.
 
 Talk uses the same effective tool permissions as text for the same authenticated
 caller, agent, session, target, operation, and final arguments. An action already
@@ -171,6 +198,13 @@ If session creation fails, Talk releases the microphone before reporting the err
 If OpenAI cannot transcribe an utterance, browser Talk shows the provider's error
 without ending the call or inventing a transcript. You can speak again; audio
 responses continue independently of input transcription.
+
+Browser Gateway-relay Talk tolerates slow audio acknowledgments while keeping
+at most three seconds of microphone audio in flight. Excess frames are dropped
+with a notice asking you to repeat the last part. A successful acknowledgment
+renews the relay's liveness window; if pending audio receives no acknowledgment
+for 30 seconds, Talk ends with a connection error and guidance to restart it.
+Explicit Gateway errors or a lost connection still end the call immediately.
 
 If the microphone disconnects or its permission is revoked, browser Talk ends
 the call and shows an error. Choose an available **Microphone input**, restore

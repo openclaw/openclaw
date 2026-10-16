@@ -1,18 +1,17 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
-import * as chatMessage from "./chat-message-group.ts";
 import {
-  getTranscriptState,
+  render,
+  renderChatThread,
   renderTranscriptSearch,
-  toggleTranscriptSearch,
-} from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.ts";
+} from "../test-helpers/chat-transcript-native.tsx";
+import * as chatMessage from "./chat-message-group-frame.ts";
+import { getTranscriptState, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -28,8 +27,9 @@ describe("chat transcript replies", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  function commitLayout() {
+  async function commitLayout() {
     flush();
+    await Promise.resolve();
     vi.advanceTimersToNextFrame();
     flush();
   }
@@ -73,8 +73,9 @@ describe("chat transcript replies", () => {
     "reveals loaded replies and owns their flash lifetime: $name",
     async ({ reducedMotion, textless }) => {
       const flushFrames = stubAnimationFrames();
-      const commitReplyLayout = () => {
+      const commitReplyLayout = async () => {
         flush();
+        await Promise.resolve();
         flushFrames();
         flush();
       };
@@ -120,7 +121,7 @@ describe("chat transcript replies", () => {
       try {
         preview?.click();
         await Promise.resolve();
-        commitReplyLayout();
+        await commitReplyLayout();
         expect(open).not.toHaveBeenCalled();
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
         if (!textless) {
@@ -132,14 +133,14 @@ describe("chat transcript replies", () => {
         vi.advanceTimersByTime(duration / 2);
         preview?.click();
         await Promise.resolve();
-        commitReplyLayout();
+        await commitReplyLayout();
         vi.advanceTimersByTime(duration - 1);
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
         vi.advanceTimersByTime(1);
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
         preview?.click();
         await Promise.resolve();
-        commitReplyLayout();
+        await commitReplyLayout();
         transcript.hostDisconnected();
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
       } finally {
@@ -509,7 +510,7 @@ describe("chat transcript replies", () => {
       expect(threadContainer.querySelector(sourceSelector)).toBeNull();
       requireElement(threadContainer, ".chat-reply-attribution button").click();
       await vi.advanceTimersByTimeAsync(0);
-      commitLayout();
+      await commitLayout();
 
       expect(searchContainer.querySelector("input")).toBeNull();
       if (loaded) {
@@ -589,6 +590,7 @@ describe("chat transcript replies", () => {
             ?.querySelector(".chat-reply-attribution--reply"),
           "reply attribution",
         );
+      const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
       try {
         rerender();
         transcript.hostConnected();
@@ -604,7 +606,8 @@ describe("chat transcript replies", () => {
             ?.getAttribute("data-chat-row-key"),
           "unrelated group key",
         );
-        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+        expect(prepareFrame.mock.calls.some(([group]) => group.key === unrelatedKey)).toBe(true);
+        prepareFrame.mockClear();
 
         for (const [name, text] of [
           ["Carol", "Original question loaded"],
@@ -624,7 +627,7 @@ describe("chat transcript replies", () => {
           expect(
             attribution().querySelector("button .chat-reply-attribution__name")?.textContent,
           ).toBe(name);
-          expect(renderGroup.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual(
+          expect(prepareFrame.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual(
             [],
           );
         }

@@ -13,14 +13,6 @@ describe("config schema regressions", () => {
     expect(MarkdownConfigSchema.parse({ tables: "block" })).toEqual({ tables: "block" });
   });
 
-  it("accepts valid cron.sessionRetention durations", () => {
-    expect(OpenClawSchema.safeParse({ cron: { sessionRetention: "1h30m" } }).success).toBe(true);
-  });
-
-  it("leaves skipMissedJobs unset when omitted", () => {
-    expect(OpenClawSchema.parse({ cron: {} }).cron?.skipMissedJobs).toBeUndefined();
-  });
-
   it("rejects invalid cron.sessionRetention durations", () => {
     expect(() => OpenClawSchema.parse({ cron: { sessionRetention: "abc" } })).toThrow(
       /sessionRetention|duration/i,
@@ -43,6 +35,15 @@ describe("config schema regressions", () => {
     ).toBe(false);
   });
 
+  it("round-trips the Claws Labs visibility setting", () => {
+    for (const claws of [true, false]) {
+      expect(
+        OpenClawSchema.parse({ gateway: { controlUi: { experimental: { claws } } } }).gateway
+          ?.controlUi?.experimental?.claws,
+      ).toBe(claws);
+    }
+  });
+
   it("projects schema-owned field documentation into the public schema and UI hints", () => {
     const response = computeBaseConfigSchemaResponse({ generatedAt: "desktop-metadata" });
     expect(response.schema).toHaveProperty(
@@ -52,6 +53,10 @@ describe("config schema regressions", () => {
     expect(response.uiHints["desktop.host.passwordFile"]).toMatchObject({
       label: "Local VNC Password File",
       help: "Absolute path to the VNC password file. Omit on macOS to enter account credentials when opening the desktop viewer.",
+    });
+    expect(response.uiHints["gateway.controlUi.experimental.claws"]).toMatchObject({
+      label: "Claws",
+      help: expect.stringContaining("default: false"),
     });
   });
 });

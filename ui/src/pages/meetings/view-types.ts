@@ -4,7 +4,7 @@ import type {
   TranscriptsListResult,
 } from "@openclaw/gateway-protocol";
 
-export type TranscriptReadState = {
+type TranscriptReadState = {
   summary: TranscriptsGetResult | null;
   pages: TranscriptsGetResult[];
   loading: boolean;

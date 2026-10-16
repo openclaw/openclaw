@@ -26,7 +26,7 @@ import {
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 const mainAgents: AgentsListResult = {
   defaultId: "main",
@@ -88,7 +88,6 @@ describe("sidebar routed-lineage freshness", () => {
       childSessions: [selected.key],
     };
     const initialParent = deferred<{ session: GatewaySessionRow }>();
-    const freshSelected = deferred<{ session: GatewaySessionRow }>();
     const request = vi.fn(async (method, raw) => {
       const params = raw && typeof raw === "object" ? raw : {};
       if (method === "sessions.list") {
@@ -100,7 +99,7 @@ describe("sidebar routed-lineage freshness", () => {
       if (method === "sessions.describe") {
         const key = "key" in params ? params.key : undefined;
         if (key === selected.key) {
-          return freshSelected.promise;
+          return { session: selected };
         }
         if (key === mainKey) {
           return initialParent.promise;
@@ -121,6 +120,10 @@ describe("sidebar routed-lineage freshness", () => {
 
       sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
       expect(sidebar.sessionData.childSessionRowsByParent).toEqual({});
+      expect(sidebar.sessionData.activeSessionLineageSelectedRow).toMatchObject({
+        key: selected.key,
+        sessionId: selected.sessionId,
+      });
       await waitForFast(() =>
         expect(request).toHaveBeenCalledWith(
           "sessions.list",
@@ -128,13 +131,9 @@ describe("sidebar routed-lineage freshness", () => {
         ),
       );
       await waitForFast(() => expect(sidebar.sessionData.sessionsResult?.sessions).toEqual([]));
-      await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith("sessions.describe", { key: selected.key }),
-      );
       await sidebar.updateComplete;
       expect(row()).toBeNull();
 
-      freshSelected.resolve({ session: selected });
       initialParent.resolve({ session: parent });
       await waitForFast(() =>
         expect(sidebar.sessionData.activeSessionLineageRoot?.key).toBe(mainKey),
@@ -168,7 +167,6 @@ describe("sidebar routed-lineage freshness", () => {
       provider.remove();
       sessions.dispose();
       initialParent.resolve({ session: parent });
-      freshSelected.resolve({ session: selected });
       await sidebar.updateComplete;
     }
   });

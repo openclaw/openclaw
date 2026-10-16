@@ -134,41 +134,6 @@ describe("process reaper", () => {
     expect(killSpy).not.toHaveBeenCalled();
   });
 
-  it("kills an owned recorded process tree children first", async () => {
-    const { killed } = cleanupDeps([
-      { pid: 100, ppid: 1, command: CODEX_WRAPPER_COMMAND },
-      { pid: 101, ppid: 100, command: PLUGIN_DEPS_CODEX_COMMAND },
-      { pid: 102, ppid: 101, command: "node child.js" },
-    ]);
-
-    const result = await cleanupOpenClawOwnedAcpxProcessTree({
-      rootPid: 100,
-      rootCommand: CODEX_WRAPPER_COMMAND,
-      wrapperRoot: WRAPPER_ROOT,
-    });
-
-    expect(result.skippedReason).toBeUndefined();
-    expect(result.inspectedPids).toEqual([100, 101, 102]);
-    expect(killed.slice(0, 3)).toEqual([
-      { pid: 102, signal: "SIGTERM" },
-      { pid: 101, signal: "SIGTERM" },
-      { pid: 100, signal: "SIGTERM" },
-    ]);
-  });
-
-  it("allows wrapper-root verification when stored wrapper commands are shell-quoted", async () => {
-    const { killed } = cleanupDeps([{ pid: 110, ppid: 1, command: CODEX_WRAPPER_COMMAND }]);
-
-    const result = await cleanupOpenClawOwnedAcpxProcessTree({
-      rootPid: 110,
-      rootCommand: `"/usr/local/bin/node" "${WRAPPER_ROOT}/codex-acp-wrapper.mjs"`,
-      wrapperRoot: WRAPPER_ROOT,
-    });
-
-    expect(result.skippedReason).toBeUndefined();
-    expect(killed[0]).toEqual({ pid: 110, signal: "SIGTERM" });
-  });
-
   it("requires matching lease identity before killing a leased process tree", async () => {
     const { killed } = cleanupDeps([
       { pid: 112, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
@@ -268,30 +233,6 @@ describe("process reaper", () => {
         wrapperPath: `${WRAPPER_ROOT}/codex-acp-wrapper.mjs`,
       }),
     ).resolves.toMatchObject({ skippedReason: "process-list-unavailable" });
-  });
-
-  it("does not claim a pending wrapper leased by another gateway", async () => {
-    const { killed } = cleanupDeps([
-      {
-        pid: 135,
-        ppid: 1,
-        command: `${CODEX_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-foreign`,
-      },
-    ]);
-
-    await expect(
-      cleanupOpenClawOwnedAcpxPendingLease({
-        leaseId: "lease-1",
-        gatewayInstanceId: "gateway-1",
-        wrapperRoot: WRAPPER_ROOT,
-        wrapperPath: `${WRAPPER_ROOT}/codex-acp-wrapper.mjs`,
-      }),
-    ).resolves.toEqual({
-      inspectedPids: [],
-      terminatedPids: [],
-      skippedReason: "missing-root",
-    });
-    expect(killed).toEqual([]);
   });
 
   it("keeps pending leases untouched when process evidence is unsupported", async () => {

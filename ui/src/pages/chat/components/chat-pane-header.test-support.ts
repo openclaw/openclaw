@@ -1,9 +1,39 @@
-import { html, nothing, render } from "lit";
-import { vi } from "vitest";
+import { nothing } from "lit";
+import { createComponent, createSignal, flush } from "solid-js";
+import { expect, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { renderChatPaneHeader } from "./chat-pane-header.ts";
 
 export type ChatPaneHeaderProps = Parameters<typeof renderChatPaneHeader>[0];
+
+async function settleNativeMenu() {
+  flush();
+  await Promise.resolve();
+  flush();
+}
+
+export async function openNativeMenu(menu: Element) {
+  await settleNativeMenu();
+  const panel = menu.querySelector<HTMLElement>(".oc-menu")!;
+  if (!panel.matches(":popover-open")) {
+    menu.querySelector<HTMLButtonElement>(".oc-menu-trigger")!.click();
+    await settleNativeMenu();
+  }
+  expect(panel.matches(":popover-open")).toBe(true);
+}
+
+export async function selectNativeMenu(menu: Element, value: string) {
+  await openNativeMenu(menu);
+  const item = menu.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`);
+  if (!item) {
+    throw new Error(`Expected native menu action: ${value}`);
+  }
+  expect(item.disabled).toBe(false);
+  item.click();
+  await settleNativeMenu();
+}
 
 export function chatPaneHeaderSessionRow(
   patch: Partial<GatewaySessionRow> = {},
@@ -24,6 +54,7 @@ export function mountChatPaneHeader(
   containers.push(container);
   const props: ChatPaneHeaderProps = {
     paneId: "pane-1",
+    presented: true,
     narrow: false,
     mergedChrome: false,
     title: "Session title",
@@ -42,8 +73,6 @@ export function mountChatPaneHeader(
     canReveal: true,
     copiedAction: null,
     renameDisabledReason: undefined,
-    panelActions: nothing,
-    panelLayoutActions: nothing,
     sessionMenuAction: nothing,
     onBeginRename: vi.fn(),
     onRenameInput: vi.fn(),
@@ -55,8 +84,27 @@ export function mountChatPaneHeader(
     onBranchSelect: vi.fn(),
     ...patch,
   };
-  render(html`${renderChatPaneHeader(props)}`, container);
-  return { container, props };
+  const [current, setCurrent] = createSignal(props);
+  const mounted = mountSolid(
+    () =>
+      createComponent(LitContent, {
+        get value() {
+          return renderChatPaneHeader(current());
+        },
+      }),
+    { container },
+  );
+  return {
+    container,
+    get props() {
+      return current();
+    },
+    unmount: mounted.unmount,
+    update(this: void, changes: Partial<ChatPaneHeaderProps>) {
+      setCurrent({ ...current(), ...changes });
+      flush();
+    },
+  };
 }
 
 export function mockWorkspaceIconFetch() {

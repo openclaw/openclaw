@@ -53,9 +53,9 @@ Supported actions depend on the source host and its capabilities:
 
 ## Enable supervision
 
-Guided `openclaw onboard` and macOS first-run setup attempt to install and
-enable Codex supervision after detecting a native Codex installation and
-successfully activating the selected inference backend. Codex does not need to
+Guided `openclaw onboard` attempts to install and enable Codex supervision
+after detecting a native Codex installation and successfully activating the
+selected inference backend. Codex does not need to
 be the primary backend. Supervision becomes available when that opportunistic
 plugin activation succeeds. App Server availability is checked when
 supervision first connects. An explicit Codex plugin disable or policy block
@@ -65,6 +65,8 @@ operator catalog remains registered whenever the Codex plugin is active unless
 `sessionCatalog.enabled: false` disables it. This separate switch leaves the
 Codex provider, harness, and agent-facing supervision policy unchanged while
 also removing the paired-node catalog list/read commands from this host.
+Automatic macOS first-run setup leaves native conversation discovery off;
+enable it separately when you want native sessions in the sidebar.
 Existing installations can enable the same capability manually:
 
 Enable the `codex` plugin and its supervision capability in `openclaw.json`:
@@ -99,16 +101,27 @@ is never exposed in the catalog. List, read, continue, archive, adopt, and
 terminal resume keep the selected source while retaining the explicit OpenClaw
 route agent as owner. The ordinary Codex harness remains agent-scoped by default.
 Set `appServer.homeScope: "user"` explicitly if the harness should share native
-Codex state too. Supervision honors explicit `appServer` connection settings
+Codex state too. Automatic setup selects this mode when it reuses an existing
+Codex ChatGPT or API-key login. The harness then shares `CODEX_HOME` (or
+`~/.codex`), including the native login, threads, and `config.toml`. Codex owns
+authentication and token refresh; OpenClaw does not copy or register the OAuth
+tokens in its auth store. Supervision honors explicit `appServer` connection settings
 instead of replacing them with its local user-home default.
+
+New ChatGPT sign-ins offered by automatic setup use an isolated OpenClaw agent
+home. To switch a reused native login to a separate login, open **Model Setup**
+and sign in with ChatGPT or enter an OpenAI API key. Completing sign-in selects
+`plugins.entries.codex.config.appServer.homeScope: "agent"` automatically.
+The separate login does not share native Codex threads or configuration.
+Manual selection of detected Codex retains its existing API-key import behavior.
 
 To share a running local daemon and its existing `config.toml` and login, use
 the [local Codex configuration setup](/plugins/codex-harness/native-features#use-an-existing-local-configtoml).
 
 Catalog reads use the selected store's native Codex authentication, including
 when that store is under an OpenClaw agent directory. Browsing stored sessions
-does not require importing a native credential into OpenClaw. Ordinary managed
-agent runs retain their own credential-import and authentication requirements.
+does not require importing a native credential into OpenClaw. Agent-scoped
+managed runs retain their own credential-import and authentication requirements.
 
 A Gateway-local Chat adopted from the **Codex** sidebar group is not an ordinary harness session.
 Its private supervision binding uses the supervision connection for source
@@ -628,7 +641,9 @@ and accepts 1 through 1,000 rows per endpoint. It does not cap loaded rows.
 Without raw-transcript permission, list results omit transcript-derived names,
 previews, and detailed endpoint errors.
 `codex_session_read` requires `allowRawTranscripts`. `include_turns: true`
-additionally asks Codex for turns.
+additionally asks Codex for turns. Permitted session metadata and transcript
+content preserve tool arguments and results without secret masking. Endpoint
+configuration credentials remain masked.
 
 `codex_session_send` and `codex_session_interrupt` require
 `allowWriteControls`. Send accepts `mode: "auto" | "start" | "steer"`, but

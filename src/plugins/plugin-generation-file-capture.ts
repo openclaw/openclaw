@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   createRootFileCopyBatchSync,
+  createRootFileOpenBatchSync,
   type RootFileCopyBatchSync,
+  type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
 import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
@@ -68,7 +70,12 @@ export function createPluginGenerationFileCapture({
 }) {
   const { additions } = sourceCapture;
   const ancestors = new Set<string>();
-  const copy = (source: string, target: string, copyFile: RootFileCopyBatchSync["copyFile"]) => {
+  const copy = (
+    source: string,
+    target: string,
+    copyFile: RootFileCopyBatchSync["copyFile"],
+    openFile: RootFileOpenBatchSync["openFile"],
+  ) => {
     // Metadata can precede its package body; promotion never replaces those captured bytes.
     if (capturedPaths.get(path.resolve(source)) === target) {
       return;
@@ -113,7 +120,7 @@ export function createPluginGenerationFileCapture({
             sourceLinks.defer(path.join(input, name), inputBoundary, path.join(source, name))
           )
         ) {
-          copy(path.join(source, name), path.join(target, name), copyFile);
+          copy(path.join(source, name), path.join(target, name), copyFile, openFile);
         }
       }
       ancestors.delete(real);
@@ -142,20 +149,28 @@ export function createPluginGenerationFileCapture({
           captured ?? real,
           captured ? directory : inputBoundary,
           target,
-          { hashCopiedContent: true, copyFile, ...(captured ? { preserveSourceMode: true } : {}) },
+          {
+            hashCopiedContent: true,
+            copyFile,
+            openFile,
+            ...(captured ? { preserveSourceMode: true } : {}),
+          },
         );
       }
-      receipt.file({
-        target: native?.path ?? target,
-        boundary: native?.boundary ?? directory,
-        sizeBytes: Number(stat.size),
-        native: native !== undefined,
-        prepared: native?.content ?? copiedContent,
-        onContent: (content) => {
-          native?.record(content);
-          sourceFacts?.set(path.relative(directory, target), content);
+      receipt.file(
+        {
+          target: native?.path ?? target,
+          boundary: native?.boundary ?? directory,
+          sizeBytes: Number(stat.size),
+          native: native !== undefined,
+          prepared: native?.content ?? copiedContent,
+          onContent: (content) => {
+            native?.record(content);
+            sourceFacts?.set(path.relative(directory, target), content);
+          },
         },
-      });
+        openFile,
+      );
       if (path.basename(target) === "package.json") {
         onPackageMetadata(source, target);
       }
@@ -165,6 +180,8 @@ export function createPluginGenerationFileCapture({
   };
   return (source: string, target: string) => {
     using batch = createRootFileCopyBatchSync();
-    return copy(source, target, batch.copyFile.bind(batch));
+    // Retained roots never outlive this synchronous capture or reach tree retirement.
+    using opened = createRootFileOpenBatchSync();
+    return copy(source, target, batch.copyFile.bind(batch), opened.openFile.bind(opened));
   };
 }

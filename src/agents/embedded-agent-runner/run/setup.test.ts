@@ -246,6 +246,100 @@ function createConfiguredModel(
 }
 
 describe("resolveEmbeddedRuntimeModelPolicy", () => {
+  it.each([
+    { fastMode: "ultrafast" as const, serviceTier: undefined, expected: 260_000 },
+    { fastMode: true, serviceTier: undefined, expected: 922_000 },
+    { fastMode: false, serviceTier: "ultrafast", expected: 922_000 },
+    { fastMode: "ultrafast" as const, serviceTier: "priority", expected: 260_000 },
+    { fastMode: "ultrafast" as const, serviceTier: "default", expected: 260_000 },
+  ])(
+    "caps client compaction only for the effective Ultrafast tier: $fastMode/$serviceTier",
+    ({ fastMode, serviceTier, expected }) => {
+      const result = resolveEmbeddedRunEffectiveModel({
+        runParams: {
+          sessionId: "tier-budget",
+          workspaceDir: hookContext.workspaceDir,
+          prompt: "hello",
+          runId: "tier-budget",
+          timeoutMs: 5_000,
+          fastMode,
+          config: {
+            agents: {
+              defaults: {
+                models: { "openai/gpt-5.5": { params: { fastMode: true, serviceTier } } },
+              },
+            },
+          },
+        },
+        provider: "openai",
+        modelConfigProvider: "openai",
+        modelId: "gpt-5.5",
+        agentHarnessId: "openclaw",
+        nativeModelOwned: false,
+        runtimeModel: { ...createRuntimeModel(), contextTokens: 922_000 },
+      });
+      expect(result.contextTokenBudget).toBe(expected);
+      expect(result.effectiveModel.contextWindow).toBe(expected);
+      if (expected === 260_000) {
+        expect(result.contextWindowInfo?.referenceTokens).toBe(922_000);
+        expect(result.contextTokensSource).toBeUndefined();
+      }
+    },
+  );
+
+  it("ignores undefined stream overrides when budgeting configured Ultrafast", () => {
+    const result = resolveEmbeddedRunEffectiveModel({
+      runParams: {
+        sessionId: "tier-budget",
+        workspaceDir: hookContext.workspaceDir,
+        prompt: "hello",
+        runId: "tier-budget",
+        timeoutMs: 5_000,
+        streamParams: { fastMode: undefined },
+        config: {
+          agents: {
+            defaults: {
+              params: { fastMode: "ultrafast", responsesServerCompaction: false },
+            },
+          },
+        },
+      },
+      provider: "openai",
+      modelConfigProvider: "openai",
+      modelId: "gpt-5.5",
+      agentHarnessId: "openclaw",
+      nativeModelOwned: false,
+      runtimeModel: { ...createRuntimeModel(), contextTokens: 922_000 },
+    });
+    expect(result.contextTokenBudget).toBe(260_000);
+  });
+
+  it.each([["default", "priority"], ["default"]])(
+    "preserves the budget when model policy downgrades Ultrafast: %j",
+    (...requestServiceTiers) => {
+      const params = {
+        cfg: {},
+        provider: "openai",
+        modelId: "gpt-5.5",
+        runtimeModel: { ...createRuntimeModel(), contextTokens: 922_000 },
+        nativeModelOwned: false,
+        requestServiceTiers,
+      };
+      expect(
+        resolveEmbeddedRuntimeModelPolicy({
+          ...params,
+          requestExtraParams: { fastMode: "ultrafast" },
+        }).contextTokenBudget,
+      ).toBe(922_000);
+      expect(
+        resolveEmbeddedRuntimeModelPolicy({
+          ...params,
+          requestExtraParams: { serviceTier: "ultrafast" },
+        }).contextTokenBudget,
+      ).toBe(260_000);
+    },
+  );
+
   it("keeps an unknown model's generic fallback untrusted", () => {
     const result = resolveEmbeddedRuntimeModelPolicy({
       cfg: {},

@@ -1,24 +1,23 @@
-import path from "node:path";
 import { getRuntimeConfig } from "../config/io.js";
-import { captureSessionEntryRead } from "../config/sessions/session-accessor.sqlite-entry-read-lifetime.js";
+import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
 import type { SessionActorHotState } from "../config/sessions/session-actor-contract.js";
-import {
-  captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { assertCapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.js";
 import { attachSessionEntrySnapshots } from "../config/sessions/session-entry-snapshot-values.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
+import {
+  captureSessionStoreReadCandidate,
+  isSessionStoreReadCandidateCurrent,
+} from "../config/sessions/session-store-read-candidates.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { isOpenClawAgentDatabasePathCurrent } from "../state/openclaw-agent-db-identity.js";
-import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { omitInternalSessionEffectsEntries } from "./session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
 function captureMemoryRead(params: {
   cfg?: OpenClawConfig;
@@ -27,10 +26,6 @@ function captureMemoryRead(params: {
   env?: NodeJS.ProcessEnv;
   projection?: SessionEntryReadScope["projection"];
 }) {
-  const binding = getSessionActorStorageBinding({});
-  if (!binding) {
-    return undefined;
-  }
   const cfg = params.cfg ?? getRuntimeConfig();
   const { canonicalKey, agentId } = resolveSessionStoreIdentity({
     cfg,
@@ -40,31 +35,34 @@ function captureMemoryRead(params: {
   if (!isIncognitoSessionKey(canonicalKey)) {
     return undefined;
   }
-  const requestedPath =
-    params.env && resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: params.env });
-  const captured = captureSessionActorStorageOwner({
-    agentId,
-    storePath: requestedPath,
-    sessionActor: binding,
-  });
-  const storePath =
-    captured?.path ??
-    resolveIncognitoOpenClawAgentSqlitePath({
-      agentId,
-      env: { OPENCLAW_STATE_DIR: path.resolve(binding.path, "../../../..") },
-    });
+  const captured = captureSessionActorStorageOwner(
+    { agentId, sessionKey: canonicalKey, env: params.env },
+    { assertCurrent() {}, authorize() {} },
+  );
+  if (!captured) {
+    throw new Error("Incognito session read requires a memory owner selection");
+  }
+  const { binding, authority, owner, path: storePath } = captured;
+  const assertCurrent = () => {
+    if (binding) {
+      binding.actor.assertReadable();
+    } else {
+      owner?.assertCurrent();
+    }
+    authority.assertCurrent();
+  };
   const read = () => {
     let snapshot: SessionActorHotState | undefined;
-    if (binding.actor.target.sessionKey === canonicalKey) {
-      snapshot = binding.actor.snapshot(binding.authority);
+    if (binding?.actor.target.sessionKey === canonicalKey) {
+      snapshot = binding.actor.snapshot(authority);
     } else {
-      binding.actor.assertReadable();
-      snapshot = captured?.owner?.readSession(canonicalKey, binding.authority);
+      binding?.actor.assertReadable();
+      snapshot = owner?.readSession(canonicalKey, authority);
     }
     return snapshot?.entry && attachSessionEntrySnapshots(snapshot.entry, {}, params.projection);
   };
   return {
-    binding,
+    assertCurrent,
     read,
     loaded() {
       const entry = read();
@@ -93,9 +91,10 @@ export async function withGatewaySessionEntryReadOnly<T>(
     assertActive?: () => void;
     excludeInternalEffects?: boolean;
     projection?: SessionEntryReadScope["projection"];
+    prepared?: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
   },
   consume: (
-    loaded: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+    loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
     assertCurrent: () => void,
   ) => Promise<T>,
 ): Promise<T> {
@@ -113,87 +112,40 @@ export async function withGatewaySessionEntryReadOnly<T>(
           throw new Error("Session entry read is no longer retained");
         }
         params.assertActive?.();
-        memory.binding.actor.assertReadable();
-        memory.binding.authority.assertCurrent();
+        memory.assertCurrent();
       });
     } finally {
       active = false;
     }
   }
-  const binding = captureIncognitoSessionSource({
-    agentId: params.agentId,
-    sessionKey: params.key,
-    env: params.env,
-  });
-  if (!binding) {
-    const loaded = await loadGatewaySessionEntryReadOnlyInWorker(params);
-    return consume(loaded, () => params.assertActive?.());
+  const loaded = params.prepared ?? (await loadGatewaySessionEntryReadOnlyInWorker(params));
+  if (params.prepared && params.excludeInternalEffects) {
+    omitInternalSessionEffectsEntries(loaded.store, loaded.storeKeys);
+    loaded.entry = loaded.store[loaded.legacyKey ?? loaded.canonicalKey];
   }
-  const { agentId, canonicalKey } = resolveSessionStoreIdentity({
-    cfg: params.cfg,
-    sessionKey: params.key,
-    agentId: params.agentId,
-  });
-  const owner = "kind" in binding ? binding : binding.actor;
-  captureIncognitoSessionSource({
-    agentId,
-    sessionKey: canonicalKey,
-    storePath: owner.path,
-    env: params.env,
-  });
-  const assertCurrent = () => {
-    params.assertActive?.();
-    binding.admissionSignal?.throwIfAborted();
-    if ("kind" in binding) {
-      binding.assertCurrent();
-    } else {
-      binding.actor.assertReadable();
-    }
-  };
-  const run = async () => {
-    assertCurrent();
-    const entry =
-      "kind" in binding
-        ? undefined
-        : (
-            await binding.actor.sessions.read(
-              { assertCurrent },
-              { sessionKey: canonicalKey },
-              binding.admissionSignal,
-            )
-          ).entry;
-    assertCurrent();
-    const store = entry ? { [canonicalKey]: entry } : {};
-    if (params.excludeInternalEffects) {
-      omitInternalSessionEffectsEntries(store, [canonicalKey]);
-    }
-    const result = await consume(
-      {
-        cfg: params.cfg,
-        agentId,
-        canonicalKey,
-        storePath: owner.path,
-        storeKeys: [canonicalKey],
-        store,
-        entry: store[canonicalKey],
-        legacyKey: undefined,
-        readSource: { agentId, path: owner.path },
-      },
-      assertCurrent,
-    );
-    assertCurrent();
-    return result;
-  };
-  return "kind" in binding ? run() : binding.actor.sessions.withSharedState(run);
+  return consume(loaded, () => params.assertActive?.());
 }
 
 /** Retain the selected row and physical owner through asynchronous metadata preparation. */
-export function retainGatewaySessionEntryReadOnly(
+export async function retainGatewaySessionEntryReadOnly(
   sessionKey: string,
-  agentId: string,
-  allowMetadataChanges?: Parameters<typeof captureSessionEntryRead>[2],
-  cfg?: Parameters<typeof loadGatewaySessionEntryReadOnly>[2],
+  agentId: string | undefined,
+  allowMetadataChanges?: (previous: SessionEntry, current: SessionEntry) => boolean,
+  cfg: OpenClawConfig = getRuntimeConfig(),
+  options: {
+    exactRead?: true;
+    preserveQualifiedAddress?: true;
+    prepared?: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
+  } = {},
 ) {
+  const matches = (previous: SessionEntry | undefined, current: SessionEntry | undefined) =>
+    previous && current
+      ? previous.sessionId === current.sessionId &&
+        previous.lifecycleRevision === current.lifecycleRevision &&
+        (JSON.stringify({ ...previous, lastReadAt: undefined }) ===
+          JSON.stringify({ ...current, lastReadAt: undefined }) ||
+          allowMetadataChanges?.(previous, current) === true)
+      : previous === current;
   const memory = captureMemoryRead({ cfg, key: sessionKey, agentId, projection: "list" });
   if (memory) {
     const selected = memory.loaded();
@@ -203,8 +155,7 @@ export function retainGatewaySessionEntryReadOnly(
         return false;
       }
       try {
-        memory.binding.actor.assertReadable();
-        memory.binding.authority.assertCurrent();
+        memory.assertCurrent();
         return true;
       } catch {
         return false;
@@ -212,6 +163,7 @@ export function retainGatewaySessionEntryReadOnly(
     };
     return {
       ...selected,
+      readRetainedEntry: memory.read,
       isCurrent,
       isCurrentAtResponse: () => {
         if (released) {
@@ -223,93 +175,84 @@ export function retainGatewaySessionEntryReadOnly(
         } catch {
           return false;
         }
-        const previous = selected.entry;
-        if (!previous || !current) {
-          return previous === current;
-        }
-        return (
-          previous.sessionId === current.sessionId &&
-          previous.lifecycleRevision === current.lifecycleRevision &&
-          (JSON.stringify({ ...previous, lastReadAt: undefined }) ===
-            JSON.stringify({ ...current, lastReadAt: undefined }) ||
-            allowMetadataChanges?.(previous, current) === true)
-        );
+        return matches(selected.entry, current);
       },
       release() {
         released = true;
       },
     };
   }
-  const options = { agentId, projection: "list" as const };
-  const selected = loadGatewaySessionEntryReadOnly(sessionKey, options, cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
+    { sessionKey, agentId, preserveQualifiedAddress: options.preserveQualifiedAddress },
+  ]);
   let released = false;
-  const sameRoute = () => {
-    const current = loadGatewaySessionEntryReadOnly(sessionKey, options, cfg);
-    return (
-      current.agentId === selected.agentId &&
-      current.canonicalKey === selected.canonicalKey &&
-      current.legacyKey === selected.legacyKey &&
-      current.storePath === selected.storePath &&
-      current.readSource?.agentId === selected.readSource?.agentId &&
-      current.readSource?.path === selected.readSource?.path
-    );
-  };
-  if (!selected.readSource) {
-    // A missing saved session has no private selection and must stay absent until publication.
-    return {
-      ...selected,
-      isCurrent: () => !released,
-      isCurrentAtResponse: () =>
-        !released &&
-        sameRoute() &&
-        loadGatewaySessionEntryReadOnly(sessionKey, options, cfg).entry === undefined,
-      release: () => {
-        released = true;
-      },
-    };
-  }
-  const retained = retainOpenClawAgentDatabaseReadOnly(selected.readSource);
-  if (!retained.found) {
-    throw new Error("Session store changed while preparing its metadata. Retry the request.");
-  }
-  const { database, claim } = retained;
-  let entryRead: ReturnType<typeof captureSessionEntryRead> | undefined;
+  let invalidated = false;
+  const stopChanges = sessionChanges.subscribeFacts((change) => {
+    if ("all" in change || change.sessionKey === sessionKey) {
+      invalidated = true;
+    }
+  });
+  let predicate: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   let unregister = () => {};
   const release = () => {
     if (released) {
       return;
     }
     released = true;
+    stopChanges();
+    predicate?.release();
     unregister();
-    entryRead?.release();
-    claim.release();
   };
   try {
-    entryRead = captureSessionEntryRead(
-      database,
-      selected.legacyKey ?? selected.canonicalKey,
-      allowMetadataChanges,
-    );
-    const read = entryRead;
-    unregister = registerOpenClawAgentDatabaseAsyncResource({
-      agentId: database.agentId,
-      path: database.path,
-      revoke: release,
-      // Metadata holds no asynchronous database operation or write to settle.
-      close: () => Promise.resolve(),
-    });
+    // A caller that already selected a physical source retains that source without discovery.
+    const selected =
+      options.prepared ??
+      (await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg,
+        key: sessionKey,
+        agentId,
+        projection: "list",
+        exactRead: options.exactRead,
+        preserveQualifiedAddress: options.preserveQualifiedAddress,
+      }));
+    const source = selected.capturedReadSource;
+    const selectedPath = captureSessionStoreReadCandidate(selected.storePath);
+    if (source && typeof source.databaseIdentity === "string") {
+      predicate = retainPreparedSessionEntryPredicate({
+        databaseIdentity: `file:${source.databaseIdentity}`,
+        sessionKey: selected.legacyKey ?? selected.canonicalKey,
+        entry: selected.entry,
+        matches,
+      });
+      unregister = registerOpenClawAgentDatabaseAsyncResource({
+        agentId: source.agentId,
+        path: source.path,
+        revoke: release,
+        close: () => Promise.resolve(),
+      });
+      stopChanges();
+    }
     return {
       ...selected,
-      entry: read.entry,
-      // Catalog projection calls this per model; exact target reads belong at publication.
-      isCurrent: () => !released && claim.isCurrent(),
-      // Re-read canonical target facts and verify physical ownership before publishing.
-      isCurrentAtResponse: () =>
-        !released &&
-        claim.isCurrent() &&
-        read.isCurrent() &&
-        isOpenClawAgentDatabasePathCurrent(database) &&
-        sameRoute(),
+      readRetainedEntry: () => (predicate ? predicate.readRetainedEntry() : selected.entry),
+      isCurrent: () => !released,
+      isCurrentAtResponse: () => {
+        if (released || (predicate ? !predicate.isCurrent() : invalidated)) {
+          return false;
+        }
+        try {
+          if (!isSessionStoreReadCandidateCurrent(selectedPath)) {
+            return false;
+          }
+          assertRoutingCurrent(getRuntimeConfig());
+          if (source) {
+            assertCapturedSessionEntryReadSource(source);
+          }
+          return true;
+        } catch {
+          return false;
+        }
+      },
       release,
     };
   } catch (error) {

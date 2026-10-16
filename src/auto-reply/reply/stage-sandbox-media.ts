@@ -57,6 +57,7 @@ export async function stageSandboxMedia(params: {
   skillsSnapshot?: SkillSnapshot;
   remoteMediaMode?: "sandbox-or-cache" | "cache";
   abortSignal?: AbortSignal;
+  awaitSessionDiffBaseline?: () => Promise<void>;
 }): Promise<StageSandboxMediaResult> {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir, abortSignal } = params;
   abortSignal?.throwIfAborted();
@@ -81,6 +82,8 @@ export async function stageSandboxMedia(params: {
   const forceRemoteCache =
     ctx.MediaRemoteHost &&
     (remoteWorkspace?.prepareTurnAttachments || params.remoteMediaMode === "cache");
+  await params.awaitSessionDiffBaseline?.();
+  abortSignal?.throwIfAborted();
   const sandboxParams = {
     config: cfg,
     agentId: params.agentId,
@@ -96,6 +99,8 @@ export async function stageSandboxMedia(params: {
     ).backend === "ssh"
       ? await resolveSandboxContext(sandboxParams)
       : null;
+  using sandboxLifetime = { [Symbol.dispose]: () => sshSandbox?.[Symbol.dispose]?.() };
+  void sandboxLifetime;
   const sandbox = forceRemoteCache
     ? null
     : (sshSandbox ?? (await ensureSandboxWorkspaceForSession(sandboxParams)));

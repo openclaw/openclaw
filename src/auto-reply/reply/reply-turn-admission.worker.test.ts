@@ -11,6 +11,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -77,6 +78,13 @@ it("creates a missing persistent store through reply admission without main-thre
     const sessionKey = "agent:main:first-worker-admission";
     openOpenClawStateDatabase({ env: state.env });
     expect(fs.existsSync(storePath)).toBe(false);
+    const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
+    const sharing = await prepareSessionMutationFacts({
+      cfg,
+      agentId: "main",
+      sessionKey,
+      allowMissing: true,
+    });
     const sql = observeMainThreadSql({ includeClose: true });
     sql.calibrate();
     const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
@@ -88,6 +96,7 @@ it("creates a missing persistent store through reply admission without main-thre
         sessionId: "first-worker-admission-session",
         kind: "visible",
         resetTriggered: false,
+        onDatabaseRegistration: sharing.followRegistration,
       }).then((admitted) => {
         result = admitted;
         return admitted;
@@ -99,6 +108,7 @@ it("creates a missing persistent store through reply admission without main-thre
       expect(result.sessionEntry).toBeUndefined();
       expect(result.databaseClaim.isCurrent()).toBe(true);
       expect(fs.existsSync(storePath)).toBe(true);
+      expect(sharing.readCurrent(cfg).target).toBeNull();
       await completeAdmission(result, sessionKey);
       expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
       sql.expectIdle();
@@ -109,6 +119,7 @@ it("creates a missing persistent store through reply admission without main-thre
       } finally {
         opened.mockRestore();
         sql.restore();
+        sharing.release();
       }
     }
   });

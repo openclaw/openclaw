@@ -10,7 +10,7 @@ import {
 } from "../agents/embedded-agent-runner/runs.js";
 import {
   clearSessionResetRuntimeState,
-  createSessionResetCleanupGuard,
+  prepareSessionResetCleanupGuard,
   SessionResetCleanupError,
   stopSessionResetSubagents,
 } from "../auto-reply/reply/session-reset-cleanup.js";
@@ -51,14 +51,25 @@ export async function ensureSessionRuntimeCleanup(params: {
   sessionLifecycleRevision?: string;
   assertCurrent?: () => void;
 }) {
-  const assertCurrent = createSessionResetCleanupGuard({
-    storePath: params.target.storePath,
-    sessionKey: params.target.canonicalKey,
-    expectedSession: params.sessionId
-      ? { sessionId: params.sessionId, lifecycleRevision: params.sessionLifecycleRevision }
-      : undefined,
-    assertCurrent: params.assertCurrent,
-  });
+  let cleanup: Awaited<ReturnType<typeof prepareSessionResetCleanupGuard>>;
+  try {
+    cleanup = await prepareSessionResetCleanupGuard({
+      agentId: params.target.agentId,
+      storePath: params.target.storePath,
+      sessionKey: params.target.canonicalKey,
+      expectedSession: params.sessionId
+        ? { sessionId: params.sessionId, lifecycleRevision: params.sessionLifecycleRevision }
+        : undefined,
+      assertCurrent: params.assertCurrent,
+    });
+  } catch (error) {
+    if (error instanceof SessionResetCleanupError) {
+      return errorShape(ErrorCodes.UNAVAILABLE, error.message);
+    }
+    throw error;
+  }
+  const assertCurrent = cleanup.assertCurrent;
+  using _ = { [Symbol.dispose]: cleanup.release };
   const queueKeys = [
     ...params.target.storeKeys,
     params.target.canonicalKey,

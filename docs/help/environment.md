@@ -73,24 +73,36 @@ Explicit path variables such as `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, an
 
 Packaged OpenClaw uses `NODE_COMPILE_CACHE/openclaw/<version>/<build>` when
 `NODE_COMPILE_CACHE` is set, or `node-compile-cache/openclaw` under the OS temporary
-directory otherwise. Child processes reuse the same build namespace. Source
-checkouts keep their existing cache-disable policy.
+directory otherwise. Gateway workers and child processes reuse the same build
+namespace, including when running a built source checkout. The Gateway main
+thread stays uncached: Node's synchronous cache flush can stall its event loop
+at startup or shutdown. Workers retain their existing flush boundaries on their
+own threads. An inherited active cache requires a startup respawn; on platforms
+with `execve`, the serving process keeps its PID. Node permission mode retains
+an already-active caller cache because it can forbid process replacement.
+
+Short-lived CLI commands keep their existing policy: caching is opt-in through
+`NODE_COMPILE_CACHE`, and source CLI entrypoints remain uncached. Explicit release
+prewarming still populates the cache. `NODE_DISABLE_COMPILE_CACHE` disables caching
+for both the Gateway and its workers.
 
 Release builds use a stable 16-character hash of the build ID. On Windows,
 OpenClaw skips cache paths longer than 200 characters with a warning and disables
 unsafe inherited caches for child processes, avoiding a Node startup hang.
 
-The compile-cache bootstrap owner starts best-effort maintenance in a background
-worker that does not keep CLI commands alive. Node permission mode skips this
-maintenance because workers do not inherit its filesystem restrictions; cache
-entries remain until removed by an unrestricted invocation or by the operator.
-Cleanup stops when the command exits; long-lived processes give it time to
-complete. It removes superseded build directories as units. At most once an hour, or after retiring another build, it removes bytecode older than seven days
-and trims the current cache to 512 MiB, oldest files first. This is a maintenance
-target, not a hard disk quota: concurrent writes and processes that exit before
-cleanup completes can temporarily exceed it. Interrupted maintenance is eligible
-for another attempt after an hour. Other applications' caches outside
-the `openclaw` subtree are preserved.
+The compile-cache bootstrap owner starts best-effort maintenance in a detached
+process, so cleanup can finish after a short CLI command exits. Node permission
+mode skips maintenance because a child process cannot inherit its filesystem
+restrictions. Other applications' caches outside the `openclaw` subtree are preserved.
+
+Cleanup streams the combined release caches in bounded passes, evicting the oldest
+observed files to target 512 MiB and 4,096 files, and removing bytecode older than
+seven days. Each pass visits at most 16,384 entries and stops scheduling filesystem
+work after 30 seconds. A filesystem lock serializes cleanup; an abandoned lock
+can be reclaimed after five minutes. Only a completed pass advances the hourly
+maintenance timestamp. An incomplete pass leaves the next invocation eligible to
+continue pruning. These are maintenance targets, not hard disk quotas: concurrent
+writes can temporarily exceed them, and a large backlog may need several invocations.
 
 ### Gateway and authentication
 
@@ -174,6 +186,18 @@ examined entries per scan, including excluded entries. Larger trees also fall
 back to refresh-on-search after observation retries are exhausted.
 Skills refreshes during agent preparation after capacity exhaustion, and the
 development supervisor stops its child if observation fails.
+
+## ClawHub install telemetry
+
+Authenticated skill or plugin installs from ClawHub send a best-effort install report.
+See [ClawHub telemetry](/clawhub/telemetry) for what is sent, when it is sent, and
+what is never included.
+
+| Variable                    | Purpose                                                             |
+| --------------------------- | ------------------------------------------------------------------- |
+| `CLAWHUB_DISABLE_TELEMETRY` | Disable ClawHub install reporting with `1`, `true`, `yes`, or `on`. |
+
+`CLAWDHUB_DISABLE_TELEMETRY` is accepted when `CLAWHUB_DISABLE_TELEMETRY` is unset or blank.
 
 ## Provider credentials and workspace `.env`
 

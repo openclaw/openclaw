@@ -28,6 +28,8 @@ describe("session row provenance", () => {
     ["compact-first", "compact"],
     ["descriptor-first", "dashboard"],
     ["compact-first", "dashboard"],
+    ["descriptor-first", "sidebar"],
+    ["compact-first", "sidebar"],
   ] as const)(
     "retains detail facts across %s %s reads and lets full reads clear them",
     (order, rowMode) => {
@@ -44,7 +46,7 @@ describe("session row provenance", () => {
         label: "Before",
         thinkingLevels: [{ id: "high", label: "High" }],
         toolOverrides: { webSearch: false },
-        ...(rowMode === "dashboard" ? { model: "test-model", totalTokens: 123 } : {}),
+        ...(rowMode !== "compact" ? { model: "test-model", totalTokens: 123 } : {}),
       };
       const compact: GatewaySessionRow = {
         ...identity,
@@ -62,7 +64,7 @@ describe("session row provenance", () => {
         label: "Current",
         thinkingLevels: [{ id: "high", label: "High" }],
         toolOverrides: { webSearch: false },
-        ...(rowMode === "dashboard" ? { model: "test-model", totalTokens: 123 } : {}),
+        ...(rowMode !== "compact" ? { model: "test-model", totalTokens: 123 } : {}),
       });
 
       const cleared: GatewaySessionRow = {

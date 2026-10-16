@@ -1,4 +1,8 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import {
   countActiveDescendantRunsFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
@@ -15,7 +19,14 @@ import {
   makeSettledChild,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
-afterEach(() => vi.useRealTimers());
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ session: { mainKey: "main", scope: "per-sender" } });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
+});
 
 it.each(["older batch", "cross-agent descendant", "paused member", "pending cleanup"] as const)(
   "waits only for owned work: %s",
@@ -30,6 +41,7 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
       ...(crossAgent ? { childSessionKey: "agent:research:subagent:short" } : {}),
       createdAt: now - 100,
       endedAt: now,
+      completion: { required: true, terminalReply: { disposition: "empty" } },
       requesterSettleWake: {
         status: "pending",
         attemptCount: 0,
@@ -44,6 +56,7 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
       ...(crossAgent ? { requesterStorePath: "/research/sessions.json" } : {}),
       createdAt: now - 200,
       requesterSessionKey: crossAgent ? short.childSessionKey : REQUESTER,
+      completion: { required: true, terminalReply: { disposition: "empty" } },
       execution:
         scenario === "paused member" || scenario === "pending cleanup"
           ? { status: "terminal", startedAt: now - 200, endedAt: now }

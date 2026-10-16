@@ -1,5 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import type { HarnessCompletionRecovery } from "../../../config/sessions/restart-recovery-types.js";
 import {
   loadSessionEntry,
@@ -60,6 +64,8 @@ describe("embedded run durable writer admission", () => {
   });
 
   it("supersedes the live prior writer, claims the row, and rejects its late append", async () => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(clearRuntimeConfigSnapshot);
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
       activeWriterRunId: "run-a",
@@ -176,6 +182,7 @@ describe("embedded run durable writer admission", () => {
       activeWriterRunId: "run-b",
       lifecycleRevision,
       sessionId,
+      updatedAt: 1,
     });
     expect(params.sessionTarget).toMatchObject({
       expectedLifecycleRevision: lifecycleRevision,
@@ -267,7 +274,7 @@ describe("embedded run durable writer admission", () => {
     expect(lifecycleEvents).toEqual([]);
     expect(
       loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }),
-    ).toMatchObject({ activeWriterRunId: "run-next" });
+    ).toMatchObject({ activeWriterRunId: "run-next", updatedAt: 1 });
     expect(() =>
       staleManager.appendMessage(
         buildAssistantMessage({
@@ -355,7 +362,7 @@ describe("embedded run durable writer admission", () => {
         }
       });
       try {
-        const result = claimAgentSessionWriter({
+        const claiming = claimAgentSessionWriter({
           ...scope,
           admittedRunContext,
           prompt: "completion turn",
@@ -366,9 +373,12 @@ describe("embedded run durable writer admission", () => {
           workspaceDir: "/tmp",
         });
         if (revoke) {
-          await expect(result).rejects.toThrow("admitted run authority is no longer active");
+          await expect(claiming).rejects.toMatchObject({
+            message: "admitted run authority is no longer active",
+            cause: revoked,
+          });
         } else {
-          await result;
+          await claiming;
         }
         expect(loadSessionEntry(scope)).toMatchObject({
           activeWriterRunId: revoke ? "run-a" : "run-b",

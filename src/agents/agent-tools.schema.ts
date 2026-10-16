@@ -61,6 +61,14 @@ export function normalizeToolParameters(
     return tool;
   }
   const parameters = normalizeToolParameterSchema(schema, { ...options, toolName: tool.name });
+  return bindToolParameterSchema(tool, parameters);
+}
+
+/** Bind a prepared descriptor to this attempt's argument preparation and metadata. */
+export function bindToolParameterSchema(
+  tool: AnyAgentTool,
+  parameters: AnyAgentTool["parameters"],
+): AnyAgentTool {
   const normalized = { ...tool, parameters };
   if (isObjectSchemaWithNoRequiredParams(parameters)) {
     normalized.prepareArguments = (args: unknown) => {

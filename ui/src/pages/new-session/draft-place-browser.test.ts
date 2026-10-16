@@ -1,7 +1,7 @@
-import type { ReactiveController } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { ControllerHost } from "../../lib/subscriptions-controller.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -23,7 +23,7 @@ function createBrowser(
   view?: { host: TestReactiveControllerHost; root: HTMLElement },
 ) {
   const host = view?.host ?? new TestReactiveControllerHost();
-  const controllers: ReactiveController[] = [];
+  const controllers: Parameters<ControllerHost["addController"]>[0][] = [];
   vi.spyOn(host, "addController").mockImplementation((controller) => controllers.push(controller));
   const client = {
     request,
@@ -63,7 +63,6 @@ function createBrowser(
       state: {
         groupSettings: [{ name: "Client", cwd: "/workspace/client", worktree: false }],
       },
-      groupsGeneration: () => 1,
       groupsStatus: () => "ready",
     },
   } as unknown as ApplicationContext;
@@ -452,23 +451,6 @@ describe("DraftPlaceBrowser", () => {
     },
   );
 
-  it("tracks overlapping popover hides independently", () => {
-    const { browser } = createBrowser(async () => ({}));
-
-    browser.popoverCallbacks("project").onPopoverHide();
-    browser.popoverCallbacks("where").onPopoverHide();
-
-    expect(browser.popoverHiding("project")).toBe(true);
-    expect(browser.popoverHiding("where")).toBe(true);
-
-    browser.onPopoverAfterHide("project");
-    expect(browser.popoverHiding("project")).toBe(false);
-    expect(browser.popoverHiding("where")).toBe(true);
-
-    browser.onPopoverAfterHide("where");
-    expect(browser.popoverHiding("where")).toBe(false);
-  });
-
   it.each([
     ["the Gateway omits recents", async () => ({ projects: [] })],
     [
@@ -617,13 +599,9 @@ describe("DraftGatewayState", () => {
       method === "projects.list" ? { projects: [] } : { machineName: "Visible Gateway" },
     );
     const fixture = createBrowser(request);
-    const task = (
-      fixture.gateway as unknown as { gatewayNameTask: { taskComplete: Promise<unknown> } }
-    ).gatewayNameTask;
     fixture.hello.features.methods.push("system.info");
     fixture.connectHost();
     fixture.update();
-    await task.taskComplete;
     const requestUpdate = vi.spyOn(fixture.host, "requestUpdate");
     expect(fixture.gateway.gatewayName).toBe("");
     expect(request.mock.calls.some(([method]) => method === "system.info")).toBe(false);
@@ -631,8 +609,7 @@ describe("DraftGatewayState", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     expect(requestUpdate).toHaveBeenCalledOnce();
     fixture.queuedUpdate();
-    await task.taskComplete;
-    expect(fixture.gateway.gatewayName).toBe("Visible Gateway");
+    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Visible Gateway"));
   });
 
   it("ignores a late name from the replaced client", async () => {

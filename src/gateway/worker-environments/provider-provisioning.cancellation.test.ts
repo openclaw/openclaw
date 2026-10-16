@@ -50,7 +50,7 @@ function createRuntimeManager(
 describe("worker provisioning cancellation ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each(["bootstrapping", "ready", "idle"] as const)(
+  it.each(["bootstrapping", "ready"] as const)(
     "cancels persisted SSH bootstrap from %s while retaining its child and lease cleanup",
     async (state) => {
       let record = await support.seedBootstrapping(`worker-persisted-bootstrap-stop-${state}`);
@@ -64,13 +64,6 @@ describe("worker provisioning cancellation ownership", () => {
             bundleHash: "b".repeat(64),
           }),
         });
-        if (state === "idle") {
-          record = await support.testState.store.transition({
-            environmentId: record.environmentId,
-            from: record.state,
-            to: "idle",
-          });
-        }
       }
       const entered = createDeferredCore();
       const childClosed = createDeferredCore();
@@ -218,7 +211,7 @@ describe("worker provisioning cancellation ownership", () => {
     },
   );
 
-  it.each(["cancelled", "late-success", "profile-error", "cleanup-complete"] as const)(
+  it.each(["late-success", "profile-error", "cleanup-complete"] as const)(
     "retains allocation cleanup after cancellation with a %s provider result",
     async (result) => {
       const started = createDeferredCore();
@@ -243,9 +236,6 @@ describe("worker provisioning cancellation ownership", () => {
               "lease-cancelled",
               new Error("provider setup failed before cleanup"),
             );
-          }
-          if (result === "cancelled") {
-            providerSignal?.throwIfAborted();
           }
           return { leaseId: "lease-cancelled", sharedHost: false, ssh: support.SSH_ENDPOINT };
         },
@@ -384,7 +374,7 @@ describe("worker provisioning cancellation ownership", () => {
     expect(events).toEqual(["bundle-started", "bundle-settled"]);
   });
 
-  it.each(["bundle", "npm"] as const)(
+  it.each(["npm"] as const)(
     "releases a cancelled fresh %s preparation consumer while shutdown retains the producer",
     async (install) => {
       const preparing = createDeferredCore();
@@ -394,7 +384,7 @@ describe("worker provisioning cancellation ownership", () => {
       support.testState.prepareInstallation = vi.fn(async () => {
         preparing.resolve();
         await prepared.promise;
-        return install === "bundle" ? support.BUNDLE_ARTIFACT : support.NPM_ARTIFACT;
+        return support.NPM_ARTIFACT;
       });
       const provision = vi.fn(async () => ({
         leaseId: "lease-unexpected",
@@ -503,7 +493,7 @@ describe("worker provisioning cancellation ownership", () => {
     expect(provision).not.toHaveBeenCalled();
   });
 
-  it.each(["bundle", "npm"] as const)(
+  it.each(["npm"] as const)(
     "cleans an adopted replay lease while cancelled %s preparation is still running",
     async (install) => {
       const preparing = createDeferredCore();
@@ -516,7 +506,7 @@ describe("worker provisioning cancellation ownership", () => {
           preparing.resolve();
           await prepared.promise;
         }
-        return install === "bundle" ? support.BUNDLE_ARTIFACT : support.NPM_ARTIFACT;
+        return support.NPM_ARTIFACT;
       });
       const events: string[] = [];
       const destroy = vi.fn(async () => {

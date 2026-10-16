@@ -187,7 +187,7 @@ describe("Workboard prepared launch restart recovery", () => {
           automation: { launch: { phase: "accepted", acceptedRunId: "accepted-run" } },
           attempts: [
             expect.objectContaining({
-              id: "accepted-run",
+              id: expect.any(String),
               status: "succeeded",
               runId: "accepted-run",
             }),
@@ -195,6 +195,7 @@ describe("Workboard prepared launch restart recovery", () => {
         },
       });
       expect(terminal?.metadata?.attempts).toHaveLength(1);
+      expect(terminal?.metadata?.attempts?.[0]?.id).toBe(accepted?.metadata?.attempts?.[0]?.id);
 
       await stopLifecycleSweep(lifecycle);
       lifecycle = undefined;

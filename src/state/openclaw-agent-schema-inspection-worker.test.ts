@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
-import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
@@ -58,6 +57,9 @@ DatabaseSync.prototype.exec = function(sql) {
         undefined,
         pathname,
       );
+      if (!result) {
+        throw new Error("Expected the supplied snapshot to be inspectable");
+      }
       expect(result.schemas).toEqual({ incompatible: [], indeterminate: [] });
       const ddl = fs.readFileSync(ddlLog, "utf8");
       if (attempt === 0) {
@@ -189,43 +191,3 @@ it.each(["before launch", "during read"])(
     expect(closed).toBe(true);
   },
 );
-
-it("reuses a process while rereading changed data", async () => {
-  const pathname = path.join(tempDirs.make("agent-schema-reuse-"), "source.sqlite");
-  vi.mocked(fork).mockClear();
-  await using reader = createAgentSchemaInspectionWorker();
-  for (const version of [1, 2]) {
-    const writer = sqlite.openNodeSqliteDatabase(pathname);
-    writer.exec(`PRAGMA user_version=${version};`);
-    writer.close();
-    await expect(reader.inspect({ pathname, supportedVersion: 2 })).resolves.toMatchObject({
-      version,
-    });
-  }
-  expect(fork).toHaveBeenCalledOnce();
-});
-
-it("preserves a busy source failure without requesting another snapshot attempt", () => {
-  const pathname = path.join(tempDirs.make("agent-schema-busy-"), "source.sqlite");
-  const database = sqlite.openNodeSqliteDatabase(pathname);
-  database.exec("CREATE TABLE probe(value TEXT);");
-  database.close();
-  const open = sqlite.openNodeSqliteDatabase;
-  const busy = Object.assign(new Error("database is locked"), {
-    code: "ERR_SQLITE_ERROR",
-    errcode: 5,
-  });
-  const stub = vi
-    .spyOn(sqlite, "openNodeSqliteDatabase")
-    .mockImplementation((location, options) => {
-      if (location === fs.realpathSync(pathname)) {
-        throw busy;
-      }
-      return open(location, options);
-    });
-  try {
-    expect(() => tryInspectSqliteReadOnlyInProcess(pathname, () => null)).toThrow(busy);
-  } finally {
-    stub.mockRestore();
-  }
-});

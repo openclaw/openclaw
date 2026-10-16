@@ -9,7 +9,7 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { SubscriptionsController } from "../../lib/subscriptions-controller.ts";
 import { ModelProviderLoginController } from "../model-providers/login-controller.ts";
 import { ModelPageController } from "../model-providers/page-controller.ts";
 import {
@@ -76,6 +76,7 @@ export class ModelSetupController extends ModelPageController {
 
   private observedConnection: ReturnType<typeof captureModelSetupConnection> | null = null;
   private pendingPrepareOption: ModelSetupPrepareOption | null = null;
+  private manualProviderRevealPending = false;
   private wizardMutationGeneration = 0;
   private wizardMutationActive = false;
   private wizardReturnFocus: HTMLElement | null = null;
@@ -115,8 +116,8 @@ export class ModelSetupController extends ModelPageController {
     getManualProviders: () =>
       this.state.pageState.phase === "ready" ? this.state.pageState.result.manualProviders : [],
     onManualProvider: (authChoice) => {
+      this.manualProviderRevealPending = true;
       this.selectManualProvider(authChoice);
-      revealManualProvider(this.renderRoot);
     },
     canStart: () =>
       this.canUseSetup(this.context.gateway.snapshot.client) &&
@@ -239,6 +240,10 @@ export class ModelSetupController extends ModelPageController {
     if (!this.isConnected) {
       return;
     }
+    if (this.manualProviderRevealPending) {
+      this.manualProviderRevealPending = false;
+      revealManualProvider(this.renderRoot);
+    }
     if (
       this.feedbackState !== this.state.activationState &&
       this.state.activationState.phase !== "idle"
@@ -320,6 +325,7 @@ export class ModelSetupController extends ModelPageController {
   }
 
   private resetActivity(): void {
+    this.manualProviderRevealPending = false;
     this.login.reset();
     this.setState("detectionRequest", null);
     this.setState("detectionError", null);

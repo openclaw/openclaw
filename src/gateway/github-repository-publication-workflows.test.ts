@@ -72,7 +72,7 @@ describe("repository checkpoint workflow authority", () => {
           : await f.repository.capture("accepted code\n", operation, {
               [workflow]: operation === "delete" ? null : definition + "# accepted change\n",
             });
-      const result = await f.coordinator.requestForSession(f.request(operation, f.guest));
+      const result = await f.coordinator.requestForSessionV2(f.request(operation, f.guest));
       expect(result).toMatchObject(rejected);
       expect(writes()).toEqual([]);
       if (saved) {
@@ -82,7 +82,7 @@ describe("repository checkpoint workflow authority", () => {
             ?.checkpointRef,
         ).toBe(saved.ref);
         const calls = mocks.runCommand.mock.calls.length;
-        expect(await f.coordinator.requestForSession(f.request(operation, f.guest))).toEqual(
+        expect(await f.coordinator.requestForSessionV2(f.request(operation, f.guest))).toEqual(
           result,
         );
         expect(mocks.runCommand.mock.calls).toHaveLength(calls);
@@ -115,7 +115,7 @@ describe("repository checkpoint workflow authority", () => {
     const f = await createFixture();
     await f.repository.capture("maintainer code\n", "maintainer", { [workflow]: definition });
     expect(
-      await f.coordinator.requestForSession(f.request("maintainer", f.maintainer)),
+      await f.coordinator.requestForSessionV2(f.request("maintainer", f.maintainer)),
     ).toMatchObject({ status: "published" });
     expect(
       mocks.runCommand.mock.calls.some(([args]) =>
@@ -123,13 +123,13 @@ describe("repository checkpoint workflow authority", () => {
       ),
     ).toBe(false);
     await f.repository.capture("guest code\n", "guest", { [workflow]: definition });
-    expect(await f.coordinator.requestForSession(f.request("guest", f.guest))).toMatchObject({
+    expect(await f.coordinator.requestForSessionV2(f.request("guest", f.guest))).toMatchObject({
       status: "published",
     });
     const effectCount = writes().length;
     const saved = await f.repository.capture("retained guest code\n", "restore-source");
     expect(
-      await f.coordinator.requestForSession(f.request("restore-source", f.guest)),
+      await f.coordinator.requestForSessionV2(f.request("restore-source", f.guest)),
     ).toMatchObject(rejected);
     expect(writes()).toHaveLength(effectCount);
     expect(
@@ -156,7 +156,7 @@ describe("repository checkpoint workflow authority", () => {
       if (update) {
         await capture("initial source\n", "initial", { [conflict]: approved });
         expect(
-          await f.coordinator.requestForSession(f.request("initial", f.maintainer)),
+          await f.coordinator.requestForSessionV2(f.request("initial", f.maintainer)),
         ).toMatchObject({ status: "published" });
       }
       const upstream = {
@@ -174,16 +174,16 @@ describe("repository checkpoint workflow authority", () => {
       runtime.baseHeadTree = target.workspaceTree;
       const accepted = { ...upstream, ...(update ? { [conflict]: approved } : {}) };
       await capture("source after target update\n", "inherited", accepted);
-      const result = await f.coordinator.requestForSession(f.request("inherited", f.guest));
+      const result = await f.coordinator.requestForSessionV2(f.request("inherited", f.guest));
       expect(result, JSON.stringify(result)).toMatchObject({ status: "published" });
       expect(git(["show", runtime.head + ":" + workflow])).toBe(upstream[workflow].trim());
       if (update) {
         expect(git(["show", runtime.head + ":" + conflict])).toBe(approved.trim());
         const before = writes().length;
         await capture("conflicting resolution\n", "conflict", upstream);
-        expect(await f.coordinator.requestForSession(f.request("conflict", f.guest))).toMatchObject(
-          rejected,
-        );
+        expect(
+          await f.coordinator.requestForSessionV2(f.request("conflict", f.guest)),
+        ).toMatchObject(rejected);
         expect(writes()).toHaveLength(before);
       }
     },
@@ -264,7 +264,7 @@ describe("repository checkpoint workflow authority", () => {
         }
         return result;
       });
-      const result = await f.coordinator.requestForSession(f.request(failure, f.guest));
+      const result = await f.coordinator.requestForSessionV2(f.request(failure, f.guest));
       expect(result).toMatchObject(
         failure.endsWith("revoked") ? { status: "failed", code: "identity_changed" } : rejected,
       );
@@ -282,7 +282,9 @@ describe("repository checkpoint workflow authority", () => {
       [workflow]: definition,
     });
     const claim = await holdWorkerTurn(f);
-    const accepted = await f.coordinator.requestForSession(f.request("deferred-workflow", f.guest));
+    const accepted = await f.coordinator.requestForSessionV2(
+      f.request("deferred-workflow", f.guest),
+    );
     expect(accepted.status).toBe("requested");
     const original = f.readRequester(accepted.requestId);
     expect(original?.scopes).toEqual(guestScopes);
@@ -293,7 +295,7 @@ describe("repository checkpoint workflow authority", () => {
 
     const restarted = f.restart();
     await restarted.resumeSessionRequests();
-    expect(restarted.read(accepted.requestId)).toMatchObject(rejected);
+    expect(await restarted.readAsync(accepted.requestId)).toMatchObject(rejected);
     expect(f.readRequester(accepted.requestId)).toEqual(original);
     expect(f.externalWrites).toEqual([]);
     expect(
@@ -319,7 +321,7 @@ describe("repository checkpoint workflow authority", () => {
         }
         return await transport(args, options);
       });
-      expect(await f.coordinator.requestForSession(f.request(failure, f.guest))).toMatchObject({
+      expect(await f.coordinator.requestForSessionV2(f.request(failure, f.guest))).toMatchObject({
         status: "failed",
         code: "unavailable",
       });
@@ -340,7 +342,7 @@ describe("repository checkpoint workflow authority", () => {
       return result;
     });
     expect(
-      await f.coordinator.requestForSession(f.request("authority-change", f.maintainer)),
+      await f.coordinator.requestForSessionV2(f.request("authority-change", f.maintainer)),
     ).toMatchObject({ status: "failed", code: "identity_changed" });
     expect(f.repository.runtime.uploaded.size).toBeGreaterThan(0);
     expect(f.repository.runtime.effects).toEqual([]);
@@ -381,7 +383,7 @@ describe("repository checkpoint workflow authority", () => {
     onTestFinished(() => intercepted.mockRestore());
 
     expect(
-      await f.coordinator.requestForSession(f.request("publisher-at-ref", f.maintainer)),
+      await f.coordinator.requestForSessionV2(f.request("publisher-at-ref", f.maintainer)),
     ).toMatchObject({ status: "requested" });
     expect(publisherRevoked).toBe(true);
     expect(f.maintainer.assertCurrent).not.toThrow();

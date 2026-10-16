@@ -94,3 +94,28 @@ test("a failed diagnostic sink cannot replace the operation error", () => {
   };
   expect(operation).toThrow(originalError);
 });
+
+test("archive timing separates placement, runtime selection, commit, and cron effects", () => {
+  const log = vi.spyOn(sessionLog, "info").mockImplementation(() => {});
+  const diagnostics = startSessionPatchDiagnostics("sessions.patch");
+  const group = expectDefined(diagnostics.scope("snapshot"), "archive snapshot");
+  clock = 100;
+  group.mark("projection");
+  clock = 200;
+  group.mark("runtimeSelection");
+  clock = 500;
+  group.mark("archivePlacement");
+  clock = 900;
+  group.mark("commit");
+  clock = 1_000;
+  group.finish();
+  const effects = expectDefined(diagnostics.scope("effects"), "archive effects");
+  const cron = expectDefined(diagnostics.scope("cronEffects"), "archive cron effects");
+  clock = 1_500;
+  cron.finish();
+  effects.finish();
+  diagnostics.finish();
+  expect(log).toHaveBeenCalledExactlyOnceWith(
+    "slow session patch 1500ms method=sessions.patch snapshot=100ms projection=100ms runtimeSelection=300ms archivePlacement=400ms commit=100ms effects=500ms cronEffects=500ms",
+  );
+});

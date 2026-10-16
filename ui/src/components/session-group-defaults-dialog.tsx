@@ -1,32 +1,31 @@
-import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { readMissingScopeError } from "@openclaw/gateway-client/browser";
-import { render as renderSolid, type JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, For } from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { pathDisplayName } from "../lib/path-display.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { PlaceBrowserState } from "../pages/new-session/place-browser-state.ts";
+import { PlaceBrowser } from "../pages/new-session/place-browser.tsx";
 import "../styles/new-session.css";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { Icon } from "./solid/icon.tsx";
-import { syncPopoverLabel } from "./web-awesome-popover.ts";
-import { syncDropdownItemRadio } from "./web-awesome.ts";
+import { Menu } from "./solid/menu.tsx";
+import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 
-registerSessionOrganizationEnglish();
-
-registerNewSessionSetupEnglish();
+registerEnglishCatalog(registerSessionOrganizationEnglish);
+registerEnglishCatalog(registerNewSessionSetupEnglish);
 
 export type SessionGroupDefaults = { cwd: string; worktree: boolean };
 
 type Options = {
   group: string;
+  signal?: AbortSignal;
   defaults: SessionGroupDefaults;
   listDirectory: (path?: string) => Promise<FsListDirResult>;
   inspectRepository: (path?: string) => Promise<WorktreeRepositoryStatus>;
@@ -40,7 +39,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     return Promise.resolve();
   }
   active = true;
-  return withPromiseModalHost<void>(undefined, ({ host, finish: settle }) => {
+  return withPromiseModalHost<void>({ signal: options.signal, value: undefined }, (modal) => {
+    const { host, finish, render } = modal;
     const [revision, setRevision] = createSignal(0);
     let cwd = options.defaults.cwd;
     let worktree = false;
@@ -49,15 +49,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     let submitting = false;
     let failure: string | null = null;
     let browserVisible = false;
+    let folderPopover: PopoverHandle | undefined;
     const browser = new PlaceBrowserState(options.listDirectory, paint);
-
-    const finish = () => {
-      browser.reset();
-      repositoryRequestToken += 1;
-      dispose?.();
-      settle();
-      active = false;
-    };
 
     const handleSubmit = async (event: Event) => {
       event.preventDefault();
@@ -75,6 +68,9 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       } catch (error) {
         failure = formatUiError(error);
       }
+      if (modal.settled) {
+        return;
+      }
       if (!failure) {
         finish();
         return;
@@ -84,12 +80,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     };
 
     const closePicker = () => {
-      const picker = host.querySelector<HTMLElement & { open: boolean }>(
-        "wa-popover.session-group-defaults__folder-popover",
-      );
-      if (picker) {
-        picker.open = false;
-      }
+      folderPopover?.overlay.request(false, "return");
     };
 
     const showPickerRoot = () => {
@@ -137,27 +128,6 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       paint();
     };
 
-    const handleModeSelect = (event: CustomEvent<{ item: Element }>) => {
-      const value = event.detail.item.getAttribute("value");
-      if (value !== "local" && value !== "worktree") {
-        return;
-      }
-      selectWorktree(value === "worktree");
-    };
-
-    const handleModeKeydown: JSX.EventHandler<WaDropdown, KeyboardEvent> = (event) => {
-      const dropdown = event.currentTarget;
-      if (event.key !== "Escape" || !dropdown.open) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      dropdown.open = false;
-      dropdown
-        .querySelector<HTMLElement>("#session-group-defaults-mode-trigger")
-        ?.focus({ preventScroll: true });
-    };
-
     const showBrowser = () => {
       browserVisible = true;
       void browser.navigate(cwd || undefined, "initial");
@@ -167,6 +137,11 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       setRevision((value) => value + 1);
     }
     function Dialog() {
+      let folderAnchor!: HTMLButtonElement;
+      onCleanup(() => {
+        browser.reset();
+        repositoryRequestToken += 1;
+      });
       const state = createMemo(() => {
         revision();
         const trimmedCwd = cwd.trim();
@@ -206,206 +181,71 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         };
       });
       function Browser() {
-        const current = createMemo(() => {
+        onSettled(() => {
+          host
+            .querySelector<HTMLInputElement>(".new-session-page__browser-path")
+            ?.focus({ preventScroll: true });
+        });
+        const content = createMemo(() => {
           revision();
           return {
-            ...browser.view(),
-            draft: browser.draft,
-            activeIndex: browser.activeIndex,
-            highlighted: browser.highlightedEntry(),
-            usablePath: browser.usablePath(),
-            parent: browser.listing?.parent,
-            loading: browser.loading,
-            error: browser.error,
+            browser,
+            id: "session-group-defaults-browser",
+            label: t("newSession.gateway"),
+            registerProjectPath: null,
+            registeringProject: false,
+            onBack: showPickerRoot,
+            onClose: showPickerRoot,
+            onApplyFolder: applyFolder,
+            onRegisterProject: () => {},
           };
         });
-        return (
-          <div
-            class="new-session-page__browser"
-            ref={nativeListener("keydown", (event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                event.stopImmediatePropagation();
-                showPickerRoot();
-              }
-            })}
-          >
-            <div class="new-session-page__browser-head">
-              <button
-                type="button"
-                class="new-session-page__browser-nav"
-                title={t("newSession.browserUp")}
-                aria-label={t("newSession.browserUp")}
-                onClick={() => {
-                  const parent = current().parent;
-                  if (parent) {
-                    void browser.navigate(parent);
-                  } else {
-                    showPickerRoot();
-                  }
-                }}
-              >
-                <Icon name="arrowLeft" />
-              </button>
-              <input
-                class="new-session-page__browser-path"
-                type="text"
-                role="combobox"
-                aria-expanded="true"
-                aria-autocomplete="list"
-                aria-controls="session-group-defaults-browser-list"
-                aria-activedescendant={
-                  current().highlighted
-                    ? `session-group-defaults-browser-option-${current().activeIndex}`
-                    : undefined
-                }
-                aria-label={t("newSession.folder")}
-                placeholder={t("newSession.gateway")}
-                value={current().draft}
-                onInput={(event) => browser.setDraft(event.currentTarget.value)}
-                ref={nativeListener("keydown", (event) => {
-                  switch (event.key) {
-                    case "ArrowDown":
-                    case "ArrowUp":
-                      event.preventDefault();
-                      browser.moveHighlight(event.key === "ArrowDown" ? 1 : -1);
-                      requestAnimationFrame(() =>
-                        document
-                          .getElementById(
-                            `session-group-defaults-browser-option-${browser.activeIndex}`,
-                          )
-                          ?.scrollIntoView({ block: "nearest" }),
-                      );
-                      break;
-                    case "Enter":
-                      event.preventDefault();
-                      void browser.activate();
-                      break;
-                    case "Tab":
-                      if (!event.shiftKey && browser.completeHighlighted()) {
-                        event.preventDefault();
-                      }
-                      break;
-                  }
-                })}
-              />
-              {current().loading ? (
-                <span class="new-session-page__browser-loading" role="status">
-                  {t("common.loading")}
-                </span>
-              ) : undefined}
-              <button
-                type="button"
-                class="new-session-page__browser-nav"
-                title={t("common.close")}
-                aria-label={t("common.close")}
-                onClick={showPickerRoot}
-              >
-                <Icon name="x" />
-              </button>
-            </div>
-            {current().error ? (
-              <div class="new-session-page__error" role="alert">
-                {current().error}
-              </div>
-            ) : undefined}
-            <div
-              class="new-session-page__browser-list"
-              role="listbox"
-              id="session-group-defaults-browser-list"
-              aria-label={t("newSession.folder")}
-            >
-              {current().empty !== "none" ? (
-                <div class="new-session-page__browser-empty">
-                  {t(
-                    current().empty === "no-matches"
-                      ? "newSession.browserNoMatches"
-                      : "newSession.browserEmpty",
-                  )}
-                </div>
-              ) : undefined}
-              <For each={current().entries} keyed={(entry) => entry.path}>
-                {(entry, index) => (
-                  <button
-                    type="button"
-                    role="option"
-                    id={`session-group-defaults-browser-option-${index()}`}
-                    aria-selected={index() === current().activeIndex ? "true" : "false"}
-                    class={[
-                      "new-session-page__browser-entry",
-                      {
-                        "new-session-page__browser-entry--active":
-                          index() === current().activeIndex,
-                        "new-session-page__browser-entry--hidden": entry().hidden,
-                      },
-                    ]}
-                    title={entry().hidden ? t("newSession.hiddenFolder") : undefined}
-                    onClick={() => void browser.navigate(entry().path)}
-                  >
-                    <span class="new-session-page__target-icon" aria-hidden="true">
-                      <Icon name="folder" />
-                    </span>
-                    <span>{entry().name}</span>
-                  </button>
-                )}
-              </For>
-            </div>
-            <div class="new-session-page__browser-actions">
-              <button
-                type="button"
-                class="new-session-page__browser-use"
-                disabled={current().usablePath === null}
-                onClick={() => {
-                  const path = current().usablePath;
-                  if (path !== null) {
-                    applyFolder(path);
-                    showPickerRoot();
-                  }
-                }}
-              >
-                {t("newSession.browserUse")}
-              </button>
-            </div>
-          </div>
-        );
+        return <PlaceBrowser params={content()} />;
       }
-      function ModeOption(props: { index: number }) {
-        const option = () => state().environmentOptions[props.index]!;
-        const [element, setElement] = createSignal<HTMLElement>();
-        createEffect(
-          () => ({
-            element: element(),
-            selected: option().value === state().selectedEnvironment.value,
-          }),
-          (selection) => {
-            syncDropdownItemRadio(selection.element, selection.selected);
-          },
-        );
+      function PickerRoot() {
+        onSettled(() => {
+          if (folderPopover?.overlay.open) {
+            folderPopover.overlay.surface
+              .querySelector<HTMLButtonElement>("button")
+              ?.focus({ preventScroll: true });
+          }
+        });
         return (
-          <wa-dropdown-item
-            class="session-group-defaults__mode-option"
-            data-environment-mode={option().value}
-            data-selected={option().value === state().selectedEnvironment.value ? "" : undefined}
-            aria-label={`${option().label}, ${option().description}`}
-            value={option().value}
-            type="checkbox"
-            prop:checked={option().value === state().selectedEnvironment.value}
-            prop:disabled={state().submitting}
-            autofocus={option().value === state().selectedEnvironment.value && !state().submitting}
-            ref={setElement}
-          >
-            <span
-              slot="icon"
-              class="new-session-page__target-icon session-group-defaults__mode-option-icon"
-              aria-hidden="true"
+          <div class="new-session-page__picker-root">
+            <button
+              type="button"
+              class="session-menu__item"
+              data-value="agent-workspace"
+              data-popover="close"
+              aria-pressed={!state().trimmedCwd ? "true" : "false"}
+              disabled={state().submitting}
+              ref={nativeListener("click", () => applyFolder(""))}
             >
-              <Icon name={option().icon} />
-            </span>
-            <span class="session-group-defaults__resolved-copy">
-              <strong>{option().label}</strong>
-              <small>{option().description}</small>
-            </span>
-          </wa-dropdown-item>
+              <span class="session-menu__icon" aria-hidden="true">
+                <Icon name="folder" />
+              </span>
+              <span class="session-menu__text">
+                {t("sessionsView.groupDefaultsCwdPlaceholder")}
+              </span>
+              <span class="session-menu__check" aria-hidden="true">
+                {!state().trimmedCwd ? <Icon name="check" /> : undefined}
+              </span>
+            </button>
+            <button
+              type="button"
+              class="session-menu__item"
+              data-value="browse"
+              aria-pressed="false"
+              disabled={state().submitting}
+              onClick={showBrowser}
+            >
+              <span class="session-menu__check" aria-hidden="true" />
+              <span class="session-menu__text">{t("newSession.browse")}</span>
+              <span class="new-session-page__menu-chevron" aria-hidden="true">
+                <Icon name="chevronRight" />
+              </span>
+            </button>
+          </div>
         );
       }
       return (
@@ -419,7 +259,10 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
             }
           }}
         >
-          <form class="exec-approval-card session-group-defaults" onSubmit={handleSubmit}>
+          <form
+            class="exec-approval-card session-group-defaults"
+            onSubmit={(event) => void handleSubmit(event)}
+          >
             <div class="exec-approval-header">
               <div>
                 <div class="exec-approval-title">
@@ -437,7 +280,15 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                   class="new-session-page__trigger session-group-defaults__folder"
                   aria-label={`${t("sessionsView.groupDefaultsCwd")}: ${state().folderLabel}`}
                   aria-haspopup="dialog"
+                  aria-controls="session-group-defaults-folder-popover"
                   disabled={state().submitting}
+                  ref={(element) => {
+                    folderAnchor = element;
+                  }}
+                  onClick={() => {
+                    const overlay = folderPopover?.overlay;
+                    overlay?.request(!overlay.open, overlay.open ? "return" : "none");
+                  }}
                 >
                   <span class="new-session-page__target-icon" aria-hidden="true">
                     <Icon name="folder" />
@@ -452,54 +303,27 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                     <Icon name="chevronDown" />
                   </span>
                 </button>
-                <wa-popover
-                  ref={syncPopoverLabel}
+                <Popover
+                  id="session-group-defaults-folder-popover"
+                  label={`${t("sessionsView.groupDefaultsCwd")}: ${state().folderLabel}`}
+                  anchor={folderAnchor}
                   class="new-session-page__select new-session-page__project-popover new-session-page__picker-popover session-group-defaults__folder-popover"
-                  for="session-group-defaults-folder-trigger"
                   placement="bottom-start"
-                  without-arrow
-                  onWa-hide={showPickerRoot}
+                  ref={(handle) => {
+                    folderPopover = handle;
+                  }}
+                  onOpenChange={(open) => {
+                    if (open) {
+                      folderPopover?.overlay.surface
+                        .querySelector<HTMLButtonElement>("button")
+                        ?.focus({ preventScroll: true });
+                    } else {
+                      showPickerRoot();
+                    }
+                  }}
                 >
-                  {state().browserVisible ? (
-                    <Browser />
-                  ) : (
-                    <div class="new-session-page__picker-root">
-                      <button
-                        type="button"
-                        class="session-menu__item"
-                        data-value="agent-workspace"
-                        data-popover="close"
-                        aria-pressed={!state().trimmedCwd ? "true" : "false"}
-                        disabled={state().submitting}
-                        ref={nativeListener("click", () => applyFolder(""))}
-                      >
-                        <span class="session-menu__icon" aria-hidden="true">
-                          <Icon name="folder" />
-                        </span>
-                        <span class="session-menu__text">
-                          {t("sessionsView.groupDefaultsCwdPlaceholder")}
-                        </span>
-                        <span class="session-menu__check" aria-hidden="true">
-                          {!state().trimmedCwd ? <Icon name="check" /> : undefined}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        class="session-menu__item"
-                        data-value="browse"
-                        aria-pressed="false"
-                        disabled={state().submitting}
-                        onClick={showBrowser}
-                      >
-                        <span class="session-menu__check" aria-hidden="true" />
-                        <span class="session-menu__text">{t("newSession.browse")}</span>
-                        <span class="new-session-page__menu-chevron" aria-hidden="true">
-                          <Icon name="chevronRight" />
-                        </span>
-                      </button>
-                    </div>
-                  )}
-                </wa-popover>
+                  {state().browserVisible ? <Browser /> : <PickerRoot />}
+                </Popover>
               </div>
               <div class="field">
                 <span>{t("sessionsView.groupDefaultsMode")}</span>
@@ -509,35 +333,62 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                   aria-live="polite"
                 >
                   {state().repositoryStatus === "git" ? (
-                    <wa-dropdown
+                    <Menu
+                      id="session-group-defaults-mode"
                       class="session-group-defaults__mode-dropdown"
-                      placement="bottom-start"
-                      aria-label={t("sessionsView.groupDefaultsMode")}
-                      onWa-select={handleModeSelect}
-                      onKeyDown={handleModeKeydown}
-                    >
-                      <button
-                        id="session-group-defaults-mode-trigger"
-                        slot="trigger"
-                        type="button"
-                        class="session-group-defaults__resolved-mode session-group-defaults__mode-trigger"
-                        data-value={state().selectedEnvironment.value}
-                        aria-label={`${t("sessionsView.groupDefaultsMode")}: ${state().selectedEnvironment.label}`}
-                        disabled={state().submitting}
-                      >
-                        <span class="new-session-page__target-icon" aria-hidden="true">
-                          <Icon name={state().selectedEnvironment.icon} />
-                        </span>
-                        <span class="session-group-defaults__resolved-copy">
-                          <strong>{state().selectedEnvironment.label}</strong>
-                          <small>{state().selectedEnvironment.description}</small>
-                        </span>
-                        <span class="new-session-page__trigger-chevron" aria-hidden="true">
-                          <Icon name="chevronDown" />
-                        </span>
-                      </button>
-                      <For each={[0, 1]}>{(index) => <ModeOption index={index} />}</For>
-                    </wa-dropdown>
+                      panelClass="session-group-defaults__mode-menu"
+                      triggerClass="session-group-defaults__resolved-mode session-group-defaults__mode-trigger"
+                      triggerAttributes={{
+                        id: "session-group-defaults-mode-trigger",
+                        "data-value": state().selectedEnvironment.value,
+                      }}
+                      label={`${t("sessionsView.groupDefaultsMode")}: ${state().selectedEnvironment.label}`}
+                      disabled={state().submitting}
+                      onSelect={(item) => selectWorktree(item.id === "worktree")}
+                      items={state().environmentOptions.map((option) => ({
+                        id: option.value,
+                        label: `${option.label}, ${option.description}`,
+                        type: "radio" as const,
+                        checked: option.value === state().selectedEnvironment.value,
+                        disabled: state().submitting,
+                        class: "session-group-defaults__mode-option",
+                        attributes: {
+                          "data-environment-mode": option.value,
+                          "data-selected":
+                            option.value === state().selectedEnvironment.value ? "" : undefined,
+                          "data-initial-focus":
+                            option.value === state().selectedEnvironment.value ? "" : undefined,
+                        },
+                        icon: (
+                          <span
+                            class="new-session-page__target-icon session-group-defaults__mode-option-icon"
+                            aria-hidden="true"
+                          >
+                            <Icon name={option.icon} />
+                          </span>
+                        ),
+                        content: (
+                          <span class="session-group-defaults__resolved-copy">
+                            <strong>{option.label}</strong>
+                            <small>{option.description}</small>
+                          </span>
+                        ),
+                      }))}
+                      trigger={
+                        <>
+                          <span class="new-session-page__target-icon" aria-hidden="true">
+                            <Icon name={state().selectedEnvironment.icon} />
+                          </span>
+                          <span class="session-group-defaults__resolved-copy">
+                            <strong>{state().selectedEnvironment.label}</strong>
+                            <small>{state().selectedEnvironment.description}</small>
+                          </span>
+                          <span class="new-session-page__trigger-chevron" aria-hidden="true">
+                            <Icon name="chevronDown" />
+                          </span>
+                        </>
+                      }
+                    />
                   ) : (
                     <div
                       class="session-group-defaults__resolved-mode"
@@ -574,7 +425,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                 {state().failure}
               </div>
             ) : undefined}
-            <div class="exec-approval-actions">
+            <openclaw-modal-actions class="exec-approval-actions">
               <button
                 type="submit"
                 class="btn primary"
@@ -598,15 +449,22 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                   {t("common.retry")}
                 </button>
               ) : undefined}
-              <button type="button" class="btn" disabled={state().submitting} onClick={finish}>
+              <button
+                type="button"
+                class="btn"
+                disabled={state().submitting}
+                onClick={() => finish()}
+              >
                 {t("common.cancel")}
               </button>
-            </div>
+            </openclaw-modal-actions>
           </form>
         </openclaw-modal-dialog>
       );
     }
-    const dispose = renderSolid(() => <Dialog />, host);
+    render(() => <Dialog />);
     void inspectRepository(true);
+  }).finally(() => {
+    active = false;
   });
 }

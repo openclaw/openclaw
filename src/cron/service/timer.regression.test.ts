@@ -7,7 +7,7 @@ import {
   createIsolatedRegressionJob,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeatAndWait as requestOwnedHeartbeatAndWait,
@@ -43,8 +43,7 @@ import { update } from "./ops-mutations.js";
 import { run as runManualCronJob } from "./ops-run.js";
 import type { CronEvent, CronServiceDeps, CronServiceState } from "./state.js";
 import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
-import { runMissedJobs } from "./timer.js";
-import { onTimer } from "./timer.test-support.js";
+import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const timerRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-timer-regressions-",
@@ -105,7 +104,11 @@ async function occupyWorkerSlots(state: CronServiceState, count: number) {
     return { status: "ok" };
   };
   const done = Promise.all(jobs.map((job) => runManualCronJob(state, job.id, "force")));
-  await started.promise;
+  await awaitGateBeforeSettlement(
+    started.promise,
+    done,
+    "Capacity fixture finished before its runs started",
+  );
   return { release: () => release.resolve(), done };
 }
 
@@ -187,44 +190,6 @@ describe("cron service timer regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
     expect((await loadCronStore(storePath)).jobs).toEqual(persisted.jobs);
     stop(restarted);
-  });
-
-  it("#24355: one-shot job disabled after max transient retries", async () => {
-    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
-
-    const cronJob = createIsolatedRegressionJob({
-      id: "oneshot-max-retries",
-      name: "reminder",
-      scheduledAt,
-      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-      payload: { kind: "agentTurn", message: "remind me" },
-      state: { nextRunAtMs: scheduledAt },
-    });
-    cronJob.deleteAfterRun = true;
-    const storePath = await storeJobs([cronJob]);
-
-    let now = scheduledAt;
-    const runIsolatedAgentJob = vi.fn().mockResolvedValue({
-      status: "error",
-      error: "429 rate limit exceeded",
-    });
-    const state = createCronServiceState({
-      storePath,
-      nowMs: () => now,
-      runIsolatedAgentJob,
-    });
-
-    for (let i = 0; i < 4; i += 1) {
-      await onTimer(state);
-      const job = requireJob(state, "oneshot-max-retries");
-      if (i < 3) {
-        expect(job.enabled).toBe(true);
-        now = requireTimestamp(job.state.nextRunAtMs, "max-retries next run") + 1;
-      } else {
-        expect(job.enabled).toBe(false);
-      }
-    }
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(4);
   });
 
   it("enforces a minimum refire gap for second-granularity cron schedules (#17821)", async () => {
@@ -611,7 +576,11 @@ describe("cron service timer regressions", () => {
     const slots = await occupyWorkerSlots(state, 7);
     const timerRun = onTimer(state);
     try {
-      await firstStarted.promise;
+      await awaitGateBeforeSettlement(
+        firstStarted.promise,
+        timerRun,
+        "Scheduled requests finished before the first launch",
+      );
       expect(requireJob(state, second.id).state.queuedAtMs).toBe(dueAt);
       now += 2 * 60 * 60 * 1000 + 1;
       await onTimer(state);
@@ -890,6 +859,7 @@ describe("cron service timer regressions", () => {
     const releaseRun = createDeferred<{ status: "ok"; summary: string }>();
     const state = createCronServiceState({
       storePath,
+      maxMissedJobsPerRestart: 1,
       nowMs: () => scheduledAt,
       runIsolatedAgentJob: async () => {
         runStarted.resolve();

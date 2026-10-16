@@ -96,7 +96,6 @@ type CodexComputerUseInspectionParams = Omit<
 };
 
 type ExplicitManagedComputerUseInstallContext = {
-  client: CodexAppServerClient;
   agentDir: string;
   codexHome: string;
   command: string;
@@ -490,7 +489,7 @@ async function inspectCodexComputerUseWithoutFence(
         ...(repair?.warnings ?? []),
         ...(compatibilityStartupAllowed
           ? [
-              "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+              "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to block startup after a failed live test.",
             ]
           : []),
       ],
@@ -559,7 +558,6 @@ async function resolveExplicitManagedComputerUseInstallContext(
     return undefined;
   }
   return {
-    client: params.client,
     agentDir: params.agentDir,
     codexHome,
     command,

@@ -5,32 +5,35 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
+import { buildPayloads } from "../../agents/embedded-agent-runner/run/payloads.test-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import {
   formatBillingErrorMessage,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
   renderHeartbeatRunFailureCopy,
 } from "../../agents/failover/user-copy.js";
-import {
-  AgentHarnessPreflightError,
-  AgentHarnessSessionSupersededError,
-} from "../../agents/harness/errors.js";
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
-  createAgentRunSupersededAbortError,
-  createSessionPlacementSettlementClosedAbortError,
 } from "../../agents/run-termination.js";
+import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-state.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
+  getRawExecuteAgentTurnForTest,
   createRunAgentTurnParams,
   createMockTypingSignaler,
   createFollowupRun,
@@ -41,11 +44,84 @@ import {
   type EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: terminal failures", () => {
+  it.each([0])(
+    "preserves retry exhaustion through returned provider payloads (%s)",
+    async (retries) => {
+      const rawError = "429 rate limit exceeded. Please try again in 221ms.";
+      const payloads = buildPayloads({
+        provider: "external",
+        lastAssistant: makeAssistantMessageFixture({
+          provider: "external",
+          model: "primary",
+          errorMessage: rawError,
+        }),
+        rateLimitRetriesExhausted: retries,
+      });
+      expect(getReplyPayloadMetadata(payloads[0]!)?.providerFailure).toMatchObject({
+        rawError,
+        rateLimitRetriesExhausted: retries,
+      });
+      state.runWithModelFallbackMock.mockResolvedValueOnce({
+        result: {
+          payloads,
+          meta: {
+            durationMs: 1,
+            replayInvalid: true,
+            error: { kind: "incomplete_turn", message: rawError, fallbackSafe: false },
+          },
+        },
+        provider: "external",
+        model: "primary",
+        attempts: [],
+      });
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
+      const text = JSON.stringify(result);
+      expect(text).toContain(
+        retries === 0
+          ? "recovery is disabled"
+          : `${retries} automatic ${retries === 1 ? "retry" : "retries"}`,
+      );
+      // Diagnostics keep the raw hint, but the delivered payload names exhaustion.
+      if (result.kind !== "success") {
+        throw new Error("expected success result");
+      }
+      expect(result.runResult.payloads?.[0]?.text).not.toContain("221ms");
+    },
+  );
+
+  it.each(["HTTP 429: An error occurred while processing your request. Try again in 221ms."])(
+    "preserves retry exhaustion through external thrown failures (%s)",
+    async (rawError) => {
+      state.runWithModelFallbackMock.mockRejectedValueOnce(
+        new FailoverError(rawError, {
+          rawError,
+          status: 429,
+          reason: "rate_limit",
+          rateLimitRetriesExhausted: 9,
+        }),
+      );
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
+        ...createRunAgentTurnParams(createFollowupRun()),
+        sessionCtx: { Provider: "whatsapp", MessageSid: "message" },
+      });
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toContain("9 automatic retries");
+      }
+    },
+  );
+
   it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       createTestFallbackSummaryError({
@@ -183,29 +259,33 @@ describe("executeAgentTurn: terminal failures", () => {
     expect(failCall[1]).toBeInstanceOf(CommandLaneClearedError);
   });
 
-  it("returns a visible failure when settlement closes without supersession", async () => {
-    const agentEvents = await import("../../infra/agent-events.js");
-    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+  it("retains automatic recovery when restart admission refuses an active turn", async () => {
+    const { emitAgentEvent } = await import("../../infra/agent-events.js");
     const replyOperation = createReplyOperation({
-      sessionKey: "agent:main:closed-terminal",
-      sessionId: "session",
+      sessionKey: "agent:main:restart-refusal",
+      sessionId: "restart-refusal",
       resetTriggered: false,
     });
     replyOperation.setPhase("running");
-    const error = createSessionPlacementSettlementClosedAbortError();
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+      params.onExecutionPhase?.({
+        phase: "model_call_started",
+        provider: "openai",
+        model: "fixture",
+      });
+      // The admission fence closes before the shutdown owner aborts the turn.
+      markGatewayRestartDraining();
+      throw new GatewayDrainingError();
+    });
     try {
-      const { executeAgentTurn } = await import("./agent-runner-execution.js");
+      const executeAgentTurn = await getRawExecuteAgentTurnForTest();
       const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
-      expect(result.outcome.kind).toBe("rejected");
-      if (result.outcome.kind === "rejected") {
-        expect(result.outcome.payload.text).toBeTruthy();
-        expect(result.outcome.payload.text).not.toBe(SILENT_REPLY_TOKEN);
-      }
-      expect(replyOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
-      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      const terminals = emitAgentEvent.mock.calls
-        .map(([event]) => event)
+      expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
+      expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
+      const terminals = vi
+        .mocked(emitAgentEvent)
+        .mock.calls.map(([event]) => event)
         .filter(
           (event) =>
             event.runId === result.runId &&
@@ -213,34 +293,111 @@ describe("executeAgentTurn: terminal failures", () => {
             (event.data.phase === "end" || event.data.phase === "error"),
         );
       expect(terminals).toHaveLength(1);
-      expect(terminals[0]?.data.phase).toBe("error");
-      expect(terminals[0]?.data.stopReason).not.toBe("superseded");
+      expect(terminals[0]?.data).toMatchObject({
+        phase: "end",
+        aborted: true,
+        stopReason: "restart",
+      });
+      expect(
+        deriveGatewaySessionLifecycleProjectionPatch({
+          entry: { updatedAt: 1, startedAt: 1 },
+          event: { ...terminals[0]!, ts: 2 },
+        }),
+      ).toMatchObject({ status: "interrupted", abortedLastRun: true });
     } finally {
+      resetGatewayWorkAdmission();
       replyOperation.complete();
     }
   });
 
   it.each([
+    { label: "reconnected first interruption", canContinue: true, acceptsFollowup: true },
+    { label: "second interruption", canContinue: true, acceptsFollowup: false },
+  ])(
+    "settles $label through the node-loss continuation owner",
+    async ({ canContinue, acceptsFollowup }) => {
+      const agentEvents = await import("../../infra/agent-events.js");
+      const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+      const replyOperation = createReplyOperation({
+        sessionKey: "agent:main:node-loss-terminal",
+        sessionId: "session",
+        resetTriggered: false,
+      });
+      replyOperation.setPhase("running");
+      const loss = new WorkerNodeLostError();
+      loss.canContinue = canContinue;
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(loss);
+      const continueStalledTurn = vi.fn(() => acceptsFollowup);
+      const runState: ReplyOperationRunState = {
+        continueStalledTurn,
+        // The queued continuation retains the original invocation's options.
+        ...(!acceptsFollowup
+          ? { replyCompletion: { expectation: "required" as const, outcome: "pending" as const } }
+          : {}),
+      };
+      const onAgentRunTerminalOutcome = vi.fn();
+      const params = createMinimalRunAgentTurnParams({ replyOperation });
+      params.opts = { [REPLY_OPERATION_RUN_STATE]: runState, onAgentRunTerminalOutcome };
+      try {
+        const executeAgentTurn = await getRawExecuteAgentTurnForTest();
+        const result = await executeAgentTurn(params);
+        const continuing = canContinue && acceptsFollowup;
+        expect(result.outcome).toMatchObject({
+          kind: "rejected",
+          payload: {
+            text: continuing
+              ? ""
+              : `${loss.message} This turn will not be continued automatically.`,
+          },
+        });
+        expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        if (continuing) {
+          expect(runState.replyCompletion?.outcome).toBe("pending");
+          expect(replyOperation.result).toBeNull();
+          expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
+        } else {
+          expect(replyOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+          expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
+        }
+        expect(continueStalledTurn).toHaveBeenCalledTimes(canContinue ? 1 : 0);
+        if (canContinue) {
+          expect(continueStalledTurn).toHaveBeenCalledWith(expect.any(String), replyOperation);
+        }
+        const terminals = emitAgentEvent.mock.calls
+          .map(([event]) => event)
+          .filter(
+            (event) =>
+              event.runId === result.runId &&
+              event.stream === "lifecycle" &&
+              (event.data.phase === "end" || event.data.phase === "error"),
+          );
+        expect(terminals).toHaveLength(1);
+        expect(terminals[0]?.data).toMatchObject(
+          continuing
+            ? { phase: "end", yielded: true, terminalReply: { disposition: "empty" } }
+            : { phase: "error" },
+        );
+      } finally {
+        replyOperation.complete();
+      }
+    },
+  );
+
+  it.each([
     { reason: "restart", code: "aborted_for_restart", phase: "end", stopReason: "restart" },
     {
-      reason: "superseded",
-      code: "aborted_for_supersession",
-      phase: "error",
-      stopReason: "superseded",
-    },
-    {
-      reason: "superseded",
-      code: "aborted_for_supersession",
-      phase: "error",
-      stopReason: "superseded",
+      reason: "restart",
+      code: "aborted_for_restart",
+      phase: "end",
+      stopReason: "restart",
+      backendOwned: true,
       restartError: true,
     },
     {
-      reason: "user",
-      code: "aborted_by_user",
+      reason: "superseded",
+      code: "aborted_for_supersession",
       phase: "error",
-      stopReason: "timeout",
-      supersededError: true,
+      stopReason: "superseded",
     },
   ] as const)(
     "records one $stopReason abort terminal event without returning a reply ($restartError)",
@@ -260,30 +417,19 @@ describe("executeAgentTurn: terminal failures", () => {
       state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
         if (reason === "superseded") {
           replyOperation.supersede();
-        } else {
-          const abortReason =
-            reason === "restart"
-              ? createAgentRunRestartAbortError()
-              : stopReason === "timeout"
-                ? new DOMException("upstream deadline exceeded", "TimeoutError")
-                : new Error("caller cancelled");
-          upstreamAbort.abort(abortReason);
+        } else if (!("backendOwned" in testCase)) {
+          upstreamAbort.abort(createAgentRunRestartAbortError());
         }
         if ("restartError" in testCase) {
           throw createAgentRunRestartAbortError();
-        }
-        if ("supersededError" in testCase) {
-          throw createAgentRunSupersededAbortError();
         }
         throw Object.assign(new Error("aborted"), { name: "AbortError" });
       });
 
       try {
-        const { executeAgentTurn } = await import("./agent-runner-execution.js");
+        const executeAgentTurn = await getRawExecuteAgentTurnForTest();
         const result = await executeAgentTurn({
-          ...createMinimalRunAgentTurnParams({
-            replyOperation: "supersededError" in testCase ? undefined : replyOperation,
-          }),
+          ...createMinimalRunAgentTurnParams({ replyOperation }),
           opts: { abortSignal: upstreamAbort.signal },
           isRestartRecoveryArmed: async () => true,
         });
@@ -312,7 +458,7 @@ describe("executeAgentTurn: terminal failures", () => {
   it.for([false, true])(
     "preserves the prior terminal row when cancellation precedes execution (started=%s)",
     async (started, { signal }) => {
-      const { executeAgentTurn } = await import("./agent-runner-execution.js");
+      const executeAgentTurn = await getRawExecuteAgentTurnForTest();
       const { emitAgentEvent } = await import("../../infra/agent-events.js");
       const reachedBoundary = createDeferred();
       const release = createDeferred();
@@ -420,7 +566,7 @@ describe("executeAgentTurn: terminal failures", () => {
       complete,
     } satisfies typeof replyOperation;
     state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
-    const { executeAgentTurn } = await import("./agent-runner-execution.js");
+    const executeAgentTurn = await getRawExecuteAgentTurnForTest();
 
     const execution = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ replyOperation: restartReplyOperation }),
@@ -562,36 +708,6 @@ describe("executeAgentTurn: terminal failures", () => {
       expect(result.payload.text).toContain(expected);
     },
   );
-
-  it("surfaces stale Codex session generations in groups instead of staying silent", async () => {
-    state.runWithModelFallbackMock.mockRejectedValueOnce(
-      new AgentHarnessSessionSupersededError(
-        "Codex session generation is no longer current: secret-session-id",
-      ),
-    );
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        sessionCtx: {
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
-      }),
-    });
-
-    expect(result.kind).toBe("final");
-    if (result.kind !== "final") {
-      throw new Error("expected final reply");
-    }
-    expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
-    expect(result.payload.text).toBe(
-      "⚠️ This Codex session changed before your message could run. Please send it again.",
-    );
-    expect(result.payload.text).not.toContain("secret-session-id");
-  });
 
   it("forwards sanitized generic errors on external chat channels when verbose is on", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(

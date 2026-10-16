@@ -11,6 +11,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Conversation versions" });
 const key = "agent:main:release-notes";
+const previousKey = "agent:main:planning";
 const helpText =
   "Saved copies of this conversation from rewinds or repairs. You can return to an earlier version here.";
 
@@ -23,7 +24,10 @@ suite.define(() => {
           sessionKey: key,
           agentModel: "mock/mock-model",
           models: [{ id: "mock-model", name: "Mock model", provider: "mock" }],
-          sessions: [{ key, label: "Release notes", kind: "direct", updatedAt: Date.now() }],
+          sessions: [
+            { key, label: "Release notes", kind: "direct", updatedAt: Date.now() },
+            { key: previousKey, label: "Planning", kind: "direct", updatedAt: Date.now() - 1 },
+          ],
           historyMessages: [
             { id: "prompt", role: "user", content: "Help me write a short release announcement." },
             {
@@ -61,30 +65,59 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(new URL(controlUiSessionPath(key), suite.server.baseUrl).href);
+        await page.goto(new URL(controlUiSessionPath(previousKey), suite.server.baseUrl).href);
         await page.getByText("Here is a concise draft:", { exact: false }).waitFor();
-        const trigger = page.getByRole("button", { name: "Versions", exact: true });
+        await page
+          .locator(
+            `.sidebar-recent-session[data-session-key="${key}"] a.sidebar-recent-session__link`,
+          )
+          .click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(key));
+        const pane = page.locator(`openclaw-chat-pane[data-mcp-app-owner-key*="${key}"]`);
+        await pane.getByText("Here is a concise draft:", { exact: false }).waitFor();
+        const trigger = pane.getByRole("button", { name: "Versions", exact: true });
         await trigger.press("Enter");
-        const menu = page.locator(".chat-pane__branches-menu");
-        const menuSurface = menu.locator('[part="menu"]');
+        const menu = pane.locator(".chat-pane__branches-menu");
+        const menuSurface = menu.locator(".oc-menu");
         const info = menu.getByRole("button", { name: "About versions" });
         const help = page.getByRole("dialog", { name: "About versions" });
+        const helpSurface = menu.locator(".chat-pane__versions-help");
         await expect
           .poll(() => info.evaluate((element) => element === document.activeElement))
           .toBe(true);
         expect(await help.isVisible()).toBe(false);
-        await waitForControlUiProofSurface(menuSurface, [info]);
-        const infoIconBox = await info.locator("svg").boundingBox();
-        expect(infoIconBox).not.toBeNull();
         const current = menu.locator('.chat-pane__branch-item[data-active="true"]');
-        expect(await current.locator(".chat-pane__branch-headline").textContent()).toBe(
-          "A simpler way to stay organized",
-        );
-        const textBox = await current.locator(".chat-pane__branch-copy").boundingBox();
-        const checkBox = await current.locator(".chat-pane__branch-active").boundingBox();
+        await waitForControlUiProofSurface(menuSurface, [
+          info,
+          current.locator(".chat-pane__branch-copy"),
+          current.locator(".chat-pane__branch-active svg"),
+        ]);
+        // Measure one DOM generation so a rerender cannot detach an icon between reads.
+        const { infoIconBox, headline, textBox, checkBox, checkIconBox } =
+          await menuSurface.evaluate((surface) => {
+            const active = surface.querySelector('.chat-pane__branch-item[data-active="true"]');
+            const measure = (element: Element | null) => {
+              if (
+                !element?.isConnected ||
+                !element.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+              ) {
+                return null;
+              }
+              const { x, y, width, height } = element.getBoundingClientRect();
+              return width > 0 && height > 0 ? { x, y, width, height } : null;
+            };
+            return {
+              infoIconBox: measure(surface.querySelector(".chat-pane__versions-info svg")),
+              headline: active?.querySelector(".chat-pane__branch-headline")?.textContent,
+              textBox: measure(active?.querySelector(".chat-pane__branch-copy") ?? null),
+              checkBox: measure(active?.querySelector(".chat-pane__branch-active") ?? null),
+              checkIconBox: measure(active?.querySelector(".chat-pane__branch-active svg") ?? null),
+            };
+          });
+        expect(infoIconBox).not.toBeNull();
+        expect(headline).toBe("A simpler way to stay organized");
         expect(textBox).not.toBeNull();
         expect(checkBox).not.toBeNull();
-        const checkIconBox = await current.locator(".chat-pane__branch-active svg").boundingBox();
         expect(checkIconBox).not.toBeNull();
         expect(
           Math.abs(
@@ -105,7 +138,9 @@ suite.define(() => {
 
         await info.press("Enter");
         await help.waitFor();
-        expect((await menu.locator("wa-popover").textContent())?.trim()).toBe(helpText);
+        expect((await menu.locator(".chat-pane__versions-help").textContent())?.trim()).toBe(
+          helpText,
+        );
         const helpFrame = await takeControlUiScreenshotFrame(page, help, [help], {
           animations: "disabled",
         });
@@ -117,7 +152,7 @@ suite.define(() => {
         expect(await menuSurface.isVisible()).toBe(true);
         await info.click();
         await help.waitFor();
-        await page.getByText("Here is a concise draft:", { exact: false }).click();
+        await pane.locator(".agent-chat__composer-combobox textarea").click();
         await expect.poll(() => help.isVisible()).toBe(false);
         await expect.poll(() => menuSurface.isVisible()).toBe(false);
         expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(0);
@@ -128,6 +163,34 @@ suite.define(() => {
         const switched = await gateway.waitForRequest("sessions.branches.switch");
         expect(switched.params).toMatchObject({ leafEntryId: "earlier" });
         await expect.poll(() => menuSurface.isVisible()).toBe(false);
+
+        // Browser Back changes presentation without an outside pointer dismissal.
+        await trigger.press("Enter");
+        await info.press("Enter");
+        await help.waitFor();
+        const beforeBack = await takeControlUiScreenshotFrame(page, help, [help], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(suite.artifactDir, "before-back.png"), beforeBack.png);
+        const switchCount = (await gateway.getRequests("sessions.branches.switch")).length;
+        await page.goBack();
+        await expect
+          .poll(() => new URL(page.url()).pathname)
+          .toBe(controlUiSessionPath(previousKey));
+        const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+        const composer = activePane.locator(".agent-chat__composer-combobox textarea");
+        await composer.waitFor();
+        const afterBack = await takeControlUiScreenshotFrame(page, activePane, [composer], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(suite.artifactDir, "after-back.png"), afterBack.png);
+        expect(await pane.count()).toBe(1);
+        expect(await pane.getAttribute("inert")).not.toBeNull();
+        await expect.poll(() => menuSurface.isVisible()).toBe(false);
+        await expect.poll(() => helpSurface.isVisible()).toBe(false);
+        await composer.fill("Continue planning after browser Back");
+        expect(await composer.inputValue()).toBe("Continue planning after browser Back");
+        expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(switchCount);
       },
     );
   });

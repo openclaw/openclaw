@@ -41,12 +41,12 @@ export type SystemAgentConfiguredRouteDeps = {
   /** Explicit role selection for verifying a utility candidate alongside a working primary. */
   modelTarget?: "utility";
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntime;
+  loadAuthProfileStoreForRuntimeAsync?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntimeAsync;
   pluginMetadataPlugins?: PluginMetadataSnapshot["plugins"];
 };
 type SystemAgentRouteProjectionDeps = Pick<
   SystemAgentConfiguredRouteDeps,
-  "loadAuthProfileStoreForRuntime" | "pluginMetadataPlugins" | "modelTarget"
+  "loadAuthProfileStoreForRuntimeAsync" | "pluginMetadataPlugins" | "modelTarget"
 >;
 
 /** The canonical source and default-materialized view from one authoritative read. */
@@ -160,7 +160,7 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
       agentId: modelOwnerAgentId,
     });
   const cliAuthProfileId = allowCliAuthProfileForwarding
-    ? resolveCliExecutionAuthProfileId({
+    ? await resolveCliExecutionAuthProfileId({
         cliExecutionProvider: executionProvider,
         authProfileProvider: selection.provider,
         config: runConfig,
@@ -173,18 +173,23 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
               },
             }
           : {}),
-        ...(deps.loadAuthProfileStoreForRuntime
-          ? { loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime }
+        ...(deps.loadAuthProfileStoreForRuntimeAsync
+          ? { loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync }
           : {}),
       })
     : undefined;
   const authProfileId = allowCliAuthProfileForwarding ? cliAuthProfileId : selection.profileId;
   const executionConfig = projectSystemAgentExecutionConfig(preparedConfig, modelOwnerAgentId);
+  const modelLabel = modelSelection.resolveConfiguredRouteModelLabel({
+    configuredRef: configuredSelection.modelRef,
+    resolved: { provider: selection.provider, model: selection.modelId },
+    ...(selection.profileId ? { profileId: selection.profileId } : {}),
+  });
   const base = {
     ...(configuredSelection.modelTarget ? { modelTarget: configuredSelection.modelTarget } : {}),
     sourceConfig: runConfig,
     runConfig: executionConfig,
-    modelLabel: `${selection.provider}/${selection.modelId}`,
+    modelLabel,
     provider: executionProvider,
     model: selection.modelId,
     agentDir: selection.agentDir,

@@ -134,29 +134,18 @@ async function persistBindingsSnapshot(params: {
 }): Promise<MatrixThreadBindingRecord[]> {
   const store = createThreadBindingStore(params);
   const liveKeys = new Set(params.bindings.map((record) => buildThreadBindingStoreKey(record)));
-  const stored = new Map<string, MatrixThreadBindingRecord>();
   for (const entry of await store.entries()) {
     const record = normalizeBindingRecord(entry.value, params.accountId);
-    if (record) {
-      stored.set(entry.key, record);
-    }
     if (record && !liveKeys.has(entry.key)) {
       await store.delete(entry.key);
     }
   }
-  const committed: MatrixThreadBindingRecord[] = [];
+  // The persistence queue captures these records after earlier touches have settled.
   for (const record of params.bindings) {
     const key = buildThreadBindingStoreKey(record);
-    const previous = stored.get(key);
-    // A snapshot accepted behind a targeted touch must not restore its older activity time.
-    const next =
-      previous && sameBindingIncarnation(previous, record)
-        ? { ...record, lastActivityAt: Math.max(record.lastActivityAt, previous.lastActivityAt) }
-        : record;
-    await store.register(key, toPluginJsonValue(next));
-    committed.push(next);
+    await store.register(key, toPluginJsonValue(record));
   }
-  return committed;
+  return params.bindings;
 }
 
 export async function createMatrixThreadBindingManager(params: {
@@ -478,52 +467,15 @@ export async function createMatrixThreadBindingManager(params: {
             throw new Error("Matrix thread binding changed while recording activity");
           }
         };
-        const store = getMatrixRuntime().state.openKeyedStoreV2<MatrixThreadBindingRecord>(
-          {
-            namespace: THREAD_BINDINGS_NAMESPACE,
-            maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
-            env: resolveMatrixSqliteStateEnv({ env: params.env, stateDir: sqliteStateDir }),
-          },
-          { assertCurrent },
-        );
-        const key = buildThreadBindingStoreKey(current);
-        let observation = await store.observe(key);
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          assertCurrent();
-          const stored = normalizeBindingRecord(observation.value, params.accountId);
-          if (!stored || !sameBindingIncarnation(stored, current)) {
-            throw new Error("Matrix stored thread binding changed while recording activity");
-          }
-          if (current.lastActivityAt - stored.lastActivityAt < TOUCH_PERSIST_DELAY_MS) {
-            committedBindings.set(resolveBindingKey(stored), stored);
-            setBindingRecord({
-              ...stored,
-              lastActivityAt: Math.max(stored.lastActivityAt, current.lastActivityAt),
-            });
-            if (current.lastActivityAt > stored.lastActivityAt) {
-              schedulePersist(TOUCH_PERSIST_DELAY_MS);
-            }
-            return;
-          }
-          const updated = {
-            ...stored,
-            lastActivityAt: Math.max(stored.lastActivityAt, current.lastActivityAt),
-          };
-          const result = await store.compareAndApply(key, observation.comparison, {
-            operation: "update",
-            action: "set",
-            value: toPluginJsonValue(updated),
-          });
-          if (result.status === "conflict") {
-            observation = result.current;
-            continue;
-          }
-          assertCurrent();
-          committedBindings.set(resolveBindingKey(updated), updated);
-          setBindingRecord(updated);
-          return;
-        }
-        throw new Error("Matrix thread binding changed repeatedly while recording activity");
+        // This queue owns every binding write; foreign writers are unsupported.
+        const store = createThreadBindingStore({
+          env: params.env,
+          stateDir: sqliteStateDir,
+          assertCurrent,
+        });
+        await store.register(buildThreadBindingStoreKey(current), toPluginJsonValue(current));
+        assertCurrent();
+        committedBindings.set(resolveBindingKey(current), current);
       });
     persistQueue = next;
     return next;

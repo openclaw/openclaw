@@ -3,6 +3,7 @@ import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
@@ -18,8 +19,8 @@ import {
 } from "../session-request-agent.js";
 import type { SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
+import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -39,6 +40,7 @@ type SessionChangeContext = Pick<
   | "getRuntimeConfig"
   | "sessionRowProjectionOwner"
   | "getSessionEventSubscriberConnIds"
+  | "getSessionMessageSubscriberConnIds"
   | "workerSessionPlacementService"
   | "mentionInbox"
 >;
@@ -123,6 +125,28 @@ function snapshotTarget(payload: SessionChangedPayload, scope: SessionEventAgent
     : undefined;
 }
 
+function resolveSessionDrain(
+  context: SessionChangeContext,
+  payload: SessionChangedPayload,
+  scope: SessionEventAgentScope | null,
+  eventReceivers: ReadonlySet<string>,
+): { connIds: ReadonlySet<string>; subscriptionKey: string } | undefined {
+  if (!payload.sessionKey || !scope?.[1] || !["reset", "delete", "new"].includes(payload.reason)) {
+    return undefined;
+  }
+  const key = resolveSessionStoreKey({
+    cfg: context.getRuntimeConfig(),
+    sessionKey: payload.sessionKey,
+    storeAgentId: scope[1],
+  });
+  const subscriptionKey = resolveSessionSubscriptionKey(key, scope[1]);
+  const messageReceivers = context.getSessionMessageSubscriberConnIds?.(subscriptionKey);
+  return {
+    connIds: new Set([...eventReceivers, ...(messageReceivers ?? [])]),
+    subscriptionKey,
+  };
+}
+
 function broadcastSessionsChanged(
   context: SessionChangeContext,
   payload: SessionChangedPayload,
@@ -130,13 +154,10 @@ function broadcastSessionsChanged(
   includeSnapshot = true,
   read?: SessionRowReadView,
 ): void {
-  const connIds = context.getSessionEventSubscriberConnIds();
-  if (!hasSessionChangeReceivers(connIds)) {
-    return;
-  }
   if (scope === null) {
     return;
   }
+  const connIds = context.getSessionEventSubscriberConnIds();
   const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = scope;
   const routingOptions = {
     ...(routingAgentId ? { agentId: routingAgentId } : {}),
@@ -147,6 +168,23 @@ function broadcastSessionsChanged(
     ...(eventAgentId ? { agentId: eventAgentId } : {}),
     ts: Date.now(),
   };
+  const drain = resolveSessionDrain(context, payload, scope, connIds);
+  if (drain && drain.connIds.size > 0) {
+    // Publish in row order; a slow recipient must reconnect instead of missing eviction.
+    context.broadcastToConnIds(
+      "socket.drain",
+      { ...eventPayload, agentId: routingAgentId },
+      drain.connIds,
+      {
+        ...routingOptions,
+        sessionKeys: [drain.subscriptionKey],
+        dropIfSlow: false,
+      },
+    );
+  }
+  if (!hasSessionChangeReceivers(connIds)) {
+    return;
+  }
   if (!includeSnapshot) {
     // Native plugins need the keyed notice, but a keyed WebSocket payload would
     // ask recipient projection to read the unavailable row again.
@@ -264,16 +302,13 @@ async function publishSessionChange(context: SessionChangeContext, change: Sessi
   };
   try {
     if (query && projection) {
-      const prepared = await sessionEventPublicationRows(projection).withPreparedExactRows(
+      await sessionEventPublicationRows(projection).withPreparedExactRows(
         () => [query],
         (read) => {
           broadcast(true, read);
         },
         { includeAncestors: true },
       );
-      if (prepared.kind !== "complete") {
-        broadcast(false);
-      }
     } else {
       broadcast();
     }
@@ -290,21 +325,22 @@ function startPendingSessionChange(pending: PendingSessionChange, leading?: Sess
   if (pending.work) {
     return;
   }
-  pending.work = Promise.resolve()
-    .then(async () => {
-      if (leading) {
-        await publishSessionChange(pending.context, leading);
+  // The sidecar drain owns publication after the emitting request has completed.
+  pending.work = runOutsideAsyncWorkScope(async () => {
+    await Promise.resolve();
+    if (leading) {
+      await publishSessionChange(pending.context, leading);
+    }
+    while (pending.due) {
+      const next = pending.latest;
+      if (next) {
+        pending.latest = undefined;
+        await publishSessionChange(pending.context, next);
+      } else {
+        break;
       }
-      while (pending.due) {
-        const next = pending.latest;
-        if (next) {
-          pending.latest = undefined;
-          await publishSessionChange(pending.context, next);
-        } else {
-          break;
-        }
-      }
-    })
+    }
+  })
     .catch((error: unknown) => {
       log.warn("Session change publication failed", { error: formatErrorMessageWithCode(error) });
     })
@@ -382,18 +418,24 @@ export function emitSessionsChanged(
     bumpGatewayAccessRevision();
   }
   if (!catalogOnly) {
-    invalidateSessionSharingSnapshot(payload.sessionKey);
     // Inbox subscriptions are independent of session-list subscriptions, including a closed sidebar.
     void context.mentionInbox?.invalidateAsync(payload.sessionKey);
   }
   const connIds = context.getSessionEventSubscriberConnIds();
-  if (!hasSessionChangeReceivers(connIds)) {
+  // Lightweight contexts without either kind of listener need no routing config.
+  if (!hasSessionChangeReceivers(connIds) && !context.getSessionMessageSubscriberConnIds) {
     return;
   }
   const cfg = context.getRuntimeConfig();
   const scope: SessionEventAgentScope | null = payload.sessionKey
     ? resolveSessionEventAgentScope(cfg, payload.sessionKey, payload.agentId)
     : [payload.agentId, payload.agentId, undefined];
+  if (
+    !hasSessionChangeReceivers(connIds) &&
+    !resolveSessionDrain(context, payload, scope, connIds)?.connIds.size
+  ) {
+    return;
+  }
   if (options.preparedPublication && payload.sessionKey) {
     return broadcastSessionsChanged(context, payload, scope, true, options.sessionRows);
   }
@@ -443,4 +485,22 @@ export function emitSessionsChanged(
   next.timer = setTimeout(() => finishPendingSessionChange(next), SESSIONS_CHANGED_DEBOUNCE_MS);
   next.timer.unref?.();
   startPendingSessionChange(next, { payload, scope });
+}
+
+/** Naming changes runtime presentation without changing access or stored session facts. */
+export function emitSessionTitleChanged(
+  context: SessionChangeContext,
+  target: { sessionKey: string; sessionId?: string; agentId: string },
+): void {
+  try {
+    emitSessionsChanged(
+      context,
+      { ...target, reason: "chat.title" },
+      { accessChanged: false, rowScope: "runtime" },
+    );
+  } catch (error) {
+    log.warn("Session title state publication failed", {
+      error: formatErrorMessageWithCode(error),
+    });
+  }
 }

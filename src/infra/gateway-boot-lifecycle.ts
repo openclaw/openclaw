@@ -30,13 +30,13 @@ import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 export {
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
+  GATEWAY_SIGNAL_REPEAT_WINDOW_MS,
 } from "./gateway-boot-lifecycle.kernel.js";
 
 // Keep enough history for operator forensics while bounding lifecycle-segment
 // growth. Retention must comfortably exceed GATEWAY_BOOT_LOOP_WINDOW_MS.
 const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 export const GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS = 500;
-export const GATEWAY_SIGNAL_REPEAT_WINDOW_MS = 5 * 60_000;
 
 export function formatGatewayRepeatedSignalHint(
   signal: NodeJS.Signals,
@@ -143,9 +143,6 @@ export async function inspectGatewayCrashLoopBreakerAsync(
     { type: "gatewayBoot.breaker", input: nowMs },
     { signal, current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "gatewayBoot.breaker")) {
-    throw new Error("Unexpected Gateway crash-loop breaker result");
-  }
   return reply?.decision ?? buildGatewayCrashLoopBreakerDecision({ uncleanBoots: 0 });
 }
 
@@ -219,12 +216,12 @@ export async function recordGatewayCrashLoopRecovery(
   }
 }
 
-export function completeGatewayBootLifecycle(
+export async function completeGatewayBootLifecycle(
   bootId: string | undefined,
   completion: GatewayBootLifecycleCompletion,
   env: NodeJS.ProcessEnv = process.env,
   nowMs = Date.now(),
-): void {
+): Promise<void> {
   if (!bootId) {
     return;
   }
@@ -237,34 +234,12 @@ export function completeGatewayBootLifecycle(
           ? "SIGINT"
           : undefined;
   try {
-    const recentStops = runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .updateTable("gateway_boot_lifecycle")
-            .set({
-              completed_at_ms: nowMs,
-              outcome: completion.outcome,
-              ...(completion.startupReason ? { startup_reason: completion.startupReason } : {}),
-              reason: completion.reason ?? null,
-            })
-            .where("boot_id", "=", bootId),
-        );
-        return signal
-          ? executeSqliteQueryTakeFirstSync(
-              db,
-              kysely
-                .selectFrom("gateway_boot_lifecycle")
-                .select((eb) => eb.fn.countAll<number>().as("count"))
-                .where("outcome", "=", "clean_stop")
-                .where("reason", "=", completion.reason ?? null)
-                .where("completed_at_ms", ">=", nowMs - GATEWAY_SIGNAL_REPEAT_WINDOW_MS),
-            )?.count
-          : undefined;
-      },
-      { env },
+    const context = captureOpenClawStateWorkerContext({ env });
+    const recentStops = await runOpenClawStateWorkerOperation(context, (scope) =>
+      scope.execute({
+        type: "gatewayBoot.complete",
+        input: { bootId, completion, nowMs, countSignalStops: signal !== undefined },
+      }),
     );
     if (signal && recentStops !== undefined && recentStops >= 3) {
       gatewayLifecycleLog.warn(

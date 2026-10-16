@@ -1,4 +1,5 @@
 import type { SessionLogEntry } from "../../../../src/infra/session-cost-usage.types.js";
+import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { CostUsageSummary } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
@@ -57,7 +58,12 @@ type UsageDataState = {
   error: string | null;
   sessions: UsageSessionEntry[];
   creatorOptions: NonNullable<SessionsUsageResult["creatorOptions"]>;
-  sessionsLimitReached: boolean; // True if 1000 session cap was hit
+  overview?: SessionsUsageResult["overview"];
+  sessionPage?: Pick<
+    NonNullable<SessionsUsageResult["overview"]>,
+    "offset" | "limit" | "total" | "unfilteredSessionCount" | "tableTotals" | "tableSessionCount"
+  >;
+  selectedSession?: UsageSessionEntry | null;
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
@@ -96,7 +102,7 @@ type UsageDetailState = {
   context: UsageContextDetail;
   timeSeriesMode: "cumulative" | "per-turn";
   timeSeriesBreakdownMode: "total" | "by-type";
-  timeSeries: { points: TimeSeriesPoint[] } | null;
+  timeSeries: SessionUsageTimeSeries | null;
   timeSeriesLoading: boolean;
   timeSeriesStatus: PanelRefreshStatus;
   timeSeriesCursorStart: number | null; // Start of selected range (null = no selection)
@@ -132,7 +138,9 @@ type UsageCallbacks = {
     onClearQuery: () => void;
   };
   display: {
-    onExportJson: (data: UsageJsonExport) => void;
+    onExportJson: () => void;
+    onExportCsv: (format: "sessions-csv" | "daily-csv") => void;
+    onPageChange: (offset: number) => void;
     onChange: (display: Partial<UsageDisplayState>) => void;
   };
   details: {

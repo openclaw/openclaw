@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal, onCleanup, runWithOwner } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, runWithOwner } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
@@ -35,7 +35,6 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
     const [renderSource, setRenderSource] = createSignal<SvgRenderSource>();
     const [failed, setFailed] = createSignal(false);
     let source: SvgRenderSource | undefined;
-    let loadVersion = 0;
     let abortController: AbortController | undefined;
 
     const retireSource = () => {
@@ -50,7 +49,6 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
     };
     const releaseSource = () =>
       runWithOwner(null, () => {
-        loadVersion += 1;
         abortController?.abort();
         abortController = undefined;
         retireSource();
@@ -65,12 +63,11 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
     });
     createEffect(loadKey, ([src, identity, sizeBytes]) =>
       runWithOwner(null, () => {
-        releaseSource();
         setFailed(false);
-        const version = loadVersion;
+        let active = true;
         const current = () =>
           host.isConnected &&
-          version === loadVersion &&
+          active &&
           src === host.src &&
           identity === host.sourceIdentity &&
           sizeBytes === host.sizeBytes;
@@ -88,22 +85,18 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
           }
           const controller = new AbortController();
           abortController = controller;
-          let timeout: ReturnType<typeof setTimeout> | undefined;
+          const timeout = setTimeout(
+            () =>
+              controller.abort(new DOMException("SVG attachment fetch timed out", "TimeoutError")),
+            SVG_PREVIEW_FETCH_TIMEOUT_MS,
+          );
           try {
-            const response = await Promise.race([
-              fetch(src, {
-                credentials: "same-origin",
-                headers: { Accept: "image/svg+xml" },
-                method: "GET",
-                signal: controller.signal,
-              }),
-              new Promise<never>((_resolve, reject) => {
-                timeout = setTimeout(() => {
-                  controller.abort();
-                  reject(new DOMException("SVG attachment fetch timed out", "TimeoutError"));
-                }, SVG_PREVIEW_FETCH_TIMEOUT_MS);
-              }),
-            ]);
+            const response = await fetch(src, {
+              credentials: "same-origin",
+              headers: { Accept: "image/svg+xml" },
+              method: "GET",
+              signal: controller.signal,
+            });
             if (!response.ok) {
               await response.body?.cancel().catch(() => undefined);
               throw new Error("SVG attachment is unavailable");
@@ -143,12 +136,12 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
           });
         }
         return () => {
+          active = false;
           stopObserving?.();
           releaseSource();
         };
       }),
     );
-    onCleanup(releaseSource);
 
     const handleOpen = () => {
       if (!source || !host.onOpen) {
@@ -167,12 +160,7 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
           URL.revokeObjectURL(opened.url);
         }
       };
-      try {
-        host.onOpen(opened.url, release);
-      } catch (error) {
-        release();
-        throw error;
-      }
+      host.onOpen(opened.url, release);
     };
 
     return (

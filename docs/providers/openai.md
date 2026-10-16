@@ -9,7 +9,7 @@ title: "OpenAI"
 ---
 
 OpenClaw uses one provider id, `openai`, for both direct API-key auth and
-ChatGPT/Codex subscription auth. `openai/*` is the canonical model route.
+ChatGPT/Codex subscription auth. `openai/*` is the standard model route.
 For embedded agent turns with runtime policy unset or `auto`, OpenAI's route
 facts decide whether OpenClaw may select the bundled Codex app-server runtime
 implicitly. The `openai/*` prefix alone does not select a runtime.
@@ -68,7 +68,7 @@ working. Each entry points at the page that now holds the content.
 - <a id="verify-the-model-is-available" />[Verify the model is available](/providers/openai/setup#verify-the-model-is-available)
 - <a id="codex-subscription" />[Codex subscription](/providers/openai/setup#codex-subscription)
 - <a id="run-codex-oauth" />[Run Codex OAuth](/providers/openai/setup#run-codex-oauth)
-- <a id="use-the-canonical-openai-model-route" />[Use the canonical OpenAI model route](/providers/openai/setup#use-the-canonical-openai-model-route)
+- <a id="use-the-canonical-openai-model-route" />[Use the standard OpenAI model route](/providers/openai/setup#use-the-canonical-openai-model-route)
 - <a id="verify-codex-auth-is-available" />[Verify Codex auth is available](/providers/openai/setup#verify-codex-auth-is-available)
 
 **[OpenAI models](/providers/openai/models)**
@@ -152,3 +152,61 @@ For hosted execution, file handling, and connected tools in chat, see the
     Auth details and credential reuse rules.
   </Card>
 </CardGroup>
+
+## Decision models
+
+The bundled `openai` plugin supports the beta
+[OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)
+through OpenClaw's [Decision model role](/concepts/decision-models).
+Configure `OPENAI_API_KEY` or an `openai` API-key auth profile, then select
+`openai/gpt-6-luna` in the Decision picker or set:
+
+```json5
+{
+  agents: { defaults: { decisionModel: "openai/gpt-6-luna" } },
+}
+```
+
+The account and selected model must have Decisions API access. OpenClaw requires
+a Platform API key for Decisions. It excludes ChatGPT/Codex subscription profiles
+and Sign in with ChatGPT token-sharing grants before credential resolution.
+Requests use the configured OpenAI provider headers
+and transport settings. A custom Platform-compatible `baseUrl` must implement
+`POST /decisions`; ChatGPT backend URLs are rejected.
+
+Boolean questions map to predicates; choices retain their string labels; score
+levels use zero-based rubric positions. A batch supports up to 200 questions,
+with up to 255 alternatives per choice question. Larger requests return
+`unsupported-input` before credential resolution or an API call. Split independent
+questions into separate batches, or reduce the alternatives.
+
+Structured evidence and criteria are
+serialized as JSON text. The current Decision V1 contract carries text/JSON
+evidence, so this adapter does not send image parts. A per-question refusal
+makes the entire batch unavailable with `unsupported-input`; malformed or
+incomplete answers return `invalid-response`. Probabilities, fractional scores,
+provider confidence, and input/output token usage are preserved.
+
+Selecting a Decision model does not replace the primary chat model or enable
+automatic Decision assistance. Explicit evaluations send the supplied evidence
+to OpenAI and use Platform billing.
+
+### Harness and authentication
+
+Both the OpenClaw and Codex harnesses expose the shared `decision_evaluate` tool
+when a Decision model is configured, subject to normal tool policy.
+The OpenAI plugin sends its requests to
+`POST /v1/decisions`. Codex's native model loop still uses Responses.
+
+| Primary-model harness | Primary-model auth | Decision auth and behavior                                                                                                      |
+| --------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| OpenClaw              | Platform API key   | The shared tool resolves a compatible OpenAI API key.                                                                           |
+| OpenClaw              | ChatGPT OAuth      | The shared tool requires a separate OpenAI API-key profile or `OPENAI_API_KEY`.                                                 |
+| Codex                 | Platform API key   | The shared tool resolves an OpenClaw OpenAI API key independently of Codex's native credentials.                                |
+| Codex                 | ChatGPT OAuth      | Native Codex login remains available for chat. The shared tool requires an OpenClaw OpenAI API-key profile or `OPENAI_API_KEY`. |
+
+With automatic OAuth-only discovery, an evaluation returns `credentials-unavailable`
+without an API request. An explicitly incompatible provider credential binding
+remains terminal; OpenClaw does not substitute another account. Configure the
+Decision API key through OpenClaw's existing OpenAI auth setup, without changing
+the primary model or Codex login.

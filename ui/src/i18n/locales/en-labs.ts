@@ -3,6 +3,8 @@ import { en } from "./en.ts";
 
 const enLabs = {
   labsPage: {
+    configure: "Configure",
+    configureFeature: "Configure {name}",
     decisionAssistance: {
       title: "Decision assistance",
       description:
@@ -27,6 +29,22 @@ const enLabs = {
       description:
         "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
     },
+    advisor: {
+      title: "Advisor",
+      description:
+        "Every few tool calls or minutes of agent work, Advisor reviews the conversation on the session's own model. If it spots avoidable work (drifting from the request, repeated or stalled tool calls), it offers one short correction to the active run, or the next turn when steering is unavailable. Adds model calls.",
+    },
+    composerPredictions: {
+      title: "Composer predictions",
+      description:
+        "Suggest a next message after a reply in the active conversation. Adds a tool-free model call using conversation context. Tab accepts the suggestion into your draft; it never sends automatically. Off by default.",
+      model: "Prediction model",
+      modelDescription:
+        "Utility is recommended for short, lower-cost predictions. Conversation uses the current chat model; Default uses the agent's configured primary model. An unavailable choice skips predictions instead of switching models.",
+      utility: "Utility model (recommended)",
+      conversation: "Conversation model",
+      default: "Default model",
+    },
     chatBubbles: {
       title: "Speech bubbles",
       description:
@@ -36,6 +54,10 @@ const enLabs = {
       title: "Custom plugin UI",
       description:
         "Let installed plugins add pages, widgets, and custom views. Their JavaScript runs with your signed-in permissions, so enable only plugins you trust. Bundled plugin views remain available. Reload this tab to clear previously loaded plugin code.",
+    },
+    claws: {
+      title: "Claws",
+      description: "Claws are ready-made agents for specific tasks.",
     },
     hostDesktop: {
       title: "Host Desktop",

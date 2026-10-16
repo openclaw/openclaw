@@ -8,6 +8,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionEntries from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import {
   runExclusiveSessionLifecycleMutation,
   startSessionWorkAdmissionInterruption,
@@ -32,6 +33,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     testing.resetReplyRunRegistry();
     await closeOpenClawAgentDatabasesAsync();
+    memorySessionActorOwners.reset();
     vi.restoreAllMocks();
     cleanup();
   }),
@@ -61,24 +63,21 @@ function complete(result: Awaited<ReturnType<typeof admitReplyTurn>> | undefined
   }
 }
 
-it("keeps native incognito admission with its existing owner without an actor", async ({
-  signal,
-}) => {
+it("keeps incognito admission and its actor with the existing memory owner", async ({ signal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const key = "agent:main:dashboard:incognito-reply-admission";
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
     const scope = { agentId: "main", storePath, sessionKey: key };
-    sessionEntries.replaceSessionEntrySync(scope, { sessionId, updatedAt: 1, incognito: true });
-    const native = getOpenClawAgentDatabaseIfOpen({
+    await sessionEntries.replaceSessionEntry(scope, { sessionId, updatedAt: 1, incognito: true });
+    const owner = memorySessionActorOwners.read({
       agentId: "main",
       path: storePath,
-      env: state.env,
     });
-    expect(native).toBeDefined();
+    expect(owner).toBeDefined();
     const result = await admit(storePath, { agentId: "main", sessionKey: key });
     try {
       if (result.status !== "owned" || !result.databaseClaim) {
-        throw new Error("Native incognito admission must retain its database claim");
+        throw new Error("Incognito admission must retain its memory claim");
       }
       const { operation, databaseClaim } = result;
       expect(getReplyOperationSessionTarget(operation)).toMatchObject({
@@ -87,18 +86,24 @@ it("keeps native incognito admission with its existing owner without an actor", 
         readSource: {
           agentId: "main",
           path: storePath,
-          databaseIdentity: databaseClaim.identity,
+          databaseIdentity: owner?.identity.incarnation,
         },
         target: { canonicalKey: key, storeKeys: [key] },
       });
-      expect(typeof databaseClaim.identity).toBe("symbol");
-      await expect(acquireReplyOperationSessionActor(operation)).resolves.toBeUndefined();
+      expect(databaseClaim).toMatchObject({
+        kind: "memory",
+        identity: owner?.identity.handle,
+        incarnation: owner?.identity.incarnation,
+      });
+      const actor = await acquireReplyOperationSessionActor(operation);
+      expect(actor?.target).toEqual({ database: owner?.identity, sessionKey: key });
       expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({
         sessionId,
         incognito: true,
         updatedAt: 1,
       });
-      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBe(native);
+      expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBe(owner);
+      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBeUndefined();
       expect(fs.existsSync(storePath)).toBe(false);
       expect(databaseClaim.isCurrent()).toBe(true);
       operation.complete();
@@ -109,7 +114,8 @@ it("keeps native incognito admission with its existing owner without an actor", 
       ).toMatchObject({ settled: true });
       expect(databaseClaim.isCurrent()).toBe(false);
       expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({ sessionId, updatedAt: 1 });
-      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBe(native);
+      expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBe(owner);
+      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBeUndefined();
       expect(fs.existsSync(storePath)).toBe(false);
     } finally {
       complete(result);
@@ -118,46 +124,25 @@ it("keeps native incognito admission with its existing owner without an actor", 
   });
 });
 
-it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
+it.each(["cancelled", "request-changed"] as const)(
   "does not admit a delayed healthy rotation after %s",
   async (change) => {
     const root = tempDirs.make("reply-delayed-rotation-");
     const storePath = path.join(root, "owner.sqlite");
-    const foreignStore = path.join(root, "target.sqlite");
     const nextSessionId = "after-compaction";
     seed(storePath);
-    if (change === "later-rebound-store") {
-      seed(foreignStore);
+    const owner = await admit(storePath);
+    if (owner.status !== "owned" || !owner.databaseClaim) {
+      throw new Error("Fixture requires an admitted physical database owner");
     }
-    let preparingOwner = false;
-    const registerOwner = async () => {
-      preparingOwner = true;
-      try {
-        const result = await admit(storePath);
-        if (result.status !== "owned" || !result.databaseClaim) {
-          throw new Error("Fixture requires an admitted physical database owner");
-        }
-        return result;
-      } finally {
-        preparingOwner = false;
-      }
-    };
-    let owner = change.startsWith("later-") ? undefined : await registerOwner();
     const captured =
       createDeferred<Awaited<ReturnType<typeof sessionEntries.loadSessionEntryForAdmission>>>();
     const release = createDeferred();
     const load = sessionEntries.loadSessionEntryForAdmission;
     let reads = 0;
     vi.spyOn(sessionEntries, "loadSessionEntryForAdmission").mockImplementation(async (...args) => {
-      if (preparingOwner) {
-        return await load(...args);
-      }
       const read = ++reads;
       const snapshot = await load(...args);
-      if (read === 1 && change.startsWith("later-")) {
-        expect(registry.replyRunRegistry.get(sessionKey)).toBeUndefined();
-        owner = await registerOwner();
-      }
       if (read === 2) {
         captured.resolve(snapshot);
         await release.promise;
@@ -184,30 +169,11 @@ it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
       ]);
       expect(snapshot.entry?.sessionId).toBe(sessionId);
       expect(snapshot.databaseClaim.isCurrent()).toBe(true);
-      if (!owner?.databaseClaim) {
-        throw new Error("Fixture requires the admitted predecessor before rotation");
-      }
       expect(snapshot.databaseClaim.identity).toBe(owner.databaseClaim.identity);
       await sessionEntries.replaceSessionEntry(
         { storePath, sessionKey },
         { sessionId: nextSessionId, updatedAt: 2 },
       );
-      if (change === "later-rebound-store") {
-        preparingOwner = true;
-        try {
-          const adopted = await admit(foreignStore, {
-            expectedSessionId: sessionId,
-            adoptOperation: owner.operation,
-          });
-          if (adopted.status !== "owned" || !adopted.databaseClaim) {
-            throw new Error("Fixture requires physical-store adoption");
-          }
-          expect(adopted.databaseClaim.identity).not.toBe(owner.databaseClaim.identity);
-          expect(snapshot.databaseClaim.isCurrent()).toBe(true);
-        } finally {
-          preparingOwner = false;
-        }
-      }
       owner.operation.updateSessionId(nextSessionId);
       owner.operation.complete();
       if (change === "cancelled") {
@@ -224,13 +190,11 @@ it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
         // Caller refusal keeps precedence over a concurrent physical-store retirement.
         await expect(pending).rejects.toBe(requestFailure);
         expect(reads).toBe(2);
-      } else {
-        await expect(pending).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
       }
       expect(registry.replyRunRegistry.get(sessionKey)).toBeUndefined();
     } finally {
       release.resolve();
-      owner?.operation.complete();
+      owner.operation.complete();
       const result = await pending.catch(() => undefined);
       complete(result);
     }

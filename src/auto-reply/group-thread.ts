@@ -13,7 +13,7 @@ import {
   type GroupThreadTurn,
 } from "./group-thread-context.js";
 import type { ResolvedGroupThreadConfig } from "./group-thread.types.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "./tokens.js";
+import { SILENT_REPLY_TOKEN } from "./tokens.js";
 
 export type { GroupThreadTurn } from "./group-thread-context.js";
 
@@ -142,7 +142,7 @@ export async function runGroupThread<T>(params: {
               group.qualified && group.configuredAgentCount > 1 ? { agentId, name } : undefined,
             formatReply: params.formatReply,
             recordReply: (payload) => {
-              if (!open || isSilentReplyText(payload.text)) {
+              if (!open) {
                 return;
               }
               const text = payload.text?.trim() ?? "";

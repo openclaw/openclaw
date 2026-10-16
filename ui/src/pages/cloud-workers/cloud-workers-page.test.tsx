@@ -116,7 +116,7 @@ describe("Cloud Workers mutation requests", () => {
         }
         if (method === "environments.list") {
           if (!isRecord(params) || params.projection !== "profiles") {
-            throw new Error("environment inventory unavailable");
+            return { environments: [] };
           }
           return {
             environments: [],
@@ -173,11 +173,10 @@ describe("Cloud Workers mutation requests", () => {
       try {
         await waitForSolid(() => {
           const profiles = [...page.querySelectorAll(".settings-section")].find((section) =>
-            section.querySelector("h2")?.textContent?.trim().startsWith("Profiles"),
+            section.querySelector("h2")?.textContent?.trim().startsWith("Machines"),
           );
           expect(profiles?.querySelectorAll(".settings-row code")).toHaveLength(2);
         });
-        expect(page.textContent).not.toContain("environment inventory unavailable");
         const row = expectDefined(
           [...page.querySelectorAll(".settings-row")].find(
             (entry) => entry.querySelector("code")?.textContent === "pending",
@@ -259,11 +258,7 @@ describe("Cloud Workers mutation requests", () => {
           expect(retainedRow?.textContent).toContain("Advertised");
         });
         if (action !== "delete") {
-          await waitForSolid(() =>
-            expect(page.textContent).toContain(
-              "Profile saved. Build a snapshot from the Snapshots view.",
-            ),
-          );
+          await waitForSolid(() => expect(page.textContent).toContain("Profile saved."));
           expect(request).not.toHaveBeenCalledWith("environments.prepare", expect.anything());
         }
         expect(patches[0]).toMatchObject({

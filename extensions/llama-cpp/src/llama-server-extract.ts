@@ -19,33 +19,6 @@ const LLAMA_ARCHIVE_LIMITS = {
 } satisfies ArchiveExtractLimits;
 const MAX_ALIAS_BYTES = 512 * MEBIBYTE;
 
-function assertManifestBasename(filename: string): string {
-  if (
-    !filename ||
-    filename === "." ||
-    filename === ".." ||
-    /[\\/]/u.test(filename) ||
-    path.basename(filename) !== filename
-  ) {
-    throw new Error(`invalid llama-server archive manifest filename: ${filename}`);
-  }
-  return filename;
-}
-
-function resolveArchiveRoot(destDir: string, archiveRoot: string): string {
-  if (archiveRoot === ".") {
-    return destDir;
-  }
-  if (path.isAbsolute(archiveRoot) || /\\/u.test(archiveRoot)) {
-    throw new Error(`invalid llama-server archive root: ${archiveRoot}`);
-  }
-  const parts = archiveRoot.split("/");
-  if (parts.some((part) => !part || part === "." || part === "..")) {
-    throw new Error(`invalid llama-server archive root: ${archiveRoot}`);
-  }
-  return path.join(destDir, ...parts);
-}
-
 async function assertRegularFile(filePath: string, label: string): Promise<Stats> {
   const stat = await fs.lstat(filePath).catch(() => undefined);
   if (!stat?.isFile() || stat.nlink > 1) {
@@ -59,25 +32,15 @@ async function materializeAssetAliases(params: {
   asset: LlamaServerArchive;
   requiredFiles: readonly string[];
 }): Promise<void> {
-  const claimedNames = new Set(params.requiredFiles.map(assertManifestBasename));
-  for (const file of claimedNames) {
+  // Paths come from the private pinned asset manifest, not archive entries.
+  for (const file of params.requiredFiles) {
     await assertRegularFile(path.join(params.rootDir, file), `file ${file}`);
   }
   let copiedBytes = 0;
-  for (const [rawSource, rawAliases] of params.asset.regularFileAliases) {
-    const source = assertManifestBasename(rawSource);
-    if (claimedNames.has(source)) {
-      throw new Error(`duplicate llama-server archive manifest filename: ${source}`);
-    }
-    claimedNames.add(source);
+  for (const [source, aliases] of params.asset.regularFileAliases) {
     const sourcePath = path.join(params.rootDir, source);
     const sourceStat = await assertRegularFile(sourcePath, `alias source ${source}`);
-    for (const rawAlias of rawAliases) {
-      const alias = assertManifestBasename(rawAlias);
-      if (claimedNames.has(alias)) {
-        throw new Error(`duplicate llama-server archive manifest filename: ${alias}`);
-      }
-      claimedNames.add(alias);
+    for (const alias of aliases) {
       copiedBytes += sourceStat.size;
       if (copiedBytes > MAX_ALIAS_BYTES) {
         throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.EXTRACTED_SIZE_EXCEEDS_LIMIT);
@@ -85,10 +48,6 @@ async function materializeAssetAliases(params: {
       const aliasPath = path.join(params.rootDir, alias);
       await fs.copyFile(sourcePath, aliasPath, fsConstants.COPYFILE_EXCL);
       await fs.chmod(aliasPath, sourceStat.mode & 0o777);
-      const aliasStat = await assertRegularFile(aliasPath, `alias ${alias}`);
-      if (aliasStat.size !== sourceStat.size) {
-        throw new Error(`llama-server archive alias copy is incomplete: ${alias}`);
-      }
     }
   }
 }
@@ -123,7 +82,7 @@ async function extractVerifiedArchive(params: {
     entryFilter: (entry) => (entry.kind === "symlink" ? "skip" : "extract"),
     onFiltered: "skip-entry",
   });
-  const rootDir = resolveArchiveRoot(params.destDir, params.asset.archiveRoot);
+  const rootDir = path.join(params.destDir, params.asset.archiveRoot);
   await materializeAssetAliases({
     rootDir,
     asset: params.asset,

@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
-import { render, type ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SolidControllerHost } from "../../../lit/solid-controller-host.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatStateController } from "../chat-state-controller.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -129,7 +129,7 @@ describe("completed-work duration", () => {
       render(renderChatThread(props, transcript), container);
       transcript.hostUpdated();
     };
-    const host: ReactiveControllerHost = {
+    const host: SolidControllerHost = {
       addController: () => undefined,
       removeController: () => undefined,
       requestUpdate: rerender,

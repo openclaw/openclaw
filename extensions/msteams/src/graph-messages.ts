@@ -104,9 +104,11 @@ type MSTeamsMessageTarget = {
   accountId?: string | null;
   to: string;
   messageId: string;
+  /** Thread root of a channel reply; Graph addresses replies only beneath it. */
+  threadRootId?: string;
 };
 
-async function resolveGraphMessageContext(
+export async function resolveGraphMessageContext(
   params: Pick<MSTeamsMessageTarget, "cfg" | "accountId" | "to">,
   options?: { preferDelegated?: boolean },
 ) {
@@ -134,9 +136,19 @@ async function resolveGraphPinContext(
   return context;
 }
 
+function resolveMessagePath(
+  conv: ReturnType<typeof resolveConversationPath>,
+  params: Pick<MSTeamsMessageTarget, "messageId" | "threadRootId">,
+): string {
+  const messageId = encodeURIComponent(params.messageId);
+  return conv.kind === "channel" && params.threadRootId && params.threadRootId !== params.messageId
+    ? `${conv.basePath}/messages/${encodeURIComponent(params.threadRootId)}/replies/${messageId}`
+    : `${conv.basePath}/messages/${messageId}`;
+}
+
 export async function getMessageMSTeams(params: MSTeamsMessageTarget) {
-  const { token, basePath } = await resolveGraphMessageContext(params);
-  const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}`;
+  const { token, ...conv } = await resolveGraphMessageContext(params);
+  const path = resolveMessagePath(conv, params);
   const msg = await fetchGraphJson<GraphMessage>({ token, path });
   return {
     id: msg.id ?? params.messageId,
@@ -223,7 +235,7 @@ export async function listPinsMSTeams(params: ListPinsMSTeamsParams) {
 
 type GraphReaction = {
   reactionType?: string;
-  user?: { id?: string; displayName?: string };
+  user?: { user?: { id?: string; displayName?: string | null } | null } | null;
   createdDateTime?: string;
 };
 
@@ -252,10 +264,10 @@ async function mutateMessageReaction(
   operation: "setReaction" | "unsetReaction",
 ): Promise<{ ok: true }> {
   const reactionType = resolveMSTeamsReactionEmoji(params.reactionType);
-  const { token, basePath } = await resolveGraphMessageContext(params, { preferDelegated: true });
+  const { token, ...conv } = await resolveGraphMessageContext(params, { preferDelegated: true });
   await mutateGraphJson<unknown>({
     token,
-    path: `${basePath}/messages/${encodeURIComponent(params.messageId)}/${operation}`,
+    path: `${resolveMessagePath(conv, params)}/${operation}`,
     method: "POST",
     body: { reactionType },
     beta: true,
@@ -276,8 +288,8 @@ export function unreactMessageMSTeams(params: ReactMessageMSTeamsParams): Promis
  * Uses Graph v1.0 (reactions are included in the message resource).
  */
 export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
-  const { token, basePath } = await resolveGraphMessageContext(params);
-  const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}`;
+  const { token, ...conv } = await resolveGraphMessageContext(params);
+  const path = resolveMessagePath(conv, params);
   const msg = await fetchGraphJson<GraphMessageWithReactions>({ token, path });
 
   const grouped = new Map<
@@ -293,10 +305,11 @@ export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
     // Count every reaction regardless of whether the user ID is present
     // (deleted accounts, guests, or anonymous users may lack a user ID)
     group.count++;
-    if (reaction.user?.id) {
+    const user = reaction.user?.user;
+    if (user?.id) {
       group.users.push({
-        id: reaction.user.id,
-        displayName: reaction.user.displayName,
+        id: user.id,
+        displayName: user.displayName ?? undefined,
       });
     }
   }

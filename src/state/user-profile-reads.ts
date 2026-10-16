@@ -2,6 +2,7 @@ import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.j
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { captureUserProfileAuthorityRead } from "./user-profile-events.js";
+import { readUserProfileSnapshot } from "./user-profile-list.js";
 import type { CachedGitHubIdentity, CachedGitHubIdentityBinding } from "./user-profiles.types.js";
 
 type ProfileReadOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
@@ -19,9 +20,6 @@ export async function prepareCurrentUserProfileAliases(
     { current: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userProfiles.aliases.resolve")) {
-    throw new Error("Profile alias reader returned an unexpected result");
-  }
   const isCurrent = authority.bind([profileId, reply?.profileId ?? profileId]);
   const assertCurrent = () => {
     if (!isCurrent?.()) {
@@ -43,26 +41,11 @@ export async function resolveCanonicalCachedGitHubIdentity(
   if (!reply) {
     return undefined;
   }
-  if (!reply.ok || reply.type !== "userProfiles.githubIdentity.cached") {
-    throw new Error("Cached GitHub identity reader returned an unexpected result");
-  }
   return reply.identity;
 }
 
 export async function listProfiles(options: ProfileReadOptions = {}) {
   return (await readUserProfileSnapshot(undefined, options)).profiles;
-}
-
-export async function readUserProfileSnapshot(
-  githubAccountIds?: readonly number[],
-  options: ProfileReadOptions = {},
-) {
-  const context = captureOpenClawStateWorkerContext(options);
-  const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "userProfiles.list",
-    input: githubAccountIds ? { githubAccountIds } : undefined,
-  });
 }
 
 /** Candidate IDs and search labels; current recipient policy remains caller-owned. */

@@ -6,7 +6,7 @@ import {
 import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
-  createChannelNativeOriginTargetResolver,
+  createChannelNativeOriginTargetResolverAsync,
   resolveApprovalRequestSessionConversation,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
@@ -128,7 +128,7 @@ function resolveSuppressionAccountId(params: {
   );
 }
 
-const resolveMatrixOriginTargetBase = createChannelNativeOriginTargetResolver({
+const resolveMatrixOriginTargetBase = createChannelNativeOriginTargetResolverAsync({
   channel: "matrix",
   resolveTurnSourceTarget: resolveTurnSourceMatrixOriginTarget,
   resolveSessionTarget: resolveSessionMatrixOriginTarget,
@@ -264,11 +264,15 @@ const matrixDeliveryAdapter = matrixBaseDeliveryAdapter && {
 };
 
 export const matrixApprovalCapability = createChannelApprovalCapability({
-  authorizeActorAction: (
-    params: Parameters<NonNullable<ChannelApprovalCapability["authorizeActorAction"]>>[0],
+  authorizeActorActionAsync: async (
+    params: Parameters<NonNullable<ChannelApprovalCapability["authorizeActorActionAsync"]>>[0],
   ) => {
     if (params.approvalKind !== "plugin") {
-      return matrixNativeApprovalCapability.authorizeActorAction?.(params) ?? { authorized: true };
+      return (
+        (await matrixNativeApprovalCapability.authorizeActorActionAsync?.(params)) ?? {
+          authorized: true,
+        }
+      );
     }
     if (
       !hasMatrixPluginApprovers({

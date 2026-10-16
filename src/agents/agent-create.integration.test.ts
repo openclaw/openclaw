@@ -31,6 +31,7 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import * as workerStores from "../infra/sqlite-worker-store.js";
 import {
   persistProviderAuthProfileBatch,
   stageProviderAuthProfileBatch,
@@ -44,7 +45,6 @@ import {
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
-  getOpenClawAgentDatabaseIfOpen,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -694,6 +694,20 @@ it.each(["commit", "rollback", "close-failure"] as const)(
     let staged = false;
     let retainedCreation: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
     let restoreNativeClose: (() => void) | undefined;
+    let nativeStore: { close(): Promise<void> } | undefined;
+    const openNative = workerStores.openAgentDatabaseSqliteWorkerStore;
+    const observeNativeOpen =
+      phase === "close-failure"
+        ? vi
+            .spyOn(workerStores, "openAgentDatabaseSqliteWorkerStore")
+            .mockImplementation(async (...args) => {
+              const store = await openNative(...args);
+              if (args[0].databasePath === resolveAuthProfileDatabasePath(agentDir)) {
+                nativeStore = store;
+              }
+              return store;
+            })
+        : undefined;
     const settlement: string[] = [];
     // An ordinary writer outside the creation lifecycle, through the same wizard path.
     const writeOutsideCreation = () =>
@@ -733,22 +747,18 @@ it.each(["commit", "rollback", "close-failure"] as const)(
           staged = true;
           retainedCreation = AsyncLocalStorage.snapshot();
           if (phase === "close-failure") {
-            const database = getOpenClawAgentDatabaseIfOpen({
-              agentId: "work",
-              path: resolveAuthProfileDatabasePath(agentDir),
-            });
-            if (!database) {
-              throw new Error("Staged auth did not retain its database");
+            if (!nativeStore) {
+              throw new Error("Staged auth did not retain its worker store");
             }
-            const close = database.db.close.bind(database.db);
+            const close = nativeStore.close.bind(nativeStore);
             let failed = false;
-            const closeSpy = vi.spyOn(database.db, "close").mockImplementation(() => {
+            const closeSpy = vi.spyOn(nativeStore, "close").mockImplementation(async () => {
               if (!failed) {
                 failed = true;
                 settlement.push("close-failed");
                 throw new Error("injected native close failure");
               }
-              close();
+              await close();
               settlement.push("close-retried");
             });
             restoreNativeClose = () => closeSpy.mockRestore();
@@ -799,7 +809,7 @@ it.each(["commit", "rollback", "close-failure"] as const)(
           throw new Error("Auth staging did not capture its creation context");
         }
         await expect(retainedCreation(writeOutsideCreation)).rejects.toThrow(
-          "Agent creation claim is no longer active",
+          "agent work is deleted",
         );
         expect(isWorkDatabaseOpen()).toBe(false);
         expect(readProfiles()["openai:after"]).toBeUndefined();
@@ -807,6 +817,7 @@ it.each(["commit", "rollback", "close-failure"] as const)(
       }
     } finally {
       restoreNativeClose?.();
+      observeNativeOpen?.mockRestore();
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       await state.cleanup();

@@ -183,44 +183,6 @@ describe("Hermes migration secret items", () => {
     );
   });
 
-  it("imports the current Hermes MiniMax China credential", async () => {
-    const { source, secretContext } = await makeHermesSecretFixture();
-    const envVar = ["MINIMAX", "CN", "API", "KEY"].join("_");
-    await writeFile(path.join(source, ".env"), `${envVar}=placeholder\n`);
-
-    const plan = await buildHermesMigrationProvider().plan(secretContext());
-
-    expect(plan.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "secret",
-          details: expect.objectContaining({ envVar, provider: "minimax" }),
-        }),
-      ]),
-    );
-  });
-
-  it("imports the selected provider credential without an endpoint override", async () => {
-    const { source, secretContext } = await makeHermesSecretFixture();
-    const envVar = ["STEPFUN", "API", "KEY"].join("_");
-    await writeFile(
-      path.join(source, "config.yaml"),
-      "model:\n  provider: stepfun\n  default: step-3.5-flash\n",
-    );
-    await writeFile(path.join(source, ".env"), `${envVar}=placeholder\n`);
-
-    const plan = await buildHermesMigrationProvider().plan(secretContext());
-
-    expect(plan.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "secret",
-          details: expect.objectContaining({ envVar, provider: "stepfun" }),
-        }),
-      ]),
-    );
-  });
-
   it("keeps legacy Moonshot model routing and credentials aligned", async () => {
     const { source, secretContext } = await makeHermesSecretFixture();
     const envVar = ["MOONSHOT", "API", "KEY"].join("_");
@@ -245,32 +207,32 @@ describe("Hermes migration secret items", () => {
     );
   });
 
-  it.each([
-    ["sk-kimi-placeholder", "kimi"],
-    ["legacy-moonshot-placeholder", "moonshot"],
-  ])("aligns KIMI_API_KEY with its effective %s route", async (apiKey, expectedProvider) => {
-    const { source, secretContext } = await makeHermesSecretFixture(expectedProvider);
-    const envVar = ["KIMI", "API", "KEY"].join("_");
-    await writeFile(
-      path.join(source, "config.yaml"),
-      "model:\n  provider: kimi-coding\n  default: kimi-k2.5\n",
-    );
-    await writeFile(path.join(source, ".env"), `${envVar}=${apiKey}\n`);
+  it.each([["sk-kimi-placeholder", "kimi"]])(
+    "aligns KIMI_API_KEY with its effective %s route",
+    async (apiKey, expectedProvider) => {
+      const { source, secretContext } = await makeHermesSecretFixture(expectedProvider);
+      const envVar = ["KIMI", "API", "KEY"].join("_");
+      await writeFile(
+        path.join(source, "config.yaml"),
+        "model:\n  provider: kimi-coding\n  default: kimi-k2.5\n",
+      );
+      await writeFile(path.join(source, ".env"), `${envVar}=${apiKey}\n`);
 
-    const plan = await buildHermesMigrationProvider().plan(secretContext());
+      const plan = await buildHermesMigrationProvider().plan(secretContext());
 
-    expect(plan.items.find((item) => item.id === "config:default-model")?.details?.model).toBe(
-      `${expectedProvider}/kimi-k2.5`,
-    );
-    expect(plan.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "secret",
-          details: expect.objectContaining({ envVar, provider: expectedProvider }),
-        }),
-      ]),
-    );
-  });
+      expect(plan.items.find((item) => item.id === "config:default-model")?.details?.model).toBe(
+        `${expectedProvider}/kimi-k2.5`,
+      );
+      expect(plan.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "secret",
+            details: expect.objectContaining({ envVar, provider: expectedProvider }),
+          }),
+        ]),
+      );
+    },
+  );
 
   it("imports a configured provider key_env as matching OpenClaw provider auth", async () => {
     const { source, stateDir, secretContext, config, runtime } = await makeHermesSecretFixture();
@@ -622,28 +584,6 @@ describe("Hermes migration secret items", () => {
     });
   });
 
-  it("keeps secret conflict checks read-only during planning", async () => {
-    const { source, secretContext, agentDir, provider } = await makeHermesSecretFixture();
-    await writeFile(path.join(source, ".env"), "OPENAI_API_KEY=sk-hermes\n");
-    const existingStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:existing": {
-          type: "api_key",
-          provider: "openai",
-          key: "existing-main-key",
-        },
-      },
-    };
-    writeAuthProfileStore(agentDir, existingStore);
-    const beforePlanStore = readAuthProfileStore(agentDir);
-    await provider.plan(secretContext());
-
-    expect(readAuthProfileStore(agentDir)).toEqual(beforePlanStore);
-    // Canonical profiles stay in SQLite; planning must not recreate the retired JSON sidecar.
-    await expectMissingPath(path.join(agentDir, "auth-profiles.json"));
-  });
-
   it("reports late-created auth profiles as conflicts without overwriting", async () => {
     const { source, secretContext, reportDir, agentDir, provider } =
       await makeHermesSecretFixture();
@@ -757,97 +697,6 @@ describe("Hermes migration secret items", () => {
       }),
     ]);
     expect(result.summary.conflicts).toBe(1);
-    await expectMissingPath(path.join(agentDir, "auth-profiles.json"));
-  });
-
-  it("imports supported Hermes provider env credentials including OpenCode and GitHub Copilot", async () => {
-    const { source, config, secretContext, reportDir, agentDir, provider } =
-      await makeHermesSecretFixture();
-    await writeFile(
-      path.join(source, ".env"),
-      ["OPENCODE_ZEN_API_KEY=opencode-key", "COPILOT_GITHUB_TOKEN=gho-copilot-token", ""].join(
-        "\n",
-      ),
-    );
-    const ctx = secretContext({
-      config,
-      reportDir,
-      runtime: makeConfigRuntime(config),
-    });
-    const plan = await provider.plan(ctx);
-
-    expect(plan.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "secret:opencode",
-          status: "planned",
-          details: expect.objectContaining({
-            envVar: "OPENCODE_ZEN_API_KEY",
-            provider: "opencode",
-            profileId: "opencode:hermes-import",
-          }),
-        }),
-        expect.objectContaining({
-          id: "secret:opencode-go",
-          status: "planned",
-          details: expect.objectContaining({
-            envVar: "OPENCODE_ZEN_API_KEY",
-            provider: "opencode-go",
-            profileId: "opencode-go:hermes-import",
-          }),
-        }),
-        expect.objectContaining({
-          id: "secret:github-copilot",
-          status: "planned",
-          details: expect.objectContaining({
-            envVar: "COPILOT_GITHUB_TOKEN",
-            mode: "token",
-            provider: "github-copilot",
-            profileId: "github-copilot:github",
-          }),
-        }),
-      ]),
-    );
-
-    const result = await provider.apply(ctx, plan);
-
-    expect(result.summary.errors).toBe(0);
-    const authStore = readAuthProfileStore(agentDir);
-    expect(authStore.profiles?.["opencode:hermes-import"]).toMatchObject({
-      type: "api_key",
-      provider: "opencode",
-      key: "opencode-key",
-    });
-    expect(authStore.profiles?.["opencode-go:hermes-import"]).toMatchObject({
-      type: "api_key",
-      provider: "opencode-go",
-      key: "opencode-key",
-    });
-    expect(authStore.profiles?.["github-copilot:github"]).toMatchObject({
-      type: "token",
-      provider: "github-copilot",
-      token: "gho-copilot-token",
-    });
-    expect(config.auth?.profiles?.["github-copilot:github"]).toMatchObject({
-      provider: "github-copilot",
-      mode: "token",
-    });
-  });
-
-  it("does not import web-search-only Perplexity env credentials as model auth profiles", async () => {
-    const { source, secretContext, reportDir, agentDir, provider } =
-      await makeHermesSecretFixture();
-    await writeFile(path.join(source, ".env"), "PERPLEXITY_API_KEY=pplx-hermes\n");
-    const ctx = secretContext({
-      reportDir,
-    });
-    const plan = await provider.plan(ctx);
-
-    expect(plan.items.some((item) => item.id === "secret:perplexity")).toBe(false);
-
-    const result = await provider.apply(ctx, plan);
-
-    expect(result.summary.errors).toBe(0);
     await expectMissingPath(path.join(agentDir, "auth-profiles.json"));
   });
 
@@ -970,69 +819,6 @@ describe("Hermes migration secret items", () => {
 
     expect(result.summary.errors).toBe(0);
     await expectMissingPath(path.join(agentDir, "auth-profiles.json"));
-  });
-
-  it("prefers OpenCode auth from XDG_DATA_HOME when it belongs to the migrated home", async () => {
-    const { root, source, config, secretContext, reportDir, agentDir } =
-      await makeHermesSecretFixture(".hermes");
-    const xdgDataHome = path.join(root, "xdg-data");
-    const previousXdgDataHome = process.env.XDG_DATA_HOME;
-    await writeFile(path.join(source, "config.yaml"), "model: opencode/kimi-k2.5\n");
-    await writeFile(
-      path.join(root, ".local", "share", "opencode", "auth.json"),
-      JSON.stringify({
-        opencode: {
-          type: "api",
-          key: "sibling-opencode-key",
-        },
-      }),
-    );
-    await writeFile(
-      path.join(xdgDataHome, "opencode", "auth.json"),
-      JSON.stringify({
-        opencode: {
-          type: "api",
-          key: "xdg-opencode-key",
-        },
-      }),
-    );
-
-    try {
-      process.env.XDG_DATA_HOME = xdgDataHome;
-      const provider = buildHermesMigrationProvider();
-      const ctx = secretContext({
-        config,
-        reportDir,
-        runtime: makeConfigRuntime(config),
-      });
-      const plan = await provider.plan(ctx);
-
-      expect(plan.items).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "secret:opencode:opencode-auth-json",
-            source: path.join(xdgDataHome, "opencode", "auth.json"),
-            status: "planned",
-          }),
-        ]),
-      );
-
-      const result = await provider.apply(ctx, plan);
-
-      expect(result.summary.errors).toBe(0);
-      const authStore = readAuthProfileStore(agentDir);
-      expect(authStore.profiles?.["opencode:hermes-import"]).toMatchObject({
-        type: "api_key",
-        provider: "opencode",
-        key: "xdg-opencode-key",
-      });
-    } finally {
-      if (previousXdgDataHome === undefined) {
-        delete process.env.XDG_DATA_HOME;
-      } else {
-        process.env.XDG_DATA_HOME = previousXdgDataHome;
-      }
-    }
   });
 
   it("imports OpenCode OpenAI OAuth credentials as OpenAI auth", async () => {

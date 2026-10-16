@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   readOpenClawAgentDatabaseRegistryToken,
@@ -10,6 +11,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
@@ -30,11 +32,14 @@ import {
   prepareSessionStoreTargetInventoryRead,
   withSessionStoreTarget,
 } from "./session-store-target-runtime.js";
-import { projectionLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+
+afterAll(clearRuntimeConfigSnapshot);
 
 describe("transcript turn physical identity", () => {
   const fixture = useTempSessionsFixture("openclaw-transcript-identity-");
+  beforeEach(() => setRuntimeConfigSnapshot({}));
   const sessionId = "selected-window";
   const scope = (sessionKey = "global") => ({
     agentId: "main",
@@ -59,27 +64,13 @@ describe("transcript turn physical identity", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("resolves the current transcript from receipt-maintained entry facts", async () => {
+  it("resolves the current transcript and lifecycle revision across entry writes", async () => {
     const selected = scope("agent:main:current");
     replaceSessionEntrySync(selected, { sessionId, updatedAt: 1, lifecycleRevision: "first" });
     await readSessionEntriesFromStoreInWorker({
       agentId: "main",
       storePath: selected.storePath,
       sessionKeys: [selected.sessionKey],
-    });
-    const run = projectionLane.pool.run.bind(projectionLane.pool);
-    let runtimeReads = 0;
-    vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await run(...args);
-      if (
-        reply.ok &&
-        typeof reply.value !== "boolean" &&
-        !Array.isArray(reply.value) &&
-        reply.value.kind === "session-runtime-target"
-      ) {
-        runtimeReads++;
-      }
-      return reply;
     });
     expect(
       await transcriptTargets.resolveSessionTranscriptRuntimeTarget(selected, undefined, {
@@ -100,7 +91,28 @@ describe("transcript turn physical identity", () => {
       sessionKey: selected.sessionKey,
       selectedLifecycleRevision: "second",
     });
-    expect(runtimeReads).toBe(0);
+  });
+
+  it("resolves a shared session ID to its transcript owner after the requested row's facts are retained", async () => {
+    const base = scope("agent:main:cron:job");
+    const run = scope(`${base.sessionKey}:run:${sessionId}`);
+    replaceSessionEntrySync(base, { sessionId, updatedAt: 1, lifecycleRevision: "base" });
+    replaceSessionEntrySync(run, { sessionId, updatedAt: 2, lifecycleRevision: "run" });
+    await readSessionEntriesFromStoreInWorker({
+      agentId: "main",
+      storePath: base.storePath,
+      sessionKeys: [base.sessionKey],
+    });
+    expect(
+      await transcriptTargets.resolveSessionTranscriptRuntimeTarget(base, undefined, {
+        keyFormat: "agent-qualified",
+      }),
+    ).toMatchObject({
+      sessionId,
+      sessionKey: run.sessionKey,
+      selectedSessionId: sessionId,
+      selectedLifecycleRevision: "run",
+    });
   });
 
   it("reuses a selected target until an owning registry write reassigns it", async () => {
@@ -166,6 +178,38 @@ describe("transcript turn physical identity", () => {
       targets: [{ agentId: "other", storePath }],
     });
     expect(reads.mock.calls.length).toBeGreaterThan(initialReads);
+  });
+
+  it("reuses per-agent inventory and cleanup after ordinary session writes", async () => {
+    const storePath = fixture.storePath();
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.resolve(fixture.sessionsDir(), "../../.."),
+    };
+    const session = { agentId: "main", storePath, sessionKey: "agent:main:global", env };
+    replaceSessionEntrySync(session, { sessionId, updatedAt: 1 });
+    const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
+    const closes = vi.spyOn(targetDiscoveryLane.pool, "closeResources");
+    const select = () =>
+      prepareSessionStoreTargetInventoryRead(
+        prepareSessionStoreTargetInventory(
+          {
+            agents: { entries: { main: {} } },
+          },
+          ["main"],
+          env,
+        ),
+      ).withRead(async (inventory) => inventory.agents[0]?.result);
+    const expected = { available: true, targets: [{ agentId: "main", storePath }] };
+    expect(await select()).toEqual(expected);
+    const initialReads = reads.mock.calls.length;
+    const initialCloses = closes.mock.calls.length;
+    expect(initialReads).toBeGreaterThan(0);
+
+    replaceSessionEntrySync(session, { sessionId, updatedAt: 2 });
+    expect(await select()).toEqual(expected);
+    expect(reads).toHaveBeenCalledTimes(initialReads);
+    expect(closes).toHaveBeenCalledTimes(initialCloses);
   });
 
   it("refreshes family inventory after writing an already registered sibling", async () => {
@@ -272,6 +316,7 @@ describe("transcript turn physical identity", () => {
   ])(
     "preserves the physical row $stored when writing $requested",
     async ({ stored, requested, mainKey }) => {
+      setRuntimeConfigSnapshot(mainKey ? { session: { mainKey } } : {});
       replaceSessionEntrySync(scope(stored), { sessionId, updatedAt: 1 });
       if (mainKey) {
         setCanonicalSqliteSessionMainKey(database(), mainKey);
