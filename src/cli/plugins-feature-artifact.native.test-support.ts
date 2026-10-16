@@ -32,6 +32,22 @@ const originalWriteJson = defaultRuntime.writeJson;
 const directories: string[] = [];
 let pristineParent: string | undefined;
 let pristineFixturePromise: Promise<string> | undefined;
+
+async function unpack(archive: string, parent: string, name = "extracted") {
+  const cwd = path.join(parent, name);
+  await fs.mkdir(cwd);
+  await extract({ file: archive, cwd, strict: true });
+  return path.join(cwd, "package");
+}
+
+function sourceLoader(entryPath: string) {
+  return getCachedPluginModuleLoader({
+    modulePath: entryPath,
+    importerUrl: import.meta.url,
+    aliasMap: buildPluginLoaderAliasMap(entryPath, process.argv[1], import.meta.url, "src"),
+    tryNative: false,
+  });
+}
 afterEach(async () => {
   defaultRuntime.writeJson = originalWriteJson;
   await Promise.all(
@@ -130,10 +146,7 @@ void describe("plugin artifact authoring", () => {
         activation: { action: "plugin_activate_artifact", path: archive, sha256 },
       },
     ]);
-    const extracted = path.join(parent, "extracted");
-    await fs.mkdir(extracted);
-    await extract({ file: archive, cwd: extracted, strict: true });
-    const packageRoot = path.join(extracted, "package");
+    const packageRoot = await unpack(archive, parent);
     const metadata = JSON.parse(await fs.readFile(path.join(packageRoot, "package.json"), "utf8"));
     assert.equal(metadata.dependencies, undefined);
     assert.equal(metadata.scripts, undefined);
@@ -152,25 +165,12 @@ void describe("plugin artifact authoring", () => {
       errors: [],
     });
     assert.deepEqual(manifest.contracts.tools, ["draft_review_analyze"]);
-    const sourceExtracted = path.join(parent, "source-extracted");
-    await fs.mkdir(sourceExtracted);
-    await extract({ file: archive, cwd: sourceExtracted, strict: true });
-    const sourcePackageRoot = path.join(sourceExtracted, "package");
+    const sourcePackageRoot = await unpack(archive, parent, "source-extracted");
     const sourceEntryPath = path.join(sourcePackageRoot, "dist/index.js");
     // A separate plugin extraction exercises transformation while its SDK stays
     // on the canonical source host graph.
     const sourceLoaded = withPluginCache(createPluginCache(), () =>
-      getCachedPluginModuleLoader({
-        modulePath: sourceEntryPath,
-        importerUrl: import.meta.url,
-        aliasMap: buildPluginLoaderAliasMap(
-          sourceEntryPath,
-          process.argv[1],
-          import.meta.url,
-          "src",
-        ),
-        tryNative: false,
-      })(sourceEntryPath),
+      sourceLoader(sourceEntryPath)(sourceEntryPath),
     );
     assert.partialDeepStrictEqual(sourceLoaded, {
       __openclawCreateRequire: 1,
@@ -264,10 +264,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
       await runPluginsPackCommand({ root: rootDir, json: true });
       const archive = path.join(rootDir, filename);
       assert.partialDeepStrictEqual(jsonOutput.at(-1), { pluginId: id, path: archive });
-      const extracted = path.join(parent, "extracted");
-      await fs.mkdir(extracted);
-      await extract({ file: archive, cwd: extracted, strict: true });
-      const packageDir = path.join(extracted, "package");
+      const packageDir = await unpack(archive, parent);
       const manifest = JSON.parse(await fs.readFile(path.join(packageDir, "package.json"), "utf8"));
       assert.deepEqual(
         await fs.readFile(path.join(packageDir, "openclaw.plugin.json")),
@@ -303,10 +300,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
       });
       if (setup) {
         // Keep plugin entry evaluation independent while reusing the native host SDK.
-        const sourceExtracted = path.join(parent, "source-extracted");
-        await fs.mkdir(sourceExtracted);
-        await extract({ file: archive, cwd: sourceExtracted, strict: true });
-        const sourcePackageDir = path.join(sourceExtracted, "package");
+        const sourcePackageDir = await unpack(archive, parent, "source-extracted");
         const sourceResolution = {
           ...resolution,
           packageDir: sourcePackageDir,
@@ -319,17 +313,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
         const setupPath = resolvePackageSetupSource(sourceResolution);
         assert.ok(setupPath);
         withPluginCache(createPluginCache(), () => {
-          const load = getCachedPluginModuleLoader({
-            modulePath: sourceEntryPath!,
-            importerUrl: import.meta.url,
-            aliasMap: buildPluginLoaderAliasMap(
-              sourceEntryPath!,
-              process.argv[1],
-              import.meta.url,
-              "src",
-            ),
-            tryNative: false,
-          });
+          const load = sourceLoader(sourceEntryPath!);
           assert.partialDeepStrictEqual(load(sourceEntryPath!), {
             default: { shared: { ready: true } },
           });
@@ -415,10 +399,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     await runPluginsBuildCommand({ root: rootDir });
     const archive = path.join(parent, "lazy-page.tgz");
     await runPluginsPackCommand({ root: rootDir, out: archive });
-    const extracted = path.join(parent, "extracted");
-    await fs.mkdir(extracted);
-    await extract({ file: archive, cwd: extracted, strict: true });
-    const packageRoot = path.join(extracted, "package");
+    const packageRoot = await unpack(archive, parent);
     const manifest = JSON.parse(
       await fs.readFile(path.join(packageRoot, "openclaw.plugin.json"), "utf8"),
     );
@@ -471,10 +452,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
 
     const archive = path.join(parent, "prebuilt.tgz");
     await runPluginsPackCommand({ root: rootDir, out: archive });
-    const extracted = path.join(parent, "extracted");
-    await fs.mkdir(extracted);
-    await extract({ file: archive, cwd: extracted, strict: true });
-    const packageRoot = path.join(extracted, "package");
+    const packageRoot = await unpack(archive, parent);
     assert.equal(await activate(packageRoot), "Prebuilt ready");
     assert.equal(
       await fs.readFile(path.join(packageRoot, directory, "theme.css"), "utf8"),
