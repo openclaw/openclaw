@@ -113,8 +113,8 @@ export function createMSTeamsReplyDispatcher(params: {
   // whenever a hook can rewrite or cancel so the original payload cannot escape the final gate.
   const hookRunner = getGlobalHookRunner();
   const allowProviderPreview = !(
-    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
-    (hookRunner?.hasHooks("message_sending") ?? false)
+    (hookRunner?.hasHooks("reply_payload_sending", { channelId: "msteams" }) ?? false) ||
+    (hookRunner?.hasHooks("message_sending", { channelId: "msteams" }) ?? false)
   );
   const streamController = createTeamsReplyStreamController({
     tableMode,

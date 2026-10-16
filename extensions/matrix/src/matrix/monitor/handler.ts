@@ -316,8 +316,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       // hook can rewrite or cancel so the original payload cannot escape the delivery gate.
       const hookRunner = getGlobalHookRunner();
       const allowProviderPreview = !(
-        (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
-        (hookRunner?.hasHooks("message_sending") ?? false)
+        (hookRunner?.hasHooks("reply_payload_sending", { channelId: "matrix" }) ?? false) ||
+        (hookRunner?.hasHooks("message_sending", { channelId: "matrix" }) ?? false)
       );
       const draftController = await createMatrixDraftController({
         streaming: allowProviderPreview ? streaming : "off",

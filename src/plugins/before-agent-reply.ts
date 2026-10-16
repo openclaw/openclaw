@@ -5,13 +5,13 @@ import { runOncePerAgentRun } from "../infra/agent-events.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readClaimingHookAdmission, withClaimingHookAdmission } from "./hook-claim-admission.js";
+import { isPluginHookAgentTrigger } from "./hook-eligibility.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentReplyEvent,
   PluginHookBeforeAgentReplyResult,
 } from "./hook-types.js";
-import { isPluginHookAgentTrigger } from "./hook-types.js";
 
 const BEFORE_AGENT_REPLY_OBSERVER_KEY = Symbol.for("openclaw.beforeAgentReply.observer");
 

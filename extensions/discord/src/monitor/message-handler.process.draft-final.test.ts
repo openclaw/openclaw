@@ -77,6 +77,21 @@ describe("processDiscordMessage provider preview hook safety", () => {
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
+  it.each(
+    ["reply_payload_sending", "message_sending"].flatMap((hookName) =>
+      (["partial", "progress"] as const).map((mode) => [hookName, mode] as const),
+    ),
+  )("preserves %s-scoped iMessage hooks with %s Discord previews", async (hookName, mode) => {
+    const hasHooks = vi.fn(
+      (name: string, ctx?: { channelId?: string }) =>
+        name === hookName && ctx?.channelId !== "discord",
+    );
+    getGlobalHookRunner.mockReturnValue({ hasHooks });
+    await runHookSafetyFinalReply(mode);
+    expect(hasHooks).toHaveBeenCalledWith(hookName, { channelId: "discord" });
+    expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
+  });
+
   it("does not re-enter final delivery after message_sending cancellation", async () => {
     registerHooks("message_sending");
     deliverDiscordReply.mockResolvedValueOnce({ visibleReplySent: false });

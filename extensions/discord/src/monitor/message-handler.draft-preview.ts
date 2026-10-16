@@ -65,8 +65,8 @@ export function createDiscordDraftPreviewController(params: {
     !params.groupThread &&
     !params.isRoomEvent &&
     !(
-      (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
-      (hookRunner?.hasHooks("message_sending") ?? false)
+      (hookRunner?.hasHooks("reply_payload_sending", { channelId: "discord" }) ?? false) ||
+      (hookRunner?.hasHooks("message_sending", { channelId: "discord" }) ?? false)
     );
   const draftMaxChars = Math.min(params.textLimit, 2000);
   const canStreamProgressDraftForToolOnlySource =

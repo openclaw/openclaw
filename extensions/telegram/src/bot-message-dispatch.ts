@@ -286,8 +286,8 @@ export const dispatchTelegramMessage = async (
   const allowProviderPreview =
     !dispatchContext.ctxPayload.GroupThread &&
     !(
-      (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
-      (hookRunner?.hasHooks("message_sending") ?? false)
+      (hookRunner?.hasHooks("reply_payload_sending", { channelId: "telegram" }) ?? false) ||
+      (hookRunner?.hasHooks("message_sending", { channelId: "telegram" }) ?? false)
     );
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
   const turnConfig = {

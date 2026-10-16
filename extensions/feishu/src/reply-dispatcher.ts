@@ -251,8 +251,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     renderMode !== "raw";
   const hookRunner = getGlobalHookRunner();
   const modifyingHooksRegistered =
-    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
-    (hookRunner?.hasHooks("message_sending") ?? false);
+    (hookRunner?.hasHooks("reply_payload_sending", { channelId: "feishu" }) ?? false) ||
+    (hookRunner?.hasHooks("message_sending", { channelId: "feishu" }) ?? false);
   // A preview exists before modifying hooks accept the logical payload, so suppress all eager
   // CardKit activity whenever either hook could rewrite or cancel the eventual send.
   const previewStreamingEnabled = streamingEnabled && !modifyingHooksRegistered;

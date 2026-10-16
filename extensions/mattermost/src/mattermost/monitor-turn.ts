@@ -83,8 +83,8 @@ export async function dispatchMattermostInboundTurn(
   // can rewrite or cancel so the original payload cannot escape the durable delivery gate.
   const hookRunner = getGlobalHookRunner();
   const allowProviderPreview = !(
-    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
-    (hookRunner?.hasHooks("message_sending") ?? false)
+    (hookRunner?.hasHooks("reply_payload_sending", { channelId: "mattermost" }) ?? false) ||
+    (hookRunner?.hasHooks("message_sending", { channelId: "mattermost" }) ?? false)
   );
   const draftPreviewEnabled = allowProviderPreview && account.streamingMode !== "off";
   const draftProgressEnabled =

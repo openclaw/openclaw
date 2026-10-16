@@ -21,6 +21,7 @@ import type {
 } from "./hook-before-agent-start.types.js";
 import type { PluginHookBeforeToolCallResult } from "./hook-before-tool-call-result.js";
 import type { InputGateDecision } from "./hook-decision-types.js";
+import type { PluginHookAgentTrigger, PluginHookReplyDispatchKind } from "./hook-eligibility.js";
 import type {
   PluginHookCronChangedEvent,
   PluginHookCronReconciledContext,
@@ -169,19 +170,7 @@ export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
   hookName === "before_prompt_build" ||
   hookName === "heartbeat_prompt_contribution";
 
-const PLUGIN_HOOK_AGENT_TRIGGERS = ["cron", "heartbeat", "user"] as const;
-
-export type PluginHookAgentTrigger = (typeof PLUGIN_HOOK_AGENT_TRIGGERS)[number];
-
-const pluginHookAgentTriggerSet = new Set<PluginHookAgentTrigger>(PLUGIN_HOOK_AGENT_TRIGGERS);
-
-export const isPluginHookAgentTrigger = (trigger: unknown): trigger is PluginHookAgentTrigger =>
-  typeof trigger === "string" && pluginHookAgentTriggerSet.has(trigger as PluginHookAgentTrigger);
-
-export type PluginHookReplyDispatchKind = "agent" | "acp";
-
-export const isPluginHookReplyDispatchKind = (kind: unknown): kind is PluginHookReplyDispatchKind =>
-  kind === "agent" || kind === "acp";
+export type { PluginHookAgentTrigger, PluginHookReplyDispatchKind } from "./hook-eligibility.js";
 
 export type PluginToolMatcher = readonly [string, ...string[]];
 
@@ -204,6 +193,12 @@ export type PluginHookRegistrationOptions<K extends PluginHookName> = {
         ];
       }
     : { eligibleDispatchKinds?: never }) &
+  (K extends "reply_payload_sending" | "message_sending"
+    ? {
+        /** Host-enforced channel scope; absent or unknown context remains eligible. */
+        eligibleChannels?: readonly [string, ...string[]];
+      }
+    : { eligibleChannels?: never }) &
   (K extends "before_tool_call" | "after_tool_call"
     ? { matcher?: PluginToolMatcher }
     : { matcher?: never }) &
@@ -961,6 +956,7 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   timeoutMs?: number;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];
   eligibleDispatchKinds?: readonly PluginHookReplyDispatchKind[];
+  eligibleChannels?: readonly string[];
   requiresToolAuthority?: true;
   /** Host-resolved transcript authority. Never infer this again from plugin identity. */
   conversationAccessAllowed?: true;

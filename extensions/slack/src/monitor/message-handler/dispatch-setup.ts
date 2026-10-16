@@ -255,8 +255,8 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
 
   const hookRunner = getGlobalHookRunner();
   const modifyingHooksRegistered =
-    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
-    (hookRunner?.hasHooks("message_sending") ?? false);
+    (hookRunner?.hasHooks("reply_payload_sending", { channelId: "slack" }) ?? false) ||
+    (hookRunner?.hasHooks("message_sending", { channelId: "slack" }) ?? false);
   // Portable previews and native progress cards exist before outbound modifiers accept the
   // payload. Native answer streaming stays enabled because it begins after both hook gates.
   const allowPreHookProviderStreaming =

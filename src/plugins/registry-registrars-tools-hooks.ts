@@ -17,6 +17,11 @@ import {
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import {
+  isPluginHookAgentTrigger,
+  isPluginHookChannelId,
+  isPluginHookReplyDispatchKind,
+} from "./hook-eligibility.js";
+import {
   resolveConversationAccessAllowed,
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
@@ -32,12 +37,7 @@ import type {
 } from "./registry-types.js";
 import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
-import {
-  isPluginHookAgentTrigger,
-  isPluginHookName,
-  isPluginHookReplyDispatchKind,
-  isPromptInjectionHookName,
-} from "./types.js";
+import { isPluginHookName, isPromptInjectionHookName } from "./types.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginHookOptions,
@@ -425,6 +425,10 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       hookName === "reply_dispatch"
         ? normalizeHookEligibility(opts?.eligibleDispatchKinds, isPluginHookReplyDispatchKind)
         : undefined;
+    const eligibleChannels =
+      hookName === "reply_payload_sending" || hookName === "message_sending"
+        ? normalizeHookEligibility(opts?.eligibleChannels, isPluginHookChannelId)
+        : undefined;
     const matcher =
       hookName === "before_tool_call" || hookName === "after_tool_call"
         ? normalizePluginToolMatcher(opts?.matcher)
@@ -443,6 +447,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(eligibleTriggers ? { eligibleTriggers } : {}),
       ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
+      ...(eligibleChannels ? { eligibleChannels } : {}),
       ...(hookName === "before_prompt_build" && opts?.requiresToolAuthority === true
         ? { requiresToolAuthority: true }
         : {}),

@@ -27,6 +27,22 @@ there produces a warning, and the typed runner never invokes that registration.
 Use `api.on(...)` for every hook in the [hook
 catalog](/plugins/hooks/reference#hook-catalog).
 
+## Outgoing hook channel scope
+
+`reply_payload_sending` and `message_sending` registrations may declare
+`eligibleChannels: ["imessage"]` (or other canonical lowercase channel-provider
+identifiers). These are providers such as `discord`, not conversation IDs.
+The host uses the same scope for hook presence checks and handler execution.
+Omitted or malformed lists remain unrestricted; missing or noncanonical channel
+context remains eligible. A channel preview may ignore an explicitly unrelated
+modifier, but still suppresses previews for applicable or unrestricted modifiers.
+
+```typescript
+api.on("reply_payload_sending", rewriteIMessageReply, {
+  eligibleChannels: ["imessage"],
+});
+```
+
 ## Quick start
 
 This example replies to a user message containing `hook-demo-check` without
