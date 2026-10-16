@@ -404,7 +404,44 @@ jobs:
     # Match the regular Windows installer build runner.
     runs-on: windows-2022
     timeout-minutes: 105
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
+      # Reuse this build for installer changes. Releases always test their exact artifact.
+      - name: Check whether to install the Windows bundle
+        id: installer-scope
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { posix } = require('node:path');
+            const paths = [
+              '.github/workflows/{linux-app,linux-app-release}.yml',
+              'apps/linux/scripts/{stage-runtime,stage-package,test-stage-runtime,test-stage-package}.mjs',
+              'apps/linux/src-tauri/{build.rs,tauri*.conf.json,Cargo.toml,Cargo.lock}',
+              'apps/linux/src-tauri/src/bundled_runtime*.rs',
+              'apps/linux/tests/windows_installer_smoke.mjs',
+              'scripts/lib/openclaw-bun.json',
+              'scripts/stage-openclaw-bun.sh',
+            ];
+            let install = true;
+            if (context.eventName === 'pull_request') {
+              try {
+                const files = await github.paginate(github.rest.pulls.listFiles, {
+                  ...context.repo, pull_number: context.issue.number, per_page: 100,
+                });
+                // GitHub caps this list at 3,000. Never skip based on a partial diff.
+                if (files.length < 3000 && files.length === context.payload.pull_request.changed_files) {
+                  install = files.some(({ filename, previous_filename }) =>
+                    [filename, previous_filename].some(name => name &&
+                      paths.some(pattern => posix.matchesGlob(name, pattern))));
+                }
+              } catch {
+                core.warning('Changed-file lookup failed; testing the installer.');
+              }
+            }
+            core.setOutput('install', install);
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -449,6 +486,16 @@ jobs:
           # Cold Windows declarations can exceed the package builder's 45-minute default.
           OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "3600000"
         run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Install Windows bundle and verify packaged runtime
+        if: steps.installer-scope.outputs.install == 'true'
+        shell: pwsh
+        env:
+          CANDIDATE_DIR: apps/linux/src-tauri/target/release/bundle/nsis
+        run: |
+          $env:EXPECTED_MANIFEST_SHA256 = (Get-FileHash apps/linux/src-tauri/target/desktop-runtime/manifest.json -Algorithm SHA256).Hash
+          $env:RELEASE_TAG = (Get-Content apps/linux/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          node apps/linux/tests/windows_installer_smoke.mjs
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

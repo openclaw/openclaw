@@ -7459,7 +7459,44 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
       /\$\{RUNNER_TEMP\}\/bin\/(?:cargo-tauri|minisign)/u,
     );
   }
+  const qualifyWindows = linux.jobs.qualify_windows;
+  expect(qualifyWindows.needs).toEqual(["validate_release", "build_windows"]);
+  expect(qualifyWindows.permissions).toEqual({ contents: "read" });
+  expect(JSON.stringify(qualifyWindows)).not.toContain("${{ secrets.");
+  const qualificationSteps = qualifyWindows.steps as WorkflowStep[];
+  expect(
+    qualificationSteps.find(({ uses }) => uses?.startsWith("actions/checkout"))?.with,
+  ).toMatchObject({ ref: "${{ github.workflow_sha }}", "persist-credentials": false });
+  const builtInstallerId = "${{ needs.build_windows.outputs.unsigned_updater_artifact_id }}";
+  expect(
+    qualificationSteps.find(({ uses }) => uses === DOWNLOAD_ARTIFACT_V8)?.with?.["artifact-ids"],
+  ).toBe(builtInstallerId);
+  expect(qualificationSteps.find(({ id }) => id === "install")).toMatchObject({
+    env: {
+      EXPECTED_MANIFEST_SHA256: "${{ needs.build_windows.outputs.manifest_sha256 }}",
+      RELEASE_TAG: "${{ needs.validate_release.outputs.release_tag }}",
+    },
+    run: "node apps/linux/tests/windows_installer_smoke.mjs",
+  });
+  expect(qualifyWindows.outputs).toEqual({
+    artifact_id: builtInstallerId,
+    sha256: "${{ steps.install.outputs.sha256 }}",
+  });
+  const qualifiedInstallerId = "${{ needs.qualify_windows.outputs.artifact_id }}";
   const windowsSigner = linux.jobs.sign_windows;
+  expect(windowsSigner.needs).toEqual(["validate_release", "qualify_windows"]);
+  const windowsSigningSteps = windowsSigner.steps as WorkflowStep[];
+  expect(
+    windowsSigningSteps.find(({ name }) => name === "Download unsigned Windows installer")?.with,
+  ).toEqual({ "artifact-ids": qualifiedInstallerId, path: "dist/windows" });
+  const checkSigningInput = windowsSigningSteps.find(
+    ({ name }) => name === "Validate Windows signing input",
+  );
+  expect(checkSigningInput?.env?.QUALIFIED_SHA256).toBe(
+    "${{ needs.qualify_windows.outputs.sha256 }}",
+  );
+  expect(checkSigningInput?.run).toContain("if ($hash -ne $env:QUALIFIED_SHA256) { throw");
+  expect(windowsSigner.outputs.sha256).toBe("${{ steps.signature.outputs.sha256 }}");
   expect(windowsSigner.environment).toBe("release-signing");
   expect(windowsSigner.permissions).toEqual({ contents: "read", "id-token": "write" });
   expect(JSON.stringify(windowsSigner)).not.toContain("actions/checkout");
@@ -7472,39 +7509,43 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   for (const [enabled, result, expected] of [
     ["true", "success", true],
     ["true", "failure", false],
+    ["true", "skipped", false],
+    ["true", "cancelled", false],
     ["false", "success", false],
   ]) {
     expect(
       runInNewContext(windowsSigner.if.replace(/^\$\{\{|\}\}$/gu, ""), {
         vars: { OPENCLAW_RELEASE_WINDOWS_SIGNED: enabled },
-        needs: { build_windows: { result } },
+        needs: { qualify_windows: { result } },
       }),
     ).toBe(expected);
   }
-  for (const [enabled, signed, expected] of [
+  for (const [enabled, signed, signsWhenQualified] of [
     ["true", "failure", false],
     ["true", "skipped", false],
     ["true", "success", true],
     ["false", "skipped", true],
   ]) {
-    expect(
-      runInNewContext(linux.jobs.sign_desktop.if.replace(/^\$\{\{|\}\}$/gu, ""), {
-        always: () => true,
-        vars: { OPENCLAW_RELEASE_WINDOWS_SIGNED: enabled },
-        needs: {
-          validate_release: { outputs: { desktop_test_bundles: "false" } },
-          build_windows: { result: "success" },
-          sign_windows: { result: signed },
-        },
-      }),
-    ).toBe(expected);
+    for (const qualified of ["success", "failure", "skipped", "cancelled"]) {
+      expect(
+        runInNewContext(linux.jobs.sign_desktop.if.replace(/^\$\{\{|\}\}$/gu, ""), {
+          always: () => true,
+          vars: { OPENCLAW_RELEASE_WINDOWS_SIGNED: enabled },
+          needs: {
+            validate_release: { outputs: { desktop_test_bundles: "false" } },
+            qualify_windows: { result: qualified },
+            sign_windows: { result: signed },
+          },
+        }),
+      ).toBe(qualified === "success" && signsWhenQualified);
+    }
   }
   const desktopSigningJob = linux.jobs.sign_desktop;
   const desktopSigningSteps = desktopSigningJob.steps as WorkflowStep[];
   expect(desktopSigningJob.needs).toEqual([
     "validate_release",
     "build_macos",
-    "build_windows",
+    "qualify_windows",
     "sign_windows",
   ]);
   expect(desktopSigningJob.permissions).toEqual({});
@@ -7530,7 +7571,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     desktopSigningSteps.find(({ name }) => name === "Download finalized Windows updater installer")
       ?.with,
   ).toEqual({
-    "artifact-ids": "${{ needs.build_windows.outputs.unsigned_updater_artifact_id }}",
+    "artifact-ids": qualifiedInstallerId,
     path: "dist/signing-input/windows",
   });
   for (const enabled of ["true", "false"]) {
@@ -7546,7 +7587,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     expect(selected[0]?.with?.["artifact-ids"]).toBe(
       enabled === "true"
         ? "${{ needs.sign_windows.outputs.signed_installer_artifact_id }}"
-        : "${{ needs.build_windows.outputs.unsigned_updater_artifact_id }}",
+        : qualifiedInstallerId,
     );
   }
   const signDesktop = expectDefined(
@@ -7554,6 +7595,8 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     "desktop updater signing step",
   );
   expect(signDesktop.env).toMatchObject({
+    WINDOWS_SHA256:
+      "${{ vars.OPENCLAW_RELEASE_WINDOWS_SIGNED == 'true' && needs.sign_windows.outputs.sha256 || needs.qualify_windows.outputs.sha256 }}",
     RELEASE_TAG: "${{ needs.validate_release.outputs.release_tag }}",
     TAG_SHA: "${{ needs.validate_release.outputs.tag_sha }}",
     TAURI_SIGNING_PRIVATE_KEY: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
@@ -8175,6 +8218,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
       step: WorkflowStep,
       tools: ReturnType<typeof writeSigningToolFixtures>,
       desktop = true,
+      windowsSha256 = "",
     ) =>
       spawnSync("bash", ["-c", step.run ?? ""], {
         cwd: root,
@@ -8184,6 +8228,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
           PATH: tools.path,
           RELEASE_TAG: "v2026.8.2",
           DESKTOP_TEST_BUNDLES: String(desktop),
+          WINDOWS_SHA256: windowsSha256,
           RUNNER_TEMP: root,
           TAG_SHA: "a".repeat(40),
           MINISIGN_BINARY_SHA256: tools.minisignBinarySha256,
@@ -8242,7 +8287,23 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     writeFileSync(macosInput, "finalized-macos-updater-bytes");
     writeFileSync(windowsInput, "finalized-windows-updater-bytes");
     const desktopSigningTools = writeSigningToolFixtures(desktopSigningRoot);
-    const desktopSigned = runSigning(desktopSigningRoot, signDesktop, desktopSigningTools);
+    const rejectedDesktop = runSigning(
+      desktopSigningRoot,
+      signDesktop,
+      desktopSigningTools,
+      true,
+      "0".repeat(64),
+    );
+    expect(rejectedDesktop.status).toBe(1);
+    expect(rejectedDesktop.stderr).toContain("computed checksum did NOT match");
+    expect(existsSync(desktopSigningTools.tauriLog)).toBe(false);
+    const desktopSigned = runSigning(
+      desktopSigningRoot,
+      signDesktop,
+      desktopSigningTools,
+      true,
+      digest(readFileSync(windowsInput)),
+    );
     expect(desktopSigned.status, `${desktopSigned.stdout}${desktopSigned.stderr}`).toBe(0);
     expect(readFileSync(macosInput, "utf8")).toBe("finalized-macos-updater-bytes");
     expect(readFileSync(windowsInput, "utf8")).toBe("finalized-windows-updater-bytes");
@@ -8306,7 +8367,13 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     mkdirSync(path.dirname(windowsOnlyInput), { recursive: true });
     writeFileSync(windowsOnlyInput, "finalized-windows-only-bytes");
     const windowsSigningTools = writeSigningToolFixtures(windowsSigningRoot);
-    const windowsSigned = runSigning(windowsSigningRoot, signDesktop, windowsSigningTools, false);
+    const windowsSigned = runSigning(
+      windowsSigningRoot,
+      signDesktop,
+      windowsSigningTools,
+      false,
+      digest(readFileSync(windowsOnlyInput)),
+    );
     expect(windowsSigned.status, `${windowsSigned.stdout}${windowsSigned.stderr}`).toBe(0);
     expect(
       readFileSync(
