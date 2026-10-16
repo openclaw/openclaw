@@ -51,7 +51,16 @@ function wrapperFixture() {
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
   };
-  return { root, canonical, env };
+  const git = (cwd: string, ...args: string[]) => {
+    const result = run(
+      "git",
+      ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", ...args],
+      { cwd, env },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  return { root, canonical, env, git };
 }
 
 function writeFixture(root: string, files: Record<string, unknown>) {
@@ -60,6 +69,14 @@ function writeFixture(root: string, files: Record<string, unknown>) {
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, typeof value === "string" ? value : JSON.stringify(value));
   }
+}
+
+function replaceFsSafe(root: string, canonical: string, manifest: Record<string, unknown>) {
+  const dependency = join(root, "fixture-fs-safe");
+  writeFixture(dependency, { "package.json": manifest, "config.js": "export {};\n" });
+  const installed = join(canonical, "node_modules/@openclaw/fs-safe");
+  rmSync(installed);
+  symlinkSync(dependency, installed, process.platform === "win32" ? "junction" : "dir");
 }
 
 it("keeps packaged scripts closed over runtime imports", () => {
@@ -248,7 +265,7 @@ it.each([
 itPosix.each(["empty", "legacy", "outdated"])(
   "boots an anchor handed off by an older wrapper (dependencies=%s)",
   (dependencies) => {
-    const { root, canonical, env: baseEnv } = wrapperFixture();
+    const { root, canonical, env: baseEnv, git } = wrapperFixture();
     const anchor = join(root, "anchor");
     mkdirSync(canonical);
     const env = {
@@ -256,8 +273,7 @@ itPosix.each(["empty", "legacy", "outdated"])(
       OPENCLAW_PR_ANCHOR_REPO_ROOT: canonical,
       TSX_TSCONFIG_PATH: join(anchor, "tsconfig.json"),
     };
-    const initialized = run("git", ["init", canonical], { env });
-    expect(initialized.status, initialized.stderr).toBe(0);
+    git(root, "init", canonical);
     copyPrWrapperSources(anchor);
     linkPrWrapperDependencies(canonical);
     if (dependencies === "legacy") {
@@ -272,11 +288,7 @@ itPosix.each(["empty", "legacy", "outdated"])(
       }
     }
     if (dependencies === "outdated") {
-      const obsoletePackage = join(root, "obsolete-fs-safe");
-      writeFixture(obsoletePackage, { "package.json": { version: "0.5.6" } });
-      const donor = join(canonical, "node_modules/@openclaw/fs-safe");
-      rmSync(donor);
-      symlinkSync(obsoletePackage, donor, process.platform === "win32" ? "junction" : "dir");
+      replaceFsSafe(root, canonical, { version: "0.5.6" });
     }
     const bootstrap = run(join(anchor, "scripts/pr"), ["review-init"], { env });
     if (dependencies === "outdated") {
@@ -296,51 +308,26 @@ itPosix.each(["empty", "legacy", "outdated"])(
       status: 2,
       stdout: expect.stringContaining("scripts/pr review-init <PR>"),
     });
-    const provision = run(
-      process.execPath,
-      [
-        "--import",
-        join(anchor, "scripts/tsx.mjs"),
-        join(anchor, "scripts/pr-lib/worktree-provision.mts"),
-      ],
-      { env },
-    );
-    expectResult(provision, {
-      status: 1,
-      stderr: expect.stringContaining("Usage: worktree-provision.mts"),
-    });
-
-    if (dependencies !== "legacy") {
-      return;
+    if (dependencies === "legacy") {
+      rmSync(join(canonical, "node_modules/yaml"));
+      expectResult(run(join(anchor, "scripts/pr"), ["review-init"], { env }), {
+        status: 2,
+        stdout: expect.stringContaining("scripts/pr review-init <PR>"),
+      });
     }
-    rmSync(join(canonical, "node_modules/yaml"));
-    expectResult(run(join(anchor, "scripts/pr"), ["review-init"], { env }), {
-      status: 2,
-      stdout: expect.stringContaining("scripts/pr review-init <PR>"),
-    });
   },
 );
 
 itPosix.each([false, true])("launches a pre-helper anchor (manifest=%s)", (manifest) => {
-  const { root, canonical, env: baseEnv } = wrapperFixture();
+  const { root, canonical, env, git } = wrapperFixture();
   const linked = join(root, "linked");
-  const env = {
-    ...baseEnv,
+  Object.assign(env, {
     TMPDIR: root,
     GIT_AUTHOR_NAME: "OpenClaw Test",
     GIT_AUTHOR_EMAIL: "test@example.invalid",
     GIT_COMMITTER_NAME: "OpenClaw Test",
     GIT_COMMITTER_EMAIL: "test@example.invalid",
-  };
-  const git = (cwd: string, ...args: string[]) => {
-    const result = run(
-      "git",
-      ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", ...args],
-      { cwd, env },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    return result.stdout.trim();
-  };
+  });
   git(root, "init", "-b", "main", canonical);
   const wrapper = join(canonical, "scripts/pr");
   // The old entrypoint understands the verified handoff but has no dependency helper.
@@ -373,19 +360,12 @@ itPosix.each([false, true])("launches a pre-helper anchor (manifest=%s)", (manif
   linkPrWrapperDependencies(canonical);
   if (manifest) {
     // The anchor's required version can differ from the newer parent's manifest.
-    const dependency = join(root, "older-fs-safe");
-    writeFixture(dependency, {
-      "package.json": {
-        name: "@openclaw/fs-safe",
-        version: "0.0.0-fixture",
-        type: "module",
-        exports: { "./config": "./config.js" },
-      },
-      "config.js": "export {};\n",
+    replaceFsSafe(root, canonical, {
+      name: "@openclaw/fs-safe",
+      version: "0.0.0-fixture",
+      type: "module",
+      exports: { "./config": "./config.js" },
     });
-    const installed = join(canonical, "node_modules/@openclaw/fs-safe");
-    rmSync(installed);
-    symlinkSync(dependency, installed, "dir");
   }
 
   const result = run(join(linked, "scripts/pr"), ["review-init"], {

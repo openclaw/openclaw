@@ -16,7 +16,8 @@ function runShell(
   });
 }
 
-function runOnboard(root: string, body: string, setup = "", timeout?: number) {
+function runOnboard(body: string, setup = "", timeout?: number) {
+  const root = tempDirs.make("openclaw-onboard-");
   return runShell(
     `
 set -euo pipefail
@@ -244,7 +245,7 @@ async function runClawhubModule(kind: "verifier" | "selector", ...args: string[]
   });
 }
 
-function runInstall(bin: string, scratch: string, overrides: Record<string, string> = {}) {
+function runInstall(bin: string, scratch: string) {
   return spawnSync("bash", ["scripts/e2e/lib/skills/clawhub-install-proof.sh"], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -254,7 +255,6 @@ function runInstall(bin: string, scratch: string, overrides: Record<string, stri
       OPENCLAW_TEST_STATE_SCRIPT_B64: "",
       PATH: `${bin}:${process.env.PATH ?? ""}`,
       TMPDIR: scratch,
-      ...overrides,
     },
   });
 }
@@ -333,10 +333,8 @@ sleep() { SECONDS=$((SECONDS + 61)); }
     }
   });
 
-  it("preserves wizard exit status when reporting failures", async () => {
-    const tempRoot = tempDirs.make("openclaw-onboard-status-test-");
-    const result = await runOnboard(
-      tempRoot,
+  it("preserves wizard exit status when reporting failures", () => {
+    const result = runOnboard(
       `
 openclaw_e2e_run_script_with_pty() {
   local _command="$1"
@@ -359,10 +357,8 @@ run_wizard_cmd failing-wizard fake-state "node fake-wizard" send_noop false
     expect(output).toContain("fake wizard log");
   });
 
-  it("delivers wizard input and EOF without retaining an inherited writer", async () => {
-    const tempRoot = tempDirs.make("openclaw-onboard-fifo-eof-");
-    const result = await runOnboard(
-      tempRoot,
+  it("delivers wizard input and EOF without retaining an inherited writer", () => {
+    const result = runOnboard(
       `
 openclaw_e2e_run_script_with_pty() { cat >"$2"; }
 send_and_close() {
@@ -385,20 +381,16 @@ test ! -e "$ONBOARD_TMP_DIR"
     expect(result.stdout).toContain("recorded input:wizard input\n");
   });
 
-  it("does not wait for a skills prompt after the ready state renders", async () => {
-    const tempRoot = tempDirs.make("openclaw-onboard-skills-ready-");
-    const sentPath = path.join(tempRoot, "sent.txt");
-    const wizardLogPath = path.join(tempRoot, "skills.log");
-    const result = await runOnboard(
-      tempRoot,
+  it("does not wait for a skills prompt after the ready state renders", () => {
+    const result = runOnboard(
       `
 sleep() { :; }
-WIZARD_LOG_PATH=${JSON.stringify(wizardLogPath)}
+WIZARD_LOG_PATH="$OPENCLAW_ONBOARD_E2E_TMPDIR/skills.log"
 printf 'Skills status\\nAll skills ready\\n' >"$WIZARD_LOG_PATH"
-exec 3>${JSON.stringify(sentPath)}
+exec 3>"$OPENCLAW_ONBOARD_E2E_TMPDIR/sent.txt"
 send_skills_flow
 exec 3>&-
-test ! -s ${JSON.stringify(sentPath)}
+test ! -s "$OPENCLAW_ONBOARD_E2E_TMPDIR/sent.txt"
 `,
     );
 
@@ -428,10 +420,8 @@ test ! -s ${JSON.stringify(sentPath)}
 
   it.each([true, false])(
     "requires onboarding gateway TCP readiness (reachable=%s)",
-    async (reachable) => {
-      const tempRoot = tempDirs.make("openclaw-onboard-gateway-");
-      const result = await runOnboard(
-        tempRoot,
+    (reachable) => {
+      const result = runOnboard(
         `
 openclaw_e2e_probe_tcp() { return ${reachable ? 0 : 1}; }
 sleep 30 &
@@ -461,10 +451,8 @@ test ! -e "$ONBOARD_TMP_DIR"
     },
   );
 
-  it("rejects invalid onboarding gateway wait attempts before probing", async () => {
-    const tempRoot = tempDirs.make("openclaw-onboard-gateway-attempts-");
-    const result = await runOnboard(
-      tempRoot,
+  it("rejects invalid onboarding gateway wait attempts before probing", () => {
+    const result = runOnboard(
       `
 openclaw_e2e_probe_tcp() {
   echo "probe should not run" >&2
@@ -751,7 +739,7 @@ docker_e2e_run_with_harness() { printf '%s\\n' "$@"; }
       registry: "https://clawhub.ai",
       slug,
     });
-    await writeFile(lockPath, `${JSON.stringify({ skills: { [slug]: { version: "1.0.0" } } })}\n`);
+    await writeJson(lockPath, { skills: { [slug]: { version: "1.0.0" } } });
     await writeJson(infoPath, { filePath: escapedInfoPath, skillKey: "wrong-skill" });
 
     const result = await runClawhubModule(
