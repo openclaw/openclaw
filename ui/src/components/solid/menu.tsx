@@ -62,6 +62,8 @@ export type MenuItem = {
   variant?: "danger";
   /** Lazy branches construct their entries on first open. */
   children?: readonly MenuEntry[] | (() => readonly MenuEntry[]);
+  /** Opt this branch into the parent menu's idle preparation. */
+  prewarm?: boolean;
   content?: JSX.Element;
   trigger?: JSX.Element;
   closeOnSelect?: boolean;
@@ -471,7 +473,7 @@ export function Menu(props: BranchProps): JSX.Element {
                         id={`${identity.id}-${item().id}`}
                         label={item().label}
                         lazy={lazy}
-                        prewarm={props.prewarm}
+                        prewarm={props.prewarm && item().prewarm}
                         items={childEntries()}
                         trigger={
                           item().trigger ?? (

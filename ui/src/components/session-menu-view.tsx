@@ -148,6 +148,7 @@ export function useSessionMenuEntries(
         </>
       ),
       children: state.compact ? undefined : () => body(entry.view),
+      prewarm: entry.view === "assign-owner",
       closeOnSelect: false,
       onBeforeShow: entry.view === "icon" ? appearance.prepare : undefined,
     };

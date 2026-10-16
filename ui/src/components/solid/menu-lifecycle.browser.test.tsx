@@ -56,6 +56,7 @@ describe("Solid menu branch lifetime", () => {
     };
     const [ready, setReady] = createSignal(false);
     const avatar = vi.fn(() => <span>Avatar</span>);
+    const unopened = vi.fn(() => <button>Other content</button>);
     const view = mountMenu({
       lazy: true,
       get prewarm() {
@@ -65,6 +66,7 @@ describe("Solid menu branch lifetime", () => {
         {
           id: "assign",
           label: "Assign to",
+          prewarm: true,
           children: () =>
             Array.from({ length: 40 }, (_, id) => ({
               id: String(id),
@@ -75,6 +77,11 @@ describe("Solid menu branch lifetime", () => {
                 </button>
               ),
             })),
+        },
+        {
+          id: "other",
+          label: "Other",
+          children: [{ id: "other-content", label: "Other content", render: unopened }],
         },
       ],
     });
@@ -97,6 +104,7 @@ describe("Solid menu branch lifetime", () => {
     await openMenu("people-assign");
     expect(idle.size).toBe(0);
     expect(avatar).toHaveBeenCalledTimes(40);
+    expect(unopened).not.toHaveBeenCalled();
     expect(item("Person 0", "people-assign")).toBe(retained);
     await userEvent.keyboard("{Escape}");
     await phase(surface("people-assign"), "hidden");
