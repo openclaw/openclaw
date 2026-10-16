@@ -88,8 +88,14 @@ function snapshotEntriesForNode(
         return [];
       }
       const sessionId = environment.attachedSessionIds[0]!;
-      const facts = preparedPlacements.get(sessionId);
-      facts?.assertCurrent();
+      let facts = preparedPlacements.get(sessionId);
+      try {
+        facts?.assertCurrent();
+      } catch {
+        // A turn can invalidate prepared pruning facts while the node reconnects.
+        // Preserve every manifest until fresh facts arrive, without losing retention publication.
+        facts = undefined;
+      }
       const placement = facts?.placement;
       const pending = facts?.pendingResult;
       // The base is not a complete reachability set until reconciliation settles. Pending

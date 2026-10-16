@@ -806,10 +806,6 @@ describe("node workspace retain coordinator", () => {
         }
         release.resolve();
         await startup;
-        if (change === "placement" || change === "pending" || change === "result") {
-          expect(invoke).not.toHaveBeenCalled();
-          return;
-        }
         expect(invoke).toHaveBeenCalledOnce();
         expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
           retain: [
@@ -819,6 +815,17 @@ describe("node workspace retain coordinator", () => {
             }),
           ],
         });
+        if (change === "placement") {
+          await coordinator.schedule("node-1");
+          expect(invoke).toHaveBeenCalledTimes(2);
+          expect(invoke.mock.calls[1]?.[0].params).toMatchObject({
+            retain: [
+              expect.objectContaining({
+                manifestRefs: [baseManifest, `sha256:${"a".repeat(64)}`],
+              }),
+            ],
+          });
+        }
       } finally {
         release.resolve();
         await startup;
