@@ -58,7 +58,7 @@ function denied(message = "Session access changed; reopen the session before con
   );
 }
 
-class SessionAccessPreparationPendingError extends SessionMutationAuthorizationChangedError {
+export class SessionAccessPreparationPendingError extends SessionMutationAuthorizationChangedError {
   constructor() {
     super(
       errorShape(

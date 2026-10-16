@@ -369,5 +369,6 @@
   "web-media",
   "agent-core",
   "agent-sessions",
-  "llm"
+  "llm",
+  "research-adapter-contract"
 ]

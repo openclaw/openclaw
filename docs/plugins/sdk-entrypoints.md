@@ -373,3 +373,9 @@ plugin transport effects and disclosure; pass its assertion into the plugin's
 database writer and file publication boundaries too. Versioned owner-bound RPC
 names let CLI callers require updated plugin handlers without assuming that an
 updated Gateway also upgraded an independently installed plugin.
+
+## Managed research contract
+
+The narrow [`research-adapter-contract`](/plugins/research-adapters) subpath defines
+versioned request, capability and evidence semantics for the bundled research
+feature and provider-owned managed services over existing plugin RPC.
