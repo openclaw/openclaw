@@ -2652,7 +2652,7 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/infra/update-candidate-state.ts",
+    "src/infra/update-candidate-state.shared.ts",
     [
       {
         tier: "T3",
@@ -2660,6 +2660,11 @@ const reviewedOperations = new Map([
         evidence:
           "CLI backup src/cli/update-cli/update-command-database-backup.ts:104 → src/infra/update-database-backup.ts:387; baseline update-command-initialization-run.ts:224 → update-recovery-baseline-capture.ts:343; worker inventory modes update-candidate-state.worker.ts:49,68,73.",
       },
+    ],
+  ],
+  [
+    "src/infra/update-candidate-state.ts",
+    [
       {
         tier: "W",
         operations: ["snapshotUpdateCandidateState.transform"],

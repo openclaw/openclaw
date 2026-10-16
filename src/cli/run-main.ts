@@ -694,14 +694,7 @@ export async function runCli(
               }
             } finally {
               if (resources) {
-                await runCliDisposer("plugin-registration-resources", async () => {
-                  try {
-                    await resources.release();
-                  } catch (error) {
-                    console.error(`Plugin CLI resource disposal failed: ${String(error)}`);
-                    throw error;
-                  }
-                });
+                await runCliDisposer("plugin-registration-resources", () => resources.release());
               }
               pauseNonTtyStdinForCliExit();
             }

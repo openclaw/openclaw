@@ -377,6 +377,7 @@ export async function executeMutableUpdate(
         await assertUpdateDatabaseEngineContexts(
           admission!.contexts,
           asNullableRecord(asNullableRecord(manifest)?.openclaw)?.databaseEngines,
+          asNullableRecord(asNullableRecord(manifest)?.openclaw)?.postgresFamilies,
         );
       }
       // Staged manifests own package schema support; Git builds refresh their admitted versions.
@@ -604,7 +605,11 @@ export async function executeMutableUpdate(
         channel: params.channel,
         devTarget: params.devTarget,
         inspectGitTarget: async (target, installTarget) => {
-          await assertUpdateDatabaseEngineContexts(admission!.contexts, target.databaseEngines);
+          await assertUpdateDatabaseEngineContexts(
+            admission!.contexts,
+            target.databaseEngines,
+            target.postgresFamilies,
+          );
           retentionInstallTarget = installTarget;
           await recordInspectedGitTarget(target, recordPhase, assertExecutionCurrent);
           assertExecutionCurrent();
@@ -636,7 +641,11 @@ export async function executeMutableUpdate(
         },
         beforeGitMutation: async (target) => {
           assertReadableGitMetadata(target.metadataUnreadable);
-          await assertUpdateDatabaseEngineContexts(admission!.contexts, target.databaseEngines);
+          await assertUpdateDatabaseEngineContexts(
+            admission!.contexts,
+            target.databaseEngines,
+            target.postgresFamilies,
+          );
           admittedTargetSchemaVersions = target.schemaVersions;
           await beforeActivate(gitMutationRoots ?? [params.root]);
         },

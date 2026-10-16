@@ -2170,7 +2170,7 @@ src/media/audio-transcode.ts	1
 src/media/bounded-read-file.ts	2
 src/media/input-files.ts	1
 src/media/local-media-access.ts	1
-src/media/media-facts.ts	16
+src/media/media-facts.ts	14
 src/media/playback-transcode.ts	1
 src/media/runtime-prompt-image-provenance.ts	1
 src/media/store.remote.runtime.ts	1
@@ -2286,7 +2286,7 @@ src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
 src/plugins/hook-types.ts	2
-src/plugins/hooks.ts	9
+src/plugins/hooks.ts	8
 src/plugins/host-hook-attachments.ts	1
 src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	4

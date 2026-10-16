@@ -36,11 +36,8 @@ import {
   normalizeFallbackFailureReason,
   reportUpdateStepCompletion,
 } from "../../infra/update-runner-command.js";
-import {
-  readBranchName,
-  readGitTargetSchemaVersions,
-  selectChannelTag,
-} from "../../infra/update-runner-git-target.js";
+import { readGitTargetSchemaVersions } from "../../infra/update-runner-git-schema.js";
+import { readBranchName, selectChannelTag } from "../../infra/update-runner-git-target.js";
 import { updateGitCheckout } from "../../infra/update-runner-git.js";
 import type {
   CommandRunner as UpdateRunnerCommandRunner,
