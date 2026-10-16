@@ -49,7 +49,7 @@ function manifest(root: string): Record<string, string> {
   );
 }
 
-function inspectDatabaseCopy<T>(databasePath: string, read: (database: DatabaseSync) => T): T {
+function schemaMetadata(databasePath: string) {
   // Inspect a private copy: opening a consolidated WAL database can itself create a WAL.
   const root = tempDirs.createTempDir("openclaw-admission-schema-");
   const copy = path.join(root, "database.sqlite");
@@ -60,7 +60,10 @@ function inspectDatabaseCopy<T>(databasePath: string, read: (database: DatabaseS
   }
   const db = new DatabaseSync(copy);
   try {
-    return read(db);
+    return {
+      userVersion: db.prepare("PRAGMA user_version").get()?.user_version,
+      schemaMeta: db.prepare("SELECT * FROM schema_meta ORDER BY rowid").all(),
+    };
   } finally {
     db.close();
   }
@@ -85,13 +88,6 @@ function runFixture(runtimeRoot: string, env: NodeJS.ProcessEnv, script: string)
   return tempDirs.track(
     runSourceRuntime(runtimeRoot, env, ["--input-type=module", "--eval", script], 60_000),
   );
-}
-
-function schemaMetadata(databasePath: string) {
-  return inspectDatabaseCopy(databasePath, (db) => ({
-    userVersion: db.prepare("PRAGMA user_version").get()?.user_version,
-    schemaMeta: db.prepare("SELECT * FROM schema_meta ORDER BY rowid").all(),
-  }));
 }
 
 type AdmissionCase = {
@@ -155,7 +151,6 @@ it.each<[string, AdmissionCase]>([
     const configPath = path.join(stateDir, "openclaw.json");
     const baseEnv = fixtureEnv(root, stateDir, configPath);
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-    const legacyWorkspacePath = path.join(workspaceDir, "openclaw-workspace-state.json");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     fs.mkdirSync(path.join(stateDir, "agents", "main", "agent"), { recursive: true });
     fs.mkdirSync(workspaceDir);
@@ -178,17 +173,12 @@ it.each<[string, AdmissionCase]>([
       }
       const identity = canonicalIdentity ? generateStoredDeviceIdentity() : undefined;
       if (identity) {
+        const { deviceId, publicKeyPem, privateKeyPem, createdAtMs } = identity;
         prepared
           .prepare(
             "INSERT INTO device_identities (identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms) VALUES ('primary', ?, ?, ?, ?, ?)",
           )
-          .run(
-            identity.deviceId,
-            identity.publicKeyPem,
-            identity.privateKeyPem,
-            identity.createdAtMs,
-            identity.createdAtMs,
-          );
+          .run(deviceId, publicKeyPem, privateKeyPem, createdAtMs, createdAtMs);
       }
       if (consolidated) {
         prepared.close();
@@ -202,13 +192,11 @@ it.each<[string, AdmissionCase]>([
           agents: selectedSession
             ? { entries: { agent: { workspace: workspaceDir } } }
             : { defaults: { workspace: workspaceDir } },
-          ...(selectedSession || repairable
-            ? {
-                session: selectedSession
-                  ? { store: path.join(stateDir, "external/{agentId}/sessions.json") }
-                  : { idleMinutes: 45 },
-              }
-            : {}),
+          session: selectedSession
+            ? { store: path.join(stateDir, "external/{agentId}/sessions.json") }
+            : repairable
+              ? { idleMinutes: 45 }
+              : undefined,
         });
         if (config === "clobbered") {
           fs.copyFileSync(configPath, `${configPath}.bak`);
@@ -235,7 +223,7 @@ it.each<[string, AdmissionCase]>([
         );
       }
       if (workspace) {
-        writeJson(legacyWorkspacePath, {
+        writeJson(path.join(workspaceDir, "openclaw-workspace-state.json"), {
           version: 1,
           bootstrapSeededAt: "2026-07-02T00:00:00.000Z",
           setupCompletedAt: "2026-07-02T00:00:00.000Z",
@@ -352,8 +340,6 @@ it.each<[string, AdmissionCase]>([
   },
   75_000,
 );
-const STARTUP_RECOVERY = "openclaw doctor --fix";
-
 async function seedMalformedDatabase(
   stateDir: string,
   mutation: string,
@@ -403,7 +389,7 @@ it.each<[string, string, boolean, string?]>([
   ],
 ])(
   "preserves unused legacy state but refuses an unsafe required store: %s",
-  async (reason, mutation, shared, recovery = STARTUP_RECOVERY) => {
+  async (reason, mutation, shared, recovery = "openclaw doctor --fix") => {
     const database = mutation !== "";
     const root = fs.realpathSync(tempDirs.createTempDir("openclaw-legacy-owner-refusal-"));
     const stateDir = path.join(root, "state");
@@ -431,13 +417,11 @@ it.each<[string, string, boolean, string?]>([
     const legacyPath = database
       ? await seedMalformedDatabase(stateDir, mutation, shared)
       : path.join(stateDir, "agent", "settings.json");
+    const approvalsPath = path.join(stateDir, "exec-approvals.json");
+    const approvalsJson = JSON.stringify({ version: 1, defaults: {}, agents: {} });
     if (!database) {
       fs.writeFileSync(legacyPath, '{"legacy":true}\n');
-      writeJson(path.join(stateDir, "exec-approvals.json"), {
-        version: 1,
-        defaults: {},
-        agents: {},
-      });
+      fs.writeFileSync(approvalsPath, approvalsJson);
     }
     const before = fs.readFileSync(legacyPath);
     const configBefore = fs.readFileSync(configPath);
@@ -466,9 +450,7 @@ it.each<[string, string, boolean, string?]>([
     } else {
       expect(result.stdout, output).toContain("__READY__");
       expect(output).not.toContain("__REFUSED__");
-      expect(fs.readFileSync(path.join(stateDir, "exec-approvals.json"), "utf8")).toBe(
-        JSON.stringify({ version: 1, defaults: {}, agents: {} }),
-      );
+      expect(fs.readFileSync(approvalsPath, "utf8")).toBe(approvalsJson);
       expect(fs.readdirSync(stateDir)).not.toContainEqual(
         expect.stringMatching(/^exec-approvals\.json\.migrated\./),
       );

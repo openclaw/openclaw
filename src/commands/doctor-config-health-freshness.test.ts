@@ -25,6 +25,8 @@ const config = (port: number) => ({
   gateway: { mode: "local", port },
 });
 const configRaw = (port: number) => JSON.stringify(config(port));
+const olderRaw = configRaw(19092);
+const newerRaw = configRaw(19093);
 
 function configIO(home: string, configPath: string) {
   const options = {
@@ -47,6 +49,8 @@ function configIO(home: string, configPath: string) {
     return health();
   };
   const assertDurableHealth = async (expected: ConfigHealthState | undefined) => {
+    expect(raw()).toBe(newerRaw);
+    expect(expected?.entries?.[configPath]?.lastKnownGood?.hash).toBe(hashConfigRaw(newerRaw));
     expect(health()).toEqual(expected);
     await closeOpenClawStateDatabaseAsync();
     expect(health()).toEqual(expected);
@@ -54,23 +58,18 @@ function configIO(home: string, configPath: string) {
   return { configPath, io, read, raw, replace, observe, assertDurableHealth };
 }
 
-function withFixture(
-  run: (
-    f: ReturnType<typeof configIO> & { goodRaw: string | null; directory: string },
-  ) => Promise<void>,
-  custom = false,
-) {
+type Fixture = ReturnType<typeof configIO> & { goodRaw: string | null; directory: string };
+function withFixture(run: (f: Fixture) => Promise<void>, custom = false) {
   return withDoctorConfigPreflightHome(async (home) => {
     try {
       const directory = path.join(home, "custom-config");
-      let file: string;
+      const file = custom
+        ? path.join(directory, "openclaw.json")
+        : await writeOpenClawConfig(home, config(19091));
       if (custom) {
         fs.mkdirSync(directory, { mode: 0o750 });
         fs.chmodSync(directory, 0o750);
-        file = path.join(directory, "openclaw.json");
         fs.writeFileSync(file, configRaw(19091));
-      } else {
-        file = await writeOpenClawConfig(home, config(19091));
       }
       const f = configIO(home, file);
       const good = await f.read();
@@ -101,10 +100,8 @@ it.skipIf(process.platform === "win32")(
 );
 
 it("keeps the last-known-good file when a newer observation supersedes promotion", () =>
-  withFixture(async ({ configPath, io, raw, replace, goodRaw, observe, assertDurableHealth }) => {
-    const olderRaw = configRaw(19092);
+  withFixture(async ({ io, raw, replace, goodRaw, observe, assertDurableHealth }) => {
     const older = await replace(olderRaw);
-    const newerRaw = configRaw(19093);
     let observedNewer = false;
     let expectedHealth: ConfigHealthState | undefined;
     const openRoot = safeFs.root;
@@ -122,11 +119,7 @@ it("keeps the last-known-good file when a newer observation supersedes promotion
     });
     const promoted = await io.promoteConfigSnapshotToLastKnownGood(older);
     expect(observedNewer).toBe(true);
-    expect(expectedHealth?.entries?.[configPath]?.lastKnownGood?.hash).toBe(
-      hashConfigRaw(newerRaw),
-    );
     expect(raw(".last-good")).toBe(goodRaw);
-    expect(raw()).toBe(newerRaw);
     expect(promoted).toBe(false);
     await assertDurableHealth(expectedHealth);
   }));
@@ -139,10 +132,9 @@ it.each(
   "$operation preserves committed file truth and newer health after $metadata",
   ({ operation, metadata }) =>
     withFixture(async ({ configPath, io, raw, replace, goodRaw, observe, assertDurableHealth }) => {
-      const targetRaw = operation === "promotion" ? configRaw(19092) : "{ invalid json";
+      const targetRaw = operation === "promotion" ? olderRaw : "{ invalid json";
       const target = await replace(targetRaw);
       expect(target.valid).toBe(operation === "promotion");
-      const newerRaw = configRaw(19093);
       const capture = healthState.captureConfigHealthStateStore;
       let superseded = false;
       let expectedHealth: ConfigHealthState | undefined;
@@ -163,9 +155,6 @@ it.each(
                 operation === "promotion" ? targetRaw : goodRaw,
               );
               expectedHealth = observe(newerRaw);
-              expect(expectedHealth.entries?.[configPath]?.lastKnownGood?.hash).toBe(
-                hashConfigRaw(newerRaw),
-              );
               if (metadata === "admission retirement") {
                 await closeOpenClawStateDatabaseAsync();
               }
@@ -197,7 +186,6 @@ it.each(
       }
       expect(superseded).toBe(true);
       expect(expectedHealth).toBeDefined();
-      expect(raw()).toBe(newerRaw);
       await assertDurableHealth(expectedHealth);
     }),
 );

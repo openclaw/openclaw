@@ -5,7 +5,6 @@ import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "../agents/sandb
 import { readConfigFileSnapshot } from "../config/config.js";
 import { findLegacyConfigIssues } from "../config/legacy.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
-import type { AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
@@ -33,24 +32,9 @@ function withMigrationHome(run: (home: string) => Promise<void>, env: NodeJS.Pro
   );
 }
 
-async function runDoctor(configPath: string, nonInteractive = false, repair?: boolean) {
-  const ctx = await prepareDoctorContext(
-    configPath,
-    nonInteractive ? { options: { nonInteractive, repair } } : undefined,
-  );
+async function runDoctor(configPath: string, repair?: boolean) {
+  const ctx = await prepareDoctorContext(configPath, { options: { nonInteractive: true, repair } });
   await ctx[Symbol.asyncDispose]();
-}
-
-async function restrictedConfig(
-  tools: AgentEntryConfig["tools"],
-  globalTools: OpenClawConfig["tools"],
-) {
-  return {
-    gateway: { mode: "local", port: await getFreePort() },
-    plugins: { enabled: false },
-    tools: globalTools,
-    agents: { ownership: "explicit", entries: { restricted: { tools } } },
-  } satisfies OpenClawConfig;
 }
 
 async function writeFixture(home: string, config: unknown) {
@@ -82,8 +66,7 @@ it("backs up and persists inherited Talk SecretRefs for an unmarked published up
       message: expect.stringContaining("talk.realtime"),
     });
 
-    await runDoctor(configPath, true);
-
+    await runDoctor(configPath);
     const saved = await readConfigFileSnapshot();
     expect(saved.valid).toBe(true);
     expect(saved.sourceConfig.talk?.realtime).toEqual({
@@ -93,7 +76,7 @@ it("backs up and persists inherited Talk SecretRefs for an unmarked published up
     });
     expect(saved.sourceConfig.plugins?.entries?.["voice-call"]?.config).toEqual(voiceConfig);
     expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
-    await runDoctor(configPath, true);
+    await runDoctor(configPath);
     expect((await readConfigFileSnapshot()).raw).toBe(saved.raw);
     expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
   }));
@@ -106,18 +89,21 @@ it.each([
   "preserves permissions during repair ($extra, sandbox=$sandbox)",
   ({ extra, repaired, sandbox }) =>
     withMigrationHome(async (home) => {
-      const raw = await restrictedConfig(
-        sandbox
-          ? { sandbox: { tools: { allow: ["read", "message"], alsoAllow: [extra] } } }
-          : { profile: "minimal", allow: ["session_status", "exec"], alsoAllow: [extra] },
-        sandbox ? { sandbox: { tools: { alsoAllow: ["exec"] } } } : { alsoAllow: ["exec"] },
-      );
+      const tools = sandbox
+        ? { sandbox: { tools: { allow: ["read", "message"], alsoAllow: [extra] } } }
+        : { profile: "minimal" as const, allow: ["session_status", "exec"], alsoAllow: [extra] };
+      const raw: OpenClawConfig = {
+        gateway: { mode: "local", port: await getFreePort() },
+        plugins: { enabled: false },
+        tools: sandbox ? { sandbox: { tools: { alsoAllow: ["exec"] } } } : { alsoAllow: ["exec"] },
+        agents: { ownership: "explicit", entries: { restricted: { tools } } },
+      };
       const { configPath, original } = await writeFixture(home, raw);
       const before = resolveSandboxToolPolicyForAgent(raw, "restricted");
       if (sandbox) {
         expect(isToolAllowed(before, "exec")).toBe(false);
       }
-      await runDoctor(configPath);
+      await runDoctor(configPath, true);
       const saved = await readConfigFileSnapshot();
       expect(saved.valid).toBe(repaired);
       if (sandbox) {
@@ -153,10 +139,7 @@ it("normalizes retired metadata and Code Mode config for an unmarked npm updater
       plugins: { enabled: false },
     });
     expect((await readConfigFileSnapshot()).valid).toBe(false);
-
-    // Shipped npm parents omit --fix and do not set the update marker.
     await using ctx = await prepareDoctorContext(configPath, { options: { nonInteractive: true } });
-
     expect(ctx.prompter.shouldRepair).toBe(false);
     const saved = await readConfigFileSnapshot();
     expect(saved.valid).toBe(true);
@@ -170,68 +153,54 @@ it("normalizes retired metadata and Code Mode config for an unmarked npm updater
     expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
   }));
 
-it.each([
-  {
-    name: "a legacy parent (legacy)",
-    legacy: true,
-    repair: true,
-    env: { OPENCLAW_UPDATE_IN_PROGRESS: "legacy" },
-  },
-  { name: "an include", include: true },
-  { name: "a remaining invalid key", invalid: true },
-  { name: "a future writer", future: true },
-  { name: "externally managed config", env: { OPENCLAW_CONFIG_READONLY: "1" } },
-  { name: "Nix-managed config", env: { OPENCLAW_NIX_MODE: "1" } },
-  {
-    name: "a parent with a later writable config handoff",
-    env: {
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
-    },
-  },
-  {
-    name: "an unresolved plugin during a legacy update",
-    invalidPlugin: true,
-    env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-  },
-])("preserves config bytes with $name during ordinary Doctor", (fixture) =>
+it.each<[string, NodeJS.ProcessEnv?]>([
+  ["legacy", { OPENCLAW_UPDATE_IN_PROGRESS: "legacy" }],
+  ["include"],
+  ["invalid"],
+  ["future"],
+  ["readonly", { OPENCLAW_CONFIG_READONLY: "1" }],
+  ["nix", { OPENCLAW_NIX_MODE: "1" }],
+  [
+    "handoff",
+    { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1" },
+  ],
+  ["missing-plugin", { OPENCLAW_UPDATE_IN_PROGRESS: "1" }],
+])("preserves %s config bytes during ordinary Doctor", (kind, env) =>
   withMigrationHome(
     async (home) => {
+      const legacy = kind === "legacy";
+      const include = kind === "include";
       const canonical = { source: "path" as const, installPath: path.join(home, "canonical") };
-      if (fixture.legacy) {
+      if (legacy) {
         await seedInstalledPluginIndex(
           { existing: canonical },
           { config: { plugins: { enabled: false } } },
         );
       }
       const configPath = await writeOpenClawConfig(home, {
-        ...(fixture.legacy
+        ...(legacy
           ? { agents: { list: [{ id: "main", name: "Operator" }, { id: "helper" }] } }
           : {}),
         meta: {
-          lastTouchedAt: fixture.legacy ? "2026-02-15T00:00:00.000Z" : "2026-03-31T00:00:00.000Z",
-          lastTouchedVersion: fixture.legacy
-            ? "2026.2.15"
-            : fixture.future
-              ? "9999.1.1"
-              : "2026.3.31",
-          ...(fixture.invalid ? { unknownSetting: true } : {}),
+          lastTouchedAt: legacy ? "2026-02-15T00:00:00.000Z" : "2026-03-31T00:00:00.000Z",
+          lastTouchedVersion: legacy ? "2026.2.15" : kind === "future" ? "9999.1.1" : "2026.3.31",
+          ...(kind === "invalid" ? { unknownSetting: true } : {}),
         },
-        gateway: fixture.include ? { $include: "gateway.json" } : { mode: "local" },
-        plugins: fixture.invalidPlugin
-          ? { load: { paths: [path.join(home, "missing-plugin")] } }
-          : { enabled: false },
+        gateway: include ? { $include: "gateway.json" } : { mode: "local" },
+        plugins:
+          kind === "missing-plugin"
+            ? { load: { paths: [path.join(home, "missing-plugin")] } }
+            : { enabled: false },
       });
-      if (fixture.include) {
+      if (include) {
         await fs.writeFile(path.join(path.dirname(configPath), "gateway.json"), '{"mode":"local"}');
       }
       const original = await fs.readFile(configPath, "utf8");
 
-      await runDoctor(configPath, true, fixture.repair);
-
+      await runDoctor(configPath, legacy || undefined);
       expect(await fs.readFile(configPath, "utf8")).toBe(original);
       await expect(fs.access(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
-      if (fixture.legacy) {
+      if (legacy) {
         expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual({
           existing: canonical,
         });
@@ -241,7 +210,7 @@ it.each([
       OPENCLAW_CONFIG_READONLY: undefined,
       OPENCLAW_NIX_MODE: undefined,
       OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: undefined,
-      ...fixture.env,
+      ...env,
     },
   ),
 );
