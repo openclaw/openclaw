@@ -16,6 +16,9 @@ vi.mock("node:child_process", async () => {
 });
 
 const authSuccess = cliResult({ started: true, status: 0 });
+const unknownOutcome = { reason: "creation-outcome-unknown", status: "outcome-unknown" };
+const issueUrl = (id: number) => `https://github.com/openclaw/openclaw/issues/${id}`;
+const created = (id: number) => ({ status: "created", url: issueUrl(id) });
 
 type CliResult = Awaited<ReturnType<RunGithubCli>>;
 
@@ -128,14 +131,11 @@ it.each([false, true])("reconciles exact content (persisted attempt=%s)", async 
   const issue = prepare(`reconcile-${persisted}`);
   const runGh = cli(
     ...(persisted ? [] : [authSuccess, cliResult({ started: true, status: 1 })]),
-    lookupResult(issue, "https://github.com/openclaw/openclaw/issues/456"),
+    lookupResult(issue, issueUrl(456)),
   );
   await expect(
     (persisted ? reconcileGithubIssue : submitGithubIssue)(issue, runGh),
-  ).resolves.toEqual({
-    status: "created",
-    url: "https://github.com/openclaw/openclaw/issues/456",
-  });
+  ).resolves.toEqual(created(456));
   if (persisted) {
     expect(runGh).toHaveBeenCalledOnce();
     expect(runGh.mock.calls[0]?.[1]).toEqual({ input: "" });
@@ -158,10 +158,7 @@ it.each([
     lookupResult(issue, url),
   );
 
-  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
-    reason: "creation-outcome-unknown",
-    status: "outcome-unknown",
-  });
+  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual(unknownOutcome);
 });
 
 it("does not reconcile a marker search candidate with different content", async () => {
@@ -169,23 +166,16 @@ it("does not reconcile a marker search candidate with different content", async 
   const runGh = cli(
     authSuccess,
     cliOutput("HTTP/2.0 201 Created\r\n\r\nnot-a-url\n"),
-    lookupResult(
-      issue,
-      "https://github.com/openclaw/openclaw/issues/999",
-      `${issue.body}\nchanged`,
-    ),
+    lookupResult(issue, issueUrl(999), `${issue.body}\nchanged`),
   );
 
-  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
-    reason: "creation-outcome-unknown",
-    status: "outcome-unknown",
-  });
+  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual(unknownOutcome);
 });
 
 it("deduplicates concurrent submissions with the same marker", async () => {
   const issue = prepare("concurrent");
   const { promise: auth, resolve: releaseAuth } = createDeferred<ReturnType<typeof cliResult>>();
-  const runGh = cli(auth, cliOutput("https://github.com/openclaw/openclaw/issues/789\n"));
+  const runGh = cli(auth, cliOutput(`${issueUrl(789)}\n`));
 
   const first = submitGithubIssue(issue, runGh);
   const second = submitGithubIssue(issue, runGh);
@@ -193,10 +183,7 @@ it("deduplicates concurrent submissions with the same marker", async () => {
   expect(runGh).toHaveBeenCalledOnce();
   releaseAuth?.(authSuccess);
 
-  await expect(Promise.all([first, second])).resolves.toEqual([
-    { status: "created", url: "https://github.com/openclaw/openclaw/issues/789" },
-    { status: "created", url: "https://github.com/openclaw/openclaw/issues/789" },
-  ]);
+  await expect(Promise.all([first, second])).resolves.toEqual([created(789), created(789)]);
   expect(runGh).toHaveBeenCalledTimes(2);
 });
 
@@ -235,10 +222,7 @@ it.each([false, true])("checks child authority (retired=%s)", async (retire) => 
       queueMicrotask(() => {
         child.emit("spawn");
         if (args[0] === "api") {
-          child.stdout.emit(
-            "data",
-            Buffer.from("https://github.com/openclaw/openclaw/issues/123\n"),
-          );
+          child.stdout.emit("data", Buffer.from(`${issueUrl(123)}\n`));
         }
         child.emit("close", 0);
       }),
@@ -268,10 +252,7 @@ it.each([false, true])("checks child authority (retired=%s)", async (retire) => 
     expect(claimed).toBe(false);
     expect(authorityAtCreate).toBeUndefined();
   } else {
-    await expect(submission).resolves.toEqual({
-      status: "created",
-      url: "https://github.com/openclaw/openclaw/issues/123",
-    });
+    await expect(submission).resolves.toEqual(created(123));
     expect(authorityAtCreate).toBe(true);
   }
   expect(spawnMock.mock.calls.map(([, args]) => args[0])).toEqual(
