@@ -7,11 +7,11 @@ import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-run
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  consumeCodexAppServerLiveThread,
+  consumeCodexAppServerLiveThread as consumeThread,
   ensureCodexAppServerClientRuntime,
-  hasCodexAppServerLiveThread,
-  isCodexAppServerLiveThreadClaimed,
-  retainCodexAppServerLiveThread,
+  hasCodexAppServerLiveThread as hasLiveThread,
+  isCodexAppServerLiveThreadClaimed as isThreadClaimed,
+  retainCodexAppServerLiveThread as retainThread,
 } from "./app-server/client-runtime.js";
 import { createLazyCodexAppServerBindingStore } from "./app-server/session-binding-store.js";
 import {
@@ -39,31 +39,36 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+async function createSession(sessionKey: string) {
+  const identity = {
+    kind: "session" as const,
+    agentId: "main",
+    sessionId: "session-id",
+    sessionKey,
+  };
+  const session = {
+    sessionId: identity.sessionId,
+    updatedAt: 1,
+    modelSelectionLocked: false,
+    inputTokens: 0,
+  };
+  const storePath = path.join(tempDirs.make("codex-thread-selection-"), "sessions.json");
+  await upsertSessionEntry({ ...identity, storePath, entry: session });
+  const runtime = createPluginRuntimeMock({
+    agent: { session: { resolveStorePath: () => storePath } },
+  });
+  return { identity, session, storePath, runtime };
+}
+
 describe("native Codex thread selection", () => {
   it.each(["connection", "session", "config"] as const)(
     "revalidates a native request after a %s change",
     async (change) => {
       const bindingStore = createCodexTestBindingStore();
-      const identity = {
-        kind: "session" as const,
-        agentId: "main",
-        sessionId: "session-id",
-        sessionKey: "agent:main:selection",
-      };
+      const { identity, session, storePath, runtime } = await createSession("agent:main:selection");
       const binding = { threadId: "bound-thread", cwd: "/synthetic/workspace" };
       await bindingStore.mutate(identity, { kind: "set", binding });
       let config: OpenClawConfig = {};
-      const session = {
-        sessionId: identity.sessionId,
-        updatedAt: 1,
-        modelSelectionLocked: false,
-        inputTokens: 0,
-      };
-      const storePath = path.join(tempDirs.make("codex-thread-selection-"), "sessions.json");
-      await upsertSessionEntry({ ...identity, storePath, entry: session });
-      const runtime = createPluginRuntimeMock({
-        agent: { session: { resolveStorePath: () => storePath } },
-      });
       const dispatch = vi.fn(() => ({ data: [] }));
       const request = vi.fn<typeof codexControlRequest>();
       request.mockImplementation(async (_config, _method, _params, options = {}) => {
@@ -115,7 +120,7 @@ describe("native Codex fork ownership", () => {
       await run(fixture);
     } finally {
       fixture.forkResponse.resolve(fixture.response);
-      fixture.harness.client.close();
+      fixture.client.close();
       sharedClients.getLeasedSharedCodexAppServerClient.mockReset();
       sharedClients.releaseLeasedSharedCodexAppServerClient.mockReset();
       sharedClients.retireSharedCodexAppServerClientIfCurrent.mockReset();
@@ -124,15 +129,9 @@ describe("native Codex fork ownership", () => {
 
   async function createFork() {
     const bindingStore = createLazyCodexAppServerBindingStore(createCodexTestBindingStateStore());
-    const identity = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionId: "session-id",
-      sessionKey: "agent:main:fork-ownership",
-    };
-    const session = { sessionId: identity.sessionId, updatedAt: 1, modelSelectionLocked: false };
-    const storePath = path.join(tempDirs.make("codex-thread-fork-"), "sessions.json");
-    await upsertSessionEntry({ ...identity, storePath, entry: session });
+    const { identity, session, storePath, runtime } = await createSession(
+      "agent:main:fork-ownership",
+    );
     let invocationCurrent = true;
     const forkWritten = createDeferred<void>();
     const response = {
@@ -142,7 +141,7 @@ describe("native Codex fork ownership", () => {
     };
     const forkResponse = createDeferred<unknown>();
     const unsubscribed: string[] = [];
-    const harness = createClientHarness({
+    const { client } = createClientHarness({
       onWrite: (line, send) => {
         const request = JSON.parse(line) as {
           id: number;
@@ -166,20 +165,18 @@ describe("native Codex fork ownership", () => {
         }
       },
     });
-    ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/synthetic/agent" });
-    sharedClients.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
+    ensureCodexAppServerClientRuntime(client, { agentDir: "/synthetic/agent" });
+    sharedClients.getLeasedSharedCodexAppServerClient.mockResolvedValue(client);
     const binding = {
       threadId: "bound-thread",
-      clientId: harness.client.getInstanceId(),
+      clientId: client.getInstanceId(),
       cwd: "/synthetic/workspace",
     };
     await bindingStore.mutate(identity, { kind: "set", binding });
     const tool = (sessionBound = true, requestTimeoutMs = 60_000) =>
       createCodexThreadsTool({
         bindingStore,
-        runtime: createPluginRuntimeMock({
-          agent: { session: { resolveStorePath: () => storePath } },
-        }),
+        runtime,
         context: {
           config: {},
           ...(sessionBound ? identity : {}),
@@ -200,7 +197,7 @@ describe("native Codex fork ownership", () => {
       session,
       storePath,
       binding,
-      harness,
+      client,
       forkWritten,
       forkResponse,
       response,
@@ -212,12 +209,12 @@ describe("native Codex fork ownership", () => {
           ...(attached ? {} : { attach: false }),
         }),
       expectRetired: async () => {
-        await expect(
-          harness.client.request("thread/read", { threadId: "source-thread" }),
-        ).rejects.toThrow("closed");
+        await expect(client.request("thread/read", { threadId: "source-thread" })).rejects.toThrow(
+          "closed",
+        );
         expect(
           sharedClients.retireSharedCodexAppServerClientIfCurrent,
-        ).toHaveBeenCalledExactlyOnceWith(harness.client);
+        ).toHaveBeenCalledExactlyOnceWith(client);
         expect(unsubscribed).toEqual([]);
         expect(bindingStore.read(identity)).toEqual(binding);
       },
@@ -229,10 +226,10 @@ describe("native Codex fork ownership", () => {
 
   it("retains the fork for the next turn without releasing the running turn", () =>
     withFork(async (fixture) => {
-      const { harness, bindingStore, identity, binding, forkResponse, response, unsubscribed } =
+      const { client, bindingStore, identity, binding, forkResponse, response, unsubscribed } =
         fixture;
-      await retainCodexAppServerLiveThread(harness.client, binding.threadId);
-      const running = await consumeCodexAppServerLiveThread(harness.client, binding.threadId);
+      await retainThread(client, binding.threadId);
+      const running = await consumeThread(client, binding.threadId);
       forkResponse.resolve(response);
 
       await expect(fixture.fork("attach-fork")).resolves.toMatchObject({
@@ -241,14 +238,14 @@ describe("native Codex fork ownership", () => {
 
       expect(bindingStore.read(identity)).toMatchObject({
         threadId: "forked-thread",
-        clientId: harness.client.getInstanceId(),
+        clientId: client.getInstanceId(),
       });
-      expect(hasCodexAppServerLiveThread(harness.client, "forked-thread")).toBe(true);
-      expect(isCodexAppServerLiveThreadClaimed(harness.client, binding.threadId)).toBe(true);
+      expect(hasLiveThread(client, "forked-thread")).toBe(true);
+      expect(isThreadClaimed(client, binding.threadId)).toBe(true);
       expect(unsubscribed).toEqual([]);
       await running!.release(binding.threadId);
       expect(unsubscribed).toEqual([binding.threadId]);
-      expect(hasCodexAppServerLiveThread(harness.client, "forked-thread")).toBe(true);
+      expect(hasLiveThread(client, "forked-thread")).toBe(true);
     }));
 
   it("preserves a replacement binding while the native fork is in flight", () =>
@@ -265,7 +262,7 @@ describe("native Codex fork ownership", () => {
       await rejected;
       expect(fixture.bindingStore.read(fixture.identity)).toEqual(replacement);
       expect(fixture.unsubscribed).toEqual(["forked-thread"]);
-      expect(hasCodexAppServerLiveThread(fixture.harness.client, "forked-thread")).toBe(false);
+      expect(hasLiveThread(fixture.client, "forked-thread")).toBe(false);
     }));
 
   it("rejects a retained fork when its invocation ends during the binding write", () =>
@@ -274,7 +271,7 @@ describe("native Codex fork ownership", () => {
       const bindingWrite = vi
         .spyOn(fixture.bindingStore, "mutate")
         .mockImplementationOnce((...args) => {
-          expect(hasCodexAppServerLiveThread(fixture.harness.client, "forked-thread")).toBe(true);
+          expect(hasLiveThread(fixture.client, "forked-thread")).toBe(true);
           // The lazy facade awaits the binding owner before its guarded write.
           const pending = mutate(...args);
           fixture.revokeInvocation();
@@ -289,10 +286,10 @@ describe("native Codex fork ownership", () => {
         expect(bindingWrite).toHaveBeenCalledOnce();
         expect(fixture.bindingStore.read(fixture.identity)).toEqual(fixture.binding);
         expect(fixture.unsubscribed).toEqual(["forked-thread"]);
-        expect(hasCodexAppServerLiveThread(fixture.harness.client, "forked-thread")).toBe(false);
+        expect(hasLiveThread(fixture.client, "forked-thread")).toBe(false);
         expect(sharedClients.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
         await expect(
-          fixture.harness.client.request("thread/read", { threadId: fixture.binding.threadId }),
+          fixture.client.request("thread/read", { threadId: fixture.binding.threadId }),
         ).resolves.toMatchObject({ thread: { id: fixture.binding.threadId } });
       } finally {
         bindingWrite.mockRestore();
@@ -309,7 +306,7 @@ describe("native Codex fork ownership", () => {
             const result = await withLease(identity, run);
             expect(fixture.bindingStore.read(identity)).toMatchObject({
               threadId: "forked-thread",
-              clientId: fixture.harness.client.getInstanceId(),
+              clientId: fixture.client.getInstanceId(),
             });
             await expect(
               fixture.bindingStore.mutate(identity, {
@@ -328,37 +325,37 @@ describe("native Codex fork ownership", () => {
 
         expect(settledLease).toHaveBeenCalledOnce();
         expect(fixture.bindingStore.read(fixture.identity)?.threadId).toBe("successor-thread");
-        expect(hasCodexAppServerLiveThread(fixture.harness.client, "forked-thread")).toBe(true);
+        expect(hasLiveThread(fixture.client, "forked-thread")).toBe(true);
         expect(fixture.unsubscribed).toEqual([]);
       } finally {
         settledLease.mockRestore();
       }
     }));
 
-  it("retires the exact client when a written fork times out without a thread id", () =>
+  it.each([
+    { failure: "timeout", error: "timed out", response: undefined },
+    { failure: "assembly", error: "failed to read the new fork", response: undefined },
+    { failure: "response", error: "invalid thread/fork response", response: {} },
+    { failure: "response", error: "did not include a thread id", response: { thread: {} } },
+  ])("retires the written fork client after $error", ({ failure, error, response }) =>
     withFork(async (fixture) => {
-      const pending = fixture.fork("unknown-fork", false, 100);
-      const rejected = expect(pending).rejects.toThrow("timed out");
+      const pending = fixture.fork("failed-fork", false, failure === "timeout" ? 100 : 60_000);
+      const rejected = expect(pending).rejects.toThrow(error);
       await fixture.forkWritten.promise;
-      await rejected;
-
-      await fixture.expectRetired();
-    }));
-
-  it("retires a fork client after an invalid-request response assembly error", () =>
-    withFork(async (fixture) => {
-      const pending = fixture.fork("failed-fork-response", false);
-      const rejected = expect(pending).rejects.toThrow("failed to read the new fork");
-      await fixture.forkWritten.promise;
-      fixture.forkResponse.reject({ code: -32600, message: "failed to read the new fork" });
+      if (failure === "assembly") {
+        fixture.forkResponse.reject({ code: -32600, message: error });
+      } else if (failure === "response") {
+        fixture.forkResponse.resolve(response);
+      }
       await rejected;
       await fixture.expectRetired();
-    }));
+    }),
+  );
 
   it("keeps the client available when fork authority changes before dispatch", () =>
     withFork(async (fixture) => {
       sharedClients.getLeasedSharedCodexAppServerClient
-        .mockResolvedValueOnce(fixture.harness.client)
+        .mockResolvedValueOnce(fixture.client)
         .mockImplementationOnce(async () => {
           fixture.session.modelSelectionLocked = true;
           await upsertSessionEntry({
@@ -366,26 +363,15 @@ describe("native Codex fork ownership", () => {
             storePath: fixture.storePath,
             entry: fixture.session,
           });
-          return fixture.harness.client;
+          return fixture.client;
         });
       await expect(fixture.fork("unwritten-fork")).rejects.toThrow(
         "native thread ownership changed",
       );
       await expect(
-        fixture.harness.client.request("thread/read", { threadId: "source-thread" }),
+        fixture.client.request("thread/read", { threadId: "source-thread" }),
       ).resolves.toMatchObject({ thread: { id: "source-thread" } });
       expect(sharedClients.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
       expect(fixture.unsubscribed).toEqual([]);
     }));
-
-  it.each([
-    { response: {}, error: "invalid thread/fork response" },
-    { response: { thread: {} }, error: "did not include a thread id" },
-  ])("retires a fork subscription after $error", ({ response, error }) =>
-    withFork(async (fixture) => {
-      fixture.forkResponse.resolve(response);
-      await expect(fixture.fork("malformed-fork", false)).rejects.toThrow(error);
-      await fixture.expectRetired();
-    }),
-  );
 });

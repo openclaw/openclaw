@@ -35,6 +35,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
   runCommandBuffered: processRuntimeMocks.runCommandBuffered,
 }));
 
+const runCommand = processRuntimeMocks.runCommandBuffered;
 let tempDir: string;
 let previousCodexHome: string | undefined;
 const resolveCatalogSource = vi.fn<Parameters<typeof createCodexCliSessionNodeHostCommands>[0]>();
@@ -107,9 +108,60 @@ async function writeRollout(sessionId: string, records: unknown[] = [], large = 
   return sessionFile;
 }
 
+type SessionEntry = ReturnType<PluginRuntime["agent"]["session"]["getSessionEntry"]>;
+function catalogEntry(sourceHomeId: string, changed = ""): NonNullable<SessionEntry> {
+  const marker = {
+    sourceHostId: "node:node-1",
+    sourceThreadId: changed === "thread" ? "other-thread" : "native-thread",
+    nodeId: changed === "node" ? "other-node" : "node-1",
+    sourceHomeId,
+    ...(changed === "initializing" ? { initializing: true } : {}),
+  };
+  return {
+    sessionId: "openclaw-session",
+    updatedAt: 1,
+    agentHarnessId: "codex",
+    modelSelectionLocked: changed !== "lock",
+    pluginExtensions:
+      changed === "missing marker" ? undefined : { codex: { sessionCatalog: marker } },
+  };
+}
+function catalogRequest(runtime: PluginRuntime) {
+  return {
+    runtime,
+    nodeId: "node-1",
+    sessionId: "native-thread",
+    sessionKey: "agent:research:harness:codex:node-session:catalog-chat",
+    agentId: "research",
+    prompt: "continue",
+  };
+}
+async function createCatalog(homeScope: "agent" | "user" = "agent") {
+  const { createCodexSessionCatalogControl } = await import("./session-catalog-control.js");
+  const { resolveCodexSupervisionAppServerRuntimeOptions } = await import("./app-server/config.js");
+  let config: OpenClawConfig =
+    homeScope === "agent" ? { agents: { ownership: "explicit", entries: { research: {} } } } : {};
+  let pluginConfig = { appServer: { transport: "stdio", homeScope } };
+  const factory = createCodexSessionCatalogControl({
+    config,
+    getRuntimeConfig: () => config,
+    getPluginConfig: () => pluginConfig,
+    resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+  });
+  return {
+    factory,
+    reconfigure: (transport: string, nextConfig: OpenClawConfig = { ...config }) => {
+      pluginConfig = {
+        appServer: { transport, homeScope: transport === "stdio" ? homeScope : "user" },
+      };
+      config = nextConfig;
+    },
+  };
+}
+
 describe("codex cli node sessions", () => {
   beforeEach(async () => {
-    processRuntimeMocks.runCommandBuffered.mockReset().mockImplementation(completeResume);
+    runCommand.mockReset().mockImplementation(completeResume);
     resolveCatalogSource.mockReset();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-cli-sessions-"));
     previousCodexHome = process.env.CODEX_HOME;
@@ -201,16 +253,7 @@ describe("codex cli node sessions", () => {
       const project = path.join(tempDir, "project");
       await fs.mkdir(project);
       vi.stubEnv("CODEX_HOME", relativeHome);
-      const { createCodexSessionCatalogControl } = await import("./session-catalog-control.js");
-      const { resolveCodexSupervisionAppServerRuntimeOptions } =
-        await import("./app-server/config.js");
-      const config: OpenClawConfig = {};
-      const factory = createCodexSessionCatalogControl({
-        config,
-        getRuntimeConfig: () => config,
-        getPluginConfig: () => ({ appServer: { transport: "stdio", homeScope: "user" } }),
-        resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-      });
+      const { factory } = await createCatalog("user");
       try {
         expect(path.isAbsolute(relativeHome)).toBe(false);
         await fs.writeFile(
@@ -235,7 +278,7 @@ describe("codex cli node sessions", () => {
         const { runCommandBuffered } = await vi.importActual<
           typeof import("openclaw/plugin-sdk/process-runtime")
         >("openclaw/plugin-sdk/process-runtime");
-        processRuntimeMocks.runCommandBuffered.mockImplementation((argv, options) =>
+        runCommand.mockImplementation((argv, options) =>
           runCommandBuffered(
             [
               process.execPath,
@@ -261,7 +304,7 @@ describe("codex cli node sessions", () => {
           ),
         );
         expect(resumed).toMatchObject({ ok: true, text: listed.sessions[0].lastMessage });
-        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledWith(
+        expect(runCommand).toHaveBeenCalledWith(
           expect.any(Array),
           expect.objectContaining({ cwd: project }),
         );
@@ -273,7 +316,7 @@ describe("codex cli node sessions", () => {
   );
 
   it("keeps authorized resume execution available while native discovery is disabled", async () => {
-    processRuntimeMocks.runCommandBuffered.mockImplementation(async (argv) => ({
+    runCommand.mockImplementation(async (argv) => ({
       ...(await completeResume(argv)),
       stdout: Buffer.from("diagnostic"),
     }));
@@ -332,7 +375,7 @@ describe("codex cli node sessions", () => {
       sessionId: "session-123",
       text: "final answer",
     });
-    const [argv, options] = processRuntimeMocks.runCommandBuffered.mock.calls[0] ?? [];
+    const [argv, options] = runCommand.mock.calls[0] ?? [];
     const execIndex = argv?.indexOf("exec") ?? -1;
     expect(argv?.slice(execIndex, execIndex + 7)).toEqual([
       "exec",
@@ -352,19 +395,27 @@ describe("codex cli node sessions", () => {
     });
   });
 
-  it("does not attach an empty rollout to history from its filename alone", async () => {
+  it.each([
+    { scenario: "empty rollout", text: "history prompt", ts: 1778678322 },
+    { scenario: "Date-invalid timestamp", text: "bad timestamp", ts: 8_700_000_000_000 },
+  ])("keeps history usable with $scenario", async ({ scenario, text, ts }) => {
     const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd";
-    await writeHistory([{ session_id: sessionId, ts: 1778678322, text: "history prompt" }]);
-    const sessionsDir = path.join(tempDir, "sessions");
-    await fs.mkdir(sessionsDir);
-    await fs.writeFile(path.join(sessionsDir, `rollout-${sessionId}.jsonl`), "");
-    const result = await listLocalSessions({ filter: sessionId });
-    expect(result.sessions).toEqual([
+    await writeHistory([{ session_id: sessionId, ts, text }]);
+    if (scenario === "empty rollout") {
+      const sessionsDir = path.join(tempDir, "sessions");
+      await fs.mkdir(sessionsDir);
+      await fs.writeFile(path.join(sessionsDir, `rollout-${sessionId}.jsonl`), "");
+    }
+    const parsed = await listLocalSessions({
+      filter: scenario === "empty rollout" ? sessionId : text,
+      limit: 5,
+    });
+    expect(parsed.sessions).toEqual([
       {
         sessionId,
-        updatedAt: "2026-05-13T13:18:42.000Z",
-        lastMessage: "history prompt",
+        lastMessage: text,
         messageCount: 1,
+        ...(scenario === "empty rollout" ? { updatedAt: "2026-05-13T13:18:42.000Z" } : {}),
       },
     ]);
   });
@@ -377,7 +428,7 @@ describe("codex cli node sessions", () => {
     >("openclaw/plugin-sdk/process-runtime");
     const ready = path.join(tempDir, "ready");
     const lateWrite = path.join(tempDir, "late-write");
-    processRuntimeMocks.runCommandBuffered.mockImplementationOnce((argv, options) =>
+    runCommand.mockImplementationOnce((argv, options) =>
       runCommandBuffered(
         [
           process.execPath,
@@ -452,49 +503,22 @@ describe("codex cli node sessions", () => {
       assertCurrent: () => {},
     });
     await rejected;
-    expect(processRuntimeMocks.runCommandBuffered).not.toHaveBeenCalled();
+    expect(runCommand).not.toHaveBeenCalled();
   });
 
   it("preserves the node-owned catalog home without redirecting legacy bindings", async () => {
-    const { createCodexSessionCatalogControl } = await import("./session-catalog-control.js");
-    const { resolveCodexSupervisionAppServerRuntimeOptions } =
-      await import("./app-server/config.js");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    let config: OpenClawConfig = {
-      agents: { ownership: "explicit", entries: { research: {} } },
-    };
-    let pluginConfig = { appServer: { transport: "stdio", homeScope: "agent" } };
-    const factory = createCodexSessionCatalogControl({
-      config,
-      getRuntimeConfig: () => config,
-      getPluginConfig: () => pluginConfig,
-      resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-    });
+    const { factory, reconfigure } = await createCatalog();
     try {
       const source = await factory.forNode("research");
       expect(source.codexHome).not.toBe(tempDir);
       await fs.mkdir(source.codexHome, { recursive: true });
-      processRuntimeMocks.runCommandBuffered.mockImplementation(async (argv, options) => {
+      runCommand.mockImplementation(async (argv, options) => {
         await fs.writeFile(path.join(options?.env?.CODEX_HOME ?? tempDir, "resumed"), "yes");
         return completeResume(argv);
       });
       const command = nodeCommand(undefined, (agentId) => factory.forNode(agentId));
-      let entry: ReturnType<PluginRuntime["agent"]["session"]["getSessionEntry"]> = {
-        sessionId: "openclaw-session",
-        updatedAt: 1,
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-        pluginExtensions: {
-          codex: {
-            sessionCatalog: {
-              sourceHostId: "node:node-1",
-              sourceThreadId: "native-thread",
-              nodeId: "node-1",
-              sourceHomeId: source.sourceHomeId,
-            },
-          },
-        },
-      };
+      let entry = catalogEntry(source.sourceHomeId);
       const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => ({
         ok: true,
         payloadJSON: await command.handle(JSON.stringify(request.params)),
@@ -503,15 +527,7 @@ describe("codex cli node sessions", () => {
         agent: { session: { getSessionEntryAsync: async () => entry } },
         nodes: { invoke },
       });
-      const request = {
-        runtime,
-        nodeId: "node-1",
-        sessionId: "native-thread",
-        sessionKey: "agent:research:harness:codex:node-session:catalog-chat",
-        agentId: "research",
-        prompt: "continue",
-        cwd: tempDir,
-      };
+      const request = { ...catalogRequest(runtime), cwd: tempDir };
       await expect(resumeCodexCliSessionOnNode(request)).resolves.toMatchObject({
         text: "final answer",
       });
@@ -524,12 +540,11 @@ describe("codex cli node sessions", () => {
         code: "ENOENT",
       });
 
-      pluginConfig = { appServer: { transport: "unix", homeScope: "user" } };
-      config = { ...config };
+      reconfigure("unix");
       await expect(resumeCodexCliSessionOnNode(request)).rejects.toThrow(
         "requires a local Codex catalog source",
       );
-      config = { agents: { ownership: "explicit", entries: { replacement: {} } } };
+      reconfigure("unix", { agents: { ownership: "explicit", entries: { replacement: {} } } });
       await expect(resumeCodexCliSessionOnNode(request)).rejects.toThrow(
         "unknown Codex session catalog agent",
       );
@@ -549,18 +564,8 @@ describe("codex cli node sessions", () => {
   });
 
   it("revalidates the node source after awaited CLI temporary-directory setup", async () => {
-    const { createCodexSessionCatalogControl } = await import("./session-catalog-control.js");
-    const { resolveCodexSupervisionAppServerRuntimeOptions } =
-      await import("./app-server/config.js");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    let config: OpenClawConfig = { agents: { ownership: "explicit", entries: { research: {} } } };
-    let pluginConfig = { appServer: { transport: "stdio", homeScope: "agent" } };
-    const factory = createCodexSessionCatalogControl({
-      config,
-      getRuntimeConfig: () => config,
-      getPluginConfig: () => pluginConfig,
-      resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-    });
+    const { factory, reconfigure } = await createCatalog();
     const allocated = Promise.withResolvers<string>();
     const releaseAllocation = Promise.withResolvers<void>();
     const createTemporaryDirectory = fs.mkdtemp.bind(fs);
@@ -582,15 +587,13 @@ describe("codex cli node sessions", () => {
       running = command.handle(request);
       const rejected = expect(running).rejects.toThrow("configuration changed");
       const directory = await allocated.promise;
-      pluginConfig = { appServer: { transport: "unix", homeScope: "user" } };
-      config = { ...config };
+      reconfigure("unix");
       releaseAllocation.resolve();
       await rejected;
-      expect(processRuntimeMocks.runCommandBuffered).not.toHaveBeenCalled();
+      expect(runCommand).not.toHaveBeenCalled();
       await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
       allocate.mockRestore();
-      pluginConfig = { appServer: { transport: "stdio", homeScope: "agent" } };
-      config = { ...config };
+      reconfigure("stdio");
       await expect(command.handle(request)).resolves.toContain("final answer");
     } finally {
       releaseAllocation.resolve();
@@ -610,59 +613,17 @@ describe("codex cli node sessions", () => {
             getSessionEntryAsync: async () =>
               changed === "missing row"
                 ? undefined
-                : {
-                    sessionId: "openclaw-session",
-                    updatedAt: 1,
-                    agentHarnessId: "codex",
-                    modelSelectionLocked: changed !== "lock",
-                    pluginExtensions:
-                      changed === "missing marker"
-                        ? undefined
-                        : {
-                            codex: {
-                              sessionCatalog: {
-                                sourceHostId: "node:node-1",
-                                sourceThreadId:
-                                  changed === "thread" ? "other-thread" : "native-thread",
-                                nodeId: changed === "node" ? "other-node" : "node-1",
-                                sourceHomeId: codexCatalogHomeId(tempDir),
-                                ...(changed === "initializing" ? { initializing: true } : {}),
-                              },
-                            },
-                          },
-                  },
+                : catalogEntry(codexCatalogHomeId(tempDir), changed),
           },
         },
         nodes: { invoke },
       });
-      await expect(
-        resumeCodexCliSessionOnNode({
-          runtime,
-          nodeId: "node-1",
-          sessionId: "native-thread",
-          sessionKey: "agent:research:harness:codex:node-session:catalog-chat",
-          agentId: "research",
-          prompt: "continue",
-        }),
-      ).rejects.toThrow("changed before its node turn");
+      await expect(resumeCodexCliSessionOnNode(catalogRequest(runtime))).rejects.toThrow(
+        "changed before its node turn",
+      );
       expect(invoke).not.toHaveBeenCalled();
     },
   );
-
-  it("ignores Date-invalid Codex history timestamps", async () => {
-    const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cf";
-    await writeHistory([{ session_id: sessionId, ts: 8_700_000_000_000, text: "bad timestamp" }]);
-
-    const parsed = await listLocalSessions({ filter: "bad timestamp", limit: 5 });
-
-    expect(parsed.sessions).toEqual([
-      {
-        sessionId,
-        lastMessage: "bad timestamp",
-        messageCount: 1,
-      },
-    ]);
-  });
 
   it("streams rollout JSONL with a record spanning many chunks", async () => {
     const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5250";
@@ -693,59 +654,53 @@ describe("codex cli node sessions", () => {
     ]);
   });
 
-  it("discards partial large-file summaries and closes after a later read fails", async () => {
-    const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5251";
-    await writeRollout(sessionId, [], true);
-    const firstChunk = Buffer.from(`${JSON.stringify(meta(sessionId, "/tmp/partial"))}\n`);
-    const close = vi.fn(async () => undefined);
-    const read = vi
-      .fn()
-      .mockImplementationOnce(async (buffer: Buffer) => {
-        firstChunk.copy(buffer);
-        return { bytesRead: firstChunk.length, buffer };
-      })
-      .mockRejectedValueOnce(Object.assign(new Error("read failed"), { code: "EIO" }));
-    vi.spyOn(fs, "open").mockResolvedValue({ read, close } as never);
-
-    const parsed = await listLocalSessions({ limit: 5 });
-
-    expect(parsed.sessions).toEqual([]);
-    expect(read).toHaveBeenCalledTimes(2);
-    expect(close).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a completed large-file summary when close rejects", async () => {
-    const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5252";
+  it.each(["read", "close"] as const)("handles a large-file %s failure", async (failure) => {
+    const partial = failure === "read";
+    const sessionId = partial
+      ? "019e23d1-f33d-78e3-959e-0f56f30a5251"
+      : "019e23d1-f33d-78e3-959e-0f56f30a5252";
+    const cwd = partial ? "/tmp/partial" : "/tmp/close-failure";
     const sessionFile = await writeRollout(sessionId, [], true);
     const content = Buffer.from(
-      [meta(sessionId, "/tmp/close-failure"), userMessage("survives close failure")]
-        .map((record) => JSON.stringify(record))
-        .join("\n"),
+      [
+        JSON.stringify(meta(sessionId, cwd)),
+        ...(partial ? [] : [JSON.stringify(userMessage("survives close failure"))]),
+      ].join("\n") + (partial ? "\n" : ""),
     );
+    const ioError = Object.assign(new Error(`${failure} failed`), { code: "EIO" });
     const close = vi.fn(async () => {
-      throw Object.assign(new Error("close failed"), { code: "EIO" });
+      if (!partial) {
+        throw ioError;
+      }
     });
-    const read = vi
-      .fn()
-      .mockImplementationOnce(async (buffer: Buffer) => {
-        content.copy(buffer);
-        return { bytesRead: content.length, buffer };
-      })
-      .mockResolvedValueOnce({ bytesRead: 0, buffer: Buffer.alloc(0) });
+    const read = vi.fn().mockImplementationOnce(async (buffer: Buffer) => {
+      content.copy(buffer);
+      return { bytesRead: content.length, buffer };
+    });
+    if (partial) {
+      read.mockRejectedValueOnce(ioError);
+    } else {
+      read.mockResolvedValueOnce({ bytesRead: 0, buffer: Buffer.alloc(0) });
+    }
     vi.spyOn(fs, "open").mockResolvedValue({ read, close } as never);
-
     const parsed = await listLocalSessions({ limit: 5 });
-
-    expect(parsed.sessions).toEqual([
-      {
-        sessionId,
-        updatedAt: "2026-05-14T00:10:24.000Z",
-        cwd: "/tmp/close-failure",
-        lastMessage: "survives close failure",
-        sessionFile,
-        messageCount: 1,
-      },
-    ]);
+    expect(parsed.sessions).toEqual(
+      partial
+        ? []
+        : [
+            {
+              sessionId,
+              updatedAt: "2026-05-14T00:10:24.000Z",
+              cwd: "/tmp/close-failure",
+              lastMessage: "survives close failure",
+              sessionFile,
+              messageCount: 1,
+            },
+          ],
+    );
+    if (partial) {
+      expect(read).toHaveBeenCalledTimes(2);
+    }
     expect(close).toHaveBeenCalledOnce();
   });
 
@@ -798,7 +753,5 @@ describe("codex cli node sessions", () => {
         messageCount: 1,
       },
     ]);
-    expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\ud83e");
-    expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\udd16");
   });
 });

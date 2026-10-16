@@ -28,8 +28,11 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
   runCommandBuffered: processRuntimeMocks.runCommandBuffered,
 }));
 
+const runCommand = processRuntimeMocks.runCommandBuffered;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionId = "01a0c710-4cad-7049-858e-b5a9fb33c013";
+const symlink = (target: string, alias: string) =>
+  fs.symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
 
 const completeResume: RunCommandBuffered = async (argv, options) => {
   const outputPath = argv[argv.indexOf("--output-last-message") + 1];
@@ -58,8 +61,8 @@ async function createRegisteredResume() {
   const aliasAgentDir = path.join(stateDir, "alpha-alias");
   await fs.mkdir(alphaHome, { recursive: true });
   await fs.mkdir(betaHome, { recursive: true });
-  await fs.symlink(alphaHome, aliasHome, process.platform === "win32" ? "junction" : "dir");
-  await fs.symlink(alphaDir, aliasAgentDir, process.platform === "win32" ? "junction" : "dir");
+  await symlink(alphaHome, aliasHome);
+  await symlink(alphaDir, aliasAgentDir);
   for (const home of [alphaHome, betaHome]) {
     await fs.mkdir(path.join(home, "sessions"));
     await fs.writeFile(
@@ -74,11 +77,12 @@ async function createRegisteredResume() {
     appServer: { transport: "stdio", homeScope: "agent" },
     sessionCatalog: { enabled: false },
   };
+  const agents = (agentDir: string) => ({
+    ownership: "explicit" as const,
+    entries: { alpha: { agentDir }, beta: { agentDir: betaDir } },
+  });
   let config: OpenClawConfig = {
-    agents: {
-      ownership: "explicit",
-      entries: { alpha: { agentDir: alphaDir }, beta: { agentDir: betaDir } },
-    },
+    agents: agents(alphaDir),
     plugins: { entries: { codex: { enabled: true, config: pluginConfig } } },
   };
   let sessionEntry: ReturnType<PluginRuntime["agent"]["session"]["getSessionEntry"]>;
@@ -119,17 +123,19 @@ async function createRegisteredResume() {
     command,
     invoke,
     runtime,
+    resume: (sessionKey: string) => ({
+      runtime,
+      nodeId: "node-1",
+      sessionId,
+      sessionKey,
+      agentId: "alpha",
+      prompt: "continue",
+    }),
     setSessionEntry: (entry: typeof sessionEntry) => {
       sessionEntry = entry;
     },
     reconfigureAlpha: (agentDir: string) => {
-      config = {
-        ...config,
-        agents: {
-          ownership: "explicit",
-          entries: { alpha: { agentDir }, beta: { agentDir: betaDir } },
-        },
-      };
+      config = { ...config, agents: agents(agentDir) };
     },
     request: (agentId?: string) =>
       JSON.stringify({ sessionId, prompt: "continue", cwd: stateDir, agentId }),
@@ -167,79 +173,60 @@ function prepareBoundCatalogSession(
   return {
     marker,
     entry,
-    request: {
-      runtime: fixture.runtime,
-      nodeId: "node-1",
-      sessionId,
-      sessionKey: "agent:alpha:harness:codex:node-session:bound-catalog",
-      agentId: "alpha",
-      prompt: "continue",
-    },
+    request: fixture.resume("agent:alpha:harness:codex:node-session:bound-catalog"),
   };
 }
 
 describe("registered Codex node resume reservations", () => {
   beforeEach(() => {
-    processRuntimeMocks.runCommandBuffered.mockReset().mockImplementation(completeResume);
+    runCommand.mockReset().mockImplementation(completeResume);
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it("keeps a bound thread on its pinned home across alias retargeting and node source reconfiguration", async () => {
-    const fixture = await createRegisteredResume();
-    const pin = codexCatalogHomeId(fixture.alphaHome);
-    const { request, entry } = prepareBoundCatalogSession(fixture, pin);
-    const savedEntry = structuredClone(entry);
-    try {
-      fixture.reconfigureAlpha(fixture.aliasAgentDir);
-      expect(codexCatalogHomeId(path.join(fixture.aliasAgentDir, "codex-home"))).toBe(pin);
-      await expect(resumeCodexCliSessionOnNode(request)).resolves.toMatchObject({
-        text: fixture.alphaHome,
-      });
-      expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledOnce();
-      processRuntimeMocks.runCommandBuffered.mockClear();
-
-      await fs.unlink(fixture.aliasAgentDir);
-      await fs.symlink(
-        path.dirname(fixture.betaHome),
-        fixture.aliasAgentDir,
-        process.platform === "win32" ? "junction" : "dir",
-      );
-      expect(await fs.realpath(path.join(fixture.aliasAgentDir, "codex-home"))).toBe(
-        fixture.betaHome,
-      );
-      await expect(resumeCodexCliSessionOnNode(request)).resolves.toMatchObject({
-        text: fixture.alphaHome,
-      });
-      expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledOnce();
-      processRuntimeMocks.runCommandBuffered.mockClear();
-
-      fixture.reconfigureAlpha(path.dirname(fixture.betaHome));
-      expect(codexCatalogHomeId(fixture.betaHome)).not.toBe(pin);
-      await expect(resumeCodexCliSessionOnNode(request)).rejects.toBeInstanceOf(Error);
-      expect(processRuntimeMocks.runCommandBuffered).not.toHaveBeenCalled();
-      expect(entry).toEqual(savedEntry);
-    } finally {
-      await fixture.stop();
-    }
-  });
-
-  it("decodes a shipped source-less catalog marker without automatically executing it", async () => {
-    const fixture = await createRegisteredResume();
-    const { request, entry, marker } = prepareBoundCatalogSession(fixture, undefined);
-    const savedEntry = structuredClone(entry);
-    try {
-      expect(readNodeSessionMarker(entry)).toEqual(marker);
-      await expect(resumeCodexCliSessionOnNode(request)).rejects.toBeInstanceOf(Error);
-      expect(fixture.invoke).not.toHaveBeenCalled();
-      expect(processRuntimeMocks.runCommandBuffered).not.toHaveBeenCalled();
-      expect(entry).toEqual(savedEntry);
-    } finally {
-      await fixture.stop();
-    }
-  });
+  it.each([true, false])(
+    "rejects a changed or missing catalog source (pinned=%s)",
+    async (pinned) => {
+      const fixture = await createRegisteredResume();
+      const pin = pinned ? codexCatalogHomeId(fixture.alphaHome) : undefined;
+      const { request, entry, marker } = prepareBoundCatalogSession(fixture, pin);
+      const savedEntry = structuredClone(entry);
+      const expectPinnedHome = async () => {
+        await expect(resumeCodexCliSessionOnNode(request)).resolves.toMatchObject({
+          text: fixture.alphaHome,
+        });
+        expect(runCommand).toHaveBeenCalledOnce();
+        runCommand.mockClear();
+      };
+      try {
+        if (pinned) {
+          fixture.reconfigureAlpha(fixture.aliasAgentDir);
+          expect(codexCatalogHomeId(path.join(fixture.aliasAgentDir, "codex-home"))).toBe(pin);
+          await expectPinnedHome();
+          await fs.unlink(fixture.aliasAgentDir);
+          await symlink(path.dirname(fixture.betaHome), fixture.aliasAgentDir);
+          expect(await fs.realpath(path.join(fixture.aliasAgentDir, "codex-home"))).toBe(
+            fixture.betaHome,
+          );
+          await expectPinnedHome();
+          fixture.reconfigureAlpha(path.dirname(fixture.betaHome));
+          expect(codexCatalogHomeId(fixture.betaHome)).not.toBe(pin);
+        } else {
+          expect(readNodeSessionMarker(entry)).toEqual(marker);
+        }
+        await expect(resumeCodexCliSessionOnNode(request)).rejects.toBeInstanceOf(Error);
+        expect(runCommand).not.toHaveBeenCalled();
+        if (!pinned) {
+          expect(fixture.invoke).not.toHaveBeenCalled();
+        }
+        expect(entry).toEqual(savedEntry);
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
 
   it("keeps unmarked slash bindings on the user home while fresh node requests select the current source", async () => {
     const fixture = await createRegisteredResume();
@@ -247,14 +234,7 @@ describe("registered Codex node resume reservations", () => {
     fixture.reconfigureAlpha(path.dirname(fixture.betaHome));
     try {
       await expect(
-        resumeCodexCliSessionOnNode({
-          runtime: fixture.runtime,
-          nodeId: "node-1",
-          sessionId,
-          sessionKey: "agent:alpha:telegram:direct:owner",
-          agentId: "alpha",
-          prompt: "continue",
-        }),
+        resumeCodexCliSessionOnNode(fixture.resume("agent:alpha:telegram:direct:owner")),
       ).resolves.toMatchObject({ text: fixture.alphaHome });
       expect(fixture.invoke.mock.calls[0]?.[0].params).not.toHaveProperty("agentId");
       expect(fixture.invoke.mock.calls[0]?.[0].params).not.toHaveProperty("sourceHomeId");
@@ -271,7 +251,7 @@ describe("registered Codex node resume reservations", () => {
     const alphaStarted = createDeferred<void>();
     const betaStarted = createDeferred<void>();
     const release = createDeferred<void>();
-    processRuntimeMocks.runCommandBuffered.mockImplementation(async (argv, options) => {
+    runCommand.mockImplementation(async (argv, options) => {
       const home = await fs.realpath(options?.env?.CODEX_HOME ?? "");
       if (home === fixture.alphaHome) {
         alphaStarted.resolve();
@@ -292,7 +272,7 @@ describe("registered Codex node resume reservations", () => {
       await expect(Promise.race([betaStarted.promise.then(() => "started"), beta])).resolves.toBe(
         "started",
       );
-      expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(2);
+      expect(runCommand).toHaveBeenCalledTimes(2);
       release.resolve();
       expect(JSON.parse(await alpha)).toMatchObject({ text: fixture.alphaHome });
       expect(JSON.parse(await beta)).toMatchObject({ text: fixture.betaHome });
@@ -307,7 +287,7 @@ describe("registered Codex node resume reservations", () => {
     const fixture = await createRegisteredResume();
     const started = createDeferred<void>();
     const release = createDeferred<void>();
-    processRuntimeMocks.runCommandBuffered.mockImplementationOnce(async (argv, options) => {
+    runCommand.mockImplementationOnce(async (argv, options) => {
       expect(await fs.realpath(options?.env?.CODEX_HOME ?? "")).toBe(fixture.alphaHome);
       started.resolve();
       await release.promise;
@@ -335,7 +315,7 @@ describe("registered Codex node resume reservations", () => {
             "already has an active resume turn",
           );
         }
-        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledOnce();
+        expect(runCommand).toHaveBeenCalledOnce();
       }
       release.resolve();
       expect(await outcome).toMatchObject({ message: "node invocation canceled" });
@@ -345,7 +325,7 @@ describe("registered Codex node resume reservations", () => {
           text: fixture.alphaHome,
         });
       }
-      expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(3);
+      expect(runCommand).toHaveBeenCalledTimes(3);
     } finally {
       release.resolve();
       await outcome;

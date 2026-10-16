@@ -26,29 +26,7 @@ function config(appServer: Record<string, unknown> = {}): OpenClawConfig {
         },
       },
     },
-    plugins: {
-      entries: {
-        codex: {
-          enabled: true,
-          config: {
-            appServer: {
-              args: [
-                "app-server",
-                "--listen",
-                "stdio://",
-                "-c",
-                "model_context_window=1000000",
-                "-c",
-                "model_auto_compact_token_limit=700000",
-                "-c",
-                "model_auto_compact_token_limit_scope=total",
-              ],
-              ...appServer,
-            },
-          },
-        },
-      },
-    },
+    plugins: { entries: { codex: { enabled: true, config: { appServer } } } },
   };
 }
 
@@ -118,24 +96,6 @@ function expectFinding(findings: unknown, expected: Record<string, unknown>) {
 
 describe("managed Codex doctor check", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  async function withNativeProbe(
-    source: (pidPath: string) => string,
-    run: (check: HealthCheck, command: string, pidPath: string) => Promise<void>,
-    detached = false,
-  ) {
-    const directory = tempDirs.make("openclaw-codex-probe-");
-    const command = path.join(directory, "codex");
-    const pidPath = path.join(directory, "probe.pid");
-    try {
-      await fs.writeFile(command, `#!${process.execPath}\n${source(pidPath)}`, { mode: 0o755 });
-      await run(nativeCheck(command), command, pidPath);
-    } finally {
-      const pid = Number(await fs.readFile(pidPath, "utf8").catch(() => ""));
-      if (pid > 0) {
-        killProcessTree(pid, { force: true, detached });
-      }
-    }
-  }
   it.skipIf(process.platform === "win32")(
     "returns successful JSON when a version binary closes stdin immediately",
     async () => {
@@ -171,9 +131,11 @@ fs.writeSync(1, "codex-cli ${CODEX_APP_SERVER_VERSION}\\n");
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.signal, result.stderr).toBeNull();
-      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(result, result.stderr || result.stdout).toMatchObject({
+        error: undefined,
+        signal: null,
+        status: 0,
+      });
       expect(JSON.parse(result.stdout)).toEqual({
         ok: true,
         findings: [],
@@ -244,11 +206,11 @@ fs.writeSync(1, "codex-cli ${CODEX_APP_SERVER_VERSION}\\n");
     }
   });
 
-  it.skipIf(process.platform === "win32")(
-    "bounds a successful probe whose detached descendant retains its output pipes",
-    () =>
-      withNativeProbe(
-        (pidPath) => `const { spawn } = require("node:child_process");
+  it.skipIf(process.platform === "win32").each([
+    {
+      scenario: "orphaned output pipes",
+      detached: true,
+      source: (pidPath: string) => `const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const orphan = spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 10000)"], {
   detached: true,
@@ -258,76 +220,83 @@ fs.writeFileSync(${JSON.stringify(pidPath)}, String(orphan.pid));
 orphan.unref();
 console.log("codex-cli ${CODEX_APP_SERVER_VERSION}");
 `,
-        async (check) => {
-          const startedAt = performance.now();
-          const findings = await check.detect(finalizationContext());
-
-          expect(performance.now() - startedAt).toBeLessThan(7_000);
-          expectFinding(findings, {
-            checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
-            severity: "warning",
-            message: expect.stringContaining("version check failed:"),
-            fixHint: expect.stringContaining("after restart"),
-          });
-        },
-        true,
-      ),
-    15_000,
-  );
-
-  it("reports a missing managed launcher before execution", async () => {
-    const deps = managedDeps();
-    deps.resolveStartOptions.mockRejectedValueOnce(new Error("managed launcher missing"));
-    const check = createCheck(deps);
-
-    expectFinding(await check.detect(context(config())), {
-      checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
-      message: "Managed Codex app-server could not be resolved: managed launcher missing",
-    });
-    expect(deps.runVersionCommand).not.toHaveBeenCalled();
-  });
-
-  it("reports a launcher whose platform-native artifact is absent", async () => {
-    const deps = managedDeps();
-    deps.resolveNativeCommand.mockReturnValueOnce(undefined);
-    const check = createCheck(deps);
-
-    expectFinding(await check.detect(context(config())), {
-      checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
-      path: "/candidate/plugin/codex",
-      message: "Managed Codex app-server resolved a launcher without a native artifact.",
-    });
-    expect(deps.runVersionCommand).not.toHaveBeenCalled();
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "bounds a native version probe that ignores SIGTERM",
-    () =>
-      withNativeProbe(
-        (
-          pidPath,
-        ) => `require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+    },
+    {
+      scenario: "ignored SIGTERM",
+      detached: false,
+      source: (
+        pidPath: string,
+      ) => `require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
 process.on("SIGTERM", () => {});
 setInterval(() => {}, 1000);
 `,
-        async (check, command, pidPath) => {
-          const findings = await check.detect(context(config()));
-
-          expectFinding(findings, {
-            checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
-            path: command,
-            message:
-              "Managed Codex app-server version check failed: Version check timed out after 5000 ms",
-            requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within 5000 ms`,
-          });
-          const probePid = Number(await fs.readFile(pidPath, "utf8"));
-          expect(() => process.kill(probePid, 0)).toThrow(
-            expect.objectContaining({ code: "ESRCH" }),
-          );
-        },
-      ),
+    },
+  ])(
+    "bounds a version probe with $scenario",
+    async ({ source, detached }) => {
+      const directory = tempDirs.make("openclaw-codex-probe-");
+      const command = path.join(directory, "codex");
+      const pidPath = path.join(directory, "probe.pid");
+      try {
+        await fs.writeFile(command, `#!${process.execPath}\n${source(pidPath)}`, { mode: 0o755 });
+        const check = nativeCheck(command);
+        const startedAt = performance.now();
+        const findings = await check.detect(detached ? finalizationContext() : context(config()));
+        expectFinding(findings, {
+          checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
+          ...(detached
+            ? {
+                severity: "warning",
+                message: expect.stringContaining("version check failed:"),
+                fixHint: expect.stringContaining("after restart"),
+              }
+            : {
+                path: command,
+                message:
+                  "Managed Codex app-server version check failed: Version check timed out after 5000 ms",
+                requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within 5000 ms`,
+              }),
+        });
+        if (detached) {
+          expect(performance.now() - startedAt).toBeLessThan(7_000);
+        } else {
+          const pid = Number(await fs.readFile(pidPath, "utf8"));
+          expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+        }
+      } finally {
+        const pid = Number(await fs.readFile(pidPath, "utf8").catch(() => ""));
+        if (pid > 0) {
+          killProcessTree(pid, { force: true, detached });
+        }
+      }
+    },
     15_000,
   );
+
+  it.each([
+    {
+      scenario: "missing launcher",
+      message: "Managed Codex app-server could not be resolved: managed launcher missing",
+    },
+    {
+      scenario: "absent native artifact",
+      message: "Managed Codex app-server resolved a launcher without a native artifact.",
+      path: "/candidate/plugin/codex",
+    },
+  ])("reports a $scenario before execution", async ({ scenario, message, path: findingPath }) => {
+    const deps = managedDeps();
+    if (scenario === "missing launcher") {
+      deps.resolveStartOptions.mockRejectedValueOnce(new Error("managed launcher missing"));
+    } else {
+      deps.resolveNativeCommand.mockReturnValueOnce(undefined);
+    }
+    expectFinding(await createCheck(deps).detect(context(config())), {
+      checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
+      message,
+      ...(findingPath ? { path: findingPath } : {}),
+    });
+    expect(deps.runVersionCommand).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["custom command", { command: "/operator/codex" }],

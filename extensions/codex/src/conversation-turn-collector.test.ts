@@ -27,6 +27,7 @@ function createCollector() {
 
 describe("codex conversation turn collector", () => {
   afterEach(() => {
+    vi.clearAllTimers();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -58,28 +59,25 @@ describe("codex conversation turn collector", () => {
     });
   });
 
-  it("returns the last completed final answer when the terminal summary is empty", async () => {
-    const collector = createCollector();
-    collector.item("first", "first answer", { phase: "final_answer" });
-    collector.item("second", "second answer", { phase: "final_answer" });
-    collector.end();
-
-    await expect(collector.wait({ timeoutMs: 100 })).resolves.toEqual({
+  it.each([
+    {
+      scenario: "empty terminal summary",
+      metadata: { phase: "final_answer" },
+      items: [],
       replyText: "second answer",
-    });
-  });
-
-  it("lets the terminal final answer supersede later streamed completions", async () => {
-    const collector = createCollector();
-    collector.item("answer", "earlier answer");
-    collector.item("later", "later answer");
-    collector.end({
+    },
+    {
+      scenario: "terminal override",
+      metadata: {},
       items: [{ type: "agentMessage", id: "answer", text: "terminal answer" }],
-    });
-
-    await expect(collector.wait({ timeoutMs: 100 })).resolves.toEqual({
       replyText: "terminal answer",
-    });
+    },
+  ])("uses the last final answer with $scenario", async ({ metadata, items, replyText }) => {
+    const collector = createCollector();
+    collector.item("answer", "first answer", metadata);
+    collector.item("later", "second answer", metadata);
+    collector.end({ items });
+    await expect(collector.wait({ timeoutMs: 100 })).resolves.toEqual({ replyText });
   });
 
   it("ignores notifications for other threads or turns", async () => {
@@ -130,18 +128,12 @@ describe("codex conversation turn collector", () => {
 
   it("clamps oversized turn wait timers", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      const collector = createCollector();
-      const completion = collector.wait({ timeoutMs: MAX_TIMER_TIMEOUT_MS + 1 });
+    const collector = createCollector();
+    const completion = collector.wait({ timeoutMs: MAX_TIMER_TIMEOUT_MS + 1 });
 
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-      collector.end();
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    collector.end();
 
-      await expect(completion).resolves.toEqual({ replyText: "" });
-    } finally {
-      vi.restoreAllMocks();
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
+    await expect(completion).resolves.toEqual({ replyText: "" });
   });
 });
