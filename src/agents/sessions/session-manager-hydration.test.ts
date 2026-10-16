@@ -44,19 +44,68 @@ function canonicalTarget(
   };
 }
 
+async function seedHistory(target: ReturnType<typeof canonicalTarget>, text: string) {
+  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+  return SessionManager.open(target).appendMessage(makeUserMessage(text, 1));
+}
+
+function expectMessages(manager: SessionManager, ...messages: unknown[]) {
+  expect(manager.buildSessionContext().messages).toEqual(messages);
+}
+
+function restoreStateDir(value: string | undefined) {
+  if (value === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = value;
+  }
+}
+
+function pauseHistoryRead(at: "request" | "reply") {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
+    spy.mockRestore();
+    const pause = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    if (at === "reply") {
+      return historyLane.pool.run(input, options).then(async (result) => {
+        await pause();
+        return result;
+      });
+    }
+    return historyLane.pool.run(async () => {
+      await pause();
+      return typeof input === "function" ? await input() : input;
+    }, options);
+  });
+  return {
+    release: () => release.resolve(),
+    restore: () => spy.mockRestore(),
+    wait: (pending: Promise<unknown>, message: string) =>
+      Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error(message);
+        }),
+      ]),
+  };
+}
+
 it.each(["canonical", "shared"])(
   "opens cold and bounded %s SDK views without host SQLite and preserves complete durable history",
   async (layout) => {
     await withOpenClawTestState({ label: "session-hydration" }, async (state) => {
-      const target = {
-        agentId: layout === "shared" ? "worker" : "main",
-        sessionId: "hydration",
-        sessionKey: `agent:${layout === "shared" ? "worker" : "main"}:hydration`,
-        storePath:
-          layout === "canonical"
-            ? path.join(state.agentDir("main"), "openclaw-agent.sqlite")
-            : path.join(state.root, "shared.sqlite"),
-      };
+      const target = canonicalTarget(state, "hydration");
+      if (layout === "shared") {
+        Object.assign(target, {
+          agentId: "worker",
+          sessionKey: "agent:worker:hydration",
+          storePath: state.path("shared.sqlite"),
+        });
+      }
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
       const source = SessionManager.open(target, "/stored");
       for (let index = 0; index < 12; index++) {
@@ -197,15 +246,8 @@ it("preserves the shipped SDK omitted-history option for bounded views", async (
 
 it("pairs current-turn entries with the complete hydrated version and captured prefix in durable storage", async () => {
   await withOpenClawTestState({ label: "current-turn-entry-version" }, async (state) => {
-    const target = canonicalTarget(
-      state,
-      "current-turn-version",
-      "agent:main:current-turn-version",
-    );
-    await upsertSessionEntryCore(target, {
-      sessionId: target.sessionId,
-      updatedAt: 1,
-    });
+    const target = canonicalTarget(state, "current-turn-version");
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const source = SessionManager.open(target);
     const beforeEntryId = source.appendMessage(makeUserMessage("earlier user", 0));
     const entryId = source.appendMessage(makeUserMessage("current user", 1));
@@ -251,8 +293,7 @@ it("pairs current-turn entries with the complete hydrated version and captured p
           entryId: hiddenEntryId,
           includeEntry,
         });
-        expect(hidden.anchor).toBeUndefined();
-        expect(hidden.event).toBeUndefined();
+        expect(hidden).toMatchObject({ anchor: undefined, event: undefined });
       }
     }
     await expect(fencedReader.readCurrentTurnEntry(request)).rejects.toThrow(
@@ -264,42 +305,24 @@ it("pairs current-turn entries with the complete hydrated version and captured p
 it("does not publish a stale retarget over a manager changed while its worker read waits", async () => {
   await withOpenClawTestState({ label: "session-hydration-retarget" }, async (state) => {
     const target = canonicalTarget(state, "retarget");
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const source = SessionManager.open(target);
-    source.appendMessage(makeUserMessage("persisted", 1));
+    await seedHistory(target, "persisted");
     const manager = SessionManager.inMemory("/detached");
-    const release = createDeferredCore();
-    const entered = createDeferredCore();
-    const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
-      spy.mockRestore();
-      return historyLane.pool.run(async () => {
-        entered.resolve();
-        await release.promise;
-        return typeof input === "function" ? await input() : input;
-      }, options);
-    });
+    const gate = pauseHistoryRead("request");
     const pending = manager.setSessionTargetAsync(target);
     const refused = expect(pending).rejects.toThrow("changed during transcript hydration");
     try {
-      await Promise.race([
-        entered.promise,
-        refused.then(() => {
-          throw new Error("Retarget settled before the intercepted worker read");
-        }),
-      ]);
+      await gate.wait(refused, "Retarget settled before the intercepted worker read");
       manager.appendMessage(makeUserMessage("newer detached view", 2));
-      release.resolve();
+      gate.release();
       await refused;
       expect(manager.isPersisted()).toBe(false);
-      expect(manager.buildSessionContext().messages).toEqual([
-        makeUserMessage("newer detached view", 2),
-      ]);
+      expectMessages(manager, makeUserMessage("newer detached view", 2));
       await manager.setSessionTargetAsync(target);
       expect(manager.getSessionId()).toBe(target.sessionId);
-      expect(manager.buildSessionContext().messages).toEqual([makeUserMessage("persisted", 1)]);
+      expectMessages(manager, makeUserMessage("persisted", 1));
     } finally {
-      release.resolve();
-      spy.mockRestore();
+      gate.release();
+      gate.restore();
       await Promise.allSettled([pending]);
     }
   });
@@ -310,10 +333,7 @@ it.each(["hydration", "current-turn"] as const)(
   async (kind) => {
     await withOpenClawTestState({ label: "session-hydration-queued-abort" }, async (state) => {
       const target = canonicalTarget(state, "queued-abort");
-      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const entryId = SessionManager.open(target).appendMessage(
-        makeUserMessage("preserved predecessor", 1),
-      );
+      const entryId = await seedHistory(target, "preserved predecessor");
       const { snapshot } = await prepareSessionTranscriptHydration(target).read();
       const entered = createDeferredCore();
       const queued = createDeferredCore();
@@ -381,9 +401,7 @@ it.each(["hydration", "current-turn"] as const)(
         await refused;
         release.resolve();
         for (const predecessor of await predecessors) {
-          expect(predecessor.buildSessionContext().messages).toEqual([
-            makeUserMessage("preserved predecessor", 1),
-          ]);
+          expectMessages(predecessor, makeUserMessage("preserved predecessor", 1));
         }
       } finally {
         release.resolve();
@@ -423,42 +441,27 @@ it.each(["abort", "database-close"] as const)(
   async (reason) => {
     await withOpenClawTestState({ label: "session-hydration-revoked" }, async (state) => {
       const target = canonicalTarget(state, "revoked");
-      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      SessionManager.open(target).appendMessage(makeUserMessage("retained", 1));
+      await seedHistory(target, "retained");
       const controller = new AbortController();
-      const received = createDeferredCore();
-      const release = createDeferredCore();
-      const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
-        spy.mockRestore();
-        return historyLane.pool.run(input, options).then(async (result) => {
-          received.resolve();
-          await release.promise;
-          return result;
-        });
-      });
+      const gate = pauseHistoryRead("reply");
       const pending = SessionManager.openAsync(target, undefined, undefined, controller.signal);
       const refused = expect(pending).rejects.toThrow(
         reason === "abort" ? "cancelled hydration" : "revoked",
       );
       try {
-        await Promise.race([
-          received.promise,
-          refused.then(() => {
-            throw new Error("Hydration settled before the intercepted reply");
-          }),
-        ]);
+        await gate.wait(refused, "Hydration settled before the intercepted reply");
         if (reason === "abort") {
           controller.abort(new Error("cancelled hydration"));
         } else {
           await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
         }
-        release.resolve();
+        gate.release();
         await refused;
         const reopened = await SessionManager.openAsync(target);
-        expect(reopened.buildSessionContext().messages).toEqual([makeUserMessage("retained", 1)]);
+        expectMessages(reopened, makeUserMessage("retained", 1));
       } finally {
-        release.resolve();
-        spy.mockRestore();
+        gate.release();
+        gate.restore();
         await Promise.allSettled([pending]);
       }
     });
@@ -501,28 +504,21 @@ it.each([
       }
       try {
         const manager = await pending;
-        expect(manager.buildSessionContext().messages).toEqual([
-          makeUserMessage("original private history", 1),
-        ]);
+        expectMessages(manager, makeUserMessage("original private history", 1));
         const exposed = manager.getSessionTarget();
         expect(exposed?.env?.OPENCLAW_STATE_DIR).toBe(state.stateDir);
         Object.assign(exposed?.env ?? {}, { OPENCLAW_STATE_DIR: state.statePath("getter-root") });
         await manager.reloadPersistedTranscriptAsync();
-        expect(manager.buildSessionContext().messages).toEqual([
-          makeUserMessage("original private history", 1),
-        ]);
+        expectMessages(manager, makeUserMessage("original private history", 1));
         await manager.appendMessageAsync(makeUserMessage("same private owner", 2));
         const original = { ...target, env: { OPENCLAW_STATE_DIR: state.stateDir } };
-        expect((await SessionManager.openAsync(original)).buildSessionContext().messages).toEqual([
+        expectMessages(
+          await SessionManager.openAsync(original),
           makeUserMessage("original private history", 1),
           makeUserMessage("same private owner", 2),
-        ]);
+        );
       } finally {
-        if (originalEnvironment === undefined) {
-          delete process.env.OPENCLAW_STATE_DIR;
-        } else {
-          process.env.OPENCLAW_STATE_DIR = originalEnvironment;
-        }
+        restoreStateDir(originalEnvironment);
         await Promise.allSettled([pending]);
         memorySessionActorOwners.closeDatabase(ownerLocation);
       }
@@ -541,8 +537,7 @@ it.each(["process", "explicit"])(
       },
       async (state) => {
         const target = canonicalTarget(state, "file-environment");
-        await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        SessionManager.open(target).appendMessage(makeUserMessage("file history", 1));
+        await seedHistory(target, "file history");
         await waitForSessionTranscriptProjection(target);
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
         const originalEnvironment = process.env.OPENCLAW_STATE_DIR;
@@ -567,11 +562,7 @@ it.each(["process", "explicit"])(
           const original = { ...target, env: { OPENCLAW_STATE_DIR: state.stateDir } };
           expect(SessionManager.open(original).buildSessionContext().thinkingLevel).toBe("high");
         } finally {
-          if (originalEnvironment === undefined) {
-            delete process.env.OPENCLAW_STATE_DIR;
-          } else {
-            process.env.OPENCLAW_STATE_DIR = originalEnvironment;
-          }
+          restoreStateDir(originalEnvironment);
           delete process.env.OPENCLAW_SUPERVISOR_MODE;
           await Promise.allSettled([pending]);
         }
@@ -592,8 +583,7 @@ it.each(["completed-drain", "active-drain", "terminal-owner"])(
           sessionKey: "agent:worker:discovery-lifecycle",
           storePath: state.path("shared.sqlite"),
         };
-        await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        SessionManager.open(target).appendMessage(makeUserMessage("durable shared history", 1));
+        await seedHistory(target, "durable shared history");
         await waitForSessionTranscriptProjection(target);
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
         const received = createDeferredCore();
@@ -649,9 +639,7 @@ it.each(["completed-drain", "active-drain", "terminal-owner"])(
           release.resolve();
           await expected;
           if (transition === "completed-drain") {
-            expect((await pending).buildSessionContext().messages).toEqual([
-              makeUserMessage("durable shared history", 1),
-            ]);
+            expectMessages(await pending, makeUserMessage("durable shared history", 1));
           }
         } finally {
           release.resolve();
@@ -670,17 +658,11 @@ it.each(["canonical", "custom"])(
   "transfers a Windows environment snapshot through the real %s async opener without retargeting it",
   async (layout) => {
     await withOpenClawTestState({ label: "session-hydration-windows-transfer" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "windows-transfer",
-        sessionKey: "agent:main:windows-transfer",
-        storePath:
-          layout === "canonical"
-            ? path.join(state.agentDir("main"), "openclaw-agent.sqlite")
-            : state.path("windows-shared.sqlite"),
-      };
-      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      SessionManager.open(target).appendMessage(makeUserMessage("captured store", 1));
+      const target = canonicalTarget(state, "windows-transfer");
+      if (layout === "custom") {
+        target.storePath = state.path("windows-shared.sqlite");
+      }
+      await seedHistory(target, "captured store");
       const hostPlatform = process.platform;
       const env = { ...state.env };
       for (const key of Object.keys(env)) {
@@ -746,9 +728,7 @@ it.each(["canonical", "custom"])(
         expect(process.platform).toBe(hostPlatform);
         release.resolve();
         await result;
-        expect((await pending).buildSessionContext().messages).toEqual([
-          makeUserMessage("captured store", 1),
-        ]);
+        expectMessages(await pending, makeUserMessage("captured store", 1));
         const expectedEnv = {
           OPENCLAW_STATE_DIR: state.stateDir,
           OPENCLAW_SUPERVISOR_MODE: "external",

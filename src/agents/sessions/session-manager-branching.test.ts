@@ -19,6 +19,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { SessionManager } from "./session-manager.js";
@@ -33,17 +34,31 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 afterEach(() => vi.restoreAllMocks());
 
+function createScope(sessionId: string, sessionKey = `agent:main:${sessionId}`) {
+  const dir = tempDirs.make("openclaw-session-manager-");
+  return {
+    dir,
+    scope: {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath: path.join(dir, "sessions.json"),
+    },
+  };
+}
+
+function transcriptEntries(sessionId: string, ...messageIds: string[]) {
+  return [
+    expect.objectContaining({ id: sessionId, type: "session" }),
+    ...messageIds.map((id) => expect.objectContaining({ id, type: "message" })),
+  ];
+}
+
 describe("SessionManager branch replacement", () => {
   it.each(["memory", "sqlite"].flatMap((mode) => [3, 4].map((version) => ({ mode, version }))))(
     "preserves projection version $version, opaque parents, and labels in a $mode branch",
     async ({ mode, version }) => {
-      const dir = tempDirs.make("openclaw-session-manager-branch-");
-      const scope = {
-        agentId: "main",
-        sessionId: "source-session",
-        sessionKey: "agent:main:branch-labels",
-        storePath: path.join(dir, "sessions.json"),
-      };
+      const { dir, scope } = createScope("source-session", "agent:main:branch-labels");
       const entries = [
         { type: "session", version, id: scope.sessionId, cwd: dir },
         {
@@ -117,16 +132,12 @@ describe("SessionManager branch replacement", () => {
   );
 
   it("creates SQLite-backed branch sessions without rewriting the source transcript", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const storePath = path.join(dir, "sessions.json");
-    const sessionId = "sqlite-branch-source";
-    const sessionKey = "agent:main:dashboard:sqlite-branch-source";
-    const marker = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId,
-      storePath,
-    });
-    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    const { dir, scope } = createScope(
+      "sqlite-branch-source",
+      "agent:main:dashboard:sqlite-branch-source",
+    );
+    const { sessionId, sessionKey, storePath } = scope;
+    const marker = formatSqliteSessionFileMarker(scope);
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
@@ -186,48 +197,32 @@ describe("SessionManager branch replacement", () => {
       delivery: { kind: "internal" },
       sessionId: branchedSessionId,
     });
-    await expect(loadTranscriptEvents({ agentId: "main", sessionId, storePath })).resolves.toEqual([
-      expect.objectContaining({ id: sessionId, type: "session" }),
-      expect.objectContaining({ id: user.messageId, type: "message" }),
-      expect.objectContaining({ id: assistant.messageId, type: "message" }),
-    ]);
-    await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        sessionId: branchedSessionId,
-        sessionKey,
-        storePath,
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        id: branchedSessionId,
-        parentSession: sessionId,
-        type: "session",
-      }),
-      expect.objectContaining({ id: user.messageId, type: "message" }),
-      expect.objectContaining({ id: assistant.messageId, type: "message" }),
-    ]);
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual(
+      transcriptEntries(sessionId, user.messageId, assistant.messageId),
+    );
+    await expect(loadTranscriptEvents({ ...scope, sessionId: branchedSessionId })).resolves.toEqual(
+      [
+        expect.objectContaining({
+          id: branchedSessionId,
+          parentSession: sessionId,
+          type: "session",
+        }),
+        expect.objectContaining({ id: user.messageId, type: "message" }),
+        expect.objectContaining({ id: assistant.messageId, type: "message" }),
+      ],
+    );
     expect(() => sessionManager.prepareTranscriptRewrite()).not.toThrow();
     expect(sessionManager.removeTrailingEntries((entry) => entry.id === assistant.messageId)).toBe(
       1,
     );
     expect(() => sessionManager.prepareTranscriptRewrite()).not.toThrow();
     await expect(loadTranscriptEvents({ ...scope, sessionId: branchedSessionId })).resolves.toEqual(
-      [
-        expect.objectContaining({ id: branchedSessionId, type: "session" }),
-        expect.objectContaining({ id: user.messageId, type: "message" }),
-      ],
+      transcriptEntries(branchedSessionId, user.messageId),
     );
   });
 
   it("does not publish a branch identity when transcript persistence fails", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const scope = {
-      agentId: "main",
-      sessionId: "branch-write-failure",
-      sessionKey: "agent:main:branch-write-failure",
-      storePath: path.join(dir, "sessions.json"),
-    };
+    const { dir, scope } = createScope("branch-write-failure");
     const manager = SessionManager.open(scope, dir);
     const leafId = manager.appendMessage({ role: "user", content: "source", timestamp: 1 });
     const beforeEntry = loadSessionEntry(scope);
@@ -268,12 +263,12 @@ describe("SessionManager branch replacement", () => {
   it.each(["lifecycle", "writer", "metadata", "guarded-target", "successor-writer"])(
     "revalidates queued %s changes before branching",
     async (change) => {
-      const dir = tempDirs.make("openclaw-session-manager-");
-      const storePath = path.join(dir, "sessions.json");
-      const sessionId = "sqlite-branch-race-source";
-      const sessionKey = "agent:main:dashboard:sqlite-branch-race-source";
-      const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
-      const scope = { agentId: "main", sessionId, sessionKey, storePath };
+      const { dir, scope } = createScope(
+        "sqlite-branch-race-source",
+        "agent:main:dashboard:sqlite-branch-race-source",
+      );
+      const { sessionId, sessionKey } = scope;
+      const marker = formatSqliteSessionFileMarker(scope);
       await upsertSessionEntryCore(scope, {
         activeWriterRunId: "branch-original-writer",
         lifecycleRevision: "branch-original-revision",
@@ -319,24 +314,18 @@ describe("SessionManager branch replacement", () => {
       });
       const beforeBranch = readManagerState();
       const writerChanged = change === "writer" || change === "successor-writer";
-      let releaseOwnerChange = () => {};
-      const ownerChangeGate = new Promise<void>((resolve) => {
-        releaseOwnerChange = resolve;
-      });
-      let markOwnerChangeStarted = () => {};
-      const ownerChangeStarted = new Promise<void>((resolve) => {
-        markOwnerChangeStarted = resolve;
-      });
+      const ownerChangeGate = createDeferredCore();
+      const ownerChangeStarted = createDeferredCore();
       const ownerChange = updateSessionEntry(scope, async () => {
-        markOwnerChangeStarted();
-        await ownerChangeGate;
+        ownerChangeStarted.resolve();
+        await ownerChangeGate.promise;
         return change === "lifecycle"
           ? { lifecycleRevision: "branch-replacement-revision" }
           : writerChanged
             ? { activeWriterRunId: "branch-replacement-writer" }
             : { label: "updated while branch queued" };
       });
-      await ownerChangeStarted;
+      await ownerChangeStarted.promise;
 
       const queuedAt = Date.now() - 1_000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(queuedAt);
@@ -347,7 +336,7 @@ describe("SessionManager branch replacement", () => {
       const whileQueued = readManagerState();
       clock.mockRestore();
       const commitStartedAt = Date.now();
-      releaseOwnerChange();
+      ownerChangeGate.resolve();
 
       await ownerChange;
       if (change === "lifecycle") {
@@ -393,11 +382,9 @@ describe("SessionManager branch replacement", () => {
         expect(sessionManager.getSessionId()).toBe(branchId);
       }
       expect(whileQueued).toEqual(beforeBranch);
-      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-        expect.objectContaining({ id: sessionId, type: "session" }),
-        expect.objectContaining({ id: user.messageId, type: "message" }),
-        expect.objectContaining({ id: assistant.messageId, type: "message" }),
-      ]);
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual(
+        transcriptEntries(sessionId, user.messageId, assistant.messageId),
+      );
     },
   );
 });

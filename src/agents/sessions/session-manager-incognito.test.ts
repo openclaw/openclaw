@@ -70,7 +70,7 @@ async function create(name: string) {
   ).toMatchObject({ kind: "committed" });
   return { target, binding, run: <T>(run: () => T) => runWithSessionActorStorage(binding, run) };
 }
-async function captureCommitRevocation(
+async function withCommitRevocation(
   target: SessionTranscriptRuntimeTarget,
   operation: (assertCurrent: () => void) => Promise<unknown>,
 ) {
@@ -86,12 +86,25 @@ async function captureCommitRevocation(
         throw new Error("Caller revoked after commit");
       }
     });
-  } catch (error) {
-    return error;
   } finally {
     unsubscribe();
   }
+}
+
+async function captureCommitRevocation(
+  target: SessionTranscriptRuntimeTarget,
+  operation: (assertCurrent: () => void) => Promise<unknown>,
+) {
+  try {
+    await withCommitRevocation(target, operation);
+  } catch (error) {
+    return error;
+  }
   throw new Error("Expected committed operation to report revoked publication");
+}
+
+function readWatermark(binding: SelectedSessionActorStorageBinding) {
+  return binding.actor.storage.read({ type: "session.history.watermark", input: {} }, authority);
 }
 
 it("persists deduplicated messages, metadata, suffixes, rewrites, branches, and compaction on the memory owner", async () => {
@@ -151,10 +164,7 @@ it("advances the CLI writer boundary through metadata commits and refuses revoke
   const { target, binding, run } = await create("cli-metadata");
   await run(async () => {
     const manager = await SessionManager.openAsync(target);
-    const { watermark } = await binding.actor.storage.read(
-      { type: "session.history.watermark", input: {} },
-      authority,
-    );
+    const { watermark } = await readWatermark(binding);
     const runId = "synthetic-cli-run";
     const authFingerprint = "a".repeat(64);
     await patchSessionEntryCore(target, () => ({
@@ -185,10 +195,7 @@ it("advances the CLI writer boundary through metadata commits and refuses revoke
       },
       async () => {
         await manager.appendCustomEntryAsync("cli-metadata", { synthetic: true });
-        const after = await binding.actor.storage.read(
-          { type: "session.history.watermark", input: {} },
-          authority,
-        );
+        const after = await readWatermark(binding);
         expect(
           binding.actor.storage.readCurrent({ type: "session.entry.read", input: {} }, authority),
         ).toMatchObject({
@@ -199,14 +206,7 @@ it("advances the CLI writer boundary through metadata commits and refuses revoke
         await expect(manager.appendCustomEntryAsync("refused", {})).rejects.toThrow(
           "CLI writer revoked",
         );
-        expect(
-          (
-            await binding.actor.storage.read(
-              { type: "session.history.watermark", input: {} },
-              authority,
-            )
-          ).watermark,
-        ).toEqual(after.watermark);
+        expect((await readWatermark(binding)).watermark).toEqual(after.watermark);
       },
     );
   });
@@ -261,42 +261,26 @@ it.each(["append", "persist"] as const)(
     const { target } = await create(`committed-${method}`);
     const manager = await SessionManager.openAsync(target);
     await manager.appendCustomEntryAsync("before-revocation");
-    let current = true;
-    const unsubscribe = sessionChanges.subscribeFacts((change) => {
-      if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
-        current = false;
-      }
-    });
-    try {
-      await withSessionManagerWriteAssertion(
-        manager,
-        () => {
-          if (!current) {
-            throw new Error("Caller revoked after commit");
-          }
-        },
-        async () => {
-          if (method === "append") {
-            await manager.appendCustomEntryAsync("committed-once");
-          } else {
-            await manager.persistAsync({
-              type: "custom",
-              id: "committed-once",
-              parentId: null,
-              timestamp: new Date(1).toISOString(),
-              customType: "committed-once",
-              data: {},
-            });
-          }
-          expect(current).toBe(false);
-          await expect(manager.appendCustomEntryAsync("refused")).rejects.toThrow(
-            "Caller revoked after commit",
-          );
-        },
-      );
-    } finally {
-      unsubscribe();
-    }
+    await withCommitRevocation(target, (assertCurrent) =>
+      withSessionManagerWriteAssertion(manager, assertCurrent, async () => {
+        if (method === "append") {
+          await manager.appendCustomEntryAsync("committed-once");
+        } else {
+          await manager.persistAsync({
+            type: "custom",
+            id: "committed-once",
+            parentId: null,
+            timestamp: new Date(1).toISOString(),
+            customType: "committed-once",
+            data: {},
+          });
+        }
+        expect(assertCurrent).toThrow("Caller revoked after commit");
+        await expect(manager.appendCustomEntryAsync("refused")).rejects.toThrow(
+          "Caller revoked after commit",
+        );
+      }),
+    );
     if (method === "persist") {
       await manager.reloadPersistedTranscriptAsync();
     }
