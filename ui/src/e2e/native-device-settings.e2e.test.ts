@@ -21,6 +21,10 @@ const settingMessages = (page: Page) =>
 async function expectSetting(page: Page, key: string, value: unknown) {
   await expect.poll(() => settingMessages(page)).toContainEqual({ type: "set", key, value });
 }
+const permissionRow = (page: Page, title: RegExp) =>
+  page.locator("openclaw-device-permissions-page .settings-row").filter({
+    has: page.locator(".settings-row__title").filter({ hasText: title }),
+  });
 
 async function installDeviceSettingsBridge(page: Page, snapshot: NativeDeviceSettingsSnapshot) {
   if (snapshot.device.platform === "macos") {
@@ -115,10 +119,7 @@ suite.define(() => {
             .waitFor();
           await list.getByRole("link", { name: "This iPhone", exact: true }).click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/device");
-          await page
-            .locator(".native-embed-header")
-            .getByRole("heading", { name: "This iPhone", exact: true })
-            .waitFor();
+          await nativeForm(page.locator(".native-embed-header")).heading("This iPhone").waitFor();
           const devicePage = page.locator("openclaw-device-page");
           const appearance = devicePage.getByRole("combobox", { name: "Appearance", exact: true });
           await expect.poll(() => appearance.inputValue()).toBe("system");
@@ -133,13 +134,8 @@ suite.define(() => {
           await expect.poll(() => appearance.inputValue()).toBe("dark");
           await page.locator(".native-embed-header__back").click();
           await list.locator('a[href="/settings/device/permissions"]').click();
-          const permissionsPage = page.locator("openclaw-device-permissions-page");
-          const precise = permissionsPage.locator(".settings-row").filter({
-            has: page.locator(".settings-row__title").filter({ hasText: /^Precise location$/ }),
-          });
-          await precise
-            .getByRole("button", { name: "Open Settings: Precise location", exact: true })
-            .waitFor();
+          const precise = permissionRow(page, /^Precise location$/);
+          await nativeForm(precise).button("Open Settings: Precise location").waitFor();
           expect(await precise.getByRole("switch").count()).toBe(0);
         },
       );
@@ -173,17 +169,16 @@ suite.define(() => {
       const sharingLabel = devicePage
         .locator(".settings-row__title")
         .filter({ hasText: /^Desktop sharing$/ });
-      await sharingLabel.click();
-      await expectSetting(page, "capabilities.desktopSharingEnabled", false);
-      snapshot.capabilities.desktopSharingEnabled = false;
-      await replyToDeviceSetting(page, snapshot);
-      await expect.poll(() => sharing.isChecked()).toBe(false);
-      expect(await computerControl.isChecked()).toBe(true);
-      await sharingLabel.click();
-      await expectSetting(page, "capabilities.desktopSharingEnabled", true);
-      snapshot.capabilities.desktopSharingEnabled = true;
-      await replyToDeviceSetting(page, snapshot);
-      await expect.poll(() => sharing.isChecked()).toBe(true);
+      for (const enabled of [false, true]) {
+        await sharingLabel.click();
+        await expectSetting(page, "capabilities.desktopSharingEnabled", enabled);
+        snapshot.capabilities.desktopSharingEnabled = enabled;
+        await replyToDeviceSetting(page, snapshot);
+        await expect.poll(() => sharing.isChecked()).toBe(enabled);
+        if (!enabled) {
+          expect(await computerControl.isChecked()).toBe(true);
+        }
+      }
 
       const iconStyle = devicePage.getByRole("combobox", { name: "Dock icon", exact: true });
       await expect.poll(() => iconStyle.inputValue()).toBe("paper");
@@ -206,12 +201,8 @@ suite.define(() => {
 
       await sidebar.locator('a[href="/settings/device/permissions"]').click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/device/permissions");
-      const permissionsPage = page.locator("openclaw-device-permissions-page");
-      const notifications = permissionsPage.locator(".settings-row").filter({
-        has: page.locator(".settings-row__title").filter({ hasText: /^Notifications$/ }),
-      });
-      await notifications
-        .getByRole("button", { name: "Grant…: Notifications", exact: true })
+      await nativeForm(permissionRow(page, /^Notifications$/))
+        .button("Grant…: Notifications")
         .click();
       await expect
         .poll(messages)
@@ -232,19 +223,18 @@ suite.define(() => {
         expect((await page.goto(`${suite.server.baseUrl}settings/${route}`))?.status()).toBe(200);
         await page.getByText(/only available inside the OpenClaw app/).waitFor();
         await page.locator('.settings-sidebar__item[href="/settings/devices"]').waitFor();
-        expect(
-          await page
+        const sidebar = page.locator(".settings-sidebar");
+        expect({
+          links: await sidebar
             .locator(
               '.settings-sidebar__item[href="/settings/device"], .settings-sidebar__item[href="/settings/device/permissions"]',
             )
             .count(),
-        ).toBe(0);
-        expect(
-          await page
+          macGroup: await sidebar
             .locator(".settings-sidebar__group-label")
             .filter({ hasText: /^\s*This Mac\s*$/ })
             .count(),
-        ).toBe(0);
+        }).toEqual({ links: 0, macGroup: 0 });
       }
       await page.goto(`${suite.server.baseUrl}settings/talk`);
       const triggers = page.getByRole("textbox", { name: "Trigger words", exact: true });
@@ -288,15 +278,12 @@ suite.define(() => {
       const addDomain = async (domain: string) => {
         await devicePage.getByRole("textbox", { name: "Add hostname", exact: true }).fill(domain);
         await devicePage.getByRole("button", { name: "Add hostname", exact: true }).click();
+        await expectSetting(page, "browser.cookieSync.domains", ["example.com", domain]);
       };
       const expectProfileRequest = (value: string) =>
         expectSetting(page, "browser.cookieSync.targetProfile", value);
 
       await addDomain("cancelled.example.com");
-      await expectSetting(page, "browser.cookieSync.domains", [
-        "example.com",
-        "cancelled.example.com",
-      ]);
       await revisit();
       const cancelledDomain = devicePage.getByRole("button", {
         name: "Remove cancelled.example.com",
@@ -308,10 +295,6 @@ suite.define(() => {
       await expect.poll(() => cancelledDomain.count()).toBe(0);
 
       await addDomain("approved.example.com");
-      await expectSetting(page, "browser.cookieSync.domains", [
-        "example.com",
-        "approved.example.com",
-      ]);
       snapshot.browser.cookieSync.domains.push("approved.example.com");
       await replyToDeviceSetting(page, snapshot);
 

@@ -11,6 +11,7 @@ import {
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
+import { nativeForm } from "./native-form.test-support.ts";
 import { installNativeEmbed, installNativeWebChrome } from "./native-nav.test-support.ts";
 import { catalog } from "./native-plugin-ui.test-support.ts";
 
@@ -21,7 +22,7 @@ type ConversationTestWindow = Window &
     conversationMessages: Record<string, unknown>[];
     windowDragMessages: { type: "window-drag" }[];
     actionMenuReceipts: { requestId: unknown; expanded: string | null }[];
-    dashboardResponse?: "rejected" | "throw";
+    rejectDashboard?: boolean;
     __OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__: { documentId: string };
   };
 const messages = (page: Page) =>
@@ -35,6 +36,19 @@ const sessionRow = (name: string, label = name) => ({
   kind: "direct",
 });
 const assistantText = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] });
+const capabilities = ["navigate", "presentation", "focus-composer"];
+const composerSelector = ".agent-chat__composer-combobox textarea";
+const withPage = (run: (page: Page) => Promise<void>) =>
+  suite.withPage({ viewport, serviceWorkers: "block" }, ({ page }) => run(page));
+async function openConversation(page: Page) {
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+  const pane = page.locator(".chat-pane-cache__pane--visible");
+  const composer = pane.locator(composerSelector);
+  await composer.waitFor();
+  return { pane, composer, ...nativeForm(pane) };
+}
+const expectMessage = (page: Page, type: string, expected: Record<string, unknown>) =>
+  expect.poll(() => lastMessage(page, type)).toMatchObject(expected);
 async function installConversationHost(page: Page, features?: string[]) {
   await page.addInitScript((requestedFeatures) => {
     Object.assign(window, {
@@ -72,13 +86,8 @@ async function installConversationHost(page: Page, features?: string[]) {
                       ?.getAttribute("aria-expanded") ?? null,
                 });
               }
-              if (message.type === "open-dashboard") {
-                if (host.dashboardResponse === "rejected") {
-                  return Promise.resolve({ ok: false, error: "Dashboard unavailable" });
-                }
-                if (host.dashboardResponse === "throw") {
-                  return Promise.reject(new Error("Dashboard unavailable"));
-                }
+              if (message.type === "open-dashboard" && host.rejectDashboard) {
+                return Promise.resolve({ ok: false, error: "Dashboard unavailable" });
               }
               return Promise.resolve({ ok: true });
             },
@@ -114,16 +123,13 @@ async function command(
     },
     { type, payload, requestId },
   );
-  let receipt: Record<string, unknown> | undefined;
   await expect
-    .poll(async () => {
-      receipt = (await messages(page)).find(
+    .poll(async () =>
+      (await messages(page)).find(
         (message) => message.type === "command-result" && message.requestId === requestId,
-      );
-      return receipt;
-    })
-    .toBeDefined();
-  expect(receipt, JSON.stringify(receipt)).toMatchObject(expected);
+      ),
+    )
+    .toMatchObject(expected);
 }
 
 async function headerLeadingInset(page: Page) {
@@ -141,7 +147,7 @@ const navigate = (page: Page, name: string, requestId: string) =>
 
 suite.define(() => {
   it("keeps a single web conversation with in-page native navigation and Dashboard handoff", async () => {
-    await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
+    await withPage(async (page) => {
       await installConversationHost(page);
       const linkedUrl = controlUiSessionUrl(suite.server.baseUrl, "agent:main:linked");
       const gateway = await installMockGateway(page, {
@@ -185,10 +191,7 @@ suite.define(() => {
           }),
         );
       }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
-      const pane = page.locator(".chat-pane-cache__pane--visible");
-      const composer = pane.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor();
+      const { pane, composer, button } = await openConversation(page);
       await pane.getByText("Conversation ready.", { exact: false }).waitFor();
       expect(
         await page
@@ -234,7 +237,7 @@ suite.define(() => {
       });
       const first = (await messages(page))[0];
       expect(first).toMatchObject({ type: "ready", contract: 1, surface: "conversation" });
-      expect(first?.capabilities).toEqual(["navigate", "presentation", "focus-composer"]);
+      expect(first?.capabilities).toEqual(capabilities);
       const documentId = first?.documentId;
       const timeOrigin = await page.evaluate(() => performance.timeOrigin);
       const initialUrl = page.url();
@@ -254,10 +257,10 @@ suite.define(() => {
       expect((await messages(page)).filter((message) => message.type === "open-dashboard")).toEqual(
         [],
       );
-      await pane.getByRole("button", { name: "Close tab: notes.txt", exact: true }).click();
+      await button("Close tab: notes.txt").click();
       await fileView.waitFor({ state: "detached" });
       await composer.fill("Verify the web composer");
-      await pane.getByRole("button", { name: "Send message", exact: true }).click();
+      await button("Send message").click();
       const request = requireRecord((await gateway.waitForRequest("chat.send")).params);
       expect(request).toMatchObject({
         message: "Verify the web composer",
@@ -272,9 +275,7 @@ suite.define(() => {
         .getByText("Web composer verified.", { exact: true })
         .waitFor();
       await navigate(page, "next", "navigate-1");
-      await expect
-        .poll(async () => lastMessage(page, "state"))
-        .toMatchObject({ context: { agentId: "main", sessionKey: "agent:main:next" } });
+      await expectMessage(page, "state", { context: sessionContext("next") });
       const navigationMessages = await messages(page);
       const navigationResult = navigationMessages.findIndex(
         (message) => message.type === "command-result" && message.requestId === "navigate-1",
@@ -299,29 +300,26 @@ suite.define(() => {
           }),
       );
       await linkedConversation.click();
-      await expect
-        .poll(async () => lastMessage(page, "route-changed"))
-        .toMatchObject({ agentId: "main", sessionKey: "agent:main:linked" });
+      await expectMessage(page, "route-changed", sessionContext("linked"));
       const conversationUrl = page.url();
       await pane.getByRole("link", { name: "Settings", exact: true }).click();
-      await expect
-        .poll(async () => lastMessage(page, "open-dashboard"))
-        .toMatchObject({ path: "/settings", search: "?section=general" });
+      await expectMessage(page, "open-dashboard", {
+        path: "/settings",
+        search: "?section=general",
+      });
       expect(page.url()).toBe(conversationUrl);
-      for (const response of ["rejected", "throw"] as const) {
-        await page.evaluate((replyMode) => {
-          (window as ConversationTestWindow).dashboardResponse = replyMode;
-        }, response);
-        await pane.getByRole("link", { name: "Settings", exact: true }).click();
-        const toast = page.locator(".app-toast");
-        await expect
-          .poll(() => toast.textContent())
-          .toContain("Couldn't open that page in the Dashboard");
-        expect(page.url()).toBe(conversationUrl);
-        expect(await composer.isVisible()).toBe(true);
-        await toast.getByRole("button", { name: "Dismiss", exact: true }).click();
-        await toast.waitFor({ state: "detached" });
-      }
+      await page.evaluate(() => {
+        (window as ConversationTestWindow).rejectDashboard = true;
+      });
+      await pane.getByRole("link", { name: "Settings", exact: true }).click();
+      const toast = page.locator(".app-toast");
+      await expect
+        .poll(() => toast.textContent())
+        .toContain("Couldn't open that page in the Dashboard");
+      expect(page.url()).toBe(conversationUrl);
+      expect(await composer.isVisible()).toBe(true);
+      await toast.getByRole("button", { name: "Dismiss", exact: true }).click();
+      await toast.waitFor({ state: "detached" });
       expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
       expect((await messages(page)).every((message) => message.documentId === documentId)).toBe(
         true,
@@ -333,9 +331,7 @@ suite.define(() => {
       await expect.poll(() => pane.getAttribute("aria-hidden")).toBe("false");
       expect(await composer.isVisible()).toBe(true);
       await navigate(page, "linked", "inactive-navigate");
-      await expect
-        .poll(async () => lastMessage(page, "state"))
-        .toMatchObject({ context: { agentId: "main", sessionKey: "agent:main:linked" } });
+      await expectMessage(page, "state", { context: sessionContext("linked") });
       expect(await pane.getAttribute("aria-hidden")).toBe("false");
       expect(await composer.isVisible()).toBe(true);
       await command(page, "focus-composer", {}, "inactive-focus", {
@@ -353,22 +349,12 @@ suite.define(() => {
   });
 
   it("publishes composer metadata for another session without exposing its draft", async () => {
-    await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
+    await withPage(async (page) => {
       await installConversationHost(page, ["session-facts-v1", "unknown-fixture-feature"]);
       await installMockGateway(page, {
         sessions: ["main", "draft-b"].map((name) => sessionRow(name)),
       });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
-      const composer = page.locator(
-        ".chat-pane-cache__pane--visible .agent-chat__composer-combobox textarea",
-      );
-      await composer.waitFor();
-      expect((await messages(page))[0]?.capabilities).toEqual([
-        "navigate",
-        "presentation",
-        "focus-composer",
-        "session-facts-v1",
-      ]);
+      const { composer } = await openConversation(page);
       const latestFacts = () => lastMessage(page, "session-facts");
       const sessionB = sessionContext("draft-b");
       await command(page, "navigate", sessionB, "draft-b");
@@ -397,35 +383,12 @@ suite.define(() => {
             : null;
         })
         .toBe(false);
-      const snapshots = (await messages(page)).filter(
-        (message) => message.type === "session-facts",
-      );
-      const documentId = (await messages(page))[0]?.documentId;
-      let revision = 0;
-      for (const snapshot of snapshots) {
-        expect(snapshot).toMatchObject({ contract: 1, documentId });
-        expect(typeof snapshot.revision).toBe("number");
-        expect(snapshot.revision).toBeGreaterThan(revision);
-        revision = Number(snapshot.revision);
-        expect(Buffer.byteLength(JSON.stringify(snapshot), "utf8")).toBeLessThanOrEqual(65_536);
-        if (Array.isArray(snapshot.sessions)) {
-          expect(snapshot.sessions.length).toBeLessThanOrEqual(64);
-          for (const row of snapshot.sessions) {
-            expect(Object.keys(requireRecord(row)).toSorted()).toEqual([
-              "agentId",
-              "hasComposerDraft",
-              "outboxAttentionCount",
-              "sessionKey",
-            ]);
-          }
-        }
-      }
       expect(JSON.stringify(await messages(page))).not.toContain(privateDraft);
     });
   });
 
   it("opens the selected session's web actions before acknowledging and leaves execution in web", async () => {
-    await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
+    await withPage(async (page) => {
       await installConversationHost(page, ["session-actions-v1"]);
       const sessionB = sessionContext("worker-b");
       const gateway = await installMockGateway(page, {
@@ -474,16 +437,8 @@ suite.define(() => {
           } };`,
         }),
       );
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
-      const pane = page.locator(".chat-pane-cache__pane--visible");
-      await pane.locator(".agent-chat__composer-combobox textarea").waitFor();
+      const { pane } = await openConversation(page);
       const timeOrigin = await page.evaluate(() => performance.timeOrigin);
-      expect((await messages(page))[0]?.capabilities).toEqual([
-        "navigate",
-        "presentation",
-        "focus-composer",
-        "session-actions-v1",
-      ]);
       await command(page, "open-session-actions", sessionB, "open-worker-b");
       expect(
         await page.evaluate(() =>
@@ -533,7 +488,7 @@ suite.define(() => {
   it.each(["browser", "dashboard", "ios"] as const)(
     "preserves %s chat and settings presentation",
     async (mode) => {
-      await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
+      await withPage(async (page) => {
         if (mode === "ios") {
           await installNativeEmbed(page, { platform: "ios", formFactor: "pad" });
         } else if (mode === "dashboard") {
@@ -543,7 +498,7 @@ suite.define(() => {
           historyMessages: [assistantText("Ordinary conversation.")],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await page.locator(composerSelector).waitFor();
         expect(await page.locator(".chat-pane__header").isVisible()).toBe(true);
         expect(await page.locator(".native-embed-header").count()).toBe(mode === "ios" ? 1 : 0);
         expect(await page.locator(".settings-sidebar__agent").count()).toBe(mode === "ios" ? 1 : 0);

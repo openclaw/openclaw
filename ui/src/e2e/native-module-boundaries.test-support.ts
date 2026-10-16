@@ -1,9 +1,17 @@
+import type { Locator } from "playwright";
 import { describe, expect, it } from "vitest";
 import {
   type createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
 import { createNativeNavPageOpener } from "./native-nav-page.test-support.ts";
+
+const expectAnimation = async (
+  element: Locator,
+  property: "animationName" | "animationDuration",
+  value: string,
+) =>
+  expect(await element.evaluate((node, key) => getComputedStyle(node)[key], property)).toBe(value);
 
 export function defineNativeModuleBoundaryTests(
   suite: ReturnType<typeof createControlUiE2eSuite>,
@@ -20,7 +28,6 @@ export function defineNativeModuleBoundaryTests(
           held = await holdModuleResponse(target, moduleRequest(`ui/src/${source}`));
         },
       });
-      // The suite's context teardown releases held responses even on assertion failure.
       return { page, held };
     }
 
@@ -39,27 +46,22 @@ export function defineNativeModuleBoundaryTests(
       expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
       const toggle = page.locator(".topbar-nav-toggle");
       const navigation = page.getByRole("dialog", { name: "Navigation" });
-      await toggle.click();
-      await expect.poll(() => navigation.isVisible()).toBe(true);
-      await page.keyboard.press("Escape");
-      await expect.poll(() => navigation.isVisible()).toBe(false);
+      const openAndClose = async (close: () => Promise<unknown>) => {
+        await toggle.click();
+        await expect.poll(() => navigation.isVisible()).toBe(true);
+        await close();
+        await expect.poll(() => navigation.isVisible()).toBe(false);
+      };
+      await openAndClose(() => page.keyboard.press("Escape"));
       expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
-
-      await toggle.click();
-      await expect.poll(() => navigation.isVisible()).toBe(true);
-      await page.setViewportSize({ width: 1440, height: 900 });
-      await expect.poll(() => navigation.isVisible()).toBe(false);
+      await openAndClose(() => page.setViewportSize({ width: 1440, height: 900 }));
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--mobile-nav");
-
       held.release();
       await expect.poll(() => element.evaluate((node) => node.matches(":defined"))).toBe(true);
       await page.setViewportSize({ width: 900, height: 900 });
-      await toggle.click();
-      await expect.poll(() => navigation.isVisible()).toBe(true);
-      await page.keyboard.press("Escape");
-      await expect.poll(() => navigation.isVisible()).toBe(false);
+      await openAndClose(() => page.keyboard.press("Escape"));
       expect(errors).toEqual([]);
       expect(held.requests()).toBe(1);
     });
@@ -100,8 +102,7 @@ export function defineNativeModuleBoundaryTests(
         const toggle = page.locator('[data-navigation-view="sessions"]');
         await toggle.click();
         await expect.poll(() => page.locator(".sidebar-shell").isVisible()).toBe(false);
-        // The native event does not generate an outside pointer that could
-        // accidentally dismiss an Inbox resurrected by the old import.
+        // No outside pointer: a stale import must not resurrect Inbox.
         await page.evaluate(() => {
           window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
         });
@@ -134,31 +135,26 @@ export function defineNativeModuleBoundaryTests(
       const { page, held: popupModule } = await openHeldPage("components/solid/tooltip.tsx", {
         nativeNav: false,
       });
-
       await page.keyboard.press("ControlOrMeta+K");
       // The loading dialog is replaced during handoff; measure the full palette.
       const palette = page.locator("openclaw-command-palette .cmd-palette");
-      const paletteDialog = page.locator("openclaw-command-palette openclaw-modal-dialog.palette");
       await palette.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
-      expect(await palette.evaluate((element) => getComputedStyle(element).animationName)).toBe(
-        "none",
+      await expectAnimation(palette, "animationName", "none");
+      await expectAnimation(
+        page.locator("openclaw-command-palette openclaw-modal-dialog.palette dialog"),
+        "animationDuration",
+        "0s",
       );
-      expect(
-        await paletteDialog.evaluate((element) => {
-          const dialog = element.querySelector<HTMLDialogElement>("dialog");
-          return dialog ? getComputedStyle(dialog).animationDuration : "missing";
-        }),
-      ).toBe("0s");
       await page.keyboard.press("Escape");
-
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-identity-card").click();
       const buildLink = sidebar.getByRole("menuitem", {
         name: "Control UI build details",
         exact: true,
       });
-      const hoverCard = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip");
-      const surface = hoverCard.locator(".tooltip-surface[popover]");
+      const surface = sidebar.locator(
+        "openclaw-sidebar-build-chip openclaw-tooltip .tooltip-surface[popover]",
+      );
       await surface.waitFor({ state: "attached" });
       // Pause native motion before releasing the first-use renderer.
       await surface.evaluate((element) => {
@@ -173,22 +169,31 @@ export function defineNativeModuleBoundaryTests(
       expect(await surface.isVisible()).toBe(false);
       popupModule.release();
       await surface.waitFor({ state: "visible" });
-      const hoverCardMotion = await surface.evaluate((popupSurface) => {
-        if (!(popupSurface instanceof HTMLElement)) {
-          throw new Error("Expected HTML hovercard");
-        }
-        const style = getComputedStyle(popupSurface);
-        const [originX, originY] = style.transformOrigin.split(" ").map(Number.parseFloat);
-        return {
-          open: popupSurface.matches(":popover-open"),
-          animationDuration: style.animationDuration,
-          popupHeight: popupSurface.offsetHeight,
-          popupWidth: popupSurface.offsetWidth,
-          originX,
-          originY,
-          placement: popupSurface.getAttribute("data-placement"),
-          playState: style.animationPlayState,
-        };
+      expect(
+        await surface.evaluate((popupSurface) => {
+          if (!(popupSurface instanceof HTMLElement)) {
+            throw new Error("Expected HTML hovercard");
+          }
+          const style = getComputedStyle(popupSurface);
+          const [originX, originY] = style.transformOrigin.split(" ").map(Number.parseFloat);
+          return {
+            open: popupSurface.matches(":popover-open"),
+            animationDuration: style.animationDuration,
+            centered:
+              originX > popupSurface.offsetWidth * 0.45 &&
+              originX < popupSurface.offsetWidth * 0.55,
+            bottom: originY > popupSurface.offsetHeight * 0.95,
+            placement: popupSurface.getAttribute("data-placement"),
+            playState: style.animationPlayState,
+          };
+        }),
+      ).toMatchObject({
+        open: true,
+        animationDuration: "0.14s",
+        playState: "paused",
+        placement: expect.stringMatching(/^top(?:-|$)/u),
+        centered: true,
+        bottom: true,
       });
       await surface.evaluate((element) => {
         (element as HTMLElement).style.removeProperty("animation-play-state");
@@ -201,18 +206,7 @@ export function defineNativeModuleBoundaryTests(
       const drawer = page.locator(".shell-nav.nav-drawer");
       await expect.poll(() => drawer.count()).toBe(1);
       await page.locator(".chat-pane__nav-toggle:visible").first().click();
-      expect(await drawer.evaluate((element) => getComputedStyle(element).animationName)).toBe(
-        "none",
-      );
-      expect(hoverCardMotion).toMatchObject({
-        open: true,
-        animationDuration: "0.14s",
-        playState: "paused",
-        placement: expect.stringMatching(/^top(?:-|$)/u),
-      });
-      expect(hoverCardMotion.originX).toBeGreaterThan(hoverCardMotion.popupWidth * 0.45);
-      expect(hoverCardMotion.originX).toBeLessThan(hoverCardMotion.popupWidth * 0.55);
-      expect(hoverCardMotion.originY).toBeGreaterThan(hoverCardMotion.popupHeight * 0.95);
+      await expectAnimation(drawer, "animationName", "none");
     });
   });
 }

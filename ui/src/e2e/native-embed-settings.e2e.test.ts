@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { WebSearchStatusResult } from "../../../packages/gateway-protocol/src/schema/web-search.ts";
-import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../api/types.ts";
+import type { ChannelsPairingListResult } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -13,6 +13,7 @@ import {
   createNativeEmbedLayoutMethodResponses,
   installExistingNativeDeviceSettings,
 } from "./native-embed-fixtures.test-support.ts";
+import { nativeForm } from "./native-form.test-support.ts";
 import { installNativeEmbed, installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI native embed settings E2E" });
@@ -36,6 +37,12 @@ async function visit(page: Page, route: RouteId) {
 async function back(page: Page, route: RouteId = "settings") {
   await page.locator(".native-embed-header__back").click();
   await waitForControlUiRoute(page, { routeId: route, pathname: pathForRoute(route) });
+}
+function layoutFits(page: Page) {
+  return page.locator("main.content").evaluate((main) => ({
+    viewport: document.documentElement.scrollWidth <= window.innerWidth,
+    content: main.scrollWidth <= main.clientWidth,
+  }));
 }
 const routes = [
   "custodian",
@@ -89,11 +96,6 @@ suite.define(() => {
         await installMockGateway(page, {
           operatorScopes: ["operator.admin", "operator.read", "operator.write"],
           methodResponses: {
-            "doctor.memory.status": {
-              agentId: "main",
-              provider: "none",
-              embedding: { ok: false, checked: false },
-            },
             "migrations.memory.plan": {
               agentId: "main",
               workspace: "/tmp/synthetic-workspace",
@@ -107,14 +109,14 @@ suite.define(() => {
           await page.locator('a[href="/memory-import"]').click();
         }
         await waitForControlUiRoute(page, { routeId: destination.route });
-        const header = page.locator(".native-embed-header");
-        await header.getByRole("heading", { name: destination.title, exact: true }).waitFor();
+        const header = nativeForm(page.locator(".native-embed-header"));
+        await header.heading(destination.title).waitFor();
         expect(await page.locator(".shell-nav, openclaw-app-topbar").count()).toBe(0);
         // Memory's document link uses the parent fallback; hub tabs use app history.
         await back(page, destination.from);
 
         await visit(page, destination.route);
-        await header.getByRole("heading", { name: destination.title, exact: true }).waitFor();
+        await header.heading(destination.title).waitFor();
         const parent = destination.from === "memory" ? "memory" : "settings";
         await back(page, parent);
         if (parent === "memory") {
@@ -153,27 +155,22 @@ suite.define(() => {
       await installMockGateway(page, { operatorScopes: ["operator.read"] });
       await visit(page, "settings");
       const list = page.locator(".settings-embed-list");
+      const fields = page.locator(
+        'input:not([type="hidden"], [type="checkbox"], [type="radio"]), select, textarea',
+      );
       await list.locator('a[href="/settings/device"]').waitFor();
       expect(await list.locator('a[href="/settings/security"]').count()).toBe(0);
       for (const route of ["device", "device-permissions", "talk", "updates"] as const) {
         await list.locator(`a[href="${pathForRoute(route)}"]`).click();
         await waitForControlUiRoute(page, { routeId: route });
         expect(await page.locator(desktopChrome).count()).toBe(0);
+        expect(await layoutFits(page)).toMatchObject({ content: true });
         expect(
-          await page
-            .locator("main.content")
-            .evaluate((main) => main.scrollWidth <= main.clientWidth),
-        ).toBe(true);
-        expect(
-          await page
-            .locator(
-              'input:not([type="hidden"], [type="checkbox"], [type="radio"]), select, textarea',
-            )
-            .evaluateAll((fields) =>
-              fields
-                .filter((field) => field.getBoundingClientRect().width > 0)
-                .every((field) => Number.parseFloat(getComputedStyle(field).fontSize) >= 16),
-            ),
+          await fields.evaluateAll((inputs) =>
+            inputs
+              .filter((field) => field.getBoundingClientRect().width > 0)
+              .every((field) => Number.parseFloat(getComputedStyle(field).fontSize) >= 16),
+          ),
         ).toBe(true);
         await back(page);
       }
@@ -206,14 +203,6 @@ suite.define(() => {
             await installExistingNativeDeviceSettings(page);
             const methodResponses = {
               ...createNativeEmbedLayoutMethodResponses(),
-              "channels.status": {
-                ts: 0,
-                channels: {},
-                channelAccounts: {},
-                channelOrder: [],
-                channelLabels: {},
-                channelDefaultAccountId: {},
-              } satisfies ChannelsStatusSnapshot,
               "channels.pairing.list": {
                 accounts: [],
                 requests: [],
@@ -224,12 +213,7 @@ suite.define(() => {
                 enabled: true,
                 provider: null,
                 agentId: "main",
-                model: {
-                  provider: "openai",
-                  id: "gpt-5.6-luna",
-                  runtime: "openclaw",
-                  runtimeLabel: "OpenClaw",
-                },
+                model: { provider: "openai", id: "gpt-5.6-luna", runtime: "openclaw" },
                 route: {
                   kind: "managed",
                   provider: "parallel-free",
@@ -257,6 +241,7 @@ suite.define(() => {
               featureMethods: [
                 ...defaultControlUiFeatureMethods,
                 ...Object.keys(methodResponses),
+                "channels.status",
                 "secrets.store.set",
                 "secrets.store.delete",
               ],
@@ -323,13 +308,7 @@ suite.define(() => {
               if (route === "cron") {
                 await page.getByText("Healthy automation", { exact: true }).first().waitFor();
               }
-              expect(
-                await page.locator("main.content").evaluate((main) => ({
-                  viewport: document.documentElement.scrollWidth <= window.innerWidth,
-                  content: main.scrollWidth <= main.clientWidth,
-                })),
-                route,
-              ).toMatchObject({ viewport: true, content: true });
+              expect(await layoutFits(page), route).toEqual({ viewport: true, content: true });
               if (route !== "settings") {
                 await back(page);
                 if (route === "appearance") {

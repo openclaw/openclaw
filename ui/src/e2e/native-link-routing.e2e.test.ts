@@ -1,4 +1,3 @@
-// Real-browser proof for native-host link routing and the bridge-free browser path.
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { NativeBrowserMessage, NativeBrowserReply } from "../app/native-browser-bridge.ts";
@@ -60,29 +59,21 @@ suite.define(() => {
     await context.addInitScript(() => {
       const messages: unknown[] = [];
       const browserMessages: NativeBrowserMessage[] = [];
-      const host = window as LinkTestWindow & {
-        webkit?: {
-          messageHandlers?: {
-            openclawLink?: { postMessage: (message: unknown) => void };
-            openclawBrowser?: {
-              postMessage: (message: NativeBrowserMessage) => Promise<NativeBrowserReply>;
-            };
-          };
-        };
-      };
-      host.openclawNativeLinkMessages = messages;
-      host.openclawNativeBrowserMessages = browserMessages;
-      host.webkit = {
-        messageHandlers: {
-          openclawLink: { postMessage: (message: unknown) => messages.push(message) },
-          openclawBrowser: {
-            postMessage: async (message) => {
-              browserMessages.push(message);
-              return message.type === "open" ? { ok: true, tabId: message.tabId } : { ok: true };
+      Object.assign(window, {
+        openclawNativeLinkMessages: messages,
+        openclawNativeBrowserMessages: browserMessages,
+        webkit: {
+          messageHandlers: {
+            openclawLink: { postMessage: (message: unknown) => messages.push(message) },
+            openclawBrowser: {
+              postMessage: async (message: NativeBrowserMessage): Promise<NativeBrowserReply> => {
+                browserMessages.push(message);
+                return message.type === "open" ? { ok: true, tabId: message.tabId } : { ok: true };
+              },
             },
           },
         },
-      };
+      });
     });
     const { page, link } = await openChat(
       context,
@@ -171,10 +162,7 @@ suite.define(() => {
       const dialog = document.createElement("dialog");
       dialog.id = "native-link-routing-modal";
       dialog.setAttribute("aria-label", "Link routing test");
-      const anchor = document.createElement("a");
-      anchor.href = "https://example.com/modal-report";
-      anchor.textContent = "modal report";
-      dialog.append(anchor);
+      dialog.innerHTML = '<a href="https://example.com/modal-report">modal report</a>';
       document.body.append(dialog);
       dialog.showModal();
     });

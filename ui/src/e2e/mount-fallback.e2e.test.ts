@@ -1,6 +1,8 @@
+import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { pauseVirtualClock, type ControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
@@ -50,20 +52,14 @@ async function startRegisteredElementFixture(): Promise<ControlUiE2eServer> {
     }
     response.end(body);
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Registered-element fixture did not acquire a loopback port");
   }
   return {
     baseUrl: `http://127.0.0.1:${address.port}/`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
+    close: promisify(server.close.bind(server)),
   };
 }
 
