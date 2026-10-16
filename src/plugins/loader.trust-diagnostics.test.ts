@@ -13,6 +13,7 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { writeJson } from "./loader-suite.test-support.js";
 import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -33,6 +34,28 @@ const agentMailIntegrity = normalizeClawHubSha256Integrity(
 );
 if (!agentMailIntegrity) {
   throw new Error("Expected a valid AgentMail catalog integrity");
+}
+
+type TrustCase = {
+  name: string;
+  pluginId?: string;
+  packageName?: string;
+  version?: string;
+  override?: Partial<PluginInstallRecord>;
+  symlinkedStateRoot?: boolean;
+  reason: string;
+  trusted: boolean;
+  repair?: boolean;
+  repairTrusted?: boolean;
+};
+const agentMail = { pluginId: "agentmail", packageName: "@agentmail/agentmail", version: "0.2.1" };
+function trustCase(
+  name: string,
+  reason: string,
+  trusted: boolean,
+  options: Omit<TrustCase, "name" | "reason" | "trusted"> = {},
+): TrustCase {
+  return { name, reason, trusted, ...options };
 }
 
 afterEach(async () => {
@@ -125,42 +148,22 @@ describe("recorded plugin trust diagnostics", () => {
   });
 
   it.each([
-    {
-      name: "official install through a symlinked state root",
+    trustCase("official install through a symlinked state root", "trusted-official", true, {
       symlinkedStateRoot: true,
-      reason: "trusted-official",
-      trusted: true,
-    },
-    {
-      name: "legacy ClawHub spec",
+    }),
+    trustCase("legacy ClawHub spec", "provenance-missing", false, {
       override: { source: "clawhub", spec: `clawhub:${defaultPackageName}@2026.8.2` },
-      reason: "provenance-missing",
-      trusted: false,
       repair: true,
-    },
-    {
-      name: "missing provenance",
-      override: { spec: undefined },
-      reason: "provenance-missing",
-      trusted: false,
-    },
-    {
-      name: "conflicting identity",
+    }),
+    trustCase("missing provenance", "provenance-missing", false, { override: { spec: undefined } }),
+    trustCase("conflicting identity", "provenance-invalid", false, {
       override: { resolvedName: "@vendor/diffs" },
-      reason: "provenance-invalid",
-      trusted: false,
-    },
-    {
-      name: "local npm archive",
+    }),
+    trustCase("local npm archive", "origin-path", false, {
       override: { artifactKind: "npm-pack" },
-      reason: "origin-path",
-      trusted: false,
-    },
-    {
-      name: "official AgentMail ClawHub install",
-      pluginId: "agentmail",
-      packageName: "@agentmail/agentmail",
-      version: "0.2.1",
+    }),
+    trustCase("official AgentMail ClawHub install", "trusted-official", true, {
+      ...agentMail,
       override: {
         source: "clawhub",
         spec: "clawhub:@agentmail/agentmail@0.2.1",
@@ -168,55 +171,30 @@ describe("recorded plugin trust diagnostics", () => {
         clawhubUrl: "https://clawhub.ai",
         clawhubChannel: "official",
       },
-      reason: "trusted-official",
-      trusted: true,
-    },
-    {
-      name: "legacy AgentMail ClawHub install",
-      pluginId: "agentmail",
-      packageName: "@agentmail/agentmail",
-      version: "0.2.1",
+    }),
+    trustCase("legacy AgentMail ClawHub install", "provenance-missing", false, {
+      ...agentMail,
       override: { source: "clawhub", spec: "clawhub:@agentmail/agentmail@0.2.1" },
-      reason: "provenance-missing",
-      trusted: false,
       repair: true,
       repairTrusted: false,
-    },
-    {
-      name: "legacy AgentMail ClawHub install with matching integrity",
-      pluginId: "agentmail",
-      packageName: "@agentmail/agentmail",
-      version: "0.2.1",
-      override: {
-        source: "clawhub",
-        spec: "clawhub:@agentmail/agentmail@0.2.1",
-        integrity: agentMailIntegrity,
+    }),
+    trustCase(
+      "legacy AgentMail ClawHub install with matching integrity",
+      "provenance-missing",
+      false,
+      {
+        ...agentMail,
+        override: {
+          source: "clawhub",
+          spec: "clawhub:@agentmail/agentmail@0.2.1",
+          integrity: agentMailIntegrity,
+        },
+        repair: true,
+        repairTrusted: true,
       },
-      reason: "provenance-missing",
-      trusted: false,
-      repair: true,
-      repairTrusted: true,
-    },
-    {
-      name: "unendorsed AgentMail npm namesake",
-      pluginId: "agentmail",
-      packageName: "@agentmail/agentmail",
-      version: "0.2.1",
-      reason: "provenance-invalid",
-      trusted: false,
-    },
-  ] satisfies Array<{
-    name: string;
-    pluginId?: string;
-    packageName?: string;
-    version?: string;
-    override?: Partial<PluginInstallRecord>;
-    symlinkedStateRoot?: boolean;
-    reason: string;
-    trusted: boolean;
-    repair?: boolean;
-    repairTrusted?: boolean;
-  }>)(
+    ),
+    trustCase("unendorsed AgentMail npm namesake", "provenance-invalid", false, agentMail),
+  ])(
     "inspection and registration agree for $name",
     async ({
       override,
@@ -380,14 +358,11 @@ describe("recorded plugin trust diagnostics", () => {
       }),
     );
     for (const plugin of plugins) {
-      fs.writeFileSync(
-        path.join(plugin.dir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: plugin.id,
-          configSchema: { type: "object" },
-          contracts: { tools: [plugin.id] },
-        }),
-      );
+      writeJson(path.join(plugin.dir, "openclaw.plugin.json"), {
+        id: plugin.id,
+        configSchema: { type: "object" },
+        contracts: { tools: [plugin.id] },
+      });
     }
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const dispatchHookAgentTurn = vi.fn(async () => ({

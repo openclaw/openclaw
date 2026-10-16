@@ -5,6 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { collectErrorGraphCandidates } from "../infra/errors.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { pluginConfig, requireTool, writeJson } from "./loader-suite.test-support.js";
 import {
   acquirePluginRegistryForInspection,
   clearPluginRegistryLoadCache,
@@ -36,25 +37,12 @@ import {
 function writeToolPlugin(params: Parameters<typeof writePlugin>[0] & { tool: string }) {
   const { tool, ...definition } = params;
   const plugin = writePlugin(definition);
-  writeFileSync(
-    path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: plugin.id,
-      configSchema: { type: "object", properties: {} },
-      contracts: { tools: [tool] },
-    }),
-  );
+  writeJson(path.join(plugin.dir, "openclaw.plugin.json"), {
+    id: plugin.id,
+    configSchema: { type: "object", properties: {} },
+    contracts: { tools: [tool] },
+  });
   return plugin;
-}
-
-function pluginConfig(...plugins: ReturnType<typeof writePlugin>[]) {
-  return {
-    plugins: {
-      allow: plugins.map((plugin) => plugin.id),
-      load: { paths: plugins.map((plugin) => plugin.file) },
-      slots: { memory: "none" },
-    },
-  };
 }
 
 it.each(["settled", "rejected", "pending"] as const)(
@@ -254,10 +242,7 @@ it("preserves an adopted published instance across cache retirement", async () =
     }),
   );
   try {
-    const tool = registry.tools[0]?.factory({});
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("Expected the registered lazy-import probe");
-    }
+    const tool = requireTool(registry);
     setActivePluginRegistry(registry);
     setActivePluginRegistry({ ...registry, plugins: [...registry.plugins] });
     writeFileSync(helper, 'export const value = "edited after capture";');
@@ -311,10 +296,7 @@ it("keeps a module-scope resource open for the republished instance after the ol
   const previous = load(previousCache);
   const next = load(nextCache);
   try {
-    const tool = next.tools[0]?.factory({});
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("Expected the registered resource probe");
-    }
+    const tool = requireTool(next);
     await disposePluginRegistryInstances(previous);
     await retirePluginCache(previousCache);
     await expect(tool.execute("after-republish", {})).resolves.toMatchObject({

@@ -1,4 +1,4 @@
-import fs, { writeFileSync } from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -18,6 +18,7 @@ import {
   resolveNativePluginModelConfig,
 } from "./loader-runtime-load.js";
 import { PluginLoadFailureError } from "./loader-shared.js";
+import { pluginConfig, requireTool, writeJson } from "./loader-suite.test-support.js";
 import {
   clearPluginRegistryLoadCache,
   loadAndActivateRootPluginRegistry,
@@ -221,20 +222,23 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
           modelAuth: Object.getOwnPropertyDescriptor(runtime, "modelAuth")!,
           modelConfig: Object.getOwnPropertyDescriptor(runtime, "modelConfig")!,
         };
+        const expectPolicyFacades = () => {
+          for (const [key, facade] of [
+            ["modelAuth", modelAuth],
+            ["modelConfig", modelConfig],
+          ] as const) {
+            expect(runtime[key]).toBe(facade);
+            expect(descriptors[key].get?.()).toBe(facade);
+            expect(Object.getOwnPropertyDescriptor(runtime, key)).toEqual({
+              configurable: true,
+              enumerable: true,
+              get: expect.any(Function),
+              set: undefined,
+            });
+          }
+        };
         expect(descriptors.nodes.get?.()).toBe(nodes);
-        for (const [key, facade] of [
-          ["modelAuth", modelAuth],
-          ["modelConfig", modelConfig],
-        ] as const) {
-          expect(runtime[key]).toBe(facade);
-          expect(descriptors[key].get?.()).toBe(facade);
-          expect(descriptors[key]).toEqual({
-            configurable: true,
-            enumerable: true,
-            get: expect.any(Function),
-            set: undefined,
-          });
-        }
+        expectPolicyFacades();
         for (const [key, prepared] of [
           ["config", configApi],
           ["state", state],
@@ -277,18 +281,11 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
         );
         expect(runtime.hooks).toBe(hooks);
         expect(runtime.nodes).toBe(nodes);
+        expectPolicyFacades();
         for (const [key, facade] of [
           ["modelAuth", modelAuth],
           ["modelConfig", modelConfig],
         ] as const) {
-          expect(runtime[key]).toBe(facade);
-          expect(descriptors[key].get?.()).toBe(facade);
-          expect(Object.getOwnPropertyDescriptor(runtime, key)).toEqual({
-            configurable: true,
-            enumerable: true,
-            get: expect.any(Function),
-            set: undefined,
-          });
           expect(Reflect.set(runtime, key, {})).toBe(false);
           expect(runtime[key]).toBe(facade);
         }
@@ -405,13 +402,7 @@ it("reuses discovered registrations through prepared load options until invalida
     body: 'module.exports = { id: "prepared-cache", register() {} };',
   });
   const options = {
-    config: {
-      plugins: {
-        allow: [plugin.id],
-        load: { paths: [plugin.file] },
-        slots: { memory: "none" },
-      },
-    },
+    config: pluginConfig(plugin),
   };
   const first = loadPluginRegistryHandle(options);
   expect(first.plugins).toContainEqual(
@@ -449,13 +440,7 @@ describe("cached plugin load failures", () => {
       body: 'module.exports = { id: "cached-load-failure", register() { throw new Error("cached registration failed"); } };',
     });
     const options = {
-      config: {
-        plugins: {
-          allow: [plugin.id],
-          load: { paths: [plugin.file] },
-          slots: { memory: "none" },
-        },
-      },
+      config: pluginConfig(plugin),
     };
     const cached = await load(options);
     expect(cached.plugins).toContainEqual(
@@ -485,13 +470,7 @@ describe("cached plugin load failures", () => {
       body: "module.exports = { register() {} };",
     });
     const options = {
-      config: {
-        plugins: {
-          allow: [broken.id, healthy.id],
-          load: { paths: [broken.file, healthy.file] },
-          slots: { memory: "none" },
-        },
-      },
+      config: pluginConfig(broken, healthy),
       cache: false,
     };
     const previous = loadPluginRegistryHandle(options);
@@ -537,13 +516,7 @@ describe("cached plugin load failures", () => {
       body: "module.exports = { register() {} };",
     });
     const options = {
-      config: {
-        plugins: {
-          allow: [broken.id, healthy.id],
-          load: { paths: [broken.file, healthy.file] },
-          slots: { memory: "none" },
-        },
-      },
+      config: pluginConfig(broken, healthy),
       cache: false,
     };
     setActiveDegradedPlugins([
@@ -653,30 +626,16 @@ describe("clearPluginRegistryLoadCache", () => {
           },
         };`,
       });
-      writeFileSync(
-        path.join(plugin.dir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: plugin.id,
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
-          contracts: { tools: ["retirement_probe"] },
-        }),
-      );
+      writeJson(path.join(plugin.dir, "openclaw.plugin.json"), {
+        id: plugin.id,
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+        contracts: { tools: ["retirement_probe"] },
+      });
       const options = {
-        config: {
-          plugins: {
-            allow: [plugin.id],
-            load: { paths: [plugin.file] },
-            slots: { memory: "none" },
-          },
-        },
+        config: pluginConfig(plugin),
       };
-      const resolveTool = (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-        const tool = registry.tools[0]!.factory({ config: options.config });
-        if (!tool || Array.isArray(tool)) {
-          throw new Error("expected one lifetime probe tool");
-        }
-        return tool;
-      };
+      const resolveTool = (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+        requireTool(registry, options.config);
       const read = async (registry: ReturnType<typeof loadOpenClawPlugins>) =>
         await resolveTool(registry).execute("probe", {});
       const original = loadOpenClawPlugins(options);

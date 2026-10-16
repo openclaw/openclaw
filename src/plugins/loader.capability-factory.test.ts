@@ -20,6 +20,7 @@ import type {
 import { isPluginRegistryLoadInFlight, resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
+import { pluginConfig, isolatedLoaderEnv, writeJson } from "./loader-suite.test-support.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -97,32 +98,18 @@ async function withFactoryPlugin(
     };`,
   });
   if (manifest) {
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: plugin.id,
-        configSchema: { type: "object", additionalProperties: false },
-        ...manifest,
-      }),
-    );
+    writeJson(path.join(plugin.dir, "openclaw.plugin.json"), {
+      id: plugin.id,
+      configSchema: { type: "object", additionalProperties: false },
+      ...manifest,
+    });
   }
   await withEnvAsync(
-    {
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    },
+    isolatedLoaderEnv(root),
     async () =>
       await run(
         {
-          config: {
-            plugins: {
-              allow: [plugin.id],
-              load: { paths: [plugin.file] },
-              slots: { memory: "none" },
-            },
-          },
+          config: pluginConfig(plugin),
           pluginSdkResolution: "src",
           activate: false,
         },

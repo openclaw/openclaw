@@ -14,6 +14,12 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { activatePluginRegistry } from "./loader-shared.js";
 import {
+  pluginConfig,
+  isolatedLoaderEnv,
+  requireTool,
+  writeJson,
+} from "./loader-suite.test-support.js";
+import {
   loadOpenClawPluginCliRegistry,
   loadOpenClawPlugins,
   loadPluginRegistryHandle,
@@ -184,10 +190,7 @@ it("keeps system routing bound to the replacement lifecycle owner", async () => 
   });
   const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  fs.writeFileSync(
-    manifestPath,
-    JSON.stringify({ ...manifest, contracts: { tools: ["preparation_probe"] } }),
-  );
+  writeJson(manifestPath, { ...manifest, contracts: { tools: ["preparation_probe"] } });
   const config = {
     plugins: { allow: [plugin.id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
   };
@@ -216,10 +219,7 @@ it("keeps system routing bound to the replacement lifecycle owner", async () => 
     expect(drainSystemEvents(queueKey)).toEqual([]);
     expect(getActivePluginRegistry()).toBe(previous);
     activatePluginRegistry(registry, null, "gateway-bindable", undefined, previous);
-    const tool = registry.tools[0]!.factory({ config });
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("Expected the registered preparation probe");
-    }
+    const tool = requireTool(registry, config);
     await tool.execute("published", {});
     expect(drainSystemEvents(queueKey)).toEqual(["published"]);
   } finally {
@@ -300,13 +300,7 @@ describe("registry load modes", () => {
       registration: 'api.registerProvider({ id: "mode-provider", label: "Mode", auth: [] });',
     });
     const options = {
-      config: {
-        plugins: {
-          allow: [plugin.id],
-          load: { paths: [plugin.file] },
-          slots: { memory: "none" },
-        },
-      },
+      config: pluginConfig(plugin),
     };
     const validation = loadPluginRegistryHandle({ ...options, mode: "validate" });
     const full = loadPluginRegistryHandle(options);
@@ -345,14 +339,11 @@ describe("registration config snapshot", () => {
       }), { name: 'config_capture' });
     } };`,
     });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: plugin.id,
-        configSchema: { type: "object", additionalProperties: false },
-        contracts: { tools: ["config_capture"] },
-      }),
-    );
+    writeJson(path.join(plugin.dir, "openclaw.plugin.json"), {
+      id: plugin.id,
+      configSchema: { type: "object", additionalProperties: false },
+      contracts: { tools: ["config_capture"] },
+    });
     const source: OpenClawConfig = {
       agents: { entries: { ops: { name: "registration snapshot" } } },
       gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },
@@ -367,45 +358,37 @@ describe("registration config snapshot", () => {
     setRuntimeConfigSnapshot(runtime, source);
     process.on(event, onRegistered);
     try {
-      await withEnvAsync(
-        {
-          OPENCLAW_HOME: root,
-          OPENCLAW_STATE_DIR: path.join(root, "state"),
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        },
-        async () => {
-          const registry = loadOpenClawPlugins({
-            config: runtime,
-            cache: false,
-            activate: false,
-            runtimeSideEffects: true,
-            throwOnLoadError: true,
-          });
-          try {
-            expect(registeredConfig).toBe(getPluginRuntimeLoadContext(registry)?.config);
-            if (!registeredConfig) {
-              throw new Error("Expected fixture plugin registration");
-            }
-            const readCurrent = createRuntimeConfigReader(registeredConfig);
-            expect(readCurrent()).toBe(runtime);
-            runtime.agents!.entries!.ops!.name = "caller mutation";
-            expect(registry.tools[0]?.factory({})).toMatchObject({
-              description: "registration snapshot",
-            });
-
-            const replacement: OpenClawConfig = { ...runtime, gateway: { port: 19002 } };
-            setRuntimeConfigSnapshot(replacement, source);
-            expect(readCurrent()).toBe(replacement);
-            expect(registry.tools[0]?.factory({})).toMatchObject({
-              description: "registration snapshot",
-            });
-            expect(getPluginRuntimeLoadContext(registry)?.rawConfig).toBe(runtime);
-          } finally {
-            await disposePluginRegistryInstances(registry);
+      await withEnvAsync(isolatedLoaderEnv(root), async () => {
+        const registry = loadOpenClawPlugins({
+          config: runtime,
+          cache: false,
+          activate: false,
+          runtimeSideEffects: true,
+          throwOnLoadError: true,
+        });
+        try {
+          expect(registeredConfig).toBe(getPluginRuntimeLoadContext(registry)?.config);
+          if (!registeredConfig) {
+            throw new Error("Expected fixture plugin registration");
           }
-        },
-      );
+          const readCurrent = createRuntimeConfigReader(registeredConfig);
+          expect(readCurrent()).toBe(runtime);
+          runtime.agents!.entries!.ops!.name = "caller mutation";
+          expect(registry.tools[0]?.factory({})).toMatchObject({
+            description: "registration snapshot",
+          });
+
+          const replacement: OpenClawConfig = { ...runtime, gateway: { port: 19002 } };
+          setRuntimeConfigSnapshot(replacement, source);
+          expect(readCurrent()).toBe(replacement);
+          expect(registry.tools[0]?.factory({})).toMatchObject({
+            description: "registration snapshot",
+          });
+          expect(getPluginRuntimeLoadContext(registry)?.rawConfig).toBe(runtime);
+        } finally {
+          await disposePluginRegistryInstances(registry);
+        }
+      });
     } finally {
       process.off(event, onRegistered);
     }
