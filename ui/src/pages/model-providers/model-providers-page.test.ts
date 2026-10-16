@@ -7,7 +7,7 @@ import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import "../../lib/toast-host.ts";
-import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
+import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { DefaultsDraft } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
@@ -253,6 +253,7 @@ describe("ModelProvidersPage agent scope", () => {
       expect(page.querySelector(".model-providers__defaults")?.textContent).toContain(
         "2 more fallbacks after this one",
       );
+      await openPicker(fallback!);
       expect(fallback?.textContent).toContain("No fallback model (remove all 3)");
       await choosePickerValue(fallback!, selection);
 

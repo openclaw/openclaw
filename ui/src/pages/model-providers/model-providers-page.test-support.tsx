@@ -75,7 +75,7 @@ export function modelPicker(
   role: keyof typeof modelPickerLabels,
 ): SelectPicker {
   const picker = page.querySelector<SelectPicker>(
-    `.model-providers__defaults openclaw-select-picker:has([role="listbox"][aria-label="${modelPickerLabels[role]}"])`,
+    `.model-providers__defaults openclaw-select-picker:has(.picker-select__trigger[aria-label^="${modelPickerLabels[role]}"])`,
   );
   expect(picker, `${role} model picker`).not.toBeNull();
   return picker!;

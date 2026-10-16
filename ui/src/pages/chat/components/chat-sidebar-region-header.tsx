@@ -147,7 +147,7 @@ function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {
       : null;
   };
   return (
-    <Show when={favicon()} fallback={<LitContent value={props.tab.icon} />}>
+    <Show when={favicon()} fallback={props.tab.icon}>
       {(src) => <img class="tabstrip-tab__favicon" src={src()} alt="" />}
     </Show>
   );

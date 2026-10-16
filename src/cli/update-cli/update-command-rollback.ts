@@ -26,10 +26,12 @@ import type { PackageUpdateTransaction } from "../../infra/package-update-swap-c
 import { readExistingStateRootMode } from "../../infra/private-dir-mode.js";
 import {
   readUpdateStateSchemaVersions,
-  resolveUpdateStateContentVersion,
-  updateStateSchemaVersionsMatch,
   type UpdateStateSchemaVersion,
 } from "../../infra/update-candidate-state.js";
+import {
+  resolveUpdateStateContentVersion,
+  updateStateSchemaVersionsMatch,
+} from "../../infra/update-candidate-state.versions.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";

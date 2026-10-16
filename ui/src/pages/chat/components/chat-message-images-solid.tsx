@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal, onCleanup, untrack, useContext } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import { ChatImageActions } from "./chat-image-actions.tsx";
 import {
@@ -575,8 +575,8 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
 type MessageImageProps = { image: ImageBlock; options: ImageRenderOptions };
 
 function MessageImage(props: MessageImageProps): JSX.Element {
-  const presented = useContext(SolidContentPresentation);
-  // Parked Lit roots release active image subscriptions.
+  const presented = useContext(ContentPresentation);
+  // Parked content releases active image subscriptions.
   return (
     <Show when={presented()}>
       <MessageImageContent image={props.image} options={props.options} />

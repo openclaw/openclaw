@@ -516,6 +516,18 @@ export function copyReplyPayloadMetadata<T extends object>(source: object, paylo
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
 }
 
+export function retainSilentFinalPayloads(payloads: readonly ReplyPayload[]): ReplyPayload[] {
+  return payloads.flatMap((payload) => {
+    if (payload.isError) {
+      return [payload];
+    }
+    const nonTextPayload = { ...payload, text: undefined };
+    return hasReplyPayloadContent(nonTextPayload)
+      ? [copyReplyPayloadMetadata(payload, nonTextPayload)]
+      : [];
+  });
+}
+
 /** Marks a host-owned payload as deliverable even when normal source replies are suppressed. */
 export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
   return setReplyPayloadMetadata(payload, {

@@ -42,6 +42,9 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/interrupted-input-context.integration.test.ts",
   // Physical admission and descriptor custody belong to the application host, not an unhosted test Worker.
   "src/infra/database-engine/physical-facts.test.ts",
+  "src/infra/database-engine/maintenance-custody.conformance.test.ts",
+  "src/infra/database-engine/postgres-search-admission.postgres.test.ts",
+  "src/infra/database-engine/postgres-search.conformance.test.ts",
   "src/infra/worker-task-pool.sqlite-idle.test.ts",
   "src/state/openclaw-state-db.postgres.test.ts",
   "src/gateway/server-database-engine.postgres.test.ts",

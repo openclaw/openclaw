@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
@@ -20,16 +19,8 @@ import {
 import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAvatarUrl } from "./chat-state-route.ts";
-import { ChatAuthorAvatar, renderChatAuthorAvatar } from "./components/chat-author-avatar.ts";
+import { ChatAuthorAvatar } from "./components/chat-author-avatar.ts";
 import { ChatWelcome } from "./components/chat-welcome.tsx";
-
-const legacyContainers: HTMLElement[] = [];
-
-function createLegacyContainer() {
-  const container = document.createElement("div");
-  legacyContainers.push(container);
-  return container;
-}
 
 function imageResponse() {
   return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } });
@@ -193,21 +184,23 @@ it.each([["/console", "sample-bot", "1000000001", true]] as const)(
       },
     };
     const identity = { ...sender.identity };
-    const container = createLegacyContainer();
-    render(
-      renderChatAuthorAvatar(sender, "chat-author-avatar", undefined, {
-        key: "agent:main:main",
-        channelAvatarUrl:
-          basePath + "/__openclaw__/channel-avatar/agent%3Amain%3Amain?v=portrait-1",
-        origin: {
-          provider: "telegram",
-          accountId: "sample-bot",
-          chatType: "direct",
-          from: "telegram:1000000001",
-        },
-      }),
-      container,
-    );
+    const { container } = mountSolid(() => (
+      <ChatAuthorAvatar
+        sender={sender}
+        class="chat-author-avatar"
+        channelAvatar={{
+          key: "agent:main:main",
+          channelAvatarUrl:
+            basePath + "/__openclaw__/channel-avatar/agent%3Amain%3Amain?v=portrait-1",
+          origin: {
+            provider: "telegram",
+            accountId: "sample-bot",
+            chatType: "direct",
+            from: "telegram:1000000001",
+          },
+        }}
+      />
+    ));
     expect(Boolean(container.querySelector("openclaw-channel-avatar"))).toBe(matches);
     expect(container.querySelector("[role=img]")?.getAttribute("aria-label")).toBe("Riley Adams");
     expect(sender.identity).toEqual(identity);
@@ -298,10 +291,6 @@ function pendingUntilAbort<T>(signal: AbortSignal | null | undefined): Promise<T
 }
 
 afterEach(() => {
-  for (const container of legacyContainers) {
-    render(nothing, container);
-  }
-  legacyContainers.length = 0;
   cleanupSolid();
   setAvatarGatewayOrigin(null);
   vi.useRealTimers();

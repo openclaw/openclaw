@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { hashConfigIncludeRaw } from "../config/includes.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
@@ -177,7 +178,7 @@ export async function readBackupConfigCaptureFile(file: CapturedConfigFile): Pro
       ) {
         throw new Error("file identity changed");
       }
-      const bytes = await handle.readFile();
+      const bytes = await readFileHandleBounded(handle, Infinity);
       const raw = bytes.toString("utf8");
       if (!bytes.equals(Buffer.from(raw)) || hashConfigIncludeRaw(raw) !== file.hash) {
         throw new Error("file contents changed");

@@ -27,6 +27,7 @@ import {
   readTranscriptIdentityByEventId,
   readTranscriptEventRows,
   readTranscriptSnapshot,
+  type SqliteTranscriptSnapshotRow,
   type SqliteTranscriptSnapshotState,
 } from "./session-accessor.sqlite-read.js";
 import {
@@ -304,6 +305,7 @@ function commitLockedTranscript(
         );
       let result: TranscriptMessageAppendResult<unknown> | undefined;
       let messageSeq: number | undefined;
+      let replacementRows: SqliteTranscriptSnapshotRow[] | undefined;
       if (input.kind === "message") {
         const preparation = input.preparation;
         const preparedMessage =
@@ -359,7 +361,11 @@ function commitLockedTranscript(
         if (input.snapshot && !snapshotCurrent) {
           throw new SqliteTranscriptMutationConflictError(input.scope.sessionId);
         }
-        replaceSqliteTranscriptEventsInTransaction(database, input.scope, input.events, projection);
+        replacementRows = [];
+        replaceSqliteTranscriptEventsInTransaction(database, input.scope, input.events, {
+          ...projection,
+          writtenRows: replacementRows,
+        });
       }
       assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);
       const candidate: LockedTranscriptCommitted = {
@@ -379,7 +385,10 @@ function commitLockedTranscript(
         snapshot:
           input.snapshot || input.kind === "replace"
             ? input.kind === "replace" || snapshotCurrent
-              ? { kind: "current", rows: readTranscriptEventRows(database, input.scope.sessionId) }
+              ? {
+                  kind: "current",
+                  rows: replacementRows ?? readTranscriptEventRows(database, input.scope.sessionId),
+                }
               : { kind: "stale" }
             : undefined,
       };

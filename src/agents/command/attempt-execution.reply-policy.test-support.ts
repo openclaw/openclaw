@@ -66,6 +66,13 @@ export function registerCommandReplyPolicyTests({
       ] of INTER_SESSION_REPLY_POLICY_CASES) {
         const sessionEntry = makeSessionEntry(`session-${messageChannel}`);
         const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
+        const expectation =
+          replyExpectation === "optional"
+            ? "optional"
+            : privateCompletion || sessionKey.includes(":subagent:") || messageChannel === "webchat"
+              ? "result-required"
+              : (replyExpectation ?? (allowSilence ? "optional" : "required"));
+        const resultRequired = expectation === "result-required";
         const cli = providerOverride === "claude-cli";
         if (cli) {
           runCliAgentMock.mockImplementationOnce(runPreparedCommandCliAttempt);
@@ -93,12 +100,14 @@ export function registerCommandReplyPolicyTests({
               : { kind: "external_user" },
           },
         });
-        if (cli && !allowSilence) {
+        if (cli && resultRequired) {
           await expect(attempt).rejects.toThrow("CLI backend returned an empty response.");
         } else {
           const result = await attempt;
           if (cli) {
-            expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
+            expect(result.payloads).toBeUndefined();
+            expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
+            expect(result.meta.finalAssistantRawText).toBe("NO_REPLY");
             expect(result.meta.error).toBeUndefined();
             expect(
               classifyEmbeddedAgentRunResultForModelFallback({
@@ -113,8 +122,8 @@ export function registerCommandReplyPolicyTests({
         expectMockArgFields(
           selectedRunner,
           {
-            terminalReplyExpectation: allowSilence ? "optional" : "required",
-            silentReplyPromptMode: allowSilence ? undefined : "none",
+            terminalReplyExpectation: expectation,
+            silentReplyPromptMode: resultRequired ? "none" : undefined,
           },
           selectedRunner.mock.calls.length - 1,
         );

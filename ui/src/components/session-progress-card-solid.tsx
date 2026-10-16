@@ -3,7 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, For, Show, useContext } from "solid-js";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
-import { SolidContentPresentation } from "../lit/solid-content.tsx";
+import { ContentPresentation } from "../lib/solid/presentation.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import {
   progressCardPresentation,
@@ -38,7 +38,7 @@ export type SessionProgressCardProps = {
 type CardProps = SessionProgressCardProps & { card: ProgressCard };
 
 function ActivityTime(props: { timestamp: number; labelKey: Parameters<typeof t>[0] }) {
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   const [revision, setRevision] = createSignal(0);
   createEffect(createMemo(presented), (active) => {
     if (!active) {

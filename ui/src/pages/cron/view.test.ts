@@ -1,7 +1,7 @@
 // Control UI tests cover the Automations (cron) list pane and select controls.
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
-import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createCronViewJob as createJob,
@@ -270,6 +270,7 @@ describe("cron view editor", () => {
       "openclaw-select-picker:has(#cron-failure-alert-channel)",
       HTMLElement,
     );
+    await openPicker(channel);
     const optionValues = Array.from(channel.querySelectorAll('[role="option"]'), (option) =>
       option.getAttribute("data-value"),
     );
@@ -292,6 +293,7 @@ describe("cron view editor", () => {
       "openclaw-select-picker:has(#cron-failure-alert-delivery-mode)",
       HTMLElement,
     );
+    await openPicker(mode);
     expect(mode.querySelector('[role="option"][data-value=""]')?.textContent).toContain(
       "Inherit global setting",
     );
@@ -401,6 +403,7 @@ describe("cron view editor", () => {
       "openclaw-select-picker:has(#cron-delivery-mode)",
       HTMLElement,
     );
+    await openPicker(delivery);
     const values = Array.from(delivery.querySelectorAll('[role="option"]'), (option) =>
       option.getAttribute("data-value"),
     );
@@ -523,6 +526,7 @@ describe("cron view editor", () => {
     const unit = Array.from(container.querySelectorAll("openclaw-select-picker")).find(
       (picker) => picker.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Unit",
     );
+    await openPicker(unit!);
     expect(unit?.querySelector('[role="option"][data-value="seconds"]')).toBeInstanceOf(
       HTMLElement,
     );
