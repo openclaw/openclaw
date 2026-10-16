@@ -42,8 +42,6 @@ export async function prepareSkillLibraryNodeProcess(
   });
   const abort = new AbortController();
   const logFile = path.join(node.stateDir, "node.log");
-  // Only the spawned node-host sees this path; the one-shot status failure seam consumes it.
-  const statusFailureFile = path.join(node.stateDir, "status-failure.trigger");
   let failure: Error | undefined;
   let logs = "";
   let completion: Promise<void> | undefined;
@@ -91,13 +89,7 @@ export async function prepareSkillLibraryNodeProcess(
             "--ephemeral",
           ],
           cwd: process.cwd(),
-          env: {
-            ...node.env,
-            TMPDIR: workerTmpDir,
-            TMP: workerTmpDir,
-            TEMP: workerTmpDir,
-            OPENCLAW_TEST_NODE_WORKER_STATUS_FAILURE_FILE: statusFailureFile,
-          },
+          env: { ...node.env, TMPDIR: workerTmpDir, TMP: workerTmpDir, TEMP: workerTmpDir },
           stdio: ["ignore", "pipe", "pipe"],
           signal: abort.signal,
           requireProcessTreeExit: process.platform !== "win32",
@@ -154,27 +146,7 @@ export async function prepareSkillLibraryNodeProcess(
         throw error;
       }
     };
-    // The node deletes the trigger when it injects the failure, so absence proves consumption.
-    const armStatusFailure = async (detail: string) => {
-      const pending = `${statusFailureFile}.pending`;
-      await fs.writeFile(pending, detail, { mode: 0o600 });
-      await fs.rename(pending, statusFailureFile);
-    };
-    const statusFailureConsumed = () =>
-      fs.access(statusFailureFile).then(
-        () => false,
-        () => true,
-      );
-    return {
-      nodeId,
-      stateDir: node.stateDir,
-      logFile,
-      start,
-      stop,
-      output: () => logs,
-      armStatusFailure,
-      statusFailureConsumed,
-    };
+    return { nodeId, stateDir: node.stateDir, logFile, start, stop };
   } catch (error) {
     try {
       await stop();
