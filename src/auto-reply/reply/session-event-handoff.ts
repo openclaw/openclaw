@@ -325,6 +325,9 @@ export function enqueueSessionEventForHost(
       signal.removeEventListener("abort", onAbort);
       generationLease?.release();
       if (canReadmit) {
+        // Passive custody survives only until some attempt adopts the occurrence.
+        const preservePassive =
+          options.preserveOccurrenceOnRejection && !adopted ? true : undefined;
         ownership.release();
         try {
           // A fresh dispatch binds the current policy for admission, execution and
@@ -345,13 +348,13 @@ export function enqueueSessionEventForHost(
             assertAcceptanceCurrent: pendingAcceptanceAssertion,
             onAdopted: options.onAdopted,
             occurrences,
-            preserveOccurrenceOnRejection: options.preserveOccurrenceOnRejection,
+            preserveOccurrenceOnRejection: preservePassive,
             readmissionAttempt: attempt + 1,
             deliver: options.deliver,
             assertCurrent: options.assertCurrent,
           });
         } catch (error) {
-          if (!options.preserveOccurrenceOnRejection) {
+          if (!preservePassive) {
             // The released occurrence carries no producer contract; consume it.
             claimSystemEventTurn(
               resolveSystemEventQueueKey(sessionKey, agentId),
