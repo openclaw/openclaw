@@ -129,10 +129,10 @@ it.each([
 );
 
 it.each([
-  { nodeVersion: "26.1.0", npmExit: 0, gitExit: 0, bootstrap: false },
-  { nodeVersion: "26.0.0", npmExit: 0, gitExit: 0, bootstrap: true },
-  { nodeVersion: "24.14.1", npmExit: 0, gitExit: 0, bootstrap: true },
-])("checks usable Node/npm/Git before bootstrap: %j", (scenario) => {
+  ["26.1.0", false],
+  ["26.0.0", true],
+  ["24.14.1", true],
+] as const)("checks Node %s before bootstrap", (nodeVersion, needsBootstrap) => {
   const bootstrap = vi.fn();
   ensureSmokeGuestRuntime({
     runShell: (script) =>
@@ -141,17 +141,17 @@ it.each([
         [
           "-c",
           `node() { ${shellQuote(process.execPath)} -e ${shellQuote('Object.defineProperty(process.versions, "node", { value: process.env.OPENCLAW_TEST_NODE_RELEASE }); eval(process.argv[1]);')} "$2"; }
-npm() { return ${scenario.npmExit}; }
-git() { return ${scenario.gitExit}; }
+npm() { return 0; }
+git() { return 0; }
 ${script}`,
         ],
         {
           encoding: "utf8",
-          env: { ...process.env, OPENCLAW_TEST_NODE_RELEASE: scenario.nodeVersion },
+          env: { ...process.env, OPENCLAW_TEST_NODE_RELEASE: nodeVersion },
           timeout: 10_000,
         },
       ),
     bootstrap,
   });
-  expect(bootstrap).toHaveBeenCalledTimes(scenario.bootstrap ? 1 : 0);
+  expect(bootstrap).toHaveBeenCalledTimes(needsBootstrap ? 1 : 0);
 });
