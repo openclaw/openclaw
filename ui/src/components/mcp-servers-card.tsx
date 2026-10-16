@@ -60,7 +60,7 @@ export function McpServersCard(props: McpServersCardProps) {
     subscribe: (source, notify) => source.subscribe(notify),
     equality: "revision",
   });
-  const [state, setState] = createSignal<{
+  const [view, setView] = createSignal<{
     busy: boolean;
     message: McpServerMessage | null;
     formOpen: boolean;
@@ -76,7 +76,7 @@ export function McpServersCard(props: McpServersCardProps) {
     sessionExpiredMessage: () => t("mcpServers.signInExpired"),
   });
   void context.runtimeConfig.ensureLoaded().catch((error: unknown) => {
-    setState((state) => ({ ...state, message: { kind: "error", text: formatUiError(error) } }));
+    setView((state) => ({ ...state, message: { kind: "error", text: formatUiError(error) } }));
   });
   const hello = createMemo(() => gateway.read().snapshot.hello);
   // A new transport retires the previous sign-in before another interaction can start one.
@@ -110,7 +110,7 @@ export function McpServersCard(props: McpServersCardProps) {
     ) {
       return;
     }
-    setState((state) => ({ ...state, message: null }));
+    setView((state) => ({ ...state, message: null }));
     login.runner.prepareSignIn("oauth", server.name);
     void login.runner.startMcpLogin(server.name);
   };
@@ -123,22 +123,22 @@ export function McpServersCard(props: McpServersCardProps) {
       return false;
     }
     mutationPending = true;
-    setState((state) => ({ ...state, busy: true, message: null }));
+    setView((state) => ({ ...state, busy: true, message: null }));
     try {
       await patchMcpServers(context.runtimeConfig, options);
-      setState((state) => ({ ...state, message: { kind: "success", text: options.successText } }));
+      setView((state) => ({ ...state, message: { kind: "success", text: options.successText } }));
       return true;
     } catch (error) {
-      setState((state) => ({ ...state, message: { kind: "error", text: formatUiError(error) } }));
+      setView((state) => ({ ...state, message: { kind: "error", text: formatUiError(error) } }));
       return false;
     } finally {
       mutationPending = false;
-      setState((state) => ({ ...state, busy: false }));
+      setView((state) => ({ ...state, busy: false }));
     }
   };
   const addServer = async (form: McpServerForm) => {
     if (!MCP_SERVER_NAME_PATTERN.test(form.name)) {
-      setState((state) => ({
+      setView((state) => ({
         ...state,
         message: { kind: "error", text: t("mcpServers.nameInvalid") },
       }));
@@ -146,7 +146,7 @@ export function McpServersCard(props: McpServersCardProps) {
     }
     const target = parseMcpTarget(form.target, form.transport);
     if (!target) {
-      setState((state) => ({
+      setView((state) => ({
         ...state,
         message: { kind: "error", text: t("mcpServers.targetInvalid") },
       }));
@@ -159,7 +159,7 @@ export function McpServersCard(props: McpServersCardProps) {
         successText: t("mcpServers.addedSuccess", { name: form.name }),
       })
     ) {
-      setState((state) => ({ ...state, formOpen: false }));
+      setView((state) => ({ ...state, formOpen: false }));
     }
   };
   const toggleServer = (name: string, enabled: boolean) =>
@@ -179,7 +179,7 @@ export function McpServersCard(props: McpServersCardProps) {
   const rows = createMemo(() =>
     summarizeMcpServers(resolveEditableSnapshotConfig(config.read().configSnapshot)),
   );
-  const disabled = () => state().busy || !canMutate();
+  const disabled = () => view().busy || !canMutate();
 
   return (
     <openclaw-mcp-servers-card>
@@ -198,7 +198,7 @@ export function McpServersCard(props: McpServersCardProps) {
               title={mutationBlockedReason() ?? ""}
               disabled={disabled()}
               onClick={() => {
-                setState((state) => ({
+                setView((state) => ({
                   ...state,
                   formOpen: !state.formOpen,
                   message: state.formOpen ? state.message : null,
@@ -212,18 +212,18 @@ export function McpServersCard(props: McpServersCardProps) {
             </button>
           }
         >
-          <Show when={state().formOpen}>
+          <Show when={view().formOpen}>
             <McpServersForm
-              busy={state().busy}
+              busy={view().busy}
               disabled={!canMutate()}
               blockedReason={mutationBlockedReason()}
               onSubmit={(form) => void addServer(form)}
               onCancel={() => {
-                setState((state) => ({ ...state, formOpen: false }));
+                setView((state) => ({ ...state, formOpen: false }));
               }}
             />
           </Show>
-          <Show when={state().message}>
+          <Show when={view().message}>
             {(message) => (
               <div
                 class={["mcp-server-message", `mcp-server-message--${message().kind}`]}
@@ -318,7 +318,7 @@ export function McpServersCard(props: McpServersCardProps) {
                             disabled={disabled()}
                             onClick={() => void toggleServer(server().name, !server().enabled)}
                           >
-                            {state().busy
+                            {view().busy
                               ? t("mcpServers.working")
                               : server().enabled
                                 ? t("mcpServers.disable")
