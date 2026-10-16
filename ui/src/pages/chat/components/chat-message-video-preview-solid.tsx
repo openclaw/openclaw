@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createEffect, createSignal, useContext } from "solid-js";
+import { Show, createEffect, createSignal, untrack, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { requestVideoPoster } from "../../../lib/media/video-poster.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -63,23 +63,25 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
       }
     });
   };
-  // Presentation owns the viewport observer and browser poster resources.
   createEffect(presented, (active) => {
     setPosterUrl(undefined);
     if (!active) {
       return undefined;
     }
-    const stopObserving = observeChatAttachmentViewport(
-      element,
-      () => {
-        visible = true;
-        requestPoster();
-      },
-      () => {
-        visible = false;
-        release();
-        setPosterUrl(undefined);
-      },
+    // Observer setup can admit synchronously; only presentation drives this effect.
+    const stopObserving = untrack(() =>
+      observeChatAttachmentViewport(
+        element,
+        () => {
+          visible = true;
+          requestPoster();
+        },
+        () => {
+          visible = false;
+          release();
+          setPosterUrl(undefined);
+        },
+      ),
     );
     return () => {
       stopObserving();
