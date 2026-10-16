@@ -23,6 +23,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import type { ElementProperties } from "../../types/solid-elements.d.ts";
 
 type RecoveryEntry = ChatOutboxRecoveryEntry | DurableComposerRecoveryEntry;
 type RecoveryHost = Parameters<typeof captureChatOutboxRecoveryDestination>[0] &
@@ -491,4 +492,22 @@ export function PaneOutboxRecovery(props: {
       onOutbox-restored={() => props.onRestored()}
     />
   );
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-outbox-recovery": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-chat-outbox-recovery"]
+      > &
+        ElementProperties<
+          Pick<
+            HTMLElementTagNameMap["openclaw-chat-outbox-recovery"],
+            "host" | "identity" | "messages"
+          >
+        > & {
+          "onOutbox-restored"?: () => void;
+        };
+    }
+  }
 }

@@ -667,7 +667,7 @@ export async function recoverStore(params: {
         reason: `dispatch_${resumeResult}`,
         nextOwner:
           resumeResult === "started"
-            ? "background-lane"
+            ? `${params.recoveryAdmission?.lane ?? "background"}-lane`
             : resumeResult === "settled"
               ? "none"
               : "main-session-recovery",

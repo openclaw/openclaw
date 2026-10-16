@@ -6,6 +6,7 @@ import {
   readPanelHostedTabs,
 } from "../../../components/panel-hosted-tabs.ts";
 import { solidContent } from "../../../lit/solid-content.tsx";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
@@ -18,6 +19,7 @@ import {
   getSessionWorkspace,
   loadSessionWorkspace,
 } from "./chat-session-workspace-state.ts";
+import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import { openSessionWorkspaceFile, type SessionWorkspaceHost } from "./chat-session-workspace.ts";
 import "./chat-files-panel.tsx";
 
@@ -523,6 +525,93 @@ describe("workspace file tabs", () => {
     await hosted.closeHostedTab("a");
     expect(getSessionWorkspace(state).previews).not.toContain(a);
   });
+
+  it.each(["close", "reopen", "disconnect"])(
+    "handles %s while an App close is awaiting teardown",
+    async (outcome) => {
+      const pending = createDeferred();
+      const panel = document.createElement("openclaw-chat-files-panel");
+      const app = document.createElement("mcp-app-view");
+      const connectedAtTeardown: boolean[] = [];
+      const teardown = vi.fn(() => {
+        connectedAtTeardown.push(app.isConnected);
+        return pending.promise;
+      });
+      const headersAtRestart: boolean[] = [];
+      const restart = vi.fn(() =>
+        headersAtRestart.push(panel.querySelector(".rail-header") !== null),
+      );
+      Object.assign(app, { teardown, restartAfterTeardown: restart });
+      const editor = document.createElement("textarea");
+      const previews: SessionWorkspacePreview[] = [
+        {
+          id: "app",
+          label: "Parts tray",
+          content: {
+            kind: "mcp-app",
+            title: "Parts tray",
+            launch: {
+              owner: createGatewayBrowserClientFixture(),
+              sessionKey: "agent:main:files",
+              serverName: "parts",
+              entrypoint: {
+                title: "Parts tray",
+                toolName: "tray",
+                resourceUri: "ui://parts/tray",
+                entrypoint: { type: "thread" },
+              },
+            },
+          },
+        },
+        { id: "file", label: "notes.md", content: { kind: "markdown", content: "Notes" } },
+      ];
+      panel.previews = previews;
+      panel.activeId = "app";
+      panel.renderDetail = (content) => (content.kind === "mcp-app" ? app : editor);
+      panel.onClose = (id) => {
+        panel.previews = panel.previews.filter((preview) => preview.id !== id);
+        panel.activeId = "file";
+      };
+      document.body.append(panel);
+      await panel.updateComplete;
+      flush();
+      editor.value = "Unsaved draft";
+
+      await panel.closeHostedTab("app");
+      flush();
+      expect(connectedAtTeardown).toEqual([true]);
+      expect(panel.querySelector("mcp-app-view")).toBe(app);
+      expect(app.isConnected).toBe(true);
+      expect(restart).not.toHaveBeenCalled();
+
+      panel.tabsInHeader = false;
+      if (outcome === "reopen") {
+        panel.previews = previews;
+        panel.activeId = "app";
+      } else if (outcome === "disconnect") {
+        panel.remove();
+      }
+      await panel.updateComplete;
+      flush();
+      pending.resolve();
+      await pending.promise;
+      await waitForSolid(() => {
+        if (outcome === "reopen") {
+          expect(restart).toHaveBeenCalledOnce();
+          expect(headersAtRestart).toEqual([true]);
+          expect(panel.querySelector("mcp-app-view")).toBe(app);
+        } else {
+          expect(app.isConnected).toBe(false);
+          expect(restart).not.toHaveBeenCalled();
+        }
+      });
+      expect(teardown).toHaveBeenCalledOnce();
+      if (outcome !== "disconnect") {
+        expect(panel.querySelector("textarea")).toBe(editor);
+        expect(editor.value).toBe("Unsaved draft");
+      }
+    },
+  );
 
   it("opens the file browser from its action hosted outside the panel", async () => {
     const panel = mountPanel();
