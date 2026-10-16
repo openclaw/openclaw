@@ -153,9 +153,27 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
       }
       const sessionId = inputs.sessionId;
       const publish = () => {
+        // Concurrent cold sessions settle after one another; reuse what they already published.
+        const latest = latestByKey.get(key);
+        const published =
+          latest?.pluginMetadataSnapshot === inputs.pluginMetadataSnapshot
+            ? latest?.entries
+            : undefined;
         const prepared = pending.map((entry, index): PreparedDescriptor | undefined => {
           if (entry === entries?.[index]) {
             return entry;
+          }
+          const shared = published?.[index];
+          if (
+            shared &&
+            shared.source === entry.source &&
+            shared.outputSource === entry.outputSource &&
+            shared.descriptor.description === entry.descriptor.description &&
+            (entry.finalSource === entry.normalized
+              ? shared.finalSource === shared.normalized
+              : shared.finalSource === entry.finalSource)
+          ) {
+            return shared;
           }
           const normalizedSchema = publishParameters(entry.normalized, entry.descriptor.name);
           const parameters =

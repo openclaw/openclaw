@@ -151,6 +151,19 @@ describe("finalized tool descriptor snapshots", () => {
     expect(attempt([tool(schema())], otherSession).tool().parameters).not.toBe(published);
   });
 
+  it("shares one publication between concurrent cold sessions", async () => {
+    const parameters = schema();
+    const otherSession = { hookContext: { sessionId: "other-session" } };
+    const first = attempt([tool(parameters)]);
+    const second = attempt([tool(parameters)], otherSession);
+    await first.settle();
+    await second.settle();
+
+    const published = attempt([tool(parameters)]).tool().parameters;
+    expect(getPublishedRuntimeToolInputSchema(published)).toBeDefined();
+    expect(attempt([tool(parameters)], otherSession).tool().parameters).toBe(published);
+  });
+
   it("retains a prepared output schema when another descriptor changes", async () => {
     const parameters = schema();
     const outputSchema = schema();
