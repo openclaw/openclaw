@@ -403,10 +403,10 @@ describe("Plugin link reader panel", () => {
     header.append(actions);
     const newTab = actions.querySelector<HTMLButtonElement>("button")!;
     newTab.focus();
-    panel.readers = [];
+    panel.available = false;
     await panel.updateComplete;
     expect(newTab.disabled).toBe(true);
-    panel.readers = [reader];
+    panel.available = true;
     await panel.updateComplete;
     expect(panel.hostedActions).toBe(actions);
     expect(actions.querySelector("button")).toBe(newTab);
