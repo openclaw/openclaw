@@ -49,6 +49,15 @@ function errorTree(error: unknown): unknown[] {
   return error instanceof AggregateError ? [error, ...error.errors.flatMap(errorTree)] : [error];
 }
 
+function cleanupStep(events: string[], label: string, error?: Error) {
+  return async () => {
+    events.push(label);
+    if (error) {
+      throw error;
+    }
+  };
+}
+
 describe("QA gateway fixture error composition", () => {
   it.for(["joined", "unconfirmed", "rejected"] as const)(
     "keeps the generation workspace through a held server close and %s Gateway cleanup",
@@ -134,9 +143,7 @@ describe("QA gateway fixture error composition", () => {
           }),
           startQaMockOpenAiServer: async () => ({
             baseUrl: "http://127.0.0.1:1",
-            stop: async () => {
-              cleaned.push("provider");
-            },
+            stop: cleanupStep(cleaned, "provider"),
           }),
           createQaGatewayChild: () => ({
             start: async () => {
@@ -360,12 +367,8 @@ describe("QA gateway fixture error composition", () => {
           cleaned.push("body");
           return value;
         },
-        () => {
-          cleaned.push("gateway");
-        },
-        () => {
-          cleaned.push("provider");
-        },
+        cleanupStep(cleaned, "gateway"),
+        cleanupStep(cleaned, "provider"),
       ),
     ).resolves.toBe(value);
     expect(cleaned).toEqual(["body", "gateway", "provider"]);
@@ -399,10 +402,7 @@ describe("QA gateway fixture error composition", () => {
       async () => {
         throw bodyError;
       },
-      () => {
-        events.push("release");
-        throw releaseError;
-      },
+      cleanupStep(events, "release", releaseError),
       async () => {
         events.push("context-closing");
         contextClosing.resolve();
@@ -410,13 +410,8 @@ describe("QA gateway fixture error composition", () => {
         events.push("context-settled");
         throw contextError;
       },
-      () => {
-        events.push("browser");
-        throw browserError;
-      },
-      () => {
-        events.push("node");
-      },
+      cleanupStep(events, "browser", browserError),
+      cleanupStep(events, "node"),
       () =>
         stopQaGatewayFixture({
           stop: async () => {
@@ -424,9 +419,7 @@ describe("QA gateway fixture error composition", () => {
             return { errors: [gatewayError] };
           },
         }),
-      () => {
-        events.push("provider");
-      },
+      cleanupStep(events, "provider"),
     ).catch((error: unknown) => error);
     await contextClosing.promise;
     const beforeSettlement = [...events];
@@ -517,9 +510,7 @@ describe("QA gateway fixture error composition", () => {
         }),
         startQaMockOpenAiServer: async () => ({
           baseUrl: "http://127.0.0.1:43211",
-          stop: async () => {
-            cleaned.push("provider");
-          },
+          stop: cleanupStep(cleaned, "provider"),
         }),
       }));
       vi.doMock("../../scripts/e2e/lib/plugin-index-sqlite.mjs", () => ({
@@ -530,9 +521,7 @@ describe("QA gateway fixture error composition", () => {
           const label = `receiver-${receiverCount++}`;
           return {
             listen: async () => 43212,
-            close: async () => {
-              cleaned.push(label);
-            },
+            close: cleanupStep(cleaned, label),
           };
         },
       }));
@@ -568,8 +557,7 @@ describe("QA gateway fixture error composition", () => {
         "/qa-fixture/scratch",
         "/qa-fixture/seed",
       ]);
-      expect(errorTree(failure)).toContain(startupError);
-      expect(errorTree(failure)).toContain(finalizationError);
+      expect(errorTree(failure)).toEqual(expect.arrayContaining([startupError, finalizationError]));
       expect(errorTree(new AggregateError(finishErrors))).toContain(finalizationError);
     }));
 });

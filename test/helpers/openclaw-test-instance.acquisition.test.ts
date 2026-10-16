@@ -21,6 +21,24 @@ import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 import { createDeferred, withTestTimeout } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
+function listen(server: net.Server, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+}
+
+async function close(server: net.Server): Promise<void> {
+  if (server.listening) {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
 describe("createOpenClawTestInstance acquisition", () => {
   it("closes an absent Gateway reservation while retaining its port claims", async () => {
     const listeners = new Map<number, net.Server>();
@@ -48,13 +66,7 @@ describe("createOpenClawTestInstance acquisition", () => {
         expect(reservation?.address()).toBeNull();
         // Released sockets can belong to an unclaimed listener even while the
         // fixture retains cooperative claims; observe the exact reserved socket.
-        await new Promise<void>((resolve, reject) => {
-          competitor.once("error", reject);
-          competitor.listen(instance.port, "127.0.0.1", () => {
-            competitor.off("error", reject);
-            resolve();
-          });
-        });
+        await listen(competitor, instance.port);
         await instance.stopGateway();
         expect(reservation?.listening).toBe(false);
         expect(reservation?.address()).toBeNull();
@@ -65,12 +77,7 @@ describe("createOpenClawTestInstance acquisition", () => {
           });
         }
       },
-      () =>
-        competitor.listening
-          ? new Promise<void>((resolve, reject) => {
-              competitor.close((error) => (error ? reject(error) : resolve()));
-            })
-          : undefined,
+      () => close(competitor),
       () => instance.cleanup(),
     );
     const released = await acquireTestPortBlock({ port: instance.port, offsets: [0, 1] });
@@ -153,21 +160,6 @@ describe("createOpenClawTestInstance acquisition", () => {
       let competitorClaim: TestPortClaim | undefined;
       let restoreAllocation: (() => void) | undefined;
       let reserved: { port: number; cleanup: () => Promise<void> } | undefined;
-      const listen = (server: net.Server, port: number) =>
-        new Promise<void>((resolve, reject) => {
-          server.once("error", reject);
-          server.listen(port, "127.0.0.1", () => {
-            server.off("error", reject);
-            resolve();
-          });
-        });
-      const close = async (server: net.Server) => {
-        if (server.listening) {
-          await new Promise<void>((resolve, reject) => {
-            server.close((error) => (error ? reject(error) : resolve()));
-          });
-        }
-      };
       await runQaGatewayFixture(
         async () => {
           const competing = await reserveTestPortListener({
@@ -229,18 +221,10 @@ describe("createOpenClawTestInstance acquisition", () => {
               true,
             );
           }
-          await new Promise<void>((resolve, reject) => {
-            sandbox.once("error", reject);
-            sandbox.listen(instance.port + 1, "127.0.0.1", resolve);
-          });
+          await listen(sandbox, instance.port + 1);
           expect(sandbox.listening).toBe(true);
         },
-        () =>
-          sandbox.listening
-            ? new Promise<void>((resolve, reject) => {
-                sandbox.close((error) => (error ? reject(error) : resolve()));
-              })
-            : undefined,
+        () => close(sandbox),
         () => instance.cleanup(),
       );
     },
