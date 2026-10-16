@@ -276,7 +276,15 @@ After the network denial, allow only bind and connect within the isolated root:
 ```
 
 Keep IP networking, the operator's home, Keychain, launchctl, and host SQLite
-libraries denied. Neither operation contacts an IP network service.
+libraries denied. Neither operation contacts an IP network service. Bun
+standalone cleanup reads process-group membership through macOS `libproc` without
+executing `/bin/ps`; no process-exec allowance for `ps` is needed.
+
+Doctor reports `SQLite (doctor process): <path> (<version>, extension loading enabled)`
+in its **Database engines** diagnostic, including for isolated profiles and
+host-managed installs. Packaging checks should assert that the path points to the
+artifact's `runtime/lib/libsqlite3.dylib`. This diagnostic describes the library
+selected by the Doctor process; it does not require host-service inspection.
 
 Use a short, canonical temporary root: Darwin limits Unix socket paths to 103
 bytes. The broker's fallback for longer paths is outside the isolated root and

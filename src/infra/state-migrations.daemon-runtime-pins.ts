@@ -19,6 +19,20 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
     return { changes: [], warnings: [] };
   }
   const sourceState = resolveOpenClawStateSqlitePath(env);
+  const migrationComplete = (stateEnv: NodeJS.ProcessEnv) => {
+    const previous = withDaemonRuntimePinStore(stateEnv, false, (db) =>
+      db.prepare("SELECT source_state, phase FROM daemon_runtime_pin_migration").get(),
+    );
+    return previous?.phase === "complete" && previous.source_state === sourceState;
+  };
+  // A completed handoff needs no offline custody, including while the Gateway runs.
+  try {
+    if (migrationComplete(env)) {
+      return { changes: [], warnings: [] };
+    }
+  } catch (error) {
+    return { changes: [], warnings: [`Failed migrating daemon runtime pins: ${String(error)}`] };
+  }
   const receipt = (db: DatabaseSync, phase: "copied" | "complete") => {
     const result = db
       .prepare(`
@@ -41,11 +55,10 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
     label: "daemon runtime pins",
     releaseLabel: "Daemon runtime pin",
     errorLabel: "Failed migrating daemon runtime pins",
+    retryGuidance:
+      "Stop the Gateway and other state owners for this profile, run `openclaw doctor --fix` against the same state/config, then restart the Gateway.",
     run: async (lockedEnv) => {
-      const previous = withDaemonRuntimePinStore(lockedEnv, false, (db) =>
-        db.prepare("SELECT source_state, phase FROM daemon_runtime_pin_migration").get(),
-      );
-      if (previous?.phase === "complete" && previous.source_state === sourceState) {
+      if (migrationComplete(lockedEnv)) {
         return { changes: [], warnings: [] };
       }
       const moved = !fs.existsSync(sourceState)
