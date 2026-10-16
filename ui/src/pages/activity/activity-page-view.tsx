@@ -103,7 +103,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
     previousEntries = entries;
     previousAutoFollow = enabled;
     if (!force && (!enabled || !appended || !atBottom)) {
-      return;
+      return undefined;
     }
     const frame = requestAnimationFrame(() => {
       const container = stream;

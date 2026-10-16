@@ -33,7 +33,7 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
   const [now, setNow] = createSignal(Date.now());
   const idle = createMemo(() => !props.progress && !props.busy);
   // An idle action retires pinning; progress updates preserve the operator's choice.
-  const [pinned, setPinned] = createSignal<boolean>((previous) => !idle() && !!previous);
+  const [pinned, setPinned] = createSignal<boolean>((previous) => !idle() && Boolean(previous));
   let hovering = false;
   const progressId = `plugin-install-progress-${generateUUID()}`;
   const dismiss = () => {
