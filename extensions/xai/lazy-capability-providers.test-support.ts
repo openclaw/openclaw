@@ -10,77 +10,43 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { beforeEach, vi, type Mock } from "vitest";
+import { beforeEach, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => {
   throw new Error("Lazy capability metadata must not load the broad agent runtime");
 });
 
-const runtimeMocks = vi.hoisted(() => {
-  const generateImage: Mock = vi.fn();
-  const transcribeAudio: Mock = vi.fn();
-  const generateVideo: Mock = vi.fn();
-  const listVoices: Mock = vi.fn();
-  const synthesize: Mock = vi.fn();
-  const streamSynthesize: Mock = vi.fn();
-  const synthesizeTelephony: Mock = vi.fn();
-  const transcriptionConnect: Mock = vi.fn();
-  const transcriptionSendAudio: Mock = vi.fn();
-  const transcriptionClose: Mock = vi.fn();
-  const transcriptionIsConnected: Mock = vi.fn();
-  const createTranscriptionSession: Mock = vi.fn();
-  const voiceConnect: Mock = vi.fn();
-  const voiceSendAudio: Mock = vi.fn();
-  const voiceSetMediaTimestamp: Mock = vi.fn();
-  const voiceSendUserMessage: Mock = vi.fn();
-  const voiceTriggerGreeting: Mock = vi.fn();
-  const voiceHandleBargeIn: Mock = vi.fn();
-  const voiceSubmitToolResult: Mock = vi.fn();
-  const voiceAcknowledgeMark: Mock = vi.fn();
-  const voiceClose: Mock = vi.fn();
-  const voiceIsConnected: Mock = vi.fn();
-  const createVoiceBridge: Mock<
-    (request: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge
-  > = vi.fn();
-  const buildImageProvider: Mock = vi.fn();
-  const buildMediaProvider: Mock = vi.fn();
-  const buildVideoProvider: Mock = vi.fn();
-  const buildSpeechProvider: Mock = vi.fn();
-  const buildTranscriptionProvider: Mock = vi.fn();
-  const buildVoiceProvider: Mock = vi.fn();
-
-  return {
-    generateImage,
-    transcribeAudio,
-    generateVideo,
-    listVoices,
-    synthesize,
-    streamSynthesize,
-    synthesizeTelephony,
-    transcriptionConnect,
-    transcriptionSendAudio,
-    transcriptionClose,
-    transcriptionIsConnected,
-    createTranscriptionSession,
-    voiceConnect,
-    voiceSendAudio,
-    voiceSetMediaTimestamp,
-    voiceSendUserMessage,
-    voiceTriggerGreeting,
-    voiceHandleBargeIn,
-    voiceSubmitToolResult,
-    voiceAcknowledgeMark,
-    voiceClose,
-    voiceIsConnected,
-    createVoiceBridge,
-    buildImageProvider,
-    buildMediaProvider,
-    buildVideoProvider,
-    buildSpeechProvider,
-    buildTranscriptionProvider,
-    buildVoiceProvider,
-  };
-});
+const runtimeMocks = vi.hoisted(() => ({
+  generateImage: vi.fn(),
+  transcribeAudio: vi.fn(),
+  generateVideo: vi.fn(),
+  listVoices: vi.fn(),
+  synthesize: vi.fn(),
+  streamSynthesize: vi.fn(),
+  synthesizeTelephony: vi.fn(),
+  transcriptionConnect: vi.fn(),
+  transcriptionSendAudio: vi.fn(),
+  transcriptionClose: vi.fn(),
+  transcriptionIsConnected: vi.fn(),
+  createTranscriptionSession: vi.fn(),
+  voiceConnect: vi.fn(),
+  voiceSendAudio: vi.fn(),
+  voiceSetMediaTimestamp: vi.fn(),
+  voiceSendUserMessage: vi.fn(),
+  voiceTriggerGreeting: vi.fn(),
+  voiceHandleBargeIn: vi.fn(),
+  voiceSubmitToolResult: vi.fn(),
+  voiceAcknowledgeMark: vi.fn(),
+  voiceClose: vi.fn(),
+  voiceIsConnected: vi.fn(),
+  buildImageProvider: vi.fn(),
+  buildMediaProvider: vi.fn(),
+  buildVideoProvider: vi.fn(),
+  buildSpeechProvider: vi.fn(),
+  buildTranscriptionProvider: vi.fn(),
+  buildVoiceProvider: vi.fn(),
+  createVoiceBridge: vi.fn<(request: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge>(),
+}));
 
 vi.mock("./image-generation-provider.js", () => ({
   buildXaiImageGenerationProvider: runtimeMocks.buildImageProvider,

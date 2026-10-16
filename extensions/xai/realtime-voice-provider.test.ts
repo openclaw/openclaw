@@ -119,6 +119,14 @@ function toolResultEvent(callId: string, result: unknown) {
   };
 }
 
+function truncateEvent(item_id: string, audio_end_ms: number) {
+  return { type: "conversation.item.truncate", item_id, content_index: 0, audio_end_ms };
+}
+
+function expectTail(socket: FakeWebSocketInstance, ...events: unknown[]) {
+  expect(parseSent(socket).slice(-events.length)).toEqual(events);
+}
+
 describe("buildXaiRealtimeVoiceProvider", () => {
   it("retires unheard playback marks after a failed native terminal", async () => {
     const onMark = vi.fn();
@@ -207,18 +215,8 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       bridge.handleBargeIn?.({ force: true });
       expect(sent(socket, "response.cancel")).toHaveLength(1);
       expect(sent(socket, "conversation.item.truncate")).toEqual([
-        {
-          type: "conversation.item.truncate",
-          item_id: "audible",
-          content_index: 0,
-          audio_end_ms: 620,
-        },
-        {
-          type: "conversation.item.truncate",
-          item_id: "queued",
-          content_index: 0,
-          audio_end_ms: 0,
-        },
+        truncateEvent("audible", 620),
+        truncateEvent("queued", 0),
       ]);
       expect(onClearAudio).toHaveBeenCalledOnce();
     });
@@ -412,11 +410,13 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(options?.headers?.Authorization).toBe("Bearer xai-env");
     expect(options).toEqual(expect.objectContaining({ maxPayload: 16 * 1024 * 1024 }));
     const session = requireSession(socket);
-    expect(session.voice).toBe("ara");
-    expect(session.reasoning).toEqual({ effort: "none" });
+    expect(session).toMatchObject({
+      voice: "ara",
+      reasoning: { effort: "none" },
+      tool_choice: "auto",
+    });
     expect(session.resumption).toBeUndefined();
     expect(session.tools).toHaveLength(1);
-    expect(session.tool_choice).toBe("auto");
     expect(session.turn_detection).toEqual({
       type: "server_vad",
       threshold: 0.9,
@@ -570,10 +570,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         ],
       },
     });
-    expect(parseSent(socket).slice(-2)).toEqual([
-      userMessageEvent("Continue."),
-      { type: "response.create" },
-    ]);
+    expectTail(socket, userMessageEvent("Continue."), { type: "response.create" });
     expect(onTranscript.mock.calls).toEqual([["assistant", "Valid text and audio", true]]);
   });
 
@@ -607,19 +604,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
           (event) =>
             event.type === "response.cancel" || event.type === "conversation.item.truncate",
         ),
-      ).toEqual(
-        completed
-          ? [
-              { type: "response.cancel" },
-              {
-                type: "conversation.item.truncate",
-                item_id: "item",
-                content_index: 0,
-                audio_end_ms: 300,
-              },
-            ]
-          : [],
-      );
+      ).toEqual(completed ? [{ type: "response.cancel" }, truncateEvent("item", 300)] : []);
     },
   );
 
@@ -745,10 +730,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     socket.emitServer({ type: "response.created" });
     socket.emitServer({ type: "response.done" });
     bridge.sendUserMessage?.("Continue.");
-    expect(parseSent(socket).slice(-2)).toEqual([
-      userMessageEvent("Continue."),
-      { type: "response.create" },
-    ]);
+    expectTail(socket, userMessageEvent("Continue."), { type: "response.create" });
   });
 
   it("rejects an undefined tool result before transport ownership changes", async () => {
@@ -759,10 +741,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(onError).not.toHaveBeenCalled();
     expect(sent(socket, "conversation.item.create")).toEqual([]);
     await bridge.submitToolResult("call_1", { recovered: true });
-    expect(parseSent(socket).slice(-2)).toEqual([
-      toolResultEvent("call_1", { recovered: true }),
-      { type: "response.create" },
-    ]);
+    expectTail(socket, toolResultEvent("call_1", { recovered: true }), { type: "response.create" });
   });
 
   it("serializes a tool result once while suppressing its response", async () => {
@@ -986,14 +965,11 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(sent(secondSocket, "conversation.item.create")).toEqual([]);
     secondSocket.emitServer({ type: "session.updated" });
     expect(sent(secondSocket, "response.create")).toEqual([]);
-    expect(parseSent(secondSocket).slice(-1)).toEqual([
-      toolResultEvent("call_1", { text: "first" }),
-    ]);
+    expectTail(secondSocket, toolResultEvent("call_1", { text: "first" }));
     await bridge.submitToolResult("call_2", { text: "second" });
-    expect(parseSent(secondSocket).slice(-2)).toEqual([
-      toolResultEvent("call_2", { text: "second" }),
-      { type: "response.create" },
-    ]);
+    expectTail(secondSocket, toolResultEvent("call_2", { text: "second" }), {
+      type: "response.create",
+    });
   });
 
   it("queues text turns submitted while a resumed session is reconnecting", async () => {
@@ -1012,10 +988,9 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     bridge.sendUserMessage?.("OpenClaw finished checking.");
     expect(sent(secondSocket, "conversation.item.create")).toEqual([]);
     secondSocket.emitServer({ type: "session.updated" });
-    expect(parseSent(secondSocket).slice(-2)).toEqual([
-      userMessageEvent("OpenClaw finished checking."),
-      { type: "response.create" },
-    ]);
+    expectTail(secondSocket, userMessageEvent("OpenClaw finished checking."), {
+      type: "response.create",
+    });
     expect(onReady).toHaveBeenCalledOnce();
   });
 

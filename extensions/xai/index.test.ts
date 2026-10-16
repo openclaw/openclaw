@@ -159,18 +159,17 @@ describe("xai provider plugin", () => {
       email: "user@example.com",
     }));
     const apiKey = vi.fn();
+    const context = {
+      config: {},
+      agentDir: "/agent",
+      env: {},
+      provider: "xai",
+      resolveOAuthToken: oauth,
+      resolveApiKeyFromConfigAndStore: apiKey,
+      resolveApiKeyCandidatesFromConfigAndStore: vi.fn(),
+    };
 
-    await expect(
-      provider.resolveUsageAuth?.({
-        config: {},
-        agentDir: "/agent",
-        env: {},
-        provider: "xai",
-        resolveOAuthToken: oauth,
-        resolveApiKeyFromConfigAndStore: apiKey,
-        resolveApiKeyCandidatesFromConfigAndStore: vi.fn(),
-      }),
-    ).resolves.toEqual({
+    await expect(provider.resolveUsageAuth?.(context)).resolves.toEqual({
       token: "oauth-token",
       accountId: "acct",
       email: "user@example.com",
@@ -179,13 +178,9 @@ describe("xai provider plugin", () => {
     expect(apiKey).not.toHaveBeenCalled();
     await expect(
       provider.resolveUsageAuth?.({
-        config: {},
-        agentDir: "/agent",
+        ...context,
         env: { XAI_API_KEY: "xai-api-key" },
-        provider: "xai",
         resolveOAuthToken: vi.fn(async () => null),
-        resolveApiKeyFromConfigAndStore: apiKey,
-        resolveApiKeyCandidatesFromConfigAndStore: vi.fn(),
       }),
     ).resolves.toEqual({ handled: true });
     expect(manifest.contracts).toMatchObject({ usageProviders: ["xai"] });
@@ -197,16 +192,16 @@ describe("xai provider plugin", () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
         data: [
-          { id: "grok-4.7", object: "model" },
-          { id: "grok-4.6", object: "model" },
-          { id: "grok-4.5", object: "model" },
-          { id: "grok-4.20-0309-reasoning", object: "model" },
-          { id: "grok-4.20-0309-non-reasoning", object: "model" },
-          { id: "grok-5-preview", object: "model" },
-          { id: "grok-4.20-multi-agent-0309", object: "model" },
-          { id: "grok-imagine-image", object: "model" },
-          { id: "grok-imagine-video", object: "model" },
-        ],
+          "grok-4.7",
+          "grok-4.6",
+          "grok-4.5",
+          "grok-4.20-0309-reasoning",
+          "grok-4.20-0309-non-reasoning",
+          "grok-5-preview",
+          "grok-4.20-multi-agent-0309",
+          "grok-imagine-image",
+          "grok-imagine-video",
+        ].map((id) => ({ id, object: "model" })),
       }),
       finalUrl: "https://api.x.ai/v1/models",
       release,
@@ -430,30 +425,27 @@ describe("xai provider plugin", () => {
 
   it("classifies Grok usage and spending limit errors", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
+    const classify = (errorMessage: string) => provider.classifyFailoverReason?.({ errorMessage });
+    const spendingLimit =
+      "Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit.";
 
     expect(
-      provider.classifyFailoverReason?.({
-        errorMessage:
-          '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
-      }),
+      classify(
+        `403 ${JSON.stringify({ code: "The caller does not have permission to execute the specified operation", error: spendingLimit })}`,
+      ),
     ).toBe("billing");
     expect(
-      provider.classifyFailoverReason?.({
-        errorMessage:
-          '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
-      }),
+      classify(
+        `429 ${JSON.stringify({ code: "Some resource has been exhausted", error: spendingLimit })}`,
+      ),
     ).toBe("billing");
     expect(
-      provider.classifyFailoverReason?.({
-        errorMessage:
-          '429 {"code":"Some resource has been exhausted","error":"Rate limit exceeded"}',
-      }),
+      classify('429 {"code":"Some resource has been exhausted","error":"Rate limit exceeded"}'),
     ).toBe("rate_limit");
     expect(
-      provider.classifyFailoverReason?.({
-        errorMessage:
-          '400 {"code":"Client specified an invalid argument","error":"Incorrect API key provided: xa***en. You can obtain an API key from https://console.x.ai."}',
-      }),
+      classify(
+        '400 {"code":"Client specified an invalid argument","error":"Incorrect API key provided: xa***en. You can obtain an API key from https://console.x.ai."}',
+      ),
     ).toBeUndefined();
   });
 
@@ -546,20 +538,11 @@ describe("xai provider plugin", () => {
   it("declares setup auto-enable reasons for plugin-owned tool config", () => {
     const probe = registerXaiAutoEnableProbe();
 
-    expect(
-      probe({
-        config: { plugins: { entries: { xai: { config: { xSearch: { enabled: true } } } } } },
-        env: {},
-      }),
-    ).toBe("xai tool configured");
-    expect(
-      probe({
-        config: {
-          plugins: { entries: { xai: { config: { codeExecution: { enabled: true } } } } },
-        },
-        env: {},
-      }),
-    ).toBe("xai tool configured");
+    for (const name of ["x_search", "code_execution"] as const) {
+      expect(probe({ config: createXaiBilledToolConfig(name, true), env: {} })).toBe(
+        "xai tool configured",
+      );
+    }
     expect(probe({ config: {}, env: {} })).toBeNull();
   });
 
@@ -614,13 +597,15 @@ describe("xai provider plugin", () => {
         baseUrl: "https://api.x.ai/v1",
       },
     } as never);
-    expect(resolved?.id).toBe("grok-4.3");
-    expect(resolved?.provider).toBe("xai");
-    expect(resolved?.api).toBe("openai-completions");
-    expect(resolved?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(resolved?.reasoning).toBe(true);
-    expect(resolved?.input).toEqual(["text", "image"]);
-    expect(resolved?.contextWindow).toBe(1_000_000);
+    expect(resolved).toMatchObject({
+      id: "grok-4.3",
+      provider: "xai",
+      api: "openai-completions",
+      baseUrl: "https://api.x.ai/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+    });
 
     const buildAlias = provider.resolveDynamicModel?.({
       provider: "xai",
@@ -631,35 +616,17 @@ describe("xai provider plugin", () => {
         baseUrl: "https://api.x.ai/v1",
       },
     } as never);
-    expect(buildAlias?.id).toBe("grok-4.5");
-    expect(buildAlias?.reasoning).toBe(true);
-    expect(buildAlias?.contextWindow).toBe(500_000);
+    expect(buildAlias).toMatchObject({ id: "grok-4.5", reasoning: true, contextWindow: 500_000 });
   });
 
   it("marks modern Grok refs without accepting multi-agent ids", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(
-      provider.isModernModelRef?.({
-        provider: "xai",
-        modelId: "grok-4.6",
-      } as never),
-    ).toBe(true);
-    expect(
-      provider.isModernModelRef?.({
-        provider: "xai",
-        modelId: "grok-4.3",
-      } as never),
-    ).toBe(true);
-    expect(
-      provider.isModernModelRef?.({
-        provider: "xai",
-        modelId: "grok-4.20-multi-agent-experimental-beta-0304",
-      } as never),
-    ).toBe(false);
-    expect(
-      provider.isModernModelRef?.({ provider: "xai", modelId: "grok-3-mini-fast" } as never),
-    ).toBe(false);
+    const modern = (modelId: string) =>
+      provider.isModernModelRef?.({ provider: "xai", modelId } as never);
+    expect(modern("grok-4.6")).toBe(true);
+    expect(modern("grok-4.3")).toBe(true);
+    expect(modern("grok-4.20-multi-agent-experimental-beta-0304")).toBe(false);
+    expect(modern("grok-3-mini-fast")).toBe(false);
   });
 
   it("follows the listed reasoning efforts for a Grok model the ID rules do not cover", async () => {

@@ -8,26 +8,41 @@ import {
   runtimeMocks,
 } from "./lazy-capability-providers.test-support.js";
 
+function captureVoiceInput() {
+  const forwarded: string[] = [];
+  runtimeMocks.voiceSendAudio.mockImplementation((audio: Buffer) => {
+    forwarded.push(`audio:${audio[0]}`);
+  });
+  runtimeMocks.voiceSetMediaTimestamp.mockImplementation((time: number) => {
+    forwarded.push(`timestamp:${time}`);
+  });
+  runtimeMocks.voiceSendUserMessage.mockImplementation((text: string) => {
+    forwarded.push(`user:${text}`);
+  });
+  runtimeMocks.voiceSubmitToolResult.mockImplementation((id: string) => {
+    forwarded.push(`tool:${id}`);
+  });
+  runtimeMocks.voiceTriggerGreeting.mockImplementation((text?: string) => {
+    forwarded.push(`greeting:${String(text)}`);
+  });
+  return forwarded;
+}
+
+function expectNoCalls(...mocks: Array<ReturnType<typeof vi.fn>>) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
+function expectToolResult(id: string, result: unknown) {
+  expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledExactlyOnceWith(id, result, undefined);
+}
+
 describe("xAI lazy realtime voice", () => {
   it("preserves voice startup ordering and waits to trigger the greeting", async () => {
     const connecting = createDeferred<void>();
-    const forwarded: string[] = [];
+    const forwarded = captureVoiceInput();
     runtimeMocks.voiceConnect.mockReturnValue(connecting.promise);
-    runtimeMocks.voiceSendAudio.mockImplementation((audio: Buffer) => {
-      forwarded.push(`audio:${audio[0]}`);
-    });
-    runtimeMocks.voiceSetMediaTimestamp.mockImplementation((timestamp: number) => {
-      forwarded.push(`timestamp:${timestamp}`);
-    });
-    runtimeMocks.voiceSendUserMessage.mockImplementation((text: string) => {
-      forwarded.push(`user:${text}`);
-    });
-    runtimeMocks.voiceSubmitToolResult.mockImplementation((callId: string) => {
-      forwarded.push(`tool:${callId}`);
-    });
-    runtimeMocks.voiceTriggerGreeting.mockImplementation((instructions?: string) => {
-      forwarded.push(`greeting:${instructions ?? ""}`);
-    });
     const bridge = await createLazyVoiceBridge();
     const first = Buffer.from([0x01]);
     const second = Buffer.from([0x02]);
@@ -41,11 +56,13 @@ describe("xAI lazy realtime voice", () => {
     await vi.waitFor(() => expect(runtimeMocks.voiceConnect).toHaveBeenCalledOnce());
     bridge.sendAudio(second);
 
-    expect(runtimeMocks.voiceSetMediaTimestamp).not.toHaveBeenCalled();
-    expect(runtimeMocks.voiceSendAudio).not.toHaveBeenCalled();
-    expect(runtimeMocks.voiceSendUserMessage).not.toHaveBeenCalled();
-    expect(runtimeMocks.voiceSubmitToolResult).not.toHaveBeenCalled();
-    expect(runtimeMocks.voiceTriggerGreeting).not.toHaveBeenCalled();
+    expectNoCalls(
+      runtimeMocks.voiceSetMediaTimestamp,
+      runtimeMocks.voiceSendAudio,
+      runtimeMocks.voiceSendUserMessage,
+      runtimeMocks.voiceSubmitToolResult,
+      runtimeMocks.voiceTriggerGreeting,
+    );
 
     connecting.resolve();
     await connectPromise;
@@ -69,19 +86,7 @@ describe("xAI lazy realtime voice", () => {
   });
 
   it("moves the latest pending timestamp and greeting to the operation tail", async () => {
-    const forwarded: string[] = [];
-    runtimeMocks.voiceSetMediaTimestamp.mockImplementation((timestamp: number) => {
-      forwarded.push(`timestamp:${timestamp}`);
-    });
-    runtimeMocks.voiceSendUserMessage.mockImplementation((text: string) => {
-      forwarded.push(`user:${text}`);
-    });
-    runtimeMocks.voiceSendAudio.mockImplementation((audio: Buffer) => {
-      forwarded.push(`audio:${audio[0]}`);
-    });
-    runtimeMocks.voiceTriggerGreeting.mockImplementation((instructions?: string) => {
-      forwarded.push(`greeting:${String(instructions)}`);
-    });
+    const forwarded = captureVoiceInput();
     const bridge = await createLazyVoiceBridge();
 
     bridge.setMediaTimestamp(1);
@@ -115,11 +120,7 @@ describe("xAI lazy realtime voice", () => {
       await bridge.submitToolResult("call-1", { recovered: true });
       await bridge.connect();
 
-      expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledExactlyOnceWith(
-        "call-1",
-        { recovered: true },
-        undefined,
-      );
+      expectToolResult("call-1", { recovered: true });
     },
   );
 
@@ -131,11 +132,7 @@ describe("xAI lazy realtime voice", () => {
     await bridge.connect();
 
     expect(toJSON).toHaveBeenCalledExactlyOnceWith("");
-    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledExactlyOnceWith(
-      "call-1",
-      { key: "", ok: true },
-      undefined,
-    );
+    expectToolResult("call-1", { key: "", ok: true });
   });
 
   it("ignores unsupported interim voice results before lazy queue admission", async () => {
@@ -179,16 +176,12 @@ describe("xAI lazy realtime voice", () => {
     await connectPromise;
 
     expect(runtimeMocks.voiceSendUserMessage).toHaveBeenCalledExactlyOnceWith(acceptedMessage);
-    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledExactlyOnceWith(
-      "call-1",
-      acceptedResult,
-      undefined,
-    );
+    expectToolResult("call-1", acceptedResult);
   });
 
   it("drains voice input queued while an earlier tool result is submitting", async () => {
     const submitting = createDeferred<void>();
-    const forwarded: string[] = [];
+    const forwarded = captureVoiceInput();
     runtimeMocks.voiceSubmitToolResult
       .mockImplementationOnce((callId: string) => {
         forwarded.push(`tool:${callId}`);
@@ -197,12 +190,6 @@ describe("xAI lazy realtime voice", () => {
       .mockImplementation((callId: string) => {
         forwarded.push(`tool:${callId}`);
       });
-    runtimeMocks.voiceSendUserMessage.mockImplementation((text: string) => {
-      forwarded.push(`user:${text}`);
-    });
-    runtimeMocks.voiceSetMediaTimestamp.mockImplementation((timestamp: number) => {
-      forwarded.push(`timestamp:${timestamp}`);
-    });
     const bridge = await createLazyVoiceBridge();
 
     await bridge.submitToolResult("call-1", { text: "first" });
@@ -279,11 +266,7 @@ describe("xAI lazy realtime voice", () => {
     expect(runtimeMocks.voiceSendUserMessage).toHaveBeenCalledExactlyOnceWith(
       "arrived-during-handoff",
     );
-    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledExactlyOnceWith(
-      "call-1",
-      { text: "tool-result" },
-      undefined,
-    );
+    expectToolResult("call-1", { text: "tool-result" });
     expect(runtimeMocks.voiceTriggerGreeting).toHaveBeenCalledExactlyOnceWith("welcome");
   });
 
