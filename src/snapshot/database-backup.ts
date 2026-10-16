@@ -3,6 +3,12 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import {
+  createConfigReadError,
+  createInvalidConfigError,
+  formatInvalidConfigDetails,
+  isConfigReadFailure,
+} from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
 import {
@@ -73,27 +79,36 @@ export async function runOfflineDatabaseBackup<T>(
     );
   }
   const { createConfigIO } = await import("../config/config.js");
-  const config =
-    prepared?.config ??
-    (
-      await createConfigIO({
+  return runWithLocalStateOwner({
+    method: "backup.create",
+    params: {},
+    target: sourcePath,
+    onForeignOwner: "refuse",
+    runLocal: async ({ assertCurrent }) => {
+      assertCurrent();
+      let config = prepared?.config;
+      if (!config) {
+      const snapshot = await createConfigIO({
         observe: false,
         pluginValidation: "core-only",
-      }).readConfigFileSnapshot()
-    ).config;
-  const selection = prepared?.selection ?? (await resolveDatabaseEngineSelection(config));
-  return withDatabaseEngineSelection(selection, () =>
-    runWithLocalStateOwner({
-      method: "backup.create",
-      params: {},
-      target: sourcePath,
-      onForeignOwner: "refuse",
-      runLocal: ({ assertCurrent }) => {
-        const scope = { config, assertCurrent };
-        return offlineBackup.run(scope, () => run(scope));
-      },
-    }),
-  );
+      }).readConfigFileSnapshot();
+      assertCurrent();
+      if (!snapshot.valid) {
+        const details = formatInvalidConfigDetails(snapshot.issues);
+        throw isConfigReadFailure(snapshot)
+          ? createConfigReadError(snapshot, details)
+          : createInvalidConfigError(snapshot.path, details);
+      }
+      config = snapshot.config;
+      }
+      const selection = prepared?.selection ?? (await resolveDatabaseEngineSelection(config));
+      assertCurrent();
+      const scope = { config, assertCurrent };
+      return withDatabaseEngineSelection(selection, () =>
+        offlineBackup.run(scope, () => run(scope)),
+      );
+    },
+  });
 }
 
 export async function verifyMatchedPostgresBackup(
