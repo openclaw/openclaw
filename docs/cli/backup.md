@@ -250,6 +250,8 @@ entire export was already missing. Unmanaged SQLite files remain opaque.
 Before restoring PostgreSQL, configure the recovery installation's connection
 and make its external SecretRef available. Restore uses that configured
 connection, not the archived configuration, to choose its destination server.
+When activating the archived config, retain or reapply the recovery connection
+settings so the restored anchors still address the destination server.
 The original PostgreSQL namespaces remain untouched.
 
 <Warning>

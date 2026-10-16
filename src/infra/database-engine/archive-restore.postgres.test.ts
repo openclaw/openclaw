@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -6,7 +7,6 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import * as tar from "tar";
 import { describe, expect, it } from "vitest";
-import "./backup-worker.test-support.js";
 import { backupRestoreCommand } from "../../commands/backup-restore.js";
 import { buildBackupArchivePath } from "../../commands/backup-shared.js";
 import { createTestRuntime } from "../../commands/test-runtime-config-helpers.js";
@@ -131,11 +131,15 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
           value: JSON.stringify({ matrix: index }),
         })),
       ];
+      const descriptors = new Map(
+        await Promise.all(
+          [...new Set(stores.map(({ family }) => family))].map(
+            async (family) => [family, await loadDatabasePortDescriptor(family, config)] as const,
+          ),
+        ),
+      );
       await admin.connect();
       try {
-        resetDatabaseEngineSelectionForTest();
-        installDatabaseEngineSelection(await resolveDatabaseEngineSelection(config, state.env));
-        setRuntimeConfigSnapshot(config);
         await admin.query(`CREATE DATABASE "${database}"`);
         await admin.query(`CREATE DATABASE "${recoveryDatabase}"`);
         await client.connect();
@@ -147,7 +151,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
           "CREATE EXTENSION vector; CREATE EXTENSION pg_trgm; CREATE EXTENSION unaccent",
         );
         for (const store of stores) {
-          const descriptor = await loadDatabasePortDescriptor(store.family, config);
+          const descriptor = descriptors.get(store.family)!;
           const namespace = `archive_${randomUUID().replaceAll("-", "")}`;
           const storeId = randomUUID();
           namespaces.add(namespace);
@@ -214,6 +218,8 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
             .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
             .run(storeId, namespace);
         }
+        resetDatabaseEngineSelectionForTest();
+        clearRuntimeConfigSnapshot();
         const backup = await createBackupArchive({
           output: state.path("archive.tar.gz"),
           includeWorkspace: false,
@@ -237,10 +243,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
         };
         await state.writeConfig(recoveryConfig);
         resetDatabaseEngineSelectionForTest();
-        installDatabaseEngineSelection(
-          await resolveDatabaseEngineSelection(recoveryConfig, state.env),
-        );
-        setRuntimeConfigSnapshot(recoveryConfig);
+        clearRuntimeConfigSnapshot();
         const targetPath = state.path("restored");
         const restored = await backupRestoreCommand(createTestRuntime(), {
           archive: backup.archivePath,
@@ -315,6 +318,8 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
         const legacyArchive = state.path("legacy.tar.gz");
         await tar.c({ file: legacyArchive, cwd: legacyRoot, gzip: true }, [backup.archiveRoot]);
         const legacyTarget = state.path("legacy-restored");
+        resetDatabaseEngineSelectionForTest();
+        clearRuntimeConfigSnapshot();
         await backupRestoreCommand(createTestRuntime(), {
           archive: legacyArchive,
           target: legacyTarget,
@@ -433,6 +438,8 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
             "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
           )
         ).rows;
+        resetDatabaseEngineSelectionForTest();
+        clearRuntimeConfigSnapshot();
         await expect(
           backupRestoreCommand(createTestRuntime(), {
             archive: corruptArchive,
@@ -464,6 +471,8 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
         );
         const missingArchive = state.path("missing-capsule.tar.gz");
         await tar.c({ file: missingArchive, cwd: corruptRoot, gzip: true }, [backup.archiveRoot]);
+        resetDatabaseEngineSelectionForTest();
+        clearRuntimeConfigSnapshot();
         await expect(
           backupRestoreCommand(createTestRuntime(), {
             archive: missingArchive,

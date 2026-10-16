@@ -151,6 +151,9 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
       {
         using source = openNodeSqliteDatabase(":memory:");
         source.exec(descriptor.sqlite);
+        for (const fragment of descriptor.fragments ?? []) {
+          source.exec(fragment.sqlite);
+        }
         source.exec(seed);
         await materializeDatabasePort({
           source: { engine: "sqlite", db: source },

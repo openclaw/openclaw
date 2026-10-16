@@ -374,6 +374,8 @@ files remain opaque and are copied without opening them.
 Configure the recovery installation's PostgreSQL connection and supply its
 external SecretRef before restoring. The configured destination selects the
 server; restore does not silently connect using the archived configuration.
+When activating the archived config, retain or reapply the recovery connection
+settings so the restored anchors still address that destination server.
 `openclaw backup sqlite restore` remains SQLite-only.
 
 Git restore supports `--global`, `--agent <id>`, and `--store <id>` for recorded
