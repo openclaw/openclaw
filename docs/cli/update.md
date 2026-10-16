@@ -583,10 +583,20 @@ change `updateAdmissionProtocol: 1` or its comparison rules. An absent field mea
 the installed driver checks the selected package or Git target for `postgres`
 before mutation. A target that lacks it is refused with `database-engine-preflight`:
 reverse-port to SQLite with the current compatible binary before updating, or
-stay on the current version. See [Database engines](/reference/database-engines);
-the port command remains disabled until its release prerequisites are met.
+stay on the current version. See [Database engines](/reference/database-engines).
 SQLite-only installations keep the existing admission path and do not require
 the field. Candidate admission cannot override this installed-driver protection.
+
+Targets also declare supported PostgreSQL families in
+`openclaw.postgresFamilies`. Mixed installations and explicit family overrides
+require the candidate's existing admission checks to accept the complete family
+selection before mutation; `databaseEngines: ["postgres"]` alone is insufficient.
+Preflight uses the effective shared-state engine for registry and plugin facts,
+and each agent store's physical engine for its schema inspection, including
+retained stores and disabled plugins. Updates preserve the default and family
+overrides; they never implicitly port a family. `openclaw update --dry-run`
+previews the flow using installed checks; it does not stage a package or run
+candidate admission, so candidate family compatibility remains pending.
 
 | Owner                                | Checks and operations                                                                                                                                                                                                                                                                                                                    |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

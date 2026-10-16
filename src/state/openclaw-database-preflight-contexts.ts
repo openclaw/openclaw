@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
+import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import type {
   IncompatibleOpenClawDatabase,
@@ -27,6 +29,7 @@ export async function preflightOpenClawDatabaseSchemaContexts(options: {
   contexts: readonly {
     env: NodeJS.ProcessEnv;
     configuredAgentDatabaseCandidatePaths: readonly string[];
+    databaseEngineSelection?: DatabaseEngineSelection;
   }[];
   supportedVersions: OpenClawSchemaVersions;
   preserveSourceArtifacts: boolean;
@@ -34,13 +37,17 @@ export async function preflightOpenClawDatabaseSchemaContexts(options: {
   const groups: {
     env: NodeJS.ProcessEnv;
     configuredAgentDatabaseCandidatePaths: string[];
+    databaseEngineSelection?: DatabaseEngineSelection;
   }[] = [];
   for (const context of options.contexts) {
     const stateDir = resolveStateDir(context.env);
     const previous = groups.at(-1);
     // Aliased roots can have different lexical imports boundaries. Adjacent
     // exact roots share discovery without reordering other profiles' refusals.
-    if (previous?.env.OPENCLAW_STATE_DIR === stateDir) {
+    if (
+      previous?.env.OPENCLAW_STATE_DIR === stateDir &&
+      previous.databaseEngineSelection === context.databaseEngineSelection
+    ) {
       previous.configuredAgentDatabaseCandidatePaths.push(
         ...context.configuredAgentDatabaseCandidatePaths,
       );
@@ -49,6 +56,7 @@ export async function preflightOpenClawDatabaseSchemaContexts(options: {
       env.OPENCLAW_STATE_DIR = stateDir;
       groups.push({
         env,
+        databaseEngineSelection: context.databaseEngineSelection,
         configuredAgentDatabaseCandidatePaths: [...context.configuredAgentDatabaseCandidatePaths],
       });
     }
@@ -56,15 +64,19 @@ export async function preflightOpenClawDatabaseSchemaContexts(options: {
   const incompatible = new Map<string, IncompatibleOpenClawDatabase>();
   const indeterminate = new Map<string, IndeterminateOpenClawDatabase>();
   for (const group of groups) {
-    const result = await preflightOpenClawDatabaseSchemas({
-      env: group.env,
-      supportedVersions: options.supportedVersions,
-      preserveSourceArtifacts: options.preserveSourceArtifacts,
-      configuredAgentDatabaseTargets: [],
-      configuredAgentDatabaseCandidatePaths: [
-        ...new Set(group.configuredAgentDatabaseCandidatePaths),
-      ],
-    });
+    const inspect = () =>
+      preflightOpenClawDatabaseSchemas({
+        env: group.env,
+        supportedVersions: options.supportedVersions,
+        preserveSourceArtifacts: options.preserveSourceArtifacts,
+        configuredAgentDatabaseTargets: [],
+        configuredAgentDatabaseCandidatePaths: [
+          ...new Set(group.configuredAgentDatabaseCandidatePaths),
+        ],
+      });
+    const result = await (group.databaseEngineSelection
+      ? withDatabaseEngineSelection(group.databaseEngineSelection, inspect)
+      : inspect());
     for (const database of result.incompatible) {
       const identity = canonicalDatabaseIdentity(database);
       incompatible.set(identity, incompatible.get(identity) ?? database);

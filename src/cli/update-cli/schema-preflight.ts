@@ -5,6 +5,7 @@ import { createConfigIO } from "../../config/io.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveDatabaseEngineSelection } from "../../infra/database-engine/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { preflightOpenClawDatabaseSchemaContexts } from "../../state/openclaw-database-preflight-contexts.js";
@@ -152,22 +153,28 @@ export async function checkTargetDatabaseSchemasForContexts(
   if (!supportedVersions) {
     return { incompatible: [], indeterminate: [] };
   }
-  const inspectionContexts = contexts.map((context) => {
-    try {
-      return {
-        env: context.env,
-        configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
-          context.config,
-          { env: context.env },
-        ),
-      };
-    } catch (error) {
-      throw new UpdatePreMutationError(
-        "database-schema-preflight",
-        `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
-      );
-    }
-  });
+  const inspectionContexts = await Promise.all(
+    contexts.map(async (context) => {
+      try {
+        return {
+          env: context.env,
+          databaseEngineSelection: await resolveDatabaseEngineSelection(
+            context.config,
+            context.env,
+          ),
+          configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
+            context.config,
+            { env: context.env },
+          ),
+        };
+      } catch (error) {
+        throw new UpdatePreMutationError(
+          "database-schema-preflight",
+          `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
+        );
+      }
+    }),
+  );
   return preflightOpenClawDatabaseSchemaContexts({
     contexts: inspectionContexts,
     supportedVersions,

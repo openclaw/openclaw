@@ -2,7 +2,11 @@ import { fork } from "node:child_process";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
-import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
+import {
+  getDatabaseEngineInput,
+  getDatabaseEngineSelection,
+  withDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import {
@@ -112,7 +116,32 @@ export function createAgentSchemaInspectionWorker() {
       }
       busy = true;
       try {
-        if (kind === "agent" && getDatabaseEngineInput("agent")) {
+        const schemaOnly =
+          kind === "agent" &&
+          !input.verifyCurrentSchemaShape &&
+          !input.requireStartupMigrationReadiness &&
+          !input.inspectOwnership &&
+          !input.inspectEmptyStore;
+        if (schemaOnly) {
+          // Update admission includes retained stores that can differ from the selected engine.
+          const { readBackupEngine } = await import("../snapshot/database-backup.js");
+          const physical = readBackupEngine(snapshotPath ?? input.pathname);
+          if (physical.engine === "postgres") {
+            const { withDatabasePortPostgres } =
+              await import("../infra/database-engine/port-provider.js");
+            const selection = getDatabaseEngineSelection();
+            const inspect = () =>
+              withDatabasePortPostgres({}, physical, async (_client, _descriptor, version) => ({
+                version,
+              }));
+            const result = await (selection
+              ? withDatabaseEngineSelection(selection, inspect)
+              : inspect());
+            inspectionCount += 1;
+            return result;
+          }
+        }
+        if (kind === "agent" && !schemaOnly && getDatabaseEngineInput("agent")) {
           if (snapshotPath) {
             throw new Error(
               "PostgreSQL agent inspection requires its live engine owner, not a SQLite snapshot.",

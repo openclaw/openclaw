@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAdmittedSqliteSchemaFacts, admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
 import { agentPortProvider } from "./agent-port.js";
+import { getScopedDatabaseEngineSelection } from "./context.js";
 import { logbookPortProvider } from "./logbook-port.js";
 import {
   DatabasePortDataError,
@@ -49,9 +50,12 @@ export function sqliteDatabasePortProvider(db: DatabaseSync) {
 export async function withDatabasePortConnection<T>(
   config: OpenClawConfig,
   run: (client: Client) => Promise<T>,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<T> {
   const { resolveDatabaseEngineSelection } = await import("./config.js");
-  const input = (await resolveDatabaseEngineSelection(config)).postgres;
+  const input =
+    getScopedDatabaseEngineSelection()?.postgres ??
+    (await resolveDatabaseEngineSelection(config, env)).postgres;
   if (!input) {
     throw new Error(
       "PostgreSQL requires an effective postgres family and a resolvable connection.",
@@ -85,35 +89,45 @@ export async function assertDatabasePortNamespaceOwner(client: Client, namespace
 export function withDatabasePortPostgres<T>(
   config: OpenClawConfig,
   anchor: { namespace: string; storeId: string },
-  run: (client: Client, descriptor: PortDescriptor) => Promise<T>,
+  run: (client: Client, descriptor: PortDescriptor, sourceVersion: number) => Promise<T>,
   pluginOwners?: DatabasePortPluginOwners,
+  env?: NodeJS.ProcessEnv,
 ): Promise<T> {
-  return withDatabasePortConnection(config, async (client) => {
-    const rows = await client
-      .query<{ store: string; store_id: string; version: string }>(
-        `SELECT store, store_id, version FROM ${quote(anchor.namespace)}.openclaw_schema_meta`,
-      )
-      .then(
-        (result) => result.rows,
-        async () => {
-          // Ownership can make metadata unreadable before the normal source inspection.
-          await assertDatabasePortNamespaceOwner(client, anchor.namespace);
-          throw new DatabasePortDataError(
-            `Cannot resolve PostgreSQL anchor family; supported families: ${databasePortProviders.map((entry) => entry.id).join(", ")}`,
-          );
-        },
+  return withDatabasePortConnection(
+    config,
+    async (client) => {
+      const rows = await client
+        .query<{ store: string; store_id: string; version: string }>(
+          `SELECT store, store_id, version FROM ${quote(anchor.namespace)}.openclaw_schema_meta`,
+        )
+        .then(
+          (result) => result.rows,
+          async () => {
+            // Ownership can make metadata unreadable before the normal source inspection.
+            await assertDatabasePortNamespaceOwner(client, anchor.namespace);
+            throw new DatabasePortDataError(
+              `Cannot resolve PostgreSQL anchor family; supported families: ${databasePortProviders.map((entry) => entry.id).join(", ")}`,
+            );
+          },
+        );
+      const row = rows[0];
+      if (rows.length !== 1 || !row || row.store_id !== anchor.storeId) {
+        throw new DatabasePortDataError("PostgreSQL anchor does not match its store metadata");
+      }
+      const version = Number(row.version);
+      if (!/^\d+$/u.test(row.version) || !Number.isSafeInteger(version)) {
+        throw new DatabasePortDataError("PostgreSQL store metadata has an invalid schema version");
+      }
+      const { loadDatabasePortDescriptor } = await import("./port-provider-descriptor.js");
+      return run(
+        client,
+        await loadDatabasePortDescriptor(row.store, config, {
+          version,
+          pluginOwners,
+        }),
+        version,
       );
-    const row = rows[0];
-    if (rows.length !== 1 || !row || row.store_id !== anchor.storeId) {
-      throw new DatabasePortDataError("PostgreSQL anchor does not match its store metadata");
-    }
-    const { loadDatabasePortDescriptor } = await import("./port-provider-descriptor.js");
-    return run(
-      client,
-      await loadDatabasePortDescriptor(row.store, config, {
-        version: Number(row.version),
-        pluginOwners,
-      }),
-    );
-  });
+    },
+    env,
+  );
 }

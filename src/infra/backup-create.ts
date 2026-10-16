@@ -26,6 +26,7 @@ import {
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { runOfflineDatabaseBackup } from "../snapshot/database-backup.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import {
@@ -387,12 +388,24 @@ export async function createBackupArchive(
   return await withCommandProcessScope(() => createBackupArchiveInScope(opts), opts.signal);
 }
 
-async function createBackupArchiveInScope(opts: BackupCreateOptions): Promise<BackupCreateResult> {
+async function createBackupArchiveInScope(
+  opts: BackupCreateOptions,
+  preparedPlan?: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
+): Promise<BackupCreateResult> {
   const nowMs = resolveDateTimestampMs(opts.nowMs);
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
-  const plan = await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs });
+  const plan =
+    preparedPlan ?? (await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs }));
+  const selection = plan.databaseSelection;
+  if (!preparedPlan && !opts.dryRun && selection?.postgres && plan.databaseConfig) {
+    return runOfflineDatabaseBackup(
+      plan.stateDir,
+      () => createBackupArchiveInScope({ ...opts, nowMs }, plan),
+      { config: plan.databaseConfig, selection },
+    );
+  }
   const outputPath = await resolveOutputPath({
     output: opts.output,
     nowMs,
