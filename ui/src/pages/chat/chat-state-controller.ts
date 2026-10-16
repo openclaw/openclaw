@@ -54,7 +54,7 @@ function transcriptSources(state: ChatPageHost): readonly unknown[] {
 
 export function createChatState<TState extends ChatPageHost>(
   renderer: {
-    requestUpdate: () => void;
+    invalidate: () => void;
     readonly updateComplete: Promise<unknown>;
   },
   onStateChange?: () => void,
@@ -458,12 +458,12 @@ export function createChatState<TState extends ChatPageHost>(
       backgroundRenderFrame ??= requestAnimationFrame(() => {
         backgroundRenderFrame = undefined;
         if (isRenderLifecycleScopeActive(scope)) {
-          renderer.requestUpdate();
+          renderer.invalidate();
         }
       });
     } else {
       cancelBackgroundRender();
-      renderer.requestUpdate();
+      renderer.invalidate();
     }
     return true;
   }

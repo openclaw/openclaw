@@ -4971,6 +4971,13 @@ bound to the captured owner, and shutdown joins accepted work. The existing
 update behavior are unchanged. Drain inspection reads pending and claimed rows in
 one snapshot so a concurrent release cannot hide a lane head between reads.
 Shutdown joins deferred settlement even when it starts before dispatch returns.
+The drain selects each lane head from that ordered snapshot and passes its ID and
+resolved lane to the existing claim writer. The pending-only update arbitrates
+competing owners; a refused claim leaves its lane blocked until the next pass.
+The drain does not repeat the backlog read or revalidate the entire selection
+window. A lane-policy change during the write wait takes effect on the next pass;
+channel inspection and live dispatch authority still apply before delivery.
+The shipped SDK `claimNext` API retains its standalone selection behavior.
 Accepted enqueues, claims, and resubmissions return the mutation's row directly;
 only duplicate enqueues read the retained row. Claims atomically update pending
 rows, and corrupt payloads are tombstoned in that same writer transaction.

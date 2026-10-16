@@ -36,12 +36,12 @@ import type {
 import { agentEngineInput, openAgentEngineStore } from "./openclaw-agent-db-engine.js";
 import { findOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
-  assertAgentDatabaseMaintenanceAuthority,
   hasAgentDatabaseMaintenanceAuthority,
   readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim,
   releaseOpenClawAgentDatabaseLease,
   type OpenClawAgentDatabaseWorkerLeaseReceipt,
 } from "./openclaw-agent-db-lease.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import { agentSchemaMetadataKey } from "./openclaw-agent-db-metadata.js";
 import {
   drainAgentDatabaseResources,

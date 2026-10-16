@@ -41,7 +41,7 @@ export async function prepareTtsPreferences(): Promise<PreparedTtsPreferences> {
     void load.then(release, release);
     pending = load;
   }
-  return { ...(await pending) };
+  return pending;
 }
 
 async function loadPath(context: OpenClawStateWorkerContext): Promise<PreparedTtsPreferences> {

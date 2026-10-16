@@ -199,7 +199,9 @@ suite.define(() => {
         await model.click();
         await selectChatModelOption(pane.locator('[data-chat-model-option="openai/model-b"]'));
         await gateway.waitForRequest("sessions.patch", { match: { key, model: "openai/model-b" } });
-        await pane.locator("[data-chat-thinking-select]").click();
+        const thinking = pane.locator("[data-chat-thinking-select]");
+        await expect.poll(() => thinking.getAttribute("aria-disabled")).toBe("false");
+        await thinking.click();
         const slider = pane.locator("[data-chat-thinking-slider]");
         await expect.poll(() => slider.isVisible()).toBe(true);
         await expect.poll(() => slider.isEnabled()).toBe(true);

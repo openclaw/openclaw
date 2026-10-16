@@ -249,9 +249,9 @@ export const RECOVERY_SUMMARY = {
 
 export function installDeliveryCompletionHooks(registerMatrix = false) {
   const fixtures = installDeliveryQueueTmpDirHooks();
-  let deliver: typeof import("./deliver.js").deliverOutboundPayloads;
+  let send: typeof import("../../plugin-sdk/channel-outbound.js").sendDurableMessageBatch;
   beforeAll(async () => {
-    ({ deliverOutboundPayloads: deliver } = await import("./deliver.js"));
+    ({ sendDurableMessageBatch: send } = await import("../../plugin-sdk/channel-outbound.js"));
   });
   beforeEach(async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
@@ -283,5 +283,17 @@ export function installDeliveryCompletionHooks(registerMatrix = false) {
     setActivePluginRegistry(createEmptyPluginRegistry());
     vi.unstubAllEnvs();
   });
-  return { ...fixtures, deliver: (...args: Parameters<typeof deliver>) => deliver(...args) };
+  return {
+    ...fixtures,
+    deliver: async ({
+      queuePolicy,
+      ...params
+    }: Omit<Parameters<DeliverFn>[0], "bestEffort" | "onDeliveryIntent">) => {
+      const result = await send({ ...params, durability: queuePolicy ?? "best_effort" });
+      if (result.status === "failed" || result.status === "partial_failed") {
+        throw result.error;
+      }
+      return result.results;
+    },
+  };
 }

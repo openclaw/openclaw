@@ -531,7 +531,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const parentSession = this.observedParentSessionRow();
     const header: ChatPaneHeaderProps = {
       paneId: this.paneId,
-      presented: { owner: this, isPresented: () => this.presented },
+      presented: { owner: this.element, isPresented: () => this.presented },
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
@@ -655,6 +655,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onBeginRename: () => row && this.beginHeaderRename(row),
       onRenameInput: (value) => {
         this.headerRenameValue = value;
+        this.invalidate();
       },
       onCommitRename: () => this.commitHeaderRename(),
       onCancelRename: () => this.cancelHeaderRename(),

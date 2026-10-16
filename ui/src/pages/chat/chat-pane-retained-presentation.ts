@@ -199,7 +199,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (archived && this.currentSessionArchived === false) {
       dismissThreadPortals(this.presentationId, this.element);
       if (this.archiveFocusOwned) {
-        this.querySelector<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
+        this.element.querySelector<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
       }
     }
     this.currentSessionArchived = archived;
@@ -215,7 +215,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const retained = this.hasQueuedMessageEdit;
     if (retained !== this.retainedQueuedEdit) {
       this.retainedQueuedEdit = retained;
-      this.dispatchEvent(new Event(QUEUED_EDIT_RETENTION_CHANGE_EVENT, { bubbles: true }));
+      this.element.dispatchEvent(new Event(QUEUED_EDIT_RETENTION_CHANGE_EVENT, { bubbles: true }));
     }
   }
 
@@ -368,7 +368,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       lifetime: presented.lifetime,
       revision: card.revision,
     });
-    this.requestUpdate();
+    this.invalidate();
   }
 
   protected override initialProgressCardTarget() {
@@ -463,6 +463,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     const { promise, resolve } = createDeferredCore<boolean>();
     this.resetConfirmation = { scopeKey, promise, resolve };
+    this.invalidate();
     return promise;
   }
 
@@ -479,6 +480,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return;
     }
     this.resetConfirmation = undefined;
+    this.invalidate();
     pending.resolve(confirmed);
   }
 
@@ -501,10 +503,9 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       void refreshCurrentChatSessionList(this.state).catch(() => undefined);
       void resumeStoredChatOutboxes(this.state);
     }
-    this.querySelector(".chat-transcript-announcement")?.setAttribute(
-      "aria-live",
-      active ? "polite" : "off",
-    );
+    this.element
+      .querySelector(".chat-transcript-announcement")
+      ?.setAttribute("aria-live", active ? "polite" : "off");
   }
 
   protected override presentedChanged(presented: boolean): void {
@@ -580,7 +581,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       clearSessionWorkspacePreviews(state);
       state.requestUpdate?.();
     }
-    this.querySelector(".chat-transcript-announcement")?.setAttribute("aria-live", "off");
+    this.element.querySelector(".chat-transcript-announcement")?.setAttribute("aria-live", "off");
   }
 
   public prepareForEviction(): void {

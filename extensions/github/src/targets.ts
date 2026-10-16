@@ -1,3 +1,4 @@
+import type { ControlUiLinkReaderDetailParams } from "openclaw/plugin-sdk/control-ui-link-reader";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type GitHubItemTarget = {
@@ -84,6 +85,7 @@ export function parseGitHubLinkParams(
   url: string;
   agentId?: string;
   refresh: boolean;
+  section?: ControlUiLinkReaderDetailParams["section"];
   filesExpanded: boolean;
 } | null {
   if (
@@ -91,6 +93,11 @@ export function parseGitHubLinkParams(
     typeof value.url !== "string" ||
     value.url.length > 4096 ||
     (value.refresh !== undefined && typeof value.refresh !== "boolean") ||
+    (value.section !== undefined &&
+      value.section !== "overview" &&
+      value.section !== "checks" &&
+      value.section !== "files" &&
+      value.section !== "discussion") ||
     (value.agentId !== undefined && (typeof value.agentId !== "string" || !value.agentId.trim()))
   ) {
     return null;
@@ -120,6 +127,7 @@ export function parseGitHubLinkParams(
           url: url.href,
           ...(typeof value.agentId === "string" ? { agentId: value.agentId.trim() } : {}),
           refresh: value.refresh === true,
+          ...(value.section !== undefined ? { section: value.section } : {}),
           filesExpanded: subpage === "files",
         }
       : null;

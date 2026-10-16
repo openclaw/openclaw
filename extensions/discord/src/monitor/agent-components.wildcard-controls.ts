@@ -1,5 +1,6 @@
 import { ComponentType } from "discord-api-types/v10";
 import { parseDiscordComponentCustomIdForInteraction } from "../component-custom-id.js";
+import type { DiscordComponentSelectType } from "../components.types.js";
 import {
   BaseMessageInteractiveComponent,
   Button,
@@ -31,7 +32,7 @@ export type DiscordComponentControlHandlers = {
 
 type SelectControlSpec = {
   type: ComponentType;
-  kind: "string" | "user" | "role" | "mentionable" | "channel";
+  kind: DiscordComponentSelectType;
 };
 
 const SELECT_CONTROLS = [
