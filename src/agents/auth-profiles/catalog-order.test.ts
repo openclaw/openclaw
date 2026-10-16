@@ -7,8 +7,25 @@ import {
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
+  createOAuthRefreshCredential,
 } from "./credential-fixtures.test-support.js";
 import type { AuthProfileStore } from "./types.js";
+
+const authOrder = (provider: string, ...ids: string[]): OpenClawConfig => ({
+  auth: { order: { [provider]: ids } },
+});
+
+function expectSelection(
+  store: AuthProfileStore,
+  config: OpenClawConfig,
+  provider: string,
+  apiKey: string,
+  profileId: string,
+) {
+  for (const resolve of [createProviderAuthResolver, createProviderApiKeyResolver]) {
+    expect(resolve({}, store, config)(provider)).toMatchObject({ apiKey, profileId });
+  }
+}
 
 vi.mock("../provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({ "proof-alias": "openai" }),
@@ -39,13 +56,7 @@ describe("provider catalog auth order", () => {
       [profileA]: createApiKeyCredential("openai", "key-a"),
       [profileB]: createApiKeyCredential("openai", "key-b"),
     });
-    const config: OpenClawConfig = {
-      auth: {
-        order: {
-          openai: [profileB, profileA],
-        },
-      },
-    };
+    const config = authOrder("openai", profileB, profileA);
 
     expect(createProviderAuthResolver({}, store, config)("openai")).toMatchObject({
       apiKey: "key-b",
@@ -71,19 +82,8 @@ describe("provider catalog auth order", () => {
         cooldownModel: "gpt-5.5",
       },
     };
-    const cooldownConfig: OpenClawConfig = {
-      auth: {
-        order: {
-          openai: [profileA, profileB],
-        },
-      },
-    };
-    for (const resolve of [createProviderAuthResolver, createProviderApiKeyResolver]) {
-      expect(resolve({}, store, cooldownConfig)("openai")).toMatchObject({
-        apiKey: "key-a",
-        profileId: profileA,
-      });
-    }
+    const cooldownConfig = authOrder("openai", profileA, profileB);
+    expectSelection(store, cooldownConfig, "openai", "key-a", profileA);
 
     store.usageStats = {
       [profileA]: {
@@ -91,26 +91,14 @@ describe("provider catalog auth order", () => {
         cooldownReason: "rate_limit",
       },
     };
-    for (const resolve of [createProviderAuthResolver, createProviderApiKeyResolver]) {
-      expect(resolve({}, store, cooldownConfig)("openai")).toMatchObject({
-        apiKey: "key-b",
-        profileId: profileB,
-      });
-    }
-
-    const aliasConfig: OpenClawConfig = {
-      auth: {
-        order: {
-          "proof-alias": [profileB, profileA],
-        },
-      },
-    };
-    for (const resolve of [createProviderAuthResolver, createProviderApiKeyResolver]) {
-      expect(resolve({}, store, aliasConfig)("proof-alias")).toMatchObject({
-        apiKey: "key-b",
-        profileId: profileB,
-      });
-    }
+    expectSelection(store, cooldownConfig, "openai", "key-b", profileB);
+    expectSelection(
+      store,
+      authOrder("proof-alias", profileB, profileA),
+      "proof-alias",
+      "key-b",
+      profileB,
+    );
   });
 
   it("keeps the static credential kind separate from the preferred OAuth profile", () => {
@@ -120,13 +108,12 @@ describe("provider catalog auth order", () => {
         provider: "minimax-portal",
         token: "catalog-token",
       },
-      "minimax-portal:oauth": {
-        type: "oauth",
+      "minimax-portal:oauth": createOAuthRefreshCredential({
         provider: "minimax-portal",
         access: "oauth-access",
         refresh: "oauth-refresh",
         expires: Date.now() + 60 * 60_000,
-      },
+      }),
     });
     expect(createProviderApiKeyResolver({}, store)("minimax-portal")).toMatchObject({
       apiKey: "catalog-token",
@@ -182,24 +169,19 @@ describe("provider catalog auth order", () => {
     const profileId = "openai:oauth-ref";
     const auth = createProviderAuthResolver(
       {},
-      {
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "oauth",
-            provider: "openai",
-            access: "",
-            refresh: "",
-            expires: 0,
-            oauthRef: {
-              source: "openclaw-credentials",
-              provider: "openai-codex",
-              id: "00000000000000000000000000000000",
-            },
+      createAuthProfileStoreFixture({
+        [profileId]: createOAuthRefreshCredential({
+          access: "",
+          refresh: "",
+          expires: 0,
+          oauthRef: {
+            source: "openclaw-credentials",
+            provider: "openai-codex",
+            id: "00000000000000000000000000000000",
           },
-        },
-      },
-      { auth: { order: { openai: [profileId] } } },
+        }),
+      }),
+      authOrder("openai", profileId),
     )("openai");
 
     expect(auth).toMatchObject({
@@ -216,20 +198,18 @@ describe("provider catalog auth order", () => {
     const resolveAuth = createProviderAuthResolver(
       {},
       createAuthProfileStoreFixture({
-        [profileA]: {
-          type: "oauth",
-          provider: "openai",
+        [profileA]: createOAuthRefreshCredential({
           access: "oauth-a",
           refresh: "refresh-a",
           expires: Date.now() + 60_000,
-        },
+        }),
         [profileB]: {
           type: "api_key",
           provider: "openai",
           keyRef: { source: "file", provider: "vault", id: "/openai/profile-b" },
         },
       }),
-      { auth: { order: { openai: [profileA, profileB] } } },
+      authOrder("openai", profileA, profileB),
     );
 
     expect(resolveAuth("openai")).toMatchObject({

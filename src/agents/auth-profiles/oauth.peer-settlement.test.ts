@@ -69,6 +69,33 @@ function resetOAuthTestState(): void {
 
 const profileId = "openai:default";
 const provider = "openai";
+function oauth(
+  prefix = "rotated",
+  overrides: Partial<import("./types.js").OAuthCredential> = {},
+): import("./types.js").OAuthCredential {
+  return {
+    type: "oauth",
+    provider,
+    access: prefix + "-access",
+    refresh: prefix + "-refresh",
+    expires: Date.now() + 60 * 60 * 1000,
+    ...overrides,
+  };
+}
+function expired(
+  overrides: Omit<Parameters<typeof createExpiredOauthStore>[0], "profileId" | "provider"> = {},
+) {
+  return createExpiredOauthStore({ profileId, provider, ...overrides });
+}
+async function agentDirectory(name: string) {
+  const directory = path.join(tempRoot, "agents", name, "agent");
+  await fs.mkdir(directory, { recursive: true });
+  return directory;
+}
+function expectTerminal(credential: import("./types.js").AuthProfileCredential | undefined) {
+  expect(credential?.type === "oauth" && isOAuthRefreshFence(credential)).toBe(true);
+  expect(credential?.type === "oauth" && isPendingOAuthRefreshFence(credential)).toBe(false);
+}
 function candidate(agentId: string, agentDir: string) {
   return {
     configured: true,
@@ -122,9 +149,8 @@ afterEach(async () => {
 
 describe("OAuth refresh peer settlement", () => {
   it("settles a replaced peer database discovered after provider refresh", async () => {
-    const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-    await fs.mkdir(peerAgentDir, { recursive: true });
-    const original = createExpiredOauthStore({ profileId, provider, accountId: "acct-a" });
+    const peerAgentDir = await agentDirectory("peer-a");
+    const original = expired({ accountId: "acct-a" });
     saveAuthProfileStore(original, peerAgentDir);
     const peerPath = resolveAuthProfileDatabasePath(peerAgentDir);
     const backupPath = path.join(tempRoot, "peer-before-refresh.sqlite");
@@ -133,14 +159,7 @@ describe("OAuth refresh peer settlement", () => {
     await fs.copyFile(peerPath, backupPath);
     const originalIdentity = readDatabasePathIdentitySync(peerPath);
     saveAuthProfileStore(original, mainAgentDir);
-    const replacement = {
-      type: "oauth" as const,
-      provider,
-      access: "rotated-access",
-      refresh: "rotated-refresh",
-      expires: Date.now() + 60 * 60 * 1000,
-      accountId: "acct-a",
-    };
+    const replacement = oauth("rotated", { accountId: "acct-a" });
     refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
       const fenced = read(peerAgentDir);
       expect(fenced?.type === "oauth" && isPendingOAuthRefreshFence(fenced)).toBe(true);
@@ -151,22 +170,17 @@ describe("OAuth refresh peer settlement", () => {
       return replacement;
     });
 
-    await expect(resolveFrom(mainAgentDir)).resolves.toEqual(
-      expect.objectContaining({ apiKey: replacement.access }),
-    );
+    await expect(resolveFrom(mainAgentDir)).resolves.toMatchObject({ apiKey: replacement.access });
     expect(read(mainAgentDir)).toMatchObject(replacement);
     expect(read(peerAgentDir)).toBeUndefined();
-    await expect(resolveFrom(peerAgentDir)).resolves.toEqual(
-      expect.objectContaining({ apiKey: replacement.access }),
-    );
+    await expect(resolveFrom(peerAgentDir)).resolves.toMatchObject({ apiKey: replacement.access });
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledOnce();
   });
 
   it.each([["failed", createFailedOAuthRefreshFence]])(
     "does not replace a different %s fence for the same refresh generation",
     async (_, build) => {
-      const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-      await fs.mkdir(peerAgentDir, { recursive: true });
+      const peerAgentDir = await agentDirectory("peer-a");
       const original = {
         type: "oauth" as const,
         provider,
@@ -197,9 +211,8 @@ describe("OAuth refresh peer settlement", () => {
       import("../../state/openclaw-agent-worker-store.js"),
       import("../../infra/sqlite-worker-contract.js"),
     ]);
-    const peerAgentDir = path.join(tempRoot, "agents", "peer-lost-reply", "agent");
-    await fs.mkdir(peerAgentDir, { recursive: true });
-    const store = createExpiredOauthStore({ profileId, provider });
+    const peerAgentDir = await agentDirectory("peer-lost-reply");
+    const store = expired();
     saveAuthProfileStore(store, peerAgentDir);
     const original = read(peerAgentDir);
     if (original?.type !== "oauth") {
@@ -238,21 +251,13 @@ describe("OAuth refresh peer settlement", () => {
   });
 
   it("terminally fences peers instead of exposing a different shared account", async () => {
-    const ownerAgentDir = path.join(tempRoot, "agents", "owner-a", "agent");
-    const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-    await Promise.all([
-      fs.mkdir(ownerAgentDir, { recursive: true }),
-      fs.mkdir(peerAgentDir, { recursive: true }),
+    const [ownerAgentDir, peerAgentDir] = await Promise.all([
+      agentDirectory("owner-a"),
+      agentDirectory("peer-a"),
     ]);
 
-    const accountA = createExpiredOauthStore({
-      profileId,
-      provider,
-      accountId: "acct-a",
-    });
-    const accountB = createExpiredOauthStore({
-      profileId,
-      provider,
+    const accountA = expired({ accountId: "acct-a" });
+    const accountB = expired({
       access: "shared-b-access",
       refresh: "shared-b-refresh",
       accountId: "acct-b",
@@ -263,20 +268,13 @@ describe("OAuth refresh peer settlement", () => {
     }
     sharedB.expires = Date.now() + 60 * 60 * 1000;
     saveAuthProfileStore(accountA, ownerAgentDir);
-    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), peerAgentDir);
+    saveAuthProfileStore(expired(), peerAgentDir);
     saveAuthProfileStore(accountB, mainAgentDir);
-    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue({
-      type: "oauth",
-      provider,
-      access: "rotated-a-access",
-      refresh: "rotated-a-refresh",
-      expires: Date.now() + 60 * 60 * 1000,
-      accountId: "acct-a",
-    });
-
-    await expect(resolveFrom(ownerAgentDir)).resolves.toEqual(
-      expect.objectContaining({ apiKey: "rotated-a-access" }),
+    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(
+      oauth("rotated-a", { accountId: "acct-a" }),
     );
+
+    await expect(resolveFrom(ownerAgentDir)).resolves.toMatchObject({ apiKey: "rotated-a-access" });
 
     expect(read(mainAgentDir)).toMatchObject({
       access: "shared-b-access",
@@ -287,8 +285,7 @@ describe("OAuth refresh peer settlement", () => {
       accountId: "acct-a",
     });
     const terminalPeer = read(peerAgentDir);
-    expect(terminalPeer?.type === "oauth" && isOAuthRefreshFence(terminalPeer)).toBe(true);
-    expect(terminalPeer?.type === "oauth" && isPendingOAuthRefreshFence(terminalPeer)).toBe(false);
+    expectTerminal(terminalPeer);
     await expect(resolveFrom(peerAgentDir)).resolves.toBeNull();
   });
 
@@ -308,8 +305,7 @@ describe("OAuth refresh peer settlement", () => {
   ])(
     "terminally fences an exact replacement for $name",
     async ({ provider: peerProvider, ownerIdentity, peerIdentity }) => {
-      const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-      await fs.mkdir(peerAgentDir, { recursive: true });
+      const peerAgentDir = await agentDirectory("peer-a");
       const peerProfileId = `${peerProvider}:default`;
       const ownerOriginal = {
         type: "oauth" as const,
@@ -347,22 +343,19 @@ describe("OAuth refresh peer settlement", () => {
         replacement,
       });
       const settled = read(peerAgentDir, peerProfileId);
-      expect(settled?.type === "oauth" && isOAuthRefreshFence(settled)).toBe(true);
-      expect(settled?.type === "oauth" && isPendingOAuthRefreshFence(settled)).toBe(false);
+      expectTerminal(settled);
     },
   );
 
   it("continues rolling back peers after one candidate cannot be restored or terminalized", async () => {
-    const original = createExpiredOauthStore({ profileId, provider }).profiles[profileId];
+    const original = expired().profiles[profileId];
     if (original?.type !== "oauth") {
       throw new Error("expected original OAuth credential");
     }
     const fence = createOAuthRefreshFence({ profileId, credential: original });
-    const brokenAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-    const healthyAgentDir = path.join(tempRoot, "agents", "peer-b", "agent");
-    await Promise.all([
-      fs.mkdir(brokenAgentDir, { recursive: true }),
-      fs.mkdir(healthyAgentDir, { recursive: true }),
+    const [brokenAgentDir, healthyAgentDir] = await Promise.all([
+      agentDirectory("peer-a"),
+      agentDirectory("peer-b"),
     ]);
     await fs.writeFile(resolveAuthProfileDatabasePath(brokenAgentDir), "not a sqlite database");
     saveAuthProfileStore({ version: 1, profiles: { [profileId]: fence } }, healthyAgentDir);
@@ -399,21 +392,13 @@ describe("OAuth refresh peer settlement", () => {
   });
 
   it("terminally fences superseded peers when shared inheritance is a different account", async () => {
-    const ownerAgentDir = path.join(tempRoot, "agents", "owner-a", "agent");
-    const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-    await Promise.all([
-      fs.mkdir(ownerAgentDir, { recursive: true }),
-      fs.mkdir(peerAgentDir, { recursive: true }),
+    const [ownerAgentDir, peerAgentDir] = await Promise.all([
+      agentDirectory("owner-a"),
+      agentDirectory("peer-a"),
     ]);
 
-    const accountA = createExpiredOauthStore({
-      profileId,
-      provider,
-      accountId: "acct-a",
-    });
-    const accountB = createExpiredOauthStore({
-      profileId,
-      provider,
+    const accountA = expired({ accountId: "acct-a" });
+    const accountB = expired({
       access: "shared-b-access",
       refresh: "shared-b-refresh",
       accountId: "acct-b",
@@ -442,14 +427,7 @@ describe("OAuth refresh peer settlement", () => {
       profiles: [
         {
           profileId,
-          credential: {
-            type: "oauth",
-            provider,
-            access: "relogin-a-access",
-            refresh: "relogin-a-refresh",
-            expires: Date.now() + 60 * 60 * 1000,
-            accountId: "acct-a",
-          },
+          credential: oauth("relogin-a", { accountId: "acct-a" }),
         },
       ],
       resetFailureState: true,
@@ -457,16 +435,13 @@ describe("OAuth refresh peer settlement", () => {
     });
     finishRefresh();
 
-    await expect(resolving).resolves.toEqual(
-      expect.objectContaining({ apiKey: "relogin-a-access" }),
-    );
+    await expect(resolving).resolves.toMatchObject({ apiKey: "relogin-a-access" });
     expect(read(mainAgentDir)).toMatchObject({
       access: "shared-b-access",
       accountId: "acct-b",
     });
     const terminalPeer = read(peerAgentDir);
-    expect(terminalPeer?.type === "oauth" && isOAuthRefreshFence(terminalPeer)).toBe(true);
-    expect(terminalPeer?.type === "oauth" && isPendingOAuthRefreshFence(terminalPeer)).toBe(false);
+    expectTerminal(terminalPeer);
   });
 
   it("reports exact removal owners and preserves a reconnected peer", async () => {
@@ -540,14 +515,9 @@ describe("OAuth refresh peer settlement", () => {
   });
 
   it("does not republish a refresh generation removed during provider I/O", async () => {
-    const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-    await fs.mkdir(peerAgentDir, { recursive: true });
+    const peerAgentDir = await agentDirectory("peer-a");
 
-    const original = createExpiredOauthStore({
-      profileId,
-      provider,
-      accountId: "acct-a",
-    });
+    const original = expired({ accountId: "acct-a" });
     saveAuthProfileStore(original, peerAgentDir);
     saveAuthProfileStore(original, mainAgentDir);
     expect(read(peerAgentDir)).toEqual(original.profiles[profileId]);
@@ -557,14 +527,7 @@ describe("OAuth refresh peer settlement", () => {
     refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
       markStarted();
       await finishRefreshGate;
-      return {
-        type: "oauth",
-        provider,
-        access: "late-rotated-access",
-        refresh: "late-rotated-refresh",
-        expires: Date.now() + 60 * 60 * 1000,
-        accountId: "acct-a",
-      } as never;
+      return oauth("late-rotated", { accountId: "acct-a" }) as never;
     });
 
     const resolving = resolveFrom(peerAgentDir);

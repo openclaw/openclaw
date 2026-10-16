@@ -20,6 +20,7 @@ import { withAgentDirEnv } from "./sqlite.test-support.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import type { OAuthCredential, RuntimeAuthProfileStore } from "./types.js";
 
+const readOptions = { allowKeychainPrompt: false, readOnly: true, syncExternalCli: false };
 const readMiniMax = vi.hoisted(() => vi.fn<() => OAuthCredential | null>(() => null));
 vi.mock("../cli-credentials.js", () => ({ readMiniMaxCliCredentialsCached: readMiniMax }));
 const credential = (overrides: Partial<OAuthCredential> = {}): OAuthCredential => ({
@@ -167,18 +168,12 @@ describe("external auth owner", () => {
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
     const loaded = ensureAuthProfileStore(agentDir, {
       ...(scoped ? { externalCliProviderIds: ["openai"] } : {}),
-      allowKeychainPrompt: false,
-      readOnly: true,
-      syncExternalCli: false,
+      ...readOptions,
     });
     // Scoped lookups publish retained health; ordinary lookups return it to the caller.
     const retained = scoped ? getRuntimeAuthProfileStoreSnapshotCore(agentDir) : loaded;
-    expect(retained).toMatchObject({
-      profiles: store.profiles,
-      order: store.order,
-      lastGood: store.lastGood,
-      usageStats: store.usageStats,
-    });
+    const { profiles, order, lastGood, usageStats } = store;
+    expect(retained).toMatchObject({ profiles, order, lastGood, usageStats });
     expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats).toEqual(store.usageStats);
   });
 
@@ -204,9 +199,7 @@ describe("external auth owner", () => {
       try {
         const loaded = ensureAuthProfileStore(agentDir, {
           externalCliProviderIds: ["openai"],
-          allowKeychainPrompt: false,
-          readOnly: true,
-          syncExternalCli: false,
+          ...readOptions,
         });
         expect(loaded.profiles).toEqual(store.profiles);
         expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles).toEqual(store.profiles);

@@ -154,9 +154,33 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
+function fixture(prefix: string) {
+  const directory = temporary.make(prefix);
+  return { directory, databasePath: path.join(directory, "openclaw-agent.sqlite") };
+}
+function useObservationTimers() {
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
+}
+function disableWatcher() {
+  vi.spyOn(fs, "watch").mockImplementation(() => {
+    throw new Error("synthetic unavailable watcher");
+  });
+}
+function nextChange(directory: string) {
+  return new Promise<void>((resolve) => {
+    const unsubscribe = registerAuthProfileFileChangeListener(({ directory: observed }) => {
+      if (observed === directory) {
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
+}
+
 it("rejects a swapped database before a privileged write even before observation runs", async () => {
-  const directory = temporary.make("auth-file-write-admission-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  const { databasePath } = fixture("auth-file-write-admission-");
   fs.writeFileSync(databasePath, "original synthetic database");
   captureAuthProfileFileIdentity(databasePath);
   const write = vi.fn();
@@ -174,24 +198,14 @@ it("rejects a swapped database before a privileged write even before observation
 });
 
 it("publishes a first owner write immediately and keeps same-file writes from revoking identity", async () => {
-  vi.useFakeTimers({
-    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-  const directory = temporary.make("auth-file-write-through-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  useObservationTimers();
+  const { directory, databasePath } = fixture("auth-file-write-through-");
   expect(readAuthProfileDatabaseIdentity(databasePath)?.key).toMatch(/^path:/);
   fs.writeFileSync(databasePath, "created synthetic database");
   noteAuthProfileFileWrite(databasePath);
   const captured = captureAuthProfileFileIdentity(databasePath);
   expect(captured.identity?.key).toMatch(/^file:/);
-  const changed = new Promise<void>((resolve) => {
-    const unsubscribe = registerAuthProfileFileChangeListener(({ directory: observed }) => {
-      if (observed === directory) {
-        unsubscribe();
-        resolve();
-      }
-    });
-  });
+  const changed = nextChange(directory);
   fs.writeFileSync(databasePath, "session-only write in the same file");
   await vi.advanceTimersByTimeAsync(30_000);
   await changed;
@@ -219,8 +233,7 @@ it("publishes a first owner write to previously admitted directory aliases", () 
 });
 
 it("keeps first-write authority when publication overtakes an observed file read", async () => {
-  const directory = temporary.make("auth-file-publication-race-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  const { databasePath } = fixture("auth-file-publication-race-");
   readAuthProfileDatabaseIdentity(databasePath);
   const original = fs.promises.stat;
   let published: ReturnType<typeof captureAuthProfileFileIdentity> | undefined;
@@ -242,14 +255,9 @@ it("keeps first-write authority when publication overtakes an observed file read
 });
 
 it("explicitly refreshes absent files without retiring unchanged authority", async () => {
-  vi.useFakeTimers({
-    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-  vi.spyOn(fs, "watch").mockImplementation(() => {
-    throw new Error("synthetic unavailable watcher");
-  });
-  const directory = temporary.make("auth-file-explicit-refresh-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  useObservationTimers();
+  disableWatcher();
+  const { directory, databasePath } = fixture("auth-file-explicit-refresh-");
   const legacyPath = path.join(directory, "auth.json");
   expect(readAuthProfileDatabaseIdentity(databasePath)?.key).toMatch(/^path:/);
   expect(authProfileSourceExists(legacyPath)).toBe(false);
@@ -266,14 +274,9 @@ it("explicitly refreshes absent files without retiring unchanged authority", asy
 });
 
 it("joins a fallback observation received while a prior refresh is pending", async () => {
-  vi.useFakeTimers({
-    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-  vi.spyOn(fs, "watch").mockImplementation(() => {
-    throw new Error("synthetic unavailable watcher");
-  });
-  const directory = temporary.make("auth-file-coalesced-refresh-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  useObservationTimers();
+  disableWatcher();
+  const { directory, databasePath } = fixture("auth-file-coalesced-refresh-");
   fs.writeFileSync(databasePath, "synthetic database");
   readAuthProfileDatabaseIdentity(databasePath);
   const firstStarted = Promise.withResolvers<void>();
@@ -323,24 +326,14 @@ it("joins a fallback observation received while a prior refresh is pending", asy
 });
 
 it("invalidates admitted auth facts after a separate process replaces their files", async () => {
-  vi.useFakeTimers({
-    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-  const directory = temporary.make("auth-file-owner-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  useObservationTimers();
+  const { directory, databasePath } = fixture("auth-file-owner-");
   const legacyPath = path.join(directory, "auth-profiles.json");
   fs.writeFileSync(databasePath, "initial synthetic database");
   const captured = captureAuthProfileFileIdentity(databasePath);
   const before = captured.identity;
   expect(authProfileSourceExists(legacyPath)).toBe(false);
-  const changed = new Promise<void>((resolve) => {
-    const unsubscribe = registerAuthProfileFileChangeListener(({ directory: changedDirectory }) => {
-      if (directory === changedDirectory) {
-        unsubscribe();
-        resolve();
-      }
-    });
-  });
+  const changed = nextChange(directory);
   await promisify(execFile)(process.execPath, [
     "-e",
     'const fs = require("node:fs"); const [db, legacy] = process.argv.slice(1); fs.writeFileSync(db + ".replacement", "replacement synthetic database"); fs.renameSync(db + ".replacement", db); fs.writeFileSync(legacy, "{}");',
@@ -361,23 +354,12 @@ it("invalidates admitted auth facts after a separate process replaces their file
 });
 
 it("periodically invalidates when directory events are unavailable", async () => {
-  vi.useFakeTimers({
-    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-  vi.spyOn(fs, "watch").mockImplementation(() => {
-    throw new Error("synthetic unavailable watcher");
-  });
+  useObservationTimers();
+  disableWatcher();
   const directory = temporary.make("auth-file-fallback-");
   const legacyPath = path.join(directory, "auth.json");
   expect(authProfileSourceExists(legacyPath)).toBe(false);
-  const changed = new Promise<void>((resolve) => {
-    const unsubscribe = registerAuthProfileFileChangeListener(({ directory: observed }) => {
-      if (observed === directory) {
-        unsubscribe();
-        resolve();
-      }
-    });
-  });
+  const changed = nextChange(directory);
   fs.writeFileSync(legacyPath, "{}");
   await vi.advanceTimersByTimeAsync(30_000);
   await changed;
@@ -385,20 +367,10 @@ it("periodically invalidates when directory events are unavailable", async () =>
 });
 
 it("keeps an absent database readable as missing after fallback revalidation", async () => {
-  vi.useFakeTimers({
-    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-  const directory = temporary.make("auth-file-still-missing-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  useObservationTimers();
+  const { directory, databasePath } = fixture("auth-file-still-missing-");
   const captured = captureAuthProfileFileIdentity(databasePath);
-  const changed = new Promise<void>((resolve) => {
-    const unsubscribe = registerAuthProfileFileChangeListener(({ directory: observed }) => {
-      if (observed === directory) {
-        unsubscribe();
-        resolve();
-      }
-    });
-  });
+  const changed = nextChange(directory);
   await vi.advanceTimersByTimeAsync(30_000);
   await changed;
   expect(readAuthProfileDatabaseIdentity(databasePath)).toEqual(captured.identity);
@@ -406,8 +378,7 @@ it("keeps an absent database readable as missing after fallback revalidation", a
 });
 
 it("retires observations with the database owner", async () => {
-  const directory = temporary.make("auth-file-retired-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  const { databasePath } = fixture("auth-file-retired-");
   fs.writeFileSync(databasePath, "synthetic database");
   const captured = captureAuthProfileFileIdentity(databasePath);
   await applyAgentDatabaseReaderRequest({
@@ -420,8 +391,7 @@ it("retires observations with the database owner", async () => {
 });
 
 it("keeps physical file authority through logical snapshot reset", async () => {
-  const directory = temporary.make("auth-file-logical-reset-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  const { databasePath } = fixture("auth-file-logical-reset-");
   fs.writeFileSync(databasePath, "synthetic database");
   const captured = captureAuthProfileFileIdentity(databasePath);
   clearRuntimeAuthProfileStoreSnapshots();
@@ -455,8 +425,7 @@ it("keeps sibling file authority when another database is replaced or retired", 
 });
 
 it("reports a first database file separately from a replaced credential source", async () => {
-  const directory = temporary.make("auth-file-first-session-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  const { directory, databasePath } = fixture("auth-file-first-session-");
   readAuthProfileDatabaseIdentity(databasePath);
   const changes: Array<{ identityChanged: boolean; createdPaths: readonly string[] }> = [];
   const unsubscribe = registerAuthProfileFileChangeListener((change) => {
