@@ -110,10 +110,17 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
     ) {
       return;
     }
+    // Native migration locks and private archive row order have no PostgreSQL SQL equivalent.
+    // Keep other constructs at these owners, and these constructs at callers, in the ratchet.
+    const nativeMaintenance =
+      (file === "src/infra/update-doctor-migration-attribution.ts" &&
+        (match.construct === "transaction-mode" || match.construct === "pragma")) ||
+      (file === "src/infra/sqlite-migration-scoped-snapshot.ts" && match.construct === "rowid");
     const { line, character } = source.getLineAndCharacterOfPosition(position);
     sites.push({
       ...match,
-      owner: match.owner || SQLITE_PRIMITIVE_OWNERS.includes(file),
+      group: nativeMaintenance ? "engine-maintenance" : match.group,
+      owner: nativeMaintenance || match.owner || SQLITE_PRIMITIVE_OWNERS.includes(file),
       line: line + 1,
       column: character + 1,
     });

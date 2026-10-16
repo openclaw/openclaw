@@ -360,37 +360,105 @@ it("compares base to working tree or index using only changed files, and permits
 });
 
 it.each([
-  { file: "src/infra/sqlite-strict.ts", sql: "PRAGMA foreign_keys = OFF", result: 0, owner: true },
-  { file: "src/consumer.ts", sql: "PRAGMA foreign_keys = OFF", result: 1, owner: false },
-  { file: "src/infra/sqlite-snapshot.ts", sql: "PRAGMA auto_vacuum", result: 0, owner: true },
-  { file: "src/consumer.ts", sql: "PRAGMA auto_vacuum", result: 1, owner: false },
+  {
+    file: "src/infra/sqlite-strict.ts",
+    sql: "PRAGMA foreign_keys = OFF",
+    result: 0,
+    owner: true,
+    construct: "pragma",
+  },
+  {
+    file: "src/consumer.ts",
+    sql: "PRAGMA foreign_keys = OFF",
+    result: 1,
+    owner: false,
+    construct: "pragma",
+  },
+  {
+    file: "src/infra/sqlite-snapshot.ts",
+    sql: "PRAGMA auto_vacuum",
+    result: 0,
+    owner: true,
+    construct: "pragma",
+  },
+  {
+    file: "src/consumer.ts",
+    sql: "PRAGMA auto_vacuum",
+    result: 1,
+    owner: false,
+    construct: "pragma",
+  },
   {
     file: "src/infra/sqlite-snapshot.ts",
     sql: "INSERT OR IGNORE INTO t VALUES (1)",
     result: 1,
     owner: true,
+    construct: "insert-conflict",
   },
   {
     file: "src/infra/sqlite-snapshot.ts",
     sql: "SELECT json_extract(value, '$') FROM t",
     result: 1,
     owner: true,
+    construct: "json-projection",
   },
   {
     file: "src/infra/sqlite-strict.ts",
     sql: "INSERT OR IGNORE INTO t VALUES (1)",
     result: 1,
     owner: true,
+    construct: "insert-conflict",
   },
   {
     file: "src/infra/sqlite-strict.ts",
     sql: "SELECT json_extract(value, '$') FROM t",
     result: 1,
     owner: true,
+    construct: "json-projection",
   },
+  ...(
+    [
+      ["BEGIN EXCLUSIVE", "transaction-mode", 0],
+      ["PRAGMA locking_mode=EXCLUSIVE", "pragma", 0],
+      ["VACUUM", "vacuum", 1],
+      ["INSERT OR IGNORE INTO t VALUES (1)", "insert-conflict", 1],
+      ["SELECT json_extract(value, '$') FROM t", "json-projection", 1],
+    ] as const
+  ).map(([sql, construct, result]) => ({
+    file: "src/infra/update-doctor-migration-attribution.ts",
+    sql,
+    construct,
+    result,
+    owner: result === 0,
+  })),
+  ...(
+    [
+      ["SELECT * FROM archive ORDER BY rowid", "rowid", 0],
+      ["INSERT OR IGNORE INTO t VALUES (1)", "insert-conflict", 1],
+      ["SELECT json_extract(value, '$') FROM t", "json-projection", 1],
+    ] as const
+  ).map(([sql, construct, result]) => ({
+    file: "src/infra/sqlite-migration-scoped-snapshot.ts",
+    sql,
+    construct,
+    result,
+    owner: true,
+  })),
+  ...(
+    [
+      ["BEGIN EXCLUSIVE", "transaction-mode"],
+      ["SELECT * FROM archive ORDER BY rowid", "rowid"],
+    ] as const
+  ).map(([sql, construct]) => ({
+    file: "src/consumer.ts",
+    sql,
+    construct,
+    result: 1,
+    owner: false,
+  })),
 ])(
   "ratchets $sql in $file with only primitive maintenance excluded",
-  ({ file, sql, result, owner }) => {
+  ({ file, sql, result, owner, construct }) => {
     const { root, write, git } = fixture();
     write(file, "export {};\n");
     git("add", ".");
@@ -400,12 +468,12 @@ it.each([
     vi.spyOn(console, "error").mockImplementation(() => {});
     const logs = vi.spyOn(console, "log").mockImplementation(() => {});
     expect(main(root, ["--base", base])).toBe(result);
-    expect(inventory(root)).toMatchObject([{ file, matches: [{ owner }] }]);
+    expect(inventory(root)).toMatchObject([{ file, matches: [{ owner, construct }] }]);
     if (result === 0) {
       expect(logs).toHaveBeenCalledWith(
         "SQLite primitive owners: 1 engine-maintenance matches in changed files (excluded from comparison).",
       );
-      expect(logs).toHaveBeenCalledWith(expect.stringContaining("pragma (owner)"));
+      expect(logs).toHaveBeenCalledWith(expect.stringContaining(`${construct} (owner)`));
     }
   },
 );
