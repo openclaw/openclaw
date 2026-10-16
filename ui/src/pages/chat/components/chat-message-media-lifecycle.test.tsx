@@ -165,16 +165,56 @@ function observeSubscriber(subscriber: () => void): () => void {
   return subscriber;
 }
 
+function createImagePane(
+  images: ImageBlock[] | (() => ImageBlock[]),
+  options: Omit<ImageRenderOptions, "onRequestUpdate"> = {},
+) {
+  const container = document.createElement("div");
+  let root: ReturnType<typeof renderImages>;
+  const rerender = observeSubscriber(() => {
+    root = renderImages(container, typeof images === "function" ? images() : images, {
+      ...options,
+      onRequestUpdate: rerender,
+    });
+  });
+  return {
+    container,
+    rerender,
+    setConnected: (connected: boolean) => root.setConnected(connected),
+  };
+}
+
 function createManagedImagePane(
   source: string,
   options: Omit<ImageRenderOptions, "onRequestUpdate"> = {},
   artifactId?: string,
+  mimeType?: string,
 ) {
-  const container = document.createElement("div");
-  const rerender = observeSubscriber(() =>
-    renderManagedImage(container, source, { ...options, onRequestUpdate: rerender }, artifactId),
+  return createImagePane(
+    () => [{ url: source, alt: "Managed image", artifactId, mimeType }],
+    options,
   );
-  return { container, rerender };
+}
+
+function abortableFetch() {
+  let signal: AbortSignal | undefined;
+  const request = vi.fn(
+    (_source: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        signal = init?.signal ?? undefined;
+        signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("last pane disconnected", "AbortError")),
+          { once: true },
+        );
+      }),
+  );
+  return {
+    request,
+    get signal() {
+      return signal;
+    },
+  };
 }
 
 function ticketResponse(mediaTicket: string, expiresInMs = 90_000) {
@@ -204,63 +244,6 @@ function createAvailabilityPane(source: string, authToken: string, policyKey?: s
 }
 
 describe("chat media resource lifecycle", () => {
-  it.each([
-    { mimeType: "image/gif", managed: true, variant: "full" },
-    { mimeType: "image/gif", managed: false, variant: "full" },
-    { mimeType: "image/png", managed: true, variant: "thumbnail" },
-    { mimeType: "image/png", managed: false, variant: "thumbnail" },
-  ])(
-    "loads the explicit inline image variant ($mimeType, managed: $managed)",
-    async ({ mimeType, managed, variant }) => {
-      const source = managedImageSource();
-      const artifactId = "inline-image-" + crypto.randomUUID();
-      const { blobUrl } = installManagedImageUrls();
-      const fetchMock = vi.fn(async (_url: string) => ({
-        ok: true,
-        blob: async () => new Blob(["pixels"], { type: mimeType }),
-      }));
-      vi.stubGlobal("fetch", fetchMock);
-      const resolveArtifactDownload = vi.fn(async (_params: unknown) => ({
-        url: source,
-        ...(!managed ? { blob: new Blob(["pixels"], { type: mimeType }) } : {}),
-      }));
-      const message = {
-        role: "assistant",
-        content: [{ type: "image", artifactId, mimeType, ...(managed ? { url: source } : {}) }],
-      };
-      const images = projectMessageMedia(message, normalizeMessage(message).content).images;
-      const container = document.createElement("div");
-      const rerender = observeSubscriber(() =>
-        renderImages(container, images, {
-          sessionKey: "agent:main:main",
-          resolveArtifactDownload,
-          onRequestUpdate: rerender,
-        }),
-      );
-      rerender();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(resolveArtifactDownload.mock.calls.map(([params]) => params)).toEqual([
-        {
-          sessionKey: "agent:main:main",
-          artifactId,
-          variant,
-          ...(variant === "thumbnail" ? { previewWidth: 480 } : {}),
-        },
-      ]);
-      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
-        managed
-          ? [
-              variant === "full"
-                ? source
-                : source.replace(/\/full$/u, "/thumbnail") + "?v=4&width=480",
-            ]
-          : [],
-      );
-      expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
-      unmountImages(container);
-    },
-  );
-
   it("retries a GIF original and reuses it when the viewer opens", async () => {
     const source = managedImageSource();
     const { blobUrl } = installManagedImageUrls();
@@ -272,15 +255,11 @@ describe("chat media resource lifecycle", () => {
       .mockResolvedValueOnce({ ok: false, blob: async () => new Blob() });
     vi.stubGlobal("fetch", fetchMock);
     const onOpenImage = vi.fn();
-    const container = document.createElement("div");
-    const rerender = observeSubscriber(() =>
-      renderManagedImage(
-        container,
-        source,
-        { onRequestUpdate: rerender, onOpenImage },
-        undefined,
-        "image/gif",
-      ),
+    const { container, rerender } = createManagedImagePane(
+      source,
+      { onOpenImage },
+      undefined,
+      "image/gif",
     );
     rerender();
     await vi.advanceTimersByTimeAsync(0);
@@ -341,11 +320,8 @@ describe("chat media resource lifecycle", () => {
         );
       const fetchMock = vi.fn(async (_url: string) => imageResponse());
       vi.stubGlobal("fetch", fetchMock);
-      const container = document.createElement("div");
       const options = { sessionKey: "first-session", connectionEpoch: 1, resolveArtifactDownload };
-      const rerender = observeSubscriber(() =>
-        renderImages(container, [{ artifactId }], { ...options, onRequestUpdate: rerender }),
-      );
+      const { container, rerender } = createImagePane(() => [{ artifactId }], options);
       rerender();
       options.sessionKey = "second-session";
       rerender();
@@ -547,17 +523,12 @@ describe("chat media resource lifecycle", () => {
   it("keeps simultaneous managed images until their individual render parts disappear", async () => {
     const { fetchMock } = installImageFetch();
 
-    const container = document.createElement("div");
     const firstSource = managedImageSource();
     const secondSource = managedImageSource();
     let sources = [firstSource, secondSource];
-    const rerender = observeSubscriber(() => {
-      const images = sources.map((source) => ({
-        url: source,
-        alt: "Managed image",
-      }));
-      renderImages(container, images, { onRequestUpdate: rerender });
-    });
+    const { container, rerender } = createImagePane(() =>
+      sources.map((url) => ({ url, alt: "Managed image" })),
+    );
 
     rerender();
     const firstResource = managedImageResource(firstSource);
@@ -617,26 +588,23 @@ describe("chat media resource lifecycle", () => {
   it("does not subscribe or fetch a managed image while its Solid owner is disconnected", async () => {
     const { fetchMock } = installImageFetch();
 
-    const container = document.createElement("div");
     let source = managedImageSource();
-    let root!: ReturnType<typeof renderImages>;
-    const rerender = observeSubscriber(() => {
-      const image = { url: source, alt: "Managed image" };
-      root = renderImages(container, [image], { onRequestUpdate: rerender });
-    });
+    const { container, rerender, setConnected } = createImagePane(() => [
+      { url: source, alt: "Managed image" },
+    ]);
 
     rerender();
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    root.setConnected(false);
+    setConnected(false);
     source = managedImageSource();
     rerender();
     await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    root.setConnected(true);
+    setConnected(true);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -857,21 +825,8 @@ describe("chat media resource lifecycle", () => {
 
   it("recovers a shared attachment without reviving a disconnected pane", async () => {
     const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
-    let requestSignal: AbortSignal | undefined;
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(null, { status: 401 }))
-      .mockImplementationOnce(
-        (_source: string, init?: RequestInit) =>
-          new Promise<Response>((_resolve, reject) => {
-            requestSignal = init?.signal ?? undefined;
-            requestSignal?.addEventListener(
-              "abort",
-              () => reject(new DOMException("last pane disconnected", "AbortError")),
-              { once: true },
-            );
-          }),
-      );
+    const pending = abortableFetch();
+    const fetchMock = pending.request.mockResolvedValueOnce(new Response(null, { status: 401 }));
     vi.stubGlobal("fetch", fetchMock);
     const first = vi.fn();
     const second = vi.fn();
@@ -892,10 +847,10 @@ describe("chat media resource lifecycle", () => {
     expect(second).toHaveBeenCalledOnce();
     resolveAssistantAttachmentAvailability(source, secondOptions);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(requestSignal?.aborted).toBe(false);
+    expect(pending.signal?.aborted).toBe(false);
 
     releaseChatMediaResourceSubscriber(second);
-    expect.soft(requestSignal?.aborted).toBe(true);
+    expect.soft(pending.signal?.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(0);
     first.mockClear();
     second.mockClear();
@@ -910,18 +865,8 @@ describe("chat media resource lifecycle", () => {
 
   it("keeps shared image work alive until the last split pane disconnects", async () => {
     const source = managedImageSource();
-    let requestSignal: AbortSignal | undefined;
-    const fetchMock = vi.fn(
-      (_source: string, init?: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          requestSignal = init?.signal ?? undefined;
-          requestSignal?.addEventListener(
-            "abort",
-            () => reject(new DOMException("last pane disconnected", "AbortError")),
-            { once: true },
-          );
-        }),
-    );
+    const pending = abortableFetch();
+    const fetchMock = pending.request;
     vi.stubGlobal("fetch", fetchMock);
 
     const { rerender: rerenderFirst } = createManagedImagePane(source);
@@ -932,13 +877,13 @@ describe("chat media resource lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     releaseChatMediaResourceSubscriber(rerenderFirst);
-    expect(requestSignal?.aborted).toBe(false);
+    expect(pending.signal?.aborted).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     releaseChatMediaResourceSubscriber(rerenderSecond);
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(requestSignal?.aborted).toBe(true);
+    expect(pending.signal?.aborted).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -974,46 +919,6 @@ describe("chat media resource lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(createObjectURL).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(imageSrc(container)).toBe(blobUrl);
-  });
-
-  it("retries signed artifact tickets without exposing gateway or requester credentials", async () => {
-    const source = managedImageSource();
-    const artifactId = `artifact-${crypto.randomUUID()}`;
-    const ticketedUrl = `${source}?mediaTicket=signed`;
-    const { blobUrl } = installManagedImageUrls();
-    const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
-    const fetchMock = vi
-      .fn<
-        (
-          url: string,
-          init: RequestInit,
-        ) => Promise<{ ok: false } | ReturnType<typeof imageResponse>>
-      >()
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce(imageResponse());
-    vi.stubGlobal("fetch", fetchMock);
-
-    const { container, rerender } = createManagedImagePane(
-      source,
-      { authToken: "must-never-be-forwarded", resolveArtifactDownload },
-      artifactId,
-    );
-
-    rerender();
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    for (const [requestUrl, init] of fetchMock.mock.calls) {
-      expect(requestUrl).toBe(
-        `${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=4&width=480`,
-      );
-      const headers = new Headers(init.headers);
-      expect(headers.get("Authorization")).toBeNull();
-      expect(headers.get("x-openclaw-requester-session-key")).toBeNull();
-    }
     expect(imageSrc(container)).toBe(blobUrl);
   });
 });

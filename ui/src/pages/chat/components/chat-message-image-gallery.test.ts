@@ -23,6 +23,8 @@ import {
 } from "./chat-message.test-support.ts";
 
 let container: HTMLDivElement;
+const managedSource = () =>
+  `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
 let onRequestUpdate: () => void;
 let imageView: ReturnType<typeof mountSolid<MessageImagesProps>> | undefined;
 
@@ -212,97 +214,11 @@ describe("message image gallery loading", () => {
     },
   );
 
-  it("opens the cached preview immediately, upgrades a bounded rendition after decoding, and reuses it", async () => {
-    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
-    const full = createDeferred<Response>();
-    const decoded = createDeferred();
-    const decode = vi.fn(() => decoded.promise);
-    const blobPrefix = `blob:progressive-${crypto.randomUUID()}`;
-    stubImageDecoding(blobPrefix, decode);
-    const fetch = vi.fn((url: string) =>
-      url.includes("width=960") ? full.promise : Promise.resolve(imageResponse()),
-    );
-    vi.stubGlobal("fetch", fetch);
-    const gallery = createGallery();
-    const { onOpenImage, dispose } = gallery;
-    try {
-      renderImages([{ url: source, alt: "Detailed screenshot" }], {
-        onOpenImage,
-        onRequestUpdate,
-      });
-      await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
-      const tile = container.querySelector<HTMLButtonElement>(".chat-message-image-button")!;
-      tile.click();
-
-      expect(onOpenImage).toHaveBeenCalledOnce();
-      expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-0`);
-      full.resolve(imageResponse());
-      await vi.waitFor(() => expect(decode).toHaveBeenCalledOnce());
-      expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-0`);
-      decoded.resolve();
-      await vi.waitFor(() =>
-        expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-1`),
-      );
-
-      gallery.close();
-      tile.click();
-      expect(onOpenImage).toHaveBeenCalledTimes(2);
-      expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-0`);
-      await vi.waitFor(() =>
-        expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-1`),
-      );
-      expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-        source.replace(/\/full$/u, "/thumbnail?v=4&width=480"),
-        source.replace(/\/full$/u, "/thumbnail?v=4&width=960"),
-      ]);
-    } finally {
-      full.resolve(new Response(null, { status: 503 }));
-      decoded.resolve();
-      dispose();
-    }
-  });
-
-  it("keeps the preview when reopening a rendition the browser cannot decode", async () => {
-    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
-    const blobPrefix = `blob:unsupported-${crypto.randomUUID()}`;
-    const decode = vi.fn(async () => {
-      throw new Error("Unsupported image format");
-    });
-    stubImageDecoding(blobPrefix, decode);
-    const fetch = vi.fn(async (_url: string) => imageResponse());
-    vi.stubGlobal("fetch", fetch);
-    const gallery = createGallery();
-    const { onOpenImage, dispose } = gallery;
-    try {
-      renderImages([{ url: source, alt: "Original in unsupported format" }], {
-        onOpenImage,
-        onRequestUpdate,
-      });
-      await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
-      const tile = container.querySelector<HTMLButtonElement>(".chat-message-image-button")!;
-      tile.click();
-      await vi.waitFor(() => expect(decode).toHaveBeenCalledOnce());
-      expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-0`);
-
-      gallery.close();
-      tile.click();
-      expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-0`);
-      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(2));
-      expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-0`);
-      expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-        source.replace(/\/full$/u, "/thumbnail?v=4&width=480"),
-        source.replace(/\/full$/u, "/thumbnail?v=4&width=960"),
-      ]);
-    } finally {
-      dispose();
-    }
-  });
-
   it.each(["navigation", "tile"] as const)(
     "does not prefetch neighbors and retries a failed selected rendition via %s",
     async (action) => {
       vi.useFakeTimers();
-      const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+      const source = managedSource();
       const blobPrefix = `blob:gallery-${crypto.randomUUID()}`;
       stubImageDecoding(blobPrefix, async () => {});
       const fetchDisplay = vi.fn(async () => new Response(null, { status: 503 }));

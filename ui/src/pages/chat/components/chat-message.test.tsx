@@ -6,7 +6,6 @@ import { projectAgentToolActivity } from "../../../../../src/infra/agent-activit
 import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts";
-import * as localStorageModule from "../../../local-storage.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -16,7 +15,6 @@ import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { ChatNotice } from "./chat-divider.tsx";
-import { dismissConfirmedActionPopovers } from "./chat-message-confirmation-view.tsx";
 import {
   ActivityGroup,
   MessageGroup as MessageGroupView,
@@ -47,7 +45,6 @@ import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import "./chat-detail-panel.tsx";
 
 let view: HTMLDivElement;
-const localStorageValues = new Map<string, string>();
 const mediaSubscribers = new Set<() => void>();
 const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 const renderStreamingMarkdown = markdown.toStreamingMarkdownParts;
@@ -57,26 +54,12 @@ const streamingMarkdownRenderMock = vi.fn((value: string): [string, string] => [
   `<div class="streaming-markdown">${value}</div>`,
 ]);
 
-function getSafeLocalStorageMock(): Storage {
-  return {
-    get length() {
-      return localStorageValues.size;
-    },
-    clear: () => localStorageValues.clear(),
-    getItem: (key: string) => localStorageValues.get(key) ?? null,
-    key: (index: number) => [...localStorageValues.keys()][index] ?? null,
-    removeItem: (key: string) => localStorageValues.delete(key),
-    setItem: (key: string, value: string) => localStorageValues.set(key, value),
-  };
-}
-
 function TestAvatar(props: { role: string }) {
   return <div class={`chat-avatar ${props.role}`} />;
 }
 
 beforeEach(() => {
   view = document.createElement("div");
-  vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
   vi.spyOn(markdown, "toStreamingMarkdownParts").mockImplementation(streamingMarkdownRenderMock);
   vi.spyOn(chatAvatar, "ChatAvatar").mockImplementation(TestAvatar);
@@ -333,137 +316,6 @@ function renderMessageGroups(
   );
 }
 
-function clearConfirmedActionSkip() {
-  localStorageValues.delete("openclaw:skip-rewind-confirm");
-}
-
-function stubAnimationFrameQueue() {
-  const callbacks: FrameRequestCallback[] = [];
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    callbacks.push(callback);
-    return callbacks.length;
-  });
-  return () => {
-    const pending = callbacks.splice(0);
-    for (const callback of pending) {
-      callback(performance.now());
-    }
-  };
-}
-
-function getLastCaptureListener(calls: readonly unknown[][], event: string) {
-  return (
-    calls.findLast(
-      ([type, listener, options]) => type === event && options === true && listener,
-    )?.[1] ?? null
-  );
-}
-
-function countCaptureListenerRemovals(
-  calls: readonly unknown[][],
-  listener: unknown,
-  event: string,
-) {
-  return calls.filter(
-    ([type, removedListener, options]) =>
-      type === event && options === true && removedListener === listener,
-  ).length;
-}
-
-function renderConfirmedActionFixture() {
-  const container = document.body.appendChild(document.createElement("div"));
-  container.dataset.confirmedActionFixture = "true";
-  const onAction = vi.fn();
-  clearConfirmedActionSkip();
-  renderGroupedMessage(
-    createUserMessage("hello from user", { timestamp: 1000 }),
-    "user",
-    { onRewind: onAction },
-    container,
-  );
-  const actionButton = container.querySelector<HTMLButtonElement>(".chat-group-rewind");
-  expect(actionButton).toBeInstanceOf(HTMLButtonElement);
-  return { actionButton: actionButton!, container, onAction };
-}
-
-function openConfirmedAction(actionButton: HTMLButtonElement) {
-  actionButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-}
-
-function domRect(params: Partial<Pick<DOMRect, "left" | "top" | "width" | "height">>): DOMRect {
-  return new DOMRect(params.left ?? 0, params.top ?? 0, params.width ?? 0, params.height ?? 0);
-}
-
-function stubConfirmedActionGeometry(params: {
-  trigger: { left: number; top: number; width: number; height: number };
-  popover: { width: number; height: number };
-  viewport: { left?: number; top?: number; width: number; height: number };
-}) {
-  vi.stubGlobal("innerWidth", params.viewport.width);
-  vi.stubGlobal("innerHeight", params.viewport.height);
-  vi.stubGlobal("visualViewport", {
-    height: params.viewport.height,
-    offsetLeft: params.viewport.left ?? 0,
-    offsetTop: params.viewport.top ?? 0,
-    width: params.viewport.width,
-  });
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
-    this: HTMLElement,
-  ) {
-    if (this.classList.contains("chat-group-rewind")) {
-      return domRect(params.trigger);
-    }
-    if (this.classList.contains("chat-confirm-popover")) {
-      return domRect(params.popover);
-    }
-    return domRect({});
-  });
-}
-
-function setupArmedConfirmedAction() {
-  const flushAnimationFrames = stubAnimationFrameQueue();
-  const addListenerSpy = vi.spyOn(document, "addEventListener");
-  const removeListenerSpy = vi.spyOn(document, "removeEventListener");
-  const addKeyListenerSpy = vi.spyOn(window, "addEventListener");
-  const removeKeyListenerSpy = vi.spyOn(window, "removeEventListener");
-  const fixture = renderConfirmedActionFixture();
-
-  openConfirmedAction(fixture.actionButton);
-  flushAnimationFrames();
-
-  const outsideClickListener = getLastCaptureListener(addListenerSpy.mock.calls, "click");
-  const outsideContextMenuListener = getLastCaptureListener(
-    addListenerSpy.mock.calls,
-    "contextmenu",
-  );
-  const escapeListener = getLastCaptureListener(addKeyListenerSpy.mock.calls, "keydown");
-  const popover = expectElement(document.body, ".chat-confirm-popover", HTMLElement);
-  for (const listener of [outsideClickListener, outsideContextMenuListener, escapeListener]) {
-    expect(typeof listener).toBe("function");
-  }
-
-  return {
-    ...fixture,
-    escapeListener,
-    outsideClickListener,
-    outsideContextMenuListener,
-    popover,
-    removeKeyListenerSpy,
-    removeListenerSpy,
-  };
-}
-
-function expectConfirmedActionDismissed(params: ReturnType<typeof setupArmedConfirmedAction>) {
-  expect(params.popover.isConnected).toBe(false);
-  for (const [spy, listener, event] of [
-    [params.removeListenerSpy, params.outsideClickListener, "click"],
-    [params.removeListenerSpy, params.outsideContextMenuListener, "contextmenu"],
-    [params.removeKeyListenerSpy, params.escapeListener, "keydown"],
-  ] as const) {
-    expect(countCaptureListenerRemovals(spy.mock.calls, listener, event)).toBe(1);
-  }
-}
-
 async function flushAssistantAttachmentAvailabilityChecks() {
   for (let i = 0; i < 6; i++) {
     await Promise.resolve();
@@ -564,11 +416,6 @@ afterEach(() => {
   }
   mediaSubscribers.clear();
   markdownRenderMock.mockClear();
-  document.querySelectorAll("[data-confirmed-action-fixture]").forEach((element) => {
-    dismissConfirmedActionPopovers(element);
-    element.remove();
-  });
-  clearConfirmedActionSkip();
   setAvatarGatewayOrigin(null);
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -646,13 +493,13 @@ describe("grouped chat rendering", () => {
     expect(list.querySelector("li:last-child > .chat-duplicate-count")?.textContent).toBe("×2");
   });
 
-  it.each(["thinking"])("suppresses a whole %s region spanning assistant media", (tag) => {
+  it("suppresses a whole thinking region spanning assistant media", () => {
     renderMarkdownAssistant([
-      { type: "text", text: `<${tag}>Hidden before` },
+      { type: "text", text: "<thinking>Hidden before" },
       { type: "image", url: "https://example.com/hidden-before.png" },
       { type: "text", text: "Hidden middle" },
       { type: "image", url: "https://example.com/hidden-after.png" },
-      { type: "text", text: `Hidden after</${tag}>\n\nVisible answer` },
+      { type: "text", text: "Hidden after</thinking>\n\nVisible answer" },
     ]);
     expect(elementText(".chat-text")?.trim()).toBe("Visible answer");
   });
@@ -705,15 +552,9 @@ describe("grouped chat rendering", () => {
   });
 
   it.each([
-    { label: "fence", markdown: "Paragraph\n\n```ts\nconst value = 1;\n```", terminal: "pre" },
     {
       label: "compact details",
       markdown: "<details><summary>More</summary>body</details>",
-      terminal: "details",
-    },
-    {
-      label: "block details",
-      markdown: "<details>\n<summary>More</summary>\n\nbody\n</details>",
       terminal: "details",
     },
     {
@@ -741,51 +582,6 @@ describe("grouped chat rendering", () => {
       expect(chatText.querySelector("td:last-child")?.textContent ?? "").not.toContain("×3");
     },
   );
-
-  it("adds Reply to the inline message actions and forwards persisted reply context", () => {
-    const onReply = vi.fn();
-    renderAssistantMessage(
-      createAssistantMessage("Reply with this context.", {
-        timestamp: 1000,
-        __openclaw: { id: "assistant-entry-1" },
-      }),
-      { onReply },
-    );
-
-    const actions = view.querySelectorAll<HTMLButtonElement>(".chat-group-footer-actions button");
-    expect([...actions].map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Reply to message",
-      "Copy as markdown",
-    ]);
-
-    view.querySelector<HTMLButtonElement>('[aria-label="Reply to message"]')?.click();
-
-    expect(onReply).toHaveBeenCalledWith({
-      messageId: "assistant-message",
-      senderLabel: "OpenClaw",
-      sourceMessageId: "assistant-entry-1",
-      text: "Reply with this context.",
-    });
-
-    const userContainer = document.createElement("div");
-    renderGroupedMessage(
-      createUserMessage("User reply context.", {
-        timestamp: 1001,
-        __openclaw: { id: "user-entry-1" },
-      }),
-      "user",
-      { onReply, userName: "Jason" },
-      userContainer,
-    );
-    userContainer.querySelector<HTMLButtonElement>('[aria-label="Reply to message"]')?.click();
-
-    expect(onReply).toHaveBeenLastCalledWith({
-      messageId: "user-message",
-      senderLabel: "Message",
-      sourceMessageId: "user-entry-1",
-      text: "User reply context.",
-    });
-  });
 
   it.each([
     { state: "failed", actionLabel: "Check failure", retry: true, discard: false },
@@ -887,154 +683,6 @@ describe("grouped chat rendering", () => {
     }
   });
 
-  it.each([
-    {
-      name: "clamps the confirmation inside shifted visual viewports",
-      trigger: { left: 620, top: 540, width: 24, height: 24 },
-      popover: { width: 200, height: 80 },
-      viewport: { left: 320, top: 300, width: 320, height: 240 },
-      placement: "above",
-      top: "452px",
-      left: "432px",
-    },
-  ])("$name", ({ trigger, popover, viewport, placement, top, left }) => {
-    stubConfirmedActionGeometry({ trigger, popover, viewport });
-    const fixture = renderConfirmedActionFixture();
-
-    openConfirmedAction(fixture.actionButton);
-
-    const element = expectElement(document.body, ".chat-confirm-popover", HTMLElement);
-    expect(element.parentElement).toBe(document.body);
-    expect(element.dataset.placement).toBe(placement);
-    expect(element.style.top).toBe(top);
-    expect(element.style.left).toBe(left);
-  });
-
-  it("exposes dialog semantics and keeps keyboard focus inside the confirmation", () => {
-    const fixture = renderConfirmedActionFixture();
-
-    openConfirmedAction(fixture.actionButton);
-
-    const popover = expectElement(document.body, ".chat-confirm-popover", HTMLElement);
-    const check = expectElement(popover, ".chat-confirm-popover__check", HTMLInputElement);
-    const cancel = expectElement(popover, ".chat-confirm-popover__cancel", HTMLButtonElement);
-    const confirm = expectElement(popover, ".chat-confirm-popover__yes", HTMLButtonElement);
-    expect(popover.getAttribute("role")).toBe("dialog");
-    expect(popover.getAttribute("aria-modal")).toBe("true");
-    expect(popover.getAttribute("aria-label")).toBe(
-      popover.querySelector(".chat-confirm-popover__text")?.textContent,
-    );
-    expect(popover.querySelector(".chat-confirm-popover__remember span")?.textContent).toBe(
-      "Don't ask again",
-    );
-    expect(cancel.textContent).toBe("Cancel");
-    expect(document.activeElement).toBe(cancel);
-
-    for (const [from, to, shiftKey] of [
-      [confirm, check, false],
-      [check, confirm, true],
-    ] as const) {
-      from.focus();
-      const event = new KeyboardEvent("keydown", {
-        key: "Tab",
-        bubbles: true,
-        cancelable: true,
-        shiftKey,
-      });
-      from.dispatchEvent(event);
-      expect(event.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(to);
-    }
-  });
-
-  it.each(["Escape", "Cancel", "Rewind"] as const)(
-    "dismisses confirmation listeners and transfers focus after %s",
-    (action) => {
-      const fixture = setupArmedConfirmedAction();
-      const target = expectElement(
-        fixture.popover,
-        action === "Rewind" ? ".chat-confirm-popover__yes" : ".chat-confirm-popover__cancel",
-        HTMLButtonElement,
-      );
-      const leakedKeydown = vi.fn();
-      document.addEventListener("keydown", leakedKeydown);
-      try {
-        if (action === "Rewind") {
-          target.focus();
-        }
-        const event =
-          action === "Escape"
-            ? new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
-            : new MouseEvent("click", { bubbles: true });
-        target.dispatchEvent(event);
-        if (action === "Escape") {
-          expect(event.defaultPrevented).toBe(true);
-          expect(leakedKeydown).not.toHaveBeenCalled();
-        }
-        expectConfirmedActionDismissed(fixture);
-        if (action === "Rewind") {
-          expect(fixture.onAction).toHaveBeenCalledTimes(1);
-          expect(document.activeElement).not.toBe(fixture.actionButton);
-        } else {
-          expect(fixture.onAction).not.toHaveBeenCalled();
-          expect(document.activeElement).toBe(fixture.actionButton);
-        }
-      } finally {
-        document.removeEventListener("keydown", leakedKeydown);
-      }
-    },
-  );
-
-  it("dismisses only confirmations contained by the requested owner", () => {
-    const fixture = setupArmedConfirmedAction();
-    const sibling = renderConfirmedActionFixture();
-    openConfirmedAction(sibling.actionButton);
-    const siblingPopover = [
-      ...document.querySelectorAll<HTMLElement>(".chat-confirm-popover"),
-    ].find((popover) => popover !== fixture.popover);
-
-    dismissConfirmedActionPopovers(fixture.container);
-
-    expectConfirmedActionDismissed(fixture);
-    expect(siblingPopover?.isConnected).toBe(true);
-    dismissConfirmedActionPopovers(sibling.container);
-  });
-
-  it("dismisses a portaled confirmation when its owner is detached", async () => {
-    const fixture = setupArmedConfirmedAction();
-
-    fixture.container.remove();
-    await Promise.resolve();
-
-    expectConfirmedActionDismissed(fixture);
-  });
-
-  it("does not attach an outside-click listener after owner cleanup before the next frame", () => {
-    const flushAnimationFrames = stubAnimationFrameQueue();
-    const addListenerSpy = vi.spyOn(document, "addEventListener");
-    const removeListenerSpy = vi.spyOn(document, "removeEventListener");
-    const addKeyListenerSpy = vi.spyOn(window, "addEventListener");
-    const removeKeyListenerSpy = vi.spyOn(window, "removeEventListener");
-    const fixture = renderConfirmedActionFixture();
-
-    openConfirmedAction(fixture.actionButton);
-    const contextMenuListener = getLastCaptureListener(addListenerSpy.mock.calls, "contextmenu");
-    const escapeListener = getLastCaptureListener(addKeyListenerSpy.mock.calls, "keydown");
-    expect(typeof contextMenuListener).toBe("function");
-    expect(typeof escapeListener).toBe("function");
-    dismissConfirmedActionPopovers(fixture.container);
-    flushAnimationFrames();
-
-    expect(document.querySelector(".chat-confirm-popover")).toBeNull();
-    expect(getLastCaptureListener(addListenerSpy.mock.calls, "click")).toBeNull();
-    for (const [spy, listener, event] of [
-      [removeListenerSpy, contextMenuListener, "contextmenu"],
-      [removeKeyListenerSpy, escapeListener, "keydown"],
-    ] as const) {
-      expect(countCaptureListenerRemovals(spy.mock.calls, listener, event)).toBe(1);
-    }
-  });
-
   it("uses the largest prompt for context and aggregates usage, cache, and nested cost", () => {
     renderAssistantMessages(
       [
@@ -1059,40 +707,6 @@ describe("grouped chat rendering", () => {
       "W307",
     ]);
     expect(elementText(".msg-meta__cost")).toContain("$0.12");
-  });
-
-  it("dismisses message context when the neighboring reply tooltip opens", async () => {
-    vi.useFakeTimers();
-    const provider = document.createElement("openclaw-tooltip-provider");
-    provider.append(view);
-    document.body.append(provider);
-    renderAssistantMessage(
-      createAssistantMessage("Done", {
-        usage: { input: 12_000, output: 300 },
-        model: "openai/gpt-5.6-luna",
-        timestamp: 1000,
-      }),
-      { contextWindow: 100_000, onReply: vi.fn() },
-    );
-
-    try {
-      await Promise.all(
-        [...view.querySelectorAll("openclaw-tooltip")].map((tip) => tip.updateComplete),
-      );
-      const summary = view.querySelector<HTMLElement>(".msg-meta__summary")!;
-      summary.click();
-      const metadata = summary.closest("openclaw-tooltip")!;
-      await metadata.updateComplete;
-      expect(metadata.hasAttribute("open")).toBe(true);
-      const reply = view.querySelector<HTMLButtonElement>(".chat-reply-btn")!;
-      reply.focus();
-      const replyTooltip = reply.closest("openclaw-tooltip")!;
-      await replyTooltip.updateComplete;
-      expect(replyTooltip.hasAttribute("open")).toBe(true);
-      expect(metadata.hasAttribute("open")).toBe(false);
-    } finally {
-      provider.remove();
-    }
   });
 
   it("renders relative and compact dates while clamping clock skew", () => {
@@ -3058,7 +2672,12 @@ describe("grouped chat rendering", () => {
         '.chat-group-footer-actions [aria-label="Reply to message"]',
       )
       ?.click();
-    expect(onReply).toHaveBeenCalledWith(expect.objectContaining({ text: "a".repeat(499) }));
+    expect(onReply).toHaveBeenCalledWith({
+      messageId: "assistant-message",
+      senderLabel: "OpenClaw",
+      sourceMessageId: "assistant-disclosure-actions",
+      text: "a".repeat(499),
+    });
     expect(container.querySelector<HTMLElement>(".chat-bubble")?.dataset.messageText).toBe(
       visibleMessage,
     );

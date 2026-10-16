@@ -404,28 +404,23 @@ describe("attachment sidebar source ownership", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps a known oversized SVG compact without fetching it", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    drawAssistantAttachments([
-      svgAttachment(`${window.location.origin}/oversized.svg`, "oversized.svg", {
-        sizeBytes: 256 * 1024 + 1,
-      }),
-    ]);
-
-    await vi.waitFor(() => expect(card("--compact")).not.toBeNull());
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("cancels one oversized SVG chunk without creating an object URL", async () => {
-    const intersectAttachment = stubAttachmentIntersection();
-    const cancel = vi.fn();
-    const createObjectURL = vi.fn();
-    stubObjectUrls(createObjectURL);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
+  it.each(["size", "chunk", "timeout", "decode"] as const)(
+    "keeps an SVG compact after %s failure",
+    async (failure) => {
+      const name =
+        { size: "oversized", chunk: "chunked", timeout: "stalled", decode: "broken" }[failure] +
+        ".svg";
+      const cancel = vi.fn();
+      const createObjectURL = vi.fn(() => "blob:broken-svg");
+      const onOpenSidebar = vi.fn();
+      const onAssistantAttachmentLoaded = vi.fn();
+      stubObjectUrls(createObjectURL);
+      const fetchMock = vi.fn<typeof fetch>();
+      vi.stubGlobal("fetch", fetchMock);
+      let intersect: (() => Promise<void>) | undefined;
+      if (failure === "chunk") {
+        intersect = stubAttachmentIntersection();
+        fetchMock.mockResolvedValue(
           new Response(
             new ReadableStream<Uint8Array>({
               start(controller) {
@@ -435,77 +430,58 @@ describe("attachment sidebar source ownership", () => {
             }),
             { headers: { "Content-Type": "image/svg+xml" } },
           ),
-      ) as unknown as typeof fetch,
-    );
-    drawAssistantAttachments(
-      [svgAttachment(`${window.location.origin}/chunked.svg`, "chunked.svg")],
-      {},
-    );
-
-    await intersectAttachment();
-    await vi.waitFor(() => expect(card("--compact")).not.toBeNull());
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(createObjectURL).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the SVG card when a same-origin fetch stalls", async () => {
-    vi.useFakeTimers();
-    const intersectAttachment = stubAttachmentIntersection();
-    const fetchMock = vi.fn<typeof fetch>(
-      (_input, init) =>
-        new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener(
-            "abort",
-            () => reject(new DOMException("Aborted", "AbortError")),
-            {
-              once: true,
-            },
-          );
-        }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const onAssistantAttachmentLoaded = vi.fn();
-    drawAssistantAttachments(
-      [svgAttachment(`${window.location.origin}/stalled.svg`, "stalled.svg")],
-      {},
-      undefined,
-      onAssistantAttachmentLoaded,
-    );
-
-    await intersectAttachment();
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(card("--compact")).not.toBeNull();
-    expect(onAssistantAttachmentLoaded).toHaveBeenCalledOnce();
-  });
-
-  it("falls back to a compact file card when an SVG image cannot render", async () => {
-    stubObjectUrls(() => "blob:broken-svg");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => svgResponse("<svg><broken")),
-    );
-    const onOpenSidebar = vi.fn();
-    drawAssistantAttachments(
-      [svgAttachment(`${window.location.origin}/broken.svg`, "broken.svg")],
-      {},
-      onOpenSidebar,
-    );
-
-    const image = await vi.waitFor(() => {
-      const candidate = container.querySelector<HTMLImageElement>("img.chat-message-image");
-      expect(candidate).not.toBeNull();
-      return candidate!;
-    });
-    image.dispatchEvent(new Event("error"));
-
-    await vi.waitFor(() => expect(card("--compact")).not.toBeNull());
-    expect(imageNode()).toBeNull();
-    expect(text("__title")).toContain("broken.svg");
-    expandCard();
-    expect(onOpenSidebar).toHaveBeenCalledOnce();
-  });
+        );
+      } else if (failure === "timeout") {
+        vi.useFakeTimers();
+        intersect = stubAttachmentIntersection();
+        fetchMock.mockImplementation(
+          (_input, init) =>
+            new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener(
+                "abort",
+                () => reject(new DOMException("Aborted", "AbortError")),
+                { once: true },
+              );
+            }),
+        );
+      } else if (failure === "decode") {
+        fetchMock.mockResolvedValue(svgResponse("<svg><broken"));
+      }
+      drawAssistantAttachments(
+        [
+          svgAttachment(
+            `${window.location.origin}/${name}`,
+            name,
+            failure === "size" ? { sizeBytes: 256 * 1024 + 1 } : {},
+          ),
+        ],
+        {},
+        failure === "decode" ? onOpenSidebar : undefined,
+        failure === "timeout" ? onAssistantAttachmentLoaded : undefined,
+      );
+      await intersect?.();
+      if (failure === "timeout") {
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(fetchMock).toHaveBeenCalledOnce();
+        expect(onAssistantAttachmentLoaded).toHaveBeenCalledOnce();
+      } else if (failure === "decode") {
+        const failed = await vi.waitFor(() => expectDefined(imageNode(), "SVG image"));
+        failed.dispatchEvent(new Event("error"));
+      }
+      await vi.waitFor(() => expect(card("--compact")).not.toBeNull());
+      if (failure === "size") {
+        expect(fetchMock).not.toHaveBeenCalled();
+      } else if (failure === "chunk") {
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(createObjectURL).not.toHaveBeenCalled();
+      } else if (failure === "decode") {
+        expect(imageNode()).toBeNull();
+        expect(text("__title")).toContain("broken.svg");
+        expandCard();
+        expect(onOpenSidebar).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("retries a failed managed attachment resolution", async () => {
     const attachmentId = crypto.randomUUID();

@@ -17,7 +17,9 @@ import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import type { NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
 import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
+import { createReplyPreviewResolver, type LoadedReplySource } from "./chat-reply-preview.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { projectTranscriptChain, projectTranscriptIndex } from "./chat-transcript-message-index.ts";
 
 let container: HTMLDivElement;
 let view: ReturnType<typeof createMessageGroupHarness>;
@@ -74,6 +76,27 @@ function renderTestMessageGroup(
   });
 }
 
+function readCall(id: string, path: string, parentToolCallId?: string) {
+  return {
+    type: "toolCall",
+    id,
+    name: "read",
+    arguments: { path },
+    ...(parentToolCallId ? { parentToolCallId } : {}),
+  };
+}
+
+function narrationEntry(key: string, content: unknown, overrides: Record<string, unknown>) {
+  return {
+    kind: "message" as const,
+    key,
+    message: createAssistantMessage(content, {
+      runId: "narrated-file-run",
+      ...overrides,
+    }),
+  };
+}
+
 describe("forwarded message attribution", () => {
   it.each([
     { collapsed: false, key: "click" },
@@ -122,19 +145,8 @@ describe("forwarded message attribution", () => {
         {
           runId: "forwarded-tools",
           content: [
-            {
-              type: "toolCall",
-              id: "parent-read",
-              name: "read",
-              arguments: { path: "reports/index.html" },
-            },
-            {
-              type: "toolCall",
-              id: "child-read",
-              name: "read",
-              parentToolCallId: "parent-read",
-              arguments: { path: "reports/styles.css" },
-            },
+            readCall("parent-read", "reports/index.html"),
+            readCall("child-read", "reports/styles.css", "parent-read"),
           ],
         },
       );
@@ -178,36 +190,21 @@ describe("forwarded message attribution", () => {
 
   it("keeps the sender on narrated file links beside a single tool in a run frame", () => {
     const groups = groupMessages([
-      {
-        kind: "message",
-        key: "forwarded-tool-narration",
-        message: {
-          role: "assistant",
-          runId: "narrated-file-run",
+      narrationEntry(
+        "forwarded-tool-narration",
+        [
+          { type: "text", text: "See `reports/index.html:7`" },
+          readCall("read-report", "reports/index.html"),
+        ],
+        {
           timestamp: 1_000,
           senderSession: { sessionKey },
-          content: [
-            { type: "text", text: "See `reports/index.html:7`" },
-            {
-              type: "toolCall",
-              id: "read-report",
-              name: "read",
-              arguments: { path: "reports/index.html" },
-            },
-          ],
         },
-      },
-      {
-        kind: "message",
-        key: "narrated-file-answer",
-        message: {
-          role: "assistant",
-          runId: "narrated-file-run",
-          timestamp: 2_000,
-          phase: "final_answer",
-          content: "Done.",
-        },
-      },
+      ),
+      narrationEntry("narrated-file-answer", "Done.", {
+        timestamp: 2_000,
+        phase: "final_answer",
+      }),
     ]).filter((item) => item.kind === "group");
     const frame = coalesceAgentRunFrames(groups).find((item) => item.kind === "agent-run-frame");
     if (!frame) {
@@ -413,3 +410,97 @@ describe("forwarded message attribution", () => {
     },
   );
 });
+
+const message = {
+  role: "user",
+  content: "Please review the release fixes.",
+  __openclaw: { id: "original", senderIsOwner: true },
+};
+const viewers = [
+  { userId: "alex", userName: "Alex", userAvatar: "AV" },
+  { userId: "maya", userName: "Maya", userAvatar: "MV" },
+  { userId: null, userName: null, userAvatar: null },
+];
+
+function groupFor(input: unknown) {
+  const [group] = groupMessages([{ kind: "message", key: "saved-input", message: input }]);
+  if (group?.kind !== "group") {
+    throw new Error("Expected a visible input group");
+  }
+  return group;
+}
+
+it.each([
+  { name: "owner-only gutter", avatarPlacement: "gutter", sender: undefined },
+  { name: "owner-only footer", avatarPlacement: "footer", sender: undefined },
+  {
+    name: "unqualified sender",
+    avatarPlacement: "gutter",
+    sender: { senderId: "alex", senderName: "Recorded author" },
+  },
+  {
+    name: "remote sender",
+    avatarPlacement: "gutter",
+    sender: {
+      senderId: "alex",
+      senderName: "Recorded author",
+      senderIdentity: {
+        type: "observation",
+        pluginId: "discord",
+        accountId: "work",
+        senderKind: "human",
+        id: "alex",
+      },
+    },
+  },
+] as const)("does not borrow the viewer's identity for $name", ({ avatarPlacement, sender }) => {
+  const input = sender ? { ...message, __openclaw: sender } : message;
+  const original = structuredClone(input);
+  for (const viewer of sender ? [viewers[0]] : viewers) {
+    view.render(groupFor(input), {
+      showReasoning: false,
+      showToolCalls: true,
+      showOwnSenderName: false,
+      avatarPlacement,
+      ...viewer,
+    });
+    expect(container.querySelector(".chat-sender-name")?.textContent).toBe(
+      sender ? "Recorded author" : "Message",
+    );
+    expect(container.querySelector("a.chat-sender-name, img")).toBeNull();
+    if (sender) {
+      expect(container.querySelector(".chat-avatar")?.textContent?.trim()).toBe("RA");
+    } else {
+      expect(container.querySelector(".chat-avatar, .chat-author-avatar")).toBeNull();
+      expect(container.querySelector(".chat-group--peer")).toBeNull();
+      expect(container.querySelector(".chat-text")?.textContent).toContain(message.content);
+    }
+  }
+  expect(input).toEqual(original);
+});
+
+it.each(["loaded", "fetched"] as const)(
+  "labels %s reply previews without borrowing the viewer",
+  (location) => {
+    const props = { ...viewers[0], assistantName: "OpenClaw" };
+    const chain = projectTranscriptChain([groupFor(message)], {
+      sessionKey: "agent:main:historical",
+      runWorking: false,
+      searchActive: false,
+    });
+    const loaded =
+      location === "loaded"
+        ? projectTranscriptIndex(chain, new Map(), props).loadedReplySources
+        : new Map<string, LoadedReplySource>();
+    const resolve = createReplyPreviewResolver(loaded, {
+      ...props,
+      replyMessageAccess: {
+        revision: 0,
+        navigationId: null,
+        read: () => message,
+        open: () => undefined,
+      },
+    });
+    expect(resolve("original")).toMatchObject({ senderLabel: "Message", text: message.content });
+  },
+);
