@@ -3,7 +3,6 @@ import {
   createAgentLifecycleTerminalBackstop,
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { prepareCronRootSessionGeneration } from "../../config/sessions/session-delivery-generation.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,6 +35,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
+import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -503,16 +503,13 @@ async function runEmbeddedAgentForSession(
                   payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
                   meta: {
                     durationMs: Date.now() - started,
-                    agentMeta: {
-                      sessionId: params.sessionId,
-                      provider,
-                      model: modelId,
-                    },
-                    finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-                    finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+                    agentMeta: { sessionId: params.sessionId, provider, model: modelId },
+                    terminalReply: hookResult.reply
+                      ? sanitizeAgentRunTerminalReply(hookResult.reply.text ?? "")
+                      : { disposition: "silent" },
                     providerStarted: false,
                   },
-                };
+                } satisfies EmbeddedAgentRunResult;
               }
 
               assistantErrorTranscript ??=

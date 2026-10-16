@@ -92,32 +92,26 @@ suite.define(() => {
           current.locator(".chat-pane__branch-copy"),
           current.locator(".chat-pane__branch-active svg"),
         ]);
-        // Header updates can replace branch details; measure one rendered menu state.
+        // Measure one DOM generation so a rerender cannot detach an icon between reads.
         const { infoIconBox, headline, textBox, checkBox, checkIconBox } =
           await menuSurface.evaluate((surface) => {
-            const activeBranch = surface.querySelector(
-              '.chat-pane__branch-item[data-active="true"]',
-            );
-            const bounds = (element: Element | null) => {
+            const active = surface.querySelector('.chat-pane__branch-item[data-active="true"]');
+            const measure = (element: Element | null) => {
               if (
-                !element ||
-                !element.checkVisibility({ visibilityProperty: true }) ||
-                element.getClientRects().length === 0
+                !element?.isConnected ||
+                !element.checkVisibility({ checkOpacity: true, visibilityProperty: true })
               ) {
                 return null;
               }
               const { x, y, width, height } = element.getBoundingClientRect();
-              return { x, y, width, height };
+              return width > 0 && height > 0 ? { x, y, width, height } : null;
             };
             return {
-              infoIconBox: bounds(surface.querySelector(".chat-pane__versions-info svg")),
-              headline:
-                activeBranch?.querySelector(".chat-pane__branch-headline")?.textContent ?? null,
-              textBox: bounds(activeBranch?.querySelector(".chat-pane__branch-copy") ?? null),
-              checkBox: bounds(activeBranch?.querySelector(".chat-pane__branch-active") ?? null),
-              checkIconBox: bounds(
-                activeBranch?.querySelector(".chat-pane__branch-active svg") ?? null,
-              ),
+              infoIconBox: measure(surface.querySelector(".chat-pane__versions-info svg")),
+              headline: active?.querySelector(".chat-pane__branch-headline")?.textContent,
+              textBox: measure(active?.querySelector(".chat-pane__branch-copy") ?? null),
+              checkBox: measure(active?.querySelector(".chat-pane__branch-active") ?? null),
+              checkIconBox: measure(active?.querySelector(".chat-pane__branch-active svg") ?? null),
             };
           });
         expect(infoIconBox).not.toBeNull();

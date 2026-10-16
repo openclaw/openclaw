@@ -103,7 +103,7 @@ export type PluginStateWorkerOperations = {
   };
 };
 
-export type PluginStateReadType =
+type PluginStateReadType =
   | "pluginState.lookup"
   | "pluginState.lookupMany"
   | "pluginState.entries"

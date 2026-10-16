@@ -1,7 +1,7 @@
 import { createSignal, flush, Show } from "solid-js";
 import { expect, it, vi } from "vitest";
+import type { AgentIdentity } from "../../lib/identity-avatar-view.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import type { AgentIdentity } from "../identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 
 it("carries prepared avatar state and image errors across Solid updates", () => {

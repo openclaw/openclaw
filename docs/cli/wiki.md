@@ -223,6 +223,10 @@ openclaw wiki chatgpt import --export ./conversations.json --dry-run
 
 A non-dry-run import that changes any page records an import run id, printed in the summary, needed for rollback.
 
+Malformed UTF-8 exports are rejected before the vault is initialized or imported
+pages are changed. If the error names an invalid export, download a fresh ChatGPT
+export and retry the import.
+
 ### `wiki chatgpt rollback <run-id>`
 
 Roll back a previously applied ChatGPT import run, removing pages it created and restoring pages it overwrote. Pages changed after import are moved under the run's `.openclaw-wiki/import-runs/<run-id>/recovered/` directory instead of being deleted. Recovery paths remain in the command result on retries and later `alreadyRolledBack` responses. Interrupted runs remain `rolling_back` while target recovery or derived-artifact compilation is incomplete. A persisted process-restart fence separates those phases: after it, retries rebuild indexes and compiled caches without rewriting source pages or moving later pathname writes. A later normal compile may refresh machine-managed Related blocks. This covers in-process failure and process restart after ordinary filesystem calls return, not kernel or host power-loss ordering.

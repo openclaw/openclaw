@@ -9,7 +9,6 @@ import {
   listRunsForControllerFromRuns,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import type { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
@@ -55,13 +54,8 @@ vi.mock("./subagent-registry-state.js", () => ({
     mocks.getSubagentSessionListRunsSnapshotForChildSessions,
   getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
-  withSubagentRunReadSnapshot: (async (_runs, select, consume) => {
-    const selected = select(mocks.readSnapshot);
-    return consume(
-      selected,
-      new Map([...mocks.readSnapshot].filter(([runId]) => selected.runIds.includes(runId))),
-    );
-  }) satisfies typeof withSubagentRunReadSnapshot,
+  prepareSubagentSessionListReadCache: async () => {},
+  getSubagentSessionListRunsSnapshotForSessions: () => mocks.readSnapshot,
 }));
 
 function createRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {

@@ -3,9 +3,12 @@
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../infra/system-events.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
@@ -23,7 +26,6 @@ import {
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { adoptPausedSubagentRunForFollowUp } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import { testing as registryTesting } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const fixture = useSubagentControlFixture();
@@ -99,10 +101,24 @@ function answerWakes(
     if (wakes.length === 1) {
       await onWake?.(params);
     }
+    const terminal = prepareAgentRunTerminalReply({ rawText: replies[wakes.length - 1] ?? "" });
     return {
       status: "ok",
       inputProcessingCompleted: true,
-      result: { payloads: [{ text: replies[wakes.length - 1] }], meta: {} },
+      result: {
+        payloads: terminal.text ? [{ text: terminal.text }] : [],
+        meta: { terminalReply: terminal.terminalReply },
+        ...(terminal.terminalReply.disposition === "silent"
+          ? {
+              deliveryStatus: {
+                status: "suppressed",
+                succeeded: true,
+                reason: "no_visible_payload",
+                resultCount: 0,
+              },
+            }
+          : {}),
+      },
     } as T;
   };
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
@@ -117,42 +133,61 @@ function expectNoChildResultPushed(draft: TestDraft) {
 }
 
 it.each([
-  ["a visible answer", ["The delegated work is done."]],
-  ["a silent attempt and a visible retry", ["NO_REPLY", "The delegated work is done."]],
-  ["exhausted silent attempts", ["NO_REPLY", "NO_REPLY", "NO_REPLY"]],
-] as const)(
-  "retires the card once, after the cohort's requester wake settles through %s",
-  async (_name, replies) => {
-    const spawns = await yieldCohort("parent-turn", ["a", "b"]);
-    const draft = newDraft();
-    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-    const wakes = answerWakes(draft, replies);
-
-    await endRun("a");
-    expect(wakes).toEqual([]);
-    expect(draft.retire).not.toHaveBeenCalled();
-
-    await endRun("b");
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    try {
-      // A yielded requester owes a visible answer, so silence retries the same wake.
-      for (const retryDelayMs of [30_000, 120_000].slice(0, replies.length - 1)) {
-        expect(draft.retire).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(retryDelayMs);
-        await registryTesting.sweepOnceForTests();
-        await fixture.settle();
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-    expect(wakes.map(({ retiredBefore }) => retiredBefore)).toEqual(replies.map(() => 0));
-    expect(draft.retire).toHaveBeenCalledOnce();
-    expect(draft.push).toHaveBeenCalledWith(
-      expect.objectContaining({ itemId: "b", kind: "subagent", status: "completed" }),
+  ["a visible answer", ["The delegated work is done."], true],
+  ["intentional external silence", ["NO_REPLY"], true],
+  ["required internal result", ["NO_REPLY"], false],
+] as const)("settles the progress card according to %s", async (name, replies, retired) => {
+  const requesterOrigin =
+    name === "intentional external silence"
+      ? { channel: "telegram", to: "12345", accountId: "default" }
+      : undefined;
+  if (requesterOrigin) {
+    await upsertSessionEntryCore(
+      {
+        storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+          agentId: "main",
+        }),
+        sessionKey: requesterKey,
+      },
+      {
+        delivery: {
+          kind: "external",
+          route: {
+            channel: requesterOrigin.channel,
+            accountId: requesterOrigin.accountId,
+            target: { to: requesterOrigin.to },
+          },
+          context: requesterOrigin,
+          origin: {
+            provider: requesterOrigin.channel,
+            to: requesterOrigin.to,
+            accountId: requesterOrigin.accountId,
+          },
+        },
+      },
     );
-    expectNoChildResultPushed(draft);
-  },
-);
+  }
+  const spawns = await yieldCohort("parent-turn", ["a", "b"], requesterOrigin);
+  const draft = newDraft();
+  expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
+  const wakes = answerWakes(draft, replies);
+
+  await endRun("a");
+  expect(wakes).toEqual([]);
+  expect(draft.retire).not.toHaveBeenCalled();
+
+  await endRun("b");
+  expect(wakes.map(({ retiredBefore }) => retiredBefore)).toEqual(replies.map(() => 0));
+  if (retired) {
+    expect(draft.retire).toHaveBeenCalledOnce();
+  } else {
+    expect(draft.retire).not.toHaveBeenCalled();
+  }
+  expect(draft.push).toHaveBeenCalledWith(
+    expect.objectContaining({ itemId: "b", kind: "subagent", status: "completed" }),
+  );
+  expectNoChildResultPushed(draft);
+});
 
 it("does not adopt a card for a cohort whose completion was already delivered", async () => {
   const spawns = await yieldCohort("parent-turn", ["a", "b"]);
