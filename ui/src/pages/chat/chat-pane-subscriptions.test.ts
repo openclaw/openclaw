@@ -2,19 +2,111 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { localEditorFilePath } from "../../app/native-editor-locality.runtime.ts";
+import type {
+  NativeGatewaysCapability,
+  NativeGatewaysSnapshot,
+} from "../../app/native-gateways.runtime.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import {
   connectPaneTestView,
   createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
+
+const native = vi.hoisted(() => ({ capability: null as NativeGatewaysCapability | null }));
+vi.mock("../../app/native-gateways.runtime.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../app/native-gateways.runtime.ts")>()),
+  nativeGatewaysCapability: () => native.capability,
+}));
+
+it("updates native locality synchronously and catches up parked panes on reveal", async () => {
+  let snapshot: NativeGatewaysSnapshot = {
+    currentId: "local",
+    gateways: [
+      {
+        id: "local",
+        name: "Local",
+        kind: "local",
+        isPrimary: true,
+        canPromote: false,
+        health: "ok",
+      },
+      {
+        id: "remote",
+        name: "Remote",
+        kind: "remote",
+        isPrimary: false,
+        canPromote: true,
+        health: "ok",
+      },
+    ],
+  };
+  const listeners = new Set<(next: NativeGatewaysSnapshot) => void>();
+  native.capability = {
+    get snapshot() {
+      return snapshot;
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    select: vi.fn(),
+    setPrimary: vi.fn(),
+    openSettings: vi.fn(),
+  };
+  const publish = (currentId: string) => {
+    snapshot = { ...snapshot, currentId };
+    listeners.forEach((listener) => listener(snapshot));
+  };
+  const { pane } = createTestChatPane({
+    client: createGatewayBrowserClientFixture(),
+  });
+  const file = { path: "file.ts", root: "/workspace" };
+  const rendered: Array<string | null> = [];
+  const render = vi.fn(() => {
+    rendered.push(localEditorFilePath(file));
+    return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
+  });
+  pane.render = render;
+  onTestFinished(() => {
+    pane.disconnectedCallback();
+    native.capability = null;
+  });
+  connectPaneTestView(pane);
+  await pane.updateComplete;
+  expect(rendered.at(-1)).toBe("/workspace/file.ts");
+
+  publish("remote");
+  expect(localEditorFilePath(file)).toBeNull();
+  await waitForSolid(() => expect(rendered.at(-1)).toBeNull());
+
+  pane.presented = false;
+  await Promise.resolve();
+  flush();
+  render.mockClear();
+  publish("local");
+  expect(localEditorFilePath(file)).toBe("/workspace/file.ts");
+  flush();
+  expect(render).not.toHaveBeenCalled();
+  pane.presented = true;
+  await pane.updateComplete;
+  expect(rendered.at(-1)).toBe("/workspace/file.ts");
+
+  pane.disconnectedCallback();
+  expect(listeners.size).toBe(0);
+  publish("remote");
+  connectPaneTestView(pane);
+  await pane.updateComplete;
+  expect(rendered.at(-1)).toBeNull();
+});
 
 it("parks and remounts presentation subscriptions using the runtime's context without a provider", async () => {
   const { pane } = createTestChatPane({
     client: createGatewayBrowserClientFixture(),
-    sessions: createSessionCapabilityFixture(),
   });
   const navigation = pane.context.navigation;
   const subscribe = navigation.subscribe.bind(navigation);

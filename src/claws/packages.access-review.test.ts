@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { installClawPackages } from "./packages.js";
+import { installClawPackages } from "./packages.boundary.test-support.js";
 import { packageInstallPlan } from "./packages.test-support.js";
 
 describe("Claw package reviewed access", () => {

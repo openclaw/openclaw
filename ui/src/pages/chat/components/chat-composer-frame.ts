@@ -33,17 +33,8 @@ import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
 import type { ComposerPrediction } from "./chat-composer-prediction.ts";
-import {
-  isSkillMenuVisible,
-  resetSkillMenuState,
-  type SkillMenuHost,
-  updateSkillMenu,
-} from "./chat-composer-skill-menu.tsx";
-import {
-  resetSlashMenuState,
-  type SlashMenuHost,
-  updateSlashMenu,
-} from "./chat-composer-slash-menu.tsx";
+import { isSkillMenuVisible, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
+import type { SlashMenuHost } from "./chat-composer-slash-menu.tsx";
 import {
   clearPendingClearedSubmittedDraft,
   commitComposerDraft,
@@ -234,7 +225,7 @@ export function createChatComposerContext(
     !(getMentions().length > 0 && (mentionsUnsupported || draft.trimStart().startsWith("/"))) &&
     !goalComposer.pending &&
     state.dictation?.locksComposer !== true &&
-    !(state.skillMenuOpen && state.skillCommandRefreshPending) &&
+    !(state.skillMenu.state.skillMenuOpen && state.skillMenu.state.skillCommandRefreshPending) &&
     (props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0) === 0 &&
     (props.connected || !draft.trimStart().startsWith("/"));
   const renderedDraftCanSubmit = canSubmitDraft(visibleDraft);
@@ -306,13 +297,13 @@ export function createChatComposerContext(
     goalComposer,
   });
 
-  const updateEmojiMenu = (target: HTMLTextAreaElement) =>
+  const updateEmojiMenu = (
+    target: HTMLTextAreaElement,
+    commandsOpen = state.skillMenu.state.skillMenuOpen || state.slashMenu.state.slashMenuOpen,
+  ) =>
     state.emojiMenu.update(
       target,
-      !state.composerComposing &&
-        !state.skillMenuOpen &&
-        !state.slashMenuOpen &&
-        !state.mentionMenu.open,
+      !state.composerComposing && !commandsOpen && !state.mentionMenu.open,
     );
   const syncComposerValue = (target: HTMLTextAreaElement, typedAtSign = false) => {
     prediction?.dismiss();
@@ -334,12 +325,14 @@ export function createChatComposerContext(
     state.mentionInput = undefined;
     goalComposer.activateDraft(target.value);
     if (!goalComposer.active) {
-      updateSlashMenu(target.value, state, slashMenuHost, requestUpdate);
-      updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
+      const slashOpen = state.slashMenu.update(target.value, slashMenuHost);
+      const skillOpen = state.skillMenu.update(target.value, target.selectionStart, skillMenuHost);
       const mentionIntent = typedAtSign ? "trigger" : "input";
       state.mentionMenu.update(target, mentionIntent);
+      updateEmojiMenu(target, slashOpen || skillOpen);
+    } else {
+      updateEmojiMenu(target);
     }
-    updateEmojiMenu(target);
     // The textarea owns ordinary edits; only redraw the pane when surrounding
     // controls change. Slash and skill menus invalidate their own presentation.
     if (
@@ -410,16 +403,18 @@ export function createChatComposerContext(
     ) {
       shareTypingSelection(target);
     }
-    updateEmojiMenu(target);
     if (goalComposer.active) {
+      updateEmojiMenu(target);
       return;
     }
     state.mentionMenu.update(target);
     if (event.type === "keyup") {
+      updateEmojiMenu(target);
       return;
     }
-    updateSlashMenu(target.value, state, slashMenuHost, requestUpdate);
-    updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
+    const slashOpen = state.slashMenu.update(target.value, slashMenuHost);
+    const skillOpen = state.skillMenu.update(target.value, target.selectionStart, skillMenuHost);
+    updateEmojiMenu(target, slashOpen || skillOpen);
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
     if (event.target !== state.composerTextarea) {
@@ -649,35 +644,33 @@ export function createChatComposerContext(
     onPrimaryActionPointerDown: (event) =>
       preserveComposerFocusOnPrimaryAction(event, state.composerTextarea),
   };
-  if (props.modelSwitching && state.slashMenuCommand?.key === "think") {
-    resetSlashMenuState(state);
-  }
+  const clearSlashMenu =
+    props.modelSwitching && state.slashMenu.state.slashMenuCommand?.key === "think";
   const emojiEnabled =
     canCompose &&
     !state.composerComposing &&
     !state.dictation?.locksComposer &&
     !goalComposer.pending;
   const commandsVisible = props.connected && canCompose;
-  if (
-    !(commandsVisible && isSkillMenuVisible(state)) &&
-    state.skillMenuOpen &&
-    !state.skillCommandRefreshPending
-  ) {
-    resetSkillMenuState(state);
-  }
+  const clearSkillMenu =
+    !(commandsVisible && isSkillMenuVisible(state.skillMenu.state)) &&
+    state.skillMenu.state.skillMenuOpen &&
+    !state.skillMenu.state.skillCommandRefreshPending;
   if (!props.capabilityMenu) {
     state.capabilityMenuView = "root";
   }
   const menus = resolveComposerMenus(
     props.paneId,
     commandsVisible,
-    state,
-    state,
+    state.skillMenu.state,
+    state.slashMenu.state,
     state.mentionMenu,
     state.emojiMenu,
   );
 
   return {
+    clearSlashMenu,
+    clearSkillMenu,
     props,
     state,
     attachmentReadRevision: props.attachmentReads?.revision,

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import { SidebarEmptyGroupsController } from "./sidebar-empty-groups-controller.ts";
+import { SidebarEmptyGroupsPreference } from "./sidebar-empty-groups.ts";
 
 let storage: Storage;
 beforeEach(() => {
@@ -16,15 +16,9 @@ function fixture() {
     connectionRevision: 0,
     snapshot: { phase: "connected", selfUser: { id: "ada" } as { id: string } | null },
   };
-  const host = {
-    addController: vi.fn(),
-    removeController: vi.fn(),
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  };
-  const controller = new SidebarEmptyGroupsController(host, () => ({ gateway }));
+  const controller = new SidebarEmptyGroupsPreference(() => ({ gateway }));
   controller.reconcile();
-  return { controller, gateway, host };
+  return { controller, gateway };
 }
 
 describe("personal empty-group preference", () => {
@@ -105,11 +99,10 @@ describe("personal empty-group preference", () => {
     vi.spyOn(storage, "setItem").mockImplementation(() => {
       throw new Error("denied");
     });
-    const { controller, host } = fixture();
+    const { controller } = fixture();
     expect(controller.mode).toBe("filtering");
     controller.set("never");
     controller.reconcile();
     expect(controller.mode).toBe("never");
-    expect(host.requestUpdate).toHaveBeenCalled();
   });
 });

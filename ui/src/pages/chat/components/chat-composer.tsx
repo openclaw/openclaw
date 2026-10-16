@@ -112,6 +112,17 @@ export function ChatComposer(props: ChatComposerInput) {
     state.textareaRef?.();
     state.composerInputRef?.();
   });
+  createEffect(
+    () => [context().clearSlashMenu, context().clearSkillMenu] as const,
+    ([slash, skill]) => {
+      if (slash) {
+        getChatComposerState(props.paneId).slashMenu.reset();
+      }
+      if (skill) {
+        getChatComposerState(props.paneId).skillMenu.reset();
+      }
+    },
+  );
   const fields = new Map(
     Object.keys(untrack(context)).map((key) => [
       key,

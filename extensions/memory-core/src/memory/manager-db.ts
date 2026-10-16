@@ -5,27 +5,29 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
+  isPostgresSqlConnection,
   loadSqliteVecExtension,
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   openOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
+  openOpenClawAgentSqliteWorkerStoreV2,
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
+  tableExists as admittedTableExists,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import {
-  requireMemorySearchCapability,
-  requireMemorySearchDatabase,
-} from "../memory-search-database.js";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
+import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import {
   MEMORY_INDEX_STATE_ID,
   memoryDatabaseTableExists as tableExists,
   readMemoryDatabaseRevision,
 } from "./manager-db-kernel.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
+import type { MemoryPublicationOperations } from "./manager-publication-task.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 
 const MEMORY_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -63,6 +65,50 @@ function hasSqliteVecExtension(db: DatabaseSync): boolean {
     return typeof row?.version === "string" && row.version.trim().length > 0;
   } catch {
     return false;
+  }
+}
+
+/** PostgreSQL reset borrows the existing agent owner without creating a missing index. */
+export async function resetPostgresMemoryDatabase(params: {
+  agentId: string;
+  dbPath: string;
+  workspaceDir: string;
+}): Promise<boolean> {
+  const lock = await waitForMemoryReindexLock(params.dbPath);
+  try {
+    return await withMemoryWorkspaceLock(params.workspaceDir, () =>
+      withMemoryIndexGeneration(params.dbPath, "write", async () => {
+        const worker = await openOpenClawAgentSqliteWorkerStoreV2<MemoryPublicationOperations>(
+          { agentId: params.agentId, path: params.dbPath },
+          { version: 2, assertCurrent() {} },
+          {
+            moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
+            input: { kind: "agent" },
+          },
+        );
+        try {
+          const receipt = await worker.executeExisting(
+            { type: "database.reset", input: undefined },
+            () => {},
+          );
+          if (!receipt) {
+            return false;
+          }
+          const result = receipt.value;
+          if (!result.ok) {
+            throw Object.assign(new Error(result.error.message), result.error, {
+              entered: result.entered,
+              committed: result.committed,
+            });
+          }
+          return result.value;
+        } finally {
+          await worker.close();
+        }
+      }),
+    );
+  } finally {
+    await lock.release();
   }
 }
 
@@ -234,7 +280,6 @@ export function openMemoryDatabaseReadOnlyAtPath(
   allowExtension: boolean,
   agentId: string,
 ) {
-  requireMemorySearchCapability();
   const opened = openOpenClawAgentDatabaseReadOnly(
     { agentId, path: dbPath },
     { allowExtension, lifecycle: "agent" },
@@ -246,16 +291,14 @@ export function openMemoryDatabaseReadOnlyAtPath(
     throw new Error(`Memory index database schema is missing: ${dbPath}`);
   }
   const { database } = opened;
-  let db: DatabaseSync;
-  try {
-    db = requireMemorySearchDatabase(database.db);
-  } catch (error) {
-    database.close();
-    throw error;
-  }
-  if (!tableExists(db, "main", MEMORY_INDEX_STATE_TABLE)) {
+  const db = database.db;
+  if (!admittedTableExists(db, MEMORY_INDEX_STATE_TABLE)) {
     database.close();
     return openUninitializedMemoryDatabase(allowExtension);
+  }
+  if (isPostgresSqlConnection(db)) {
+    database.close();
+    throw new Error("PostgreSQL memory reads require the asynchronous worker API.");
   }
   return { db, release: database.close, hasIndex: true };
 }

@@ -5,7 +5,7 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSetEntries,
 } from "../../infra/kysely-sync.js";
-import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import type { SessionTranscriptStats } from "./session-accessor.sqlite-contract.js";
@@ -61,7 +61,11 @@ const transcriptStatsQuery = createSqliteQueryCache((database: EngineConnection)
             ])
             .$call((query) =>
               point
-                ? query.where("session_id", "=", id)
+                ? query
+                    .where("session_id", "=", id)
+                    .$if(isPostgresSqlConnection(database), (pointQuery) =>
+                      pointQuery.groupBy("session_id"),
+                    )
                 : query
                     .where(
                       "session_id",

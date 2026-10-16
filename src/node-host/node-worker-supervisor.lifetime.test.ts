@@ -650,8 +650,7 @@ describe("node worker environment stop after failed initialization", () => {
   it.runIf(process.platform === "linux" || process.platform === "darwin")(
     "settles native recovery without publishing capacity until the unrelated container recovers",
     async () => {
-      const cleanupMode =
-        process.platform === "linux" && !process.versions.bun ? "linux-subreaper" : "owned-anchor";
+      const cleanupMode = process.platform === "linux" ? "linux-subreaper" : "owned-anchor";
       const capacities: Array<{ total: number; available: number }> = [];
       const root = tempDirs.make("node-worker-stop-initialization-");
       const fixture = createNodeWorkerContainerFixture(root, fileLockModule, {

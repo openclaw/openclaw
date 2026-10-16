@@ -30,5 +30,6 @@ export { stageSqliteTransactionState } from "../../../../src/infra/sqlite-post-c
 export {
   sqlPublicationAnchor,
   type PostgresSqlConnection,
+  type EngineConnection,
 } from "../../../../src/infra/sql-connection.js";
 export * from "../../../../src/infra/database-engine/sqlite-search-schema.js";

@@ -15,6 +15,7 @@ import {
   installDeletedAgentDatabaseFences,
 } from "./agent-database-readers.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
+import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
 import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
@@ -40,6 +41,7 @@ export function serveWorkerTasks<Output>(
     transferList?: (value: Output) => Transferable[];
     retireOnError?: boolean;
     idleGc?: false;
+    retainedData?: () => readonly DiagnosticWorkerRetainedData[];
   } = {},
 ): void {
   serveOwnedWorkerTasks(handler, options);
@@ -56,6 +58,8 @@ export function serveOwnedWorkerTasks<Output>(
     retireOnError?: boolean;
     /** Guest runtimes own their heap budget and lifetime across task boundaries. */
     idleGc?: false;
+    /** Cheap owner-held counts and size estimates; never contents, keys, or identities. */
+    retainedData?: () => readonly DiagnosticWorkerRetainedData[];
   } = {},
 ): void {
   let memoryPort: MessagePort;
@@ -133,7 +137,7 @@ export function serveOwnedWorkerTasks<Output>(
       },
       onMessage(sampleMemory) {
         if (sampleMemory && !closeMemorySamples) {
-          closeMemorySamples = serveWorkerMemorySamples(memoryPort);
+          closeMemorySamples = serveWorkerMemorySamples(memoryPort, options.retainedData);
         }
         cancelWorkerIdleGc();
       },
