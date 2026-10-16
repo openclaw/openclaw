@@ -1,32 +1,21 @@
 import type { RouteMatch, Router, RouterState } from "@openclaw/uirouter";
+import { createEffect, createSignal, onCleanup } from "solid-js";
 import {
   isAgentDatabaseInspectionPendingError,
   resolveGatewayReadRetryDelayMs,
 } from "../lib/gateway-availability.ts";
 
-const DEFAULT_PENDING_DELAY_MS = 1_000;
-
-type RouterOutletStateSlice<
-  TRouteId extends string = string,
-  TModule = unknown,
-  TData = unknown,
-> = {
+type Selection<TRouteId extends string, TModule, TData> = {
   status: RouterState<TRouteId, TModule, TData>["status"];
   active: RouteMatch<TRouteId, TModule, TData> | undefined;
   pending: RouteMatch<TRouteId, TModule, TData> | undefined;
 };
-
-export type RouterOutletSnapshot<
-  TRouteId extends string = string,
-  TModule = unknown,
-  TData = unknown,
-> = RouterOutletStateSlice<TRouteId, TModule, TData> & {
+type Snapshot<TRouteId extends string, TModule, TData> = Selection<TRouteId, TModule, TData> & {
   settled: RouteMatch<TRouteId, TModule, TData> | undefined;
   showPending: boolean;
   startupPending?: boolean;
 };
-
-export type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
+type Inputs<TRouteId extends string, TLoadContext, TModule, TData> = {
   router?: Router<TRouteId, TLoadContext, TModule, TData>;
   onNotFound?: () => boolean | void;
   notFoundRecoveryReady?: boolean;
@@ -43,310 +32,250 @@ export function selectRenderedRouteMatch<TRouteId extends string, TModule, TData
   return coldPending && active ? active : (pending ?? active);
 }
 
-function selectRouterOutletState<TRouteId extends string, TModule, TData>(
-  state: RouterState<TRouteId, TModule, TData>,
-): RouterOutletStateSlice<TRouteId, TModule, TData> {
-  return {
-    status: state.status,
-    active: state.matches[0],
-    pending: state.pendingMatches[0],
-  };
-}
-
-function idleSnapshot<TRouteId extends string, TModule, TData>(): RouterOutletSnapshot<
-  TRouteId,
+/** Presentation timing belongs to this Solid owner; route loading stays with the router. */
+export function createRouterOutletPresentation<
+  TRouteId extends string,
+  TLoadContext,
   TModule,
-  TData
-> {
-  return {
+  TData = unknown,
+>(props: Inputs<TRouteId, TLoadContext, TModule, TData>) {
+  type OutletSnapshot = Snapshot<TRouteId, TModule, TData>;
+  type OutletRouter = Inputs<TRouteId, TLoadContext, TModule, TData>["router"];
+  const idle = (): OutletSnapshot => ({
     status: "idle",
     active: undefined,
     pending: undefined,
     settled: undefined,
     showPending: false,
-  };
-}
+  });
+  let inputs: Inputs<TRouteId, TLoadContext, TModule, TData> = {};
+  let router: OutletRouter;
+  let stopRouter: (() => void) | undefined;
+  let selection: Selection<TRouteId, TModule, TData> = idle();
+  let published: OutletSnapshot & { source: OutletRouter } = { ...idle(), source: undefined };
+  // Retention-scope navigation can notify synchronously inside the caller's render memo.
+  const [snapshot, setSnapshot] = createSignal<OutletSnapshot>(published, { ownedWrite: true });
+  let settled: OutletSnapshot["settled"];
+  let pendingMatchId: string | undefined;
+  let pendingTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  let showPending = false;
+  let notFoundActive = false;
+  let notFoundDeclined = false;
+  let notFoundGeneration = 0;
+  let startupMatchId: string | undefined;
+  let startupAttempt = 0;
+  let startupTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  let disposed = false;
 
-/**
- * Owns route-presentation timing and effects without depending on a renderer.
- * Render adapters provide invalidation and bind the controller to their own
- * connection lifecycle.
- */
-export class RouterOutletController<
-  TRouteId extends string = string,
-  TLoadContext = unknown,
-  TModule = unknown,
-  TData = unknown,
-> {
-  private router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  private onNotFound?: () => boolean | void;
-  private connected = false;
-  private unsubscribe?: () => void;
-  private selection: RouterOutletStateSlice<TRouteId, TModule, TData> = idleSnapshot();
-  private snapshotValue: RouterOutletSnapshot<TRouteId, TModule, TData> = idleSnapshot();
-  private settled?: RouteMatch<TRouteId, TModule, TData>;
-  private pendingMatchId?: string;
-  private pendingTimer?: ReturnType<typeof globalThis.setTimeout>;
-  private showPending = false;
-  private notFoundActive = false;
-  private notFoundDeclined = false;
-  private notFoundGeneration = 0;
-  private notFoundRecoveryReady = true;
-  private retryContext?: TLoadContext;
-  private retryEnabled = true;
-  private startupMatchId?: string;
-  private startupAttempt = 0;
-  private startupTimer?: ReturnType<typeof globalThis.setTimeout>;
-
-  constructor(private readonly invalidate: () => void) {}
-
-  get snapshot(): RouterOutletSnapshot<TRouteId, TModule, TData> {
-    return this.snapshotValue;
-  }
-
-  setInputs(inputs: RouterOutletInputs<TRouteId, TLoadContext, TModule, TData>): void {
+  function publish() {
+    const next = {
+      source: router,
+      ...selection,
+      settled,
+      showPending,
+      startupPending: startupMatchId !== undefined,
+    };
     if (
-      this.retryContext !== inputs.retryContext ||
-      this.retryEnabled !== (inputs.retryEnabled ?? true)
+      published.source === next.source &&
+      published.status === next.status &&
+      published.active === next.active &&
+      published.pending === next.pending &&
+      published.settled === next.settled &&
+      published.showPending === next.showPending &&
+      published.startupPending === next.startupPending
     ) {
-      this.clearStartupRetry();
+      return;
     }
-    this.retryContext = inputs.retryContext;
-    this.retryEnabled = inputs.retryEnabled ?? true;
-    this.onNotFound = inputs.onNotFound;
-    const nextNotFoundRecoveryReady = inputs.notFoundRecoveryReady ?? true;
-    const recoveryBecameReady =
-      !this.notFoundRecoveryReady && nextNotFoundRecoveryReady && this.notFoundDeclined;
-    this.notFoundRecoveryReady = nextNotFoundRecoveryReady;
-    if (this.router === inputs.router) {
-      this.updateStartupRetry();
-      if (recoveryBecameReady && this.selection.status === "notFound") {
-        this.cancelNotFoundEffect();
-        this.updateNotFoundEffect(this.selection.status);
+    // Readiness compares this receipt synchronously, before Solid commits the same object.
+    published = next;
+    setSnapshot(next);
+  }
+  function clearPendingTimer() {
+    globalThis.clearTimeout(pendingTimer);
+    pendingTimer = undefined;
+  }
+  function clearStartupRetry() {
+    globalThis.clearTimeout(startupTimer);
+    startupTimer = undefined;
+    startupMatchId = undefined;
+    startupAttempt = 0;
+  }
+  function updateStartupRetry() {
+    const { retryEnabled, retryContext } = inputs;
+    // A new destination cancels the old retry before its module finishes loading.
+    const match = selection.pending ?? selection.active;
+    if (match?.id !== startupMatchId) {
+      clearStartupRetry();
+    }
+    if (retryEnabled === false || retryContext === undefined || !match) {
+      clearStartupRetry();
+      return;
+    }
+    if (match.status === "pending" || match.isFetching) {
+      globalThis.clearTimeout(startupTimer);
+      startupTimer = undefined;
+      return;
+    }
+    if (!isAgentDatabaseInspectionPendingError(match.error)) {
+      clearStartupRetry();
+      return;
+    }
+    startupMatchId = match.id;
+    if (startupTimer !== undefined) {
+      return;
+    }
+    const source = router;
+    startupTimer = globalThis.setTimeout(
+      () => {
+        startupTimer = undefined;
+        if (
+          props.router !== source ||
+          props.retryContext !== retryContext ||
+          props.retryEnabled === false
+        ) {
+          return;
+        }
+        void source?.revalidate(retryContext, match.routeId).catch(() => undefined);
+      },
+      resolveGatewayReadRetryDelayMs(match.error, startupAttempt++),
+    );
+  }
+  function cancelNotFound() {
+    notFoundGeneration += 1;
+    notFoundActive = false;
+    notFoundDeclined = false;
+  }
+  function updateNotFound() {
+    if (selection.status !== "notFound") {
+      if (notFoundActive) {
+        cancelNotFound();
       }
       return;
     }
-
-    this.detachSource();
-    this.router = inputs.router;
-    this.settled = undefined;
-    if (this.connected) {
-      this.attachSource();
+    if (notFoundActive) {
       return;
     }
-    const selection = inputs.router
-      ? selectRouterOutletState(inputs.router.getState())
-      : idleSnapshot<TRouteId, TModule, TData>();
-    this.applySelection(selection);
+    notFoundActive = true;
+    const generation = ++notFoundGeneration;
+    const source = router;
+    queueMicrotask(() => {
+      if (
+        disposed ||
+        props.router !== source ||
+        generation !== notFoundGeneration ||
+        selection.status !== "notFound"
+      ) {
+        return;
+      }
+      // Declined recovery waits for readiness rather than retrying on unrelated renders.
+      notFoundDeclined = props.onNotFound?.() === false;
+    });
   }
-
-  connect(): void {
-    if (this.connected) {
-      return;
-    }
-    this.connected = true;
-    this.attachSource(false);
-    // A disconnected host may have retained DOM for an older snapshot. Always
-    // reconcile once on reconnect, even when the router state stayed stable.
-    this.invalidate();
-  }
-
-  disconnect(): void {
-    if (!this.connected) {
-      return;
-    }
-    this.connected = false;
-    this.detachSource();
-  }
-
-  private attachSource(notify = true): void {
-    const router = this.router;
-    if (this.unsubscribe) {
-      return;
-    }
-    if (!router) {
-      this.applySelection(idleSnapshot<TRouteId, TModule, TData>(), notify);
-      return;
-    }
-    this.applySelection(selectRouterOutletState(router.getState()), notify);
-    // An earlier subscriber can navigate during this notification. Read the
-    // current route so its superseded not-found snapshot cannot trigger recovery.
-    this.unsubscribe = router.subscribe(() =>
-      this.applySelection(selectRouterOutletState(router.getState())),
-    );
-  }
-
-  private detachSource(): void {
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
-    this.clearPendingTimer();
-    this.pendingMatchId = undefined;
-    this.showPending = false;
-    this.cancelNotFoundEffect();
-    this.clearStartupRetry();
-  }
-
-  private applySelection(
-    selection: RouterOutletStateSlice<TRouteId, TModule, TData>,
-    notify = true,
-  ): void {
-    this.selection = selection;
-    if (selection.status === "idle" || selection.status === "notFound") {
-      this.settled = undefined;
+  function applySelection(next: Selection<TRouteId, TModule, TData>) {
+    selection = next;
+    if (next.status === "idle" || next.status === "notFound") {
+      settled = undefined;
     } else {
-      const rendered = selectRenderedRouteMatch(selection.active, selection.pending);
+      const rendered = selectRenderedRouteMatch(next.active, next.pending);
       if (rendered?.status === "success") {
-        this.settled = rendered;
+        settled = rendered;
       } else if (
         rendered?.status === "error" ||
         rendered?.status === "notFound" ||
         rendered?.status === "redirected"
       ) {
-        // Terminal destinations replace the previous page. A later retry must
-        // not recreate its disposed draft from a historical successful match.
-        this.settled = undefined;
+        // A terminal destination must not revive the previously disposed page on retry.
+        settled = undefined;
       }
     }
-    const pending = selection.pending;
+    const pending = next.pending;
     const coldPending =
       pending?.status === "pending" && pending.module === undefined && pending.error === undefined;
-    const needsPendingFallback = coldPending && !selection.active;
-    if (!needsPendingFallback) {
-      this.clearPendingTimer();
-      this.pendingMatchId = undefined;
-      this.showPending = false;
-    } else if (this.pendingMatchId !== pending.id) {
-      this.clearPendingTimer();
-      this.pendingMatchId = pending.id;
-      this.showPending = false;
-      this.schedulePendingFallback();
-    } else if (this.connected && !this.showPending && this.pendingTimer === undefined) {
-      this.schedulePendingFallback();
+    if (!coldPending || next.active) {
+      clearPendingTimer();
+      pendingMatchId = undefined;
+      showPending = false;
+    } else if (pendingMatchId !== pending.id) {
+      clearPendingTimer();
+      pendingMatchId = pending.id;
+      showPending = false;
+      pendingTimer = globalThis.setTimeout(() => {
+        pendingTimer = undefined;
+        showPending = true;
+        publish();
+      }, 1_000);
     }
-
-    this.updateStartupRetry();
-    this.publish(
-      {
-        ...selection,
-        settled: this.settled,
-        showPending: this.showPending,
-        startupPending: this.startupMatchId !== undefined,
-      },
-      notify,
-    );
-    this.updateNotFoundEffect(selection.status);
+    updateStartupRetry();
+    publish();
+    updateNotFound();
   }
-
-  private schedulePendingFallback(): void {
-    if (!this.connected) {
-      return;
-    }
-    this.pendingTimer = globalThis.setTimeout(() => {
-      this.pendingTimer = undefined;
-      // Selection changes and disconnect synchronously cancel this timer.
-      this.showPending = true;
-      this.publish({ ...this.selection, settled: this.settled, showPending: true });
-    }, DEFAULT_PENDING_DELAY_MS);
+  function detach() {
+    stopRouter?.();
+    stopRouter = undefined;
+    clearPendingTimer();
+    pendingMatchId = undefined;
+    showPending = false;
+    cancelNotFound();
+    clearStartupRetry();
   }
-
-  private updateStartupRetry(): void {
-    // A new destination cancels the old retry even while its module is still loading.
-    const match = this.selection.pending ?? this.selection.active;
-    if (match?.id !== this.startupMatchId) {
-      this.clearStartupRetry();
-    }
-    if (!this.connected || !this.retryEnabled || this.retryContext === undefined || !match) {
-      this.clearStartupRetry();
-      return;
-    }
-    if (match.status === "pending" || match.isFetching) {
-      globalThis.clearTimeout(this.startupTimer);
-      this.startupTimer = undefined;
-      return;
-    }
-    if (!isAgentDatabaseInspectionPendingError(match.error)) {
-      this.clearStartupRetry();
-      return;
-    }
-    this.startupMatchId = match.id;
-    if (this.startupTimer !== undefined) {
-      return;
-    }
-    const retryContext = this.retryContext;
-    this.startupTimer = globalThis.setTimeout(
-      () => {
-        this.startupTimer = undefined;
-        // Input changes, route replacement and disconnect cancel the retry.
-        void this.router?.revalidate(retryContext, match.routeId).catch(() => undefined);
-      },
-      resolveGatewayReadRetryDelayMs(match.error, this.startupAttempt++),
-    );
-  }
-
-  private clearStartupRetry(): void {
-    globalThis.clearTimeout(this.startupTimer);
-    this.startupTimer = undefined;
-    this.startupMatchId = undefined;
-    this.startupAttempt = 0;
-  }
-
-  private updateNotFoundEffect(status: RouterOutletStateSlice["status"]): void {
-    if (status !== "notFound") {
-      if (this.notFoundActive) {
-        this.cancelNotFoundEffect();
-      }
-      return;
-    }
-    if (!this.connected || this.notFoundActive) {
-      return;
-    }
-
-    this.notFoundActive = true;
-    const generation = ++this.notFoundGeneration;
-    queueMicrotask(() => {
+  createEffect(
+    () => ({
+      router: props.router,
+      onNotFound: props.onNotFound,
+      notFoundRecoveryReady: props.notFoundRecoveryReady,
+      retryContext: props.retryContext,
+      retryEnabled: props.retryEnabled,
+    }),
+    (next) => {
       if (
-        !this.connected ||
-        generation !== this.notFoundGeneration ||
-        this.selection.status !== "notFound"
+        inputs.retryContext !== next.retryContext ||
+        (inputs.retryEnabled ?? true) !== (next.retryEnabled ?? true)
       ) {
-        return;
+        clearStartupRetry();
       }
-      // A disconnected shell declines transiently. Keep the latch until its
-      // readiness input changes so unrelated renders cannot spin retries.
-      if (this.onNotFound?.() === false) {
-        this.notFoundDeclined = true;
+      const recoveryBecameReady =
+        inputs.notFoundRecoveryReady === false &&
+        next.notFoundRecoveryReady !== false &&
+        notFoundDeclined;
+      inputs = next;
+      if (router !== next.router) {
+        detach();
+        router = next.router;
+        settled = undefined;
+        const source = router;
+        const refresh = () => {
+          // Earlier subscribers can navigate reentrantly; their current destination wins.
+          const state = source?.getState();
+          applySelection(
+            state
+              ? { status: state.status, active: state.matches[0], pending: state.pendingMatches[0] }
+              : idle(),
+          );
+        };
+        refresh();
+        stopRouter = source?.subscribe(refresh);
+      } else {
+        updateStartupRetry();
+        publish();
+        if (recoveryBecameReady && selection.status === "notFound") {
+          cancelNotFound();
+          updateNotFound();
+        }
       }
-    });
-  }
-
-  private cancelNotFoundEffect(): void {
-    this.notFoundGeneration += 1;
-    this.notFoundActive = false;
-    this.notFoundDeclined = false;
-  }
-
-  private publish(snapshot: RouterOutletSnapshot<TRouteId, TModule, TData>, notify = true): void {
-    const previous = this.snapshotValue;
-    if (
-      previous.status === snapshot.status &&
-      previous.active === snapshot.active &&
-      previous.pending === snapshot.pending &&
-      previous.settled === snapshot.settled &&
-      previous.showPending === snapshot.showPending &&
-      previous.startupPending === snapshot.startupPending
-    ) {
-      return;
-    }
-    this.snapshotValue = snapshot;
-    if (notify && this.connected) {
-      this.invalidate();
-    }
-  }
-
-  private clearPendingTimer(): void {
-    if (this.pendingTimer !== undefined) {
-      globalThis.clearTimeout(this.pendingTimer);
-      this.pendingTimer = undefined;
-    }
-  }
+    },
+  );
+  onCleanup(() => {
+    disposed = true;
+    detach();
+  });
+  const empty = idle();
+  return {
+    snapshot: (): OutletSnapshot => {
+      snapshot();
+      // Subscribe even before binding; reentrant navigation reads the latest receipt.
+      return props.router === router ? published : empty;
+    },
+    isCurrent: (value: OutletSnapshot | undefined) =>
+      props.router === router && value === published,
+  };
 }

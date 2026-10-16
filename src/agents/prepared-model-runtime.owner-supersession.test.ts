@@ -20,6 +20,15 @@ import {
 } from "../gateway/server-reload-handlers.config.test-support.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import { publishConfiguredModelRuntimeSnapshots } from "../gateway/server-startup-model-runtime.js";
+import {
+  bindPluginMetadataSnapshotCache,
+  createPluginCache,
+  getPluginCache,
+  getProcessPluginCache,
+  retirePluginCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -509,6 +518,74 @@ describe("prepared model runtime owner selection", () => {
       configWrite.release.resolve();
       authWrite.release.resolve();
       await Promise.allSettled([reader, replacement]);
+    }
+  });
+
+  it("keeps logged-out reply dispatch after the config operation cache retires", async ({
+    signal,
+  }) => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    const nextConfig = { messages: { responsePrefix: "updated" } };
+    const metadata = { ...(await pluginMetadata.resolvePluginMetadataSnapshotAsync({ config })) };
+    bindPluginMetadataSnapshotCache(metadata, getProcessPluginCache());
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      pluginMetadataSnapshot: metadata,
+    });
+    const input = fixture.agentInput("default", nextConfig);
+    const operationCache = createPluginCache();
+    const resolveMetadata = vi
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
+      .mockImplementation(async () => {
+        const snapshot = { ...metadata };
+        bindPluginMetadataSnapshotCache(snapshot, getPluginCache());
+        return snapshot;
+      });
+    const { started, release } = holdNextCatalogWrite();
+    const resources = new AsyncDisposableStack();
+    let replacement: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
+    let reader: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+    let snapshotRead: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
+    let retirement: ReturnType<typeof retirePluginCache> | undefined;
+    try {
+      replacement = withPluginCache(operationCache, () =>
+        refreshPreparedModelRuntimeSnapshots(nextConfig, {
+          gatewayLifecycle: true,
+          pluginMetadataSnapshot: metadata,
+        }),
+      );
+      void replacement.catch(() => undefined);
+      await withinTest(started.promise, signal);
+      mocks.authStorage.getAll.mockReturnValue({});
+      mocks.mutationListener?.({
+        agentDir: input.agentDir,
+        affectsInheritedStores: false,
+        profileSetChanged: true,
+      });
+      release.resolve();
+      await withinTest(replacement, signal);
+      retirement = retirePluginCache(operationCache);
+      await withinTest(retirement, signal);
+
+      reader = loadPublishedGatewayReplyDispatchRuntime({
+        agentId: "default",
+        onRuntimeLease: (lease) => {
+          resources.use(lease);
+        },
+      });
+      await expect(withinTest(reader, signal)).resolves.toMatchObject({ config: nextConfig });
+      snapshotRead = prepareModelRuntimeSnapshot(input);
+      const snapshot = await withinTest(snapshotRead, signal);
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(snapshot.createStores().authStorage.getAll()).toEqual({});
+    } finally {
+      release.resolve();
+      await resources.disposeAsync();
+      const closing = closePreparedModelRuntimeSnapshots();
+      await Promise.allSettled([replacement, reader, snapshotRead, retirement, closing]);
+      resolveMetadata.mockRestore();
+      await retirePluginCache(operationCache);
     }
   });
 

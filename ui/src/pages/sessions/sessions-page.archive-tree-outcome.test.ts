@@ -154,7 +154,7 @@ describe("Sessions page confirmed tree archive outcomes", () => {
     const modal = createModalDialogTestFixture();
     const fixture = await setup(1, true);
     try {
-      const operation = modal.track(fixture.page.archiveActions.archive(fixture.root, true));
+      const operation = modal.track(fixture.page.archive(fixture.root, true));
       const actions = await waitForConfirmDialogActions();
       expect(document.body.textContent).toContain("This selection contains active work.");
       answerConfirmDialog(actions, "confirm");
@@ -186,7 +186,7 @@ describe("Sessions page confirmed tree archive outcomes", () => {
     // One more than the protocol batch maximum exercises a second confirmed chunk.
     const fixture = await setup(100);
     try {
-      const operation = modal.track(fixture.page.archiveActions.archive(fixture.root, true));
+      const operation = modal.track(fixture.page.archive(fixture.root, true));
       const actions = await waitForConfirmDialogActions();
       expect(fixture.batches).toHaveLength(0);
       answerConfirmDialog(actions, "alternative");
@@ -228,7 +228,7 @@ describe("Sessions page confirmed tree archive outcomes", () => {
     const modal = createModalDialogTestFixture();
     const fixture = await setup(2);
     try {
-      const operation = modal.track(fixture.page.archiveActions.archive(fixture.root, true));
+      const operation = modal.track(fixture.page.archive(fixture.root, true));
       answerConfirmDialog(await waitForConfirmDialogActions(), "alternative");
       const first = await fixture.dispatched.promise;
       fixture.page.remove();

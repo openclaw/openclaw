@@ -9,21 +9,14 @@ import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createIdleImport } from "../../lib/idle-import.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
-import {
-  ControllerHost,
-  SubscriptionsController,
-  viewState,
-} from "../../lib/subscriptions-controller.ts";
 import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
-import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { ChatWelcomeProps } from "../chat/components/chat-welcome.tsx";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import type { NewSessionComposerOptions } from "./composer.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
-import { NewSessionDraftController } from "./draft-controller.ts";
+import { NewSessionDraft } from "./draft-controller.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import {
   activateDraft,
@@ -34,7 +27,7 @@ import {
 import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
-import { NewSessionTitleController } from "./draft-title.ts";
+import type { createNewSessionTitle } from "./draft-title.ts";
 import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { closeAgentPicker, closeSessionMenus } from "./new-session-runtime.ts";
@@ -58,7 +51,21 @@ export type PageHost = SolidBridgeElement<
   }
 >;
 
-export class NewSessionPageOwner extends ControllerHost {
+export class NewSessionPageOwner {
+  private readonly listeners = new Set<() => void>();
+  isConnected = false;
+  readonly changed = () => {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  };
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  get updateComplete() {
+    return this.host.updateComplete;
+  }
   context?: ApplicationContext;
   get data() {
     return this.host.data;
@@ -79,14 +86,19 @@ export class NewSessionPageOwner extends ControllerHost {
   openedAgentId = "";
   messageOwnerKey = "";
   readonly connectMachine: ConnectMachineSetupState;
-  @viewState() attachmentPanel: {
+  attachmentPanel: {
     content: Extract<SidebarContent, { kind: "attachment" }>;
     ownerKey: string;
     agentId: string;
   } | null = null;
-  readonly attachmentPanelLoader = new LazyCustomElementRequestController(this);
+  readonly attachmentPanelLoader = new LazyCustomElementRequestController({
+    requestUpdate: this.changed,
+  });
   readonly closeAttachmentPanel = () => {
-    this.attachmentPanel = null;
+    if (this.attachmentPanel) {
+      this.attachmentPanel = null;
+      this.changed();
+    }
   };
   readonly openAttachmentPanel = (content: SidebarContent) => {
     if (content.kind === "attachment") {
@@ -95,37 +107,29 @@ export class NewSessionPageOwner extends ControllerHost {
         ownerKey: this.routeOwnerKey(),
         agentId: this.place.agentId,
       };
+      this.changed();
     }
   };
-  @viewState() imageLightbox: ImageLightboxItem | null = null;
-  @viewState() agentPickerOpen = false;
-  readonly draft: NewSessionDraftController;
+  imageLightbox: ImageLightboxItem | null = null;
+  agentPickerOpen = false;
+  readonly draft: NewSessionDraft;
   readonly gateway: DraftGatewayState;
   readonly browser: DraftPlaceBrowser;
   readonly place: DraftPlaceState;
   readonly submission: DraftSubmissionFlow;
   readonly dictation: NewSessionDictationControl;
-  readonly subscriptions: SubscriptionsController;
-  readonly titlePreparation = new NewSessionTitleController(this, () => ({
-    context: this.context,
-    data: this.data,
-    place: this.place,
-    submission: this.submission,
-    dictating: this.dictation.active,
-  }));
+  titlePreparation?: ReturnType<typeof createNewSessionTitle>;
   readonly flushDraft = () => this.submission.draftPersistence.persistNow();
   readonly setImageLightbox = (item: ImageLightboxItem | null) => {
     this.imageLightbox = item;
+    this.changed();
   };
 
   constructor(readonly host: PageHost) {
-    super();
-    this.addController({ hostUpdate: () => this.willUpdate() });
-    this.draft = new NewSessionDraftController(
-      this,
+    this.draft = new NewSessionDraft(
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
-        requestUpdate: () => this.requestUpdate(),
+        requestUpdate: this.changed,
         querySelector: (selector) => this.querySelector(selector),
         activeElement: () => this.ownerDocument.activeElement,
         body: () => this.ownerDocument.body,
@@ -140,7 +144,8 @@ export class NewSessionPageOwner extends ControllerHost {
           this.draft.browser.close();
           closeSessionMenus(this.host);
         },
-        takePreparedTitle: () => this.titlePreparation.takePreparedTitle(),
+        takePreparedTitle: () => this.titlePreparation?.takePreparedTitle(),
+        updateComplete: () => this.updateComplete,
         retainForHandoff: () => {
           if (!this.data || !this.isConnected) {
             return undefined;
@@ -174,7 +179,7 @@ export class NewSessionPageOwner extends ControllerHost {
     this.submission = this.draft.submission;
     this.connectMachine = new ConnectMachineSetupState(
       () => ({ client: this.gateway.client, connected: this.gateway.connected }),
-      () => this.requestUpdate(),
+      this.changed,
     );
     this.dictation = new NewSessionDictationControl({
       textarea: this.submission.composerTextarea,
@@ -184,26 +189,8 @@ export class NewSessionPageOwner extends ControllerHost {
       onMessage: (message) => this.setMessageFromUser(message),
       onError: (message) => this.submission.setError(message),
       onSubmit: () => void this.submission.submit(),
-      requestUpdate: () => this.requestUpdate(),
+      requestUpdate: this.changed,
     });
-    this.subscriptions = new SubscriptionsController(this)
-      .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
-      .watchStore(() => this.context?.theme)
-      .watchStore(() => this.context?.agents)
-      .watchStore(() => this.context?.agentIdentity)
-      .watchStore(() => this.context?.sessions)
-      .watchStore(() => this.context?.placementStartup)
-      .watchStore(() => this.context?.runtimeConfig)
-      .watch(
-        () => this.context?.config,
-        (config, notify) => config.subscribe(() => notify()),
-      );
-  }
-
-  handleEvent(event: Event) {
-    if (event instanceof KeyboardEvent) {
-      focusChatComposerFromPrintableKeydown(this.host, event);
-    }
   }
 
   focusComposer(): void {
@@ -225,33 +212,29 @@ export class NewSessionPageOwner extends ControllerHost {
     });
   }
 
-  override connect() {
+  connect() {
     if (this.isConnected) {
       return;
     }
-    super.connect();
+    this.isConnected = true;
+    this.draft.connect();
     this.submission.draftPersistence.connect();
     this.critterImport.schedule();
-    document.addEventListener("keydown", this, true);
-    window.addEventListener("beforeunload", this.flushDraft);
   }
 
-  override disconnect() {
+  disconnect() {
     if (!this.isConnected) {
       return;
     }
     this.closeAttachmentPanel();
     this.attachmentPanelLoader.requestWhileActive(attachmentPanelElement, false);
     this.critterImport.dispose();
-    document.removeEventListener("keydown", this, true);
-    window.removeEventListener("beforeunload", this.flushDraft);
-    this.subscriptions.clear();
     this.dictation.dispose();
     this.connectMachine.close();
     if (!this.retainedForHandoff) {
       this.disposeDraft();
     }
-    super.disconnect();
+    this.isConnected = false;
   }
 
   disposeDraft() {
@@ -260,7 +243,8 @@ export class NewSessionPageOwner extends ControllerHost {
     this.draft.disconnect();
   }
 
-  willUpdate() {
+  synchronize() {
+    this.draft.synchronize();
     const panel = this.attachmentPanel;
     if (
       panel &&
@@ -272,7 +256,7 @@ export class NewSessionPageOwner extends ControllerHost {
           (attachment) => attachment.id === panel.content.sourceIdentity,
         ))
     ) {
-      this.attachmentPanel = null;
+      this.closeAttachmentPanel();
     }
     this.attachmentPanelLoader.requestWhileActive(
       attachmentPanelElement,
@@ -398,7 +382,7 @@ export class NewSessionPageOwner extends ControllerHost {
       ...capabilities.composerProps(context, gateway, place.agentId),
       modelControl: place.modelControl,
       requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
-      requestUpdate: () => this.requestUpdate(),
+      requestUpdate: this.changed,
       get submitting() {
         return submission.submitting;
       },

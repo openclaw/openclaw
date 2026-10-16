@@ -1,6 +1,9 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../../cli-invocation.mjs";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { DEFAULT_RELAY_TIMEOUT_MS } from "./native-hook-relay-constants.js";
 import type { NativeHookRelayEvent, NativeHookRelayProvider } from "./native-hook-relay-types.js";
@@ -60,20 +63,26 @@ export function buildNativeHookRelayCommandWithStateDatabase(params: {
     ? { executable: params.executable, kind: "cli" as const }
     : resolveNativeHookRelayExecutable();
   const executable = target.executable;
+  const standaloneExecutable =
+    target.kind === "cli" &&
+    executable !== "openclaw" &&
+    isStandaloneRuntimeExecutable(path.resolve(executable))
+      ? path.resolve(executable)
+      : undefined;
+  const directExecutable =
+    standaloneExecutable ?? (executable === "openclaw" ? executable : undefined);
   const invocation =
-    target.kind === "cli" && executable !== "openclaw"
+    target.kind === "cli"
       ? resolveOpenClawCliInvocation({
-          execPath: params.nodeExecutable ?? process.execPath,
-          entryPath: executable,
+          execPath: directExecutable ?? params.nodeExecutable ?? process.execPath,
+          entryPath: directExecutable ? null : executable,
           execArgv: [],
           args: [],
         })
       : undefined;
   const argv = invocation
     ? [invocation.command, ...invocation.args]
-    : executable === "openclaw"
-      ? ["openclaw"]
-      : [params.nodeExecutable ?? process.execPath, executable];
+    : [params.nodeExecutable ?? process.execPath, executable];
   const nicePrefix = resolveNativeHookRelayNicePrefix(params.nice);
   const command = shellQuoteArgs([
     ...nicePrefix,
@@ -107,6 +116,9 @@ function resolveNativeHookRelayExecutable(): { executable: string; kind: "worker
   const envPath = process.env.OPENCLAW_CLI_PATH?.trim();
   if (envPath && existsSync(envPath)) {
     return { executable: envPath, kind: "cli" };
+  }
+  if (isStandaloneRuntimeExecutable()) {
+    return { executable: process.execPath, kind: "cli" };
   }
   const packageRoot = resolveOpenClawPackageRootSync({
     moduleUrl: import.meta.url,

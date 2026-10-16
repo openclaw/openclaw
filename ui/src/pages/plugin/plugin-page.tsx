@@ -87,6 +87,7 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
       mode,
       state: lifecycle.bundledViewState,
       generation: lifecycle.pluginFrameGeneration,
+      bundledHost: lifecycle.bundledViewHost,
     };
   });
   const readyView = () => {
@@ -124,20 +125,20 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
           />
         </Show>
         <Show when={readyView()} keyed>
-          {(loaded) =>
-            loaded.render({
-              get host() {
-                revision();
-                return lifecycle.bundledViewHost;
-              },
-              get client() {
-                return gateway.read().snapshot.client;
-              },
-              get connected() {
-                return gateway.read().snapshot.phase === "connected";
-              },
-            })
-          }
+          {(loaded) => (
+            <Show when={view().bundledHost} keyed>
+              {(_epoch) =>
+                loaded.render({
+                  get client() {
+                    return gateway.read().snapshot.client;
+                  },
+                  get connected() {
+                    return gateway.read().snapshot.phase === "connected";
+                  },
+                })
+              }
+            </Show>
+          )}
         </Show>
       </Match>
       <Match when={view().mode === "insecure"}>

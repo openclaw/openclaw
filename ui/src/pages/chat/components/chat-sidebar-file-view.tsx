@@ -9,7 +9,7 @@ import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-previe
 import type { EditorId } from "../../../lib/editor-links.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
-import type { FileCopyAction, FileCopyFeedback } from "./chat-file-copy-controller.ts";
+import type { FileCopyAction, FileCopyFeedback } from "./chat-file-copy.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import { HtmlPreview, HtmlPreviewSourceFallback } from "./chat-html-preview-view.tsx";
 import type { FileHtmlPreviewControls } from "./chat-html-preview.ts";
