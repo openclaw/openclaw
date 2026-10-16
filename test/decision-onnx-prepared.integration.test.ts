@@ -2,24 +2,22 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DecisionRuntimeV2 } from "openclaw/plugin-sdk/decisions";
 import { afterEach, expect, it, vi } from "vitest";
-import { resetPreparedModelRuntimeSnapshotsForTest } from "../../../src/agents/prepared-model-runtime.test-support.js";
 import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../../src/config/config.js";
-import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
-import { loadAndActivateRootPluginRegistry } from "../../../src/plugins/loader.js";
-import { resetPluginLoaderTestStateForTest } from "../../../src/plugins/loader.test-fixtures.js";
-import { clearPluginMetadataLifecycleCaches } from "../../../src/plugins/plugin-metadata-lifecycle.js";
+  createPreparedOnnxProvider,
+  onnxManifest as manifest,
+} from "../extensions/onnx/test-api.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../src/agents/prepared-model-runtime.test-support.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { loadAndActivateRootPluginRegistry } from "../src/plugins/loader.js";
+import { resetPluginLoaderTestStateForTest } from "../src/plugins/loader.test-fixtures.js";
+import { clearPluginMetadataLifecycleCaches } from "../src/plugins/plugin-metadata-lifecycle.js";
 import {
   createColdPluginFixture,
   createColdPluginHermeticEnv,
-} from "../../../src/plugins/test-helpers/cold-plugin-fixtures.js";
-import { withEnvAsync } from "../../../src/test-utils/env.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import manifest from "../openclaw.plugin.json" with { type: "json" };
-import { createPreparedOnnxProvider } from "./decisions.js";
-import type { InferenceWorkerClient } from "./worker-client.js";
+} from "../src/plugins/test-helpers/cold-plugin-fixtures.js";
+import { withEnvAsync } from "../src/test-utils/env.js";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const traceKey = Symbol.for("openclaw.test.onnx-prepared-decisions");
@@ -39,7 +37,7 @@ it("runs registered ONNX decisions through the prepared catalog and local auth w
   fs.mkdirSync(pluginRoot);
   fs.mkdirSync(emptyBundled);
   const classify = vi
-    .fn<InferenceWorkerClient["classify"]>()
+    .fn<Parameters<typeof createPreparedOnnxProvider>[0]["classify"]>()
     .mockResolvedValue([{ logits: [Math.log(4), 0], inputTokens: 7 }]);
   const trace: {
     provider: ReturnType<typeof createPreparedOnnxProvider>;
