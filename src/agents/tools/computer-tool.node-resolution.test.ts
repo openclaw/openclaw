@@ -1,10 +1,3 @@
-/**
- * computer tool node-resolution tests.
- *
- * Cover which paired node a call binds to: capability eligibility, explicit
- * node selectors, and the id-before-display-name precedence that keeps input
- * off the wrong machine.
- */
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDesktopSessionRegistry } from "../../gateway/desktop/session-registry.js";
@@ -20,55 +13,33 @@ import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { parseNodeWorkerComputerInput } from "../../worker/node-computer-protocol.js";
 import type { ComputerToolTransport } from "./computer-tool.js";
+import {
+  callGatewayToolMock,
+  createComputerTool,
+  type ComputerToolOptions,
+  gatewayComputerStatusMock,
+  listNodesMock,
+  macComputerNode,
+  screenshotPayload,
+  sleepMock,
+} from "./computer-tool.test-helpers.js";
 import { wrapToolWithGatewayCallerIdentity } from "./gateway-caller-context.js";
 
-const listNodesMock = vi.fn();
-const callGatewayToolMock = vi.fn();
-const sleepMock = vi.hoisted(() => vi.fn());
-const gatewayComputerStatusMock = vi.hoisted(() => vi.fn());
-const TINY_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
-
-vi.mock("./nodes-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./nodes-utils.js")>();
-  return { ...actual, listNodes: listNodesMock };
-});
-
-vi.mock("./gateway.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./gateway.js")>();
-  return { ...actual, callGatewayTool: callGatewayToolMock };
-});
-
-vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
-vi.mock("./computer-tool-gateway.js", () => ({
-  loadGatewayComputerStatus: gatewayComputerStatusMock,
-  bindGatewayComputerCleanup: async () => undefined,
-}));
-
-const { createComputerTool } = await import("./computer-tool.js");
-
-function macComputerNode(overrides?: Record<string, unknown>) {
-  return {
-    nodeId: "mac-1",
-    displayName: "Studio",
-    platform: "macos",
-    connected: true,
-    commands: ["screen.snapshot", "computer.act"],
-    ...overrides,
-  };
-}
-
-function screenshotPayload(screenIndex = 0, base64 = TINY_PNG_BASE64) {
-  return {
-    payload: {
-      format: "png",
-      base64,
-      displayFrameId: `display-${screenIndex}-frame`,
-      width: 1280,
-      height: 800,
-      screenIndex,
+function ownedComputer(
+  options: ComputerToolOptions = {},
+  caller?: Parameters<typeof wrapToolWithGatewayCallerIdentity>[1],
+) {
+  let cleanup: ((reason: string) => Promise<void>) | undefined;
+  const tool = createComputerTool({
+    ...options,
+    registerRunCleanup: (registered) => {
+      cleanup = registered;
     },
-  };
+  });
+  if (!cleanup) {
+    throw new Error("Computer execution did not register cleanup");
+  }
+  return { tool: caller ? wrapToolWithGatewayCallerIdentity(tool, caller) : tool, cleanup };
 }
 
 function attachedDesktopHarness(desktopRegistry?: ReturnType<typeof createDesktopSessionRegistry>) {
@@ -88,6 +59,23 @@ function attachedDesktopHarness(desktopRegistry?: ReturnType<typeof createDeskto
     h,
     computers,
     attachment,
+    async close() {
+      await computers.close();
+      await desktopRegistry?.stopAll();
+      releaseAgentRunDelegatedAuthority(h.authority);
+      resetPluginRuntimeStateForTest();
+      vi.restoreAllMocks();
+    },
+    provideScreenshots() {
+      const originalInvoke = h.privateInvoke.getMockImplementation()!;
+      h.privateInvoke.mockImplementation(async (invocation) => {
+        const result = await originalInvoke(invocation);
+        const input = parseNodeWorkerComputerInput(JSON.stringify(invocation.params));
+        return result.ok && input.operation === "snapshot"
+          ? { ...result, payload: screenshotPayload().payload }
+          : result;
+      });
+    },
     context(prepareAttachedComputer = computers.prepareAttached) {
       return {
         workerEnvironmentService: {
@@ -133,7 +121,7 @@ describe("createComputerTool node resolution", () => {
   it("takes over the selected conversation attachment through its admitted binding", async () => {
     const desktopRegistry = createDesktopSessionRegistry();
     const fixture = attachedDesktopHarness(desktopRegistry);
-    const { h, computers, attachment } = fixture;
+    const { h, attachment } = fixture;
     const context = fixture.context();
     await desktopRegistry.activate({
       sourceKey: attachment.environmentId,
@@ -145,14 +133,7 @@ describe("createComputerTool node resolution", () => {
       ownerEpoch: attachment.ownerEpoch,
       close,
     });
-    const originalInvoke = h.privateInvoke.getMockImplementation()!;
-    h.privateInvoke.mockImplementation(async (invocation) => {
-      const result = await originalInvoke(invocation);
-      const input = parseNodeWorkerComputerInput(JSON.stringify(invocation.params));
-      return result.ok && input.operation === "snapshot"
-        ? { ...result, payload: screenshotPayload().payload }
-        : result;
-    });
+    fixture.provideScreenshots();
     const cleanups: Array<(reason: string) => Promise<void>> = [];
     const createTool = () =>
       wrapToolWithGatewayCallerIdentity(
@@ -201,11 +182,7 @@ describe("createComputerTool node resolution", () => {
       expect(callGatewayToolMock).not.toHaveBeenCalled();
     } finally {
       await Promise.all(cleanups.map((cleanup) => cleanup("test-complete")));
-      await computers.close();
-      await desktopRegistry.stopAll();
-      releaseAgentRunDelegatedAuthority(h.authority);
-      resetPluginRuntimeStateForTest();
-      vi.restoreAllMocks();
+      await fixture.close();
     }
   });
 
@@ -230,12 +207,8 @@ describe("createComputerTool node resolution", () => {
     const invoke = vi.fn<ComputerToolTransport["invoke"]>(async ({ command }) =>
       command === "screen.snapshot" ? screenshotPayload().payload : { ok: true },
     );
-    let cleanup: ((reason: string) => Promise<void>) | undefined;
-    const tool = createComputerTool({
+    const { tool, cleanup } = ownedComputer({
       transport: { computerUse, resolveNode, invoke },
-      registerRunCleanup: (registered) => {
-        cleanup = registered;
-      },
     });
     expect(tool.description).toContain("this session's desktop");
     expect(tool.description).toContain("get_window_state");
@@ -309,16 +282,9 @@ describe("createComputerTool node resolution", () => {
       }
       return { ok: true };
     });
-    let cleanup: ((reason: string) => Promise<void>) | undefined;
-    const tool = createComputerTool({
+    const { tool, cleanup } = ownedComputer({
       transport: { resolveNode: async () => ({ nodeId: "session-desktop" }), invoke },
-      registerRunCleanup: (registered) => {
-        cleanup = registered;
-      },
     });
-    if (!cleanup) {
-      throw new Error("Computer execution did not register cleanup");
-    }
 
     const first = tool.execute("capture", { action: "screenshot" });
     await captureStarted.promise;
@@ -351,7 +317,6 @@ describe("createComputerTool node resolution", () => {
       const { h, computers, attachment } = fixture;
       const lifetime = new AbortController();
       const closing = createDeferredCore<PromiseSettledResult<void>>();
-      let cleanup: ((reason: string) => Promise<void>) | undefined;
       const failure = new Error("attached desktop close failed");
       const close = vi.fn<PreparedWorkerComputer["close"]>();
       const context = fixture.context(async (authority) => {
@@ -400,21 +365,14 @@ describe("createComputerTool node resolution", () => {
         };
         return prepared;
       });
-      const tool = wrapToolWithGatewayCallerIdentity(
-        createComputerTool({
-          registerRunCleanup: (registered) => {
-            cleanup = registered;
-          },
-        }),
+      const { tool, cleanup } = ownedComputer(
+        {},
         {
           ...fixture.caller(context),
           approvalSignals: [lifetime.signal],
         },
       );
       try {
-        if (!cleanup) {
-          throw new Error("Computer execution did not register cleanup");
-        }
         await expect(
           tool.execute(
             "pending-binding",
@@ -446,10 +404,7 @@ describe("createComputerTool node resolution", () => {
           expect.soft(close.mock.calls.length - closedBeforeEnvironmentStop).toBe(0);
         }
       } finally {
-        await computers.close();
-        releaseAgentRunDelegatedAuthority(h.authority);
-        resetPluginRuntimeStateForTest();
-        vi.restoreAllMocks();
+        await fixture.close();
       }
     },
   );
@@ -483,30 +438,9 @@ describe("createComputerTool node resolution", () => {
         };
         return prepared;
       });
-      const originalInvoke = h.privateInvoke.getMockImplementation();
-      if (!originalInvoke) {
-        throw new Error("Expected native computer transport");
-      }
-      h.privateInvoke.mockImplementation(async (invocation) => {
-        const result = await originalInvoke(invocation);
-        const input = parseNodeWorkerComputerInput(JSON.stringify(invocation.params));
-        return result.ok && input.operation === "snapshot"
-          ? { ...result, payload: screenshotPayload().payload }
-          : result;
-      });
-      let cleanup: ((reason: string) => Promise<void>) | undefined;
-      const tool = wrapToolWithGatewayCallerIdentity(
-        createComputerTool({
-          registerRunCleanup: (registered) => {
-            cleanup = registered;
-          },
-        }),
-        fixture.caller(context),
-      );
+      fixture.provideScreenshots();
+      const { tool, cleanup } = ownedComputer({}, fixture.caller(context));
       try {
-        if (!cleanup) {
-          throw new Error("Computer execution did not register cleanup");
-        }
         const rejectedInput = {
           action: "type",
           text: "",
@@ -565,10 +499,7 @@ describe("createComputerTool node resolution", () => {
           .soft(closeAttempts.mock.calls.length - closesBeforeEnvironmentStop)
           .toBe(closeFails ? 1 : 0);
       } finally {
-        await computers.close();
-        releaseAgentRunDelegatedAuthority(h.authority);
-        resetPluginRuntimeStateForTest();
-        vi.restoreAllMocks();
+        await fixture.close();
       }
     },
   );
@@ -590,19 +521,12 @@ describe("createComputerTool node resolution", () => {
         }
         return screenshotPayload().payload;
       });
-      let cleanup: ((reason: string) => Promise<void>) | undefined;
-      const tool = createComputerTool({
+      const { tool, cleanup } = ownedComputer({
         transport:
           targetScope === "session"
             ? { resolveNode: async () => ({ nodeId: "session-desktop" }), invoke }
             : undefined,
-        registerRunCleanup: (registered) => {
-          cleanup = registered;
-        },
       });
-      if (!cleanup) {
-        throw new Error("Computer execution did not register cleanup");
-      }
       await tool.execute("observe", { action: "screenshot" });
 
       if (targetScope === "session") {

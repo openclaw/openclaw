@@ -112,12 +112,37 @@ describe("cron tool", () => {
     return call.params;
   }
 
-  function buildReminderAgentTurnJob() {
+  function agentTurn(fields: Record<string, unknown> = {}) {
+    return { kind: "agentTurn" as const, message: "hello", ...fields };
+  }
+
+  function reminder(fields: Record<string, unknown> = {}) {
     return {
       name: "reminder",
       schedule: { at: new Date(123).toISOString() },
-      payload: { kind: "agentTurn" as const, message: "hello" },
+      payload: agentTurn(),
+      ...fields,
     };
+  }
+
+  function addJob(fields: Record<string, unknown> = {}) {
+    return { action: "add", job: reminder(fields) };
+  }
+
+  const restrictedCaller = {
+    agentSessionKey: "agent:main:telegram:group:restricted-room",
+    creatorToolAllowlist: ["read", "cron"],
+  };
+
+  function bindTestResolver(
+    runId: string,
+    resolve: Parameters<typeof runWithCronCreatorAuthorityResolver>[0]["resolve"],
+  ) {
+    return runWithCronCreatorAuthorityResolver({
+      runId,
+      resolve,
+      run: () => bindActiveCronCreatorAuthorityResolver(runId),
+    });
   }
 
   async function executeAddAndReadDelivery(params: {
@@ -135,7 +160,7 @@ describe("cron tool", () => {
     await tool.execute(params.callId, {
       action: "add",
       job: {
-        ...buildReminderAgentTurnJob(),
+        ...reminder(),
         ...(params.delivery !== undefined ? { delivery: params.delivery } : {}),
       },
     });
@@ -350,8 +375,8 @@ describe("cron tool", () => {
     expect(expectSingleGatewayCallMethod("wake")).toEqual(expected);
   });
 
-  it.each([true])("preserves scoped lookup recovery guidance when triggers=%s", (enabled) => {
-    const tool = createTestCronTool({ config: { cron: { triggers: { enabled } } } });
+  it("preserves scoped lookup recovery guidance with triggers enabled", () => {
+    const tool = createTestCronTool({ config: { cron: { triggers: { enabled: true } } } });
 
     // A scoped miss must not turn an update/remove request into a duplicate automation.
     expect(tool.description).toContain(
@@ -467,7 +492,7 @@ describe("cron tool", () => {
     },
     {
       name: "scoped creation outside the current job",
-      args: { action: "add", job: buildReminderAgentTurnJob() },
+      args: addJob(),
       options: { agentSessionKey: "main", selfRemoveOnlyJobId: "job-current" },
       error: "Automations tool is restricted to the current automation.",
     },
@@ -483,14 +508,14 @@ describe("cron tool", () => {
     },
     {
       name: "blank declaration key",
-      args: { action: "add", job: { ...buildReminderAgentTurnJob(), declarationKey: "   " } },
+      args: { action: "add", job: { ...reminder(), declarationKey: "   " } },
       error: "declarationKey must be a non-empty string",
     },
     {
       name: "blank create display name",
       args: {
         action: "add",
-        job: { ...buildReminderAgentTurnJob(), declarationKey: "daily", displayName: "   " },
+        job: { ...reminder(), declarationKey: "daily", displayName: "   " },
       },
       error: "displayName must be a non-empty string",
     },
@@ -508,12 +533,11 @@ describe("cron tool", () => {
       name: "mixed-case command payload",
       args: {
         action: "add",
-        job: {
+        job: reminder({
           name: "command",
-          schedule: { at: new Date(123).toISOString() },
           sessionTarget: "isolated",
           payload: { kind: "Command", argv: ["sh", "-lc", "echo ok"] },
-        },
+        }),
       },
       error: "automation command payloads cannot be created or edited",
     },
@@ -531,11 +555,7 @@ describe("cron tool", () => {
       args: {
         action: "add",
         contextMessages: "2messages",
-        job: {
-          name: "reminder",
-          schedule: { at: new Date(123).toISOString() },
-          payload: { kind: "systemEvent", text: "Reminder: the thing." },
-        },
+        job: reminder({ payload: { kind: "systemEvent", text: "Reminder: the thing." } }),
       },
       options: { agentSessionKey: "main" },
       error: "contextMessages must be a non-negative integer",
@@ -554,10 +574,7 @@ describe("cron tool", () => {
       name: "non-http webhook URL",
       args: {
         action: "add",
-        job: {
-          ...buildReminderAgentTurnJob(),
-          delivery: { mode: "webhook", to: "ftp://example.invalid/cron-finished" },
-        },
+        job: reminder({ delivery: { mode: "webhook", to: "ftp://example.invalid/cron-finished" } }),
       },
       options: { agentSessionKey: "agent:main:discord:dm:buddy" },
       error: 'delivery.mode="webhook" requires delivery.to to be a valid http(s) URL',
@@ -567,33 +584,28 @@ describe("cron tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it.each([["null", { agentId: null }]])(
-    "forwards %s add ownership separately from authenticated caller identity",
-    async (_name, fields) => {
-      let identity: ReturnType<typeof getGatewayToolCallerIdentity>;
-      callGatewayMock.mockImplementation(async () => {
-        identity = getGatewayToolCallerIdentity();
-        return { ok: true };
-      });
+  it("forwards null add ownership separately from authenticated caller identity", async () => {
+    let identity: ReturnType<typeof getGatewayToolCallerIdentity>;
+    callGatewayMock.mockImplementation(async () => {
+      identity = getGatewayToolCallerIdentity();
+      return { ok: true };
+    });
 
-      await executeCron(
-        {
-          action: "add",
-          job: { ...buildReminderAgentTurnJob(), ...fields },
-        },
-        {
-          agentSessionKey: "agent:agent-123:telegram:direct:channing",
-        },
-      );
-      expect(expectSingleGatewayCallMethod("cron.add")?.agentId).toBe(
-        "agentId" in fields ? fields.agentId : undefined,
-      );
-      expect(identity).toMatchObject({
-        agentId: "agent-123",
-        sessionKey: "agent:agent-123:telegram:direct:channing",
-      });
-    },
-  );
+    await executeCron(
+      {
+        action: "add",
+        job: reminder({ agentId: null }),
+      },
+      {
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+      },
+    );
+    expect(expectSingleGatewayCallMethod("cron.add")?.agentId).toBeNull();
+    expect(identity).toMatchObject({
+      agentId: "agent-123",
+      sessionKey: "agent:agent-123:telegram:direct:channing",
+    });
+  });
 
   it("does not forward model-supplied callerScope", async () => {
     await executeCron(
@@ -621,28 +633,18 @@ describe("cron tool", () => {
     const run = runWithTestCronCreatorAuthority(
       "run-timeout",
       () => {
-        const resolveCreatorToolAuthority = runWithCronCreatorAuthorityResolver({
-          runId: "run-timeout",
-          resolve: async () => {
-            await resolution;
-            return {
-              tools: ["read", "configured__lookup"],
-              provenance: { version: 1, source: "final-executable-surface" },
-            };
-          },
-          run: () => bindActiveCronCreatorAuthorityResolver("run-timeout"),
+        const resolveCreatorToolAuthority = bindTestResolver("run-timeout", async () => {
+          await resolution;
+          return {
+            tools: ["read", "configured__lookup"],
+            provenance: { version: 1, source: "final-executable-surface" },
+          };
         });
 
-        return executeCron(
-          {
-            action: "add",
-            job: buildReminderAgentTurnJob(),
-          },
-          {
-            agentSessionKey: "agent:main:main",
-            resolveCreatorToolAuthority,
-          },
-        );
+        return executeCron(addJob(), {
+          agentSessionKey: "agent:main:main",
+          resolveCreatorToolAuthority,
+        });
       },
       abortController.signal,
     );
@@ -668,9 +670,9 @@ describe("cron tool", () => {
     });
 
     await runWithTestCronCreatorAuthority("run-operation-retry", async () => {
-      const resolveCreatorToolAuthority = runWithCronCreatorAuthorityResolver({
-        runId: "run-operation-retry",
-        resolve: async (options) => {
+      const resolveCreatorToolAuthority = bindTestResolver(
+        "run-operation-retry",
+        async (options) => {
           discoverySignal = options?.signal;
           materializations += 1;
           if (materializations === 1) {
@@ -681,8 +683,7 @@ describe("cron tool", () => {
             provenance: { version: 1, source: "final-executable-surface" },
           };
         },
-        run: () => bindActiveCronCreatorAuthorityResolver("run-operation-retry"),
-      });
+      );
       const tool = createTestCronTool({
         agentSessionKey: "agent:main:main",
         resolveCreatorToolAuthority,
@@ -690,7 +691,7 @@ describe("cron tool", () => {
       const firstOperation = new AbortController();
       const firstWrite = tool.execute(
         "call-operation-retry-first",
-        { action: "add", job: buildReminderAgentTurnJob() },
+        addJob(),
         firstOperation.signal,
       );
       firstOperation.abort(new Error("first cron call timed out"));
@@ -699,11 +700,7 @@ describe("cron tool", () => {
       expect(discoverySignal?.aborted).toBe(true);
       expect(callGatewayMock).not.toHaveBeenCalled();
 
-      await tool.execute(
-        "call-operation-retry-second",
-        { action: "add", job: buildReminderAgentTurnJob() },
-        new AbortController().signal,
-      );
+      await tool.execute("call-operation-retry-second", addJob(), new AbortController().signal);
     });
 
     expect(materializations).toBe(2);
@@ -725,23 +722,15 @@ describe("cron tool", () => {
       return { ok: true };
     });
     const run = runWithTestCronCreatorAuthority("run-abort-before-commit", () => {
-      const resolveCreatorToolAuthority = runWithCronCreatorAuthorityResolver({
-        runId: "run-abort-before-commit",
-        resolve: async () => ({
-          tools: ["read", "configured__lookup"],
-          provenance: { version: 1, source: "final-executable-surface" },
-        }),
-        run: () => bindActiveCronCreatorAuthorityResolver("run-abort-before-commit"),
-      });
+      const resolveCreatorToolAuthority = bindTestResolver("run-abort-before-commit", async () => ({
+        tools: ["read", "configured__lookup"],
+        provenance: { version: 1, source: "final-executable-surface" },
+      }));
       const tool = createTestCronTool({
         agentSessionKey: "agent:main:main",
         resolveCreatorToolAuthority,
       });
-      return tool.execute(
-        "call-abort-before-commit",
-        { action: "add", job: buildReminderAgentTurnJob() },
-        operation.signal,
-      );
+      return tool.execute("call-abort-before-commit", addJob(), operation.signal);
     });
 
     await expect(run).rejects.toThrow("Configured MCP cron authority is no longer active");
@@ -770,46 +759,28 @@ describe("cron tool", () => {
     },
   ])("does not write a default add when $name", async ({ options, error }) => {
     await expect(
-      executeCron(
-        {
-          action: "add",
-          job: buildReminderAgentTurnJob(),
-        },
-        {
-          agentSessionKey: "agent:main:main",
-          ...options,
-        },
-      ),
+      executeCron(addJob(), {
+        agentSessionKey: "agent:main:main",
+        ...options,
+      }),
     ).rejects.toThrow(error);
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it.each([["empty", []]])(
-    "keeps an explicit %s add offline and exact",
-    async (_label, toolsAllow) => {
-      const resolveCreatorToolAuthority = vi.fn(async () => {
-        throw new Error("must stay offline");
-      });
+  it("keeps an explicit empty add offline and exact", async () => {
+    const resolveCreatorToolAuthority = vi.fn(async () => {
+      throw new Error("must stay offline");
+    });
 
-      await executeCron(
-        {
-          action: "add",
-          job: {
-            ...buildReminderAgentTurnJob(),
-            payload: { kind: "agentTurn", message: "hello", toolsAllow },
-          },
-        },
-        {
-          agentSessionKey: "agent:main:main",
-          creatorToolAllowlist: ["read", "cron"],
-          resolveCreatorToolAuthority,
-        },
-      );
+    await executeCron(addJob({ payload: agentTurn({ toolsAllow: [] }) }), {
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist: ["read", "cron"],
+      resolveCreatorToolAuthority,
+    });
 
-      expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
-      expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow } });
-    },
-  );
+    expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
+    expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: [] } });
+  });
 
   it.each([
     {
@@ -828,16 +799,11 @@ describe("cron tool", () => {
     },
   ])("$name", async ({ toolsAllow, creatorToolAllowlist, resolved, expected }) => {
     const resolveCreatorToolAuthority = vi.fn(async () => resolvedCreatorAuthority(resolved));
-    await executeCron(
-      {
-        action: "add",
-        job: {
-          ...buildReminderAgentTurnJob(),
-          payload: { kind: "agentTurn", message: "hello", toolsAllow },
-        },
-      },
-      { agentSessionKey: "agent:main:main", creatorToolAllowlist, resolveCreatorToolAuthority },
-    );
+    await executeCron(addJob({ payload: agentTurn({ toolsAllow }) }), {
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist,
+      resolveCreatorToolAuthority,
+    });
     expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
     expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: expected } });
   });
@@ -845,41 +811,27 @@ describe("cron tool", () => {
   it("fails incomplete inherited and unknown finite adds while preserving known finite tools", async () => {
     const captureRef = {};
     const tool = createTestCronTool({
-      agentSessionKey: "agent:main:telegram:group:restricted-room",
-      creatorToolAllowlist: ["read", "cron"],
+      ...restrictedCaller,
       creatorToolAllowlistCaptureRef: captureRef,
     });
 
-    await expect(
-      tool.execute("call-default-capture-unavailable", {
-        action: "add",
-        job: buildReminderAgentTurnJob(),
-      }),
-    ).rejects.toThrow("fresh authenticated direct-local operator turn");
+    await expect(tool.execute("call-default-capture-unavailable", addJob())).rejects.toThrow(
+      "fresh authenticated direct-local operator turn",
+    );
     expect(callGatewayMock).not.toHaveBeenCalled();
 
     await expect(
-      tool.execute("call-unknown-finite-capture-unavailable", {
-        action: "add",
-        job: {
-          ...buildReminderAgentTurnJob(),
-          payload: {
-            kind: "agentTurn",
-            message: "hello",
-            toolsAllow: ["future__tool"],
-          },
-        },
-      }),
+      tool.execute(
+        "call-unknown-finite-capture-unavailable",
+        addJob({ payload: agentTurn({ toolsAllow: ["future__tool"] }) }),
+      ),
     ).rejects.toThrow("CLI or Gateway with an explicit finite toolsAllow list");
     expect(callGatewayMock).not.toHaveBeenCalled();
 
-    await tool.execute("call-explicit-capture-unavailable", {
-      action: "add",
-      job: {
-        ...buildReminderAgentTurnJob(),
-        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["read"] },
-      },
-    });
+    await tool.execute(
+      "call-explicit-capture-unavailable",
+      addJob({ payload: agentTurn({ toolsAllow: ["read"] }) }),
+    );
     expect(expectSingleGatewayCallMethod("cron.add")).toMatchObject({
       payload: { toolsAllow: ["read"] },
     });
@@ -920,10 +872,7 @@ describe("cron tool", () => {
         id: current?.id ?? "job-dormant",
         job,
       },
-      {
-        agentSessionKey: "agent:main:telegram:group:restricted-room",
-        creatorToolAllowlist: ["read", "cron"],
-      },
+      restrictedCaller,
     );
 
     expect(readGatewayCall(current ? 1 : 0)).toEqual({
@@ -939,18 +888,9 @@ describe("cron tool", () => {
   it("does not stamp caller sessionKey when add targets isolated session", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 
-    await executeCron(
-      {
-        action: "add",
-        job: {
-          name: "isolated run",
-          schedule: { at: new Date(123).toISOString() },
-          sessionTarget: "isolated",
-          payload: { kind: "agentTurn", message: "hello" },
-        },
-      },
-      { agentSessionKey: "agent:main:webchat:dm:dashboard" },
-    );
+    await executeCron(addJob({ name: "isolated run", sessionTarget: "isolated" }), {
+      agentSessionKey: "agent:main:webchat:dm:dashboard",
+    });
     const call = readGatewayCall();
     const payload = call.params as { sessionKey?: string; sessionTarget?: string } | undefined;
     expect(payload?.sessionTarget).toBe("isolated");
@@ -987,12 +927,12 @@ describe("cron tool", () => {
     await executeCron({
       action: "add",
       job: {
-        ...buildReminderAgentTurnJob(),
+        ...reminder(),
         displayName: null,
         pacing: null,
         trigger: null,
         sessionKey: null,
-        payload: { kind: "agentTurn", message: "hello", model: null, fallbacks: null },
+        payload: agentTurn({ model: null, fallbacks: null }),
         delivery: { mode: "announce", channel: null, failureDestination: null },
       },
     });
@@ -1128,10 +1068,7 @@ describe("cron tool", () => {
         id: "job-8",
         job,
       },
-      {
-        agentSessionKey: "agent:main:telegram:group:restricted-room",
-        creatorToolAllowlist: ["read", "cron"],
-      },
+      restrictedCaller,
     );
 
     expect(callGatewayMock).toHaveBeenCalledTimes(2);
@@ -1207,16 +1144,11 @@ describe("cron tool", () => {
         },
       },
     });
-    expect(writeIdentities).toEqual([
-      expect.objectContaining({
-        cronToolsAllowCapture: "final-executable-surface",
-        cronCreatorAuthorityGrant: authorityGrant,
-      }),
-      expect.objectContaining({
-        cronToolsAllowCapture: "final-executable-surface",
-        cronCreatorAuthorityGrant: authorityGrant,
-      }),
-    ]);
+    const expectedIdentity = expect.objectContaining({
+      cronToolsAllowCapture: "final-executable-surface",
+      cronCreatorAuthorityGrant: authorityGrant,
+    });
+    expect(writeIdentities).toEqual([expectedIdentity, expectedIdentity]);
     expect(() => consumeCronCreatorAuthorityGrant(authorityGrant)).toThrow(
       "Configured MCP cron authority is no longer active",
     );
@@ -1254,8 +1186,7 @@ describe("cron tool", () => {
       },
       payload: { kind: "agentTurn", toolsAllow: ["future__tool"] },
       options: {
-        agentSessionKey: "agent:main:telegram:group:restricted-room",
-        creatorToolAllowlist: ["read", "cron"],
+        ...restrictedCaller,
         creatorToolAllowlistCaptureRef: {},
       },
       error: "fresh authenticated direct-local operator turn",
@@ -1265,7 +1196,7 @@ describe("cron tool", () => {
       id: "job-no-revision",
       current: {
         configRevision: null,
-        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["read"] },
+        payload: agentTurn({ toolsAllow: ["read"] }),
       },
       payload: { message: "updated" },
       options: { creatorToolAllowlist: ["read", "cron"] },
