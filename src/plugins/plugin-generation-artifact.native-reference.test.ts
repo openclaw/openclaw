@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -10,7 +10,7 @@ import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-roo
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadPluginRegistryHandle } from "./loader.js";
-import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import { withPluginCache } from "./plugin-cache.js";
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import {
@@ -28,6 +28,24 @@ import {
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
+afterEach(() => vi.restoreAllMocks());
+
+function failHardlink(filename: string) {
+  const failure = Object.assign(new Error("cross-device native capture"), { code: "EXDEV" });
+  const link = fs.linkSync;
+  vi.spyOn(fs, "linkSync").mockImplementation((from, to) => {
+    if (from === filename) {
+      throw failure;
+    }
+    link(from, to);
+  });
+  return failure;
+}
+
+function nativeInode(artifact: Artifact, source: string) {
+  return fs.statSync(artifact.resolve(path.join(source, "addon-0.node"))).ino;
+}
+
 it("records a native host mismatch while preserving unrelated channel accounts", async () => {
   await withOpenClawTestState({ label: "native-host-load-failure" }, async (state) => {
     const fixture = createFixture(state.path("installed"), true);
@@ -40,7 +58,6 @@ it("records a native host mismatch while preserving unrelated channel accounts",
       logger: {},
     });
     const healthy = state.path("healthy");
-    fs.mkdirSync(healthy);
     writeTree(healthy, {
       "openclaw.plugin.json": {
         id: "healthy",
@@ -61,16 +78,9 @@ it("records a native host mismatch while preserving unrelated channel accounts",
     await using resources = captureResources();
     const cache = resources.cache();
     preparePluginNativeAdmissions(fixture.index, cache);
-    const link = fs.linkSync;
-    const fault = vi.spyOn(fs, "linkSync").mockImplementation((from, to) => {
-      if (from === fixture.filename) {
-        throw Object.assign(new Error("cross-device native capture"), { code: "EXDEV" });
-      }
-      link(from, to);
-    });
+    failHardlink(fixture.filename);
     const error = vi.fn();
     try {
-      // Fault injection belongs to this isolate; exercise the public inline loader.
       const registry = withPluginCache(cache, () =>
         loadPluginRegistryHandle({
           cache: false,
@@ -108,7 +118,7 @@ it("records a native host mismatch while preserving unrelated channel accounts",
       const channel = registry.channels.find(({ plugin }) => plugin.id === "healthy-chat");
       expect(channel?.plugin.config.listAccountIds({})).toEqual(["primary", "secondary"]);
     } finally {
-      fault.mockRestore();
+      vi.restoreAllMocks();
     }
   });
 });
@@ -116,7 +126,6 @@ it("records a native host mismatch while preserving unrelated channel accounts",
 it("validates overlapping hardlinked companion placements once per member, including recovery", async () => {
   await withOpenClawTestState({ label: "native-reference-verdict" }, async (state) => {
     const root = state.path("plugin");
-    fs.mkdirSync(root);
     writeTree(root, {
       "package.json": '{"name":"native-reference-fixture"}',
       "index.cjs": "exports.value = 1;",
@@ -128,7 +137,7 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       fs.writeFileSync(path.join(directory, `addon-${index}.node`), `native fixture ${index}`);
     }
     const symlink = fs.symlinkSync;
-    const denial = vi.spyOn(fs, "symlinkSync").mockImplementation((target, link, type) => {
+    vi.spyOn(fs, "symlinkSync").mockImplementation((target, link, type) => {
       if (type === "file") {
         throw Object.assign(new Error("fixture file symlinks unavailable"), { code: "EPERM" });
       }
@@ -141,8 +150,8 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       ).length;
     await using resources = captureResources();
     const cache = resources.cache();
-    let recovery: ReturnType<Artifact["captureRecoverySource"]> | undefined;
     const capture = () => resources.capture(cache, root);
+    let recovery: ReturnType<Artifact["captureRecoverySource"]> | undefined;
     try {
       const first = capture();
       expect.soft(walks(first.rootDir)).toBe(1);
@@ -161,9 +170,7 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       expect.soft(walks(first.rootDir)).toBe(1);
       const successor = capture();
       expect.soft(walks(successor.rootDir)).toBe(1);
-      expect(fs.statSync(successor.resolve(path.join(root, "addon-0.node"))).ino).toBe(
-        fs.statSync(first.resolve(path.join(root, "addon-0.node"))).ino,
-      );
+      expect(nativeInode(successor, root)).toBe(nativeInode(first, root));
       paths.mockClear();
       successor.linkHost(hosts[1]!);
       expect.soft(walks(successor.rootDir)).toBe(1);
@@ -175,9 +182,7 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       writeTree(root, { "helper.dat": "replacement companion" });
       const replacement = capture();
       expect(replacement.sourceDigest).not.toBe(first.sourceDigest);
-      expect(fs.statSync(replacement.resolve(path.join(root, "addon-0.node"))).ino).not.toBe(
-        fs.statSync(first.resolve(path.join(root, "addon-0.node"))).ino,
-      );
+      expect(nativeInode(replacement, root)).not.toBe(nativeInode(first, root));
       expect.soft(walks(replacement.rootDir)).toBe(1);
       expect(readText(path.join(replacement.rootDir, "helper.dat"))).toBe("replacement companion");
       expect(readText(path.join(first.rootDir, "helper.dat"))).toBe("original companion");
@@ -186,8 +191,7 @@ it("validates overlapping hardlinked companion placements once per member, inclu
         "Native plugin companions cannot be preserved",
       );
     } finally {
-      paths.mockRestore();
-      denial.mockRestore();
+      vi.restoreAllMocks();
       await recovery?.disposeAsync();
     }
   });
@@ -216,16 +220,14 @@ it.each([
       let nativeFilename = fixture.filename;
       if (hoisted) {
         const dependency = path.join(path.dirname(fixture.installRoot), "native-fixture");
-        fs.mkdirSync(dependency);
         writeTree(dependency, { "package.json": { name: "native-fixture", version: "1.0.0" } });
         nativeFilename = path.join(dependency, "fixture.bin");
         fs.renameSync(fixture.filename, nativeFilename);
         const manifestPath = path.join(fixture.root, "package.json");
         const manifest = JSON.parse(readText(manifestPath));
-        fs.writeFileSync(
-          manifestPath,
-          JSON.stringify({ ...manifest, dependencies: { "native-fixture": "1.0.0" } }),
-        );
+        writeTree(fixture.root, {
+          "package.json": { ...manifest, dependencies: { "native-fixture": "1.0.0" } },
+        });
       }
       writeTree(fixture.root, {
         "child.cjs": "module.exports = require('openclaw/plugin-sdk/identity');",
@@ -249,35 +251,22 @@ it.each([
       await using resources = captureResources();
       const cache = resources.cache();
       preparePluginNativeAdmissions(fixture.index, cache);
-      const failure = Object.assign(new Error("fixture filesystem does not support hardlinks"), {
-        code: "EXDEV",
-      });
-      const link = fs.linkSync;
-      const fault = vi.spyOn(fs, "linkSync").mockImplementation((from, to) => {
-        if (from === nativeFilename) {
-          throw failure;
-        }
-        link(from, to);
-      });
-      let artifact: Artifact | undefined;
-      let successor: Artifact | undefined;
+      const failure = failHardlink(nativeFilename);
+      const capture = () => resources.capture(cache, fixture.root);
       try {
-        const capture = () => {
-          artifact = resources.capture(cache, fixture.root);
-        };
         if (source === "archive") {
           expect(capture).toThrow(failure);
         } else {
-          capture();
-          artifact!.linkHost(hosts[0]!);
-          const require = createRequire(artifact!.resolve(fixture.entry));
+          const artifact = capture();
+          artifact.linkHost(hosts[0]!);
+          const require = createRequire(artifact.resolve(fixture.entry));
           const native = hoisted
             ? require.resolve("native-fixture/fixture.bin")
-            : artifact!.resolve(nativeFilename);
+            : artifact.resolve(nativeFilename);
           expect(fs.realpathSync(native)).toBe(nativeFilename);
           expectBytes(native, fixture.bytes);
           expect(require("./child.cjs")).toBe("first");
-          successor = resources.capture(cache, fixture.root);
+          const successor = capture();
           const peer = path.join(
             hoisted ? path.dirname(nativeFilename) : fixture.installRoot,
             "node_modules",
@@ -288,7 +277,7 @@ it.each([
             fs.symlinkSync(hosts[1]!, peer, "junction");
           }
           const selectedHost = hosts[hoisted ? 0 : 1]!;
-          expect(() => successor!.linkHost(selectedHost)).toThrow(
+          expect(() => successor.linkHost(selectedHost)).toThrow(
             `does not resolve the selected OpenClaw host ${selectedHost}: ${peer} resolves to ${hosts[hoisted ? 1 : 0]}`,
           );
           expect(fs.realpathSync(path.join(fixture.installRoot, "node_modules", "openclaw"))).toBe(
@@ -296,8 +285,7 @@ it.each([
           );
         }
       } finally {
-        fault.mockRestore();
-        await retirePluginCache(cache);
+        vi.restoreAllMocks();
       }
     });
   },
@@ -343,37 +331,38 @@ it.each(["state root", "temporary placement", "publication root"] as const)(
         const fixture = createFixture(state.path("installed"), false);
         const otherState = state.path("other-state");
         const firstRoots = resolvePluginInstallRoots(state.env);
-        const secondRoots =
-          change === "publication root" ? { ...firstRoots, stateDir: otherState } : firstRoots;
-        const scopes = [
-          { storage: { stateDir: state.stateDir, placement: "state" as const }, roots: firstRoots },
-          {
-            storage: {
-              stateDir: change === "state root" ? otherState : state.stateDir,
-              placement:
-                change === "temporary placement" ? ("temporary" as const) : ("state" as const),
-            },
-            roots: secondRoots,
+        const scopes = [false, true].map((second) => ({
+          storage: {
+            stateDir: second && change === "state root" ? otherState : state.stateDir,
+            placement:
+              second && change === "temporary placement"
+                ? ("temporary" as const)
+                : ("state" as const),
           },
-        ];
+          roots:
+            second && change === "publication root"
+              ? { ...firstRoots, stateDir: otherState }
+              : firstRoots,
+        }));
         const publicationRoots = [...new Set(scopes.map(({ roots }) => roots.stateDir))];
-        const cache = createPluginCache();
-        const artifacts: Artifact[] = [];
         const capturedPaths: string[] = [];
         try {
+          await using resources = captureResources();
+          const cache = resources.cache();
           for (const stateDir of publicationRoots) {
             await writePersistedInstalledPluginIndex(fixture.index, { stateDir });
           }
           for (const { storage, roots } of scopes) {
-            const artifact = withPluginCache(cache, () =>
-              withPluginInstallRoots(roots, () =>
-                withPluginSourceCaptureStorage(storage, () => {
-                  preparePluginNativeAdmissions(fixture.index, cache);
-                  return capturePluginGenerationArtifact(fixture.root);
-                }),
+            const artifact = resources.keep(
+              withPluginCache(cache, () =>
+                withPluginInstallRoots(roots, () =>
+                  withPluginSourceCaptureStorage(storage, () => {
+                    preparePluginNativeAdmissions(fixture.index, cache);
+                    return capturePluginGenerationArtifact(fixture.root);
+                  }),
+                ),
               ),
             );
-            artifacts.push(artifact);
             const captured = fs.realpathSync(artifact.resolve(fixture.filename));
             capturedPaths.push(captured);
             const managed =
@@ -384,7 +373,7 @@ it.each(["state root", "temporary placement", "publication root"] as const)(
             }
             expectBytes(captured, fixture.bytes);
           }
-          expect(capturedPaths[0] === capturedPaths[1]).toBe(false);
+          expect(capturedPaths[0]).not.toBe(capturedPaths[1]);
           await settlePluginNativeAdmissions(cache);
           for (const [index, { roots }] of scopes.entries()) {
             const persisted = await readPersistedInstalledPluginIndex({ stateDir: roots.stateDir });
@@ -395,10 +384,6 @@ it.each(["state root", "temporary placement", "publication root"] as const)(
           }
           expectBytes(capturedPaths[0]!, fixture.bytes);
         } finally {
-          for (const artifact of artifacts) {
-            await artifact.disposeAsync();
-          }
-          await retirePluginCache(cache);
           for (const stateDir of publicationRoots) {
             await closeOpenClawStateDatabaseByPathAsync(
               resolveOpenClawStateSqlitePath({ ...state.env, OPENCLAW_STATE_DIR: stateDir }),

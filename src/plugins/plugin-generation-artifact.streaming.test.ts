@@ -7,7 +7,7 @@ import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
-import { observeFileIo } from "./plugin-generation-capture.test-support.js";
+import { expectBytes, observeFileIo, readText } from "./plugin-generation-capture.test-support.js";
 import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 
@@ -16,6 +16,7 @@ vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
 }));
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
+const reloadError = "Plugin source changed while preparing its reload";
 const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
@@ -35,6 +36,7 @@ function fixture(bytes: Buffer, basename = "fixture.bin") {
   return {
     bytes,
     filename,
+    directory: source,
     capture(entry?: string) {
       const artifact = withPluginSourceCaptureDirectory(captures, () =>
         capturePluginGenerationArtifact(source, entry, (run) => run()),
@@ -45,12 +47,10 @@ function fixture(bytes: Buffer, basename = "fixture.bin") {
   };
 }
 
+type CopyFile = typeof fsSafeAdvanced.copyRootFileSync;
 function interceptCopies(
   filename: string,
-  intercept: (
-    options: Parameters<typeof fsSafeAdvanced.copyRootFileSync>[0],
-    copyFile: typeof fsSafeAdvanced.copyRootFileSync,
-  ) => ReturnType<typeof fsSafeAdvanced.copyRootFileSync>,
+  intercept: (options: Parameters<CopyFile>[0], copyFile: CopyFile) => ReturnType<CopyFile>,
 ) {
   const createBatch = fsSafeAdvanced.createRootFileCopyBatchSync;
   const copies = vi.fn(intercept);
@@ -75,42 +75,39 @@ function captureFailure(capture: () => unknown) {
   throw new Error("Expected capture to fail");
 }
 
-it.skipIf(process.platform === "win32")(
-  "amortizes directory metadata reads when capturing sibling files",
-  () => {
-    const bytes = Buffer.alloc(64 * 1024 + 1, "S");
-    const source = fixture(bytes, "fixture.dat");
-    const lstatSync = fs.lstatSync;
-    let directoryReads = 0;
-    vi.spyOn(fs, "lstatSync").mockImplementation((filename, options) => {
-      const stat = lstatSync(filename, options);
-      if (stat?.isDirectory()) {
-        directoryReads += 1;
-      }
-      return stat;
-    });
-    source.capture();
-    const singleFileReads = directoryReads;
-    const siblings = Array.from({ length: 15 }, (_, index) =>
-      path.join(path.dirname(source.filename), `sibling-${index}.dat`),
-    );
-    for (const sibling of siblings) {
-      fs.writeFileSync(sibling, bytes);
+it.skipIf(process.platform === "win32")("amortizes sibling-file directory reads", () => {
+  const bytes = Buffer.alloc(64 * 1024 + 1, "S");
+  const source = fixture(bytes, "fixture.dat");
+  const lstatSync = fs.lstatSync;
+  let directoryReads = 0;
+  vi.spyOn(fs, "lstatSync").mockImplementation((filename, options) => {
+    const stat = lstatSync(filename, options);
+    if (stat?.isDirectory()) {
+      directoryReads += 1;
     }
-    directoryReads = 0;
-    const captured = source.capture();
-    const siblingFileReads = directoryReads;
-    for (const sibling of [source.filename, ...siblings]) {
-      expect(fs.readFileSync(captured.resolve(sibling))).toEqual(bytes);
-    }
-    expect(singleFileReads).toBeGreaterThan(0);
-    // Keep per-file identity checks, but amortize directory admission across siblings.
-    expect(siblingFileReads).toBeLessThanOrEqual(singleFileReads * (siblings.length + 1) * 0.85);
-  },
-);
+    return stat;
+  });
+  source.capture();
+  const singleFileReads = directoryReads;
+  const siblings = Array.from({ length: 15 }, (_, index) =>
+    path.join(source.directory, `sibling-${index}.dat`),
+  );
+  for (const sibling of siblings) {
+    fs.writeFileSync(sibling, bytes);
+  }
+  directoryReads = 0;
+  const captured = source.capture();
+  const siblingFileReads = directoryReads;
+  for (const sibling of [source.filename, ...siblings]) {
+    expectBytes(captured.resolve(sibling), bytes);
+  }
+  expect(singleFileReads).toBeGreaterThan(0);
+  // Keep per-file identity checks, but amortize directory admission across siblings.
+  expect(siblingFileReads).toBeLessThanOrEqual(singleFileReads * (siblings.length + 1) * 0.85);
+});
 
 it.each(["changed bytes", "escaping link"])(
-  "rejects retained source with %s before admission",
+  "rejects tampered retained source: %s",
   async (change) => {
     const bytes = Buffer.from("initial");
     const source = fixture(bytes, "fixture.dat");
@@ -136,43 +133,40 @@ it.each(["changed bytes", "escaping link"])(
     });
     await withPluginGenerationSourceCustody(async () => {
       expect(() => source.capture()).toThrow(
-        change === "escaping link"
-          ? "Cannot capture plugin source"
-          : "Plugin source changed while preparing its reload",
+        change === "escaping link" ? "Cannot capture plugin source" : reloadError,
       );
     });
-    expect(fs.readFileSync(source.filename)).toEqual(bytes);
+    expectBytes(source.filename, bytes);
   },
 );
 
 it.skipIf(process.platform !== "darwin")(
-  "clones ordinary source files and their captured aliases on APFS",
+  "clones files and aliases independently on APFS",
   async ({ skip }) => {
     const bytes = Buffer.alloc(128 * 1024 + 1, "Z");
     const source = fixture(bytes, "fixture.dat");
-    if (probeTreeClone(path.dirname(source.filename)) !== "apfs") {
+    if (probeTreeClone(source.directory) !== "apfs") {
       skip();
       return;
     }
-    const alias = path.join(path.dirname(source.filename), "alias.dat");
+    const alias = path.join(source.directory, "alias.dat");
     fs.symlinkSync("fixture.dat", alias);
     const artifact = source.capture();
     const captured = [artifact.resolve(alias), artifact.resolve(source.filename)];
     const [original, ...copies] = await readCloneFileMetadata([source.filename, ...captured]);
     expect(original?.cloneId).toBeGreaterThan(0n);
     for (const copy of copies) {
-      expect(copy?.dev).toBe(original?.dev);
+      expect(copy).toMatchObject({ dev: original?.dev, cloneId: original?.cloneId });
       expect(copy?.ino).not.toBe(original?.ino);
-      expect(copy?.cloneId).toBe(original?.cloneId);
     }
     expect(copies[0]?.ino).not.toBe(copies[1]?.ino);
     fs.writeFileSync(captured[0]!, "changed capture");
-    expect(fs.readFileSync(source.filename)).toEqual(bytes);
-    expect(fs.readFileSync(captured[1]!)).toEqual(bytes);
+    expectBytes(source.filename, bytes);
+    expectBytes(captured[1]!, bytes);
   },
 );
 
-it("captures and verifies a native artifact without whole-file Buffer reads", () => {
+it("streams native bytes into a stable snapshot", () => {
   const bytes = Buffer.alloc(2 * 1024 * 1024, "Z");
   const source = fixture(bytes);
   const observer = observeFileIo(source.filename, false);
@@ -191,22 +185,22 @@ it("captures and verifies a native artifact without whole-file Buffer reads", ()
     "390ebb32ae31f0b3ece04de41d05633762bff6932973d5d02ae284bf78e23d30",
   );
   const captured = artifact.resolve(source.filename);
-  expect(fs.readFileSync(captured).equals(bytes)).toBe(true);
+  expectBytes(captured, bytes);
   if (process.platform !== "win32") {
     expect(fs.statSync(captured).mode & 0o777).toBe(0o700);
   }
   fs.writeFileSync(source.filename, "replaced");
-  expect(fs.readFileSync(captured).equals(bytes)).toBe(true);
+  expectBytes(captured, bytes);
   fs.unlinkSync(source.filename);
-  expect(fs.readFileSync(artifact.resolve(source.filename)).equals(bytes)).toBe(true);
+  expectBytes(artifact.resolve(source.filename), bytes);
 });
 
 it.each(["cold", "warm", "lazy"] as const)(
-  "rejects a copied destination replaced before receipt admission (%s)",
+  "rejects replaced destinations before %s admission",
   (phase) => {
     const source = fixture(Buffer.from("captured"), "fixture.js");
-    fs.writeFileSync(path.join(path.dirname(source.filename), "native.bin"), "native");
-    const entry = path.join(path.dirname(source.filename), "entry.js");
+    fs.writeFileSync(path.join(source.directory, "native.bin"), "native");
+    const entry = path.join(source.directory, "entry.js");
     fs.writeFileSync(entry, "export const ready = true;");
     if (phase === "warm") {
       source.capture();
@@ -237,26 +231,24 @@ it.each(["cold", "warm", "lazy"] as const)(
     });
 
     const capture = () => (lazy ? lazy.captureResolvedModule(source.filename) : source.capture());
-    expect(capture).toThrow("Plugin source changed while preparing its reload");
+    expect(capture).toThrow(reloadError);
     if (lazy) {
       // A failed acquisition must not make the substituted pathname reusable.
-      expect(capture).toThrow("Plugin source changed while preparing its reload");
+      expect(capture).toThrow(reloadError);
       for (const specifier of [pathToFileURL(source.filename).href, "./fixture.js"]) {
         expect(() =>
           lazy.captureModule(lazy.resolve(entry), specifier, ["node", "import"]),
-        ).toThrow("Plugin source changed while preparing its reload");
+        ).toThrow(reloadError);
       }
-      expect(lazy.captureRecoverySource).toThrow(
-        "Plugin source changed while preparing its reload",
-      );
+      expect(lazy.captureRecoverySource).toThrow(reloadError);
     }
     expect(replaced).toBe(true);
-    expect(fs.readFileSync(source.filename, "utf8")).toBe("captured");
+    expect(readText(source.filename)).toBe("captured");
   },
 );
 
 it.each(["replacement", "growth"] as const)(
-  "rejects source %s after pinning without leaving a capture",
+  "rejects pinned-source %s and removes failed captures",
   (change) => {
     const source = fixture(Buffer.alloc(64 * 1024 + 1, "P"), "fixture.js");
     const admitted = fs.statSync(source.filename, { bigint: true });
@@ -281,8 +273,8 @@ it.each(["replacement", "growth"] as const)(
     const failure = captureFailure(() => source.capture());
     if (change === "replacement") {
       expect(refused).toMatchObject({ code: "path-mismatch" });
-      expect(fs.readFileSync(`${source.filename}.retained`)).toEqual(source.bytes);
-      expect(fs.readFileSync(source.filename, "utf8")).toBe("replacement");
+      expectBytes(`${source.filename}.retained`, source.bytes);
+      expect(readText(source.filename)).toBe("replacement");
     } else {
       expect(failure).toMatchObject({
         message: "Plugin source changed while preparing its reload; retry after the edit finishes.",
@@ -299,49 +291,37 @@ it.each([
   ["EBADF", false],
   ["ENOSPC", false],
   ["ENOSPC", true],
-] as const)(
-  "reports %s copy failures without retry (cleanup failure: %s)",
-  (code, cleanupFails) => {
-    const source = fixture(Buffer.alloc(64 * 1024 + 1, "C"), "fixture.js");
-    const full = code === "ENOSPC";
-    const primary = new FsSafeError("helper-failed", "guarded synchronous file copy failed", {
-      cause: Object.assign(
-        new Error(full ? "capture filesystem is full" : "injected copy failure"),
-        { code },
-      ),
+] as const)("propagates %s without retry (cleanup failure: %s)", (code, cleanupFails) => {
+  const source = fixture(Buffer.alloc(64 * 1024 + 1, "C"), "fixture.js");
+  const full = code === "ENOSPC";
+  const primary = new FsSafeError("helper-failed", "guarded synchronous file copy failed", {
+    cause: Object.assign(new Error(full ? "capture filesystem is full" : "injected copy failure"), {
+      code,
+    }),
+  });
+  const failure = cleanupFails
+    ? new FsSafeError(primary.code, primary.message, {
+        cause: new AggregateError(
+          [primary, new Error("capture cleanup failed")],
+          "copy and cleanup failed",
+        ),
+      })
+    : primary;
+  const copies = interceptCopies(source.filename, () => {
+    throw failure;
+  });
+  if (!full) {
+    expect(() => source.capture()).toThrow(failure);
+  } else {
+    const reported = captureFailure(() => source.capture());
+    expect(reported).toMatchObject({
+      code: "ENOSPC",
+      message: expect.stringContaining("capture filesystem is full"),
+      cause: failure,
     });
-    const failure = cleanupFails
-      ? new FsSafeError(primary.code, primary.message, {
-          cause: new AggregateError(
-            [primary, new Error("capture cleanup failed")],
-            "copy and cleanup failed",
-          ),
-        })
-      : primary;
-    const copies = interceptCopies(source.filename, () => {
-      throw failure;
-    });
-    if (!full) {
-      expect(() => source.capture()).toThrow(failure);
-    } else {
-      let reported: unknown;
-      try {
-        source.capture();
-      } catch (error) {
-        reported = error;
-      }
-      expect(reported).toMatchObject({
-        code: "ENOSPC",
-        message: expect.stringContaining("capture filesystem is full"),
-        cause: failure,
-      });
-      if (cleanupFails) {
-        expect(reported).toHaveProperty(
-          "message",
-          expect.stringContaining("capture cleanup failed"),
-        );
-      }
+    if (cleanupFails) {
+      expect(reported).toHaveProperty("message", expect.stringContaining("capture cleanup failed"));
     }
-    expect(copies).toHaveBeenCalledOnce();
-  },
-);
+  }
+  expect(copies).toHaveBeenCalledOnce();
+});

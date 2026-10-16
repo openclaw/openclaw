@@ -105,16 +105,14 @@ it("keeps loading siblings and retries validation when a schema cannot be serial
   try {
     const registry = await loadPlugins([broken, healthy]);
 
-    expect(requirePluginEntry(registry, healthy.id).status).toBe("loaded");
-    expect(requirePluginEntry(registry, broken.id)).toMatchObject(validationState);
+    const loaded = requirePluginEntry(registry, healthy.id);
+    const failed = requirePluginEntry(registry, broken.id);
+    expect(loaded.status).toBe("loaded");
+    expect(failed).toMatchObject(validationState);
     const replacement = await loadPlugins([broken, healthy], undefined, registry);
-    expect(requirePluginEntry(replacement, healthy.id)).toBe(
-      requirePluginEntry(registry, healthy.id),
-    );
+    expect(requirePluginEntry(replacement, healthy.id)).toBe(loaded);
     expect(requirePluginEntry(replacement, broken.id)).toMatchObject(validationState);
-    expect(requirePluginEntry(replacement, broken.id)).not.toBe(
-      requirePluginEntry(registry, broken.id),
-    );
+    expect(requirePluginEntry(replacement, broken.id)).not.toBe(failed);
     expect(signatureFailures).toBe(2);
   } finally {
     serialization.mockRestore();
