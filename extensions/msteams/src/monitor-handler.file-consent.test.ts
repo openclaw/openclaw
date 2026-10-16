@@ -130,18 +130,18 @@ describe("msteams file consent invoke authz", () => {
     expect(log.debug).toHaveBeenCalledWith("invalid file consent invoke");
   });
 
-  it("calls updateActivity to replace the consent card when consentCardActivityId is set", async () => {
+  it.each([false, true])("completes the upload when card update fails=%s", async (fails) => {
     const { uploadId, context, sendActivity, updateActivity } = createConsentInvokeHarness({
-      consentCardActivityId: "consent-card-activity-id-123",
+      consentCardActivityId: "consent-card-activity-id",
     });
-
+    if (fails) {
+      updateActivity.mockRejectedValueOnce(new Error("Teams API error"));
+    }
     await runMSTeamsFileConsentInvokeHandler(context, log);
-
     expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
-
     expect(updateActivity).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        id: "consent-card-activity-id-123",
+        id: "consent-card-activity-id",
         type: "message",
         attachments: expect.arrayContaining([
           expect.objectContaining({
@@ -150,21 +150,10 @@ describe("msteams file consent invoke authz", () => {
         ]),
       }),
     );
-    expect(sendActivity).not.toHaveBeenCalled();
+    if (!fails) {
+      expect(sendActivity).not.toHaveBeenCalled();
+    }
     expect(getPendingUpload(uploadId)).toBeUndefined();
-  });
-
-  it("still completes upload if updateActivity throws", async () => {
-    const { uploadId, context, updateActivity } = createConsentInvokeHarness({
-      consentCardActivityId: "consent-card-activity-id-fail",
-    });
-    updateActivity.mockRejectedValueOnce(new Error("Teams API error"));
-
-    await runMSTeamsFileConsentInvokeHandler(context, log);
-
-    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
-    expect(getPendingUpload(uploadId)).toBeUndefined();
-    expect(updateActivity).toHaveBeenCalledTimes(1);
   });
 
   it.each(["accept", "decline"] as const)(
@@ -203,68 +192,47 @@ describe("msteams file consent invoke FS fallback", () => {
 
   afterEach(async () => {
     vi.unstubAllEnvs();
-    try {
-      await fs.promises.rm(tmpDir, { recursive: true, force: true });
-    } catch {
-      // tmp dir may already be gone
-    }
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("reads pending upload from FS store when in-memory store is empty (cross-process CLI path)", async () => {
-    const uploadId = "cli-upload-id-123";
-    const conversationId = "19:victim@thread.v2";
-    await storePendingUploadFs({
-      id: uploadId,
-      buffer: Buffer.from("CLI PAYLOAD"),
-      filename: "cli.bin",
-      contentType: "application/octet-stream",
-      conversationId,
-    });
-
-    expect(getPendingUpload(uploadId)).toBeUndefined();
-
-    const { context } = createInvokeContext({
-      conversationId: `${conversationId};messageid=abc123`,
-      uploadId,
-      action: "accept",
-      file: {
-        name: "cli.bin",
-        contentUrl: "https://content.example.com/cli.bin",
-        uniqueId: "unique-cli",
-        fileType: "bin",
-      },
-    });
-
-    await runMSTeamsFileConsentInvokeHandler(context, log);
-
-    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
-    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://upload.example.com/put" }),
-    );
-
-    expect(await getPendingUploadFs(uploadId)).toBeUndefined();
-  });
-
-  it("cleans up FS entry on decline even when in-memory store is empty", async () => {
-    const uploadId = "cli-decline-id";
-    const conversationId = "19:victim@thread.v2";
-    await storePendingUploadFs({
-      id: uploadId,
-      buffer: Buffer.from("DECLINED"),
-      filename: "decline.txt",
-      contentType: "text/plain",
-      conversationId,
-    });
-
-    const { context } = createInvokeContext({
-      conversationId: `${conversationId};messageid=abc123`,
-      uploadId,
-      action: "decline",
-    });
-
-    await runMSTeamsFileConsentInvokeHandler(context, log);
-
-    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(await getPendingUploadFs(uploadId)).toBeUndefined();
-  });
+  it.each(["accept", "decline"] as const)(
+    "loads and cleans up a cross-process CLI upload on %s",
+    async (action) => {
+      const accepts = action === "accept";
+      const uploadId = accepts ? "cli-upload-id-123" : "cli-decline-id";
+      const conversationId = "19:victim@thread.v2";
+      await storePendingUploadFs({
+        id: uploadId,
+        conversationId,
+        buffer: Buffer.from(accepts ? "CLI PAYLOAD" : "DECLINED"),
+        filename: accepts ? "cli.bin" : "decline.txt",
+        contentType: accepts ? "application/octet-stream" : "text/plain",
+      });
+      expect(getPendingUpload(uploadId)).toBeUndefined();
+      const { context } = createInvokeContext({
+        conversationId: `${conversationId};messageid=abc123`,
+        uploadId,
+        action,
+        ...(accepts
+          ? {
+              file: {
+                name: "cli.bin",
+                contentUrl: "https://content.example.com/cli.bin",
+                uniqueId: "unique-cli",
+                fileType: "bin",
+              },
+            }
+          : {}),
+      });
+      await runMSTeamsFileConsentInvokeHandler(context, log);
+      if (accepts) {
+        expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ url: "https://upload.example.com/put" }),
+        );
+      } else {
+        expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
+      }
+      expect(await getPendingUploadFs(uploadId)).toBeUndefined();
+    },
+  );
 });

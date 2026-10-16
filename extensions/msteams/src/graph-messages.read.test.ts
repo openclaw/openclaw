@@ -16,22 +16,9 @@ installGraphMessagesMockDefaults();
 let graph: GraphMessagesTestModule;
 const target = { cfg: {}, to: CHAT_ID, messageId: "msg-1" };
 
-const NAMED_ACCOUNT_CFG = {
-  channels: {
-    msteams: {
-      appId: "default-app-id",
-      appPassword: "default-secret",
-      tenantId: "tenant-id",
-      accounts: {
-        secondary: {
-          appId: "secondary-app-id",
-          appPassword: "secondary-secret",
-          webhook: { path: "/api/messages/secondary" },
-        },
-      },
-    },
-  },
-} as OpenClawConfig;
+const NAMED_ACCOUNT_CFG: OpenClawConfig = {
+  channels: { msteams: { accounts: { secondary: { appId: "secondary-app-id" } } } },
+};
 
 beforeAll(async () => {
   graph = await loadGraphMessagesTestModule();
@@ -46,7 +33,6 @@ describe("getMessageMSTeams", () => {
     mockState.fetchGraphJson.mockResolvedValue({
       id: "msg-1",
       body: { content: "Hello" },
-      createdDateTime: "2026-03-23T10:00:00Z",
     });
 
     await graph.getMessageMSTeams({
@@ -65,23 +51,12 @@ describe("getMessageMSTeams", () => {
     });
   });
 
-  it("throws when user: target has no stored conversation", async () => {
-    mockState.findPreferredDmByUserId.mockResolvedValue(null);
-
-    await expect(graph.getMessageMSTeams({ ...target, to: "user:unknown-user" })).rejects.toThrow(
-      "No conversation found for user:unknown-user",
-    );
-  });
-
-  it("throws when user: target has an opaque Bot Framework ID", async () => {
-    mockState.findPreferredDmByUserId.mockResolvedValue({
-      conversationId: "a:bot-framework-dm-id",
-      reference: {},
-    });
-
-    await expect(graph.getMessageMSTeams({ ...target, to: "user:some-user" })).rejects.toThrow(
-      "Bot Framework ID",
-    );
+  it.each([
+    ["unknown-user", null, "No conversation found for user:unknown-user"],
+    ["some-user", { conversationId: "a:bot-framework-dm-id", reference: {} }, "Bot Framework ID"],
+  ] as const)("rejects unusable user target %s", async (user, conversation, error) => {
+    mockState.findPreferredDmByUserId.mockResolvedValue(conversation);
+    await expect(graph.getMessageMSTeams({ ...target, to: `user:${user}` })).rejects.toThrow(error);
   });
 });
 
@@ -115,54 +90,47 @@ describe("listPinsMSTeams", () => {
   });
 });
 
-describe("listReactionsMSTeams", () => {
-  it("counts missing and application identities without treating them as users", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({
-      id: "msg-1",
-      body: { content: "Hello" },
-      reactions: [
-        { reactionType: "like", user: { user: { id: "u1", displayName: "Alice" } } },
-        { reactionType: "like", user: { user: { displayName: "Deleted User" } } },
-        { reactionType: "like", user: { application: { id: "app-1", displayName: "Bot" } } },
-        { reactionType: "like", user: null },
-        { reactionType: "like", user: { user: null } },
-        { reactionType: "like" },
-        { reactionType: "like", user: { user: { id: "u3", displayName: null } } },
-        { reactionType: "heart", user: { user: { id: "u2", displayName: "Bob" } } },
-      ],
-    });
-
-    const result = await graph.listReactionsMSTeams(target);
-
-    expect(result.reactions).toEqual([
-      {
-        reactionType: "like",
-        name: "like",
-        emoji: "\u{1F44D}",
-        count: 7,
-        users: [
-          { id: "u1", displayName: "Alice" },
-          { id: "u3", displayName: undefined },
-        ],
-      },
-      {
-        reactionType: "heart",
-        name: "heart",
-        emoji: "\u2764\uFE0F",
-        count: 1,
-        users: [{ id: "u2", displayName: "Bob" }],
-      },
-    ]);
+it("counts missing and application identities without treating them as users", async () => {
+  mockState.fetchGraphJson.mockResolvedValue({
+    reactions: [
+      { reactionType: "like", user: { user: { id: "u1", displayName: "Alice" } } },
+      { reactionType: "like", user: { user: { displayName: "Deleted User" } } },
+      { reactionType: "like", user: { application: { id: "app-1", displayName: "Bot" } } },
+      { reactionType: "like", user: null },
+      { reactionType: "like", user: { user: null } },
+      { reactionType: "like" },
+      { reactionType: "like", user: { user: { id: "u3", displayName: null } } },
+      { reactionType: "heart", user: { user: { id: "u2", displayName: "Bob" } } },
+    ],
   });
+
+  const result = await graph.listReactionsMSTeams(target);
+
+  expect(result.reactions).toEqual([
+    {
+      reactionType: "like",
+      name: "like",
+      emoji: "\u{1F44D}",
+      count: 7,
+      users: [
+        { id: "u1", displayName: "Alice" },
+        { id: "u3", displayName: undefined },
+      ],
+    },
+    {
+      reactionType: "heart",
+      name: "heart",
+      emoji: "\u2764\uFE0F",
+      count: 1,
+      users: [{ id: "u2", displayName: "Bob" }],
+    },
+  ]);
 });
 
 it("rejects empty reaction types", async () => {
-  await expect(
-    graph.reactMessageMSTeams({
-      ...target,
-      reactionType: "   ",
-    }),
-  ).rejects.toThrow(/Reaction type is required/);
+  await expect(graph.reactMessageMSTeams({ ...target, reactionType: "   " })).rejects.toThrow(
+    /Reaction type is required/,
+  );
 });
 
 it("pins a message in a chat via message@odata.bind body", async () => {
@@ -198,11 +166,7 @@ describe("unpinMessageMSTeams", () => {
 
   it("rejects unpinning a message from a channel on Graph v1.0", async () => {
     await expect(
-      graph.unpinMessageMSTeams({
-        ...target,
-        to: CHANNEL_TO,
-        pinnedMessageId: "pinned-2",
-      }),
+      graph.unpinMessageMSTeams({ ...target, to: CHANNEL_TO, pinnedMessageId: "pinned-2" }),
     ).rejects.toThrow(/Pin\/unpin is not supported for channel messages/);
     expect(mockState.deleteGraphRequest).not.toHaveBeenCalled();
   });
@@ -211,32 +175,16 @@ describe("unpinMessageMSTeams", () => {
 describe("MSTeams reactions", () => {
   const channelPath = "/teams/team-id-1/channels/channel-id-1";
   it.each([
-    {
-      operation: "react",
-      to: CHANNEL_TO,
-      threadRootId: "root-1",
-      messagePath: `${channelPath}/messages/root-1/replies/msg-1`,
-      reactionType: "🎉",
-      expected: "🎉",
-      action: "setReaction",
-    },
-    {
-      operation: "unreact",
-      to: CHANNEL_TO,
-      threadRootId: "msg-1",
-      messagePath: `${channelPath}/messages/msg-1`,
-      reactionType: "🎉",
-      expected: "🎉",
-      action: "unsetReaction",
-    },
-  ])(
-    "$operation normalizes $reactionType for $messagePath",
-    async ({ operation, to, threadRootId, messagePath, reactionType, expected, action }) => {
+    ["react", "root-1", `${channelPath}/messages/root-1/replies/msg-1`, "setReaction"],
+    ["unreact", "msg-1", `${channelPath}/messages/msg-1`, "unsetReaction"],
+  ] as const)(
+    "%s addresses %s with its reaction operation",
+    async (operation, threadRootId, messagePath, action) => {
       mockState.mutateGraphJson.mockResolvedValue(undefined);
       const invoke =
         operation === "react" ? graph.reactMessageMSTeams : graph.unreactMessageMSTeams;
       await expect(
-        invoke({ cfg: {}, to, messageId: "msg-1", threadRootId, reactionType }),
+        invoke({ ...target, to: CHANNEL_TO, threadRootId, reactionType: "🎉" }),
       ).resolves.toEqual({ ok: true });
       expect(mockState.resolveGraphToken).toHaveBeenCalledWith(
         {},
@@ -246,7 +194,7 @@ describe("MSTeams reactions", () => {
         token: TOKEN,
         path: `${messagePath}/${action}`,
         method: "POST",
-        body: { reactionType: expected },
+        body: { reactionType: "🎉" },
         beta: true,
       });
     },
