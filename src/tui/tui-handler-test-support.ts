@@ -1,6 +1,8 @@
-import { expect, type Mock } from "vitest";
+import { expect, vi } from "vitest";
 
-export function expectCall(mock: Mock, args: unknown[], mode?: "once" | "last") {
+type TestMock = ReturnType<typeof vi.fn>;
+
+export function expectCall(mock: TestMock, args: unknown[], mode?: "once" | "last") {
   if (mode === "once") {
     expect(mock).toHaveBeenCalledExactlyOnceWith(...args);
   } else if (mode === "last") {
@@ -10,7 +12,7 @@ export function expectCall(mock: Mock, args: unknown[], mode?: "once" | "last") 
   }
 }
 
-export function expectUnused(...mocks: Mock[]) {
+export function expectUnused(...mocks: TestMock[]) {
   for (const mock of mocks) {
     expect(mock).not.toHaveBeenCalled();
   }
@@ -20,7 +22,7 @@ export function textMessage(text: string, role = "assistant") {
   return { role, content: [{ type: "text", text }] };
 }
 
-export function clearMocks(...mocks: Mock[]) {
+export function clearMocks(...mocks: TestMock[]) {
   for (const mock of mocks) {
     mock.mockClear();
   }

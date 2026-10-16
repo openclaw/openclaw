@@ -339,7 +339,7 @@ test("keeps hidden routing private while preserving lifecycle persistence identi
     mainSessionRestartRecovery: true,
     projectSessionLifecycle: false,
     projectSessionMessages: false,
-  };
+  } as const;
   registerAgentRunContext("run", {
     ...privateRouting,
     sessionKey: "main",

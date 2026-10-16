@@ -213,7 +213,7 @@ describe("readScheduledTaskCommand", () => {
     ["legacy action with native cwd", "C:\\Services\\Gateway", true, undefined, true],
   ] satisfies [string, string, boolean, string?, boolean?][])(
     "keeps runtime pins bound to the script with %s",
-    async (_label, nativeCwd, overridden, scriptCwd, directScript) => {
+    async (_label, nativeCwd, overridden, scriptCwd?: string, directScript?: boolean) => {
       const scriptPath = "C:\\Services\\Gateway\\gateway.cmd";
       const env = { OPENCLAW_TASK_SCRIPT: scriptPath };
       const action = taskAction(

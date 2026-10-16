@@ -132,9 +132,9 @@ function interceptMessages(
   handle.messageInjectionV2 = {
     version: 2,
     isAvailable: () => true,
-    queueMessage: async (text, options, assertCurrent) => {
+    queueMessage: async (text, options, assertCurrent, authorityKind) => {
       assertCurrent();
-      return receive(text, options, assertCurrent);
+      return receive(text, options, assertCurrent, authorityKind);
     },
   };
 }

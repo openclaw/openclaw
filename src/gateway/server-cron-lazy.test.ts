@@ -24,7 +24,7 @@ const { createLazyGatewayCronState } = await import("./server-cron-lazy.js");
 
 describe("createLazyGatewayCronState", () => {
   const createBroker = useSpawnBrokerTestFixture(afterEach);
-  let cron: GatewayCronServiceContract;
+  let cron: ReturnType<typeof createCronService>;
   let state: GatewayCronState;
   let lazy: ReturnType<typeof createLazyGatewayCronState>;
   beforeEach(() => {
@@ -340,7 +340,7 @@ function createParams(overrides: Partial<OpenClawConfig> = {}) {
   };
 }
 
-function createCronService(): GatewayCronServiceContract {
+function createCronService() {
   return {
     start: vi.fn(async () => undefined),
     stop: vi.fn(),
@@ -369,5 +369,5 @@ function createCronService(): GatewayCronServiceContract {
     writeScratch: vi.fn(async () => ({ ok: true, currentRevision: 1 }) as never),
     getDefaultAgentId: vi.fn(() => "default"),
     wake: vi.fn(async () => ({ ok: true })),
-  };
+  } satisfies GatewayCronServiceContract;
 }

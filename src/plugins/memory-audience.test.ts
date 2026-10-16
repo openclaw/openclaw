@@ -62,7 +62,7 @@ function resolveAt(
     {
       agentId: AGENT_ID,
       sessionKey,
-      ...identity,
+      sessionId: identity.sessionId,
       senderIsOwner,
       storePath: STORE_PATH,
     },

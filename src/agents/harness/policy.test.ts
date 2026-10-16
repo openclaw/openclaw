@@ -26,7 +26,7 @@ function providerConfig(
 
 function policy(
   config: OpenClawConfig,
-  params: Omit<Parameters<typeof resolveAgentHarnessPolicy>[0], "config"> = {},
+  params: Parameters<typeof resolveAgentHarnessPolicy>[0] = {},
 ) {
   return resolveAgentHarnessPolicy({
     provider: "openai",

@@ -83,7 +83,9 @@ function delivery(
   deliveredTargets: Parameters<
     ReturnType<typeof createApprovalNativeRouteReporter>["reportDelivery"]
   >[0]["deliveredTargets"],
-  targets: typeof deliveredTargets = [],
+  targets: Parameters<
+    ReturnType<typeof createApprovalNativeRouteReporter>["reportDelivery"]
+  >[0]["deliveryPlan"]["targets"] = [],
   threadId?: string,
 ) {
   return {

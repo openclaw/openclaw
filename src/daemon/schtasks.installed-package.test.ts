@@ -33,22 +33,6 @@ const candidateCheckNames = [
 
 const secret = "synthetic-installed-credential-do-not-report";
 const settledCommand = { signal: null, beforeCleanup: "dead", joined: true };
-function expectRedacted(
-  text: string | undefined,
-  includes: string[] = [],
-  excludes: string[] = [],
-) {
-  for (const value of includes) {
-    expect(text).toContain(value);
-  }
-  for (const value of [secret, ...excludes]) {
-    expect(text).not.toContain(value);
-  }
-}
-function expectOnlyCommand(records: installedCommand.CommandRecord[], expected: object) {
-  expect(records).toHaveLength(1);
-  expect(records[0]).toMatchObject(expected);
-}
 function completedStep(startedAtMs: number, endedAtMs: number): UpdateRunRecord["steps"][number] {
   return { step: "global update", status: "completed", startedAtMs, endedAtMs };
 }
@@ -79,11 +63,12 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("sanitizes colored stdout before clipping diagnostics", async () => {
-  const fixture = commandFixture();
+it.each(["stdout"] as const)("sanitizes colored %s before clipping diagnostics", async (stream) => {
+  const fixture = commandFixture({ FIXTURE_OUTPUT_STREAM: stream });
   const failure = await fixture
     .run(`
-    process.stdout.write("\\x1b[31m" + JSON.stringify({
+    const output = process.env.FIXTURE_OUTPUT_STREAM === "stderr" ? process.stderr : process.stdout;
+    output.write("\\x1b[31m" + JSON.stringify({
       padding: "x".repeat(4000), action: "install", ok: false, token: process.env.FIXTURE_SECRET,
       error: "Synthetic install refusal; inspect the registered task."
     }) + "\\x1b[0m\\n\\x1b[31mtoken\\x1b[0m=" + process.env.FIXTURE_SECRET);
@@ -91,14 +76,19 @@ it("sanitizes colored stdout before clipping diagnostics", async () => {
   `)
     .catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(Error);
-  expectRedacted(String(failure), ["Synthetic install refusal"]);
-  expectOnlyCommand(fixture.records, {
+  expect(String(failure)).toContain("Synthetic install refusal");
+  expect(String(failure)).not.toContain(secret);
+  expect(fixture.records).toHaveLength(1);
+  expect(fixture.records[0]).toMatchObject({
     code: 7,
     ...settledCommand,
-    failureOutput: { stderr: "", captureTruncated: false },
+    failureOutput: { [stream === "stdout" ? "stderr" : "stdout"]: "", captureTruncated: false },
   });
-  const output = fixture.records[0]?.failureOutput?.stdout;
-  expectRedacted(output, ['"action":"install"', "Synthetic install refusal"], ["\x1b"]);
+  const output = fixture.records[0]?.failureOutput?.[stream];
+  expect(output).toContain('"action":"install"');
+  expect(output).toContain("Synthetic install refusal");
+  expect(output).not.toContain(secret);
+  expect(output).not.toContain("\x1b");
   expect(output?.length).toBeLessThanOrEqual(2002);
 });
 
@@ -116,13 +106,17 @@ it("rejects a sibling fence mismatch without revealing credentials or the missin
     )
     .catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(Error);
-  expectRedacted(String(failure), ["different-fixture"], [missingNeedle, "\x1b"]);
+  expect(String(failure)).not.toContain(secret);
+  expect(String(failure)).not.toContain(missingNeedle);
+  expect(String(failure)).not.toContain("\x1b");
+  expect(String(failure)).toContain("different-fixture");
   expect(fixture.records[0]).toMatchObject({
     code: 1,
     ...settledCommand,
   });
-  expectRedacted(fixture.records[0]?.failureOutput?.stdout);
-  expectRedacted(fixture.records[0]?.failureOutput?.stderr, ["different-fixture"]);
+  expect(fixture.records[0]?.failureOutput?.stdout).not.toContain(secret);
+  expect(fixture.records[0]?.failureOutput?.stderr).not.toContain(secret);
+  expect(fixture.records[0]?.failureOutput?.stderr).toContain("different-fixture");
 });
 
 it("withholds incomplete captures while preserving the truncation failure", async () => {
@@ -132,7 +126,8 @@ it("withholds incomplete captures while preserving the truncation failure", asyn
       'process.stdout.write("x".repeat(262144) + "incomplete-fixture-output"); process.exitCode = 7;',
     ),
   ).rejects.toThrow("Command output was truncated");
-  expectOnlyCommand(fixture.records, {
+  expect(fixture.records).toHaveLength(1);
+  expect(fixture.records[0]).toMatchObject({
     code: 7,
     ...settledCommand,
     failureOutput: {
@@ -193,11 +188,10 @@ it("retains safe native and RPC facts before an exit-zero status fails semantic 
     },
   });
   expect(fixture.records[0]).not.toHaveProperty("failureOutput");
-  expectRedacted(
-    JSON.stringify(fixture.records[0]?.serviceOutput),
-    [],
-    ["environment", "config", "auth", "models"],
-  );
+  const observation = JSON.stringify(fixture.records[0]?.serviceOutput);
+  for (const excluded of [secret, "environment", "config", "auth", "models"]) {
+    expect(observation).not.toContain(excluded);
+  }
 });
 
 it("retains bounded sanitized install outcome without private response fields", async () => {
@@ -230,7 +224,9 @@ it("retains bounded sanitized install outcome without private response fields", 
     service: { loaded: true, label: "Scheduled Task" },
   });
   const observation = JSON.stringify(fixture.records[0]?.serviceOutput);
-  expectRedacted(observation, [], ["\u001b", "definitionBackup", "config", "auth"]);
+  for (const excluded of [secret, "\u001b", "definitionBackup", "config", "auth"]) {
+    expect(observation).not.toContain(excluded);
+  }
   expect(observation.length).toBeLessThan(11_000);
 });
 
@@ -251,7 +247,8 @@ it("retains the original failed published result before the bounded output tail"
       { commandBudget: "published-update" },
     ),
   ).rejects.toThrow();
-  expectOnlyCommand(fixture.records, {
+  expect(fixture.records).toHaveLength(1);
+  expect(fixture.records[0]).toMatchObject({
     code: 1,
     joined: true,
     publishedUpdate: {
@@ -282,10 +279,13 @@ it("retains the original failed published result before the bounded output tail"
   expect(JSON.stringify(fixture.records)).not.toContain(secret);
 });
 
-it.each([0, null, undefined])(
-  "requires every candidate check and keeps only safe proof (continuation exit=%s)",
-  (exitCode) => {
-    const name = "candidate migration continuation";
+it.each([
+  { name: "candidate migration continuation", exitCode: 0 },
+  { name: "candidate migration continuation", exitCode: null },
+  { name: "candidate migration continuation", exitCode: undefined },
+])(
+  "requires every candidate check and keeps only safe proof ($name exit=$exitCode)",
+  ({ name, exitCode }) => {
     const privatePayload = "synthetic-private-command-payload";
     const checks = candidateCheckNames.flatMap((check) =>
       check === name && exitCode === undefined
@@ -359,23 +359,20 @@ it("captures failed installed update progress without changing the ledger or ret
     ledger.recordUpdateRunVerification(run.runId, verification, options);
     const before = ledger.getUpdateRun(run.runId, options);
     const observed = await readInstalledUpdateProgress({ env, stateDir: env.OPENCLAW_STATE_DIR });
+    expect(observed).toMatchObject({ phase: "validating", status: "running" });
     expect(observed).toMatchObject({
-      phase: "validating",
-      status: "running",
       after: { version: "2026.9.6", buildId: "candidate-build" },
       verification: { serviceRunning: true, pid: 4321, port: 19417, readyz: false, settled: false },
     });
-    expectRedacted(
-      JSON.stringify(observed),
-      ["Synthetic native warning"],
-      ["synthetic-hidden-credential", privatePayload],
-    );
+    expect(JSON.stringify(observed)).toContain("Synthetic native warning");
+    expect(JSON.stringify(observed)).not.toContain("synthetic-hidden-credential");
     expect(observed).toHaveProperty(
       "steps",
       expect.arrayContaining([
         { step: "global update", status: "completed", startedAtMs: 100, endedAtMs: 200 },
       ]),
     );
+    expect(JSON.stringify(observed)).not.toContain(privatePayload);
     expect(observed).not.toHaveProperty("origin");
     expect(ledger.getUpdateRun(run.runId, options)).toEqual(before);
   } finally {
@@ -406,12 +403,10 @@ it("preserves mixed-case native context while isolating application state", () =
   expect(Object.keys(result).filter((key) => key.toUpperCase() === "PATH")).toHaveLength(1);
   expect(resolveEnvironmentValue(result, "APPDATA", "win32")).toBe(path.join(root, "appdata"));
   expect(resolveEnvironmentValue(result, "TEMP", "win32")).toBe(path.join(root, "tmp"));
-  expect(result).toMatchObject({
-    OPENCLAW_STATE_DIR: path.join(root, "state"),
-    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    npm_config_prefix: prefix,
-    npm_config_cache: path.join(root, "npm-cache"),
-  });
+  expect(result.OPENCLAW_STATE_DIR).toBe(path.join(root, "state"));
+  expect(result.OPENCLAW_CONFIG_PATH).toBe(path.join(root, "openclaw.json"));
+  expect(result.npm_config_prefix).toBe(prefix);
+  expect(result.npm_config_cache).toBe(path.join(root, "npm-cache"));
   expect(result).not.toHaveProperty("OPENAI_API_KEY");
   expect(result).not.toHaveProperty("NODE_OPTIONS");
   expect(resolveEnvironmentValue(result, "PSMODULEANALYSISCACHEPATH", "win32")).toBe(moduleCache);
@@ -424,10 +419,35 @@ describe("published installed update progress", () => {
     mode: "npm",
     steps: candidateCheckNames.map((name) => ({ name, exitCode: 0, durationMs: 12 })),
   };
-  const input: Parameters<typeof runInstalledPublishedUpdate>[0]["input"] = {
+  const input: Awaited<ReturnType<typeof installedPackage.readInput>> = {
+    sourceSha: "a".repeat(40),
+    toolingSha: "b".repeat(40),
     tarball: "C:\\synthetic-candidate.tgz",
+    candidate: {
+      name: "openclaw",
+      packageSourceSha: "a".repeat(40),
+      version: "2026.9.26",
+      sha256: "c".repeat(64),
+    },
     installRoot: "C:\\synthetic-update\\prefix",
     stateRoot: "C:\\synthetic-update\\state",
+    runtime: { version: "v24.0.0", sha256: "d".repeat(64) },
+    artifact: {
+      id: 1,
+      runId: 2,
+      runAttempt: 1,
+      workflowSha: "b".repeat(40),
+      digest: `sha256:${"e".repeat(64)}`,
+    },
+    published: ["2026.9.3", "2026.9.4"].map((version) => ({
+      source: "npm-registry",
+      version,
+      commit: "f".repeat(40),
+      tarball: `C:\\synthetic-${version}.tgz`,
+      metadata: `C:\\synthetic-${version}.json`,
+      sha256: "a".repeat(64),
+      integrity: "sha512-synthetic",
+    })),
   };
   const active: UpdateRunRecord = {
     runId: "00000000-0000-0000-0000-000000000000",

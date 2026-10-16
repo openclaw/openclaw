@@ -35,8 +35,8 @@ function createScope(...args: Parameters<typeof createCronCreatorAuthorityRunSco
   onTestFinished(() => revokeScope(scope));
   return scope;
 }
-async function expectDenied(operation: (run: ReturnType<typeof vi.fn>) => Promise<unknown>) {
-  const run = vi.fn();
+async function expectDenied(operation: (run: () => Promise<unknown>) => Promise<unknown>) {
+  const run = vi.fn(async () => undefined);
   await expect(operation(run)).rejects.toThrow(denied);
   expect(run).not.toHaveBeenCalled();
 }

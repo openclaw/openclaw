@@ -192,7 +192,7 @@ describe("MediaStreamHandler security hardening", () => {
       const handler = createHandler();
       const socket = {
         readyState: WebSocket.OPEN,
-        bufferedAmount: Number(bufferedAmount),
+        bufferedAmount,
         send: vi.fn(() => {
           socket.bufferedAmount = 2 * 1024 * 1024;
         }),

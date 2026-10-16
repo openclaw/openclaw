@@ -867,7 +867,8 @@ describe("tui command handlers", () => {
         message: "usage footer: full",
       },
     ],
-  ])("session setting: %s", async (command, patch, { message, result, ...params } = {}) => {
+  ])("session setting: %s", async (command, patch, options: SettingOptions = {}) => {
+    const { message, result, ...params } = options;
     const h = createHarness({ ...params, patchSession: vi.fn().mockResolvedValue(result ?? {}) });
     await h.handleCommand(command);
     expect(h.patchSession).toHaveBeenCalledWith({ key: "agent:main:main", ...patch });

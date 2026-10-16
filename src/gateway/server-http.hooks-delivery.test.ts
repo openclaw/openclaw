@@ -290,7 +290,7 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     readJsonBodyMock.mockResolvedValue({ ok: true, value: { message: "Dispatch" } });
     const dispatchAgentHook = vi.fn(async () => ({
       ok: false as const,
-      statusCode,
+      statusCode: 503 as const,
       error,
       runId: "run-1",
     }));

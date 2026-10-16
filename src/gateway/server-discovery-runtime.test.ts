@@ -186,7 +186,9 @@ describe("startGatewayDiscovery", () => {
     });
     builder.registry.plugins.push(record);
     const instance = new PluginInstance(record.id, { record, registry: builder.registry });
-    disposals.push(() => instance.dispose());
+    disposals.push(async () => {
+      await instance.dispose();
+    });
     const store = createPluginRuntimeStore<object>("discovery runtime missing");
     const runtime = {};
     const calls: Array<{ phase: string; value: number; runtime: object | null }> = [];

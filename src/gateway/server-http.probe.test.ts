@@ -38,7 +38,7 @@ function probeClient(server: Parameters<typeof sendRequest>[0]) {
   return {
     server,
     request,
-    async json(input: ProbeRequest, status: number, body: unknown, exact = false) {
+    async json(input: ProbeRequest, status: number, body: object, exact = false) {
       const response = await request(input);
       expect(response.res.statusCode).toBe(status);
       const assertion = expect(JSON.parse(response.getBody()));

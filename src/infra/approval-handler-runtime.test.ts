@@ -100,7 +100,11 @@ async function requireHandler(params: Parameters<typeof createHandler>[0]) {
   return runtime;
 }
 
-function makeLazyFixture(onDelivered?: ReturnType<typeof vi.fn>) {
+function makeLazyFixture(
+  onDelivered?: NonNullable<
+    ChannelApprovalNativeRuntimeAdapter<{ text: string }>["observe"]
+  >["onDelivered"],
+) {
   return {
     availability: { isConfigured: vi.fn(), shouldHandle: vi.fn() },
     presentation: {

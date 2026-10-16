@@ -210,7 +210,10 @@ function requireRealtimeConsultToolHandler() {
   return registeredToolHandler[1];
 }
 
-async function startConsult<T>(config: VoiceCallConfig, agentRuntime: T) {
+async function startConsult(
+  config: VoiceCallConfig,
+  agentRuntime: ReturnType<typeof createConsultRuntime>,
+) {
   await createRuntime({ config, agentRuntime: agentRuntime as never });
   return requireRealtimeConsultToolHandler();
 }

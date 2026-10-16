@@ -52,7 +52,7 @@ async function startServer(
     },
     capture() {
       const capture = captureSocket(port);
-      cleanup.push(capture.dispose);
+      cleanup.push(() => capture.dispose());
       return capture;
     },
     upgrade(upgradeOptions: UpgradeOptions = {}) {

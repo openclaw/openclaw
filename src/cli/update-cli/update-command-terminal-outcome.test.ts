@@ -25,6 +25,7 @@ import * as snapshot from "../../infra/sqlite-snapshot-source.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { prepareNativePackageStage } from "../../infra/update-native-package-stage.js";
 import {
   createUpdateRun,
   finishUpdateRun,
@@ -41,11 +42,6 @@ import { VERSION } from "../../version.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import {
-  resultFixture,
-  stepFixture,
-  verificationFixture,
-} from "./update-command-fixtures.test-support.js";
 import {
   finishSuccessfulPackageSwitch,
   mockVerifiedGatewayRun,
@@ -124,40 +120,122 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const verifiedGateway = () => verificationFixture("2.0.0");
-const noServiceSwitch = { shouldRestart: false, installKindChanged: false, downgradeRisk: false };
+async function createNativeRefusalSwap() {
+  const project = path.join(base, "native", "global");
+  const globalRoot = path.join(project, "5", "node_modules");
+  const packageRoot = path.join(globalRoot, "openclaw");
+  const binDir = path.join(base, "native", "bin");
+  await writePackageRoot(packageRoot, "1.0.0");
+  await fs.mkdir(binDir, { recursive: true });
+  const manifest = path.join(project, "package.json");
+  await fs.writeFile(manifest, '{"dependencies":{"openclaw":"1.0.0"}}');
+  const launcher = path.join(binDir, "openclaw");
+  await fs.writeFile(launcher, "old launcher\n");
+  const installTarget = { manager: "pnpm" as const, command: "pnpm", globalRoot, packageRoot };
+  const native = await prepareNativePackageStage({
+    installTarget,
+    packageName: "openclaw",
+    installSpec: "openclaw@2.0.0",
+    globalBinDir: binDir,
+    env: {},
+  });
+  if (!native) {
+    throw new Error("native fixture stage unavailable");
+  }
+  const candidate = path.join(native.projectRoot, path.relative(project, packageRoot));
+  await writePackageRoot(candidate, "2.0.0");
+  await fs.writeFile(path.join(native.binDir, "openclaw"), "candidate launcher\n");
+  let transaction: PackageUpdateTransaction | undefined;
+  const result = await swapStagedPackageInstall({
+    installTarget,
+    packageName: "openclaw",
+    stage: {
+      prefix: native.projectRoot,
+      layout: { prefix: native.projectRoot, globalRoot: native.globalRoot, binDir: native.binDir },
+      packageRoot: candidate,
+      installTarget: { ...installTarget, globalRoot: native.globalRoot, packageRoot: candidate },
+      native,
+    },
+    onTransaction: (value) => {
+      transaction = value;
+    },
+  });
+  if (!transaction || result.status !== "committed") {
+    throw new Error(`native fixture swap failed: ${result.step.stderrTail}`);
+  }
+  return { packageRoot, globalRoot, launcher, transaction, manifest, result };
+}
 
 async function scenario(
   kind:
     | "healthy"
     | "renamed"
+    | "retained"
+    | "release-failure"
     | "revoked"
     | "foreign-revoked"
     | "link-retained"
+    | "link-retained-once"
+    | "link-authority-read"
+    | "last-cleanup-read"
     | "link-changed"
     | "transient-read"
+    | "cleanup-read"
     | "cleanup-deadline"
     | "verified-report-read"
-    | "unverified-completion",
+    | "unverified-completion"
+    | "rollback-refused",
   json: boolean,
   repeat = false,
   deferred = true,
   preparedRecovery = false,
   completedByGateway = false,
 ) {
-  const fixture = await createPackageSwapFixture(base);
-  let injected = false;
-  let publicationFailure: { mockRestore(): void } | undefined;
-  if (kind === "unverified-completion") {
+  let swap;
+  let nativeManifest: string | undefined;
+  let prerequisiteResult: unknown;
+  let setupInjected = false;
+  if (kind === "rollback-refused") {
+    const native = await createNativeRefusalSwap();
+    nativeManifest = native.manifest;
+    swap = native;
+  } else if (kind === "unverified-completion") {
+    const fixture = await createPackageSwapFixture(base);
     const rename = fs.rename.bind(fs);
-    publicationFailure = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+    const effect = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
       if (String(args[0]) === fixture.packageRoot) {
-        injected = true;
+        setupInjected = true;
         throw Object.assign(new Error("fixture publication move denied"), { code: "EXDEV" });
       }
       return rename(...args);
     });
-  } else if (["link-retained", "link-changed", "transient-read"].includes(kind)) {
+    let transaction: PackageUpdateTransaction | undefined;
+    let result;
+    try {
+      result = await swapStagedPackageInstall({
+        ...fixture.params,
+        onTransaction: (value) => {
+          transaction = value;
+        },
+      });
+    } finally {
+      effect.mockRestore();
+    }
+    if (!transaction || result.status !== "failed") {
+      throw new Error("unverified fixture did not retain its failed transaction");
+    }
+    prerequisiteResult = result;
+    swap = { ...fixture, transaction, result };
+  } else if (
+    [
+      "link-retained",
+      "link-retained-once",
+      "link-authority-read",
+      "link-changed",
+      "transient-read",
+    ].includes(kind)
+  ) {
+    const fixture = await createPackageSwapFixture(base);
     const checkout = path.join(base, "operator-checkout");
     await fs.rename(fixture.packageRoot, checkout);
     await fs.symlink(
@@ -165,7 +243,19 @@ async function scenario(
       fixture.packageRoot,
       process.platform === "win32" ? "junction" : "dir",
     );
+    let transaction: PackageUpdateTransaction | undefined;
+    const result = await swapStagedPackageInstall({
+      ...fixture.params,
+      onTransaction: (value) => {
+        transaction = value;
+      },
+    });
+    if (!transaction || result.status !== "committed") {
+      throw new Error("linked swap failed");
+    }
+    swap = { ...fixture, result, transaction };
   } else if (kind === "verified-report-read") {
+    const fixture = await createPackageSwapFixture(base);
     const candidate = fixture.params.stage.packageRoot;
     const worker = path.join(candidate, "dist", "infra", "update-candidate-state.worker.js");
     await fs.mkdir(path.dirname(worker), { recursive: true });
@@ -174,26 +264,20 @@ async function scenario(
       `void import(${JSON.stringify(resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState).href)});\n`,
     );
     await writePackageDistInventory(candidate);
-  }
-  let transaction: PackageUpdateTransaction | undefined;
-  let swapResult: Awaited<ReturnType<typeof swapStagedPackageInstall>>;
-  try {
-    swapResult = await swapStagedPackageInstall({
+    let transaction: PackageUpdateTransaction | undefined;
+    const result = await swapStagedPackageInstall({
       ...fixture.params,
       onTransaction: (value) => {
         transaction = value;
       },
     });
-  } finally {
-    publicationFailure?.mockRestore();
+    if (!transaction || result.status !== "committed") {
+      throw new Error("Verified candidate fixture swap failed");
+    }
+    swap = { ...fixture, result, transaction };
+  } else {
+    swap = await createRetainedPackageSwap(base);
   }
-  if (
-    !transaction ||
-    swapResult.status !== (kind === "unverified-completion" ? "failed" : "committed")
-  ) {
-    throw new Error("Fixture did not retain the expected package transaction");
-  }
-  const swap = { ...fixture, transaction, result: swapResult };
   const cleanup =
     kind === "cleanup-deadline"
       ? {
@@ -233,7 +317,13 @@ async function scenario(
         }
       : {};
   const rmdir = fs.rmdir.bind(fs);
+  const rename = fs.rename.bind(fs);
   const unlink = fs.unlink.bind(fs);
+  const readlink = fs.readlink.bind(fs);
+  const shimBackup = (await fs.readdir(swap.globalRoot)).find((entry) =>
+    entry.startsWith(".openclaw.shim-backup-"),
+  );
+  const finalCleanupRoot = shimBackup && path.join(swap.globalRoot, shimBackup);
   const mutateLease = (sql: string) => {
     const db = new DatabaseSync(path.join(temporary, "managed-update-handoffs.sqlite"));
     try {
@@ -242,21 +332,30 @@ async function scenario(
       db.close();
     }
   };
-  let failedRead: "state" | "lease" | undefined;
-  const readPaths = {
-    state: path.join(base, "state", "state", "openclaw.sqlite"),
-    lease: path.join(temporary, "managed-update-handoffs.sqlite"),
-  };
+  let injected = setupInjected;
+  let failNextLeaseRead = false;
+  let failNextStateRead = false;
   const lstat = syncFs.lstatSync.bind(syncFs);
   vi.spyOn(syncFs, "lstatSync").mockImplementation((...args) => {
-    if (failedRead && String(args[0]) === readPaths[failedRead]) {
-      const message =
-        failedRead === "state"
-          ? "fixture update reporting identity read failed"
-          : "fixture transient lease metadata read failure";
-      failedRead = undefined;
+    if (
+      failNextStateRead &&
+      String(args[0]) === path.join(base, "state", "state", "openclaw.sqlite")
+    ) {
+      failNextStateRead = false;
       injected = true;
-      throw Object.assign(new Error(message), { code: "EIO" });
+      throw Object.assign(new Error("fixture update reporting identity read failed"), {
+        code: "EIO",
+      });
+    }
+    if (
+      failNextLeaseRead &&
+      String(args[0]) === path.join(temporary, "managed-update-handoffs.sqlite")
+    ) {
+      failNextLeaseRead = false;
+      injected = true;
+      throw Object.assign(new Error("fixture transient lease metadata read failure"), {
+        code: "EIO",
+      });
     }
     return lstat(...args);
   });
@@ -273,7 +372,7 @@ async function scenario(
   }
   vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
     if (String(args[0]) === swap.transaction.backupRoot) {
-      if (kind === "renamed") {
+      if (kind === "renamed" || kind === "retained") {
         expect(await fs.readdir(swap.transaction.backupRoot)).toEqual([]);
         injected = true;
         throw Object.assign(new Error("fixture obsolete backup deletion denied"), {
@@ -281,6 +380,9 @@ async function scenario(
         });
       }
       await rmdir(...args);
+      if (kind === "cleanup-read") {
+        failNextLeaseRead = true;
+      }
       if (kind === "revoked" || kind === "foreign-revoked") {
         injected = true;
         mutateLease("UPDATE managed_update_handoffs SET owner = 'replacement'");
@@ -295,9 +397,21 @@ async function scenario(
       return;
     }
     await rmdir(...args);
+    if (kind === "last-cleanup-read" && String(args[0]) === finalCleanupRoot) {
+      failNextLeaseRead = true;
+    }
+  });
+  vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+    if (kind === "retained" && String(args[0]) === swap.transaction.backupRoot) {
+      throw Object.assign(new Error("fixture fallback rename denied"), { code: "EACCES" });
+    }
+    return rename(...args);
   });
   vi.spyOn(fs, "unlink").mockImplementation(async (...args) => {
-    if (kind === "link-retained" && String(args[0]) === swap.transaction.backupRoot) {
+    if (
+      (kind === "link-retained" || (kind === "link-retained-once" && !injected)) &&
+      String(args[0]) === swap.transaction.backupRoot
+    ) {
       injected = true;
       throw Object.assign(new Error("fixture obsolete link deletion denied"), { code: "EACCES" });
     }
@@ -305,10 +419,22 @@ async function scenario(
     if (kind === "transient-read" && String(args[0]) === swap.transaction.backupRoot) {
       // The real lease owner next reads its real DB path once; its subsequent
       // reads recover. No executor or transaction method is replaced.
-      failedRead = "lease";
+      failNextLeaseRead = true;
     }
   });
+  vi.spyOn(fs, "readlink").mockImplementation(async (...args) => {
+    const value = await readlink(...args);
+    if (
+      kind === "link-authority-read" &&
+      !injected &&
+      String(args[0]) === swap.transaction.backupRoot
+    ) {
+      failNextLeaseRead = true;
+    }
+    return value;
+  });
   let repeatedCompletion: UpdateStepResult | void = undefined;
+  let repeatedFailure: string | undefined;
   const observedResults: UpdateRunResult[] = [];
   const observationLeases: string[] = [];
   let failure: unknown;
@@ -317,62 +443,116 @@ async function scenario(
     withUpdateCommandExecutor(run.runId, async (executor) => {
       run.executorFence = await executor.enter(swap.packageRoot);
       if (completedByGateway) {
-        recordUpdateRunVerification(run.runId, verifiedGateway(), { env: run.env });
+        recordUpdateRunVerification(
+          run.runId,
+          {
+            serviceRunning: true,
+            versionMatch: true,
+            channelsReady: true,
+            readyz: true,
+            settled: true,
+            runningVersion: "2.0.0",
+            pluginErrors: [],
+          },
+          { env: run.env },
+        );
         finishUpdateRun(
           run.runId,
           { status: "succeeded", after: { version: "2.0.0" } },
           { env: run.env },
         );
       }
+      if (nativeManifest) {
+        await fs.writeFile(
+          nativeManifest,
+          '{"dependencies":{"openclaw":"2.0.0","sibling":"3.0.0"}}',
+        );
+        injected = true;
+        prerequisiteResult = await swap.transaction.rollback(() =>
+          run.executorFence!.assertCurrent(),
+        );
+      }
       if (kind === "verified-report-read") {
         vi.spyOn(service, "maybeRestartService").mockImplementationOnce(async ({ result }) => {
-          const verification = verifiedGateway();
+          const verification = {
+            serviceRunning: true,
+            versionMatch: true,
+            channelsReady: true,
+            readyz: true,
+            settled: true,
+            runningVersion: "2.0.0",
+            pluginErrors: [],
+          };
           recordUpdateRunVerification(run.runId, verification, { env: run.env });
           result.verification = verification;
           closeOpenClawStateDatabaseForTest();
-          failedRead = "state";
+          failNextStateRead = true;
           return "ok";
         });
       }
       try {
-        const result = resultFixture(swap.packageRoot, {
-          before: { version: "1.0.0" },
-          after: { version: "2.0.0" },
-        });
         if (preparedRecovery) {
           mockVerifiedGatewayRun(run);
-          result.recovery = {
-            serviceRestartSafe: true,
-            packageRollbackVerified: true,
-            version: "2.0.0",
-            service: "healthy",
-          };
-          result.steps.push(
-            stepFixture("original update failure", {
-              command: "openclaw update",
-              cwd: swap.packageRoot,
-              durationMs: 1,
-              stderrTail: "fixture original failure before recovery",
-            }),
-          );
         }
         await finishSuccessfulPackageSwitch(
           { packageRoot: swap.packageRoot, run, json },
           {
-            result,
+            result: {
+              status: "ok",
+              mode: "npm",
+              root: swap.packageRoot,
+              before: { version: "1.0.0" },
+              after: { version: "2.0.0" },
+              ...(preparedRecovery
+                ? {
+                    recovery: {
+                      serviceRestartSafe: true as const,
+                      packageRollbackVerified: true,
+                      version: "2.0.0",
+                      service: "healthy" as const,
+                    },
+                  }
+                : {}),
+              steps: preparedRecovery
+                ? [
+                    {
+                      name: "original update failure",
+                      command: "openclaw update",
+                      cwd: swap.packageRoot,
+                      durationMs: 1,
+                      exitCode: 1,
+                      stderrTail: "fixture original failure before recovery",
+                    },
+                  ]
+                : [],
+              durationMs: 0,
+            },
             packageTransaction: swap.transaction,
             ...verifiedState,
             ...(preparedRecovery ? { coreAlreadyCurrent: true } : {}),
-            ...noServiceSwitch,
+            shouldRestart: false,
+            installKindChanged: false,
+            downgradeRisk: false,
           },
         );
       } finally {
         if (repeat) {
-          // A closed executor must not replace the original finalizer outcome.
-          repeatedCompletion = await swap.transaction
-            .complete({ activationVerified: true }, () => run.executorFence!.assertCurrent())
-            .catch(() => undefined);
+          try {
+            repeatedCompletion = await swap.transaction.complete({ activationVerified: true }, () =>
+              run.executorFence!.assertCurrent(),
+            );
+          } catch (error) {
+            repeatedFailure = error instanceof Error ? error.message : String(error);
+          }
         }
+      }
+      if (kind === "release-failure") {
+        injected = true;
+        // A persistent trigger affects only this disposable lease database and
+        // only the final DELETE. Acquisition and current-owner reads stay real.
+        mutateLease(
+          "CREATE TRIGGER deny_terminal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture final lease delete denied'); END",
+        );
       }
     }).then(() => {
       if (completedByGateway) {
@@ -444,10 +624,16 @@ async function scenario(
     { env: run.env },
   );
   const afterRepeat = getUpdateRun(run.runId, { env: run.env });
-  return {
+  const observations = {
+    kind,
+    json,
+    deferred,
     injected,
     repeatedCompletion,
+    repeatedFailure,
+    prerequisiteResult,
     exitCode: failure instanceof UpdateCommandFailure ? failure.exitCode : failure ? 1 : 0,
+    failure: failure instanceof Error ? failure.message : failure,
     expectedRetained,
     retainedExists,
     package: JSON.parse(await fs.readFile(path.join(swap.packageRoot, "package.json"), "utf8")),
@@ -464,40 +650,28 @@ async function scenario(
     afterRepeat,
     lease: createManagedHandoffLeaseStore().read(swap.packageRoot).kind,
   };
-}
-
-function expectFailedPublication(value: Awaited<ReturnType<typeof scenario>>) {
-  expect(value).toMatchObject({
-    exitCode: 1,
-    jsonOutput: [{ status: "error" }],
-    history: { status: "failed" },
-  });
-  expect(value.afterRepeat).toEqual(value.beforeRepeat);
+  return { ...observations, swap, run };
 }
 
 describe("composed cleanup and terminal outcome", () => {
   it("keeps the verified candidate when its running update row cannot be read for reporting", async () => {
     const value = await scenario("verified-report-read", true);
-    expect(value).toMatchObject({
-      injected: true,
-      package: { version: "2.0.0" },
-      launcher: "candidate launcher\n",
-      retainedExists: true,
-      exitCode: 1,
-    });
+    expect(value.injected).toBe(true);
+    expect(value.package.version).toBe("2.0.0");
+    expect(value.launcher).toBe("candidate launcher\n");
+    expect(value.retainedExists).toBe(true);
+    expect(value.exitCode).toBe(1);
     expect(value.history?.status).not.toBe("succeeded");
     expect(value.history?.status).not.toBe("rolled-back");
   });
   it("publishes the Gateway's completed row after real executor release", async () => {
     const value = await scenario("healthy", false, false, true, false, true);
-    expect(value).toMatchObject({
-      exitCode: 0,
-      history: { status: "succeeded" },
-      lease: "absent",
-      retainedExists: false,
-      observedResults: [{ status: "ok" }],
-      observationLeases: ["absent"],
-    });
+    expect(value.exitCode).toBe(0);
+    expect(value.history?.status).toBe("succeeded");
+    expect(value.lease).toBe("absent");
+    expect(value.retainedExists).toBe(false);
+    expect(value.observedResults).toEqual([expect.objectContaining({ status: "ok" })]);
+    expect(value.observationLeases).toEqual(["absent"]);
     expect(value.humanOutput.join("\n").toLowerCase()).toContain("updated");
     expect(value.errorOutput).not.toContain(
       "Finishing update: checking package backup retention and cleanup.",
@@ -514,7 +688,8 @@ describe("composed cleanup and terminal outcome", () => {
         ? "update-executor-settlement-failed"
         : "package-backup-retention-failed";
       expect(value.injected).toBe(true);
-      expectFailedPublication(value);
+      expect(value.exitCode).toBe(1);
+      expect(value.jsonOutput).toHaveLength(1);
       const report = value.jsonOutput[0];
       expect(report).toMatchObject({
         status: "error",
@@ -524,6 +699,7 @@ describe("composed cleanup and terminal outcome", () => {
         },
       });
       expect(value.sentinel).toMatchObject({ payload: { status: "error", stats: { reason } } });
+      expect(value.history?.status).toBe("failed");
       expect(value.package.version).toBe("2.0.0");
       expect(value.report.toLowerCase()).toContain("failed");
       expect.soft(value.history?.downtimeMs).toBe(settlementFailed ? null : 0);
@@ -547,15 +723,20 @@ describe("composed cleanup and terminal outcome", () => {
           version: "2.0.0",
           service: "healthy",
         });
-        expect(value).toMatchObject({ retainedExists: true, lease: "absent" });
+        expect(value.retainedExists).toBe(true);
+        expect(value.lease).toBe("absent");
       }
+      expect(value.afterRepeat).toEqual(value.beforeRepeat);
     },
   );
 
-  it.each(["renamed", "cleanup-deadline"] as const)(
-    "reports the %s backup after verified activation and repeated completion",
-    async (kind) => {
-      const value = await scenario(kind, true, true);
+  it.each([
+    { kind: "renamed", json: true },
+    { kind: "cleanup-deadline", json: true },
+  ] as const)(
+    "reports the $kind backup after verified activation and repeated completion",
+    async ({ kind, json }) => {
+      const value = await scenario(kind, json, true);
       if (kind === "cleanup-deadline") {
         expect(value.repeatedCompletion).toMatchObject({
           durationMs: 300_001,
@@ -568,14 +749,13 @@ describe("composed cleanup and terminal outcome", () => {
       } else {
         expect(value.injected).toBe(true);
       }
-      expect(value).toMatchObject({
-        package: { version: "2.0.0" },
-        launcher: "candidate launcher\n",
-        exitCode: 0,
-        retainedExists: true,
-        history: { status: "succeeded" },
-      });
-      expect(JSON.stringify(value.jsonOutput)).toContain(value.expectedRetained);
+      expect(value.package.version).toBe("2.0.0");
+      expect(value.launcher).toBe("candidate launcher\n");
+      expect(value.exitCode).toBe(0);
+      expect(value.retainedExists).toBe(true);
+      expect(value.history?.status).toBe("succeeded");
+      const output = json ? JSON.stringify(value.jsonOutput) : value.humanOutput.join("\n");
+      expect(output).toContain(value.expectedRetained);
       expect(JSON.stringify(value.history)).toContain(value.expectedRetained);
       expect(value.report).toContain(value.expectedRetained);
       expect(value.afterRepeat).toEqual(value.beforeRepeat);
@@ -592,24 +772,34 @@ describe("composed cleanup and terminal outcome", () => {
     async (kind) => {
       const value = await scenario(kind, true);
       expect(value.injected).toBe(true);
-      expectFailedPublication(value);
+      expect(value.exitCode).toBe(1);
+      expect(value.jsonOutput).toHaveLength(1);
       expect(value.jsonOutput[0]).toMatchObject({
         status: "error",
         steps: expect.not.arrayContaining([
           expect.objectContaining({ advisory: expect.anything() }),
         ]),
       });
+      expect(value.history?.status).toBe("failed");
+      expect(value.afterRepeat).toEqual(value.beforeRepeat);
     },
   );
   it("publishes the hard completion result through the direct finalizer fallback", async () => {
     const value = await scenario("unverified-completion", true, false, false);
-    expectFailedPublication(value);
+    expect(value.exitCode).toBe(1);
+    expect(value.jsonOutput).toHaveLength(1);
+    expect(value.jsonOutput[0]).toMatchObject({ status: "error" });
+    expect(value.history?.status).toBe("failed");
+    expect(value.afterRepeat).toEqual(value.beforeRepeat);
   });
   it("preserves foreign terminal history and emits only the pending failure", async () => {
     const value = await scenario("foreign-revoked", true);
     expect(value.injected).toBe(true);
-    expectFailedPublication(value);
+    expect(value.exitCode).toBe(1);
+    expect(value.jsonOutput).toHaveLength(1);
+    expect(value.jsonOutput[0]).toMatchObject({ status: "error" });
     expect(value.history).toMatchObject({ status: "failed", reason: "foreign-terminal-fact" });
+    expect(value.afterRepeat).toEqual(value.beforeRepeat);
   });
 });
 
@@ -635,13 +825,19 @@ it("keeps foreground success pending until the replacement Gateway observes the 
         { packageRoot: root, run, json: true },
         {
           packageTransaction: swap.transaction,
-          ...noServiceSwitch,
+          shouldRestart: false,
+          installKindChanged: false,
+          downgradeRisk: false,
           controlPlaneUpdateSentinelMeta: meta,
-          result: resultFixture(root, {
+          result: {
+            status: "ok",
             mode: "git",
+            root,
             before: { version: "1.0.0", sha: "aaa" },
             after: { version: VERSION, sha: "bbb" },
-          }),
+            steps: [],
+            durationMs: 0,
+          },
         },
       );
     });
@@ -674,20 +870,27 @@ it("keeps foreground success pending until the replacement Gateway observes the 
   });
 });
 
-it("terminalizes the foreground skipped outcome without waiting for restart", async () => {
-  const created = createUpdateRun({ trigger: "api" });
-  completeUpdateCommandRun(
-    resultFixture(base, {
-      status: "skipped",
-      reason: "already-current",
-      before: { version: "1.0.0" },
-      after: { version: "1.0.0" },
-    }),
-    { runId: created.runId, env: { ...process.env }, completionOwner: "gateway-restart" },
-  );
-  expect(getUpdateRun(created.runId)).toMatchObject({
-    status: "skipped",
-    phase: "finished",
-    reason: "already-current",
-  });
-});
+it.each([{ status: "skipped" as const, reason: "already-current", expected: "skipped" }])(
+  "terminalizes the foreground $expected outcome without waiting for restart",
+  async ({ status, reason, expected }) => {
+    const created = createUpdateRun({ trigger: "api" });
+    completeUpdateCommandRun(
+      {
+        status,
+        reason,
+        mode: "npm",
+        root: base,
+        before: { version: "1.0.0" },
+        after: { version: "1.0.0" },
+        steps: [],
+        durationMs: 0,
+      },
+      { runId: created.runId, env: { ...process.env }, completionOwner: "gateway-restart" },
+    );
+    expect(getUpdateRun(created.runId)).toMatchObject({
+      status: expected,
+      phase: "finished",
+      ...(reason ? { reason } : {}),
+    });
+  },
+);

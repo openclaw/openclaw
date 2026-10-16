@@ -109,10 +109,9 @@ beforeEach(() => {
 afterEach(async () => {
   clients.forEach((client) => client.destroy());
   releases.forEach((release) => release());
-  if (vi.isMockFunction(lifecycle.runHttpConnectionRequest)) {
-    await Promise.all(
-      lifecycle.runHttpConnectionRequest.mock.results.map((result) => result.value),
-    );
+  const runHttpConnectionRequest = lifecycle.runHttpConnectionRequest;
+  if (vi.isMockFunction(runHttpConnectionRequest)) {
+    await Promise.all(runHttpConnectionRequest.mock.results.map((result) => result.value));
   }
   await connectionWork.runWhenIdle(() => {});
   clients.clear();
