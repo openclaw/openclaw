@@ -220,6 +220,8 @@ export function candidatePublicationFixture(
     workflowFullRef: tooling.fullRef,
     workflowRef: branch,
   });
+  delete manifest.candidateBinding;
+  delete manifest.evidenceReuse;
   Object.assign(
     manifest.validationInputs,
     Object.fromEntries(
