@@ -40,7 +40,11 @@ function resolveMigrationAgentDirs(params: {
   return [...new Set(agentDirs)].toSorted((left, right) => left.localeCompare(right));
 }
 
-type RootModelsFile = Readonly<{ raw: string; root: Record<string, unknown> }>;
+type RootModelsFile = Readonly<{
+  raw: string;
+  root: Record<string, unknown>;
+  providers: Record<string, unknown>;
+}>;
 
 function readRootModelsFile(agentDir: string): RootModelsFile | undefined {
   let raw: string;
@@ -51,7 +55,9 @@ function readRootModelsFile(agentDir: string): RootModelsFile | undefined {
   }
   try {
     const root: unknown = JSON.parse(raw);
-    return isRecord(root) && isRecord(root.providers) ? { raw, root } : undefined;
+    return isRecord(root) && isRecord(root.providers)
+      ? { raw, root, providers: root.providers }
+      : undefined;
   } catch {
     return undefined;
   }
@@ -66,7 +72,7 @@ async function removeRootProviderCopies(params: {
   file: RootModelsFile;
   review: RootProviderCopyReview;
 }): Promise<string> {
-  const providers = { ...(params.file.root.providers as Record<string, unknown>) };
+  const providers = { ...params.file.providers };
   for (const { providerId } of params.review.copies) {
     delete providers[providerId];
   }
@@ -135,7 +141,7 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
       env: params.env ?? process.env,
     });
     return reviewRootProviderCopies({
-      rootProviders: file.root.providers as Record<string, unknown>,
+      rootProviders: file.providers,
       explicitProviderIds,
       catalogs,
       pluginMetadataSnapshot,
