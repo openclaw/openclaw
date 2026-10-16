@@ -55,8 +55,12 @@ other channels, and cross-agent targets remain denied. This controls retrieval,
 not automatic history injection or shared files; see [session visibility scopes](/gateway/config-tools/sessions-and-subagents#toolssessions).
 
 Channel scope is retrieval-only: sibling send, status/model changes, and session
-controls remain denied. Cross-session list and search require a Gateway-hosted
-agent; standalone RPC-only readers fail closed for those results.
+controls remain denied. In channel mode, cross-session list, history, search, and
+transcript-backed memory recall require a Gateway-hosted agent; standalone
+RPC-only readers fail closed for those results. Self-only reads and ordinary
+memory/wiki retrieval retain their existing behavior. Cross-session history
+anchors must use the target's currently admitted session ID; older incarnations
+do not inherit its current route authorization.
 
 For the same admitted run, create, fork, send, patch, reset, archive, restore,
 and delete results can queue attribution-only generic facts. The private facts

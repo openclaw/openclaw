@@ -11,7 +11,11 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { requestContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
+import { bindSessionRowProjection } from "../../gateway/session-row-projection-access.js";
+import { createSessionRowProjectionFixture } from "../../gateway/session-row-projection.test-support.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
@@ -102,10 +106,14 @@ describe("sessions_history", () => {
         [requester]: { sessionId: "requester", updatedAt: 1 },
         [target]: { sessionId: "target", updatedAt: 1 },
       });
+      const cfg: OpenClawConfig = {
+        session: { store },
+        tools: { sessions: { visibility: "channel" } },
+      };
       const requests: CallGatewayRequest[] = [];
       const tool = createSessionsHistoryTool({
         agentSessionKey: requester,
-        config: { session: { store }, tools: { sessions: { visibility: "channel" } } },
+        config: cfg,
         callGateway: async <T = Record<string, unknown>>(
           request: CallGatewayRequest,
         ): Promise<T> => {
@@ -143,7 +151,45 @@ describe("sessions_history", () => {
           return {} as T;
         },
       });
-      const result = await tool.execute("channel-history", { sessionKey: target });
+      const execute = () => tool.execute("channel-history", { sessionKey: target });
+      const delivery = {
+        kind: "external",
+        route: {
+          channel: "slack",
+          accountId: "default",
+          target: { to: "channel:c111", chatType: "channel" },
+        },
+        context: { channel: "slack", accountId: "default", to: "channel:c111" },
+        origin: { provider: "slack", chatType: "channel" },
+      } as const;
+      const projection = createSessionRowProjectionFixture({
+        cfg,
+        storePath: store,
+        store: {
+          [requester]: {
+            sessionId: "requester",
+            updatedAt: 1,
+            space: "t111",
+            chatType: "channel",
+            delivery,
+          },
+          [target]: {
+            sessionId: "target",
+            updatedAt: 1,
+            space: "t111",
+            chatType: "channel",
+            delivery,
+          },
+        },
+      });
+      const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+      const result =
+        difference === "same"
+          ? await withPluginRuntimeGatewayRequestScope(
+              { context, isWebchatConnect: () => false },
+              execute,
+            )
+          : await execute();
       if (difference === "same") {
         expect(JSON.stringify(result.details)).toContain("channel-scoped context");
       } else {

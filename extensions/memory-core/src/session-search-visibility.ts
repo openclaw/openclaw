@@ -1,7 +1,10 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
+  prepareSessionTranscriptChannelRead,
   readSessionResetRecallCutoff,
   loadArchivedSessionsAsync,
+  type PreparedSessionTranscriptChannelRead,
+  type SessionTranscriptChannelReadTarget,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   resolveCanonicalMainSessionKey,
@@ -42,6 +45,45 @@ function isGlobalSessionKeyForSharedScope(cfg: OpenClawConfig, key: string): boo
 type ConversationRecallContext = NonNullable<OpenClawPluginToolContext["conversationRecall"]>;
 
 type SessionStore = Awaited<ReturnType<typeof loadCombinedSessionStoreForGatewayAsync>>["store"];
+
+export type MemorySearchChannelTargets = {
+  hit: MemorySearchResult;
+  aliases: SessionTranscriptChannelReadTarget[];
+};
+
+export type MemorySearchChannelRead = PreparedSessionTranscriptChannelRead & {
+  sessionHits: readonly MemorySearchResult[];
+};
+
+/** Bind only the query's retained results; each query carries its own owner capability. */
+export async function prepareMemorySearchChannelRead(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  requesterSessionKey: string | undefined;
+  sandboxed: boolean;
+  hits: MemorySearchResult[];
+  targets: readonly MemorySearchChannelTargets[];
+}): Promise<MemorySearchChannelRead | undefined> {
+  if (
+    resolveEffectiveSessionToolsVisibility(params) !== "channel" ||
+    !params.hits.some((hit) => hit.source === "sessions")
+  ) {
+    return undefined;
+  }
+  if (!params.requesterSessionKey) {
+    throw new Error("Session transcript disclosure requires a requesting session.");
+  }
+  const sessionHits = params.hits.filter((hit) => hit.source === "sessions");
+  const aliases = new Map(params.targets.map((target) => [target.hit, target.aliases]));
+  const prepared: PreparedSessionTranscriptChannelRead = await prepareSessionTranscriptChannelRead({
+    cfg: params.cfg,
+    requesterAgentId: params.agentId,
+    requesterSessionKey: params.requesterSessionKey,
+    sandboxed: params.sandboxed,
+    groups: sessionHits.map((hit) => aliases.get(hit) ?? []),
+  });
+  return { ...prepared, sessionHits };
+}
 
 function isSameStoredTranscript(
   // Keep the existing file-alias privacy check even though the public store type omits locators.
@@ -160,6 +202,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   conversationRecall?: ConversationRecallContext;
   /** Trusted control-plane calls may authorize only hits already scoped to this agent. */
   trustedAgentScope?: boolean;
+  /** Query-local descriptive identities, captured before other corpora can delay disclosure. */
+  captureChannelTargets?: (targets: readonly MemorySearchChannelTargets[]) => void;
 }): Promise<MemorySearchResult[]> {
   // Session visibility owns transcript hits only. Loading the catalog here for
   // memory-only results decodes every saved session prompt on the Gateway loop.
@@ -400,6 +444,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   };
 
   const next: MemorySearchResult[] = [];
+  const channelTargets: MemorySearchChannelTargets[] = [];
   for (const hit of params.hits) {
     if (hit.source !== "sessions") {
       if (!conversationRecall || conversationRecall.corpus === "configured") {
@@ -487,7 +532,19 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     if (!allowed) {
       continue;
     }
+    if (visibility === "channel" && params.captureChannelTargets) {
+      channelTargets.push({
+        hit,
+        aliases: expandRecallAliasKeys(keys).map((key) => ({
+          key,
+          agentId: scopedAgentId ?? requesterAgentId ?? "",
+          expectedSessionId: combinedSessionStore[key]?.sessionId ?? "",
+          storePath,
+        })),
+      });
+    }
     next.push(hit);
   }
+  params.captureChannelTargets?.(channelTargets);
   return next;
 }

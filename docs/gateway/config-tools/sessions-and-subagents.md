@@ -152,10 +152,14 @@ primary main-session exception; `self` restricts even main to its current sessio
 
 The `channel` setting authorizes retrieval; it does not merge thread sessions or
 automatically inject sibling-thread history. Sibling send, status/model changes,
-and session controls remain denied. Cross-session list and search require a
-Gateway-hosted agent; standalone RPC-only readers fail closed for those results.
-It also filters transcript-backed
-memory search, but it does not isolate shared memory files, filesystem access,
+and session controls remain denied. In channel mode, cross-session list, history,
+search, and transcript-backed memory recall require a Gateway-hosted agent;
+standalone RPC-only readers fail closed for those results. Self-only reads and
+ordinary memory/wiki retrieval retain their existing behavior. Cross-session
+history anchors must use the target's currently admitted session ID; older
+incarnations do not inherit its current route authorization.
+Channel scope also filters transcript-backed memory search, but it does not
+isolate shared memory files, filesystem access,
 or a channel plugin's direct message/history tools. Restrict those capabilities
 separately when one agent serves multiple customers. Historical sessions without
 verified channel metadata fail closed; archived transcript hits in memory search

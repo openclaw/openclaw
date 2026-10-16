@@ -37,6 +37,7 @@ import {
   resolveMemorySearchAbortError,
   runMemorySearchWithDeadline,
 } from "./memory/search-deadline.js";
+import type { MemorySearchChannelRead } from "./session-search-visibility.js";
 import {
   buildMemorySearchPresentation,
   resolveMemoryCitationsMode,
@@ -57,6 +58,7 @@ type MemorySearchToolQueryDebug = NonNullable<
 >;
 type PrimaryMemorySearchValue = {
   results: MemorySearchResult[];
+  channelRead?: MemorySearchChannelRead;
   workspaceDir?: string;
   provider?: string;
   model?: string;
@@ -373,6 +375,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             ...attempted,
             value: {
               results: executed.rawResults,
+              channelRead: executed.channelRead,
               workspaceDir: status.workspaceDir,
               provider: status.provider,
               model: status.model,
@@ -438,79 +441,100 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                     balanceCorpora: requestedCorpus === "all",
                   })
                 : (memoryValue?.results ?? []);
-              // Preserve primary object identity through blending: only evidence
-              // actually returned to the model earns a recall signal.
-              const surfaced = new Set(results);
-              const recalled = (memoryValue?.results ?? []).filter((result) =>
-                surfaced.has(result),
-              );
-              const citationsMode = resolveMemoryCitationsMode(cfg);
-              const presentation = buildMemorySearchPresentation(
-                recalled,
-                shouldIncludeCitations({
-                  mode: citationsMode,
-                  sessionKey: options.agentSessionKey,
-                }),
-              );
-              const dreaming = resolveMemoryDreamingConfig({
-                pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
-                cfg,
-              });
-              if ((memory?.outcome === "ok" || memory?.outcome === "partial") && dreaming.enabled) {
-                const recall = {
-                  workspaceDir: memoryValue?.workspaceDir,
-                  query,
-                  results: recalled,
-                  nowMs: Date.now(),
-                  timezone: dreaming.timezone,
-                };
-                void import("./short-term-promotion-record.js")
-                  .then(({ recordShortTermRecalls }) => recordShortTermRecalls(recall))
-                  .catch(() => {
-                    // Gateway recall persistence stays off the reply latency path.
-                  });
+              const finalize = (visibleResults: MemorySearchToolResult[]) => {
+                // Preserve primary object identity through blending: only evidence
+                // actually returned to the model earns a recall signal.
+                const surfaced = new Set(visibleResults);
+                const recalled = (memoryValue?.results ?? []).filter((result) =>
+                  surfaced.has(result),
+                );
+                const citationsMode = resolveMemoryCitationsMode(cfg);
+                const presentation = buildMemorySearchPresentation(
+                  recalled,
+                  shouldIncludeCitations({
+                    mode: citationsMode,
+                    sessionKey: options.agentSessionKey,
+                  }),
+                );
+                const dreaming = resolveMemoryDreamingConfig({
+                  pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
+                  cfg,
+                });
+                if (
+                  (memory?.outcome === "ok" || memory?.outcome === "partial") &&
+                  dreaming.enabled
+                ) {
+                  const recall = {
+                    workspaceDir: memoryValue?.workspaceDir,
+                    query,
+                    results: recalled,
+                    nowMs: Date.now(),
+                    timezone: dreaming.timezone,
+                  };
+                  void import("./short-term-promotion-record.js")
+                    .then(({ recordShortTermRecalls }) => recordShortTermRecalls(recall))
+                    .catch(() => {
+                      // Gateway recall persistence stays off the reply latency path.
+                    });
+                }
+                const attempts = [
+                  ...((requestedCorpus === "all" || memory?.outcome === "partial") && memory
+                    ? [memory]
+                    : []),
+                  ...(wiki ? [wiki] : []),
+                ];
+                const staleness = memoryValue?.staleness;
+                const recovery = memoryValue?.unavailableResult;
+                const metadata = composeMemoryCorpusMetadata(attempts, [
+                  ...(memoryValue?.automaticRebuildWarning
+                    ? [memoryValue.automaticRebuildWarning]
+                    : []),
+                  ...(staleness?.warning ? [staleness.warning] : []),
+                  ...(recovery?.warning ? [recovery.warning] : []),
+                  ...(memory?.outcome === "partial"
+                    ? [
+                        "Only memory-file keyword matches are included; semantic memory retrieval did not finish within the search time limit. Session transcript results are not included.",
+                      ]
+                    : []),
+                ]);
+                const elapsed = Math.max(0, Date.now() - toolStartedAt);
+                const debug = memoryValue?.debug
+                  ? {
+                      ...memoryValue.debug,
+                      toolMs: elapsed,
+                      outsideSearchMs: Math.max(0, elapsed - memoryValue.debug.searchMs),
+                    }
+                  : undefined;
+                return jsonResult({
+                  results: visibleResults.map((result) => presentation.get(result) ?? result),
+                  provider: memoryValue?.provider,
+                  model: memoryValue?.model,
+                  fallback: memoryValue?.fallback,
+                  citations: citationsMode,
+                  mode: memoryValue?.mode,
+                  ...staleness,
+                  ...(attempts.length > 0 || memoryValue?.automaticRebuildWarning ? metadata : {}),
+                  ...(memory?.outcome === "partial" ? { partial: true } : {}),
+                  // Another corpus can succeed while primary memory still needs repair.
+                  ...(recovery?.action ? { action: recovery.action } : {}),
+                  debug,
+                });
+              };
+              if (!memoryValue?.channelRead) {
+                return finalize(results);
               }
-              const attempts = [
-                ...((requestedCorpus === "all" || memory?.outcome === "partial") && memory
-                  ? [memory]
-                  : []),
-                ...(wiki ? [wiki] : []),
-              ];
-              const staleness = memoryValue?.staleness;
-              const recovery = memoryValue?.unavailableResult;
-              const metadata = composeMemoryCorpusMetadata(attempts, [
-                ...(memoryValue?.automaticRebuildWarning
-                  ? [memoryValue.automaticRebuildWarning]
-                  : []),
-                ...(staleness?.warning ? [staleness.warning] : []),
-                ...(recovery?.warning ? [recovery.warning] : []),
-                ...(memory?.outcome === "partial"
-                  ? [
-                      "Only memory-file keyword matches are included; semantic memory retrieval did not finish within the search time limit. Session transcript results are not included.",
-                    ]
-                  : []),
-              ]);
-              const elapsed = Math.max(0, Date.now() - toolStartedAt);
-              const debug = memoryValue?.debug
-                ? {
-                    ...memoryValue.debug,
-                    toolMs: elapsed,
-                    outsideSearchMs: Math.max(0, elapsed - memoryValue.debug.searchMs),
-                  }
-                : undefined;
-              return jsonResult({
-                results: results.map((result) => presentation.get(result) ?? result),
-                provider: memoryValue?.provider,
-                model: memoryValue?.model,
-                fallback: memoryValue?.fallback,
-                citations: citationsMode,
-                mode: memoryValue?.mode,
-                ...staleness,
-                ...(attempts.length > 0 || memoryValue?.automaticRebuildWarning ? metadata : {}),
-                ...(memory?.outcome === "partial" ? { partial: true } : {}),
-                // Another corpus can succeed while primary memory still needs repair.
-                ...(recovery?.action ? { action: recovery.action } : {}),
-                debug,
+              const channelRead = memoryValue.channelRead;
+              const sessionHits = new Set<MemorySearchToolResult>(channelRead.sessionHits);
+              // Wiki and other awaited preparation are complete. Final channel
+              // authorization, citations, recall reservation, and serialization
+              // now share one synchronous read of the captured Gateway owner.
+              return await channelRead.withCurrentAccess((visible) => {
+                const allowed = new Set<MemorySearchToolResult>(
+                  channelRead.sessionHits.filter((_hit, index) => visible[index] === true),
+                );
+                return finalize(
+                  results.filter((result) => !sessionHits.has(result) || allowed.has(result)),
+                );
               });
             },
           });
