@@ -1801,6 +1801,17 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
           (step?.name === "openclaw doctor" &&
             step.exitCode === 86 &&
             step.advisory?.kind === "package-post-install-doctor") ||
+          (step?.name === "candidate-gateway-startup-cleanup" &&
+            step.exitCode === null &&
+            step.advisory?.kind === "recoverable-maintenance" &&
+            !step.termination &&
+            !step.signal &&
+            !step.killed &&
+            !step.outputLimitExceeded &&
+            !step.failureFacts?.length &&
+            result.steps.some(
+              (primary) => primary?.name === "candidate-gateway-startup" && primary.exitCode === 0,
+            )) ||
           // Doctor lint exits 1 for selected INFO findings after verified activation.
           (step?.name === "post-activation doctor inspections" &&
             step.exitCode === 1 &&

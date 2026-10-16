@@ -1,6 +1,48 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { vi } from "vitest";
+import { z } from "zod";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import { logbookPortProvider } from "./logbook-port.js";
 import { teamReportsPortProvider } from "./team-reports-port.js";
+import { updatePreflightTeamReportsEntrypoint } from "./update-preflight.runtime.test-support.js";
 import { workboardPortProvider } from "./workboard-port.js";
+
+/** Load the real public API without rebuilding its source SDK in every capture child. */
+export async function createTeamReportsPortFixture(root: string, sourceRoot: string) {
+  const artifact = resolveRuntimeWorkerUrl(updatePreflightTeamReportsEntrypoint);
+  await fs.mkdir(root, { recursive: true });
+  await fs.copyFile(
+    path.join(sourceRoot, "openclaw.plugin.json"),
+    path.join(root, "openclaw.plugin.json"),
+  );
+  const manifest = z
+    .looseObject({
+      openclaw: z.looseObject({ extensions: z.array(z.string()) }),
+    })
+    .parse(JSON.parse(await fs.readFile(path.join(sourceRoot, "package.json"), "utf8")));
+  manifest.openclaw.extensions = ["./index.js"];
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify(manifest));
+  await fs.writeFile(path.join(root, "index.js"), "export default {};\n");
+  await fs.writeFile(
+    path.join(root, "database-port-api.js"),
+    `export { teamReportsDatabasePortApi } from ${JSON.stringify(artifact.href)};\n`,
+  );
+  return root;
+}
+
+export async function activateUpdatePostgresPluginFixtures(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  bundledRoot: string,
+) {
+  await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
+  env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "0";
+  env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", env.OPENCLAW_DISABLE_BUNDLED_PLUGINS);
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", env.OPENCLAW_BUNDLED_PLUGINS_DIR);
+}
 
 export const updatePostgresFamilies = [
   {

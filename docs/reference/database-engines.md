@@ -501,8 +501,11 @@ admission protocol remains `1`. PostgreSQL targets also declare
 family and retained physical store, including disabled plugins. Missing engine
 or family support refuses before stopping the previous Gateway or mutating data.
 Reverse-port to SQLite with the current compatible binary, or stay on the
-current version. PostgreSQL agents require their own port and exact-backup
-provider before updates can capture them.
+current version. PostgreSQL agent runtime support does not yet include a port
+and exact-backup provider. A global PostgreSQL configuration selects that family,
+so updates currently refuse it with the previous Gateway kept running until the
+agent provider is available. The four supported providers can capture and restore
+their stores independently; they do not make a full PostgreSQL-agent update safe.
 
 Shared-state preflight reads registry, plugin installation, schema-version and
 retained-agent facts through an admitted read-only PostgreSQL transaction in a

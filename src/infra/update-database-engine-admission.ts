@@ -60,7 +60,7 @@ export async function assertUpdateDatabaseEngineContexts(
     if (postgres.length === 0 && required.size === 0) {
       continue;
     }
-    const refuse = (detail: string): never => {
+    const refuse: (detail: string) => never = (detail) => {
       throw new UpdatePreMutationError(
         "database-engine-preflight",
         `Update refused: ${detail}. Reverse-port to SQLite with the current binary before updating, or stay on the current version. See https://docs.openclaw.ai/reference/database-engines.`,
@@ -71,19 +71,30 @@ export async function assertUpdateDatabaseEngineContexts(
         `the target does not support the PostgreSQL store at ${postgres[0] ?? "the configured PostgreSQL families"}`,
       );
     }
-    for (const pathname of postgres) {
+    const { requireDatabasePortProvider } = await import("./database-engine/port-provider.js");
+    const admitFamily = (family: string) => {
+      if (!Array.isArray(targetPostgresFamilies) || !targetPostgresFamilies.includes(family)) {
+        refuse(`the target does not declare support for the PostgreSQL ${family} family`);
+      }
       try {
-        required.add(await readPostgresBackupFamily(pathname, context.config));
+        requireDatabasePortProvider(family);
+      } catch (error) {
+        refuse(error instanceof Error ? error.message : `No capture provider for ${family}`);
+      }
+    };
+    for (const family of required) {
+      admitFamily(family);
+    }
+    for (const pathname of postgres) {
+      let family: string;
+      try {
+        family = await readPostgresBackupFamily(pathname, context.config);
       } catch {
         refuse(
           `PostgreSQL family at ${pathname} cannot be captured by this updater; use a version with a port and backup provider for that family`,
         );
       }
-    }
-    for (const family of required) {
-      if (!Array.isArray(targetPostgresFamilies) || !targetPostgresFamilies.includes(family)) {
-        refuse(`the target does not declare support for the PostgreSQL ${family} family`);
-      }
+      admitFamily(family);
     }
   }
 }

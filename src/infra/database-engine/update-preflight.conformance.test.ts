@@ -38,7 +38,11 @@ import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import { materializeDatabasePort } from "./port.worker.js";
 import { statePortProvider } from "./state-port.js";
-import { updatePostgresFamilies as families } from "./update-preflight.conformance.test-support.js";
+import {
+  activateUpdatePostgresPluginFixtures,
+  createTeamReportsPortFixture,
+  updatePostgresFamilies as families,
+} from "./update-preflight.conformance.test-support.js";
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const directories = useAutoCleanupTempDirTracker(afterAll);
@@ -66,7 +70,6 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
   let config: OpenClawConfig;
   let env: NodeJS.ProcessEnv;
   let anchorCreated = false;
-
   beforeAll(async () => {
     await client.connect();
     root = await fs.realpath(directories.make("update-postgres-"));
@@ -81,7 +84,6 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${new URL("../../../scripts/tsx.mjs", import.meta.url).href}`,
     };
     config = { database: { engine: "postgres", postgres: { connection: connection! } } };
     for (const directory of [path.dirname(shared), path.dirname(agent), plugin]) {
@@ -182,7 +184,6 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       await client.end();
     }
   });
-
   async function inspect(mode: string, extra: Record<string, unknown> = {}) {
     const stagingRoot = path.join(root, `inspection-${randomUUID()}`);
     await fs.mkdir(stagingRoot);
@@ -195,7 +196,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
     });
   }
 
-  it("reads registry, installed plugins and schema versions from PostgreSQL without changing the anchor", async () => {
+  it("reads PostgreSQL inventory and a retained legacy SQLite agent without changing the anchor", async () => {
     const before = await fs.readFile(shared);
     const targetStateDir = path.join(root, "inventory");
     const candidateRoot = path.join(root, "candidate");
@@ -262,7 +263,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
     expect(await fs.readFile(shared)).toEqual(before);
   });
 
-  it("refuses an unsupported state family before disturbing the previous Gateway", async () => {
+  it("refuses an unsupported state family or unavailable agent capture before disturbing the previous Gateway", async () => {
     const previous = await acquireGatewayLock({
       env,
       role: "gateway",
@@ -284,26 +285,37 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         assertUpdateDatabaseEngineContexts(
           [{ config, env }],
           ["sqlite", "postgres"],
-          ["state", "workboard", "logbook", "team-reports"],
+          ["state", "agent", "workboard", "logbook", "team-reports"],
         ),
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow(
+        "PostgreSQL agent capture requires agent-family port and exact-backup support",
+      );
+      previous!.assertCurrent();
+      expect(await fs.readFile(shared)).toEqual(before);
     } finally {
       await previous!.release();
     }
   });
-
-  describe("four-family recovery", () => {
+  describe("four-family recovery below candidate admission", () => {
     const stores: Array<(typeof families)[number] & { pathname: string; namespace: string }> = [];
     beforeAll(async () => {
+      await client.query(
+        `DELETE FROM "${namespace}".agent_databases WHERE agent_id = 'registered'`,
+      );
+      await fs.unlink(agent);
       const pluginRoots: string[] = [];
       for (const family of families) {
         const id = family.provider.id;
-        const rootDir = fileURLToPath(new URL(`../../../extensions/${id}`, import.meta.url));
+        const sourceRoot = fileURLToPath(new URL(`../../../extensions/${id}`, import.meta.url));
+        const rootDir =
+          id === "team-reports"
+            ? await createTeamReportsPortFixture(path.join(root, "plugins", id), sourceRoot)
+            : sourceRoot;
         pluginRoots.push(rootDir);
         const descriptor = await family.provider.loadDescriptor({
           id,
           rootDir,
-          source: path.join(rootDir, "index.ts"),
+          source: path.join(rootDir, id === "team-reports" ? "index.js" : "index.ts"),
           origin: "global",
         });
         const pathname = path.join(stateDir, family.relativePath);
@@ -350,11 +362,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
           ),
         },
       };
-      await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
-      env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "0";
-      env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.dirname(pluginRoots[0]!);
-      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", env.OPENCLAW_DISABLE_BUNDLED_PLUGINS);
-      vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", env.OPENCLAW_BUNDLED_PLUGINS_DIR);
+      await activateUpdatePostgresPluginFixtures(config, env, path.dirname(pluginRoots[0]!));
     });
 
     it("seals an original recovery baseline containing all PostgreSQL families", async () => {
@@ -384,7 +392,6 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         await owner!.release();
       }
     });
-
     it("captures before a failed candidate migration and restores exact PostgreSQL rows while preserving current update history", async () => {
       const owner = await acquireGatewayLock({
         env,
