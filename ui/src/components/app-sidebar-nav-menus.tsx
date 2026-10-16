@@ -9,6 +9,7 @@ import {
   type NavigationRouteId,
 } from "../app-navigation.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { iconData, type IconName } from "./icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
@@ -25,7 +26,7 @@ export function renderSidebarMenuAction(
   return {
     id: value,
     label,
-    class: ["sidebar-customize-menu__item", options.className].filter(Boolean).join(" "),
+    class: ["sidebar-customize-menu__item", options.className],
     disabled: options.disabled,
     attributes: { title: options.title },
     icon: (
@@ -57,8 +58,8 @@ export type SidebarDropdownProps = {
 
 export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
   const id = createUniqueId();
-  let removeListeners: (() => void) | undefined;
-  onCleanup(() => removeListeners?.());
+  let removeListeners: (() => void)[] = [];
+  onCleanup(() => removeListeners.forEach((stop) => stop()));
   return (
     <Menu
       id={`sidebar-menu-${id}`}
@@ -85,14 +86,10 @@ export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
             overlay.surface.style.setProperty(property, String(value));
           }
         }
-        const enter = () => params.onPointerEnter?.();
-        const leave = () => params.onPointerLeave?.();
-        overlay.surface.addEventListener("pointerenter", enter);
-        overlay.surface.addEventListener("pointerleave", leave);
-        removeListeners = () => {
-          overlay.surface.removeEventListener("pointerenter", enter);
-          overlay.surface.removeEventListener("pointerleave", leave);
-        };
+        removeListeners = [
+          listen(overlay.surface, "pointerenter", () => params.onPointerEnter?.()),
+          listen(overlay.surface, "pointerleave", () => params.onPointerLeave?.()),
+        ];
         overlay.request(true, params.focusOnOpen === false ? "none" : "first");
       }}
       tabFocusTarget={params.tabFocusTarget}
@@ -193,10 +190,8 @@ export function renderSidebarPluginNavigationMenu(params: {
         label: action.label,
         class: [
           "sidebar-customize-menu__item",
-          action.destructive ? "session-menu__item--destructive" : "",
-        ]
-          .filter(Boolean)
-          .join(" "),
+          { "session-menu__item--destructive": action.destructive },
+        ],
         variant: action.destructive ? "danger" : undefined,
         icon:
           action.icon && Object.hasOwn(iconData, action.icon) ? (

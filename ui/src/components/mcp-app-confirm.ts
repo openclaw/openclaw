@@ -32,16 +32,6 @@ export class McpAppConfirm {
     }
   }
 
-  readonly focusStrip = (element: Element | undefined): void => {
-    const pending = this.pending;
-    // The renderer assigns the ref before inserting the strip into the document.
-    queueMicrotask(() => {
-      if (element instanceof HTMLElement && element.isConnected && this.pending === pending) {
-        element.focus({ preventScroll: true });
-      }
-    });
-  };
-
   finish(accepted: boolean, restoreFocus = true): void {
     const pending = this.pending;
     if (!pending) {

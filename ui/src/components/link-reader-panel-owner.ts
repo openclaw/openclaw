@@ -4,7 +4,8 @@ import type {
   ControlUiLinkReaderDetailParams,
   ControlUiLinkReaderDescriptor,
 } from "../../../src/shared/control-ui-link-reader.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
 import { linkReaderErrorMessage } from "./link-reader-error.ts";
@@ -15,6 +16,8 @@ import {
   tabTarget,
   tabLabel,
   type ReaderTab,
+  type ReaderSection,
+  createReaderReadyView,
 } from "./link-reader-panel-view.ts";
 import { linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
 import {
@@ -97,9 +100,6 @@ export class LinkReaderPanelOwner {
   dispatchEvent(event: Event) {
     return this.host.dispatchEvent(event);
   }
-  get updateComplete() {
-    return Promise.resolve(true);
-  }
   private hostedSignature = "";
 
   get hostedTabs() {
@@ -114,10 +114,6 @@ export class LinkReaderPanelOwner {
   }
   get activeHostedTabId(): string | null {
     return this.activeId;
-  }
-  async closeHostedTab(id: string): Promise<void> {
-    this.closeTab(id);
-    await this.updateComplete;
   }
   urlDraft = "";
   invalidUrl = false;
@@ -261,8 +257,24 @@ export class LinkReaderPanelOwner {
       this.createTab();
       this.focusAddress = false;
     }
-    if (this.isConnected && this.panelPresented && this.activeTab?.view.status === "idle") {
+    if (
+      this.isConnected &&
+      this.panelPresented &&
+      (this.activeTab?.view.status === "idle" || this.refreshRequested)
+    ) {
       void this.loadDetail();
+    }
+    if (
+      this.isConnected &&
+      this.panelPresented &&
+      this.activeTab?.view.status === "ready" &&
+      !this.activeTab.view.refreshing
+    ) {
+      for (const section of ["checks", "discussion"] as const) {
+        if (this.activeTab.view.sections[section] === "idle") {
+          void this.loadDetail(section);
+        }
+      }
     }
   }
   afterRender(): void {
@@ -307,6 +319,14 @@ export class LinkReaderPanelOwner {
     this.requestAbort = null;
     if (this.activeTab?.view.status === "loading") {
       this.activeTab.view = { status: "idle" };
+    }
+    if (this.activeTab?.view.status === "ready") {
+      this.activeTab.view.refreshing = false;
+      for (const section of ["checks", "files", "discussion"] as const) {
+        if (this.activeTab.view.sections[section] === "loading") {
+          this.activeTab.view.sections[section] = "idle";
+        }
+      }
     }
     this.refreshRequested = false;
   }
@@ -483,9 +503,6 @@ export class LinkReaderPanelOwner {
   }
   refresh(): void {
     this.abortRequest();
-    if (this.activeTab) {
-      this.setTabView(this.activeTab, { status: "idle" });
-    }
     this.refreshRequested = true;
     this.requestUpdate();
   }
@@ -516,7 +533,21 @@ export class LinkReaderPanelOwner {
       this.requestUpdate();
     }
   }
-  private async loadDetail(): Promise<void> {
+  requestSection(section: ReaderSection): void {
+    const view = this.activeTab?.view;
+    if (view?.status !== "ready" || view.refreshing || !view.sections[section]) {
+      return;
+    }
+    const refresh = view.sections[section] === "error";
+    if (refresh) {
+      view.sections[section] = "idle";
+    }
+    void this.loadDetail(section, refresh);
+  }
+  private async loadDetail(
+    section?: ReaderSection,
+    refresh = this.refreshRequested,
+  ): Promise<void> {
     const target = this.target;
     const tab = this.activeTab;
     const client = this.client;
@@ -527,9 +558,22 @@ export class LinkReaderPanelOwner {
     if (!target || !tab || !client || !this.available || !this.panelPresented) {
       return;
     }
-    const request = new AbortController();
-    this.requestAbort = request;
-    tab.view = { status: "loading" };
+    const previous = tab.view.status === "ready" ? tab.view : undefined;
+    if (section && (!previous || previous.refreshing || previous.sections[section] !== "idle")) {
+      return;
+    }
+    const request = section ? (this.requestAbort ??= new AbortController()) : new AbortController();
+    if (section && previous) {
+      previous.sections[section] = "loading";
+    } else {
+      this.requestAbort = request;
+      if (previous) {
+        previous.refreshing = true;
+        previous.message = undefined;
+      } else {
+        tab.view = { status: "loading" };
+      }
+    }
     const isCurrent = () =>
       this.requestAbort === request &&
       !request.signal.aborted &&
@@ -546,8 +590,10 @@ export class LinkReaderPanelOwner {
       this.readers.includes(target.reader);
     const requestParams: ControlUiLinkReaderDetailParams = {
       url: target.href,
+      ...(target.reader.linkReader.sessionScoped ? { sessionKey } : {}),
       ...(agentId ? { agentId } : {}),
-      ...(this.refreshRequested ? { refresh: true } : {}),
+      ...(refresh ? { refresh: true } : {}),
+      ...(target.reader.linkReader.progressive ? { section: section ?? "overview" } : {}),
     };
     this.refreshRequested = false;
     this.requestUpdate();
@@ -559,8 +605,53 @@ export class LinkReaderPanelOwner {
       );
       if (isCurrent()) {
         if (!detail || !linkReaderResponseMatchesTarget(target, detail.url)) {
-          throw new Error("Link document does not match the requested target");
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "Link document does not match the requested target",
+          });
         }
+        if (section && previous) {
+          if (detail.revision !== previous.detail.revision) {
+            previous.sections[section] = "error";
+            previous.message = t("linkReader.revisionChanged");
+          } else if (
+            // Optional upstream failures can arrive as successful, empty partial documents.
+            (section === "checks" &&
+              previous.detail.checks &&
+              detail.checks?.truncated &&
+              !detail.checks.items.length) ||
+            (section === "files" &&
+              previous.detail.files?.length &&
+              detail.filesTruncated &&
+              !detail.files?.length) ||
+            (section === "discussion" &&
+              previous.detail.comments?.length &&
+              detail.commentsTruncated &&
+              !detail.comments?.length)
+          ) {
+            previous.sections[section] = "error";
+          } else {
+            const fields =
+              section === "checks"
+                ? { checks: detail.checks }
+                : section === "files"
+                  ? {
+                      files: detail.files,
+                      filesTotal: detail.filesTotal,
+                      filesTruncated: detail.filesTruncated,
+                    }
+                  : {
+                      comments: detail.comments,
+                      commentsTotal: detail.commentsTotal,
+                      commentsTruncated: detail.commentsTruncated,
+                    };
+            previous.detail = { ...previous.detail, ...fields };
+            delete previous.sections[section];
+          }
+          this.requestUpdate();
+          return;
+        }
+        const next = createReaderReadyView(detail, previous);
         const imageMethod = target.reader.linkReader.imageMethod;
         const images = imageMethod
           ? new LinkReaderImages(
@@ -576,16 +667,34 @@ export class LinkReaderPanelOwner {
                 client.recoveryScope === recoveryScope &&
                 this.tabs.includes(tab) &&
                 this.readers.includes(target.reader) &&
-                tab.view.status === "ready" &&
-                tab.view.detail === detail,
+                tab.view === next,
             )
           : undefined;
-        this.setTabView(tab, { status: "ready", detail, images });
+        next.images = images;
+        this.setTabView(tab, next);
+        if (next.sections.files && previous?.detail.files) {
+          void this.loadDetail("files");
+        }
         this.requestUpdate();
       }
     } catch (error) {
       if (isCurrent()) {
-        tab.view = { status: "error", message: linkReaderErrorMessage(error) };
+        // Access/identity failures remove retained content and retire sibling reads.
+        const retryable =
+          !(error instanceof GatewayRequestError) ||
+          error.retryable ||
+          (isRecord(error.details) && error.details.retryable === true);
+        if (previous && retryable) {
+          previous.refreshing = false;
+          if (section) {
+            previous.sections[section] = "error";
+          } else {
+            previous.message = linkReaderErrorMessage(error);
+          }
+        } else {
+          this.abortRequest();
+          this.setTabView(tab, { status: "error", message: linkReaderErrorMessage(error) });
+        }
         this.requestUpdate();
       }
     }

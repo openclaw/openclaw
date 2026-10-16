@@ -35,6 +35,7 @@ import * as sessionAdmission from "../../sessions/session-lifecycle-admission.js
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
+import { loadRealChatDispatch, successfulChatTurn } from "./chat-send-authority.test-support.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import type { RespondFn } from "./types.js";
 
@@ -46,12 +47,12 @@ vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOrigina
   executeAgentTurn: runtime.execute,
 }));
 
-it.for([
-  { reason: "tool_authority_mismatch", cancel: false },
-  { reason: "tool_authority_mismatch", cancel: true },
-] as const)(
-  "preserves chat.send behind a direct announce ($reason, cancel=$cancel)",
-  async ({ reason, cancel }, { signal }) => {
+it.for([false, true])(
+  "preserves chat.send behind a direct announce (tool_authority_mismatch, cancel=%s)",
+  async (cancel, { signal }) => {
+    const reason = "tool_authority_mismatch";
+    const waitForGate = (...args: Parameters<typeof awaitGateBeforeSettlement>) =>
+      withinTest(awaitGateBeforeSettlement(...args), signal);
     const actualRuns = await vi.importActual<
       typeof import("../../agents/embedded-agent-runner/runs.js")
     >("../../agents/embedded-agent-runner/runs.js");
@@ -106,12 +107,7 @@ it.for([
         return pending;
       });
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const realDispatch = await vi.importActual<typeof import("../../auto-reply/dispatch.js")>(
-      "../../auto-reply/dispatch.js",
-    );
-    const realReply = await vi.importActual<typeof import("../../auto-reply/reply/get-reply.js")>(
-      "../../auto-reply/reply/get-reply.js",
-    );
+    const dispatchActual = await loadRealChatDispatch();
     dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
       const params = raw as Parameters<typeof dispatchInboundMessage>[0];
       recorder = params.replyOptions?.userTurnTranscriptRecorder;
@@ -128,11 +124,7 @@ it.for([
         settled.resolve();
       };
       try {
-        return await realDispatch.dispatchInboundMessage({
-          ...params,
-          cfg: config,
-          replyResolver: realReply.getReplyFromConfig,
-        });
+        return await dispatchActual({ ...params, cfg: config });
       } finally {
         dispatched.resolve();
       }
@@ -147,18 +139,7 @@ it.for([
       consumed.push(followupRun.prompt);
       started.resolve();
       await withinTest(release.promise, signal);
-      return {
-        runId,
-        outcome: {
-          kind: "settled",
-          status: "ok",
-          result: { payloads: [{ text: "Followup answered." }], meta: { durationMs: 0 } },
-          resolved: { provider: "openai", model: "gpt-test" },
-          fallback: { exhausted: false, attempts: [] },
-          autoCompactionCount: 0,
-          didLogHeartbeatStrip: false,
-        },
-      };
+      return successfulChatTurn(runId, "Followup answered.");
     });
     let command: Promise<void> | undefined;
     try {
@@ -212,23 +193,17 @@ it.for([
         "direct steering rejected; keeping input for followup",
         expect.objectContaining({ reason, runId: instance.runId }),
       );
-      await withinTest(
-        awaitGateBeforeSettlement(
-          queued.promise,
-          dispatched.promise,
-          "Dispatch returned without queue custody",
-        ),
-        signal,
+      await waitForGate(
+        queued.promise,
+        dispatched.promise,
+        "Dispatch returned without queue custody",
       );
       expect(fixture.context.chatQueuedTurns.has(fixture.params.idempotencyKey)).toBe(true);
       await withinTest(dispatched.promise, signal);
-      await withinTest(
-        awaitGateBeforeSettlement(
-          waitingForCommand.promise,
-          settled.promise,
-          "Queued input was abandoned while its direct predecessor still owned execution",
-        ),
-        signal,
+      await waitForGate(
+        waitingForCommand.promise,
+        settled.promise,
+        "Queued input was abandoned while its direct predecessor still owned execution",
       );
       expect(consumed).toEqual([]);
       expect(injected).not.toHaveBeenCalled();
@@ -269,14 +244,7 @@ it.for([
         expect(consumed).toEqual([]);
         return;
       }
-      await withinTest(
-        awaitGateBeforeSettlement(
-          started.promise,
-          settled.promise,
-          "Followup settled without running",
-        ),
-        signal,
-      );
+      await waitForGate(started.promise, settled.promise, "Followup settled without running");
       expect(consumed).toEqual([expect.stringContaining(fixture.params.message)]);
       release.resolve();
       await withinTest(settled.promise, signal);

@@ -60,44 +60,52 @@ function postgresFixture() {
 const writeBegin = "BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(-42)";
 
 describe("experimental PostgreSQL transaction protocol", () => {
-  it.each([false, true])("settles connection receipts on its anchor (rollback: %s)", (rollback) => {
-    const { db } = postgresFixture();
-    const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
-    const owner: SqliteWorkerOperationContext = {
-      port: admission.port,
-      sourceReservations: true,
-    };
-    const receipts: unknown[] = [];
-    observeSqliteWorkerCommittedFacts(admission, ({ facts }) => receipts.push(facts));
-    const write = () =>
-      withSqliteWorkerOperationAdmission(owner, () =>
-        runSqliteImmediateTransactionSync(db, () => {
-          deferSqliteWorkerCommitReceipt(db, { value: 7 });
-          assertSqliteWorkerCommitReceiptPending(db);
-          assertSqliteWorkerCommitReceiptPending(db.anchor);
-          expect(owner.committed).toBeUndefined();
-          if (rollback) {
-            throw new Error("cancel receipt");
-          }
-        }),
-      );
-    try {
-      if (rollback) {
-        expect(write).toThrow("cancel receipt");
-      } else {
-        write();
+  it.each([
+    { rollback: false, sourceReservations: false },
+    { rollback: false, sourceReservations: true },
+    { rollback: true, sourceReservations: false },
+    { rollback: true, sourceReservations: true },
+  ])(
+    "settles one receipt on its anchor (rollback: $rollback, source reservations: $sourceReservations)",
+    ({ rollback, sourceReservations }) => {
+      const { db } = postgresFixture();
+      const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
+      const owner: SqliteWorkerOperationContext = {
+        port: admission.port,
+        sourceReservations: sourceReservations ? true : undefined,
+      };
+      const receipts: unknown[] = [];
+      observeSqliteWorkerCommittedFacts(admission, ({ facts }) => receipts.push(facts));
+      const write = () =>
+        withSqliteWorkerOperationAdmission(owner, () =>
+          runSqliteImmediateTransactionSync(db, () => {
+            deferSqliteWorkerCommitReceipt(db, { value: 7 });
+            assertSqliteWorkerCommitReceiptPending(db);
+            assertSqliteWorkerCommitReceiptPending(db.anchor);
+            expect(owner.committed).toBeUndefined();
+            if (rollback) {
+              throw new Error("cancel receipt");
+            }
+          }),
+        );
+      try {
+        if (rollback) {
+          expect(write).toThrow("cancel receipt");
+        } else {
+          write();
+        }
+        admission.service();
+        if (rollback) {
+          expect(receipts).toEqual([]);
+        } else {
+          expect(receipts).toEqual([{ value: 7 }]);
+        }
+        expect(owner.pendingReceipts?.size).toBe(0);
+      } finally {
+        admission.finish();
       }
-      admission.service();
-      if (rollback) {
-        expect(receipts).toEqual([]);
-      } else {
-        expect(receipts).toContainEqual({ value: 7 });
-      }
-      expect(owner.pendingReceipts?.size).toBe(0);
-    } finally {
-      admission.finish();
-    }
-  });
+    },
+  );
 
   it.each(["sqlite", "postgres"] as const)(
     "leaves transaction and commit admission to the domain on %s",

@@ -4,11 +4,9 @@ import {
   createSignal,
   createStore,
   Match,
-  onCleanup,
   onSettled,
   Show,
   Switch,
-  untrack,
 } from "solid-js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
@@ -25,6 +23,7 @@ import {
   projectPresencePayload,
 } from "../../lib/presence-users.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
@@ -79,11 +78,10 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
     agentsList: state().context.agents.state.agentsList,
     hello: state().context.gateway.snapshot.hello,
   });
-  let frame: number | undefined;
   let stream: HTMLDivElement | undefined;
   let atBottom = true;
   let previousRevision = -1;
-  let previousEntries = untrack(() => state().entries);
+  let previousEntries: ReturnType<ActivityPageState["read"]>["entries"] | undefined;
   let previousAutoFollow = true;
   const follow = createMemo(
     () => ({ entries: state().entries, enabled: filters.autoFollow, revision: liveRevision() }),
@@ -94,23 +92,20 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
         previous.revision === next.revision,
     },
   );
+  // Keep the live stream DOM at the bottom while the reader is following it.
   createEffect(follow, ({ entries, enabled, revision }) => {
     if (revision !== previousRevision) {
       atBottom = true;
       previousRevision = revision;
     }
     const force = enabled && !previousAutoFollow;
-    const appended = entries !== previousEntries;
+    const appended = previousEntries !== undefined && entries !== previousEntries;
     previousEntries = entries;
     previousAutoFollow = enabled;
-    if (frame !== undefined) {
-      cancelAnimationFrame(frame);
-    }
     if (!force && (!enabled || !appended || !atBottom)) {
-      return;
+      return undefined;
     }
-    frame = requestAnimationFrame(() => {
-      frame = undefined;
+    const frame = requestAnimationFrame(() => {
       const container = stream;
       if (!container?.isConnected) {
         return;
@@ -122,6 +117,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
       container.scrollTop = container.scrollHeight;
       atBottom = true;
     });
+    return () => cancelAnimationFrame(frame);
   });
   const [presentationTime, setPresentationTime] = createSignal(Date.now());
   const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
@@ -131,10 +127,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
       setPresentationTime(Date.now());
     }
   };
-  onSettled(() => {
-    document.addEventListener("visibilitychange", visibilityChanged);
-    return () => document.removeEventListener("visibilitychange", visibilityChanged);
-  });
+  onSettled(() => listen(document, "visibilitychange", visibilityChanged));
   const expiry = createMemo(() => {
     props.page.revision();
     presentationTime();
@@ -149,6 +142,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
     });
     return deadlines.length ? Math.min(...deadlines) : undefined;
   });
+  // The browser clock expires presence even when no Gateway event arrives.
   createEffect(expiry, (deadline) => {
     if (deadline === undefined) {
       return undefined;
@@ -158,11 +152,6 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
       Math.max(0, deadline - Date.now()),
     );
     return () => clearTimeout(timer);
-  });
-  onCleanup(() => {
-    if (frame !== undefined) {
-      cancelAnimationFrame(frame);
-    }
   });
   return (
     <Show when={Boolean(route() && location())} fallback={<LoadingState />}>

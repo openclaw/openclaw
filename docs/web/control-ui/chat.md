@@ -12,6 +12,9 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
+Click a session-menu submenu, such as **Assign to…**, to open it immediately.
+Hovering still uses a short delay so moving across the menu does not open every submenu.
+
 When the visible conversation does not fill the chat pane, including when the
 latest history page is empty or tool activity is hidden, earlier history loads
 automatically after the layout settles. Filling stops once the prefetch margin
@@ -571,7 +574,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat). After an in-place `/clear` or `/reset`, fresh turns keep their user-before-reply order across live updates, incremental history catch-up, and reload.
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
     - Root sessions and ordinary Home-linked dashboard sessions can be pinned. Spawned and nested-child sessions retain their sidebar nesting and reject pin requests. Subagent runs also reject pin requests and do not appear in sidebar navigation.
-    - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names and authenticated sender identity remain separate, so account names are never used as generated titles. When New Session creates a worktree without an explicit worktree name, OpenClaw also uses the session label or generated title for its branch name, falling back to a readable crustacean-themed name. Set `agents.defaults.utilityModel` (or `agents.entries.*.utilityModel`) to route this separate model call to a lower-cost model; if that distinct model fails, title generation retries once with the primary model. Expanding another agent section browses that agent's sessions without leaving the open chat.
+    - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names and authenticated sender identity remain separate, so account names are never used as generated titles. When New Session creates a worktree without an explicit worktree name, OpenClaw also uses the session label or generated title for its branch name, falling back to a readable crustacean-themed name. Set `agents.defaults.utilityModel` (or `agents.entries.*.utilityModel`) to route this separate model call to a lower-cost model or `{ primary, fallbacks }` chain; if that distinct utility chain is exhausted, title generation retries once with the primary model. Expanding another agent section browses that agent's sessions without leaving the open chat.
     - Search the active transcript with **⌘F** on Mac or **Ctrl+F** on Windows/Linux; Mac **Ctrl+F** remains available for native text navigation. Search includes recovered full-message text and updates when an in-flight recovery finishes. Press **Escape** while search is focused to close it, clear the query, and return focus to the control that opened it. Clearing the search keeps recovered text available in the thread.
     - Thread search in the command palette (⌘K on Mac, Ctrl+K on Windows/Linux, or the search button in the top-left control cluster) searches the authorized active-session scope across configured agents on the Gateway, filters internal child/cron/system rows before result limits, and lists the best visible matches next to navigation commands. The result limit does not restrict which sessions can match. Only actual indexing, unavailable transcript history, or search failures show status messages; more matches than the displayed limit is normal. On the **Sessions** page at `/sessions`, the quick filter searches visible session metadata on the Gateway before pagination, including names, agent identity, model/runtime labels, run status, and goal text and usage. The selected agent (or **All agents**) and **Active / Archived / All** filters still apply. **Limit** sets the server page size (50 by default); **Load more sessions** appends the next matching page. Table sorting, grouping, overview counts, and **Rows per page** operate on the loaded rows, not a globally sorted result. **Search transcripts** searches message content across the complete selected session scope on the Gateway, separately from the quick filter and roster page size. Available session titles stay with transcript matches even when their sessions are outside the filtered table. Opening a session link preserves its full UUID identity when session identifiers share a prefix, including after reloading links from Sessions and Worktrees.
     - Each sidebar row keeps direct pin access plus a full context menu for unread state, rename, fork, grouping, archive, and delete. Cmd/Ctrl-click opens the session in a new browser tab. Multi-selected rows (Alt/Option-click, Shift-click for ranges) get a batch menu covering unread state, grouping, archive, and delete; batch Archive asks for confirmation when the selection contains active work, then reports per-session failures while archiving eligible rows, whereas batch Delete keeps its separate idle-or-already-archived eligibility. Archive stays disabled for agent main sessions (including `global` in global scope) and the `unknown` sentinel. For any other session, including one with active work, the Gateway stops and fully drains that session's work before archiving it. The selected archived session stays open with an archived notice and **Unarchive** action; deleting the selected session switches Chat back to that agent's main session. If you switch agents while a rename, archive, delete, or batch update is finishing, its completion preserves the newly selected agent's session list, pagination, and ongoing updates, including in Archived and All views.
@@ -693,6 +696,13 @@ those badges. A search with no official match or an unavailable catalog returns
 an explanation in chat.
 
 ### Source previews and copying code
+
+Hover over a `SKILL.md` link in chat to preview the installed skill's current
+source, with syntax colors and line numbers. Focus the link to use the keyboard,
+or tap/click to keep the card open. Copy the source or choose **Open full file**
+to read it in **Review**. The card shows up to 400 lines and rereads the file
+each time it opens; the full-file view includes all lines. Press Escape to
+dismiss it.
 
 Long clipboard text appears as a file-sized card in the composer and a compact
 chip in the transcript. Its label shows the first 30 characters of a plain-text
@@ -949,7 +959,12 @@ and attached automations; it reuses their existing actions rather than duplicati
 their data. The former pull-request and task-progress bars are not repeated above
 the composer.
 
-The expanded progress card’s options include **Don’t show task progress again**.
+The progress header shows the current step, not a completed-step total. Its
+options menu stays available when the card is expanded or collapsed and contains
+**Refresh task progress** and **Hide this card**. Hiding the card does not stop
+the task. Clearing saved progress for everyone is a separate menu action.
+
+The options also include **Don’t show task progress again**.
 This turns off the existing browser-local **Show task progress cards** preference
 and offers **Undo**. It does not stop work or delete saved progress. Session details
 remain available, as do dashboard progress widgets and session hover previews.

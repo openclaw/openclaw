@@ -1,13 +1,13 @@
 import { Show } from "solid-js";
+import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { KeyboardShortcut } from "../../../components/solid/kbd.tsx";
 import type { MenuEntry } from "../../../components/solid/menu.tsx";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
-import { LitContent, type LegacyTemplateResult } from "../../../lit/solid-content.tsx";
 
 export type HeaderMenuSessionAction = {
   id: string;
   label: string;
-  icon: LegacyTemplateResult;
+  icon: IconName;
   description?: string;
   variant?: "danger";
   disabled?: boolean;
@@ -16,7 +16,7 @@ export type HeaderMenuSessionAction = {
 
 export type HeaderMenuQuickAction =
   | (HeaderMenuSessionAction & { kind?: "action"; active?: boolean })
-  | { kind: "status"; id: string; label: string; icon: LegacyTemplateResult; description?: string };
+  | { kind: "status"; id: string; label: string; icon: IconName; description?: string };
 
 export type ChatQuickAction = HeaderMenuQuickAction & {
   className?: string;
@@ -43,7 +43,7 @@ export function chatQuickActionEntry(
       content: (
         <div class="session-menu__status" data-menu-status={action.id} role="note">
           <span class="session-menu__check" aria-hidden="true">
-            <LitContent value={action.icon} />
+            <Icon name={action.icon} />
           </span>
           {label}
         </div>
@@ -60,7 +60,7 @@ export function chatQuickActionEntry(
     variant: layout ? undefined : action.variant,
     icon: (
       <span class="session-menu__icon" aria-hidden="true">
-        <LitContent value={action.icon} />
+        <Icon name={action.icon} />
       </span>
     ),
     content: label,

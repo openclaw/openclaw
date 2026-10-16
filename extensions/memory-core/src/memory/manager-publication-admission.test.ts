@@ -41,7 +41,7 @@ async function admit(
   });
   expect(backend.execute({ type: "schema.admit", input: schema })).toMatchObject({ ok: true });
   const prepare = { type: "vector.prepare", input: { state } } as const;
-  await backend.prepare(prepare);
+  await backend.prepare?.(prepare);
   expect(backend.execute(prepare)).toMatchObject({ ok: true });
   return backend;
 }

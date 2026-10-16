@@ -15,6 +15,14 @@ token-delta streaming** to channel messages:
 - **Preview streaming (Telegram/Discord/Slack/Matrix/Mattermost/MS Teams):**
   update a temporary **preview message** while generating (send + edits/appends).
 
+Rapid provider deltas are coalesced before channel preview callbacks and worker
+preview snapshots, with a 75 ms cadence. Message boundaries and final settlement
+flush pending text; a provider pause can leave the last partial waiting for its
+next event. Each channel still applies its own network update cadence. Final
+replies and stored transcript content retain the complete text.
+The embedded TUI also batches text presentation at 75 ms, flushing before tools,
+replacements, and terminal events.
+
 ## Control UI startup status
 
 After `chat.send` acknowledges an active run, the Gateway can send a typed,
@@ -165,7 +173,10 @@ chunks** before sending them, reducing single-line spam while still providing
 progressive output.
 
 - Coalescing waits for **idle gaps** (`idleMs`) before flushing.
-- Buffers are capped by `maxChars` and flush if they exceed it.
+- Buffers are capped by `maxChars` and flush if they exceed it. Buffered text
+  merges into a following media caption only when the combined text, including
+  its joiner, fits this limit; otherwise text is sent before the original media
+  payload. Captionless media does not add a joiner.
 - `minChars` prevents tiny fragments from sending until enough text accumulates
   (final flush always sends remaining text).
 - Joiner is derived from `blockStreamingChunk.breakPreference`: `paragraph` ->

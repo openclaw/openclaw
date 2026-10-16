@@ -39,6 +39,7 @@ it.each(["refused", "blocked"] as const)(
   async (status) => {
     const report: RecoveryCleanupReport = {
       stateDir: "/fixture/state",
+      missingOriginals: 0,
       artifacts: [
         {
           path: "/fixture/original",

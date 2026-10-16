@@ -479,11 +479,8 @@ function activePayload(
   if (!stored || stored.consumed) {
     return undefined;
   }
-  const { payload, audit } = stored;
-  return (!audit || audit.enabled) &&
-    now - payload.createdAt <= CHANNEL_ADMISSION_EVIDENCE_MAX_AGE_MS
-    ? payload
-    : undefined;
+  const { payload } = stored;
+  return now - payload.createdAt <= CHANNEL_ADMISSION_EVIDENCE_MAX_AGE_MS ? payload : undefined;
 }
 
 /** Preserve one source exactly; collected sources get one new bounded opaque aggregate. */

@@ -17,8 +17,10 @@ On phones, swipe right across the chat to open navigation. A deliberate swipe op
 
 To work directly in a folder on a paired device, select that specific device,
 then choose **Existing folder on device** in the workspace picker. Enter an
-absolute path on that device. The option appears only when the connected session
-host advertises support; **Auto** cannot select an existing device folder.
+absolute path on that device, or, as an admin, choose **Browse folders on**
+_device_ and pick a folder from that device. The option appears only when the
+connected session host advertises support; **Auto** cannot select an existing
+device folder.
 The session stays bound to that device and displays its folder path. Files stay
 on the device rather than being copied to or reconciled with the Gateway. See
 [session hosting](/nodes/session-hosting#work-in-an-existing-device-folder).
@@ -44,6 +46,11 @@ buttons is selected; click any view to open its list. Selecting a different view
 while the list is open switches directly to that view. Clicking Users again keeps
 its list open; use the collapse button or keyboard shortcut to hide it.
 Home, Inbox, and your account controls stay together at the bottom of the rail.
+When gateway switching is available, the account menu shows one current-gateway row.
+Open it to switch gateways or open **Gateway settings**; **Set as primary** appears
+when the current gateway supports it. In the Mac app, Command-click or Control-click
+a gateway to open a new window. **Get the apps** remains available in the browser,
+but is omitted in the Mac app.
 Open your account menu and choose **Updates** to go directly to **Settings → Updates**.
 This opens the update settings page without starting an update. For the `stable` and
 `beta` update channels, an **Available** badge appears beside **Updates** when a new
@@ -329,6 +336,11 @@ mode, Display omits grouping and empty-group controls because the sidebar always
 groups by agent. Reset leaves those hidden preferences unchanged. It also preserves
 a saved Person grouping while owner data temporarily makes that choice unavailable.
 
+Switching to the all-agents roster or another navigation view, or closing
+navigation releases background sidebar activity streams. Open conversation panes
+keep their live messages. The active agent's session list retains critical observer
+headlines even when ambient message previews are off.
+
 On phone-width layouts the panel opens as a bottom sheet, like the issues sheet:
 tap the backdrop or press Escape to close it. The sheet has no hover or flyouts:
 tapping **Group by**, **Sort by**, or **Hide empty groups** opens its
@@ -464,7 +476,7 @@ This is a personal display preference, stored in this browser separately for eac
 Changing or clearing an owner or status filter never changes the saved preference.
 **Reset** in the popover restores **When filtering** when the empty-group control is visible. Populated groups stay visible even when collapsed, and hidden custom groups remain available in **Move to group**. Choose **Never** to recover their headers as drag targets. Catalog sections and empty agent groups in team mode retain their existing behavior. On phone-width layouts, the choices open as a page inside the filter sheet, with **Back**. Escape returns focus to the setting without closing the filter panel.
 
-Native CLI catalogs appear only when they contain sessions matching the current owner filter. Empty catalogs stay hidden even when discovery fails or the CLI can start new sessions. Catalogs load on connection. When the Gateway advertises catalog change events, catalogs refresh on those events with paced bursts and a ten-minute safety refresh. Otherwise, visible tabs refresh catalogs every 30 seconds. Returning to a hidden tab also refreshes its catalog. If more pages remain, discovery follows their cursors until a matching session appears, the catalog is exhausted, or a host reports an error, without repeating the first-page request. Discovery preserves its progress and pauses while the browser tab is hidden. A later refresh checks the first page for new sessions and restarts completed empty scans so older sessions that become visible are still discovered. Expanded catalogs preserve their loaded pages across refreshes. Populated catalogs remain visible when another host fails, with discovery details in their status indicator. Hidden catalogs do not keep the **Other** heading visible when it is the only remaining section. Native CLI starts remain available from **New session**.
+Native CLI catalogs appear only when they contain sessions matching the current owner filter. Empty catalogs stay hidden even when discovery fails or the CLI can start new sessions. Catalogs load on connection, then refresh every two minutes while the tab is visible. Returning to a hidden tab refreshes its catalog after a short coalescing delay; explicit refreshes and catalog actions do not wait for the periodic refresh. If more pages remain, discovery follows their cursors until a matching session appears, the catalog is exhausted, or a host reports an error, without repeating the first-page request. Discovery preserves its progress and pauses while the browser tab is hidden. A later refresh checks the first page for new sessions and restarts completed empty scans so older sessions that become visible are still discovered. Expanded catalogs preserve their loaded pages across refreshes. Populated catalogs remain visible when another host fails, with discovery details in their status indicator. Hidden catalogs do not keep the **Other** heading visible when it is the only remaining section. Native CLI starts remain available from **New session**.
 
 **Mark as unread** creates a reminder that remains unread while the current chat stays open, including while a run streams or completes. Leave and reopen the session, or choose **Mark as read**, to clear it.
 

@@ -2013,7 +2013,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) {
       expect(rejected.error).toContain("prerelease version 0.0.2-beta.1");
-      expect(rejected.error).toContain('"@openclaw/voice-call@beta"');
+      expect(rejected.error).toContain('"npm:@openclaw/voice-call@beta"');
     }
   });
 });

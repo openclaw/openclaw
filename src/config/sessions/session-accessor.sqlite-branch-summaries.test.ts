@@ -440,6 +440,33 @@ it("reads only the newest usable appended headline while retaining cached histor
   }
 });
 
+it("rescans an unindexed legacy prefix after an append reuses one of its IDs", async () => {
+  const scope = await seedStoredBranchEvents([message("legacy", null, "legacy headline")]);
+  const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+  const expected = { sessionKey: scope.sessionKey };
+  const previous = readSessionBranchSnapshot(database, expected);
+  expect(previous).toMatchObject({ status: "ok", appendSafe: false });
+  if (previous.status !== "ok") {
+    throw new Error("expected a legacy branch snapshot");
+  }
+
+  await appendTranscriptMessage(scope, {
+    eventId: "legacy",
+    parentId: "legacy",
+    now: 1_000,
+    message: { role: "user", content: "duplicate creates a cycle" },
+  });
+
+  expect(readSessionBranchSnapshot(database, { ...expected, previous })).toMatchObject({
+    status: "ok",
+    appendSafe: false,
+    branches: [
+      { leafEntryId: "legacy", headline: "", messageCount: 0, active: true },
+      { leafEntryId: "legacy", headline: "", messageCount: 0, active: true },
+    ],
+  });
+});
+
 it("rejects a malformed unused row before choosing an available headline", async () => {
   const scope = await seedStoredBranchEvents([message("root", null, "available headline")]);
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });

@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { BrowserContext } from "playwright";
+import type { BrowserContext, Locator, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
 import {
   takeControlUiElementScreenshot,
@@ -25,11 +25,24 @@ suite.define(() => {
   });
 
   const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+  const shellHas = (page: Page, name: string, present = true) => {
+    const result = expect.poll(() => page.locator(".shell").getAttribute("class"));
+    return present ? result.toContain(name) : result.not.toContain(name);
+  };
+  async function capture(page: Page, file: string, element: Locator, targets: Locator[]) {
+    if (captureProof) {
+      await writeFile(
+        path.join(suite.artifactDir, file),
+        await takeControlUiElementScreenshot(page, element, targets),
+      );
+    }
+  }
 
   async function openPage(options: {
     hasTouch?: boolean;
     height?: number;
     phone?: boolean;
+    route?: string;
     webChrome?: boolean;
     width?: number;
   }) {
@@ -54,42 +67,32 @@ suite.define(() => {
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
     });
-    const response = await page.goto(suite.server.baseUrl);
+    const response = await page.goto(`${suite.server.baseUrl}${options.route ?? ""}`);
     expect(response?.status()).toBe(200);
-    await page.locator(".sidebar-rail").waitFor({ state: "attached" });
+    const ready = options.route?.startsWith("settings/") ? ".settings-sidebar" : ".sidebar-rail";
+    await page.locator(ready).waitFor({ state: "attached" });
     return page;
   }
 
   it("keeps only history controls in the Settings titlebar", async () => {
-    const page = await openPage({ webChrome: true });
-    const response = await page.goto(`${suite.server.baseUrl}settings/general`);
-    expect(response?.status()).toBe(200);
+    const page = await openPage({ webChrome: true, route: "settings/general" });
 
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
     await expect.poll(() => toolbar.getByRole("button").count()).toBe(2);
-    await expect.poll(() => toolbar.getByRole("button", { name: "Back" }).isVisible()).toBe(true);
-    await expect
-      .poll(() => toolbar.getByRole("button", { name: "Forward" }).isVisible())
-      .toBe(true);
-    await expect
-      .poll(() => toolbar.getByRole("button", { name: "Expand sidebar" }).count())
-      .toBe(0);
-    await expect
-      .poll(() => toolbar.getByRole("button", { name: "Open command palette" }).count())
-      .toBe(0);
-    await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
+    for (const name of ["Back", "Forward"]) {
+      await expect.poll(() => toolbar.getByRole("button", { name }).isVisible()).toBe(true);
+    }
+    for (const name of ["Expand sidebar", "Open command palette", "New session"]) {
+      await expect.poll(() => toolbar.getByRole("button", { name }).count()).toBe(0);
+    }
   });
 
   it("keeps the document root scroll-locked in the Settings takeover", async () => {
-    const page = await openPage({ webChrome: true });
-    const response = await page.goto(`${suite.server.baseUrl}settings/general`);
-    expect(response?.status()).toBe(200);
+    const page = await openPage({ webChrome: true, route: "settings/general" });
     await page.locator(".settings-sidebar").waitFor({ state: "visible" });
 
-    // WKWebView scrolls the document whenever it overflows, dragging the
-    // settings sidebar and content along. Force overflow the way stray
-    // content would, then confirm the root refuses to move.
+    // Force overflow as in WKWebView, where it can drag the entire Settings UI.
     const metrics = await page.evaluate(() => {
       const spacer = document.createElement("div");
       spacer.style.height = "3000px";
@@ -106,63 +109,39 @@ suite.define(() => {
     expect(metrics).toEqual({ bodyScrollTop: 0, htmlScrollTop: 0, rootScrollY: 0 });
   });
 
-  it("keeps drawer and search reachable from the narrow chat title bar", async () => {
-    const page = await openPage({ width: 900 });
-    const header = page.locator(".chat-pane__header").first();
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .toContain("shell--merged-chat-chrome");
-    await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
-    await expect
-      .poll(() => header.getByRole("button", { name: "Expand sidebar" }).isVisible())
-      .toBe(true);
-    await expect.poll(() => header.locator(".chat-pane__palette-open").count()).toBe(0);
-    await header.locator(".chat-header-session-menu__trigger").click();
-    await page.getByText("Open command palette", { exact: true }).click();
-    await page.locator(".cmd-palette__input").waitFor({ state: "visible" });
-  });
-
-  it("opens search from the phone drawer while keeping the chat header compact", async () => {
-    const page = await openPage({ hasTouch: true, height: 852, phone: true, width: 393 });
-    const shell = page.locator(".shell");
-    await expect.poll(() => shell.getAttribute("class")).toContain("shell--mobile-nav");
-    await expect.poll(() => shell.getAttribute("class")).toContain("shell--merged-chat-chrome");
+  it.each([false, true])("keeps compact chat search reachable (phone: %s)", async (phone) => {
+    const page = await openPage(
+      phone ? { hasTouch: true, height: 852, phone, width: 393 } : { width: 900 },
+    );
+    if (phone) {
+      await shellHas(page, "shell--mobile-nav");
+    }
+    await shellHas(page, "shell--merged-chat-chrome");
     await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
 
     const header = page.locator(".chat-pane__header").first();
     const drawerButton = header.getByRole("button", { name: "Expand sidebar" });
     await drawerButton.waitFor({ state: "visible" });
     await expect.poll(() => header.locator(".chat-pane__palette-open").count()).toBe(0);
-    if (captureProof) {
-      await writeFile(
-        path.join(suite.artifactDir, "01-chat-title-bar.png"),
-        await takeControlUiElementScreenshot(page, header, [drawerButton]),
-      );
+    if (phone) {
+      await capture(page, "01-chat-title-bar.png", header, [drawerButton]);
+      await drawerButton.tap();
+      await shellHas(page, "shell--nav-drawer-open");
+      const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
+      await expect.poll(() => drawerSearch.isVisible()).toBe(true);
+      await capture(page, "02-sidebar-drawer.png", page.locator(".shell-nav"), [drawerSearch]);
+      await drawerSearch.tap();
+    } else {
+      await header.locator(".chat-header-session-menu__trigger").click();
+      await page.getByText("Open command palette", { exact: true }).click();
     }
-
-    await drawerButton.tap();
-    await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
-    const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
-    await expect.poll(() => drawerSearch.isVisible()).toBe(true);
-
-    if (captureProof) {
-      await writeFile(
-        path.join(suite.artifactDir, "02-sidebar-drawer.png"),
-        await takeControlUiElementScreenshot(page, page.locator(".shell-nav"), [drawerSearch]),
-      );
-    }
-
-    await drawerSearch.tap();
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible" });
-    await expect.poll(() => paletteInput.evaluate((input) => input.matches(":focus"))).toBe(true);
-    if (captureProof) {
-      await writeFile(
-        path.join(suite.artifactDir, "03-command-palette.png"),
-        await takeControlUiElementScreenshot(page, page.locator(".cmd-palette").first(), [
-          paletteInput,
-        ]),
-      );
+    if (phone) {
+      await expect.poll(() => paletteInput.evaluate((input) => input.matches(":focus"))).toBe(true);
+      await capture(page, "03-command-palette.png", page.locator(".cmd-palette").first(), [
+        paletteInput,
+      ]);
     }
   });
 
@@ -185,7 +164,7 @@ suite.define(() => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       const shell = page.locator(".shell");
-      await expect.poll(() => shell.getAttribute("class")).toContain("shell--mobile-nav");
+      await shellHas(page, "shell--mobile-nav");
 
       const dispatchTouch = async (type: string, x: number, y = 180) => {
         await page.locator(".content").evaluate(
@@ -242,13 +221,12 @@ suite.define(() => {
 
       await dispatchTouch("touchend", 210, 184);
 
-      await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
+      await shellHas(page, "shell--nav-drawer-open");
       await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
       await expect.poll(() => drawer.evaluate((element) => element.style.transform)).toBe("");
       await expect.poll(() => drawer.locator("openclaw-toast-host").count()).toBe(1);
       const backdrop = page.locator(".shell-nav-backdrop");
-      // Safari extends fixed/sticky background colors into its native chrome,
-      // then fades that tint independently of our closing scrim.
+      // Fixed/sticky backgrounds would leak a Safari native-chrome tint.
       expect(
         await backdrop.evaluate((element) => {
           const positions: string[] = [];
@@ -263,14 +241,12 @@ suite.define(() => {
         }),
       ).toEqual([]);
 
-      // Synthetic safe areas exercise the real app canvas, not native Safari
-      // chrome. The scrim must cover the padding as well as the shell content.
+      // The scrim must cover safe-area padding as well as shell content.
       await page.evaluate(() => {
         const style = document.documentElement.style;
-        style.setProperty("--safe-area-top", "48px");
-        style.setProperty("--safe-area-bottom", "30px");
-        style.setProperty("--safe-area-left", "20px");
-        style.setProperty("--safe-area-right", "20px");
+        for (const [edge, value] of Object.entries({ top: 48, bottom: 30, left: 20, right: 20 })) {
+          style.setProperty(`--safe-area-${edge}`, `${value}px`);
+        }
       });
       for (const canvasHeight of [height, height - 100]) {
         await page.setViewportSize({ width, height: canvasHeight });
@@ -301,7 +277,7 @@ suite.define(() => {
           });
       }
       await backdrop.click({ position: { x: width - 10, y: 100 } });
-      await expect.poll(() => shell.getAttribute("class")).not.toContain("shell--nav-drawer-open");
+      await shellHas(page, "shell--nav-drawer-open", false);
       await expect.poll(() => shell.locator(":scope > openclaw-toast-host").count()).toBe(1);
       await page.getByRole("button", { name: "Expand sidebar" }).click();
       await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(20);

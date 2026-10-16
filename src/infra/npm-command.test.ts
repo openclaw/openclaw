@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
 import { resolveNpmCommand } from "./npm-command.js";
 
 const cliPath = path.join(
@@ -14,9 +17,37 @@ const originalVersions = process.versions;
 afterEach(() => {
   Object.defineProperty(process, "versions", { value: originalVersions });
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("npm invocation", () => {
+  it("uses the standalone sidecar and self-as-Bun environment without host npm", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-npm-command-"));
+    try {
+      const entry = path.join(root, "npm", "bin", "npm-cli.js");
+      fs.mkdirSync(path.dirname(entry), { recursive: true });
+      fs.writeFileSync(entry, "// packaged npm entry");
+      vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(root + path.sep).href);
+      Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: "1.4.3" } });
+      const env = {
+        NPM_CONFIG_IGNORE_SCRIPTS: "true",
+        NPM_CONFIG_REGISTRY: "https://registry.example",
+      };
+      expect(resolveNpmCommand(["install", "--ignore-scripts"])).toEqual([
+        process.execPath,
+        entry,
+        "install",
+        "--ignore-scripts",
+      ]);
+      expect(resolveRuntimeScriptEnv(env)).toEqual({ ...env, BUN_BE_BUN: "1" });
+      expect(env).not.toHaveProperty("BUN_BE_BUN");
+      fs.rmSync(entry);
+      expect(() => resolveNpmCommand(["install"])).toThrow(entry);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { bun: undefined, args: ["view", "@openclaw/irc", "version"], command: ["npm"] },
     { bun: "1.4.3", args: ["install", "--ignore-scripts"], command: [process.execPath, cliPath] },

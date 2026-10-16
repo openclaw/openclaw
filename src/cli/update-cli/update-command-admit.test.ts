@@ -412,7 +412,7 @@ describe("candidate update admission", () => {
     "restart-sentinel.json",
     "restart-sentinel.json.doctor-importing",
   ])(
-    "refuses retired %s before a published updater can activate the candidate",
+    "preserves retired %s and requires importable sources to be repaired first",
     async (relative) => {
       const stateDir = path.dirname(configPath);
       const custom = relative.startsWith("custom-cron/");
@@ -426,21 +426,33 @@ describe("candidate update admission", () => {
 
       await updateAdmitCommand(contextPath);
 
-      expect(process.exitCode).toBe(3);
-      expect(readVerdict()).toMatchObject({
-        verdict: "refuse",
-        reasons: [
-          expect.objectContaining({
-            code: "retired-state-format",
-            message: expect.stringContaining("Upgrade through OpenClaw 2026.9.7"),
-          }),
-        ],
-        facts: {
-          checks: expect.arrayContaining([
-            { name: "state-format", status: "refuse", detail: expect.any(String) },
-          ]),
-        },
-      });
+      const importable =
+        relative.startsWith("settings/") ||
+        relative.startsWith("bindings/") ||
+        relative.endsWith("jobs.json") ||
+        relative.endsWith("jobs-state.json");
+      expect(process.exitCode).toBe(importable ? 3 : 0);
+      expect(readVerdict()).toMatchObject(
+        importable
+          ? {
+              verdict: "refuse",
+              reasons: [
+                expect.objectContaining({
+                  code: "retired-state-format",
+                  message: expect.stringContaining("doctor --fix"),
+                }),
+              ],
+            }
+          : {
+              verdict: "admit",
+              reasons: [],
+              facts: {
+                checks: expect.arrayContaining([
+                  { name: "state-format", status: "warn", detail: expect.any(String) },
+                ]),
+              },
+            },
+      );
       expect(stderr).toBe("");
       expect(snapshotFiles()).toEqual(before);
       expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
@@ -459,7 +471,7 @@ describe("candidate update admission", () => {
     { selector: "default", store: "other-id" },
     { selector: "config", store: "other-id" },
   ])(
-    "admits retired OAuth selected by $selector only when no legacy profile references it ($store store)",
+    "inspects retired OAuth selected by $selector without hiding config errors ($store store)",
     async ({ selector, store: storeKind }) => {
       const stateDir = path.dirname(configPath);
       const oauthDir =
@@ -516,28 +528,31 @@ describe("candidate update admission", () => {
 
       await updateAdmitCommand(contextPath);
 
-      expect(process.exitCode).toBe(storeKind === "other-id" ? 0 : 3);
+      const invalidConfig = selector.startsWith("prefixed-");
+      expect(process.exitCode).toBe(storeKind !== "other-id" || invalidConfig ? 3 : 0);
       expect(readVerdict()).toMatchObject(
-        storeKind === "other-id"
-          ? { verdict: "admit", reasons: [] }
-          : {
-              verdict: "refuse",
-              reasons: [
-                expect.objectContaining({
-                  code: "retired-state-format",
-                  message: expect.stringContaining(
-                    storeKind === "referenced"
-                      ? "Upgrade through OpenClaw 2026.9.7"
-                      : `Cannot inspect potentially retired state at ${store}`,
-                  ),
-                }),
-              ],
-              facts: {
-                checks: expect.arrayContaining([
-                  { name: "state-format", status: "refuse", detail: expect.any(String) },
-                ]),
+        invalidConfig
+          ? { verdict: "refuse", reasons: [expect.objectContaining({ code: "invalid-config" })] }
+          : storeKind === "other-id"
+            ? { verdict: "admit", reasons: [] }
+            : {
+                verdict: "refuse",
+                reasons: [
+                  expect.objectContaining({
+                    code: "retired-state-format",
+                    message: expect.stringContaining(
+                      storeKind === "unreadable"
+                        ? `Cannot inspect potentially retired state at ${store}`
+                        : "doctor --fix",
+                    ),
+                  }),
+                ],
+                facts: {
+                  checks: expect.arrayContaining([
+                    { name: "state-format", status: "refuse", detail: expect.any(String) },
+                  ]),
+                },
               },
-            },
       );
       expect(stderr).toBe("");
       expect(snapshotFiles()).toEqual(before);

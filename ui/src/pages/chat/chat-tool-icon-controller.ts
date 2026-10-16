@@ -5,7 +5,7 @@ import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { fetchPluginActivityIconBlobUrl } from "../plugins/icon-loader.ts";
 import { PluginIconController } from "../plugins/plugin-icon-controller.ts";
 
-export type PluginToolIcon = { url: string; onError: () => void };
+type PluginToolIcon = { url: string; onError: () => void };
 export type PluginToolIcons = Pick<ReadonlyMap<string, PluginToolIcon>, "get">;
 
 type ToolIconSource = {

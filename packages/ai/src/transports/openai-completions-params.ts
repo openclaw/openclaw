@@ -1,4 +1,4 @@
-import type { CacheRetention, Context, Model } from "@openclaw/llm-core";
+import type { CacheRetention, Model } from "@openclaw/llm-core";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
@@ -7,6 +7,11 @@ import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coer
 import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
+import {
+  PROVIDER_MODEL_INPUT,
+  type ProviderContext,
+  type ProviderModel,
+} from "../provider-types.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { prepareOpenAIFunctionTool } from "../providers/openai-function-tool.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
@@ -98,6 +103,8 @@ function resolveOpenAICompletionsMaxTokens(
 
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
 const OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE = 8_000;
+// Video is projected into frames by vision servers; base64 size is not a token count.
+const OPENAI_COMPLETIONS_VIDEO_CHAR_ESTIMATE = 96_000;
 const MIN_USEFUL_OUTPUT_TOKENS = 16;
 
 function estimateJsonChars(value: unknown, fallback: number): number {
@@ -166,6 +173,10 @@ function estimateOpenAICompletionsContentChars(value: unknown): number {
       adjustedChars += OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE;
       continue;
     }
+    if (record.type === "video_url" || record.type === "input_video") {
+      adjustedChars += OPENAI_COMPLETIONS_VIDEO_CHAR_ESTIMATE;
+      continue;
+    }
     const text = record.text;
     if (typeof text === "string") {
       adjustedChars += estimateStringChars(text);
@@ -177,7 +188,7 @@ function estimateOpenAICompletionsContentChars(value: unknown): number {
 }
 
 function convertTools(
-  tools: NonNullable<Context["tools"]>,
+  tools: NonNullable<ProviderContext["tools"]>,
   compat: ResolvedOpenAICompletionsCompat,
   model: OpenAIModeModel,
   mode: "direct" | "managed",
@@ -223,7 +234,7 @@ function convertTools(
 
 export function buildOpenAICompletionsParams(
   model: OpenAIModeModel,
-  context: Context,
+  context: ProviderContext,
   options: OpenAICompletionsOptions | undefined,
 ) {
   return buildOpenAICompletionsRequest(model, context, options, { mode: "managed" });
@@ -279,7 +290,7 @@ export function resolveCompletionsContextOutputBudget(
 
 export function buildOpenAICompletionsRequest(
   model: OpenAIModeModel,
-  context: Context,
+  context: ProviderContext,
   options: OpenAIThinkingProvenanceOptions | undefined,
   policy: CompletionsRequestPolicy,
 ): CompletionsRequest {
@@ -307,7 +318,12 @@ export function buildOpenAICompletionsRequest(
   const cacheOptOutIndexes = new Set<number>();
   const supportsTools = policy.mode === "direct" || supportsModelTools(model);
   // The converter needs intact boundaries for Runtime relocation or cache markers.
-  const convertedMessages = convertMessages(model as never, context, compat as never, {
+  const providerModel: ProviderModel = {
+    ...model,
+    input: options?.[PROVIDER_MODEL_INPUT] ?? model.input,
+    compat,
+  };
+  const convertedMessages = convertMessages(providerModel, context, compat, {
     cacheOptOutIndexes,
     supportsTools,
     preserveSystemPromptCacheBoundary:

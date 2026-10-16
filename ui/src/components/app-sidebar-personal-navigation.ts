@@ -10,7 +10,6 @@ import type {
   SessionListSnapshot,
 } from "../lib/sessions/session-capability.ts";
 import { showToast } from "../lib/toast.ts";
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { buildReconciledSidebarZone } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
@@ -19,12 +18,12 @@ import {
   setStoredSessionCatalogHidden,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
-import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
+import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type PersonalNavigationHost = {
-  readonly pinnedSessions: SidebarPinnedSessions;
+  readonly pinnedSessions: ReturnType<typeof createSidebarPinnedSessions>;
   readonly sidebarSnapshot: SidebarSnapshotModel | null;
   readonly sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
   readonly sidebarEntries: readonly string[];
@@ -87,48 +86,35 @@ export function hidePersonalSidebarCatalog(
 }
 
 /** Descriptor snapshots last one connection; loaded rows always supersede them. */
-export class SidebarPinnedSessions implements SolidController {
-  private source?: ApplicationContext["sessions"];
-  private scope: SessionConnectionScope | null = null;
-  private readonly requested = new Map<string, "pending" | "settled">();
-  private readonly rows = new Map<string, GatewaySessionRow>();
+export function createSidebarPinnedSessions(host: {
+  readonly isConnected: boolean;
+  readonly sessionDataContext: PersonalNavigationHost["sessionDataContext"];
+  readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
+}) {
+  let source: ApplicationContext["sessions"] | undefined;
+  let scope: SessionConnectionScope | null = null;
+  const requested = new Map<string, "pending" | "settled">();
+  const rows = new Map<string, GatewaySessionRow>();
 
-  constructor(
-    private readonly host: SolidControllerHost & {
-      readonly isConnected: boolean;
-      readonly sessionDataContext: PersonalNavigationHost["sessionDataContext"];
-      readonly sessionData: Pick<SessionDataController, "requestSessionDataUpdate">;
-    },
-  ) {
-    host.addController(this);
-  }
-
-  hostConnected(): void {
-    this.host.requestUpdate();
-  }
-
-  hostUpdate(): void {
-    this.synchronize();
-  }
-
-  private synchronize() {
-    const source = this.host.sessionDataContext?.sessions;
-    if (source !== this.source || !this.scope || !source?.isConnectionScopeCurrent(this.scope)) {
-      this.clear();
-      this.source = source;
-      this.scope = source?.captureConnectionScope() ?? null;
+  function synchronize() {
+    const nextSource = host.sessionDataContext?.sessions;
+    if (nextSource !== source || !scope || !nextSource?.isConnectionScopeCurrent(scope)) {
+      requested.clear();
+      rows.clear();
+      source = nextSource;
+      scope = source?.captureConnectionScope() ?? null;
     }
     return source;
   }
 
-  seed(rows: SidebarSnapshotModel["pinnedSessions"]): void {
-    this.synchronize();
-    if (!this.scope) {
+  function seed(snapshot: SidebarSnapshotModel["pinnedSessions"]): void {
+    synchronize();
+    if (!scope) {
       return;
     }
-    for (const row of rows) {
-      if (!this.rows.has(row.key) && this.requested.get(row.key) !== "settled") {
-        this.rows.set(row.key, {
+    for (const row of snapshot) {
+      if (!rows.has(row.key) && requested.get(row.key) !== "settled") {
+        rows.set(row.key, {
           key: row.key,
           kind: "direct",
           updatedAt: null,
@@ -144,43 +130,43 @@ export class SidebarPinnedSessions implements SolidController {
     }
   }
 
-  get(key: string): GatewaySessionRow | undefined {
-    const context = this.host.sessionDataContext;
-    const source = this.synchronize();
-    const scope = this.scope;
-    if (!this.host.isConnected || !source || !scope || !context) {
+  function get(key: string): GatewaySessionRow | undefined {
+    const context = host.sessionDataContext;
+    const currentSource = synchronize();
+    const currentScope = scope;
+    if (!host.isConnected || !currentSource || !currentScope || !context) {
       return undefined;
     }
-    if (!this.requested.has(key)) {
-      this.requested.set(key, "pending");
+    if (!requested.has(key)) {
+      requested.set(key, "pending");
       const current = () =>
-        this.source === source &&
-        this.host.sessionDataContext === context &&
-        this.scope === scope &&
-        source.isConnectionScopeCurrent(scope);
+        source === currentSource &&
+        host.sessionDataContext === context &&
+        scope === currentScope &&
+        currentSource.isConnectionScopeCurrent(currentScope);
       const publish = (row?: GatewaySessionRow | null) => {
         if (!current()) {
           return;
         }
-        this.requested.set(key, "settled");
+        requested.set(key, "settled");
         if (row) {
-          this.rows.set(key, row);
-        } else if (!this.rows.delete(key)) {
+          rows.set(key, row);
+        } else if (!rows.delete(key)) {
           return;
         }
-        if (this.host.isConnected) {
-          this.host.sessionData.requestSessionDataUpdate();
+        if (host.isConnected) {
+          host.sessionData.requestSessionDataUpdate();
         }
       };
       const describe = async () => {
         if (!current()) {
           return;
         }
-        if (!this.host.isConnected) {
-          this.requested.delete(key);
+        if (!host.isConnected) {
+          requested.delete(key);
           return;
         }
-        await source.describe({ key }).then(
+        await currentSource.describe({ key }).then(
           (result) => publish(result.session),
           () => {
             /* Missing or failed pins stay saved, invisible, and silent. */
@@ -191,15 +177,10 @@ export class SidebarPinnedSessions implements SolidController {
       // Cached pins can paint while the selected conversation takes the request budget.
       void context.connectionBootstrap.run(describe, describe, { background: true });
     }
-    return this.rows.get(key);
+    return rows.get(key);
   }
 
-  private clear(): void {
-    this.source = undefined;
-    this.scope = null;
-    this.requested.clear();
-    this.rows.clear();
-  }
+  return { synchronize, seed, get };
 }
 
 export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
@@ -246,7 +227,7 @@ export function projectUnpinnedSessionRows(
 export function personalSidebarOwnerFilterId(
   host: PersonalNavigationHost & {
     readonly sidebarAgentsMode: "chip" | "roster";
-    readonly sessionOwnerFilter: SessionOwnerFilterController;
+    readonly sessionOwnerFilter: SessionOwnerFilter;
     expandedAgentId(): string;
   },
 ): string | null {
@@ -255,7 +236,7 @@ export function personalSidebarOwnerFilterId(
   }
   const agentId = host.sidebarAgentsMode === "roster" ? "*" : host.expandedAgentId();
   const hasMultipleOwners = host.sessionOwnerFilter.hasMultipleOwners(agentId);
-  const ownerId = host.sessionOwnerFilter.ownerId;
+  const ownerId = host.sessionOwnerFilter.read().ownerId;
   const context = host.sessionDataContext;
   // Solo installs must include legacy sessions without owner metadata.
   return ownerId ===

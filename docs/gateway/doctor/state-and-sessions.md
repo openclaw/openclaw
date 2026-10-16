@@ -9,6 +9,19 @@ read_when:
 Checks 3-7b cover legacy on-disk state migrations, session integrity, model
 auth health, sandbox images, and plugin installs.
 
+## Legacy data and PostgreSQL
+
+Run `openclaw doctor --fix` before porting SQLite stores to PostgreSQL. Port
+preflight names any pending declared legacy migrations and refuses until they
+are complete. This covers native Codex task assignments, Matrix inbound dedupe,
+and legacy memory index sidecars.
+
+For families already using PostgreSQL, Doctor records an intentional non-outcome
+for these SQLite-only migrations and leaves the engine anchor alone. Legacy
+memory sidecars remain unchanged; normal reindexing uses the authoritative
+memory sources to rebuild the PostgreSQL index and may re-embed them. See
+[Database engines](/reference/database-engines#legacy-data-and-postgresql).
+
 ## Checks 3-7b
 
 <AccordionGroup>
@@ -24,7 +37,7 @@ auth health, sandbox images, and plugin installs.
 
     Imports of the pre-June `tasks/runs.sqlite`, `flows/registry.sqlite`, and `plugin-state/state.sqlite` databases are retired. Doctor leaves these files untouched. Older installations that need their records should [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions) and run its Doctor migrations before installing `latest`; June-and-later releases already use the shared state database.
 
-    The JSON plugin index at `plugins/installs.json` is retired. Doctor leaves it unchanged and directs operators to run `openclaw doctor --fix` on `2026.9.5` with a pre-update backup. Updates also check this original file before stopping the running Gateway. Current SQLite plugin indexes and install records remain supported.
+    The JSON plugin index at `plugins/installs.json` is retired. Doctor archives its original bytes before plugin discovery and reports the archive path. Current SQLite plugin indexes and install records remain authoritative; reinstall a missing plugin using its archived package spec.
 
     Retired Skill Workshop proposals belong to Doctor, including the repair pass during `openclaw update`. Doctor exports each pending or quarantined draft to `<agentDir>/workshop-skills/.archive/.retired-proposals/<proposal-id>/`, drops the retired proposal tables, and removes `<state-dir>/skill-workshop/proposals/`. Normal Gateway and local CLI startup leave those artifacts untouched. A failed export keeps the tables and files and reports a warning; rerun `openclaw doctor --fix` after fixing the cause.
 
@@ -184,6 +197,8 @@ auth health, sandbox images, and plugin installs.
     Doctor also reports auth profiles that are temporarily unusable due to short cooldowns (rate limits/timeouts/auth failures) or longer disables (billing/credit failures).
 
     Doctor also imports legacy generated provider catalogs (`plugins/*/catalog.json` and retained migration claims) into agent SQLite while preserving provider credentials. Run `openclaw doctor --fix` to import these catalogs, remove generated model rows whose transport API cannot be derived, or complete missing numeric cost rates with zero. Supplied rates and pricing metadata are preserved; null or non-numeric costs still need correction at the provider source followed by a catalog refresh. Ordinary model loading reads stored SQLite catalogs without importing sidecars or repairing saved rows. Initial disk discovery and explicit registry refresh report legacy catalogs with a Doctor command; hot model lookups and lifecycle-captured catalogs do not inspect legacy files. Newly generated catalogs are still normalized before publication.
+
+    Older versions could copy a plugin's generated provider block into the agent's root `models.json`. For example, `claude-cli` received the `anthropic` catalog through its hook alias. The root file is author-owned, so the copy and its prices never refreshed, and its zero placeholders made unpriced models show as free. With `--fix`, Doctor removes a root provider only when it is an exact copy of a block in that plugin's generated catalog, config does not declare the id, and the block carries no credentials or overrides. It saves the previous file as `models.json.bak-<timestamp>` and lists each removed provider. Edited copies stay.
 
     OAuth credential sidecar imports are retired. Doctor leaves their files and encryption keys untouched. When a legacy `auth-profiles.json` still references a sidecar, Doctor refuses the migration: upgrade through `2026.9.7` and run `openclaw doctor --fix` from an interactive terminal on the original host before retrying; that release can recover the historical key and import the credentials. Unreferenced sidecars stay in place without blocking. See [retention policy](/gateway/doctor/config-migrations#retention-policy).
 

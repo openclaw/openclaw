@@ -66,7 +66,6 @@ function mountPane(
   ) as unknown as TestChatPane;
   panes.push(pane);
   vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
-  vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
   const context = createInitializationContext(
     createGatewayBrowserClientFixture({
       offlineRecoveryScope: "test-recovery-scope",
@@ -84,7 +83,7 @@ function mountPane(
   vi.spyOn(pane.chatState, "attach").mockImplementation(() => {
     throw attached;
   });
-  expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(attached);
+  expect(() => getPaneTestRuntime(pane).start()).toThrow(attached);
   const state = pane.state;
   const liveResult = {
     messages: liveMessages,

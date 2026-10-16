@@ -1,6 +1,7 @@
 // Nextcloud Talk plugin module owns webhook ingress identity and legacy-state migration.
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import type { PersistentDedupeEntry } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { NextcloudTalkInboundAttachment } from "./types.js";
 
 export const NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION = 1;
@@ -11,10 +12,7 @@ export type NextcloudTalkIngressPayload = {
   rawEvent: string;
 };
 
-export type NextcloudTalkLegacyReplayEntry = {
-  key: string;
-  seenAt: number;
-};
+export type NextcloudTalkLegacyReplayEntry = PersistentDedupeEntry;
 
 export type NextcloudTalkLegacyReplayStore = {
   entries: () => Promise<Array<{ value: NextcloudTalkLegacyReplayEntry }>>;

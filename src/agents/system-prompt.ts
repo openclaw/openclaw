@@ -346,6 +346,8 @@ export function buildAgentSystemPrompt(params: {
   projectMemoryBootstrap?: string[];
   /** Prepared repository identities used to filter curated raw context fail-closed. */
   activeProjectKeys?: readonly string[];
+  /** Current repository identity passed to memory prompt sections. */
+  projectKey?: string;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const promptMode = params.promptMode ?? "full";
@@ -534,6 +536,7 @@ export function buildAgentSystemPrompt(params: {
             agentId: runtimeInfo?.agentId,
             agentSessionKey: runtimeInfo?.sessionKey,
             sandboxed: sandboxedRuntime,
+            projectKey: params.projectKey,
           },
           params.preparedMemoryPrompt,
         );
@@ -566,7 +569,7 @@ export function buildAgentSystemPrompt(params: {
     filterProjectScopedCuratedContextFiles({
       contextFiles: params.contextFiles,
       activeProjectKeys: params.activeProjectKeys,
-    }).filter((file) => typeof file.path === "string" && file.path.trim().length > 0),
+    }).filter((file) => file.path.trim().length > 0),
   );
   // Cache keys and bootstrap checks retain the original ordered file objects.
   const contextFiles = preparedContextFiles.map(({ file }) => file);

@@ -1,9 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createEffect, createMemo, For, Show } from "solid-js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { LinkReaderMarkdown, documentUrl, type LoadImage } from "./link-reader-markdown.tsx";
+import type { ReaderReadyView, ReaderSection } from "./link-reader-panel-view.ts";
 import { linkReaderAuthorHref } from "./link-reader-response.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { Icon, type IconName } from "./solid/icon.tsx";
@@ -171,7 +172,11 @@ const checksLabels = {
   unavailable: "linkReader.checksUnavailable",
 } as const;
 
-function ChecksContent(props: { checks: ReaderChecks; base: string }) {
+function ChecksContent(props: {
+  checks: ReaderChecks;
+  base: string;
+  refreshState?: "idle" | "loading" | "error";
+}) {
   const source = () =>
     props.checks.url ? documentUrl(props.checks.url, props.base)?.href : undefined;
   return (
@@ -186,7 +191,16 @@ function ChecksContent(props: { checks: ReaderChecks; base: string }) {
           <Icon name={checkIcons[props.checks.state]} />
         </span>
         <span class="lr-checks-heading">
-          <strong>{t(checksLabels[props.checks.state])}</strong>
+          <strong>
+            {props.refreshState
+              ? t(
+                  props.refreshState === "error"
+                    ? "linkReader.sectionRefreshFailed"
+                    : "linkReader.sectionRefreshing",
+                  { section: t("linkReader.checks") },
+                )
+              : t(checksLabels[props.checks.state])}
+          </strong>
           <span class="lr-meta">{props.checks.summary}</span>
         </span>
         <span class="lr-checks-chevron" aria-hidden="true">
@@ -254,11 +268,17 @@ function ChecksContent(props: { checks: ReaderChecks; base: string }) {
   );
 }
 
-function SectionLink(props: { section: string; label: string; count?: number }) {
+function SectionLink(props: {
+  section: string;
+  label: string;
+  count?: number;
+  onLoad?: () => void;
+}) {
   return (
     <button
       type="button"
       onClick={(event) => {
+        props.onLoad?.();
         const destination = event.currentTarget
           .closest(".lr-document")
           ?.querySelector<HTMLElement>(`[data-reader-section="${props.section}"]`);
@@ -310,10 +330,93 @@ function ListSection(props: {
   );
 }
 
+function RetainedSectionStatus(props: {
+  section: ReaderSection;
+  state: "idle" | "loading" | "error";
+  onLoad: () => void;
+}) {
+  return (
+    <p class="lr-meta" role="status">
+      {t(
+        props.state === "error"
+          ? "linkReader.sectionRefreshFailed"
+          : "linkReader.sectionRefreshing",
+        {
+          section: t(props.section === "discussion" ? "linkReader.discussion" : "linkReader.files"),
+        },
+      )}
+      {props.state === "error" && (
+        <button type="button" class="lr-retry" onClick={() => props.onLoad()}>
+          {t("linkReader.retry")}
+        </button>
+      )}
+    </p>
+  );
+}
+
+function DeferredSection(props: {
+  section: ReaderSection;
+  state: "idle" | "loading" | "error";
+  onLoad: () => void;
+}) {
+  let element: HTMLElement | undefined;
+  const label = () =>
+    t(props.section === "discussion" ? "linkReader.discussion" : "linkReader." + props.section);
+  createEffect(
+    () => props.section === "files" && props.state === "idle",
+    (observe) => {
+      if (!observe || !element || typeof IntersectionObserver === "undefined") {
+        return undefined;
+      }
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) {
+            props.onLoad();
+          }
+        },
+        { rootMargin: "120px" },
+      );
+      observer.observe(element);
+      return () => observer.disconnect();
+    },
+  );
+  return (
+    <section
+      ref={(node) => {
+        element = node;
+      }}
+      class={["lr-section-loading", { "lr-section-loading--checks": props.section === "checks" }]}
+      data-reader-section={props.section === "discussion" ? "comments" : props.section}
+      tabindex={-1}
+      aria-label={label()}
+      aria-busy={props.state === "loading" ? "true" : "false"}
+    >
+      <span
+        class={["lr-loading-dot", { "lr-loading-dot--active": props.state === "loading" }]}
+        aria-hidden="true"
+      />
+      <span role="status">
+        {props.state === "error"
+          ? t("linkReader.sectionFailed", { section: label() })
+          : props.section === "files" && props.state === "idle"
+            ? t("linkReader.filesOnDemand")
+            : t("linkReader.sectionLoading", { section: label() })}
+      </span>
+      {(props.state === "error" || (props.section === "files" && props.state === "idle")) && (
+        <button class="lr-retry" type="button" onClick={() => props.onLoad()}>
+          {t(props.state === "error" ? "linkReader.retry" : "linkReader.loadFiles")}
+        </button>
+      )}
+    </section>
+  );
+}
+
 export function LinkReaderContent(props: {
   detail: ControlUiLinkReaderDocument;
   target: LinkReaderTarget;
   loadImage?: LoadImage;
+  sections?: ReaderReadyView["sections"];
+  onLoadSection?: (section: ReaderSection) => void;
 }) {
   const authorHref = () => linkReaderAuthorHref(props.detail.authorUrl, props.detail.url);
   const coAuthorNames = () => {
@@ -373,34 +476,66 @@ export function LinkReaderContent(props: {
       </header>
       <nav class="lr-section-nav" aria-label={t("linkReader.navigation")}>
         <SectionLink section="overview" label={t("linkReader.overview")} />
-        <Show when={props.detail.checks}>
-          {(checks) => (
-            <SectionLink section="checks" label={t("linkReader.checks")} count={checks().total} />
-          )}
+        <Show when={props.detail.checks || props.sections?.checks}>
+          <SectionLink
+            section="checks"
+            label={t("linkReader.checks")}
+            count={props.detail.checks?.total}
+            onLoad={() => props.onLoadSection?.("checks")}
+          />
         </Show>
-        <Show when={props.detail.files}>
-          {(files) => (
-            <SectionLink
-              section="files"
-              label={t("linkReader.filesShort")}
-              count={props.detail.filesTotal ?? files().length}
-            />
-          )}
+        <Show when={props.detail.files || props.sections?.files}>
+          <SectionLink
+            section="files"
+            label={t("linkReader.filesShort")}
+            count={props.detail.filesTotal ?? props.detail.files?.length}
+            onLoad={() => props.onLoadSection?.("files")}
+          />
         </Show>
-        <Show when={props.detail.comments}>
-          {(comments) => (
-            <SectionLink
-              section="comments"
-              label={t("linkReader.discussion")}
-              count={props.detail.commentsTotal ?? comments().length}
-            />
-          )}
+        <Show when={props.detail.comments || props.sections?.discussion}>
+          <SectionLink
+            section="comments"
+            label={t("linkReader.discussion")}
+            count={props.detail.commentsTotal ?? props.detail.comments?.length}
+            onLoad={() => props.onLoadSection?.("discussion")}
+          />
         </Show>
       </nav>
-      <Show when={props.detail.checks}>
-        {(checks) => <ChecksContent checks={checks()} base={props.detail.url} />}
+      <Show
+        when={props.sections?.checks && !props.detail.checks && props.sections.checks}
+        fallback={
+          <Show when={props.detail.checks}>
+            {(checks) => (
+              <ChecksContent
+                checks={checks()}
+                base={props.detail.url}
+                refreshState={props.sections?.checks}
+              />
+            )}
+          </Show>
+        }
+      >
+        {(state) => (
+          <DeferredSection
+            section="checks"
+            state={state()}
+            onLoad={() => props.onLoadSection?.("checks")}
+          />
+        )}
       </Show>
-      <Show when={props.detail.partial}>
+      <Show
+        when={
+          props.detail.partial &&
+          !props.detail.bodyTruncated &&
+          !props.detail.filesTruncated &&
+          !props.detail.commentsTruncated &&
+          !props.detail.checks?.truncated &&
+          !props.detail.files?.some((file) => file.patchTruncated) &&
+          !props.detail.comments?.some(
+            (comment) => comment.bodyTruncated || comment.context?.diffTruncated,
+          )
+        }
+      >
         <p class="lr-note" role="status">
           {t("linkReader.partial")}
         </p>
@@ -425,6 +560,15 @@ export function LinkReaderContent(props: {
         </Show>
         <TruncationNote truncated={props.detail.bodyTruncated} label="linkReader.bodyTruncated" />
       </section>
+      <Show when={props.sections?.files && !props.detail.files && props.sections.files}>
+        {(state) => (
+          <DeferredSection
+            section="files"
+            state={state()}
+            onLoad={() => props.onLoadSection?.("files")}
+          />
+        )}
+      </Show>
       <Show when={props.detail.files}>
         {(files) => (
           <ListSection
@@ -433,12 +577,32 @@ export function LinkReaderContent(props: {
             total={props.detail.filesTotal}
             truncated={props.detail.filesTruncated}
           >
+            <Show when={props.sections?.files}>
+              {(state) => (
+                <RetainedSectionStatus
+                  section="files"
+                  state={state()}
+                  onLoad={() => props.onLoadSection?.("files")}
+                />
+              )}
+            </Show>
             <For each={files()} keyed={(file) => file.path}>
               {(file) => (
                 <FileContent file={file()} expanded={props.detail.filesExpanded === true} />
               )}
             </For>
           </ListSection>
+        )}
+      </Show>
+      <Show
+        when={props.sections?.discussion && !props.detail.comments && props.sections.discussion}
+      >
+        {(state) => (
+          <DeferredSection
+            section="discussion"
+            state={state()}
+            onLoad={() => props.onLoadSection?.("discussion")}
+          />
         )}
       </Show>
       <Show when={props.detail.comments}>
@@ -449,6 +613,15 @@ export function LinkReaderContent(props: {
             total={props.detail.commentsTotal}
             truncated={props.detail.commentsTruncated}
           >
+            <Show when={props.sections?.discussion}>
+              {(state) => (
+                <RetainedSectionStatus
+                  section="discussion"
+                  state={state()}
+                  onLoad={() => props.onLoadSection?.("discussion")}
+                />
+              )}
+            </Show>
             <For each={comments()} keyed={(comment) => comment.id}>
               {(comment) => (
                 <CommentContent

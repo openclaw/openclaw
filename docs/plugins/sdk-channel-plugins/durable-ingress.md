@@ -52,6 +52,17 @@ the same `event_id` is rejected durably for the tombstone retention window.
 See [Channel outbound API](/plugins/sdk-channel-outbound#durable-ingress-monitors)
 for the monitor API and shutdown contract.
 
+Agent database preparation does not delay durable intake into shared state.
+The monitor bounds active starts to `drain.startLimit` (32 by default),
+leaving additional messages in the durable queue while an agent is preparing.
+Drains that release lanes on deferral may lend up to that many additional slots
+while the deferred callbacks settle.
+Preparation waits report `agent-database-preparation-pending` at the record stage
+and log the affected agent and channel. Dispatch still waits for that agent's
+integrity and preparation checks. This bounds active in-memory work; disk backlog
+retention remains owned by the transport's existing retention policy, and pending
+messages are not discarded to enforce the active limit.
+
 The dispatch lifecycle optionally exposes
 `readLaneBacklog(): Promise<readonly ChannelIngressQueueRecord<unknown, unknown>[]>`.
 It reads same-lane durable rows that have not yet been handed off, excluding the

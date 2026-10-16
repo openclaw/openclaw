@@ -444,6 +444,16 @@ write receipt still advances. Only certify the kernel's own writes; keep user
 callbacks and authority admission outside the scope. Schema changes continue to
 invalidate all scopes.
 
+Built-in engine-aware stores consume their boot-selected family through
+`getDatabaseEngineInput(family)` from
+`openclaw/plugin-sdk/database-engine-runtime`. The host resolves the shared
+PostgreSQL secret once; plugin openers and reopens use this immutable choice.
+The experimental mixed-mode configuration is described in
+[Database engines](/reference/database-engines).
+
+External stores continue using `resolveDatabaseEngineInput(config)`, which follows
+`database.engine` independently of the built-in family overrides.
+
 Engine-aware stores keep host secret resolution and operation settlement in
 `openclaw/plugin-sdk/database-engine-runtime`, and physical opens and transaction
 recipes in the worker/admission-only
@@ -543,6 +553,17 @@ metadata, including page globals and audio/manual-action prefixes.
 `lifecycleSource` and `manualActionSource`. Callbacks receive shared fragments for
 guest names, preserved identity, virtual audio input, microphone control, and
 manual actions. Existing string-based callers keep their generated source.
+
+## Browser meeting configuration
+
+Use `resolveMeetingChromeConfig` and `resolveMeetingRealtimeConfig` from
+the production-private `openclaw/plugin-sdk/meeting-config` subpath when sharing browser-meeting settings.
+This lightweight entry point parses common Chrome, audio, realtime, and provider-map
+fields without loading meeting engines or transports. Pass object records for
+each section; the adapter retains its format aliases, in-call timeout default,
+realtime instructions, and transcription-provider default. The same subpath exposes
+`buildMeetingConfigAudioCommands` for default audio command pairs; command construction
+uses the shared audio backend owner without starting it.
 
 ## Browser meeting status ownership
 

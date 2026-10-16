@@ -6,6 +6,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -332,10 +333,22 @@ export async function captureCronUpdatedInferenceBinding(
   }
   const model = patch.payload && "model" in patch.payload ? patch.payload.model : undefined;
   const agentId = nextJob.agentId ?? resolveDefaultAgentId(cfg);
-  if (
-    !model ||
-    !resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })?.profileId
-  ) {
+  const selection = model
+    ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
+    : null;
+  // CLI backends own their login: creation records no binding for them, so an
+  // unbound job must not demand a stored account. A job that already records one
+  // keeps its rejection until an authorized transition replaces that account.
+  const cliExecution = selection
+    ? resolveCliRuntimeExecutionProvider({
+        cfg,
+        agentId,
+        provider: selection.provider,
+        modelId: selection.modelId,
+        authProfileId: selection.profileId,
+      })
+    : undefined;
+  if (!model || (cliExecution && !nextJob.inferenceBinding) || !selection?.profileId) {
     if (patch.agentId !== undefined && nextJob.inferenceBinding) {
       // A move may keep the account only when the new agent sees the same credential owner.
       const authority = await acquireCronInferenceAuthorization({

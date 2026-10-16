@@ -109,7 +109,7 @@ export async function finalizeCodexAttempt(
     isActive: isSettlementActive,
     readRetainedNativeCommands,
   } = await beginCodexAttemptSettlement(resources, turnRuntime, notifications, activeTurn);
-  let projectionDrained = false;
+  let projectionDrained: boolean;
   try {
     try {
       // Native completion does not end accepted projection or checkpoint work.

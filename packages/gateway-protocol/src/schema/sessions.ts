@@ -91,15 +91,7 @@ export const SESSION_OBSERVER_HEALTH_VALUES = [
 ] as const;
 
 /** Trajectory judgment produced for one observed agent session. */
-export const SessionObserverHealthSchema = stringLiteralUnion([
-  "on-track",
-  "grinding",
-  "stuck",
-  "waiting-on-user",
-  "wrapping-up",
-  "done",
-  "failed",
-]);
+export const SessionObserverHealthSchema = stringLiteralUnion(SESSION_OBSERVER_HEALTH_VALUES);
 
 export const SessionObserverPlanProgressSchema = closedObject({
   completed: Type.Integer({ minimum: 0 }),

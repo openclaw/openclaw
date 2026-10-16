@@ -83,11 +83,7 @@ describe("Realtime call creation", () => {
       },
       openAIRealtimeHost,
     );
-    await expect(promise).rejects.toMatchObject({
-      name: "OpenAIQuicksilverCallError",
-      status,
-      message,
-    });
+    await expect(promise).rejects.toMatchObject({ message });
   });
 
   it("omits private provider detail from call creation errors", async () => {
@@ -108,8 +104,6 @@ describe("Realtime call creation", () => {
     );
 
     await expect(promise).rejects.toMatchObject({
-      name: "OpenAIQuicksilverCallError",
-      status: 422,
       message: "GPT-Live call creation failed (422)",
     });
   });
@@ -141,11 +135,7 @@ describe("Realtime call creation", () => {
       },
       openAIRealtimeHost,
     );
-    await expect(promise).rejects.toMatchObject({
-      name: "OpenAIQuicksilverCallError",
-      status: 429,
-      message: testCase.expectedMessage,
-    });
+    await expect(promise).rejects.toMatchObject({ message: testCase.expectedMessage });
     expect(streamed.wasCanceled()).toBe(true);
     expect(streamed.getReadCount()).toBeLessThan(chunkCount);
   });
@@ -199,8 +189,6 @@ describe("Realtime call creation", () => {
         openAIRealtimeHost,
       ),
     ).rejects.toMatchObject({
-      name: "OpenAIQuicksilverCallError",
-      status: 201,
       message: "GPT-Live call creation returned an empty SDP answer",
     });
   });

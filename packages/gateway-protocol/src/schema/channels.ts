@@ -1,5 +1,10 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import {
+  TALK_CAPTURE_SCOPED_EVENT_TYPES,
+  TALK_EVENT_TYPES,
+  TALK_TURN_SCOPED_EVENT_TYPES,
+} from "../talk-event-vocabulary.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
 import { GatewayEventLoopHealthSchema } from "./runtime-vitals.js";
@@ -55,64 +60,7 @@ const TalkBrainSchema = stringLiteralUnion(["agent-consult", "direct-tools", "no
 
 const TalkAgentControlModeSchema = stringLiteralUnion(["status", "steer", "cancel", "followup"]);
 
-const TalkEventTypeSchema = stringLiteralUnion([
-  "session.started",
-  "session.ready",
-  "session.closed",
-  "session.error",
-  "session.replaced",
-  "turn.started",
-  "turn.ended",
-  "turn.cancelled",
-  "capture.started",
-  "capture.stopped",
-  "capture.cancelled",
-  "capture.once",
-  "input.audio.delta",
-  "input.audio.committed",
-  "transcript.delta",
-  "transcript.done",
-  "output.text.delta",
-  "output.text.done",
-  "output.audio.started",
-  "output.audio.delta",
-  "output.audio.done",
-  "tool.call",
-  "tool.progress",
-  "tool.result",
-  "tool.error",
-  "usage.metrics",
-  "latency.metrics",
-  "health.changed",
-]);
-
-/** Event types that must carry a turn id for client-side stream correlation. */
-const TURN_SCOPED_TALK_EVENT_TYPES = [
-  "turn.started",
-  "turn.ended",
-  "turn.cancelled",
-  "input.audio.delta",
-  "input.audio.committed",
-  "transcript.delta",
-  "transcript.done",
-  "output.text.delta",
-  "output.text.done",
-  "output.audio.started",
-  "output.audio.delta",
-  "output.audio.done",
-  "tool.call",
-  "tool.progress",
-  "tool.result",
-  "tool.error",
-];
-
-/** Capture lifecycle events must include capture id to avoid cross-turn ambiguity. */
-const CAPTURE_SCOPED_TALK_EVENT_TYPES = [
-  "capture.started",
-  "capture.stopped",
-  "capture.cancelled",
-  "capture.once",
-];
+const TalkEventTypeSchema = stringLiteralUnion(TALK_EVENT_TYPES);
 
 /** Builds JSON Schema conditional requirements while avoiding reserved word syntax. */
 function requireJsonSchemaProperties(properties: string[]): Record<string, { required: string[] }> {
@@ -145,14 +93,14 @@ export const TalkEventSchema = Type.Object(
     allOf: [
       {
         if: {
-          properties: { type: { enum: TURN_SCOPED_TALK_EVENT_TYPES } },
+          properties: { type: { enum: TALK_TURN_SCOPED_EVENT_TYPES } },
           required: ["type"],
         },
         ...requireJsonSchemaProperties(["turnId"]),
       },
       {
         if: {
-          properties: { type: { enum: CAPTURE_SCOPED_TALK_EVENT_TYPES } },
+          properties: { type: { enum: TALK_CAPTURE_SCOPED_EVENT_TYPES } },
           required: ["type"],
         },
         ...requireJsonSchemaProperties(["captureId"]),

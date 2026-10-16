@@ -108,14 +108,13 @@ describe("getMessageMSTeams", () => {
 });
 
 describe("listPinsMSTeams", () => {
-  it("follows @odata.nextLink pagination", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({
-      value: [{ id: "pinned-1", message: { id: "msg-1", body: { content: "First page" } } }],
-      "@odata.nextLink":
-        "https://graph.microsoft.com/v1.0/chats/19%3Aabc%40thread.tacv2/pinnedMessages?$expand=message&$skiptoken=page2",
-    });
-    mockState.fetchGraphAbsoluteUrl.mockResolvedValue({
-      value: [{ id: "pinned-2", message: { id: "msg-2", body: { content: "Second page" } } }],
+  it("maps pins collected by the shared Graph paginator", async () => {
+    mockState.fetchAllGraphPages.mockResolvedValue({
+      items: [
+        { id: "pinned-1", message: { id: "msg-1", body: { content: "First page" } } },
+        { id: "pinned-2", message: { id: "msg-2", body: { content: "Second page" } } },
+      ],
+      truncated: false,
     });
 
     const result = await listPinsMSTeams({
@@ -127,13 +126,10 @@ describe("listPinsMSTeams", () => {
       { id: "pinned-1", pinnedMessageId: "pinned-1", messageId: "msg-1", text: "First page" },
       { id: "pinned-2", pinnedMessageId: "pinned-2", messageId: "msg-2", text: "Second page" },
     ]);
-    expect(mockState.fetchGraphAbsoluteUrl).toHaveBeenCalledWith({
-      token: TOKEN,
-      url: "https://graph.microsoft.com/v1.0/chats/19%3Aabc%40thread.tacv2/pinnedMessages?$expand=message&$skiptoken=page2",
-    });
-    expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
+    expect(mockState.fetchAllGraphPages).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/pinnedMessages?$expand=message`,
+      maxPages: 10,
     });
   });
 

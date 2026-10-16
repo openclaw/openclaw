@@ -6,6 +6,7 @@ import {
   type LiveModelCatalogFetchGuard,
   type UpstreamProviderCatalog,
 } from "./provider-catalog-live-runtime.js";
+import { listProviderCatalogSnapshotEntries } from "./provider-catalog-snapshot.internal.js";
 
 function buildFetchGuard(body: unknown): {
   fetchGuard: MockedFunction<LiveModelCatalogFetchGuard>;
@@ -98,6 +99,7 @@ describe("shared upstream provider metadata catalogs", () => {
             "frontier-model": {
               id: "frontier-model",
               name: "Frontier Model",
+              parameterCount: 4_000_000_000,
               reasoning: true,
               tool_call: true,
               reasoning_options: [{ type: "effort", values: ["low", "high", "high", false] }],
@@ -127,6 +129,7 @@ describe("shared upstream provider metadata catalogs", () => {
       expect(model).toEqual({
         id: "frontier-model",
         name: "Frontier Model",
+        parameterCount: 4_000_000_000,
         provider: "opencode-go",
         api: "openai-responses",
         baseUrl: "https://opencode.ai/zen/go/v1",
@@ -158,6 +161,11 @@ describe("shared upstream provider metadata catalogs", () => {
           supportedReasoningEfforts: ["low", "high"],
         },
       });
+      if (!model) {
+        throw new Error("expected projected upstream model");
+      }
+      const snapshot = new Map([[model.id, { model }]]);
+      expect(listProviderCatalogSnapshotEntries(snapshot)[0]?.parameterCount).toBe(4_000_000_000);
     },
   );
 

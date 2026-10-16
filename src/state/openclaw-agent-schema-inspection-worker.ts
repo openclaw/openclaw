@@ -2,7 +2,7 @@ import { fork } from "node:child_process";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
-import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import {
@@ -17,7 +17,6 @@ import {
   resolveSqliteInspectionSignal,
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
-import { getCanonicalSqliteTableNames } from "../infra/sqlite-schema-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { agentSchemaMetadataKey } from "./openclaw-agent-db-metadata.js";
 import { agentDatabaseValidationKey } from "./openclaw-agent-db-validation-facts.js";
@@ -29,7 +28,6 @@ import type {
   AgentSchemaInspection,
   AgentSchemaInspectionInput,
 } from "./openclaw-agent-schema-inspection.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import type {
   StateSchemaInspection,
   StateSchemaInspectionInput,
@@ -114,7 +112,7 @@ export function createAgentSchemaInspectionWorker() {
       }
       busy = true;
       try {
-        if (kind === "agent" && getDatabaseEngineSelection()?.input) {
+        if (kind === "agent" && getDatabaseEngineInput("agent")) {
           if (snapshotPath) {
             throw new Error(
               "PostgreSQL agent inspection requires its live engine owner, not a SQLite snapshot.",
@@ -134,17 +132,19 @@ export function createAgentSchemaInspectionWorker() {
               () => undefined,
             )?.agentId;
           if (!agentId) {
-            const { resolveSessionSqliteTargetInWorker } =
-              await import("../config/sessions/session-transcript-read-worker-runtime.js");
-            const target = await resolveSessionSqliteTargetInWorker(
-              {
-                storePath: input.pathname,
-                env: input.env ?? process.env,
-                registeredDatabases: [],
-              },
+            const { prepareSqliteTargetFromSessionStorePath } =
+              await import("../config/sessions/session-sqlite-target.js");
+            const target = await prepareSqliteTargetFromSessionStorePath(
+              input.pathname,
+              { env: input.env ?? process.env },
               signal,
             );
-            if (target.ownerSource !== "database-path" || !target.agentId) {
+            if (
+              !target.agentId ||
+              (target.ownerSource !== undefined &&
+                target.ownerSource !== "database-path" &&
+                target.ownerSource !== "database-registry")
+            ) {
               throw new Error(
                 "PostgreSQL schema inspection could not establish the custom store owner.",
               );
@@ -207,10 +207,6 @@ export function createAgentSchemaInspectionWorker() {
             };
           }
         }
-        if (kind === "agent" && input.requireStartupMigrationReadiness) {
-          // Only an admission miss needs comparison templates in later runtime workers.
-          getCanonicalSqliteTableNames(OPENCLAW_AGENT_SCHEMA_SQL);
-        }
         const snapshot = snapshotPath
           ? { pathname: snapshotPath, identity: readSqliteIntegrityFileIdentity(snapshotPath) }
           : undefined;
@@ -264,7 +260,6 @@ export function createAgentSchemaInspectionWorker() {
               }
               response.resolve({
                 ...stateInspection,
-                schemaContracts: message.schemaContracts,
                 inspectionErrors: stateInspection.inspectionErrors.map(
                   restoreAgentSchemaInspectionError,
                 ),

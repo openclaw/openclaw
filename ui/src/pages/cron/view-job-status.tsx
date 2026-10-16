@@ -40,7 +40,7 @@ export function JobStateIndicator(props: { job: CronJob }) {
   });
   return (
     <span
-      class={`cron-table__state cron-table__state--${presentation()[0]}`}
+      class={["cron-table__state", `cron-table__state--${presentation()[0]}`]}
       role="img"
       aria-label={presentation()[2]}
       title={presentation()[2]}
@@ -71,11 +71,10 @@ export function DisabledNote(props: { job: CronJob }) {
   };
   return (
     <span
-      class={
-        props.job.state?.autoDisabled
-          ? "cron-table__paused-note cron-table__auto-disabled"
-          : "muted cron-table__paused-note"
-      }
+      class={[
+        "cron-table__paused-note",
+        props.job.state?.autoDisabled ? "cron-table__auto-disabled" : "muted",
+      ]}
       data-test-id={
         props.job.state?.autoDisabled ? `cron-row-auto-disabled-${props.job.id}` : undefined
       }

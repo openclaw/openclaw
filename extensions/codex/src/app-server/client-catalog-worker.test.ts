@@ -400,23 +400,24 @@ describe("Codex catalog worker transport", () => {
     expect(harness.client.getCloseError()).toBeUndefined();
   });
 
-  it("redacts malformed worker frames and accepts the next catalog frame", async () => {
+  it("logs only malformed worker frame sizes and accepts the next catalog frame", async () => {
     const token = `synthetic-secret-${"padding".repeat(500)}`;
+    const contentMarker = "synthetic-private-worker-tool-result-猫";
     const harness = createHarness();
     const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const request = harness.client.request("thread/list", {}, { catalogPreview: true });
-    harness.process.stdout.write(
-      `{"id":${JSON.stringify(requestId(harness))},"result":{"token":${JSON.stringify(token)},"data":[{"id":"thread","preview":"invalid \\q\n`,
-    );
+    const malformed = `{"id":${JSON.stringify(requestId(harness))},"result":{"token":${JSON.stringify(token)},"data":[{"id":"thread","preview":"${contentMarker} invalid \\q`;
+    harness.process.stdout.write(`${malformed}\n`);
     harness.send({ id: requestId(harness), result: { data: [] } });
     await expect(request).resolves.toEqual({ data: [] });
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      "failed to parse codex app-server message",
-      expect.objectContaining({ fragmentCount: 1 }),
-    );
+    expect(warn).toHaveBeenCalledExactlyOnceWith("failed to parse codex app-server message", {
+      byteCount: Buffer.byteLength(malformed),
+      charCount: malformed.length,
+      fragmentCount: 1,
+    });
     expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-secret");
-    expect(JSON.stringify(warn.mock.calls)).toContain("<redacted>");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(contentMarker);
     expect(parse).not.toHaveBeenCalled();
   });
   it("rejects oversized catalog frames before decoding and accepts the next response", async () => {

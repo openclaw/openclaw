@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import {
   executeSqliteQuerySync,
@@ -151,8 +150,7 @@ export function mutatePendingInput(
         }
         // Native SDK completion uses only "complete"; stage and finish execute in workers.
         if (input.kind === "stage") {
-          const snapshot = readPendingInputStage(current, input, row);
-          if (!isDeepStrictEqual(snapshot, input.expected)) {
+          if (row?.input_id !== input.expected.existing?.input_id) {
             throw new SessionPendingInputCustodyError(
               "Pending input changed before staging committed",
             );

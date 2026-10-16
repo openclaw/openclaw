@@ -88,7 +88,7 @@ type ProfileFixture = {
   effectiveRole?: string;
   roleSource?: "assigned" | "githubLogin" | "default";
   mergedInto?: string | null;
-  githubIdentity?: { login: string } | null;
+  githubIdentity?: { host?: string; login: string } | null;
 };
 
 export function visitorProfileFixture(

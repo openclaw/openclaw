@@ -244,10 +244,10 @@ export function writeSessionCostUsageRollupInDatabase(
   });
 }
 
-/** Read one body only while its exact metadata snapshot still owns the row. */
+/** The refresh lease owns the checkpoint while its body is loaded. */
 export function readSessionCostUsageRollupBodyInDatabase(
   db: EngineConnection,
-  row: SessionCostUsageRollupSnapshot,
+  key: string,
 ): { blob: Uint8Array | null } | undefined {
   return executeSqliteQuerySync(
     db,
@@ -255,9 +255,7 @@ export function readSessionCostUsageRollupBodyInDatabase(
       .selectFrom("cache_entries")
       .select("blob")
       .where("scope", "=", ROLLUP_SCOPE)
-      .where("key", "=", row.key)
-      .where("updated_at", "=", row.updatedAt)
-      .where("value_json", "=", cacheJsonText(row.valueJson)),
+      .where("key", "=", key),
   ).rows[0];
 }
 

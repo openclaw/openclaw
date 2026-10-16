@@ -1,17 +1,61 @@
 /* @vitest-environment jsdom */
 
-import { createSignal } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../lib/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
-import { PresentedPaneContent } from "./chat-pane-embedded-view.tsx";
+import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
-import { openSlot, setSidebarOpen } from "./sidebar-layout.ts";
+import { fitSidebarLayout, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
 
 // The lazy region separately owns the successful right outlet's contents.
 afterEach(cleanupSolid);
+
+it("retains loading panel contents when fitting a new layout snapshot", () => {
+  const layout = openSlot({ columns: [] }, "workspace");
+  let resize: (width: number) => void = () => {};
+  const mounted = mountSolid(() => {
+    const [width, setWidth] = createSignal(1400);
+    resize = setWidth;
+    return (
+      <SidebarRegionView
+        presentationId="loading-layout"
+        panelIdPrefix="chat-panel-loading-layout"
+        availableWidth={width()}
+        narrow={false}
+        callbacks={{
+          activatePanel() {},
+          togglePanelExpanded() {},
+          closeSlot() {},
+          openSlot() {},
+          reorderPanel() {},
+          resizePanel() {},
+          setOpen() {},
+        }}
+        layout={fitSidebarLayout(layout, width())!}
+        panelDefinitions={sidebarPanelDefinitions()}
+        regionError={null}
+        requestUpdate={() => {}}
+      />
+    );
+  });
+  flush();
+  const panel = mounted.container.querySelector(".side-panel__panel")!;
+  const placeholder = panel.querySelector("openclaw-panel-loading-skeleton")!;
+  const contents = placeholder.querySelector(".rows")!;
+  resize(700);
+  flush();
+  expect(mounted.container.querySelector(".side-panel__panel")).toBe(panel);
+  expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBe(placeholder);
+  expect(placeholder.querySelector(".rows")).toBe(contents);
+  expect(
+    mounted.container
+      .querySelector<HTMLElement>(".sidebar-region")
+      ?.style.getPropertyValue("--side-panel-width"),
+  ).toBe("382px");
+});
 
 it("retains the primary input and the region-owned outlet while changing the layout", () => {
   const primary = document.createElement("textarea");
@@ -69,7 +113,8 @@ it("parks on owner events and reveals only with the matching parent props", () =
   const mounted = mountSolid(() => {
     const [presentation, setPresentation] = createSignal(binding);
     repaint = () => setPresentation({ ...binding });
-    return <PresentedPaneContent presentation={presentation()} content={content} />;
+    const active = usePanePresentation(presentation);
+    return <Show when={active()}>{content}</Show>;
   });
   flush();
   expect(mounted.container.querySelector("input")).toBe(content);

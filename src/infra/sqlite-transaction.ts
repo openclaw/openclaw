@@ -287,31 +287,35 @@ function logTransactionStep(
   },
   failure?: { error: unknown },
 ): void {
-  if (!failure && params.elapsedMs < slowBusyWaitThresholdMs(params.options)) {
-    return;
+  try {
+    if (!failure && params.elapsedMs < slowBusyWaitThresholdMs(params.options)) {
+      return;
+    }
+    const sqliteErrcode = failure ? sqliteExtendedResultCode(failure.error) : undefined;
+    const sqlitePrimaryCode = failure ? sqlitePrimaryResultCode(failure.error) : undefined;
+    (params.options?.logger ?? transactionLog).warn(
+      failure ? "SQLite transaction lock wait failed" : "slow SQLite transaction step",
+      {
+        async: false,
+        ...(params.options?.busyTimeoutMs !== undefined
+          ? { busyTimeoutMs: params.options.busyTimeoutMs }
+          : {}),
+        ...transactionDiagnosticLabels(params.db, params.options),
+        ...(failure ? { code: sqliteErrorCode(failure.error) } : {}),
+        elapsedMs: params.elapsedMs,
+        ...(failure ? { failureKind: "lock-contention" } : {}),
+        isMainThread,
+        pid: process.pid,
+        ...(sqliteErrcode !== undefined ? { sqliteErrcode } : {}),
+        ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
+        step: params.step,
+        threadId,
+        ...(params.beginAdmission ? { beginAdmission: { ...params.beginAdmission } } : {}),
+      },
+    );
+  } catch {
+    // Diagnostics cannot change transaction outcomes or replace the native failure.
   }
-  const sqliteErrcode = failure ? sqliteExtendedResultCode(failure.error) : undefined;
-  const sqlitePrimaryCode = failure ? sqlitePrimaryResultCode(failure.error) : undefined;
-  (params.options?.logger ?? transactionLog).warn(
-    failure ? "SQLite transaction lock wait failed" : "slow SQLite transaction step",
-    {
-      async: false,
-      ...(params.options?.busyTimeoutMs !== undefined
-        ? { busyTimeoutMs: params.options.busyTimeoutMs }
-        : {}),
-      ...transactionDiagnosticLabels(params.db, params.options),
-      ...(failure ? { code: sqliteErrorCode(failure.error) } : {}),
-      elapsedMs: params.elapsedMs,
-      ...(failure ? { failureKind: "lock-contention" } : {}),
-      isMainThread,
-      pid: process.pid,
-      ...(sqliteErrcode !== undefined ? { sqliteErrcode } : {}),
-      ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
-      step: params.step,
-      threadId,
-      ...(params.beginAdmission ? { beginAdmission: { ...params.beginAdmission } } : {}),
-    },
-  );
 }
 
 function execTimedTransactionStep(params: {

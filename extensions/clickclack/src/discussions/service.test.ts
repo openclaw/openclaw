@@ -421,6 +421,15 @@ describe("ClickClack discussion service", () => {
       .mockResolvedValue(replacement);
 
     await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
+    expect(harness.updateChannel).not.toHaveBeenCalled();
+    expect(harness.store.lookup(sessionKey)).toMatchObject({
+      sessionId: "session-new",
+      channelId: "chn_discussion",
+      label: "Reset race",
+      section: "Sessions",
+    });
+
+    await harness.service.reconcile(sessionKey);
     expect(harness.updateChannel).toHaveBeenCalledWith(
       "chn_discussion",
       expect.objectContaining({
@@ -432,6 +441,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.createChannel).toHaveBeenCalledTimes(1);
     expect(harness.store.lookup(sessionKey)).toMatchObject({
       sessionId: "session-new",
+      channelId: "chn_discussion",
       label: "Current reset race",
       section: "Current sessions",
     });

@@ -82,7 +82,12 @@ export function createOnnxProvider(
               : { instructions: render(question.instructions) }),
           };
         });
-        const results = await client.classify(context.model, inputs, context.signal);
+        const results = await client.classify(
+          context.model,
+          inputs,
+          context.signal,
+          context.isAdmissible,
+        );
         context.signal.throwIfAborted();
         const answers = new Map<string, DecisionAnswer>();
         let inputTokens = 0;

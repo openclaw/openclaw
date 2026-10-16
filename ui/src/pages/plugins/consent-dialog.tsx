@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, onCleanup, Show, For } from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled, Show, For } from "solid-js";
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   PLUGIN_DECLARED_SURFACE_GROUPS,
@@ -45,6 +45,7 @@ export type PluginConsentState = {
 };
 
 type PluginConsentDialogProps = {
+  registerIcon?: (readId: () => string) => () => void;
   consent: PluginConsentState;
   inspection: PluginsInspectResult | null;
   loading: boolean;
@@ -60,6 +61,7 @@ type PluginConsentDialogProps = {
 };
 
 type ArtTileProps = {
+  registerIcon?: (readId: () => string) => () => void;
   slug: string;
   name: string;
   iconUrl?: string;
@@ -71,6 +73,8 @@ type ArtTileProps = {
 };
 
 export function PluginArtTile(props: ArtTileProps): JSX.Element {
+  const slug = createMemo(() => props.slug);
+  onSettled(() => props.registerIcon?.(slug));
   type ImageState = { source: string | undefined; status: "loading" | "ready" | "failed" };
   const [packageImage, setPackageImage] = createSignal<ImageState>((previous) => {
     const source = props.iconUrl;
@@ -88,7 +92,7 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
     packageImage().source && packageImage().status !== "failed"
       ? { state: packageImage(), update: setPackageImage, package: true }
       : { state: authorImage(), update: setAuthorImage, package: false };
-  const gradient = createMemo(() => pluginFallbackGradient(props.slug));
+  const gradient = createMemo(() => pluginFallbackGradient(slug()));
   const monogram = createMemo(() => pluginMonogram(props.name));
   const source = () =>
     currentImage().state.status === "failed" ? undefined : currentImage().state.source;
@@ -114,7 +118,7 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
             className(),
             { "plugins-tile--white": props.whiteBackground, skeleton: pending() },
           ]}
-          data-plugin-icon-id={props.slug}
+          data-plugin-icon-id={slug()}
           aria-hidden="true"
         >
           <Show when={source()} keyed>
@@ -135,7 +139,7 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
       ) : (
         <span
           class={[className(), `${className()}--fallback`]}
-          data-plugin-icon-id={props.slug}
+          data-plugin-icon-id={slug()}
           style={{
             "--plugins-art-a": gradient()[0],
             "--plugins-art-b": gradient()[1],
@@ -452,6 +456,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
       <section class="plugins-consent oc-card" data-plugin-consent={consent().intent.kind}>
         <header class="plugins-consent__header">
           <PluginArtTile
+            registerIcon={props.registerIcon}
             slug={slug()}
             name={name()}
             iconUrl={props.iconUrl}

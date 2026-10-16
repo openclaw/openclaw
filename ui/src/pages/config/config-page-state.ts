@@ -42,23 +42,9 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
-import {
-  projectNativeDeviceSettings,
-  projectNativeNotifications,
-} from "../../lib/reactive/application-native.ts";
-import {
-  projectGateway,
-  projectAgentSelection,
-  projectApplicationConfig,
-  projectOverlays,
-  projectWebPush,
-} from "../../lib/reactive/application.ts";
-import {
-  projectRuntimeConfig,
-  projectAgents,
-  projectAgentIdentity,
-} from "../../lib/reactive/domain-capabilities.ts";
+import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
   canReadSystemInfo,
@@ -818,6 +804,7 @@ export function createConfigPage(
     const gatewayConfig = asConfigRecord(configObject.gateway);
     const controlUiConfig = asConfigRecord(gatewayConfig?.controlUi);
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
+    const utilityModel = readModelSetting(agentsDefaults?.utilityModel);
     const themePref = currentSyncedPref("theme");
     const themeModePref = currentSyncedPref("themeMode");
     const accentPref = currentSyncedPref("accent");
@@ -948,30 +935,28 @@ export function createConfigPage(
         ? (routeData.section ?? defaultConfigSelection(pageId).activeSection)
         : null,
       sessionObserverEnabled: controlUiConfig?.sessionObserver !== false,
-      sessionObserverUtilityModel:
-        typeof agentsDefaults?.utilityModel === "string" ? agentsDefaults.utilityModel : undefined,
+      sessionObserverUtilityModel: modelSettingPrimary(utilityModel),
       sessionObserverResolvedModel: systemInfo?.defaultAgentUtilityModel,
       sessionObserverModels,
       sessionObserverModelsUnavailable,
       sessionObserverDisabled: sessionObserverBusy,
-      setSessionObserverEnabled: (enabled) => {
+      setSessionObserverEnabled: (enabled) =>
         void runtimeConfig.patch({
           raw: buildSessionObserverTogglePatch(enabled),
           note: t("configView.sessionObserver.toggleNote"),
-        });
-      },
-      setSessionObserverUtilityModel: (modelSelection) => {
+        }),
+      setSessionObserverUtilityModel: (modelSelection) =>
         void runtimeConfig
           .patch({
-            raw: buildSessionObserverUtilityModelPatch(modelSelection),
+            raw: buildSessionObserverUtilityModelPatch(modelSelection, utilityModel),
             note: t("configView.sessionObserver.modelNote"),
+            replacePaths: ["agents.defaults.utilityModel.fallbacks"],
           })
           .then((saved) => {
             if (saved) {
               void refreshSystemInfo();
             }
-          });
-      },
+          }),
       lobsterPetVisits: settings.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
       sessionDeleteConfirm:
         settings.sessionDeleteConfirm ?? UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
@@ -1035,26 +1020,25 @@ export function createConfigPage(
     } satisfies ConfigProps;
   }
   const sources = [
-    projectGateway(context.gateway),
-    projectRuntimeConfig(context.runtimeConfig),
-    projectAgentSelection(context.settingsAgentSelection),
-    projectAgentSelection(context.agentSelection),
-    projectAgents(context.agents),
-    projectAgentIdentity({
-      identities: context.agentIdentity,
-      agentId: context.agentSelection.state.selectedId,
-    }),
-    projectApplicationConfig(context.config),
-    projectOverlays(context.overlays),
-    projectWebPush(context.webPush),
-    context.nativeDeviceSettings ? projectNativeDeviceSettings(context.nativeDeviceSettings) : null,
-    context.nativeNotifications ? projectNativeNotifications(context.nativeNotifications) : null,
+    context.gateway,
+    context.runtimeConfig,
+    context.settingsAgentSelection,
+    context.agentSelection,
+    context.agents,
+    context.agentIdentity,
+    context.config,
+    context.overlays,
+    context.webPush,
+    context.nativeDeviceSettings,
+    context.nativeNotifications,
   ];
   const refresh = () => {
     synchronize();
     invalidate();
   };
+  // Route changes synchronize the config owners, lazy requests, and polling.
   createEffect(route, (next) => updateRoute(next.pageId, next.routeData));
+  // Scroll the requested settings section after its DOM has committed.
   createEffect(revision, () => afterCommit());
   onSettled(() => {
     const subscriptions = sources.flatMap((source) => (source ? [source.subscribe(refresh)] : []));
@@ -1063,12 +1047,11 @@ export function createConfigPage(
     connected = true;
     settings = loadSettings();
     hiddenSessionCatalogsChanged();
-    window.addEventListener(
-      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
-      hiddenSessionCatalogsChanged,
+    subscriptions.push(
+      listen(window, SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT, hiddenSessionCatalogsChanged),
+      listen(document, "visibilitychange", visibilityChanged),
+      listen(window, "focus", visibilityChanged),
     );
-    document.addEventListener("visibilitychange", visibilityChanged);
-    window.addEventListener("focus", visibilityChanged);
     customThemeImportOwner.connect(context.gateway.connection.gatewayUrl);
     mediaDeviceWatch = observeRealtimeTalkDevices(() => {
       void refreshMediaDevices("microphone", false);
@@ -1080,12 +1063,6 @@ export function createConfigPage(
         stop();
       }
       connected = false;
-      window.removeEventListener(
-        SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
-        hiddenSessionCatalogsChanged,
-      );
-      document.removeEventListener("visibilitychange", visibilityChanged);
-      window.removeEventListener("focus", visibilityChanged);
       customThemeImportOwner.retireImport();
       retireMediaPermissionRequests();
       mediaDeviceWatch?.();

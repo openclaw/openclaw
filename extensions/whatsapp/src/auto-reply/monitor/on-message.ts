@@ -126,10 +126,6 @@ export function createWebOnMessageHandler(params: {
     });
     const baseMentionConfig = buildMentionConfig(cfg);
 
-    if (conversationId === msg.platform.recipientJid) {
-      logVerbose(`📱 Same-phone mode detected (from === to: ${conversationId})`);
-    }
-
     const configuredRoute = resolveConfiguredBindingRoute({
       cfg,
       route: baseConversationRoute,
@@ -218,7 +214,6 @@ export function createWebOnMessageHandler(params: {
           agentId: route.agentId,
           sessionKey: route.sessionKey,
           verbose: params.verbose,
-          info: params.replyLogger.info.bind(params.replyLogger),
           warn: params.replyLogger.warn.bind(params.replyLogger),
         });
         ackAlreadySent = ackReaction !== null;

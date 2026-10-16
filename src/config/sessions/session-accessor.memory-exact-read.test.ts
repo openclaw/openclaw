@@ -2,7 +2,6 @@ import { afterEach, expect, it } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   loadExactSessionEntryCandidates,
-  loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryFromStoreReadOnly,
   loadSessionEntryByIdReadOnly,
   loadSessionEntryReadOnlyInScope,
@@ -130,25 +129,6 @@ it("serves exact entry wrappers and projections from the selected memory owner a
     ).toBe("committed");
     expect(loadSessionEntryReadOnlyInScope({ ...scope, databaseAgentId: "main" })).toMatchObject({
       label: "updated",
-    });
-    const batches = loadExactSessionEntryCandidatesReadOnlyBatch([
-      { ...scope, sessionKeys: [sessionKey], projection: "list" },
-      { ...scope, sessionKeys: [siblingKey], projection: "delivery" },
-    ]);
-    expect(batches[0]).toMatchObject({ ok: true, value: [{ entry: { label: "updated" } }] });
-    expect(batches[1]).toEqual({
-      ok: true,
-      value: [
-        {
-          sessionKey: siblingKey,
-          entry: {
-            sessionId: "sibling-id",
-            updatedAt: 2,
-            delivery: { kind: "none" },
-            groupId: undefined,
-          },
-        },
-      ],
     });
   });
   await Promise.all([actor.release(), sibling.release()]);

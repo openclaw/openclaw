@@ -17,8 +17,9 @@ import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { renderApprovalPresentation } from "./approval-presentation.tsx";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
@@ -127,7 +128,7 @@ type ApprovalPageProps = { approvalId: string };
 
 /** Approval admission stays synchronous; rendering observes the request owner's facts. */
 function createApprovalPage(context: ApplicationContext, props: ApprovalPageProps) {
-  // Requests read the live target without subscribing; the identity effect owns rebinding.
+  // External callbacks and completion checks read the live ID; effect admission receives its ID.
   const approvalId = () => untrack(() => props.approvalId);
   const state: {
     approval: ApprovalSnapshot | null;
@@ -172,21 +173,21 @@ function createApprovalPage(context: ApplicationContext, props: ApprovalPageProp
     current.approvalGrantAccess &&
     readGatewayOperatorAccess(context.gateway.snapshot).canGrantApprovals;
 
-  function bindApprovalId(force = false) {
+  function bindApprovalId(force = false, id = approvalId()) {
     try {
-      if (!force && boundApprovalId === approvalId()) {
+      if (!force && boundApprovalId === id) {
         return;
       }
-      boundApprovalId = approvalId();
+      boundApprovalId = id;
       operationGeneration += 1;
       clearPollTimer();
       state.approval = null;
-      state.loading = Boolean(approvalId());
+      state.loading = Boolean(id);
       state.resolvingDecision = null;
-      state.requestError = approvalId() ? null : "unavailable";
+      state.requestError = id ? null : "unavailable";
       state.resolutionOrigin = "observed";
-      if (approvalId() && state.connected && clientOwner && hasApprovalAccess()) {
-        void loadApproval();
+      if (id && state.connected && clientOwner && hasApprovalAccess()) {
+        void loadApproval({ id });
       }
     } finally {
       notify();
@@ -257,9 +258,9 @@ function createApprovalPage(context: ApplicationContext, props: ApprovalPageProp
     );
   }
 
-  async function loadApproval(options: { background?: boolean } = {}) {
+  async function loadApproval(options: { background?: boolean; id?: string } = {}) {
     const client = clientOwner;
-    const id = approvalId();
+    const id = options.id ?? approvalId();
     if (!client || !state.connected || !id || !hasApprovalAccess()) {
       return;
     }
@@ -438,12 +439,12 @@ function createApprovalPage(context: ApplicationContext, props: ApprovalPageProp
 
   const previousDocumentTitle = document.title;
   let activeDocumentTitle: string | undefined;
-  document.addEventListener("visibilitychange", handleVisibilityChange);
+  const stopVisibility = listen(document, "visibilitychange", handleVisibilityChange);
   bindApprovalId(true);
   const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);
   applyGatewaySnapshot(context.gateway.snapshot);
   onCleanup(() => {
-    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    stopVisibility();
     stopGateway();
     operationGeneration += 1;
     clearPollTimer();
@@ -452,9 +453,10 @@ function createApprovalPage(context: ApplicationContext, props: ApprovalPageProp
       document.title = previousDocumentTitle;
     }
   });
+  // Gateway requests and the browser title follow the currently bound approval ID.
   createEffect(
     () => props.approvalId,
-    () => bindApprovalId(),
+    (id) => bindApprovalId(false, id),
   );
   createEffect(
     () => {
@@ -621,7 +623,10 @@ function ApprovalContent(props: {
     <>
       <div class="approval-page__status" aria-live="polite" aria-atomic="true">
         <span
-          class={`approval-page__status-dot approval-page__status-dot--${props.approval.status}`}
+          class={[
+            "approval-page__status-dot",
+            `approval-page__status-dot--${props.approval.status}`,
+          ]}
           aria-hidden="true"
         />
         {pending() ? t("approvalPage.pending") : terminalTitle(props.approval, origin())}
@@ -716,6 +721,7 @@ defineSolidBridge<ApprovalPageProps>(
   {
     properties: { approvalId: { default: "", attribute: "approval-id" } },
     connected: (host) => {
+      // This checks pre-upgrade fallback markup before Solid owns the host's DOM.
       if (!host.querySelector(".approval-page__brand")) {
         host.replaceChildren();
       }

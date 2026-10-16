@@ -632,8 +632,10 @@ function getSwiftPackageResolutionBlock(): string {
     "build_swift_architecture() {",
     swiftScriptPath,
   );
+  // The inlined block skips the worker's own source of the shared disk image helpers.
+  const diskImage = `source ${JSON.stringify(path.resolve("scripts/lib/mac-disk-image.sh"))}`;
   // The shared EXIT cleanup also needs the packager preamble's unallocated app stage.
-  return `${block}\nBUILD_PATH="$ROOT_DIR/build"\nSWIFT_WORK_ROOT="$ROOT_DIR/work"\nmkdir -p "$SWIFT_WORK_ROOT"\n`;
+  return `${diskImage}\n${block}\nBUILD_PATH="$ROOT_DIR/build"\nSWIFT_WORK_ROOT="$ROOT_DIR/work"\nmkdir -p "$SWIFT_WORK_ROOT"\n`;
 }
 
 function snapshotImageInfoPlist(imagePath?: string): string {
@@ -2124,7 +2126,7 @@ printf '/dev/disk99 on /unrelated (apfs, read-only)\\n'
       expect(existsSync(mount)).toBe(detachFails);
       if (detachFails) {
         expect(result.stderr).toBe(
-          `ERROR: Peekaboo snapshot image ${image} is still attached; detach it with: hdiutil detach /dev/disk8\n`,
+          `ERROR: disk image ${image} is still attached; detach it with: hdiutil detach /dev/disk8\n`,
         );
       } else {
         expect(result.stderr).toBe("");

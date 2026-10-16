@@ -307,6 +307,7 @@ export function createBoundSpawnInvocation(
     cleanup?: "keep" | "delete";
     expectsCompletionMessage?: boolean;
     completionTarget?: "parent";
+    thinking?: string;
   },
   requesterModel?: { provider: string; model: string },
   senderIsOwner?: boolean,
@@ -398,6 +399,7 @@ export async function prepareIsolatedChildAdmissionProof(bound: BoundParent) {
         await upsertSessionEntryCore(scope, {
           label: "updated before admission",
           permissionMode: "read-only",
+          thinkingLevel: "high",
         });
       }
       return await dispatchGatewayMethodInProcess<T>(method, params, dispatchOptions);
@@ -414,6 +416,7 @@ export async function prepareIsolatedChildAdmissionProof(bound: BoundParent) {
       expect(embeddedRun).toMatchObject({
         sessionId: initialChild.sessionId,
         permissionMode: "read-only",
+        thinkLevel: "high",
       });
       const admittedChild = expectDefined(
         loadSessionEntry({ storePath, sessionKey: childSessionKey }),
@@ -429,6 +432,7 @@ export async function prepareIsolatedChildAdmissionProof(bound: BoundParent) {
         completionOwnerSessionKey: parentSessionKey,
         label: "updated before admission",
         permissionMode: "read-only",
+        thinkingLevel: "high",
       });
       return admittedChild;
     },

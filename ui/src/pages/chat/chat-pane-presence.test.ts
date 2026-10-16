@@ -11,7 +11,7 @@ import {
   createRenderTestChatPane,
   connectPaneTestView,
 } from "./chat-pane.test-support.ts";
-import type { ChatStateController } from "./chat-state-controller.ts";
+import type { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 const sessionKey = "agent:main:dashboard:presence";
@@ -36,7 +36,7 @@ async function createPane(presence: PresenceEntry[]) {
   > & {
     presencePayload: PresencePayload | undefined;
     performUpdate: () => void;
-    chatState: ChatStateController<ChatPageHost>;
+    chatState: ReturnType<typeof createChatState<ChatPageHost>>;
   };
   const context = createInitializationContext(
     createGatewayBrowserClientFixture({ instanceId: "self-tab" }),

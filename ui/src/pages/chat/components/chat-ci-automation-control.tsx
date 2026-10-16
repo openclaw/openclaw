@@ -17,7 +17,7 @@ import {
   setCiAutomationEnabled,
   type CiAutomationJobs,
 } from "../../../lib/session-pr-automation.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ChatCiAutomationView, type ChatCiAutomationProps } from "./chat-ci-automation.tsx";
 import { createCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclosure.ts";
 
@@ -67,6 +67,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
     readController?.abort();
   });
 
+  // Bind Gateway inventory and invalidation subscriptions to the current connection.
   createEffect(
     () => props.gateway,
     (source) => {
@@ -92,6 +93,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   const targetKey = createMemo(() =>
     JSON.stringify([props.sessionKey, props.sessionId, automationTarget(props)]),
   );
+  // Reset and suspend Gateway work when its session target or disclosure changes.
   createEffect(
     () => [targetKey(), props.presented, props.sessionKey, props.sessionId] as const,
     ([target, , sessionKey, sessionId], previous) => {

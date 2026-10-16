@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import type { PluginBlobStore, PluginBlobEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginBlobStoreWithReceipts } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiffsHttpHandler } from "./http.js";
@@ -22,7 +22,7 @@ beforeAll(async () => {
 describe("DiffArtifactStore", () => {
   let rootDir: string;
   let store: DiffArtifactStore;
-  let blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
+  let blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
   let reopenStore: Awaited<ReturnType<typeof createDiffStoreHarness>>["reopen"];
   let cleanupRootDir: () => Promise<void>;
 
@@ -51,7 +51,7 @@ describe("DiffArtifactStore", () => {
 
     it("rejects oversized input before token creation, registration or cleanup", async () => {
       const random = vi.spyOn(crypto, "randomBytes");
-      const register = vi.spyOn(blobStore, "registerIfAbsent");
+      const register = vi.spyOn(blobStore, "registerIfAbsentWithReceipt");
       const cleanup = vi.spyOn(store, "scheduleCleanup");
       await expect(
         store.createArtifact({ ...params, html: "x".repeat(maximum + 1) }),
@@ -82,36 +82,9 @@ describe("DiffArtifactStore", () => {
     );
   });
 
-  async function mockDateBoundaryBlob() {
-    await store.stopCleanup();
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const maximum = 8_640_000_000_000_000;
-    vi.setSystemTime(maximum - 1_000);
-    let entry: PluginBlobEntry<DiffArtifactBlobMetadata> | undefined;
-    const register = vi
-      .spyOn(blobStore, "registerIfAbsent")
-      .mockImplementation(async (key, bytes, metadata) => {
-        entry = {
-          key,
-          bytes,
-          metadata,
-          sizeBytes: bytes.byteLength,
-          createdAt: maximum - 1_000,
-          expiresAt: maximum,
-        };
-        return true;
-      });
-    const lookup = vi.spyOn(blobStore, "lookup").mockImplementation(async () => entry);
-    return {
-      register,
-      restore() {
-        lookup.mockRestore();
-        register.mockRestore();
-      },
-    };
-  }
-
   it("reopens compressed viewer bytes and retrieves them with one authorized lookup", async () => {
+    await store.stopCleanup();
+    const registrationLookup = vi.spyOn(blobStore, "lookup");
     const artifact = await createViewerArtifact(store, {
       html: "<html>demo é 🦀</html>",
       context: {
@@ -121,7 +94,11 @@ describe("DiffArtifactStore", () => {
         agentAccountId: "default",
       },
     });
+    expect(registrationLookup).not.toHaveBeenCalled();
+    registrationLookup.mockRestore();
     const stored = await blobStore.lookup(artifact.id);
+    expect(Date.parse(artifact.createdAt)).toBe(stored?.createdAt);
+    expect(Date.parse(artifact.expiresAt)).toBe(stored?.expiresAt);
     expect(stored?.metadata).toMatchObject({
       version: 1,
       kind: "viewer",
@@ -148,24 +125,20 @@ describe("DiffArtifactStore", () => {
   });
 
   it("caps artifact expiry instead of throwing near the Date boundary", async () => {
-    const boundary = await mockDateBoundaryBlob();
-    try {
-      const artifact = await createViewerArtifact(store, {
-        html: "<html>demo</html>",
-        inputKind: "patch",
-        ttlMs: 60_000,
-      });
+    await store.stopCleanup();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(8_640_000_000_000_000 - 1_000);
+    const artifact = await createViewerArtifact(store, {
+      html: "<html>demo</html>",
+      inputKind: "patch",
+      ttlMs: 60_000,
+    });
 
-      expect(artifact.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
-      expect(boundary.register).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(Uint8Array),
-        expect.any(Object),
-        { ttlMs: 1_000 },
-      );
-    } finally {
-      boundary.restore();
-    }
+    expect(artifact.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
+    await expect(blobStore.lookup(artifact.id)).resolves.toMatchObject({
+      createdAt: 8_640_000_000_000_000 - 1_000,
+      expiresAt: 8_640_000_000_000_000,
+    });
   });
 
   it("expires artifacts after the ttl", async () => {
@@ -238,9 +211,9 @@ describe("DiffArtifactStore", () => {
   });
 
   it("cleans expired rows and retries a quota-limited registration", async () => {
-    const registerIfAbsent = blobStore.registerIfAbsent.bind(blobStore);
+    const registerIfAbsent = blobStore.registerIfAbsentWithReceipt.bind(blobStore);
     const registerSpy = vi
-      .spyOn(blobStore, "registerIfAbsent")
+      .spyOn(blobStore, "registerIfAbsentWithReceipt")
       .mockRejectedValueOnce(
         Object.assign(new Error("physical quota reached"), {
           code: "PLUGIN_BLOB_LIMIT_EXCEEDED",

@@ -5,6 +5,34 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { IdentityAvatarImage } from "./identity-avatar-image.tsx";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 
+it("retains the face subtree when a publication replaces the agent with the same ID", async () => {
+  const [agent, publish] = createSignal<AgentIdentity>({ id: "forge", name: "Before" });
+  const view = mountSolid(() => <AgentIdentityAvatar agent={agent()} />);
+  try {
+    await vi.dynamicImportSettled();
+    flush();
+    const face = view.container.querySelector("svg.identity-avatar__agent-face")!;
+    const features = face.querySelector("g")!;
+    const nodes = [...features.querySelectorAll("*")];
+    const mutations = new MutationObserver(() => undefined);
+    mutations.observe(features, { childList: true, subtree: true });
+    try {
+      publish({ id: "forge", name: "After" });
+      flush();
+      expect(view.container.querySelector('[aria-label="After"]')).not.toBeNull();
+      expect(view.container.querySelector("svg.identity-avatar__agent-face")).toBe(face);
+      const retained = [...features.querySelectorAll("*")];
+      expect(retained).toHaveLength(nodes.length);
+      retained.forEach((node, index) => expect(node).toBe(nodes[index]));
+      expect(mutations.takeRecords()).toHaveLength(0);
+    } finally {
+      mutations.disconnect();
+    }
+  } finally {
+    view.unmount();
+  }
+});
+
 it.each(["load", "error"])(
   "keeps a settled %s image when its pending resource becomes the same URL",
   async (event) => {

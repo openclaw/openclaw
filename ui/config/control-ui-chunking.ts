@@ -55,14 +55,6 @@ export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
-  if (
-    normalized.startsWith("\0@oxc-project+runtime@") &&
-    normalized.endsWith("/helpers/esm/decorate.js")
-  ) {
-    // Chat and New Session still use decorators; neither route owns their shared helper.
-    return "decorator-runtime";
-  }
-
   switch (controlUiBootManifestKey(id)) {
     case "ui/src/pages/plugins/plugins-page.tsx":
       return "plugins-page";
@@ -111,20 +103,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   if (
-    moduleIdIncludesPackage(id, "lit") ||
-    moduleIdIncludesPackage(id, "lit-html") ||
-    moduleIdIncludesPackage(id, "@lit/reactive-element")
-  ) {
-    // These directives have only deferred consumers. Keep
-    // their implementation and helpers with those consumers, outside startup.
-    return /\/directives\/(?:cache|guard|unsafe-html|unsafe-svg|until|private-async-helpers)\.js$/u.test(
-      normalized,
-    )
-      ? undefined
-      : "lit-runtime";
-  }
-
-  if (
     moduleIdIncludesPackage(id, "highlight.js") ||
     moduleIdIncludesPackage(id, "markdown-it") ||
     moduleIdIncludesPackage(id, "dompurify") ||
@@ -137,8 +115,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "markdown-runtime";
   }
 
-  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
+  if (moduleIdIncludesPackage(id, "zod")) {
     return "config-runtime";
+  }
+  if (moduleIdIncludesPackage(id, "json5")) {
+    // Zod validates boot snapshots; JSON5 loads only when a config consumer warms it.
+    return "json5-runtime";
   }
 
   if (moduleIdIncludesPackage(id, "libphonenumber-js")) {

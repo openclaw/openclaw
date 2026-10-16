@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import * as globals from "../globals.js";
 import { logWarn } from "../logger.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -205,20 +206,35 @@ describe("media-understanding CLI audio entry", () => {
   ])(
     "uses %s language and prompt precedence",
     async (_source, language, request, expected, prompt) => {
-      await runAudioEntry(
-        {
-          command: "mock-transcriber",
-          args: ["--prompt", "{{Prompt}}", "--language", "{{Language}}", "--file", "{{MediaPath}}"],
-          prompt: "entry prompt",
-          language,
-        },
-        { config: { prompt: "configured prompt", language: "fr" }, request },
-      );
-      expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
-        "mock-transcriber",
-        ["--prompt", prompt, "--language", expected, "--file", expect.any(String)],
-        { timeoutMs: 60_000, maxBuffer: CLI_OUTPUT_MAX_BUFFER },
-      );
+      const verbose = vi.spyOn(globals, "shouldLogVerbose").mockReturnValue(true);
+      const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+      try {
+        await runAudioEntry(
+          {
+            command: "mock-transcriber",
+            args: [
+              "--prompt",
+              "{{Prompt}}",
+              "--language",
+              "{{Language}}",
+              "--file",
+              "{{MediaPath}}",
+            ],
+            prompt: "entry prompt",
+            language,
+          },
+          { config: { prompt: "configured prompt", language: "fr" }, request },
+        );
+        expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
+          "mock-transcriber",
+          ["--prompt", prompt, "--language", expected, "--file", expect.any(String)],
+          { timeoutMs: 60_000, maxBuffer: CLI_OUTPUT_MAX_BUFFER },
+        );
+        expect(JSON.stringify(log.mock.calls)).not.toContain(prompt);
+      } finally {
+        log.mockRestore();
+        verbose.mockRestore();
+      }
     },
   );
 

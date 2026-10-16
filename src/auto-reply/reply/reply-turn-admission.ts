@@ -459,7 +459,7 @@ export async function admitReplyTurn(
               agentId: params.agentId,
               cfg: gatewayContext.getRuntimeConfig(),
               expectedSessionId: sessionId,
-              lane: params.kind === "visible" ? CommandLane.Main : CommandLane.Background,
+              lane: params.kind === "visible" ? CommandLane.Main : undefined,
               expectedRecoveryRunId: admittedSessionEntry.restartRecoveryDeliveryRunId,
               expectedRecoverySourceRunId: admittedSessionEntry.restartRecoveryDeliverySourceRunId,
               gatewayRuntime: recoveryRuntime,

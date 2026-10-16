@@ -22,8 +22,30 @@ export function normalizeManifestControlUi(
   if (value === undefined) {
     return ok(undefined);
   }
-  if (!isRecord(value) || Object.keys(value).some((key) => key !== "entry" && key !== "styles")) {
-    return err("controlUi must contain only entry and optional styles");
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some(
+      (key) => !["entry", "styles", "activation", "settingsViews"].includes(key),
+    )
+  ) {
+    return err("controlUi contains an unknown field");
+  }
+  if (value.activation !== undefined && value.activation !== "settings-only") {
+    return err("controlUi.activation must be settings-only when specified");
+  }
+  if (
+    value.settingsViews !== undefined &&
+    (!Array.isArray(value.settingsViews) ||
+      value.settingsViews.length !== 1 ||
+      !isRecord(value.settingsViews[0]) ||
+      Object.keys(value.settingsViews[0]).length !== 2 ||
+      value.settingsViews[0].section !== "memory" ||
+      value.settingsViews[0].panel !== "overview")
+  ) {
+    return err("controlUi.settingsViews must declare the Memory overview placement once");
+  }
+  if (value.activation === "settings-only" && !value.settingsViews) {
+    return err("settings-only Control UI requires a Settings placement");
   }
   const entry = typeof value.entry === "string" ? value.entry.replace(/^\.\//u, "") : "";
   // A dedicated built directory prevents a declaration from publishing package sources.
@@ -49,5 +71,10 @@ export function normalizeManifestControlUi(
       styles.push(style);
     }
   }
-  return ok({ entry, ...(styles.length > 0 ? { styles } : {}) });
+  return ok({
+    entry,
+    ...(styles.length > 0 ? { styles } : {}),
+    ...(value.activation === "settings-only" ? { activation: value.activation } : {}),
+    ...(value.settingsViews ? { settingsViews: [{ section: "memory", panel: "overview" }] } : {}),
+  });
 }

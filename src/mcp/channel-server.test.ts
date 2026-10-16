@@ -433,6 +433,26 @@ describe("openclaw channel mcp server", () => {
       });
     });
 
+    test("rejects oversized limits and timeouts at the MCP input boundary", async () => {
+      const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+      attachReadyGateway(
+        mcp.bridge,
+        vi.fn(async () => ({ sessions: [], messages: [] })),
+      );
+      for (const request of [
+        { name: "conversations_list", arguments: { limit: 501 } },
+        { name: "messages_read", arguments: { session_key: "agent:main:main", limit: 201 } },
+        { name: "events_poll", arguments: { limit: 201 } },
+        { name: "events_wait", arguments: { timeout_ms: 3_000_000_000 } },
+      ]) {
+        const result = await mcp.client.callTool(request);
+        expect(result).toMatchObject({
+          isError: true,
+          content: [{ type: "text", text: expect.stringContaining("Input validation error") }],
+        });
+      }
+    });
+
     test("waits for queued events through the MCP tool", async () => {
       const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
       await receiveMessage(mcp.bridge, {

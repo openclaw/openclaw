@@ -16,10 +16,7 @@ import { normalizeUsage } from "../usage.js";
 import { resolveSourceReplyDelivery } from "./delivery-evidence.js";
 import { log } from "./logger.js";
 import type { EmbeddedPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
-import {
-  createPostCompactionLoopGuard,
-  PostCompactionLoopPersistedError,
-} from "./post-compaction-loop-guard.js";
+import { createPostCompactionLoopGuard } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
@@ -46,7 +43,7 @@ import {
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
 import { settleEmbeddedRun } from "./run/run-settlement.js";
-import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
+import { prepareEmbeddedRunRuntime } from "./run/runtime.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./run/settled-turn-finalization.js";
 import {
@@ -109,9 +106,7 @@ export async function runPreparedEmbeddedLoop(
   ({ provider, modelId } = preparedRuntime);
   const {
     model,
-    attemptAuthProfileStore,
     profileCandidates,
-    profileFailureStore,
     pluginHarnessOwnsAuthBootstrap,
     attemptedThinking,
     getApiKeyInfo,
@@ -161,7 +156,7 @@ export async function runPreparedEmbeddedLoop(
     enabled: resolvedLoopDetectionConfig?.enabled !== false,
   });
   let postCompactionAbortController: AbortController | undefined;
-  let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
+  let postCompactionAbortError: Error | undefined;
   // Presentation survives retry attempts, but a newer tool result must clear stale text.
   const terminalToolPresentation = createTerminalToolPresentationTracker();
   const turnTaintState = createAgentTurnTaintState(params.initialTurnTainted === true);
@@ -173,7 +168,12 @@ export async function runPreparedEmbeddedLoop(
     }
     const verdict = postCompactionGuard.observe(observation);
     if (verdict.shouldAbort) {
-      postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
+      postCompactionAbortError ??= Object.assign(new Error(verdict.message), {
+        name: "PostCompactionLoopPersistedError",
+        detector: verdict.detector,
+        count: verdict.count,
+        toolName: verdict.toolName,
+      });
       input.laneController.laneTaskAbortController.abort(postCompactionAbortError);
       postCompactionAbortController?.abort(postCompactionAbortError);
     }
@@ -288,27 +288,16 @@ export async function runPreparedEmbeddedLoop(
         runLoopIterations: runRetryBudget.attemptsCounted,
         maxRunLoopIterations: runRetryBudget.maxAttempts,
       });
-      let recordedCompactionCount = 0;
-      let acceptsRequestBudget = true;
-      contextRecoveryState.compactionRequestBudget = undefined;
-      params.onCompactionRequestBudget?.(undefined);
+      const accounting = contextRecoveryState.beginAttempt(
+        abortSignal,
+        params.onCompactionRequestBudget,
+      );
       const attemptRunInput: PreparedEmbeddedRunInput = {
         ...admittedRunInput,
         runParams: {
           ...params,
-          onCompactionRequestBudget: (budget) => {
-            if (!acceptsRequestBudget || abortSignal?.aborted) {
-              return;
-            }
-            contextRecoveryState.compactionRequestBudget = budget;
-            params.onCompactionRequestBudget?.(budget);
-          },
-          onContextAccountingEvent: (event) => {
-            if (event.kind === "compaction") {
-              recordedCompactionCount += 1;
-            }
-            contextRecoveryState.observeContextAccounting(event);
-          },
+          onCompactionRequestBudget: accounting.onCompactionRequestBudget,
+          onContextAccountingEvent: accounting.onContextAccountingEvent,
         },
       };
       let dispatch: Awaited<ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>>;
@@ -340,7 +329,7 @@ export async function runPreparedEmbeddedLoop(
           }),
         );
       } catch (error) {
-        acceptsRequestBudget = false;
+        accounting.close();
         providerReview.failure(error);
         const retryTrace = await failoverRetryController.recoverThrownHarnessAuthFailure(error);
         if (!retryTrace) {
@@ -350,7 +339,7 @@ export async function runPreparedEmbeddedLoop(
         lastRetryFailoverReason = retryTrace.reason;
         continue;
       } finally {
-        acceptsRequestBudget = false;
+        accounting.close();
       }
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
@@ -371,7 +360,7 @@ export async function runPreparedEmbeddedLoop(
         runInput: admittedRunInput,
         preparedRuntime,
         dispatchedAttempt,
-        recordedCompactionCount,
+        recordedCompactionCount: accounting.recordedCompactionCount,
         sessionPromptState,
         provider,
         modelId,
@@ -514,7 +503,7 @@ export async function runPreparedEmbeddedLoop(
             providerOwner: preparedRuntime.snapshot().providerRuntimeHandle.plugin,
             model: model.id,
             activeErrorContext,
-            authProfileStore: attemptAuthProfileStore,
+            authProfileStore: preparedRuntime.attemptAuthProfileStore,
             authProfileId: lastProfileId,
             outerContextTokenMeta,
             usageAccumulator,
@@ -586,8 +575,8 @@ export async function runPreparedEmbeddedLoop(
         ...(effectiveModel.baseUrl ? { modelTransportBaseUrl: effectiveModel.baseUrl } : {}),
         requestTransportOverrides,
         authProfileId: lastProfileId,
-        profileFailureStore,
-        attemptAuthProfileStore,
+        profileFailureStore: preparedRuntime.profileFailureStore,
+        attemptAuthProfileStore: preparedRuntime.attemptAuthProfileStore,
         apiKeyInfo: getApiKeyInfo(),
         agentHarnessId: agentHarness.id,
         settledTurnFinalizationOutcome,
@@ -620,19 +609,23 @@ export async function runPreparedEmbeddedLoop(
     // must restore terminal suppression before asynchronous settlement begins.
     contextRecoveryState.restoreTimeoutRecoveryAbandonment();
     permissionChanges.close();
-    await settleEmbeddedRun({
-      runInput: admittedRunInput,
-      runtime: preparedRuntime,
-      compaction: {
-        state: contextRecoveryState,
-        session: sessionPromptState,
-        originalTarget: originalCompactionTarget,
-        durable: durableCompactionAccounting,
-        authority: accountingAuthority,
-      },
-      ownedContextEngineLease: ownsContextEngineLogicalTurnLease
-        ? contextEngineLogicalTurnLease
-        : undefined,
-    });
+    try {
+      await settleEmbeddedRun({
+        runInput: admittedRunInput,
+        runtime: preparedRuntime,
+        compaction: {
+          state: contextRecoveryState,
+          session: sessionPromptState,
+          originalTarget: originalCompactionTarget,
+          durable: durableCompactionAccounting,
+          authority: accountingAuthority,
+        },
+        ownedContextEngineLease: ownsContextEngineLogicalTurnLease
+          ? contextEngineLogicalTurnLease
+          : undefined,
+      });
+    } finally {
+      await preparedRuntime.releaseTransport();
+    }
   }
 }

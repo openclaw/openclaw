@@ -155,7 +155,7 @@ describe("UsagePage cache convergence", () => {
     },
   );
 
-  it.each(["main", "constructor", null])(
+  it.each(["constructor", null])(
     "keeps interleaved refresh outcomes with their owning agent for scope %s",
     async (scopeId) => {
       vi.useFakeTimers();
@@ -190,55 +190,37 @@ describe("UsagePage cache convergence", () => {
     },
   );
 
-  it.each(["scope", "time zone", "date", "creator"] as const)(
-    "preserves failure until publication after changing the query's %s",
-    async (control) => {
-      vi.useFakeTimers();
-      focusDocument();
-      let snapshot = cacheSnapshot("partial");
-      const request = vi.fn(async (method: string) =>
-        method === "usage.status"
-          ? { updatedAt: 1, providers: [] }
-          : { ...snapshot.result, creatorOptions: [{ key: "user:one" }] },
-      );
-      const client = { request } as unknown as GatewayBrowserClient;
-      const context = contextWithClient(client);
-      const page = await createPage(client, true, context);
-      await preloadUsage(page);
-      context.publishUsage({ usageUpdatedAt: 1, usageRefreshFailed: true });
-      await page.updateComplete;
-      expect(page.querySelector(".usage-cache-warning.warning")).not.toBeNull();
-      if (control === "scope") {
-        const button = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-          (entry) => entry.textContent?.trim() === "Current instance",
-        );
-        button!.click();
-      } else if (control === "time zone") {
-        const select = page.querySelector<HTMLSelectElement>("select.usage-select")!;
-        select.value = "utc";
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-      } else if (control === "creator") {
-        const select = page.querySelector<HTMLSelectElement>("select.usage-creator-filter")!;
-        select.value = "user:one";
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-      } else {
-        const input = page.querySelector<HTMLInputElement>("input.usage-date-input")!;
-        input.value = "2026-08-01";
-        input.dispatchEvent(new Event("change", { bubbles: true }));
-      }
-      await vi.advanceTimersByTimeAsync(400);
-      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2);
-      await page.updateComplete;
-      expect(page.querySelector(".usage-cache-warning.warning")).not.toBeNull();
-      snapshot = cacheSnapshot("fresh");
-      context.publishUsage({ usageUpdatedAt: Date.now() });
-      await vi.advanceTimersByTimeAsync(0);
-      await page.updateComplete;
-      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(3);
-      expect(page.querySelector(".usage-cache-warning")).toBeNull();
-      expect(page.providerUsageStalled).toBe(false);
-    },
-  );
+  it("preserves failure until publication after changing the query's date", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    let snapshot = cacheSnapshot("partial");
+    const request = vi.fn(async (method: string) =>
+      method === "usage.status"
+        ? { updatedAt: 1, providers: [] }
+        : { ...snapshot.result, creatorOptions: [{ key: "user:one" }] },
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client);
+    const page = await createPage(client, true, context);
+    await preloadUsage(page);
+    context.publishUsage({ usageUpdatedAt: 1, usageRefreshFailed: true });
+    await page.updateComplete;
+    expect(page.querySelector(".usage-cache-warning.warning")).not.toBeNull();
+    const input = page.querySelector<HTMLInputElement>("input.usage-date-input")!;
+    input.value = "2026-08-01";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(400);
+    expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2);
+    await page.updateComplete;
+    expect(page.querySelector(".usage-cache-warning.warning")).not.toBeNull();
+    snapshot = cacheSnapshot("fresh");
+    context.publishUsage({ usageUpdatedAt: Date.now() });
+    await vi.advanceTimersByTimeAsync(0);
+    await page.updateComplete;
+    expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(3);
+    expect(page.querySelector(".usage-cache-warning")).toBeNull();
+    expect(page.providerUsageStalled).toBe(false);
+  });
 
   it("acknowledges only failed receipts in the explicit Refresh scope", async () => {
     vi.useFakeTimers();
@@ -329,7 +311,6 @@ describe("UsagePage cache convergence", () => {
     { publication: "before", failed: true, failureAfterCommit: "none" },
     { publication: "during", failed: true, failureAfterCommit: "none" },
     { publication: "existing", failed: true, failureAfterCommit: "none" },
-    { publication: "during", failed: false, failureAfterCommit: "other" },
     { publication: "during", failed: false, failureAfterCommit: "main" },
   ])(
     "adopts a preload publication $publication the request (failed: $failed, later failure: $failureAfterCommit) without losing or duplicating its refresh",

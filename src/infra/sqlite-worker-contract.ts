@@ -98,6 +98,7 @@ export type SqliteWorkerRequest = {
   actor: number;
   stateContext?: SqliteWorkerStateContext;
   operationAdmission?: MessagePort;
+  databaseAdmissionDeadlineAtMs?: number;
   operationAttachment?: { value: unknown };
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   executionAuthority?: SqliteWorkerExecutionAuthority;

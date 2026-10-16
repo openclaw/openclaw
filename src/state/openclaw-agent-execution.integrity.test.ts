@@ -4,8 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -58,6 +60,7 @@ import * as stateWorkerStore from "./openclaw-state-worker-store.js";
 const counter = vi.hoisted(() => ({
   path: "",
   checks: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2),
+  gate: undefined as SharedArrayBuffer | undefined,
 }));
 vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/worker-cpu.js")>();
@@ -72,6 +75,12 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
         for (const method of ["all", "get", "iterate", "run"]) {
           const execute = statement[method].bind(statement);
           statement[method] = (...args) => {
+            if (workerData.testIntegrityGate) {
+              const gate = new Int32Array(workerData.testIntegrityGate);
+              Atomics.store(gate, 1, 1);
+              Atomics.notify(gate, 1);
+              while (Atomics.load(gate, 0) === 1) Atomics.wait(gate, 0, 1);
+            }
             Atomics.add(new Int32Array(workerData.testIntegrityChecks),
               match[1].toLowerCase() === "integrity_check" ? 0 : 1, 1);
             return execute(...args);
@@ -98,6 +107,7 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
           ...options?.workerData,
           testIntegrityPath: counter.path,
           testIntegrityChecks: counter.checks,
+          testIntegrityGate: counter.gate,
         },
       });
     },
@@ -150,6 +160,63 @@ function createNativeSource(assertCurrent: () => void): AgentDatabaseRequestExec
     }),
   };
 }
+
+it.for(["warm", "cold"] as const)(
+  "admits durable channel messages while agent integrity is pending (%s shared writer)",
+  async (sharedWriter, { signal }) => {
+    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-ingress-isolation-")) };
+    const ready = openOpenClawAgentDatabase({ agentId: "ready", env });
+    const preparing = openOpenClawAgentDatabase({ agentId: "preparing", env });
+    const context = captureOpenClawStateWorkerContext({ env });
+    const assertCurrent = () => context.admission.assertCurrent();
+    const source = createNativeSource(assertCurrent);
+    const readyGeneration = createNativeGeneration(
+      ready.agentId,
+      ready.path,
+      context,
+      assertCurrent,
+    );
+    const preparingGeneration = createNativeGeneration(
+      preparing.agentId,
+      preparing.path,
+      context,
+      assertCurrent,
+    );
+    const queue = createChannelIngressQueue<{ text: string }>({
+      channelId: "synthetic",
+      stateDir: env.OPENCLAW_STATE_DIR,
+    });
+    const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
+    Atomics.store(gate, 0, 1);
+    counter.path = preparing.path;
+    counter.gate = gate.buffer;
+    invalidateOpenClawAgentDatabaseValidation(preparing.path);
+    let preparation: Promise<unknown> | undefined;
+    try {
+      // Occupy both ordinary slots on the old implementation before opening the slow agent.
+      if (sharedWriter === "warm") {
+        await queue.enqueue("before", { text: "before preparation" });
+      }
+      await readyGeneration.run(source, async () => {});
+      preparation = preparingGeneration.run(source, async () => {});
+      void preparation.catch(() => {});
+      await withinTest(Promise.resolve(Atomics.waitAsync(gate, 1, 0).value), signal);
+
+      await withinTest(queue.enqueue("during", { text: "during preparation" }), signal);
+      expect(Atomics.load(gate, 0)).toBe(1);
+      expect((await queue.listPending()).map((event) => event.id)).toEqual(
+        sharedWriter === "warm" ? ["before", "during"] : ["during"],
+      );
+    } finally {
+      Atomics.store(gate, 0, 0);
+      Atomics.notify(gate, 0);
+      counter.gate = undefined;
+      await preparation;
+      await preparingGeneration.close();
+      await readyGeneration.close();
+    }
+  },
+);
 
 it.each(["confirmed close", "native exit"] as const)(
   "uses native close evidence before recovering an agent lease (%s)",
@@ -358,7 +425,7 @@ it("opens an unconfigured external store without reconstructing unknown deletion
   expect(opening).toEqual([{ status: "fulfilled", value: "opened" }]);
   expect(closing).toEqual([{ status: "fulfilled", value: undefined }]);
   expect(fs.readFileSync(pathname)).toEqual(bytes);
-  expect(fs.readdirSync(external)).toEqual(["retained.sqlite", "retained.sqlite.seal"]);
+  expect(fs.readdirSync(external).toSorted()).toEqual(["retained.sqlite", "retained.sqlite.seal"]);
   const shared = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(env), { readOnly: true });
   try {
     expect(

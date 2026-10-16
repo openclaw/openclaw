@@ -10,10 +10,12 @@ import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as sessionEntryRuntime from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { reduceSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -963,7 +965,10 @@ function runDiscordDelivery(overrides: Partial<Parameters<typeof agentCommand>[0
   });
 }
 
-function runInternalModelCommand(runId: string) {
+function runInternalModelCommand(
+  runId: string,
+  onSessionIdChanged?: Parameters<typeof agentCommand>[0]["onSessionIdChanged"],
+) {
   return agentCommand({
     message: "probe",
     to: "+1234567890",
@@ -971,6 +976,7 @@ function runInternalModelCommand(runId: string) {
     modelRun: true,
     promptMode: "none",
     sessionEffects: "internal",
+    onSessionIdChanged,
   });
 }
 
@@ -1126,9 +1132,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolvedSessionKeyMock = undefined;
     state.persistSessionEntryMock.mockImplementation(async (...args: unknown[]) => {
       const params = args[0] as {
-        sessionStore?: Record<string, unknown>;
+        sessionStore?: Record<string, SessionEntry>;
         sessionKey?: string;
-        entry?: unknown;
+        entry?: SessionEntry;
         shouldPersist?: (entry: unknown) => boolean;
       };
       const current =
@@ -1143,6 +1149,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }
       if (params.sessionStore && params.sessionKey && params.entry) {
         params.sessionStore[params.sessionKey] = params.entry;
+        (state.sessionStoreMock ??= params.sessionStore)[params.sessionKey] = params.entry;
         return params.entry;
       }
       return current;
@@ -1171,6 +1178,34 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
     state.resolveMessageChannelSelectionMock.mockRejectedValue(new Error("channel required"));
     await resetTestSessionReaders(state);
+    // Keep command metadata writes on the fixture's persistence owner, including native recovery cases.
+    vi.spyOn(sessionEntryRuntime, "applySessionEntryOperation").mockImplementation(
+      async (scope, operation, options) => {
+        if (operation.kind !== "fields") {
+          throw new Error(`Unexpected command session patch: ${operation.kind}`);
+        }
+        const entry = state.loadSessionEntryMock(scope) as SessionEntry | undefined;
+        if (!entry) {
+          return null;
+        }
+        const patch = reduceSessionEntryPatch(operation, entry, entry);
+        if (!patch) {
+          return entry;
+        }
+        const persisted = (await state.persistSessionEntryMock({
+          agentId: scope.agentId,
+          sessionKey: scope.sessionKey,
+          storePath: scope.storePath,
+          sessionStore: state.sessionStoreMock ?? { [scope.sessionKey]: entry },
+          initialEntry: entry,
+          entry: { ...entry, ...patch },
+        })) as SessionEntry | undefined;
+        if (persisted) {
+          options?.onCommitted?.(persisted);
+        }
+        return persisted ?? null;
+      },
+    );
     state.resolveAgentDeliveryPlanMock.mockImplementation(
       (params: {
         accountId?: string;
@@ -3238,6 +3273,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("removes the one-shot internal model-run SQLite session after success", async () => {
     setupSingleAttemptFallback();
+    const onSessionIdChanged = vi.fn();
     const result = makeSuccessResult("openai", "gpt-5.4");
     state.runAgentAttemptMock.mockImplementationOnce(
       async (
@@ -3283,7 +3319,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       await releaseCleanup.promise;
     });
     let settled = false;
-    const pending = runInternalModelCommand("model-run-success").finally(() => {
+    const pending = runInternalModelCommand("model-run-success", onSessionIdChanged).finally(() => {
       settled = true;
     });
     try {
@@ -3317,6 +3353,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const cleanupOrder =
       state.applySessionEntryLifecycleMutationMock.mock.invocationCallOrder[0] ?? 0;
     expect(deliveryOrder).toBeLessThan(cleanupOrder);
+    expect(onSessionIdChanged).not.toHaveBeenCalled();
   });
 
   it.each(["prepare", "cleanup"] as const)(

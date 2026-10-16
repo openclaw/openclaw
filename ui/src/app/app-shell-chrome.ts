@@ -96,7 +96,7 @@ export interface ShellChromeHost extends ShellNewSessionHost, ShellPanelHost {
   navDrawerTrigger: HTMLElement | null;
   setNativeHistoryState(state: NativeHistoryState): void;
   commandPaletteTarget: CommandPaletteTargetDetail | undefined;
-  requestUpdate(): void;
+  invalidate(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   exitSettings(): void;
   navigate(routeId: string, options?: ApplicationNavigationOptions): void;
@@ -138,7 +138,7 @@ export class ShellChromeOwner {
       options,
     );
     for (const type of [CHAT_HISTORY_RECOVERY_CHANGED_EVENT, CHAT_PANE_LIFECYCLE_CHANGED_EVENT]) {
-      host.element.addEventListener(type, () => host.requestUpdate(), options);
+      host.element.addEventListener(type, () => host.invalidate(), options);
     }
     document.addEventListener("keydown", this.handleDocumentKeydown, {
       capture: true,
@@ -348,7 +348,7 @@ export class ShellChromeOwner {
       // Preserve the tab-local state while keeping the responsive handoff expanded.
       host.desktopNavigationExpanded = host.context?.navigation.snapshot.navCollapsed ?? false;
     }
-    host.requestUpdate();
+    host.invalidate();
     void host.updateComplete.then(() => {
       if (isMobileNavLayout() && !host.navDrawerOpen && dismissedSidebarMenus) {
         requestAnimationFrame(() => this.restoreFocusTo(visibleNavDrawerToggle(host.element)));
@@ -519,7 +519,7 @@ export class ShellChromeOwner {
       mode: this.pendingDebugOverlayMode === "minimized" ? "expanded" : "minimized",
     };
     persistLazyShellAction(event);
-    this.host.requestUpdate();
+    this.host.invalidate();
   }
 
   private readonly handleDebugOverlayRequest = (event: Event): void => {
@@ -585,7 +585,7 @@ export class ShellChromeOwner {
     );
     this.pendingLazyAction = descriptor;
     persistLazyShellAction(descriptor);
-    host.requestUpdate();
+    host.invalidate();
   };
 
   private readonly handleKeyboardShortcutsRequest = (event: Event): void => {

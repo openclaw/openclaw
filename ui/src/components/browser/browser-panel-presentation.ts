@@ -9,10 +9,7 @@ import {
 } from "../panel-toggle-contract.ts";
 import { SolidPanelController } from "../solid-panel-controller.ts";
 import { browserRequestReferencedTabs, type BrowserDashboardTarget } from "./browser-client.ts";
-import {
-  BrowserPanelController,
-  type BrowserPanelControllerHost,
-} from "./browser-panel-controller.ts";
+import { createBrowserPanel, type BrowserPanelHost } from "./browser-panel-owner.ts";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 import {
   browserTabKey,
@@ -22,10 +19,7 @@ import {
 } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-export class BrowserPanelPresentation
-  extends SolidPanelController
-  implements BrowserPanelControllerHost
-{
+export class BrowserPanelPresentation extends SolidPanelController implements BrowserPanelHost {
   /** Gateway client used for browser.request RPCs; null until connected. */
   client: GatewayBrowserClient | null = null;
   /** Whether the connected gateway advertises browser.request to this operator. */
@@ -58,14 +52,12 @@ export class BrowserPanelPresentation
   private activeDashboardKey: string | undefined;
   private activeSessionTabsKey: string | undefined;
   private consumedPreferredRevision?: string;
-  readonly browserPanelController = new BrowserPanelController(this);
+  readonly browserPanelController = createBrowserPanel(this, () => this.invalidate());
   readonly dockLayout = new DockLayoutController(this, {
     layout: browserPanelLayout,
     reservationPrefix: "browser",
     isAvailable: () => this.available,
   });
-  private viewportResizeObserver: ResizeObserver | null = null;
-  private observedViewportElement: Element | null = null;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -83,9 +75,6 @@ export class BrowserPanelPresentation
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-    this.viewportResizeObserver?.disconnect();
-    this.viewportResizeObserver = null;
-    this.observedViewportElement = null;
   }
 
   override updated(changed: Map<PropertyKey, unknown>): void {
@@ -148,24 +137,6 @@ export class BrowserPanelPresentation
     this.browserPanelController.native.presentation.update();
     this.dockLayout.syncReservation();
     this.browserPanelController.input.paintOverlay();
-    const viewportElement = this.renderRoot.querySelector(".bp-viewport");
-    if (viewportElement !== this.observedViewportElement) {
-      // The viewport is transient while the dock opens, closes, or becomes unavailable.
-      this.viewportResizeObserver?.disconnect();
-      this.observedViewportElement = viewportElement;
-      if (viewportElement && typeof ResizeObserver === "function") {
-        this.viewportResizeObserver ??= new ResizeObserver((entries) => {
-          const entry = entries[0];
-          if (entry) {
-            this.browserPanelController.handleViewportResize(
-              entry.contentRect.width,
-              entry.contentRect.height,
-            );
-          }
-        });
-        this.viewportResizeObserver.observe(viewportElement);
-      }
-    }
     const controller = this.browserPanelController;
     notifyPanelHostedTabsChanged(this.element, [
       controller.activeTargetId,

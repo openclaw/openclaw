@@ -1,7 +1,7 @@
 import type { SessionsStorageStatusResult } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
+import { For, Show, createSignal, onSettled } from "solid-js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
@@ -19,6 +19,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatByteSize, formatDateTimeMs } from "../../lib/format.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import { createSettingsStatus } from "./settings-status.ts";
 import { SESSION_STORAGE_SETTINGS_TARGET_ID } from "./settings-targets.ts";
 
@@ -94,7 +95,7 @@ export function SessionStorageSettings(props: SettingsProps) {
     setRunError(null);
     setRunOutcome(null);
   }
-  onCleanup(stopPolling);
+  onSettled(() => stopPolling);
   function observeMaintenance(status: SessionsStorageStatusResult) {
     if (status.maintenance.running) {
       followingRun = true;
@@ -167,16 +168,7 @@ export function SessionStorageSettings(props: SettingsProps) {
       !currentResult.status.maintenance.running
     );
   }
-  let ageInput: HTMLInputElement | undefined;
-  createEffect(
-    () => ageDraft() ?? String(storageConfig().afterDays),
-    (value) => {
-      // Preserve the native number draft when an owner publication leaves it unchanged.
-      if (ageInput && ageInput.value !== value) {
-        ageInput.value = value;
-      }
-    },
-  );
+  const ageValue = liveValue(() => ageDraft() ?? String(storageConfig().afterDays));
   async function runNow() {
     const currentClient = client();
     const ownsConnection = capture();
@@ -403,9 +395,7 @@ export function SessionStorageSettings(props: SettingsProps) {
                     step="1"
                     required
                     disabled={disabled()}
-                    ref={(element) => {
-                      ageInput = element;
-                    }}
+                    ref={ageValue}
                     onInput={(event: Event) => {
                       // SAFETY: This handler is bound directly to the native number input.
                       setAgeDraft((event.currentTarget as HTMLInputElement).value);

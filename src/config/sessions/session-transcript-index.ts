@@ -380,6 +380,7 @@ export function markSessionTranscriptIndexDirtyInTransaction(
   createWatermarkWriter(db, sessionId)({ ...dirty, updatedAt: now });
   const actor = readSessionActorTransactionState({ db }, { sessionId });
   if (actor) {
+    actor.transcript.contextStats = undefined;
     actor.transcript.projection = {
       ...dirty,
       hasUnclassifiedEvents: actor.transcript.projection?.hasUnclassifiedEvents ?? false,

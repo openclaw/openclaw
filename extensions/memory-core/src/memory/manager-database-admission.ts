@@ -6,6 +6,7 @@ import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 
 /** Facts published by the worker that admitted the physical index. */
 export type MemoryDatabaseAdmission = {
+  engine?: "postgres";
   hasIndex: boolean;
   ftsAvailable: boolean;
   schemaVersion?: number;

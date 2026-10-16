@@ -19,7 +19,7 @@ import {
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ChatQuestionCard } from "../chat/components/chat-question-card-view.tsx";
 import { createGatewayQuestionPanelProps } from "../chat/components/chat-question-card.ts";
 
@@ -28,7 +28,7 @@ type QuestionPageRequestError = "connection" | "load" | "unavailable" | null;
 type QuestionPageProps = { questionId: string };
 
 function createQuestionPage(context: ApplicationContext, props: QuestionPageProps) {
-  // Requests read the live target without subscribing; the identity effect owns rebinding.
+  // External callbacks and completion checks read the live ID; effect admission receives its ID.
   const questionId = () => untrack(() => props.questionId);
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [requestError, setRequestError] = createSignal<QuestionPageRequestError>(null, {
@@ -79,6 +79,7 @@ function createQuestionPage(context: ApplicationContext, props: QuestionPageProp
       document.title = previousDocumentTitle;
     }
   });
+  // Gateway requests, browser title, and return focus follow the current question ID.
   createEffect(
     () => props.questionId,
     (id, previous) => {
@@ -90,7 +91,7 @@ function createQuestionPage(context: ApplicationContext, props: QuestionPageProp
       setRequestError(id ? null : "unavailable");
       setLoading(Boolean(id));
       if (id && clientOwner) {
-        void loadQuestion(clientOwner);
+        void loadQuestion(clientOwner, id);
       }
     },
   );
@@ -139,13 +140,12 @@ function createQuestionPage(context: ApplicationContext, props: QuestionPageProp
     void loadQuestion(nextClient);
   }
 
-  async function loadQuestion(client: GatewayBrowserClient): Promise<void> {
+  async function loadQuestion(client: GatewayBrowserClient, id = questionId()): Promise<void> {
     if (!canUseQuestionPrompts(context.gateway.snapshot)) {
       setLoading(false);
       setRequestError("unavailable");
       return;
     }
-    const id = questionId();
     const generation = ++operationGeneration;
     setLoading(true);
     setRequestError(null);

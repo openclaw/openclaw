@@ -5,7 +5,7 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -29,7 +29,7 @@ describe("chat transcript controller", () => {
 
   it("retains a projected reply target until its row commits and prevents automatic follow from taking over", async () => {
     const update = createDeferred<boolean>();
-    const transcript = new ChatTranscriptController(
+    const transcript = createTranscriptTestOwner(
       {
         addController: vi.fn(),
         removeController: vi.fn(),
@@ -93,7 +93,7 @@ describe("chat transcript controller", () => {
     "keeps only the current deferred message reveal after %s",
     async (interruption) => {
       const update = createDeferred<boolean>();
-      const transcript = new ChatTranscriptController(
+      const transcript = createTranscriptTestOwner(
         {
           addController: vi.fn(),
           removeController: vi.fn(),

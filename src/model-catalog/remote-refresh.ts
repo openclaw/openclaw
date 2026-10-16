@@ -35,7 +35,7 @@ function bundleCounts(bundle: RemoteModelCatalogWireBundle): RefreshCounts {
   return {
     providers: Object.keys(bundle.providers).length,
     models:
-      bundle.schemaVersion === 2
+      bundle.schemaVersion !== 1
         ? bundle.models.length
         : Object.values(bundle.providers).reduce(
             (total, provider) => total + provider.models.length,

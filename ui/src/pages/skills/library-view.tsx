@@ -264,7 +264,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
   }) => (
     <button
       type="button"
-      class={button.action === "remove" ? "btn danger" : "btn"}
+      class={["btn", { danger: button.action === "remove" }]}
       disabled={button.locked ?? mutationLocked()}
       onClick={() => void props.library.mutate(button.action)}
     >

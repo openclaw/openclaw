@@ -33,6 +33,90 @@ function spanNamed(spans: ReadableSpan[], name: string) {
   return spans.find((span) => span.name === name);
 }
 
+test("exports untimed response observations on their trusted turn without counting usage twice", async () => {
+  const reader = new PeriodicExportingMetricReader({
+    exporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
+  });
+  const meterProvider = new MeterProvider({ readers: [reader] });
+  metrics.disable();
+  expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
+  try {
+    await startOtelService({ traces: true, metrics: true });
+    const turn = {
+      runId: "response-run",
+      callId: "response-turn",
+      provider: "openai",
+      model: "test-model",
+      observationUnit: "turn" as const,
+      trace: createDiagnosticTraceContext(),
+    };
+    emit({ type: "model.call.started", ...turn });
+    const response = {
+      ...turn,
+      type: "model.response.observed" as const,
+      timestampSource: "receipt" as const,
+      usageSource: "native-normalized" as const,
+      usageScope: "response" as const,
+      upstreamRequestIdHash: "sha256:0123456789abcdef",
+      usage: {
+        input: 6,
+        output: 4,
+        cacheRead: 3,
+        cacheWrite: 1,
+        reasoningTokens: 2,
+        total: 14,
+        promptTokens: 10,
+      },
+    };
+    emitDiagnosticEvent(response);
+    emit(response);
+    emit({
+      ...response,
+      upstreamRequestIdHash: "sha256:fedcba9876543210",
+      usage: { cacheRead: 3 },
+    });
+    emit({ type: "model.call.completed", ...turn, durationMs: 20 });
+    emit({ type: "model.usage", provider: "openai", model: "test-model", usage: response.usage });
+    await waitForDiagnosticEventsDrained();
+    const span = spanNamed(sdk.exporter.getFinishedSpans(), "openclaw.model.call");
+    expect(span?.events).toHaveLength(2);
+    expect(span?.events[0]).toMatchObject({
+      name: "openclaw.model.response.observed",
+      attributes: {
+        "openclaw.upstreamRequestIdHash": response.upstreamRequestIdHash,
+        "openclaw.model_response.timestamp_source": "receipt",
+        "openclaw.model_response.usage_source": "native-normalized",
+        "openclaw.model_response.usage_scope": "response",
+        "openclaw.model_call.usage.input_tokens": 6,
+        "openclaw.model_call.usage.output_tokens": 4,
+        "openclaw.model_call.usage.reasoning_output_tokens": 2,
+        "gen_ai.usage.input_tokens": 10,
+      },
+    });
+    expect(span?.events[1]?.attributes).not.toHaveProperty("gen_ai.usage.input_tokens");
+    expect(
+      sdk.exporter
+        .getFinishedSpans()
+        .map((item) => item.name)
+        .toSorted(),
+    ).toEqual(["openclaw.model.call", "openclaw.model.usage"]);
+    const { resourceMetrics } = await reader.collect();
+    const tokenMetrics = resourceMetrics.scopeMetrics
+      .flatMap((scope) => scope.metrics)
+      .find((metric) => metric.descriptor.name === "openclaw.tokens");
+    expect(
+      tokenMetrics?.dataPoints.find((point) => point.attributes["openclaw.token"] === "total")
+        ?.value,
+    ).toBe(14);
+    emit(response);
+    await waitForDiagnosticEventsDrained();
+    expect(span?.events).toHaveLength(2);
+  } finally {
+    await stopStartedOtelServices();
+    await meterProvider.shutdown();
+  }
+});
+
 test("keeps runtime phase parents explicit when observations arrive under another trace", async () => {
   context.disable();
   expect(context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable())).toBe(

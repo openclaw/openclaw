@@ -16,19 +16,18 @@ import { prepareTranscriptPayload } from "../config/sessions/transcript-payload.
 import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
-  assertAgentDatabaseMaintenanceAuthority,
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
 } from "../state/openclaw-agent-db-lease.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
-import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
+import { LEGACY_PARTICIPANTS_SCHEMA } from "../state/openclaw-agent-schema-history.js";
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
-import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -147,7 +146,7 @@ function openLegacyAgentDatabase(stateDir: string, agentId = "main") {
   removeCanonicalValidationFromHistoricalAgentFixture(database);
   database.exec(`
     DROP TABLE session_participants;
-    ${withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql())}
+    ${LEGACY_PARTICIPANTS_SCHEMA}
     PRAGMA user_version = 17;
     UPDATE schema_meta SET schema_version = 17 WHERE meta_key = 'primary';
   `);
@@ -725,9 +724,10 @@ describe("historical transcript directive migration", () => {
     const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
     let competingLeaseId: string | undefined;
     const originalAssert = assertAgentDatabaseMaintenanceAuthority;
-    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
+    const maintenanceAuthority =
+      await import("../state/openclaw-agent-db-maintenance-authority.js");
     const authority = vi
-      .spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthority")
+      .spyOn(maintenanceAuthority, "assertAgentDatabaseMaintenanceAuthority")
       .mockImplementation(() => {
         originalAssert();
         if (authority.mock.calls.length !== 1) {
@@ -831,9 +831,10 @@ describe("historical transcript directive migration", () => {
     const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
     let competingLeaseId: string | undefined;
     const originalAssert = assertAgentDatabaseMaintenanceAuthority;
-    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
+    const maintenanceAuthority =
+      await import("../state/openclaw-agent-db-maintenance-authority.js");
     const authority = vi
-      .spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthority")
+      .spyOn(maintenanceAuthority, "assertAgentDatabaseMaintenanceAuthority")
       .mockImplementation(() => {
         if (!competingLeaseId && new Error().stack?.includes("beforeRename")) {
           openOpenClawStateDatabase({ env })

@@ -462,8 +462,8 @@ describe("Codex app-server binding store", () => {
       applyEnv: false,
     });
     const openStore = () =>
-      createCodexAppServerBindingStore(
-        createCodexSqliteTestBindingStateStore({
+      createBindingStore(
+        createSqliteState({
           namespace: "restricted-reopen",
           maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
           env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
@@ -477,7 +477,7 @@ describe("Codex app-server binding store", () => {
     const attested = {
       ...legacy,
       threadId: "restricted-attested",
-      restrictedThreadConfigFingerprint: hashCodexAppServerBindingFingerprint("creation-policy"),
+      restrictedThreadConfigFingerprint: hashFingerprint("creation-policy"),
     };
     const legacyIdentity = { kind: "conversation" as const, bindingId: "restricted-legacy" };
     const attestedIdentity = { kind: "conversation" as const, bindingId: "restricted-attested" };

@@ -16,6 +16,7 @@ import {
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
+import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -50,6 +51,7 @@ import {
   subscribeChatPaneSnapshotInvalidation,
   subscribeChatPaneStartup,
 } from "./chat-pane-startup-subscriptions.ts";
+import type { ChatPaneInputChanges } from "./chat-pane-state-owner.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { cancelChatModelRecovery } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -58,6 +60,7 @@ import {
   applyChatAgentOwnerTransition,
   applySelectedChatAgent,
   refreshPageChat,
+  refreshChatModelAuthStatus,
   refreshChatMetadata,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
@@ -85,7 +88,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         const state = this.state;
         return state && this.active && this.presented
           ? {
-              renderRoot: this.renderRoot,
+              renderRoot: this.element,
               state,
               linkReaders: availableLinkReaders(this.context.gateway.snapshot),
               pluginPanels: this.context.plugins.registrations("panels").map((entry) => entry.key),
@@ -94,7 +97,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           : null;
       },
       pending: this.pendingPanelToggleRequests,
-      requestUpdate: () => this.requestUpdate(),
+      requestUpdate: () => this.invalidate(),
       updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
     });
 
@@ -199,7 +202,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     // A null mount binds only when its first annotation ownership begins.
     this.stagedAttachmentGatewayOwner ??= this.context.gateway.snapshot.client;
-    focusBrowserAnnotationComposerAfterUpdate(this);
+    focusBrowserAnnotationComposerAfterUpdate({
+      querySelector: this.element.querySelector.bind(this.element),
+      updateComplete: this.updateComplete,
+    });
   }
 
   protected readonly handleDocumentKeydown = (event: KeyboardEvent) => {
@@ -246,16 +252,13 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     focusChatComposerFromPrintableKeydown(this.element, event);
   };
 
-  override connectedCallback() {
+  override start() {
     this.boardProviderLifecycleConnected = true;
     this.resumeStagedAttachments();
-    super.connectedCallback();
-    if (!this.presented) {
-      this.minutePoll.stop();
-    }
+    super.start();
     const mountGatewayOwner = this.context.gateway.snapshot.client;
     this.stagedAttachmentGatewayOwner = mountGatewayOwner;
-    this.requestUpdate();
+    this.invalidate();
     if (typeof ResizeObserver === "function") {
       this.paneResizeObserver = new ResizeObserver((entries) => {
         const width = entries.at(-1)?.contentRect.width;
@@ -263,32 +266,37 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         if (typeof width === "number" && width > 0 && width !== this.paneWidth) {
           this.transcript.syncViewportGeometry();
           this.paneWidth = width;
+          this.invalidate();
         }
       });
       this.paneResizeObserver.observe(this.element);
     }
-    this.addEventListener("pointerdown", this.handlePaneFocus);
-    this.addEventListener("focusin", this.handlePaneFocus);
-    this.addEventListener("input", this.handlePaneInput);
+    this.element.addEventListener("pointerdown", this.handlePaneFocus);
+    this.element.addEventListener("focusin", this.handlePaneFocus);
+    this.element.addEventListener("input", this.handlePaneInput);
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
     const chatState = this.chatState;
     chatState.addCleanup(() => publishChatWorkContext(this.context, this));
     chatState.addCleanup(() => {
       document.removeEventListener("keydown", this.handleDocumentKeydown, true);
-      this.removeEventListener("pointerdown", this.handlePaneFocus);
-      this.removeEventListener("focusin", this.handlePaneFocus);
-      this.removeEventListener("input", this.handlePaneInput);
+      this.element.removeEventListener("pointerdown", this.handlePaneFocus);
+      this.element.removeEventListener("focusin", this.handlePaneFocus);
+      this.element.removeEventListener("input", this.handlePaneInput);
     });
     const pageState = createPageState(
       this.context,
       chatState.createRenderLifecycle(),
-      this,
+      {
+        sessionKey: this.sessionKey,
+        dispatchEvent: (event) => this.element.dispatchEvent(event),
+        querySelector: (selector) => this.element.querySelector(selector),
+      },
       this.chatMessagesBySession,
     );
     pageState.chatMetadataIsPresented = () =>
       this.presented && document.visibilityState !== "hidden";
     const refreshPresentedReads = () => {
-      this.requestUpdate();
+      this.invalidate();
       if (pageState.chatMetadataIsPresented?.()) {
         void refreshChatMetadata(pageState, { automatic: true });
         this.resumeDeferredSessionHydration();
@@ -345,7 +353,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           applyChatCacheSnapshot(pageState, snapshot);
           const target = this.resolveChatReadTarget();
           if (target && snapshot.progressCard !== undefined) {
-            this.progressCard.hydrate(target, snapshot.progressCard);
+            this.progressCards.hydrate(target, snapshot.progressCard);
           }
         } else {
           this.hydrateStoredChatSnapshot(pageState, initialSessionKey);
@@ -441,6 +449,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
+        if (state && modelAuthEventInvalidates(event)) {
+          state.modelAuthStatusResult = null;
+          state.modelAuthStatusError = null;
+          this.invalidate();
+          void refreshChatModelAuthStatus(state).finally(() => this.invalidate());
+        }
         if (
           state &&
           event.event === "sessions.changed" &&
@@ -495,7 +509,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           handlePageGatewayEvent(state, event, () => this.presented);
           if (event.event === "node.runnerInventory.changed") {
             this.activeSessionResources.invalidate();
-            this.requestUpdate();
+            this.invalidate();
           }
         }
       }),
@@ -508,7 +522,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     chatState.addCleanup(
       subscribeChatPaneSnapshotInvalidation(
         () => this.state,
-        () => this.progressCard.invalidate(this.resolveChatReadTarget()),
+        () => {
+          const target = this.resolveChatReadTarget();
+          if (target) {
+            this.progressCards.invalidate(target);
+          }
+        },
       ),
     );
     this.applyGatewaySnapshot(this.context.gateway.snapshot);
@@ -537,9 +556,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
   }
 
-  override willUpdate(changedProperties: Map<PropertyKey, unknown>) {
+  override synchronizeInputs(changes: ChatPaneInputChanges) {
     this.captureArchivePresentationFocus();
-    if (changedProperties.has("sessionKey") && this.state) {
+    if (changes.sessionKey && this.state) {
       const catalogKey = parseCatalogSessionKey(this.sessionKey);
       const nextSessionKey = catalogKey
         ? this.sessionKey
@@ -575,7 +594,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           this.state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
         }
         if (rejectedTurn || acceptedPrompt) {
-          this.requestUpdate();
+          this.invalidate();
         }
       }
       if (nextSessionKey) {
@@ -585,12 +604,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         }
       }
     }
-    if (changedProperties.has("sessionKey") || changedProperties.has("inputRegion")) {
+    if (changes.sessionKey || changes.inputRegion) {
       this.syncActiveBindings();
       this.activateComposerPresentation();
     }
     if (
-      changedProperties.has("draft") &&
+      changes.draft &&
       this.draft !== undefined &&
       this.state &&
       this.draft !== this.state.chatMessage
@@ -601,17 +620,24 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.syncRetainedBoardSession(this.resolveBoardView());
   }
 
-  override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
+  override afterRender(focusComposerChanged: boolean) {
     this.panelActions?.syncLaunch();
     void chatAvatars.refreshSenderAgentAvatars(this.state);
-    if (!this.chatRouteReadyReported && this.querySelector(CHAT_COMPOSER_TEXTAREA_SELECTOR)) {
+    if (
+      !this.chatRouteReadyReported &&
+      this.element.querySelector(CHAT_COMPOSER_TEXTAREA_SELECTOR)
+    ) {
       // The outer router commit is not a meaningful chat paint. Keep the
       // handoff cover until this pane has committed its usable composer.
       this.chatRouteReadyReported = true;
-      this.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true, composed: true }));
+      this.element.dispatchEvent(
+        new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true, composed: true }),
+      );
     }
-    if (changedProperties.has("focusComposer") && this.focusComposer) {
-      const textarea = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
+    if (focusComposerChanged && this.focusComposer) {
+      const textarea = this.element.querySelector<HTMLTextAreaElement>(
+        CHAT_COMPOSER_TEXTAREA_SELECTOR,
+      );
       const input = textarea?.closest<HTMLElement>(".agent-chat__input");
       textarea?.focus({ preventScroll: true });
       if (input && this.draft) {
@@ -630,7 +656,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       isPresented: () => this.presented && this.visuallyPresented,
       commit: (layout, automaticResource) =>
         this.commitSidebarLayout(layout, { persist: false, automaticResource }),
-      requestUpdate: () => this.requestUpdate(),
+      requestUpdate: () => this.invalidate(),
     });
     if (this.state) {
       const layout = this.initializeBrowserSidebarLayout(this.state.sidebarLayout);
@@ -653,7 +679,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     );
   }
 
-  override disconnectedCallback() {
+  override dispose() {
     this.activeSessionResources.sync(null);
     this.syncSessionCompanionPresentation(false);
     this.composerPresentation?.dispose();
@@ -716,6 +742,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.state = undefined;
     this.connectedClient = null;
     disposeQuestionPromptState(this.questionPromptState);
-    super.disconnectedCallback();
+    super.dispose();
   }
 }

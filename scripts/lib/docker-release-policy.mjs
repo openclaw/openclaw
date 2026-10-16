@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { isDirectRunUrl } from "./direct-run.mjs";
+import { isMissingManifestError } from "./docker-manifest-error.mjs";
 import {
   classifyReleaseTrain,
   compareReleaseVersions,
@@ -81,6 +82,50 @@ export function parseDockerImageConfigVersion(raw, imageRef, platform) {
     );
   }
   return version.trim();
+}
+
+/** Verify every released platform rather than trusting one image config label. */
+export function inspectDockerImageVersion(
+  imageRef,
+  execFileSyncImpl,
+  { allowMissing = false, timeoutMs = 120_000 } = {},
+) {
+  const versions = new Map();
+  for (const [index, platform] of ["linux/amd64", "linux/arm64"].entries()) {
+    let raw;
+    try {
+      raw = execFileSyncImpl(
+        "docker",
+        [
+          "buildx",
+          "imagetools",
+          "inspect",
+          imageRef,
+          "--format",
+          `{{json (index .Image "${platform}")}}`,
+        ],
+        {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          maxBuffer: 20 * 1024 * 1024,
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: timeoutMs,
+        },
+      );
+    } catch (error) {
+      if (allowMissing && index === 0 && isMissingManifestError(error, imageRef)) {
+        return null;
+      }
+      throw error;
+    }
+    versions.set(platform, parseDockerImageConfigVersion(raw, imageRef, platform));
+  }
+  const uniqueVersions = new Set(versions.values());
+  if (uniqueVersions.size !== 1) {
+    const details = [...versions].map(([platform, version]) => `${platform}=${version}`).join(", ");
+    throw new Error(`${imageRef} has inconsistent platform versions: ${details}.`);
+  }
+  return uniqueVersions.values().next().value;
 }
 
 /**

@@ -197,9 +197,19 @@ describe("desktop panel audio wiring", () => {
     },
   );
 
-  it.each(["source", "disconnect", "unmount", "tab-hidden"])(
+  it.each(["source", "disconnect", "unmount", "unmount-pending", "tab-hidden"])(
     "tears down playback on %s",
     async (reason) => {
+      const resume = reason === "unmount-pending" ? createDeferred() : undefined;
+      if (resume) {
+        const resumePromise = resume.promise;
+        vi.stubGlobal(
+          "AudioContext",
+          class extends AudioContextMock {
+            override resume = vi.fn(() => resumePromise);
+          },
+        );
+      }
       const { panel } = await setup();
       clickPanelButton(panel, "[aria-label='Unmute desktop audio']");
       await panel.updateComplete;
@@ -207,7 +217,7 @@ describe("desktop panel audio wiring", () => {
         updatePanel(panel, { requestedSource: "other" });
       } else if (reason === "disconnect") {
         clickPanelButton(panel, "[aria-label='Disconnect']");
-      } else if (reason === "unmount") {
+      } else if (reason === "unmount" || reason === "unmount-pending") {
         unmountPanel(panel);
       } else {
         vi.spyOn(document, "hidden", "get").mockReturnValue(true);
@@ -217,6 +227,11 @@ describe("desktop panel audio wiring", () => {
       expect(AudioSocketMock.instances[0]!.close).toHaveBeenCalledOnce();
       expect(AudioSocketMock.instances[0]!.listenerCount).toBe(0);
       expect(AudioContextMock.instances[0]!.close).toHaveBeenCalledOnce();
+      if (resume) {
+        resume.resolve();
+        await Promise.resolve();
+        expect(AudioSocketMock.instances[0]!.send).not.toHaveBeenCalledWith('{"action":"start"}');
+      }
     },
   );
 

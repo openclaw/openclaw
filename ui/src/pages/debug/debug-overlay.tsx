@@ -14,7 +14,7 @@ import { DEBUG_OVERLAY_REQUEST_EVENT } from "../../components/panel-toggle-contr
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { DebugOverlayFrame } from "./debug-overlay-frame-view.tsx";
 import { DebugOverlayLoading } from "./debug-overlay-loading-view.tsx";
 import { shouldCloseDebugOverlay, type DebugOverlayMode } from "./debug-overlay-state.ts";
@@ -27,6 +27,7 @@ type Props = {
 type Methods = { open(mode: DebugOverlayMode): void; toggle(): void };
 
 function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
+  // A bridge's provider ancestry is fixed for this renderer lifetime.
   const inherited = untrack(() => props.context) ? undefined : useApplication();
   const close = () => {
     host.mode = "closed";
@@ -98,6 +99,7 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
       close();
     }
   };
+  // The overlay mode owns its lazy-module request and document Escape handler.
   createEffect(
     () => ({ mode: props.mode, key: props.contentKey, loaded: Boolean(Content()) }),
     (current, previous) => {

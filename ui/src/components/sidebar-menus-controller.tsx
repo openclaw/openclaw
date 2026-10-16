@@ -234,7 +234,7 @@ export class SidebarMenusController {
     const rect = trigger.getBoundingClientRect();
     this.dismissTransientMenus();
     if (menu === "peopleFilter") {
-      this.host.people.dismiss();
+      this.host.peopleView?.dismiss();
     }
     const [width, height] = (
       {

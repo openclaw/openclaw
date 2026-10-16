@@ -12,7 +12,10 @@ import {
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
+import {
+  extractAssistantVisibleText,
+  prepareAssistantVisibleText,
+} from "../../embedded-agent-utils.js";
 import {
   INCOMPLETE_ASSISTANT_STREAM_RE,
   TERMINATED_TRANSPORT_MESSAGE_RE,
@@ -148,12 +151,25 @@ function prepareTerminalAssistantReply(
   const rawText = resolveRawAssistantAnswerText(assistant);
   const reply = prepareAgentRunTerminalReply({ rawText });
   if (assistant && reply.terminalReply.disposition !== "silent") {
-    let remainingPrefix = rawText.length - reply.text.length;
-    reply.text = extractAssistantVisibleText(assistant, (text) => {
+    // Preserve native part boundaries for either edge selected by the reply owner.
+    const prefixOnly = rawText.endsWith(reply.text);
+    let remainingPrefix = prefixOnly ? rawText.length - reply.text.length : 0;
+    let remainingLength = prefixOnly ? Infinity : reply.text.length;
+    let nativeSourceText = "";
+    const render = prepareAssistantVisibleText(assistant, (text) => {
+      if (!prefixOnly) {
+        nativeSourceText += text;
+      }
       const removed = Math.min(remainingPrefix, text.length);
       remainingPrefix -= removed;
-      return text.slice(removed);
+      const visible = text.slice(removed, removed + remainingLength);
+      remainingLength -= visible.length;
+      return visible;
     });
+    reply.text =
+      prefixOnly || nativeSourceText === rawText
+        ? render()
+        : extractAssistantVisibleText(assistant, (_text, final) => (final ? reply.text : ""));
     reply.terminalReply = sanitizeAgentRunTerminalReply(parseReplyDirectives(reply.text).text);
   }
   return reply;

@@ -34,6 +34,7 @@ export function withPreparedRuntimeFacts(snapshot: StubPreparedRuntimeSnapshot) 
     configuredRuntimeModels: [],
     findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
+    modelCatalog: { entries: [], routeVariants: [] },
   };
 }
 

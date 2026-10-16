@@ -1,3 +1,4 @@
+import { withSqliteDatabaseAdmissionWait } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -65,7 +66,17 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
       return await withCommandProcessScope(async () => {
         assertCurrent();
         const work = Promise.resolve()
-          .then(operation)
+          .then(() =>
+            withSqliteDatabaseAdmissionWait(
+              {
+                get deadlineAtMs() {
+                  return admission?.deadlineAtMs;
+                },
+                assertActive: assertCurrent,
+              },
+              operation,
+            ),
+          )
           .then(
             (value) => ({ value }),
             (error: unknown) => ({ error }),

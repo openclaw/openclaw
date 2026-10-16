@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { formatByteSize, resolveIntegerOption } from "@openclaw/normalization-core";
-import { toErrorObject } from "../infra/errors.js";
 import { LruCache } from "../infra/lru-cache.js";
 import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -77,18 +76,15 @@ function imageWithinLimits(
   metadata: ImageMetadata | null,
   maxDimensionPx: number,
   maxBytes: number,
-): metadata is ImageMetadata {
-  const width = metadata?.width;
-  const height = metadata?.height;
+): boolean {
   return (
-    typeof width === "number" &&
-    typeof height === "number" &&
-    width > 0 &&
-    height > 0 &&
+    metadata !== null &&
+    metadata.width > 0 &&
+    metadata.height > 0 &&
     buffer.byteLength <= maxBytes &&
-    width <= maxDimensionPx &&
-    height <= maxDimensionPx &&
-    width * height <= MAX_IMAGE_INPUT_PIXELS
+    metadata.width <= maxDimensionPx &&
+    metadata.height <= maxDimensionPx &&
+    metadata.width * metadata.height <= MAX_IMAGE_INPUT_PIXELS
   );
 }
 
@@ -136,7 +132,7 @@ function inferImageFileName(params: {
     return name.trim();
   }
 
-  if (typeof params.label === "string" && params.label.startsWith("read:")) {
+  if (params.label?.startsWith("read:")) {
     return fileNameFromPathLike(params.label.slice("read:".length));
   }
   return undefined;
@@ -179,12 +175,9 @@ async function resizeImageBase64IfNeeded(params: {
   }
   const buf = Buffer.from(params.base64, "base64");
   const meta = readImageMetadataFromHeader(buf) ?? (await getImageMetadata(buf));
-  const width = meta?.width;
-  const height = meta?.height;
   const overBytes = buf.byteLength > params.maxBytes;
-  const hasDimensions = typeof width === "number" && typeof height === "number";
   const overDimensions =
-    hasDimensions && (width > params.maxDimensionPx || height > params.maxDimensionPx);
+    meta !== null && (meta.width > params.maxDimensionPx || meta.height > params.maxDimensionPx);
   if (imageWithinLimits(buf, meta, params.maxDimensionPx, params.maxBytes)) {
     // An unavailable backend passes images through unverified; never record that.
     if (cacheKey !== undefined && (await verifyImageDecodability(buf))) {
@@ -196,37 +189,29 @@ async function resizeImageBase64IfNeeded(params: {
     };
   }
 
-  const maxDim = hasDimensions ? Math.max(width ?? 0, height ?? 0) : params.maxDimensionPx;
+  const maxDim = meta ? Math.max(meta.width, meta.height) : params.maxDimensionPx;
   const sideStart = maxDim > 0 ? Math.min(params.maxDimensionPx, maxDim) : params.maxDimensionPx;
   const sideGrid = buildImageResizeSideGrid(params.maxDimensionPx, sideStart);
 
-  const sourcePixels = hasDimensions ? `${width}x${height}px` : "unknown";
+  const sourcePixels = meta ? `${meta.width}x${meta.height}px` : "unknown";
   const sourceWithFile = params.fileName ? `${params.fileName} ${sourcePixels}` : sourcePixels;
   const sourceDetails = {
     label: params.label,
     fileName: params.fileName,
     sourceMimeType: params.mimeType,
-    sourceWidth: width,
-    sourceHeight: height,
+    sourceWidth: meta?.width,
+    sourceHeight: meta?.height,
     sourceBytes: buf.byteLength,
   };
   let smallestSize: number | undefined;
   for (const side of sideGrid) {
     for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
-      let out: Buffer;
-      try {
-        out = await resizeToJpeg({
-          buffer: buf,
-          maxSide: side,
-          quality,
-          withoutEnlargement: true,
-        });
-      } catch (err) {
-        if (isImageProcessorUnavailableError(err)) {
-          throw toErrorObject(err, "Non-Error thrown");
-        }
-        throw err;
-      }
+      const out = await resizeToJpeg({
+        buffer: buf,
+        maxSide: side,
+        quality,
+        withoutEnlargement: true,
+      });
       if (smallestSize === undefined || out.byteLength < smallestSize) {
         smallestSize = out.byteLength;
       }
@@ -364,7 +349,7 @@ export async function sanitizeToolResultImages(
   label: string,
   opts: ImageSanitizationLimits = {},
 ): Promise<AgentToolResult<unknown>> {
-  const content = Array.isArray(result.content) ? result.content : [];
+  const content = result.content;
   if (!content.some((block) => isImageTypeBlock(block) || isTextContentBlock(block))) {
     return result;
   }

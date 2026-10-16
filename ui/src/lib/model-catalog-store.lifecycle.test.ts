@@ -112,7 +112,7 @@ it("preserves inherited transport deadlines and explicit unbounded requests", as
   }
 });
 
-it("rejects shared readers when their connection is cleared", async () => {
+it("rejects readers on both sides of an invalidation when their connection is cleared", async () => {
   const fixture = protocolFixture();
   const first = loadModelCatalog(fixture.client, scope);
   invalidateModelCatalogCache(fixture.client);
@@ -124,7 +124,7 @@ it("rejects shared readers when their connection is cleared", async () => {
     await rejected;
     fixture.respond(0, stale);
     await activeRejected;
-    expect(fixture.sent).toHaveLength(1);
+    expect(fixture.sent).toHaveLength(2);
     expect(peekModelCatalog(fixture.client, scope)).toBeUndefined();
   } finally {
     fixture.close();

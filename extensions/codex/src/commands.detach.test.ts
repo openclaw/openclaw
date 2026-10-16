@@ -18,7 +18,6 @@ import {
 } from "./app-server/session-binding.test-helpers.js";
 import * as detachSharedClientRuntime from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
-import { handleCodexCommand } from "./command-dispatch.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import {
   createCodexRuntimeContextOverrides,
@@ -28,6 +27,7 @@ import {
   createThreadResumeResponse,
   createContext,
   createDeps,
+  dispatchCodexCommandForTest as handleCodexCommand,
   expectedDiagnosticsTargetBlock,
   readDiagnosticsConfirmationToken,
   supervisedTestBinding,
@@ -825,7 +825,7 @@ describe("Codex diagnostics confirmation", () => {
     expect(upload).toHaveBeenCalledTimes(2);
     for (const target of targets) {
       expect(upload).toHaveBeenCalledWith(
-        undefined,
+        {},
         CODEX_CONTROL_METHODS.feedback,
         {
           classification: "bug",

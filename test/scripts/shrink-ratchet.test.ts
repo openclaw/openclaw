@@ -11,12 +11,28 @@ import {
   parseRatchetCounts,
   parseRatchetPaths,
   parseRatchetScalar,
+  parseRatchetArgs,
+  resolveRatchetBase,
 } from "../../scripts/lib/shrink-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("shrink-ratchet", () => {
+  it("requires an explicit base when the caller supplies prepared ancestry", () => {
+    expect(() => parseRatchetArgs(["--no-merge-base"])).toThrow(/requires --base/u);
+    expect(parseRatchetArgs(["--base", "HEAD", "--no-merge-base"])).toMatchObject({
+      base: "HEAD",
+      mergeBase: false,
+    });
+    expect(parseRatchetArgs(["--base", "HEAD"]).mergeBase).toBe(true);
+    const root = tempDirs.make("openclaw-ratchet-unavailable-");
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    expect(() =>
+      resolveRatchetBase(root, { base: "missing", staged: false, mergeBase: false }),
+    ).toThrow(/Could not resolve ratchet base ref/u);
+  });
+
   it("rejects missing paths whose names resemble successful batch headers", () => {
     const root = tempDirs.make("openclaw-shrink-ratchet-missing-");
     execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });

@@ -129,6 +129,20 @@ describe("native Control UI browser assets", () => {
     await import("./control-ui.js");
   });
 
+  it("omits settings-only presentations from activation while keeping ordinary plugins", async () => {
+    const fixture = activateFixture();
+    expect((await listControlUiPluginCatalog()).plugins.map((plugin) => plugin.pluginId)).toEqual([
+      "native-ui",
+    ]);
+    fixture.record.controlUi = {
+      ...fixture.record.controlUi!,
+      activation: "settings-only",
+      settingsViews: [{ section: "memory", panel: "overview" }],
+    };
+    expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
+    expect(listControlUiPluginActivations({})).toEqual([]);
+  });
+
   it("hot-applies Custom plugin UI admission without replacing the backend plugin", async () => {
     await withTempConfig({
       cfg: {},

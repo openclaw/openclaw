@@ -6,6 +6,7 @@ export {
   type OpenAiCompatibleImageProviderRequestParams,
   type OpenAiCompatibleImageRequestMode,
 } from "../image-generation/openai-compatible-image-provider.js";
+export { inlineOpenAiCompatibleImageUrls } from "../image-generation/openai-compatible-image-urls.js";
 
 export {
   generatedImageAssetFromBase64,

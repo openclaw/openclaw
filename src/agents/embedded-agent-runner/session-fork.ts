@@ -1,3 +1,4 @@
+import { deserialize, serialize } from "node:v8";
 import { getAiTransportHost } from "@openclaw/ai";
 import {
   independentResponsesRequest,
@@ -9,6 +10,7 @@ import { isCredentialFieldName, preparedRequestSuffix } from "@openclaw/ai/inter
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
 import type { Message, Model } from "../../llm/types.js";
+import { isPlainData } from "../../shared/immutable-data.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import type { StreamFn } from "../runtime/index.js";
 import { normalizeUsage, type NormalizedUsage } from "../usage.js";
@@ -24,7 +26,7 @@ type SessionForkAuthority = { active: boolean; capture: object };
 type Snapshot = EmbeddedSessionForkIdentity & {
   metadata: Buffer;
   options: StreamOptions;
-  publications: Message[];
+  publications: (Buffer | Message)[];
   streamFn: StreamFn;
   payload: Blob;
   expires: number;
@@ -98,8 +100,11 @@ export function recordEmbeddedSessionForkMessage(
     return;
   }
   try {
-    const completed = structuredClone(message);
-    const bytes = Buffer.byteLength(JSON.stringify(completed));
+    // Provider plugins can consume opaque cloneable details that V8 cannot encode.
+    const completed = isPlainData(message) ? serialize(message) : structuredClone(message);
+    const bytes = Buffer.isBuffer(completed)
+      ? completed.length
+      : Buffer.byteLength(JSON.stringify(completed));
     snapshot.publications.push(completed);
     snapshot.bytes += bytes;
     retainedBytes += bytes;
@@ -297,7 +302,9 @@ export async function runEmbeddedSessionFork(params: {
   }
   const context: Parameters<StreamFn>[1] = {
     tools: metadata.tools,
-    messages: structuredClone(snapshot.publications),
+    messages: snapshot.publications.map((data): Message =>
+      Buffer.isBuffer(data) ? deserialize(data) : structuredClone(data),
+    ),
   };
   const parentPayload: unknown = JSON.parse(await snapshot.payload.text());
   if (!isRecord(parentPayload)) {

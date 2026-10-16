@@ -6,6 +6,7 @@ import {
   selectMessageActionRequesterIdentity,
 } from "../gateway/message-action-turn-capability.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../media/read-capability.js";
+import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -277,6 +278,13 @@ function* resolveOpenClawPluginToolSteps(
   const resolveApiKeyForProvider = authProfileStore
     ? async (providerId: string): Promise<string | undefined> => {
         const cfg = resolveCurrentRuntimeConfig();
+        const workspaceDir = pluginToolInputs.context.workspaceDir;
+        // This preparation excludes plugin auth, including agent-profile substitutes.
+        if (
+          resolveProviderAuthScope({ provider: providerId, config: cfg, workspaceDir }) === "plugin"
+        ) {
+          return undefined;
+        }
         for (const profileId of resolveAuthProfileOrder({
           cfg,
           store: authProfileStore,
@@ -293,7 +301,6 @@ function* resolveOpenClawPluginToolSteps(
             return resolved.apiKey;
           }
         }
-        const workspaceDir = pluginToolInputs.context.workspaceDir;
         const runtimeLookup = createRuntimeProviderAuthLookup({
           cfg,
           workspaceDir,

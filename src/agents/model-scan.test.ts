@@ -83,6 +83,29 @@ describe("scanOpenRouterModels", () => {
     expect(byPricing.image.skipped).toBe(true);
   });
 
+  it("keeps independently sized MoE models when filtering by minimum parameters", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "meta-llama/llama4-maverick-17b-128e:free",
+          name: "Llama 4 Maverick 400B",
+        },
+        {
+          id: "meta-llama/llama4-scout-17b-16e:free",
+          name: "Llama 4 Scout",
+        },
+        { id: "qwen/qwen3-30b-a3b:free", name: "Qwen3 30B A3B" },
+        { id: "meta-llama/llama-70b:free", name: "Llama 70B" },
+      ],
+    });
+
+    const results = await scanOpenRouterModels({ fetchImpl, probe: false, minParamB: 100 });
+
+    expect(results.map(({ id, inferredParamB }) => ({ id, inferredParamB }))).toEqual([
+      { id: "meta-llama/llama4-maverick-17b-128e:free", inferredParamB: 400 },
+    ]);
+  });
+
   it("uses OpenRouter top-provider limits for scan metadata", async () => {
     const fetchImpl = createFetchFixture({
       data: [

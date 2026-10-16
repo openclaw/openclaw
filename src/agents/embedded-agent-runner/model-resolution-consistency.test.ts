@@ -188,6 +188,7 @@ vi.mock("./logger.js", async (importOriginal) => {
 
 const { resolveEmbeddedRunModelSetup } = await import("./run/model-setup.js");
 const { prepareDirectCompactionAttempt } = await import("./direct-compaction-preparation.js");
+const { prepareCompactionHarnessAuth } = await import("./compaction-runtime-preparation.js");
 
 function createPreparedModelRuntime(config: Record<string, unknown>) {
   return {
@@ -392,6 +393,34 @@ describe("embedded model resolution consistency", () => {
       expect.stringContaining("outcome=failed reason=compaction_model_unresolved "),
     );
     expect(logWarnMock).not.toHaveBeenCalledWith(expect.stringContaining(" detail="));
+  });
+
+  it("returns compaction auth failure details without logging provider prose", async () => {
+    const config = {};
+    const preparedModelRuntime = createPreparedModelRuntime(config);
+    const error = new Error("private_compaction_auth_payload");
+    vi.mocked(prepareCompactionHarnessAuth).mockResolvedValueOnce({ ok: false, error });
+
+    const compaction = await prepareDirectCompactionAttempt({
+      config,
+      provider: PROVIDER,
+      model: STATIC_MODEL_ID,
+      agentId: "main",
+      sessionId: "compact-session",
+      sessionKey: "agent:main:compact-session",
+      sessionFile: "agent:main:compact-session",
+      workspaceDir: preparedModelRuntime.workspaceDir,
+      preparedModelRuntime: preparedModelRuntime as never,
+    });
+
+    expect(compaction).toMatchObject({
+      ok: false,
+      result: { ok: false, compacted: false, reason: error.message },
+    });
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("outcome=failed reason=unknown "),
+    );
+    expect(JSON.stringify(logWarnMock.mock.calls)).not.toContain(error.message);
   });
 
   it("resolves route-bound thinking compatibility for the final model", () => {

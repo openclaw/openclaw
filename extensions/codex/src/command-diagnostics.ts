@@ -8,6 +8,8 @@ import {
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./app-server/auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
+import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 import { isJsonObject } from "./app-server/protocol.js";
 import {
   bindingStoreKey,
@@ -35,8 +37,9 @@ import {
   recordCodexDiagnosticsUpload,
 } from "./command-diagnostics-support.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
-import { CODEX_CONTROL_METHODS, type CodexCommandDeps } from "./command-handler-deps.js";
+import type { CodexCommandDeps } from "./command-handler-deps.js";
 import { resolveControlTarget } from "./command-handler-scope.js";
+import { safeCodexControlRequest } from "./command-rpc.js";
 
 const NO_DIAGNOSTICS_THREAD = [
   "No Codex thread is attached to this OpenClaw session yet.",
@@ -55,7 +58,7 @@ type CodexDiagnosticsCandidate = Omit<
 export async function handleCodexDiagnosticsFeedback(
   deps: CodexCommandDeps,
   context: PluginCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   args: string,
 ): Promise<PluginCommandResult> {
   const ctx = { ...context };
@@ -199,7 +202,7 @@ function previewCodexDiagnosticsFeedbackApproval(
 async function confirmCodexDiagnosticsFeedback(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   token: string,
 ): Promise<string> {
   const pending = consumeCodexDiagnosticsConfirmation(ctx, token, "confirm");
@@ -249,7 +252,7 @@ function cancelCodexDiagnosticsFeedback(ctx: PluginCommandContext, token: string
 async function sendCodexDiagnosticsFeedbackForTargets(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   note: string,
   targets: CodexDiagnosticsTarget[],
   cooldownScope?: string,
@@ -292,7 +295,7 @@ async function sendCodexDiagnosticsFeedbackForTargets(
       });
       continue;
     }
-    const response = await deps.safeCodexControlRequest(
+    const response = await safeCodexControlRequest(
       pluginConfig,
       CODEX_CONTROL_METHODS.feedback,
       {

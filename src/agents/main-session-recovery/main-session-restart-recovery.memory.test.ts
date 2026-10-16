@@ -157,7 +157,7 @@ describe("memory restart recovery adapters", () => {
         ...params,
         recoveryAdmission: {
           handoffId: "synthetic-admission",
-          lane: CommandLane.Background,
+          lane: CommandLane.RestartRecovery,
           shouldContinue: () => true,
           beginDispatch: () => true,
         },

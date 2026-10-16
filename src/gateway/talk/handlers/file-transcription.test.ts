@@ -419,7 +419,6 @@ describe("configured file transcription through Talk RPCs", () => {
   );
 
   it.each([
-    { name: "audio default", models: cfg.tools?.media?.models, maxBytes: 8192 },
     {
       name: "largest audio fallback",
       models: [

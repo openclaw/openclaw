@@ -396,6 +396,19 @@ export const SkillsSecurityVerdictsResultSchema = closedObject({
   ),
 });
 
+/** Reads the current SKILL.md for a discovered, agent-scoped local skill. */
+export const SkillsFileGetParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  path: NonEmptyString,
+});
+
+/** Full source for the skill file preview. */
+export const SkillsFileGetResultSchema = closedObject({
+  path: NonEmptyString,
+  name: NonEmptyString,
+  content: Type.String(),
+});
+
 /** Reads the rendered skill card for one installed skill. */
 export const SkillsSkillCardParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
@@ -563,6 +576,7 @@ export const GitHubIdentityFactsSchema = closedObject({
     Type.Literal("native"),
     Type.Literal("managed-pat"),
     Type.Literal("managed-oauth"),
+    Type.Literal("app-installation"),
   ]),
   credentialState: Type.Union([
     Type.Literal("available"),
@@ -818,6 +832,8 @@ export type SkillsWorkshopUndoParams = Static<typeof SkillsWorkshopUndoParamsSch
 export type SkillsWorkshopUndoResult = Static<typeof SkillsWorkshopUndoResultSchema>;
 export type SkillsSecurityVerdictsParams = Static<typeof SkillsSecurityVerdictsParamsSchema>;
 export type SkillsSecurityVerdictsResult = Static<typeof SkillsSecurityVerdictsResultSchema>;
+export type SkillsFileGetParams = Static<typeof SkillsFileGetParamsSchema>;
+export type SkillsFileGetResult = Static<typeof SkillsFileGetResultSchema>;
 export type SkillsSkillCardParams = Static<typeof SkillsSkillCardParamsSchema>;
 export type SkillsSkillCardResult = Static<typeof SkillsSkillCardResultSchema>;
 export type SkillsUploadBeginParams = Static<typeof SkillsUploadBeginParamsSchema>;

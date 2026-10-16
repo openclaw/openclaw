@@ -13,7 +13,10 @@ import {
   isTrustedSecretSurfaceUnavailableError,
   SecretSurfaceUnavailableError,
 } from "../secrets/runtime-degraded-state.js";
-import type { ControlUiLinkReaderDocument } from "../shared/control-ui-link-reader.js";
+import type {
+  ControlUiLinkReaderDocument,
+  ControlUiLinkReaderSection,
+} from "../shared/control-ui-link-reader.js";
 
 export const CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE =
   "The configured Control UI GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.";
@@ -35,6 +38,11 @@ export type ControlUiGitHubPreviewIdentity = {
   signal?: AbortSignal;
   revalidate: () => Promise<void>;
   assertSelected: () => void;
+};
+export type ControlUiGitHubSessionIdentity = ControlUiGitHubPreviewIdentity & {
+  host: string;
+  apiBaseUrl: string;
+  repository: { id: number; owner: string; repo: string };
 };
 type ControlUiGitHubPreviewTarget = {
   owner: string;
@@ -132,6 +140,19 @@ type GitHubPublicApi = {
     fetchImpl?: typeof fetch,
     refresh?: boolean,
     request?: GitHubReadRequest,
+    section?: ControlUiLinkReaderSection,
+  ) => Promise<ControlUiLinkReaderDocument>;
+  loadSessionGitHubPreview: (
+    target: ControlUiGitHubPreviewTarget,
+    identity: ControlUiGitHubSessionIdentity,
+    fetchImpl?: typeof fetch,
+  ) => Promise<Awaited<ReturnType<GitHubPublicApi["loadControlUiGitHubPreview"]>>>;
+  loadSessionGitHubDetail: (
+    target: GitHubDetailTarget,
+    identity: ControlUiGitHubSessionIdentity,
+    fetchImpl?: typeof fetch,
+    refresh?: boolean,
+    section?: ControlUiLinkReaderSection,
   ) => Promise<ControlUiLinkReaderDocument>;
   loadControlUiGitHubPreview: (
     target: ControlUiGitHubPreviewTarget,
@@ -194,7 +215,18 @@ export function hasConfiguredGitHubApiCredential(
   );
 }
 
-type GitHubTransportApi = Omit<GitHubPublicApi, "resolveGitHubApiCredentialScope">;
+type GitHubTransportApi = Omit<
+  GitHubPublicApi,
+  "resolveGitHubApiCredentialScope" | "loadGitHubDetail"
+> & {
+  loadGitHubDetail: (
+    target: GitHubDetailTarget,
+    identity?: ControlUiGitHubPreviewIdentity,
+    fetchImpl?: typeof fetch,
+    refresh?: boolean,
+    section?: ControlUiLinkReaderSection,
+  ) => Promise<ControlUiLinkReaderDocument>;
+};
 
 // The existing loader owns library caching and retirement. Host-specific
 // callbacks stay here, rather than consulting another loader’s state.
@@ -309,12 +341,13 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
         fetchImpl,
       );
     },
-    loadGitHubDetail(target, identity, fetchImpl, refresh, request) {
+    loadGitHubDetail(target, identity, fetchImpl, refresh, request, section) {
       return library.loadGitHubDetail(
         target,
         resolveReadRequestIdentity(identity, request),
         fetchImpl,
         refresh,
+        section,
       );
     },
   };

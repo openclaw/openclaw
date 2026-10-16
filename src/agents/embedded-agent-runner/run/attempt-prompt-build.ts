@@ -4,6 +4,7 @@ import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbea
 import { getRuntimeConfig } from "../../../config/config.js";
 import { createRuntimeConfigReader } from "../../../config/runtime-snapshot.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
+import { logDecisionToolPrefilter } from "../../../decisions/diagnostics.js";
 import {
   type DiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -101,9 +102,10 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   runtimeModel: string;
   systemPromptText: string;
   runAbortSignal?: AbortSignal;
+  hasBaselineTools: () => boolean;
   applyPromptBuildToolsAllow: (
     toolsAllow: string[] | undefined,
-    decisionIsCurrent?: () => boolean,
+    pruneForDecision?: boolean,
   ) => string[];
   prepareSystemPrompt?: (currentSystemPrompt: string) => Promise<string>;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
@@ -227,7 +229,9 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
                   ? "hook-tool-policy"
                   : hasPendingActionInstructions
                     ? "pending-action-context"
-                    : undefined;
+                    : !input.hasBaselineTools()
+                      ? "no-tools"
+                      : undefined;
   let decisionPrefilter: DecisionPrefilterResult = {
     shouldPruneTools: false,
     status: "skipped",
@@ -252,15 +256,16 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       assertActive: assertHostActive,
       supportsTurnScopedToolRestrictions: attempt.supportsTurnScopedToolRestrictions,
     });
-    if (decisionPrefilter.shouldPruneTools && decisionPrefilter.isCurrent?.()) {
+    if (decisionPrefilter.shouldPruneTools) {
       decisionPrefilter.restrictionApplied = true;
     }
   }
   activeAbortSignal?.throwIfAborted();
   assertHostActive?.();
+  logDecisionToolPrefilter({ effect: decisionPrefilter.status });
   const callableToolNames = input.applyPromptBuildToolsAllow(
     effectiveToolsAllow,
-    decisionPrefilter.restrictionApplied ? decisionPrefilter.isCurrent : undefined,
+    decisionPrefilter.restrictionApplied,
   );
   // Regenerate owned capability guidance before composing hook additions, without
   // rerunning hooks or altering already-recorded conversation messages.

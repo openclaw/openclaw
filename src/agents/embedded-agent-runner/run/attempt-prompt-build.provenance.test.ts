@@ -1,10 +1,12 @@
 // #143821: prompt-build hook context must carry the turn's typed input provenance so
 // plugins can distinguish inter-session deliveries from human messages.
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import * as decisionDiagnostics from "../../../decisions/diagnostics.js";
 import type { PluginHookBeforePromptBuildResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
@@ -83,7 +85,17 @@ async function assembleWithCapturedHookCtx(
 ) {
   const config = attemptOverrides?.config ?? {};
   setRuntimeConfigSnapshot(config);
-  const { session, sessionManager, modelRegistry } = await createTestSession();
+  const { session, sessionManager, modelRegistry } = await createTestSession({
+    customTools: [
+      {
+        name: "read",
+        label: "Read",
+        description: "Read a fixture file",
+        parameters: Type.Object({}),
+        execute: async () => ({ content: [{ type: "text", text: "fixture" }], details: {} }),
+      },
+    ],
+  });
   const admission = prepareSystemAgentRunAdmission(config, runId, "main", "provenance-hook-test");
   onTestFinished(() => {
     admission.close();
@@ -144,6 +156,7 @@ async function assembleWithCapturedHookCtx(
     runtimeModel: testModel.id,
     systemPromptText: "Base system prompt",
     runAbortSignal: new AbortController().signal,
+    hasBaselineTools: () => session.getActiveToolNames().length > 0,
     applyPromptBuildToolsAllow: promptPolicy.applyPromptBuildToolsAllow ?? (() => []),
     prepareSystemPrompt: promptPolicy.prepareSystemPrompt,
     setActiveSessionSystemPrompt: setSystemPrompt,
@@ -155,6 +168,7 @@ async function assembleWithCapturedHookCtx(
 
 describe("prompt-build hook context input provenance", () => {
   it("prepares the restricted prompt once before composing the original hook additions", async () => {
+    const observeDecision = vi.spyOn(decisionDiagnostics, "logDecisionToolPrefilter");
     const order: string[] = [];
     const applyPolicy = vi.fn((names: string[] | undefined) => {
       order.push("policy");
@@ -180,6 +194,7 @@ describe("prompt-build hook context input provenance", () => {
       },
     );
     expect(order).toEqual(["policy", "prompt"]);
+    expect(observeDecision).toHaveBeenCalledExactlyOnceWith({ effect: "skipped" });
     expect(captured).toHaveLength(1);
     expect(prepareSystemPrompt).toHaveBeenCalledOnce();
     const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";

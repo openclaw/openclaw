@@ -7,7 +7,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "../plugins/control-ui-view.solid.tsx";
 import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";

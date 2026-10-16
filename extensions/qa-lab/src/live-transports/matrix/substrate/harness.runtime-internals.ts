@@ -5,7 +5,7 @@ import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { FetchLike } from "../../../docker-runtime.js";
 
 const MATRIX_QA_DEFAULT_IMAGE =
-  "ghcr.io/matrix-construct/tuwunel:v1.8.3@sha256:699fa9971c174e01c884abad8d1a3cfb2fe518e1a71f1fa16ea9dedf11873d74";
+  "ghcr.io/matrix-construct/tuwunel:v1.9.3@sha256:678b7f5350e06a41614444497c587da9dddf66767e4068a27480402f3c1367d0";
 const MATRIX_QA_DEFAULT_SERVER_NAME = "matrix-qa.test";
 export const MATRIX_QA_INTERNAL_PORT = 8008;
 export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";

@@ -139,7 +139,12 @@ describe("constrainRestartRecoveryDeliveryPayloads", () => {
 });
 
 describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
-  function project(result: Parameters<typeof buildRestartRecoveryTerminalDeliveryEvidence>[0]) {
+  type TerminalDeliveryInput = Parameters<typeof buildRestartRecoveryTerminalDeliveryEvidence>[0];
+  type PayloadOutcome = NonNullable<
+    NonNullable<TerminalDeliveryInput["deliveryStatus"]>["payloadOutcomes"]
+  >[number];
+
+  function project(result: TerminalDeliveryInput) {
     const persisted = JSON.stringify([
       { runId: "original", ...buildRestartRecoveryTerminalDeliveryEvidence(result) },
     ]);
@@ -249,7 +254,7 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
     { status: "suppressed", reason: "adapter_returned_no_identity" },
     { status: "failed", sentBeforeError: true },
     { status: "sent" },
-  ])(
+  ] satisfies Array<Omit<PayloadOutcome, "index">>)(
     "retains omitted $status send evidence instead of acknowledging policy suppression",
     async (lastOutcome) => {
       const original = {
@@ -259,7 +264,7 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
           resultCount: 0,
           reason: "cancelled_by_message_sending_hook",
           payloadOutcomes: [
-            ...Array.from({ length: 64 }, (_, index) => ({
+            ...Array.from({ length: 64 }, (_, index): PayloadOutcome => ({
               index,
               status: "suppressed",
               reason: "cancelled_by_message_sending_hook",
@@ -267,7 +272,7 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
             { index: 64, ...lastOutcome },
           ],
         },
-      };
+      } satisfies TerminalDeliveryInput;
       expect(await classify({ status: "ok", result: original })).toMatchObject({
         delivered: false,
         disposition: "ambiguous",
@@ -288,13 +293,13 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
         status: "suppressed",
         resultCount: 0,
         reason: "no_visible_payload",
-        payloadOutcomes: Array.from({ length: 65 }, (_, index) => ({
+        payloadOutcomes: Array.from({ length: 65 }, (_, index): PayloadOutcome => ({
           index,
           status: "suppressed",
           reason: index < 64 ? "no_visible_payload" : "cancelled_by_message_sending_hook",
         })),
       },
-    };
+    } satisfies TerminalDeliveryInput;
     const expected = {
       delivered: false,
       disposition: "intentional_non_delivery",
@@ -313,7 +318,7 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
       deliveryStatus: {
         status: "suppressed",
         reason: "x".repeat(300),
-        payloadOutcomes: Array.from({ length: 65 }, (_, index) => ({
+        payloadOutcomes: Array.from({ length: 65 }, (_, index): PayloadOutcome => ({
           index,
           status: "suppressed",
           reason: "y".repeat(300),

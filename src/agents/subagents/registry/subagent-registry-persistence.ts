@@ -38,6 +38,7 @@ import type {
   SubagentRunMutationOptions,
 } from "./subagent-registry-persistence.types.js";
 import { readFullSubagentRuns } from "./subagent-registry-read-cache.js";
+import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery-helpers.js";
 import {
   consumeFreshSubagentRegistryRows,
   publishSubagentRunsAfterAtomicStore,
@@ -227,12 +228,12 @@ export async function runSubagentRegistryWorkerWrite<T>(
   try {
     return await runOpenClawStateWorkerOperation(
       context,
-      async (scope) => write.decode(await write.execute(scope)),
+      async (scope) =>
+        write.kind === "registry" ? write.decode(await write.execute(scope)) : write.execute(scope),
       {
         assertCurrent: write.assertCurrent,
         createAdmission: () => {
           let phase: "waiting" | "transaction" | "commit" = "waiting";
-          const eventPhases = new Map<number, "transaction" | "commit">();
           const authorityName =
             write.kind === "registry" ? "Queued registry write" : "Subagent completion write";
           admission = createSqliteWorkerOperationAdmission((request, grant) => {
@@ -250,15 +251,7 @@ export async function runSubagentRegistryWorkerWrite<T>(
               typeof facts.eventIndex === "number"
             ) {
               const event = write.terminalEvents?.[facts.eventIndex];
-              if (
-                !event ||
-                phase !== "transaction" ||
-                !(
-                  (request.stage === "transaction" && !eventPhases.has(facts.eventIndex)) ||
-                  (request.stage === "commit" &&
-                    eventPhases.get(facts.eventIndex) === "transaction")
-                )
-              ) {
+              if (!event || phase !== "transaction" || request.stage !== "commit") {
                 throw new Error("Subagent terminal event admission requested out of order");
               }
               write.assertCurrent();
@@ -266,7 +259,6 @@ export async function runSubagentRegistryWorkerWrite<T>(
               if (!grant()) {
                 throw new Error("Subagent terminal event admission expired");
               }
-              eventPhases.set(facts.eventIndex, request.stage);
               return;
             }
             if (
@@ -299,7 +291,9 @@ export async function runSubagentRegistryWorkerWrite<T>(
     // Broker failure joins native settlement; a lost reply cannot revoke committed work.
     if (admission?.committed) {
       try {
-        return write.decode(admission.committed.facts);
+        return write.kind === "registry"
+          ? write.decode(admission.committed.facts)
+          : write.decodeCommitted(admission.committed.facts);
       } catch (receiptError) {
         throw new SubagentRegistryCommitReceiptError(receiptError);
       }
@@ -385,8 +379,8 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
     if (
       !current ||
       !isSameSubagentRunOwner(current, recovery.expected) ||
-      current.execution.status !== "terminal" ||
-      !current.requesterSettleWake ||
+      (!(current.execution.status === "terminal" && current.requesterSettleWake) &&
+        !isRetiredSubagentExecution(current)) ||
       getGatewayContextResolver(current) !== recovery.previousResolver ||
       recovery.previousResolver() !== undefined ||
       recovery.resolver() !== recovery.gateway
@@ -586,7 +580,6 @@ export async function restoreSubagentRunsFromDisk(params: {
         retainSubagentRunRuntimeOwner(params.runs.get(runId), entry);
         params.runs.set(runId, compactSubagentRunForMemory(entry));
         rememberRestoredSubagentRunNotification(entry);
-        subagentRuns.settleCommittedOwnership(entry);
         added += 1;
       }
       publishSubagentRunsAfterAtomicStore(params.runs, undefined, context.admission.databasePath)();

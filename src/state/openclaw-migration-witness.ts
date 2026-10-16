@@ -13,6 +13,7 @@ import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { LEGACY_CANONICAL_VALIDATION_TRIGGER_NAMES } from "./openclaw-agent-canonical-validation-migration.js";
 import {
+  AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
   MEDIA_ROWS_MIGRATION_META_KEY,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
@@ -97,7 +98,7 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
     if (
       !(
         witness.role === "agent" &&
-        (["schema_meta", "session_key_contract"].includes(table.name) ||
+        (["schema_meta", "session_key_contract", "memory_entry_origins"].includes(table.name) ||
           derivedMigrationColumns.has(table.name))
       ) &&
       !(
@@ -112,7 +113,7 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
   }
   if (
     (witness.role === "agent" &&
-      (witness.agentId === null || ![24, 25, 26, 27].includes(witness.schemaVersion))) ||
+      (witness.agentId === null || ![24, 25, 26, 27, 28].includes(witness.schemaVersion))) ||
     (witness.role !== "agent" && witness.agentId !== null) ||
     (witness.role !== "agent" && witness.schemaSha256 !== witness.migrationSchemaSha256) ||
     (witness.role !== "global" && witness.registryMigrationBinding !== null) ||
@@ -228,7 +229,12 @@ function captureTable(
     }
     names.unshift(rowid);
   }
-  const retained = names.map((name) => migrationColumn(role, table, name));
+  // Admission fixes the old origins layout; only its injected alias is physical identity.
+  const retained = names.map(
+    (name, index) =>
+      !(role === "agent" && table === "memory_entry_origins" && !withoutRowid && index === 0) &&
+      migrationColumn(role, table, name),
+  );
   const sha256 = createHash("sha256").update(JSON.stringify(names));
   const migrationSha256 =
     retained.every(Boolean) && !registry
@@ -417,7 +423,7 @@ export function captureOpenClawMigrationWitness(
         throw new Error("Migration witness database owner does not match the backup inventory");
       }
       if (owner.role === "agent") {
-        if (![24, 25, 26, 27].includes(schemaVersion)) {
+        if (![24, 25, 26, 27, 28].includes(schemaVersion)) {
           throw new Error(`Unsupported agent migration witness schema: ${schemaVersion}`);
         }
         assertOpenClawAgentSchemaContains(
@@ -503,10 +509,27 @@ export function captureOpenClawMigrationWitness(
       ) {
         continue;
       }
+      // Admission validates these canonical indexes; v28 changes only their physical layout.
+      if (
+        role === "agent" &&
+        object.type === "index" &&
+        ((object.name === "idx_agent_session_windows_conversation" &&
+          object.tbl_name === "session_windows") ||
+          (schemaVersion < AGENT_WRITE_LAYOUT_SCHEMA_VERSION &&
+            ((object.name === "idx_agent_transcript_event_parent" &&
+              object.tbl_name === "transcript_event_identities") ||
+              (object.name === "sqlite_autoindex_memory_entry_origins_1" &&
+                object.tbl_name === "memory_entry_origins" &&
+                object.sql === null))))
+      ) {
+        continue;
+      }
       if (
         role === "agent" &&
         object.type === "table" &&
-        (object.name === "session_key_contract" || derivedMigrationColumns.has(object.name))
+        (object.name === "session_key_contract" ||
+          object.name === "memory_entry_origins" ||
+          derivedMigrationColumns.has(object.name))
       ) {
         const definition = parseSqliteTableDefinition(
           object.name === "context_engine_turn_outbox" && object.sql
@@ -527,6 +550,7 @@ export function captureOpenClawMigrationWitness(
                 columns: [...definition.columns],
                 constraints: definition.constraints,
                 ...tableKinds.get(object.name),
+                ...(object.name === "memory_entry_origins" ? { withoutRowid: false } : {}),
               },
             }),
           )
@@ -669,7 +693,17 @@ export function assertOpenClawMigrationWitnessPreserved(
       .map((table) => ({
         name: table.name,
         columns: crossing
-          ? table.columns.filter((column) => migrationColumn(witness.role, table.name, column))
+          ? table.columns
+              .filter(
+                (_, index) =>
+                  !(
+                    witness.role === "agent" &&
+                    witness.schemaVersion < AGENT_WRITE_LAYOUT_SCHEMA_VERSION &&
+                    table.name === "memory_entry_origins" &&
+                    index === 0
+                  ),
+              )
+              .filter((column) => migrationColumn(witness.role, table.name, column))
           : table.columns,
         rowCount: table.rowCount,
         sha256: crossing || witness.registryMigrationBinding ? table.migrationSha256 : table.sha256,

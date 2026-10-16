@@ -1,6 +1,8 @@
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
+import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
+import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import type {
   RegionProps,
@@ -29,16 +31,16 @@ export type SidebarRegionParams = {
   sideFocusManaged?: boolean;
   sideFocusOrigin?: () => HTMLElement | null;
   panelDefinitions?: SidebarPanelDefinition[];
-  header?: unknown;
-  background?: unknown;
-  primary: unknown;
+  header?: SolidJSX.Element;
+  background?: SolidJSX.Element;
+  primary?: SolidJSX.Element;
   requestUpdate: () => void;
 };
 
-type SidebarRegionViewProps = SidebarRegionParams & {
+export type SidebarRegionViewProps = SidebarRegionParams & {
   panelIdPrefix: string;
   panelDefinitions: SidebarPanelDefinition[];
-  regionError: unknown;
+  regionError: Parameters<typeof LazyViewError>[0] | null | undefined;
 };
 
 export function SidebarRegionView(props: SidebarRegionViewProps) {
@@ -76,12 +78,10 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
               : "side-header / side-header / side / side",
           }}
         >
-          <LitContent value={props.background} />
+          {props.background}
         </div>
       </Show>
-      <div class="sidebar-region__header">
-        <LitContent value={props.header} />
-      </div>
+      <div class="sidebar-region__header">{props.header}</div>
       <Show
         when={props.regionError === undefined}
         fallback={
@@ -93,17 +93,17 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
                     panel.slot !== "conversation" && isSidebarSlotVisible(props.layout, panel.slot),
                 ) ?? []
               }
+              keyed={(panel) => panel.id}
             >
               {(panel) => (
                 <div
                   class="side-panel__panel"
-                  data-region={panel.id === props.layout.mainPanelId ? "main" : "side"}
+                  data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
                 >
-                  <LitContent
-                    value={
-                      props.panelDefinitions.find((definition) => definition.slot === panel.slot)
-                        ?.loading
-                    }
+                  <PanelLoadingSkeleton
+                    {...props.panelDefinitions.find(
+                      (definition) => definition.slot === panel().slot,
+                    )!.loading}
                   />
                 </div>
               )}
@@ -133,14 +133,14 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         data-region={chatMain() ? "main" : "side"}
         hidden={!isSidebarSlotVisible(props.layout, "conversation")}
       >
-        <LitContent value={props.primary} />
+        {props.primary}
       </div>
       <Show
         when={props.regionError != null}
         fallback={<div class="sidebar-region__right-runtime" />}
       >
         <div class="sidebar-region__right-runtime">
-          <LitContent value={props.regionError} />
+          <LazyViewError {...props.regionError!} />
         </div>
       </Show>
     </div>

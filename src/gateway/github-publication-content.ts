@@ -12,6 +12,7 @@ export async function prepareGitHubPublicationContent(params: {
   >;
   storePath: string;
   accountId: number;
+  host: string;
   assertCurrent: () => void;
   description: string;
 }) {
@@ -21,6 +22,7 @@ export async function prepareGitHubPublicationContent(params: {
     agentId: row.agent_id,
     config,
     excludeAccountId: params.accountId,
+    host: params.host,
     sessionKey: row.session_key,
     sessionId: row.session_id,
     storePath: params.storePath,
