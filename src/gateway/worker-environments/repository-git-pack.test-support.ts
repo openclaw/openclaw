@@ -53,12 +53,14 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
   await requireGit(source, ["config", "user.name", "Project Test"]);
   await requireGit(source, ["config", "user.email", "project@example.invalid"]);
   await requireGit(source, ["config", "commit.gpgsign", "false"]);
-  await fs.writeFile(path.join(source, "input.txt"), "old private content\n");
-  await requireGit(source, ["add", "."]);
-  await requireGit(source, ["commit", "--quiet", "-m", "ancestor"]);
-  const ancestor = await requireGit(source, ["rev-parse", "HEAD"]);
+  const commit = async (name: string, content: string) => {
+    await fs.writeFile(path.join(source, "input.txt"), `${content} private content\n`);
+    await requireGit(source, ["add", "."]);
+    await requireGit(source, ["commit", "--quiet", "-m", name]);
+    return requireGit(source, ["rev-parse", "HEAD"]);
+  };
+  const ancestor = await commit("ancestor", "old");
   const oldBlob = await requireGit(source, ["rev-parse", "HEAD:input.txt"]);
-  await fs.writeFile(path.join(source, "input.txt"), "pinned private content\n");
   if (fixtureOptions.setupRecipe !== false) {
     await fs.mkdir(path.join(source, ".openclaw"));
     await fs.writeFile(
@@ -67,17 +69,13 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
       { mode: 0o755 },
     );
   }
-  await requireGit(source, ["add", "."]);
-  await requireGit(source, ["commit", "--quiet", "-m", "pinned"]);
-  const baseCommit = await requireGit(source, ["rev-parse", "HEAD"]);
+  const baseCommit = await commit("pinned", "pinned");
   const setupRecipe =
     fixtureOptions.setupRecipe === false
       ? undefined
       : await requireGit(source, ["rev-parse", "HEAD:.openclaw/worktree-setup.sh"]);
   const tree = await requireGit(source, ["rev-parse", "HEAD^{tree}"]);
-  await fs.writeFile(path.join(source, "input.txt"), "later private content\n");
-  await requireGit(source, ["commit", "--quiet", "-am", "later"]);
-  const later = await requireGit(source, ["rev-parse", "HEAD"]);
+  const later = await commit("later", "later");
   await requireGit(root, ["clone", "--quiet", "--bare", "--no-local", source, remote]);
 
   const received = createDeferred();
@@ -154,7 +152,6 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
     throw new Error("Synthetic Git endpoint has no TCP address");
   }
   const endpoint = `http://127.0.0.1:${address.port}/remote.git`;
-  const beforeFetch = { run: async () => {} };
   const fetches: { argv: string[]; settled: boolean }[] = [];
   const failedDiagnostics: string[] = [];
   // Only translate the admitted network boundary. Git transport, authentication,
@@ -166,7 +163,6 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
     const fetch = { argv: [...args], settled: false };
     fetches.push(fetch);
     try {
-      await beforeFetch.run();
       const result = await executeGitCommand(
         cwd,
         args.map((arg) => (arg === URL ? endpoint : arg)),
@@ -244,7 +240,6 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
   };
   return {
     root,
-    source,
     endpoint,
     scratch,
     home,
@@ -259,7 +254,6 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
     received: received.promise,
     disconnected: disconnected.promise,
     fetches,
-    beforeFetch,
     failedDiagnostics,
     scripts,
     preparePack,
