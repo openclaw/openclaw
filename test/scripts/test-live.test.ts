@@ -1,5 +1,6 @@
 // Test Live tests cover test live script behavior.
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -31,14 +32,17 @@ afterEach(() => fixtureLifetime.cleanup());
 
 describe("scripts/test-live", () => {
   posixIt.for([
-    { runtime: "node", exitCode: 0 },
-    { runtime: "node", exitCode: 7 },
-    { runtime: "bun", exitCode: 0 },
-    { runtime: "bun", exitCode: 7 },
-    { runtime: undefined, exitCode: 0 },
+    { runtime: "node", ci: "", cached: false, exitCode: 0 },
+    { runtime: "node", ci: "", cached: false, exitCode: 7 },
+    { runtime: "bun", ci: "", cached: false, exitCode: 0 },
+    { runtime: "bun", ci: "", cached: false, exitCode: 7 },
+    { runtime: undefined, ci: "", cached: true, exitCode: 0 },
+    { runtime: "bun", ci: "", cached: true, exitCode: 7 },
+    { runtime: undefined, ci: "1", cached: true, exitCode: 0 },
+    { runtime: "bun", ci: "1", cached: true, exitCode: 1 },
   ])(
-    "runs the cache package lane through $runtime and preserves exit $exitCode",
-    async ({ runtime, exitCode }, { signal }) => {
+    "runs the cache package lane with runtime=$runtime CI=$ci cached=$cached and exit $exitCode",
+    async ({ runtime, ci, cached, exitCode }, { signal }) => {
       await fixtureLifetime.run(async () => {
         const root = fixtureLifetime.createTempDir("openclaw-cache-runtime-");
         const home = join(root, "home");
@@ -47,24 +51,44 @@ describe("scripts/test-live", () => {
         mkdirSync(tmp);
         const receipt = join(root, "invocation.json");
         const preload = join(root, "cache-preload.mjs");
+        const cacheHome = join(root, "cache");
+        const target = `${process.platform}-${process.arch}`;
+        const cachedBun = join(cacheHome, "openclaw/bun", bunPin.tag, target, "bin/bun");
+        mkdirSync(join(cachedBun, ".."), { recursive: true });
+        writeFakeBun(cachedBun);
+        const stockRevision = "1.4.3+c6da4a4d3";
+        writeFakeBun(join(root, "bun"), cached ? stockRevision : bunPin.revision);
+        // Supply only the pin's external bytes; the real resolver hashes the cached
+        // executable and writes its own verification receipt. No network or providers.
+        const fixturePin = JSON.stringify({
+          ...bunPin,
+          artifacts: {
+            [target]: {
+              executableSha256: createHash("sha256").update(readFileSync(cachedBun)).digest("hex"),
+            },
+          },
+        });
         // Intercept both old and new leaf entrypoints before any provider code loads.
         writeFileSync(
           preload,
           [
             'import fs from "node:fs";',
             'import path from "node:path";',
+            "const readFileSync = fs.readFileSync;",
+            "fs.readFileSync = (file, ...args) =>",
+            `  file === ${JSON.stringify(join(process.cwd(), "scripts/lib/openclaw-bun.json"))}`,
+            `    ? ${JSON.stringify(fixturePin)} : readFileSync(file, ...args);`,
             'const bootstrap = path.basename(process.argv[1] ?? "") === "vitest-worker-bootstrap.mts";',
             'if (bootstrap || ["check-live-cache.ts", "vitest.mjs"].includes(path.basename(process.argv[1] ?? ""))) {',
             "  fs.writeFileSync(process.env.OPENCLAW_CACHE_RUNTIME_RECEIPT, JSON.stringify({",
             '    runtime: process.versions.bun ? "bun" : "node", args: process.argv.slice(bootstrap ? 4 : 2),',
             "    live: process.env.OPENCLAW_LIVE_TEST, cache: process.env.OPENCLAW_LIVE_CACHE_TEST,",
-            "    selectedRuntime: process.env.OPENCLAW_VITEST_RUNTIME,",
+            "    selectedRuntime: process.env.OPENCLAW_VITEST_RUNTIME, ci: process.env.CI,",
             "  }));",
             "  process.exit(Number(process.env.OPENCLAW_FAKE_BUN_EXIT));",
             "}",
           ].join("\n"),
         );
-        writeFakeBun(join(root, "bun"));
         const script = JSON.parse(readFileSync("package.json", "utf8")).scripts["test:live:cache"];
         const [command, ...args] = script.split(/\s+/u);
         expect(command).toBe("node");
@@ -82,8 +106,9 @@ describe("scripts/test-live", () => {
               TEMP: tmp,
               NODE_OPTIONS: `--import=${preload}`,
               OPENCLAW_VITEST_RUNTIME: runtime,
-              CI: "",
-              OPENCLAW_BUN_PATH: join(root, "bun"),
+              CI: ci,
+              XDG_CACHE_HOME: cacheHome,
+              OPENCLAW_BUN_PATH: cached ? undefined : join(root, "bun"),
               OPENCLAW_CACHE_RUNTIME_RECEIPT: receipt,
               OPENCLAW_FAKE_BUN_EXIT: String(exitCode),
             },
@@ -93,10 +118,18 @@ describe("scripts/test-live", () => {
         );
         expect(result.error, result.stderr).toBeUndefined();
         expect(result.status, result.stderr).toBe(exitCode);
+        if (ci && runtime === "bun" && cached) {
+          expect(result.stderr).toContain(
+            `Bun revision verification failed: expected ${bunPin.revision}, received "${stockRevision}"`,
+          );
+          expect(existsSync(receipt)).toBe(false);
+          return;
+        }
         const invocation = JSON.parse(readFileSync(receipt, "utf8"));
         expect(invocation).toMatchObject({
-          runtime: runtime ?? "bun",
-          selectedRuntime: runtime ?? "bun",
+          runtime: runtime ?? (ci ? "node" : "bun"),
+          selectedRuntime: runtime ?? (ci ? "node" : "bun"),
+          ci: "1",
           live: "1",
           cache: "1",
         });
@@ -315,21 +348,22 @@ describe("scripts/test-live", () => {
   });
 });
 
-function writeFakeBun(filePath: string): void {
+function writeFakeBun(filePath: string, revision = bunPin.revision): void {
+  writeFileSync(join(filePath, "..", "package.json"), '{"type":"commonjs"}');
   writeFileSync(
     filePath,
     [
       "#!/usr/bin/env node",
       'if (process.argv[2] === "--revision") {',
-      `  process.stdout.write(${JSON.stringify(`${bunPin.revision}\n`)});`,
+      `  process.stdout.write(${JSON.stringify(`${revision}\n`)});`,
       "  process.exit(0);",
       "}",
       'const { spawn } = require("node:child_process");',
       'const fs = require("node:fs");',
-      'fs.writeFileSync(require("node:path").join(__dirname, "invocation.json"), JSON.stringify({',
+      'fs.writeFileSync(process.env.OPENCLAW_CACHE_RUNTIME_RECEIPT ?? require("node:path").join(__dirname, "invocation.json"), JSON.stringify({',
       '  runtime: "bun", args: process.argv.slice(2), live: process.env.OPENCLAW_LIVE_TEST,',
       "  cache: process.env.OPENCLAW_LIVE_CACHE_TEST,",
-      "  selectedRuntime: process.env.OPENCLAW_VITEST_RUNTIME,",
+      "  selectedRuntime: process.env.OPENCLAW_VITEST_RUNTIME, ci: process.env.CI,",
       "  quiet: process.env.OPENCLAW_LIVE_TEST_QUIET, compileCache: process.env.NODE_DISABLE_COMPILE_CACHE,",
       "}));",
       "if (process.env.OPENCLAW_FAKE_BUN_EXIT !== undefined) process.exit(Number(process.env.OPENCLAW_FAKE_BUN_EXIT));",
