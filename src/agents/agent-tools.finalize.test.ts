@@ -140,6 +140,17 @@ describe("finalized tool descriptor snapshots", () => {
     expect(next.tool().outputSchema).toBe(descriptor.outputSchema);
   });
 
+  it("reuses another session's descriptors only for identical source schemas", async () => {
+    const parameters = schema();
+    await attempt([tool(parameters)]).settle();
+    const published = attempt([tool(parameters)]).tool().parameters;
+    expect(getPublishedRuntimeToolInputSchema(published)).toBeDefined();
+
+    const otherSession = { hookContext: { sessionId: "other-session" } };
+    expect(attempt([tool(parameters)], otherSession).tool().parameters).toBe(published);
+    expect(attempt([tool(schema())], otherSession).tool().parameters).not.toBe(published);
+  });
+
   it("retains a prepared output schema when another descriptor changes", async () => {
     const parameters = schema();
     const outputSchema = schema();

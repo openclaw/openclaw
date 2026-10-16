@@ -41,7 +41,13 @@ type DescriptorSnapshot = {
 };
 
 const snapshots = new Map<string, DescriptorSnapshot>();
-registerPluginMetadataProcessMemoLifecycleClear(() => snapshots.clear());
+// Seeds a session's first attempt from the latest publication with the same inputs;
+// per-tool identity checks still gate every reuse.
+const latestByKey = new Map<string, DescriptorSnapshot>();
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  snapshots.clear();
+  latestByKey.clear();
+});
 
 function publishParameters(parameters: AnyAgentTool["parameters"], name: string) {
   const projected = publishRuntimeToolInputSchema(parameters, `${name}.parameters`, name);
@@ -78,10 +84,11 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
     inputs.modelCompat,
     inputs.tools.map((tool) => tool.name),
   ]);
-  const previous = inputs.sessionId ? snapshots.get(inputs.sessionId) : undefined;
+  const own = inputs.sessionId ? snapshots.get(inputs.sessionId) : undefined;
+  const previous = own?.key === key ? own : latestByKey.get(key);
   const entries =
-    previous?.key === key && previous.pluginMetadataSnapshot === inputs.pluginMetadataSnapshot
-      ? previous.entries
+    previous?.pluginMetadataSnapshot === inputs.pluginMetadataSnapshot
+      ? previous?.entries
       : undefined;
 
   return {
@@ -180,13 +187,17 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
           });
         });
         // A late settlement may replace a newer entry; input matching makes that a cold miss.
-        snapshots.delete(sessionId);
-        snapshots.set(sessionId, {
+        const snapshot = {
           key,
           pluginMetadataSnapshot: inputs.pluginMetadataSnapshot,
           entries: Object.freeze(prepared),
-        });
+        };
+        snapshots.delete(sessionId);
+        snapshots.set(sessionId, snapshot);
         pruneMapToMaxSize(snapshots, 64);
+        latestByKey.delete(key);
+        latestByKey.set(key, snapshot);
+        pruneMapToMaxSize(latestByKey, 16);
       };
       if (registerCleanup) {
         registerCleanup(async () => publish());
