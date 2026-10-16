@@ -621,7 +621,10 @@ it("replaces cached source groups during a zero-offset refill without losing liv
   const cached = nativeHistoryMessage(3);
   const changed = {
     ...cached,
-    __openclaw: { ...cached.__openclaw, senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2" },
+    __openclaw: {
+      ...cached["__openclaw"],
+      senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2",
+    },
   };
   const sibling = { ...changed, content: "Second projection from the same source" };
   const unchanged = nativeHistoryMessage(4);

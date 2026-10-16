@@ -502,7 +502,7 @@ suite.define(() => {
             {
               ...rememberedMessage,
               __openclaw: {
-                ...rememberedMessage.__openclaw,
+                ...rememberedMessage["__openclaw"],
                 senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2",
               },
             },
