@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { GatewayRequestHandlerOptions as CoreHandler } from "../../plugin-sdk/core.js";
 import type { GatewayRequestHandlerOptions as RuntimeHandler } from "../../plugin-sdk/gateway-runtime.js";
 import {
@@ -86,8 +87,7 @@ describe("worker creation through the shipped plugin Gateway context", () => {
     const service = support.createService(support.createProvider({ provision }));
     await withRegisteredCreator(service, ["development", "plugin-create"], async (invoke) => {
       const first = await invoke();
-      const replayed = await invoke();
-      expect(replayed.environmentId).toBe(first.environmentId);
+      expect((await invoke()).environmentId).toBe(first.environmentId);
       expect(first).toMatchObject({ state: "ready", profileId: "development" });
       expect(provision).toHaveBeenCalledOnce();
       expect(support.testState.store.list()).toHaveLength(1);
@@ -136,12 +136,11 @@ describe("worker creation through the shipped plugin Gateway context", () => {
         const settled = creation.catch((error: unknown) => error);
         try {
           const options = expectDefined(
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               entered.promise,
-              settled.then((outcome) => {
-                throw outcome;
-              }),
-            ]),
+              creation,
+              "Creation settled before preparation",
+            ),
             "provider preparation options",
           );
           expect(options).toMatchObject({

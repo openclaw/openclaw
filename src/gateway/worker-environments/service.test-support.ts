@@ -23,12 +23,12 @@ import type {
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import {
-  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
@@ -203,10 +203,7 @@ export function setupWorkerEnvironmentServiceSuite() {
     await fs.rm(testState.root, { recursive: true, force: true });
   });
 
-  afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-  });
+  afterAll(closeStateDatabaseForTest);
 }
 
 async function closeWorkerEnvironmentDatabase() {
@@ -424,27 +421,24 @@ async function seedDesktop(environmentId: string, desktop: WorkerDesktopEndpoint
       );
 }
 
+const makeCredential = <SessionId extends string | null>(key: string[], sessionId: SessionId) => ({
+  credentialHash: hashWorkerCredential(key.join("-")),
+  sessionId,
+  rpcSetVersion: 1,
+  expiresAtMs: testState.nowMs + 10_000,
+});
+
 export const readyPatch = (
   environmentId: string,
   receipt: NonNullable<WorkerEnvironmentTransitionPatch["bootstrapReceipt"]> = BOOTSTRAP_RECEIPT,
 ) => ({
   bootstrapReceipt: receipt,
-  credential: {
-    credentialHash: hashWorkerCredential([CREDENTIAL, environmentId].join("-")),
-    sessionId: null,
-    rpcSetVersion: 1,
-    expiresAtMs: testState.nowMs + 10_000,
-  },
+  credential: makeCredential([CREDENTIAL, environmentId], null),
 });
 
 export const attachedPatch = (environmentId: string, sessionId: string) => ({
   attachedSessionIds: [sessionId],
-  credential: {
-    credentialHash: hashWorkerCredential([CREDENTIAL, environmentId, sessionId].join("-")),
-    sessionId,
-    rpcSetVersion: 1,
-    expiresAtMs: testState.nowMs + 10_000,
-  },
+  credential: makeCredential([CREDENTIAL, environmentId, sessionId], sessionId),
 });
 
 export const admissionFor = (environmentId: string) => ({

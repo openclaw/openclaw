@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import {
   AUTHORIZATION,
@@ -14,17 +14,6 @@ import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limit
 
 async function expectAbsent(file: string) {
   expect(await fs.stat(file).catch(() => undefined)).toBeUndefined();
-}
-
-async function beforeSettlement(event: Promise<unknown>, result: Promise<unknown>) {
-  await Promise.race([
-    event,
-    result.then((outcome) => {
-      throw outcome instanceof Error
-        ? outcome
-        : new Error("Operation settled before expected event");
-    }),
-  ]);
 }
 
 describe("private repository preparation", () => {
@@ -95,8 +84,9 @@ describe("private repository preparation", () => {
     f.mode.stall = true;
     const controller = new AbortController();
     const reason = new Error("preparation owner replaced");
-    const result = f.preparePack(controller.signal).catch((error: unknown) => error);
-    await beforeSettlement(f.received, result);
+    const preparation = f.preparePack(controller.signal);
+    const result = preparation.catch((error: unknown) => error);
+    await awaitGateBeforeSettlement(f.received, preparation, "Fetch settled before request");
     controller.abort(reason);
     expect(await result).toBe(reason);
     expect(f.fetches).toHaveLength(1);
@@ -160,7 +150,11 @@ describe("private repository preparation", () => {
         .finally(() => {
           settled = true;
         });
-      await beforeSettlement(published.promise, result);
+      await awaitGateBeforeSettlement(
+        published.promise,
+        result,
+        "Preparation settled before upload",
+      );
       expect(await fs.stat(localPack!)).toBeDefined();
       expect(settled).toBe(false);
       releaseUpload.resolve();

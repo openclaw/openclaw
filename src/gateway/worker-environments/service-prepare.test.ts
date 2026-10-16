@@ -69,6 +69,12 @@ describe("on-demand prepared worker admission", () => {
       await entered.promise;
       const baseCommit = await requireGit(f.projectPath, ["rev-parse", "HEAD"]);
       const record = support.testState.store.get(result.environmentId)!;
+      const preparation = {
+        purpose: "build",
+        demandAtMs: 1_000,
+        expiresAtMs: 11_000,
+        consumedAtMs: null,
+      };
       expect(result).toEqual({
         environmentId: record.environmentId,
         preparationKey: record.preparation!.key,
@@ -85,23 +91,15 @@ describe("on-demand prepared worker admission", () => {
             baseCommit,
           },
         },
-        preparation: {
-          purpose: "build",
-          demandAtMs: 1_000,
-          expiresAtMs: 11_000,
-          consumedAtMs: null,
-        },
+        preparation,
       });
       expect(readWorkerProjectPreparation(record.profileSnapshot.project)?.setupRecipe).toMatch(
         /^[a-f0-9]{40}$/u,
       );
       expect(f.provision).toHaveBeenCalledOnce();
       expect(f.service.list()[0]?.preparation).toEqual({
-        purpose: "build",
+        ...preparation,
         key: result.preparationKey,
-        demandAtMs: 1_000,
-        expiresAtMs: 11_000,
-        consumedAtMs: null,
         project: { label: "project", baseCommit },
       });
     } finally {

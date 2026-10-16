@@ -635,19 +635,15 @@ describe("repository project admission", () => {
       const controller = new AbortController();
       const started = createDeferred();
       const release = createDeferred();
-      if (phase === "capture") {
-        mocks.captureAgentLifecycleBinding.mockImplementationOnce(async () => {
-          started.resolve();
-          await release.promise;
-          return agent;
-        });
-      } else {
-        mocks.matchesAgentLifecycleBindingAsync.mockImplementationOnce(async () => {
-          started.resolve();
-          await release.promise;
-          return true;
-        });
-      }
+      const lifecycle =
+        phase === "capture"
+          ? mocks.captureAgentLifecycleBinding
+          : mocks.matchesAgentLifecycleBindingAsync;
+      lifecycle.mockImplementationOnce(async () => {
+        started.resolve();
+        await release.promise;
+        return phase === "capture" ? agent : true;
+      });
       const pending = prepare({ signal: controller.signal });
       await started.promise;
       controller.abort();
@@ -714,20 +710,17 @@ describe("repository project admission", () => {
   it("rejects mixed local/remote descriptors and unexpected persisted owner fields", async () => {
     const { project } = await prepare();
     expect(readRepositoryWorkerProjectSnapshot({ ...project, preparation: {} })).toEqual(project);
-    expect(() => readRepositoryWorkerProjectSnapshot({ ...project, root: "/local" })).toThrow(
-      "invalid repository",
-    );
-    expect(() =>
-      readRepositoryWorkerProjectSnapshot({ ...project, token: "unpersistable" }),
-    ).toThrow("invalid repository");
-    expect(() =>
-      readRepositoryWorkerProjectSnapshot({
-        ...project,
-        source: {
-          ...project.source,
-          owner: { ...project.source.owner, token: "unpersistable" },
-        },
-      }),
-    ).toThrow("invalid repository");
+    const reject = (fields: Record<string, unknown>) =>
+      expect(() => readRepositoryWorkerProjectSnapshot({ ...project, ...fields })).toThrow(
+        "invalid repository",
+      );
+    reject({ root: "/local" });
+    reject({ token: "unpersistable" });
+    reject({
+      source: {
+        ...project.source,
+        owner: { ...project.source.owner, token: "unpersistable" },
+      },
+    });
   });
 });
