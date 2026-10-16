@@ -332,8 +332,8 @@ describe("dreaming service reconciliation", () => {
       rejectStartupList = reject;
     });
     let listCalls = 0;
-    const addCalls: CronAddInput[] = [];
-    const cron: CronParam = {
+    const add = vi.fn(async () => ({}));
+    const cron = {
       async list() {
         listCalls += 1;
         if (listCalls === 1) {
@@ -341,17 +341,17 @@ describe("dreaming service reconciliation", () => {
         }
         return [];
       },
-      async add(input) {
-        addCalls.push(input);
-        return {};
-      },
+      add,
       async update() {
         return {};
       },
       async remove() {
         return { removed: false };
       },
-    };
+      async removeStaleJobFamily() {
+        return 0;
+      },
+    } satisfies NonNullable<ReturnType<NonNullable<OpenClawPluginServiceContext["getCron"]>>>;
     const { api, logger } = createDreamingTestContext();
 
     try {
@@ -361,7 +361,7 @@ describe("dreaming service reconciliation", () => {
         stateDir: ".",
         logger,
         scheduler: api.scheduler,
-        getCron: () => ({ ...cron, removeStaleJobFamily: async () => 0 }),
+        getCron: () => cron,
       });
 
       let stopped = false;
@@ -375,7 +375,7 @@ describe("dreaming service reconciliation", () => {
       await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
 
       expect(listCalls).toBe(1);
-      expect(addCalls).toHaveLength(0);
+      expect(add).not.toHaveBeenCalled();
       expectLogContains(logger.error, "dreaming startup reconciliation failed");
     } finally {
       rejectStartupList(new Error("test cleanup"));
