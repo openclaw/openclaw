@@ -48,6 +48,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   authStorage: ModelResolution["authStorage"];
   modelRegistry: ModelResolution["modelRegistry"];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  requireDirectAuth?: boolean;
   getAgentHarness: () => AgentHarness;
   setAgentHarness: (harness: AgentHarness) => void;
   getRuntimeModel: () => RuntimeModel;
@@ -191,6 +192,19 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           context,
         }),
     });
+    if (
+      params.requireDirectAuth &&
+      prepared.attempts.some(
+        (attempt) =>
+          attempt.kind !== "direct" ||
+          attempt.plan.forwardedAuthProfileId !== undefined ||
+          !isConfiguredKeyAuthSource(attempt.plan.credentialSource) ||
+          (attempt.plan.credentialSource?.kind === "direct" &&
+            attempt.plan.credentialSource.authorization !== "declared"),
+      )
+    ) {
+      throw new Error("Connection recovery requires the admitted configured credential source.");
+    }
     // Legacy jobs have no trustworthy account history. Their env or provider-config key is
     // the only one they can use, so it keeps running; an eligible stored account needs adoption.
     if (

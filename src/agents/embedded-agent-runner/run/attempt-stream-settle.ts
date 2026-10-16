@@ -441,6 +441,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     resolvePreparedExtraParams({
       ...extraParamsContext,
       cfg: attempt.config,
+      transportConfig: attempt.transportConfig,
       provider: attempt.provider,
       modelId: attempt.modelId,
       providerRuntimeHandle: input.getProviderRuntimeHandle(),
@@ -449,7 +450,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   const providerStreamFn = registerProviderStreamForModel({
     model: attempt.model,
-    cfg: attempt.config,
+    cfg: attempt.transportConfig ?? attempt.config,
     agentDir: input.agentDir,
     workspaceDir: input.workspaceDir,
     auth,
@@ -583,6 +584,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       resolvedTransport,
       {
         preparedExtraParams: effectiveExtraParams,
+        transportConfig: attempt.transportConfig,
         modelCallUrgency: resolveModelCallUrgency(attempt),
         auth,
         nativeWebSearchPolicyContext,

@@ -1,4 +1,5 @@
 import type { TSchema } from "typebox";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ModelApi,
   ProviderModelRouteRuntimePolicy,
@@ -244,6 +245,8 @@ export type BuildAgentRuntimeDeliveryPlanParams = {
 };
 
 export type BuildAgentRuntimePlanParams = BuildAgentRuntimeDeliveryPlanParams & {
+  /** Current transport/auth config; prompt and tool policy retain the admitted config. */
+  transportConfig?: OpenClawConfig;
   model?: AgentRuntimeModel;
   modelApi?: string | null;
   harnessId?: string;
