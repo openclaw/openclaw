@@ -2,12 +2,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
+import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
-  takeControlUiElementScreenshot,
-  takeControlUiViewportScreenshot,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  captureUiProofEnabled,
   createChatFlowE2eSuite,
   expectDefined,
   installMockGateway,
@@ -21,14 +17,12 @@ const orders = ["receipt-first", "event-first"] as const;
 
 suite.define(() => {
   it.each(orders)("keeps image previews through the history handoff (%s)", async (order) => {
-    const proofDir = captureUiProofEnabled ? suite.artifactDir : undefined;
     const imageBytes = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
     await suite.withPage(
       {
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1280 },
-        ...(proofDir ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1280 } } } : {}),
       },
       async ({ page }) => {
         const sessionKey = "agent:main:main";
@@ -85,16 +79,6 @@ suite.define(() => {
           historyMessages: [],
           methodResponses: { "chat.startup": initialHistory, "chat.history": initialHistory },
         });
-        const capture = async (stage: string) => {
-          if (proofDir) {
-            await writeFile(
-              path.join(proofDir, `${stage}.png`),
-              await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-                page.locator(".chat-group.user img.chat-message-image"),
-              ]),
-            );
-          }
-        };
 
         try {
           await page.goto(`${suite.server.baseUrl}chat`);
@@ -156,7 +140,6 @@ suite.define(() => {
             };
           });
           const expectImageStillVisible = async (stage: string) => {
-            await capture(stage);
             expect(await displayed.evaluate((image) => image.isConnected)).toBe(true);
             expect(await userImage.count()).toBe(1);
             // Native pending sources may report zero dimensions while the browser
@@ -347,7 +330,6 @@ suite.define(() => {
         } finally {
           releaseMetadata();
           releaseImage();
-          await capture("06-final");
         }
       },
     );

@@ -16,7 +16,7 @@ import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.j
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
-import { installMockGateway } from "./chat-flow.test-support.ts";
+import { newChatPage, installMockGateway } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -159,8 +159,7 @@ suite.define(() => {
   ])(
     "opens $route ($sessionKey) from its session snapshot while an older reply is held",
     async ({ route, sessionKey, target, sessionScope }) => {
-      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-      const page = await context.newPage();
+      const page = await newChatPage(suite);
       const current = {
         provider: "fixture",
         id: "session-current",
@@ -203,77 +202,73 @@ suite.define(() => {
           },
         },
       });
-      try {
-        await page.goto(`${suite.server.baseUrl}${route}`);
-        const connect = await gateway.waitForRequest("connect");
-        expect(connect.params).toMatchObject({ modelCatalog: target });
-        await expect
-          .poll(async () => (await gateway.getRequests("models.list", scope)).length)
-          .toBe(1);
-        // The chat's delayed child roster request is startup work, independent of the picker.
-        await gateway.waitForRequest("sessions.list", { match: { spawnedBy: sessionKey } });
-        for (const otherScope of [
-          { agentId: "alpha" },
-          { agentId: "alpha", sessionKey: "agent:alpha:other" },
-          { agentId: "bravo", sessionKey: "agent:bravo:session-one" },
-        ]) {
-          await gateway.emitGatewayEvent("models.snapshot", {
-            target: otherScope,
-            scope: otherScope,
-            catalog: { models: [foreign] },
-          });
-        }
-        expect(await gateway.getRequests("models.list", scope)).toHaveLength(1);
+      await page.goto(`${suite.server.baseUrl}${route}`);
+      const connect = await gateway.waitForRequest("connect");
+      expect(connect.params).toMatchObject({ modelCatalog: target });
+      await expect
+        .poll(async () => (await gateway.getRequests("models.list", scope)).length)
+        .toBe(1);
+      // The chat's delayed child roster request is startup work, independent of the picker.
+      await gateway.waitForRequest("sessions.list", { match: { spawnedBy: sessionKey } });
+      for (const otherScope of [
+        { agentId: "alpha" },
+        { agentId: "alpha", sessionKey: "agent:alpha:other" },
+        { agentId: "bravo", sessionKey: "agent:bravo:session-one" },
+      ]) {
         await gateway.emitGatewayEvent("models.snapshot", {
-          target,
-          scope: "shortId" in target ? scope : target,
-          catalog: {
-            models: [current],
-            pendingProviders: ["fixture"],
-            accountSelection: {
-              kind: "personal",
-              authProfileId: "personal:fixture-person:fixture:one",
-              label: "Pinned session account",
-              source: "user",
-            },
-          },
+          target: otherScope,
+          scope: otherScope,
+          catalog: { models: [foreign] },
         });
-        const picker = page.locator(
-          'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
-        );
-        const trigger = picker.locator("[data-chat-model-select]");
-        const currentRow = picker.locator('[data-chat-model-option="fixture/session-current"]');
-        const requestsBeforeOpen = (await gateway.getRequests("models.list")).length;
-        const sessionRequestsBeforeOpen = (await gateway.getRequests("sessions.list")).length;
-        await trigger.click();
-        await revealChatModelOption(currentRow);
-        await expect.poll(() => currentRow.isVisible()).toBe(true);
-        expect(await picker.textContent()).toContain("Pinned session account");
-        expect(await picker.locator("[data-chat-model-refresh]").textContent()).toContain(
-          "Refreshing models for Fixture…",
-        );
-        expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
-        expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
-        expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
-        await gateway.resolveDeferred("models.list", { models: [older] });
-        await expect.poll(() => currentRow.isVisible()).toBe(true);
-        expect(
-          await picker
-            .locator(
-              '[data-chat-model-option="fixture/older"], [data-chat-model-option="fixture/foreign"]',
-            )
-            .count(),
-        ).toBe(0);
-        expect(await picker.textContent()).toContain("Pinned session account");
-        await trigger.click();
-        await trigger.click();
-        await revealChatModelOption(currentRow);
-        await expect.poll(() => currentRow.isVisible()).toBe(true);
-        expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
-        expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
-      } finally {
-        await suite.closeBrowserContext(context);
       }
+      expect(await gateway.getRequests("models.list", scope)).toHaveLength(1);
+      await gateway.emitGatewayEvent("models.snapshot", {
+        target,
+        scope: "shortId" in target ? scope : target,
+        catalog: {
+          models: [current],
+          pendingProviders: ["fixture"],
+          accountSelection: {
+            kind: "personal",
+            authProfileId: "personal:fixture-person:fixture:one",
+            label: "Pinned session account",
+            source: "user",
+          },
+        },
+      });
+      const picker = page.locator(
+        'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
+      );
+      const trigger = picker.locator("[data-chat-model-select]");
+      const currentRow = picker.locator('[data-chat-model-option="fixture/session-current"]');
+      const requestsBeforeOpen = (await gateway.getRequests("models.list")).length;
+      const sessionRequestsBeforeOpen = (await gateway.getRequests("sessions.list")).length;
+      await trigger.click();
+      await revealChatModelOption(currentRow);
+      await expect.poll(() => currentRow.isVisible()).toBe(true);
+      expect(await picker.textContent()).toContain("Pinned session account");
+      expect(await picker.locator("[data-chat-model-refresh]").textContent()).toContain(
+        "Refreshing models for Fixture…",
+      );
+      expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+      expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
+      await gateway.resolveDeferred("models.list", { models: [older] });
+      await expect.poll(() => currentRow.isVisible()).toBe(true);
+      expect(
+        await picker
+          .locator(
+            '[data-chat-model-option="fixture/older"], [data-chat-model-option="fixture/foreign"]',
+          )
+          .count(),
+      ).toBe(0);
+      expect(await picker.textContent()).toContain("Pinned session account");
+      await trigger.click();
+      await trigger.click();
+      await revealChatModelOption(currentRow);
+      await expect.poll(() => currentRow.isVisible()).toBe(true);
+      expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
     },
   );
 
@@ -418,9 +413,7 @@ suite.define(() => {
             await expect.poll(() => row.isVisible()).toBe(true);
             expect(await row.isEnabled()).toBe(true);
             expect(catalogRequests.size).toBe(requestsBeforeOpen);
-            await page.screenshot({
-              path: path.join(suite.artifactDir, `catalog-${replacementState}.png`),
-            });
+
             holdReconnectCatalog = false;
             heldReplies.splice(0).forEach((send) => send());
             await trigger.click();

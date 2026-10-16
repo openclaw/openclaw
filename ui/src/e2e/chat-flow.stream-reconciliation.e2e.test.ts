@@ -1,8 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  chatMessage,
+  textContent,
   createChatFlowE2eSuite,
   installMockGateway,
   requireRecord,
@@ -17,11 +16,9 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const runId = "missed-terminal-publication";
       const answer = "Review complete. The verified fix is ready.";
-      const user = {
-        role: "user",
-        content: [{ type: "text", text: "Finalize the review." }],
+      const user = chatMessage("user", "Finalize the review.", {
         __openclaw: { id: "finalize-user", seq: 1, idempotencyKey: runId + ":user" },
-      };
+      });
       const gateway = await installMockGateway(page, {
         historyMessages: [user],
         inFlightRun: { runId, startedAt: 1_000, text: "" },
@@ -34,37 +31,23 @@ suite.define(() => {
       // Persistence succeeded, but this client missed the session.message publication.
       await gateway.setHistoryMessages([
         user,
-        {
-          role: "assistant",
-          content: [{ type: "text", text: answer }],
+        chatMessage("assistant", answer, {
           stopReason: "stop",
           __openclaw: { id: "finalize-answer", seq: 2, runId },
-        },
+        }),
       ]);
       await gateway.emitGatewayEvent("chat", {
         sessionKey: "agent:main:main",
         runId,
         state: "final",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: answer }],
+        message: chatMessage("assistant", answer, {
           openclawDisplayContent: [],
-        },
+        }),
       });
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
-      try {
-        await page.locator(".chat-text").getByText(answer, { exact: true }).waitFor();
-      } finally {
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".chat-pane-cache__pane--active"),
-            [page.getByText("Finalize the review.", { exact: true })],
-            { animations: "disabled" },
-          );
-          await writeFile(path.join(suite.artifactDir, "retired-final-recovery.png"), frame.png);
-        }
-      }
+
+      await page.locator(".chat-text").getByText(answer, { exact: true }).waitFor();
+
       expect((await gateway.getRequests("chat.history")).length).toBe(initialReads + 1);
       expect(await page.locator(".chat-text").getByText(answer, { exact: true }).count()).toBe(1);
     });
@@ -76,16 +59,12 @@ suite.define(() => {
       const answer = "The workspace check is complete.";
       const notice =
         "Model Fallback: backup/model (selected primary/model; selected model unavailable)";
-      const user = {
-        role: "user",
-        content: [{ type: "text", text: "Check the workspace." }],
+      const user = chatMessage("user", "Check the workspace.", {
         __openclaw: { id: "fallback-user", seq: 1, idempotencyKey: `${runId}:user` },
-      };
-      const savedAnswer = {
-        role: "assistant",
-        content: [{ type: "text", text: answer }],
+      });
+      const savedAnswer = chatMessage("assistant", answer, {
         __openclaw: { id: "fallback-answer", seq: 2, runId },
-      };
+      });
       const gateway = await installMockGateway(page, {
         historyMessages: [user, savedAnswer],
         inFlightRun: { runId, startedAt: 1_000, text: "" },
@@ -103,11 +82,9 @@ suite.define(() => {
         sessionKey: "agent:main:main",
         runId,
         state: "final",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: answer }],
+        message: chatMessage("assistant", answer, {
           openclawDisplayContent: [],
-        },
+        }),
       });
       await gateway.emitGatewayEvent("chat", {
         sessionKey: "agent:main:main",
@@ -119,13 +96,6 @@ suite.define(() => {
         },
       });
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
-      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(suite.artifactDir, "fallback-terminal-answer.png"),
-        });
-      }
 
       const answerOccurrences = async () =>
         (await page.locator(".chat-group.assistant .chat-text").allTextContents()).filter((text) =>
@@ -161,7 +131,7 @@ suite.define(() => {
               phase: "result",
               toolCallId: "workspace-check",
               name: "read",
-              result: { content: [{ type: "text", text: "Workspace ready." }] },
+              result: { content: textContent("Workspace ready.") },
             },
           };
           const itemEvent = {
@@ -178,25 +148,21 @@ suite.define(() => {
               status: "completed",
             },
           };
-          const message = {
-            role: "assistant",
-            content: [{ type: "text", text }],
+          const message = chatMessage("assistant", text, {
             __openclaw: { id: "hydrated-answer", seq: 2, runId },
-          };
+          });
           const historyMessages = [
             message,
             ...(steer
               ? [
-                  {
-                    role: "user",
-                    content: [{ type: "text", text: "Check the follow-up." }],
+                  chatMessage("user", "Check the follow-up.", {
                     __openclaw: {
                       id: "follow-up",
                       seq: 3,
                       idempotencyKey: "follow-up:user",
                       steerTargetRunId: runId,
                     },
-                  },
+                  }),
                 ]
               : []),
           ];
@@ -223,7 +189,7 @@ suite.define(() => {
             runId,
             state: "delta",
             deltaText: text,
-            message: { role: "assistant", content: [{ type: "text", text }] },
+            message: chatMessage("assistant", text),
           });
           if (tool) {
             await gateway.emitGatewayEvent("agent", toolEvent);
@@ -275,31 +241,16 @@ suite.define(() => {
             sessionKey: "agent:main:main",
             runId,
             state: "final",
-            message: {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: steer
-                    ? `${text} ${tailText}`
-                    : tool
-                      ? `Checking the workspace.\n\n${text}`
-                      : text,
-                },
-              ],
-              openclawDisplayContent: steer ? [{ type: "text", text: tailText }] : [],
-            },
+            message: chatMessage(
+              "assistant",
+              steer ? `${text} ${tailText}` : tool ? `Checking the workspace.\n\n${text}` : text,
+              {
+                openclawDisplayContent: steer ? textContent(tailText) : [],
+              },
+            ),
           });
           await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            await page.screenshot({
-              fullPage: true,
-              path: path.join(
-                suite.artifactDir,
-                steer ? "hydrated-continuation.png" : "hydrated-answer.png",
-              ),
-            });
-          }
+
           expect(
             (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map(
               (value) => value.trim(),
@@ -331,13 +282,13 @@ suite.define(() => {
         stream: "item",
         ts: startedAt + 2_000 + index,
       }));
-      const historyMessages = items.map(({ itemId, text }, index) => ({
-        role: "assistant",
-        content: [{ type: "text", text }],
-        timestamp: startedAt + 1_000 + index,
-        __openclaw: { id: `commentary-message-${index}`, runId, seq: index + 1 },
-        openclawStreamFallback: { itemId, replacementText: text, source: "segment" },
-      }));
+      const historyMessages = items.map(({ itemId, text }, index) =>
+        chatMessage("assistant", text, {
+          timestamp: startedAt + 1_000 + index,
+          __openclaw: { id: `commentary-message-${index}`, runId, seq: index + 1 },
+          openclawStreamFallback: { itemId, replacementText: text, source: "segment" },
+        }),
+      );
       const sessionInfo = {
         activeRunIds: [runId],
         hasActiveRun: true,
@@ -379,13 +330,6 @@ suite.define(() => {
       await gateway.setOnline(true);
       await gateway.waitForRequest("chat.startup", { after: startupCount });
       await expect.poll(itemOccurrences).toEqual([1, 1]);
-
-      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(suite.artifactDir, "commentary-reconciliation.png"),
-        });
-      }
     });
   });
 
@@ -394,21 +338,19 @@ suite.define(() => {
       const runId = "evicted-commentary-run";
       const commentary = ["Checking the workspace.", "The focused tests are green."];
       const historyMessages = [
-        {
-          role: "user",
-          content: [{ type: "text", text: "Inspect the workspace." }],
+        chatMessage("user", "Inspect the workspace.", {
           __openclaw: { id: "user", seq: 1, idempotencyKey: `${runId}:user` },
-        },
-        ...commentary.map((text, index) => ({
-          role: "assistant",
-          content: [{ type: "text", text }],
-          __openclaw: { id: `commentary-${index}`, runId, seq: index + 2 },
-          openclawStreamFallback: {
-            itemId: `preamble-${index}`,
-            replacementText: text,
-            source: "segment",
-          },
-        })),
+        }),
+        ...commentary.map((text, index) =>
+          chatMessage("assistant", text, {
+            __openclaw: { id: `commentary-${index}`, runId, seq: index + 2 },
+            openclawStreamFallback: {
+              itemId: `preamble-${index}`,
+              replacementText: text,
+              source: "segment",
+            },
+          }),
+        ),
       ];
       const sessionInfo = {
         activeRunIds: [runId],
@@ -432,7 +374,7 @@ suite.define(() => {
                 phase: "result",
                 toolCallId: "focused-tests",
                 name: "exec",
-                result: { content: [{ type: "text", text: "Tests passed." }] },
+                result: { content: textContent("Tests passed.") },
               },
             },
           ],
@@ -448,13 +390,6 @@ suite.define(() => {
         );
       await expect.poll(assistantTexts).toEqual([...commentary, "Still working."]);
       expect(await page.locator(".chat-tool-msg-summary").count()).toBe(1);
-
-      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(suite.artifactDir, "evicted-commentary-after.png"),
-        });
-      }
     });
   });
 
@@ -480,7 +415,7 @@ suite.define(() => {
             state: "delta",
             deltaText,
             ...(replace ? { replace: true } : {}),
-            message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
+            message: chatMessage("assistant", snapshot),
           });
         if (persistence === "after partial streaming") {
           await emitDelta(partial, partial);
@@ -508,11 +443,9 @@ suite.define(() => {
             hasActiveRun: true,
             activeRunIds: [runId],
           },
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text }],
+          message: chatMessage("assistant", text, {
             __openclaw: { id: "workspace-answer", seq: 2, runId },
-          },
+          }),
         });
         await page.locator(".chat-group.assistant .chat-text", { hasText: text }).waitFor();
         await gateway.emitGatewayEvent("agent", {
@@ -539,11 +472,9 @@ suite.define(() => {
           runId,
           state: terminal,
           ...(terminal === "error" ? { errorMessage } : {}),
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text }],
+          message: chatMessage("assistant", text, {
             openclawDisplayContent: [],
-          },
+          }),
         });
         await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
         await page.locator(".chat-working-indicator").waitFor({ state: "hidden" });

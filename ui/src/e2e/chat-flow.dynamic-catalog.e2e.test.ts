@@ -1,8 +1,7 @@
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
+  newChatPage,
   createChatFlowE2eSuite,
   controlUiSessionUrl,
   installMockGateway,
@@ -10,25 +9,10 @@ import {
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
-let dynamicCatalogProofDir: string | null;
-beforeEach(() => {
-  dynamicCatalogProofDir =
-    process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-      ? createControlUiE2eArtifactDir("dynamic-catalog-convergence")
-      : null;
-});
 
 suite.define(() => {
   it("converges Chat reasoning and context metadata after dynamic catalog discovery", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      ...(dynamicCatalogProofDir
-        ? { recordVideo: { dir: dynamicCatalogProofDir, size: { height: 900, width: 1280 } } }
-        : {}),
-    });
-    const page = await context.newPage();
+    const page = await newChatPage(suite);
     const sessionKey = "agent:main:dynamic-catalog";
     const preparedLevels = [{ id: "off", label: "off" }];
     const discoveredLevels = ["off", "low", "medium", "high", "xhigh"].map((id) => ({
@@ -100,97 +84,67 @@ suite.define(() => {
       sessionKey,
     });
 
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const main = page.getByRole("main");
-      const modelSelect = main.locator('[data-chat-model-select="true"]');
-      const effortSelect = main.locator('[data-chat-thinking-select="true"]');
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    const main = page.getByRole("main");
+    const modelSelect = main.locator('[data-chat-model-select="true"]');
+    const effortSelect = main.locator('[data-chat-thinking-select="true"]');
 
-      await effortSelect.click();
-      await expect.poll(() => main.locator('[data-chat-thinking-option="off"]').count()).toBe(1);
-      expect(await main.locator('[data-chat-thinking-slider="true"]').count()).toBe(0);
-      expect(await gateway.getRequests("models.list")).toHaveLength(1);
-      if (dynamicCatalogProofDir) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(dynamicCatalogProofDir, "01-prepared-off-only.png"),
-        });
-      }
+    await effortSelect.click();
+    await expect.poll(() => main.locator('[data-chat-thinking-option="off"]').count()).toBe(1);
+    expect(await main.locator('[data-chat-thinking-slider="true"]').count()).toBe(0);
+    expect(await gateway.getRequests("models.list")).toHaveLength(1);
 
-      await page.keyboard.press("Escape");
-      await gateway.setSessionsListResponse(sessionResponse(discoveredLevels, 65_536));
-      await gateway.setMethodResponse("models.list", { models: [discoveredModel] });
-      const sessionListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-      const sessionDescribeMatch = { key: sessionKey, agentId: "main" };
-      const sessionDescribeCount = (
-        await gateway.getRequests("sessions.describe", sessionDescribeMatch)
-      ).length;
-      expect(await gateway.getRequests("models.list")).toHaveLength(1);
-      await gateway.emitGatewayEvent("chat.metadata.changed", {});
-      const modelsRequest = await gateway.waitForRequest("models.list", { after: 1 });
-      expect(modelsRequest.params).toEqual({
-        view: "configured",
-        agentId: "main",
-        sessionKey,
-      });
-      const refreshedSessionRequest = await gateway.waitForRequest("sessions.describe", {
-        after: sessionDescribeCount,
-        match: sessionDescribeMatch,
-      });
-      expect(refreshedSessionRequest.params).toEqual({ key: sessionKey, agentId: "main" });
-      await modelSelect.click();
-      expect(await gateway.getRequests("models.list")).toHaveLength(2);
-      const modelOption = main.locator(
-        '[data-chat-model-option="omniroute/deepseekv4flash-equivalent"]',
-      );
-      await expect.poll(() => modelOption.textContent()).toContain("262.1k");
-      if (dynamicCatalogProofDir) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(dynamicCatalogProofDir, "02-discovered-context.png"),
-        });
-      }
+    await page.keyboard.press("Escape");
+    await gateway.setSessionsListResponse(sessionResponse(discoveredLevels, 65_536));
+    await gateway.setMethodResponse("models.list", { models: [discoveredModel] });
+    const sessionListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+    const sessionDescribeMatch = { key: sessionKey, agentId: "main" };
+    const sessionDescribeCount = (
+      await gateway.getRequests("sessions.describe", sessionDescribeMatch)
+    ).length;
+    expect(await gateway.getRequests("models.list")).toHaveLength(1);
+    await gateway.emitGatewayEvent("chat.metadata.changed", {});
+    const modelsRequest = await gateway.waitForRequest("models.list", { after: 1 });
+    expect(modelsRequest.params).toEqual({
+      view: "configured",
+      agentId: "main",
+      sessionKey,
+    });
+    const refreshedSessionRequest = await gateway.waitForRequest("sessions.describe", {
+      after: sessionDescribeCount,
+      match: sessionDescribeMatch,
+    });
+    expect(refreshedSessionRequest.params).toEqual({ key: sessionKey, agentId: "main" });
+    await modelSelect.click();
+    expect(await gateway.getRequests("models.list")).toHaveLength(2);
+    const modelOption = main.locator(
+      '[data-chat-model-option="omniroute/deepseekv4flash-equivalent"]',
+    );
+    await expect.poll(() => modelOption.textContent()).toContain("262.1k");
 
-      await page.keyboard.press("Escape");
-      await effortSelect.click();
-      const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
-      await expect
-        .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
-        .toBe("off,low,medium,high,xhigh");
-      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(
-        sessionListCount,
-      );
-      if (dynamicCatalogProofDir) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(dynamicCatalogProofDir, "03-discovered-thinking-levels.png"),
-        });
-      }
+    await page.keyboard.press("Escape");
+    await effortSelect.click();
+    const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
+    await expect
+      .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
+      .toBe("off,low,medium,high,xhigh");
+    expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(sessionListCount);
 
-      await page.keyboard.press("Escape");
-      await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      const newSessionPage = page.locator("openclaw-new-session-page");
-      await newSessionPage.waitFor();
-      const newSessionModelSelect = newSessionPage.locator(
-        '.new-session-page__composer [data-chat-model-select="true"]',
-      );
-      await expect.poll(() => newSessionModelSelect.getAttribute("aria-disabled")).toBe("false");
-      await newSessionModelSelect.click();
-      const newSessionModel = newSessionPage.locator(
-        '[data-chat-model-option="omniroute/deepseekv4flash-equivalent"]',
-      );
-      await expect.poll(() => newSessionModel.textContent()).toContain("262.1k");
-      await revealChatModelOption(newSessionModel);
-      await expect.poll(() => newSessionModel.isVisible()).toBe(true);
-      if (dynamicCatalogProofDir) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(dynamicCatalogProofDir, "04-new-session-discovered-context.png"),
-        });
-      }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    await page.keyboard.press("Escape");
+    await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+    const newSessionPage = page.locator("openclaw-new-session-page");
+    await newSessionPage.waitFor();
+    const newSessionModelSelect = newSessionPage.locator(
+      '.new-session-page__composer [data-chat-model-select="true"]',
+    );
+    await expect.poll(() => newSessionModelSelect.getAttribute("aria-disabled")).toBe("false");
+    await newSessionModelSelect.click();
+    const newSessionModel = newSessionPage.locator(
+      '[data-chat-model-option="omniroute/deepseekv4flash-equivalent"]',
+    );
+    await expect.poll(() => newSessionModel.textContent()).toContain("262.1k");
+    await revealChatModelOption(newSessionModel);
+    await expect.poll(() => newSessionModel.isVisible()).toBe(true);
   });
 });
