@@ -4,18 +4,13 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { editorTheme } from "./theme/theme.js";
 import { createTuiCommandHandlersHarness } from "./tui-command-handlers-test-support.js";
+import { expectUnused, expectCall } from "./tui-handler-test-support.js";
 import { createSubmitHarness } from "./tui-submit-test-helpers.js";
 import {
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
   shouldEnableWindowsGitBashPasteFallback,
 } from "./tui-submit.js";
-
-function expectUnused(...mocks: ReturnType<typeof vi.fn>[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
 
 function createRealEditorSubmitHarness(
   admitMessage?: NonNullable<Parameters<typeof createEditorSubmitHandler>[0]["admitMessage"]>,
@@ -75,17 +70,13 @@ describe("createEditorSubmitHandler", () => {
     const retained = newerDraft ? `${draft}\n${newerDraft}` : draft;
     expect(editor.getExpandedText()).toBe(retained);
     expect(handlers.sendChat).not.toHaveBeenCalled();
-    expect(handlers.addSystem).toHaveBeenCalledExactlyOnceWith(
-      "not connected to gateway — message not sent",
-    );
+    expectCall(handlers.addSystem, ["not connected to gateway — message not sent"], "once");
     expect(onSubmitError).not.toHaveBeenCalled();
     handlers.state.isConnected = true;
     editor.handleInput("\r");
     vi.advanceTimersByTime(50);
     await Promise.resolve();
-    expect(handlers.sendChat).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: retained }),
-    );
+    expectCall(handlers.sendChat, [expect.objectContaining({ message: retained })], "once");
     expect(editor.getExpandedText()).toBe("");
   });
 
@@ -292,8 +283,6 @@ it.each([
     vi.advanceTimersByTime(50);
     expect(harness.sendChat).not.toHaveBeenCalled();
     expect(editor.setText).toHaveBeenCalledWith("must remain in the editor");
-    expect(harness.addSystem).toHaveBeenCalledWith(
-      `session change in progress; wait for /${command} to finish`,
-    );
+    expectCall(harness.addSystem, [`session change in progress; wait for /${command} to finish`]);
   },
 );
