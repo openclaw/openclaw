@@ -91,7 +91,7 @@ import kotlinx.coroutines.launch
 import java.util.Collections
 import kotlin.math.sign
 
-private const val SIDEBAR_CATALOG_REFRESH_MS = 30_000L
+private const val SIDEBAR_CATALOG_REFRESH_MS = 120_000L
 
 internal enum class SidebarSessionDragSource {
   Catalog,
