@@ -83,10 +83,10 @@ export function createTranscriptionSocketHarness(
 
   return {
     waitForFakeSocket,
-    async connectFakeSession(
+    connectFakeSession: async (
       session: { connect(): Promise<void>; close(): void },
       index = 0,
-    ): Promise<Socket> {
+    ): Promise<Socket> => {
       const connecting = session.connect();
       const socket = await waitForFakeSocket(session, index);
       socket.readyState = FakeWebSocket.OPEN;
